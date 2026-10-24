@@ -8,6 +8,7 @@ import {
 } from "../../lib/sessions/navigation-handoff.ts";
 import {
   findUiSessionRow,
+  SESSION_COMPOSER_FOCUS_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
 } from "../../lib/sessions/route-navigation.ts";
 import {
@@ -17,10 +18,56 @@ import {
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
+import { peekPrewarmedChatSnapshot } from "./session-snapshot-prewarm.ts";
 
 export function sessionKeyUuid(sessionKey: string): string | null {
   const uuid = parseAgentSessionKey(sessionKey)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
   return uuid ? uuid.toLowerCase().replaceAll("-", "") : null;
+}
+
+export async function findSnapshotSessionReference(
+  context: ApplicationContext,
+  target: Extract<SessionPathTarget, { kind: "short" }>,
+): Promise<{ key: string; agentId: string } | undefined> {
+  const reference =
+    target.shortId.length === 32
+      ? target.shortId
+      : (parseAgentSessionKey(target.literalSessionKey)?.rest ?? target.shortId);
+  const uuid = reference.toLowerCase().replaceAll("-", "");
+  const entry = peekPrewarmedChatSnapshot();
+  if (!/^[0-9a-f]{32}$/u.test(uuid) || !entry) {
+    return undefined;
+  }
+  const key = entry.cacheKey.slice(entry.cacheKey.indexOf("\u0000") + 1);
+  if (sessionKeyUuid(key) !== uuid || parseAgentSessionKey(key)?.agentId !== target.agentId) {
+    return undefined;
+  }
+  const scopeKey = () =>
+    resolveChatSnapshotKey(
+      {
+        settings: context.gateway.connection,
+        client: context.gateway.snapshot.client,
+        agentsList: context.agents.state.agentsList,
+        hello: context.gateway.snapshot.hello,
+      },
+      { sessionKey: key },
+    );
+  if (scopeKey() !== entry.cacheKey) {
+    return undefined;
+  }
+  const revision = context.gateway.connectionRevision;
+  const { readPrewarmedChatSnapshot } = await import("./session-snapshot-store.ts");
+  const admitted = await readPrewarmedChatSnapshot(entry.cacheKey);
+  const gateway = context.gateway.snapshot;
+  if (admitted && gateway.client && gateway.phase !== "connected") {
+    await gateway.client.initialConnectSent;
+  }
+  return admitted &&
+    scopeKey() === entry.cacheKey &&
+    context.gateway.connectionRevision === revision
+    ? { key, agentId: target.agentId }
+    : undefined;
 }
 
 export function findLocalSessionReference(
@@ -67,21 +114,22 @@ export function findCachedShortSession(
   location: RouteLocation,
   target: Extract<SessionPathTarget, { kind: "short" }>,
 ): CachedShortSession | undefined {
-  const locationKey = new URLSearchParams(location.search)
-    .get(SESSION_NAVIGATION_KEY_PARAM)
-    ?.trim();
+  const search = new URLSearchParams(location.search);
+  const locationKey = search.get(SESSION_NAVIGATION_KEY_PARAM)?.trim();
   const handoffKey = consumeSessionNavigationHandoff(context.gateway, location.pathname);
   const carriedKey = locationKey ?? handoffKey;
   const carriedByCurrentNavigation = Boolean(handoffKey && handoffKey === carriedKey);
   if (carriedKey) {
-    const preserveLocationKeyForCanonicalReload = () => {
-      if (locationKey) {
-        prepareSessionNavigationHandoff(context.gateway, location.pathname, locationKey);
+    const preserveHandoffForCanonicalReload = () => {
+      // Navigation-key cleanup can precede the pane consuming its draft/focus
+      // hint. Carry this validated key through both same-connection reloads.
+      if (locationKey || search.get("draft") || search.get(SESSION_COMPOSER_FOCUS_PARAM) === "1") {
+        prepareSessionNavigationHandoff(context.gateway, location.pathname, carriedKey);
       }
     };
     const carried = findUiSessionRow(context, carriedKey, target.agentId);
     if (carried && findLocalSessionReference([carried], target)) {
-      preserveLocationKeyForCanonicalReload();
+      preserveHandoffForCanonicalReload();
       return { sessionKey: carried.key, row: carried };
     }
     const carriedUuid = sessionKeyUuid(carriedKey);
@@ -92,7 +140,7 @@ export function findCachedShortSession(
       carriedAgentId &&
       normalizeAgentId(carriedAgentId) === normalizeAgentId(target.agentId)
     ) {
-      preserveLocationKeyForCanonicalReload();
+      preserveHandoffForCanonicalReload();
       return { sessionKey: carriedKey };
     }
   }

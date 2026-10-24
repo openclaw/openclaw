@@ -1,5 +1,5 @@
 ---
-summary: "Meta setup, authentication, and Muse Spark model selection"
+summary: "Meta setup, authentication, and Muse Wonder and Muse Spark model selection"
 title: "Meta"
 read_when:
   - You want to use Meta with OpenClaw
@@ -7,7 +7,7 @@ read_when:
 ---
 
 The **Meta API** uses the OpenAI-compatible **Responses API** (`POST /v1/responses`)
-for the Muse Spark reasoning models. OpenClaw provides Meta as an official external
+for the Muse Wonder and Muse Spark reasoning models. OpenClaw provides Meta as an official external
 plugin.
 
 | Property                   | Value                              |
@@ -59,7 +59,7 @@ export MODEL_API_KEY=<key>
     openclaw models list --provider meta
     ```
 
-    Lists the static Muse Spark catalog entries. If `MODEL_API_KEY` is unresolved,
+    Lists the Meta catalog entries. Select `meta/muse-wonder-1.0` for Wonder. If `MODEL_API_KEY` is unresolved,
     `openclaw models status --json` reports the missing credential under
     `auth.unusableProfiles`.
 
@@ -85,16 +85,25 @@ up provider credentials on the server.
 Prices and data-use terms come from Meta's
 [pricing and rate limits](https://dev.meta.ai/docs/pricing-rate-limits/)
 documentation.
-Meta's [model catalog](https://dev.meta.ai/docs/models) identifies Muse Spark 1.3
-as the latest version and recommends it for new work.
+Meta's [model catalog](https://dev.meta.ai/docs/models) positions Muse Wonder for
+complex coding and long-running agents, and Muse Spark for lower-cost workloads.
+New setups keep Muse Spark 1.3 as their default; Wonder is an explicit selection.
 
 | Model ref                         | Name                       | OpenClaw input | Reasoning | Context window | Input / cached input / output per 1M tokens |
 | --------------------------------- | -------------------------- | -------------- | --------- | -------------- | ------------------------------------------- |
+| `meta/muse-wonder-1.0`            | Muse Wonder                | text, image    | yes       | 1,048,576      | $4.00 / $0.20 / $20.00                      |
 | `meta/muse-spark-1.3`             | Muse Spark 1.3             | text, image    | yes       | 1,048,576      | $1.25 / $0.15 / $4.25                       |
 | `meta/muse-spark-1.3-contributor` | Muse Spark 1.3 Contributor | text, image    | yes       | 1,048,576      | $0.10 / $0.002 / $0.20                      |
 | `meta/muse-spark-1.2`             | Muse Spark 1.2             | text, image    | yes       | 1,048,576      | $1.25 / $0.15 / $4.25                       |
 | `meta/muse-spark-1.2-contributor` | Muse Spark 1.2 Contributor | text, image    | yes       | 1,048,576      | $0.10 / $0.002 / $0.20                      |
 | `meta/muse-spark-1.1`             | Muse Spark 1.1             | text, image    | yes       | 1,048,576      | $1.25 / $0.15 / $4.25                       |
+
+Muse Wonder is available in Standard mode only on Meta Model API. There is no
+`muse-wonder-1.0-contributor` API model. **Muse Wonder Full**
+(`muse-wonder-full-1.0`) is available only through the native Muse Code CLI on
+Power Usage and Maximum Usage subscriptions, not through this API provider.
+Setting Wonder's reasoning effort to `max` does not select Wonder Full. See
+[Meta's availability table](https://dev.meta.ai/docs/models#muse-wonder-availability).
 
 <Warning>
 Meta's [pricing documentation](https://dev.meta.ai/docs/pricing-rate-limits/) and
@@ -120,6 +129,7 @@ Capabilities:
 - Text and image input through OpenClaw
 - Tool calling and streaming
 - Reasoning effort: `minimal`, `low`, `medium`, `high`, `xhigh` (OpenClaw default: `high`)
+- `max` effort for Muse Wonder and Muse Spark 1.3 Standard; not for Contributor models
 - Stateless encrypted reasoning replay (`store: false`, `include: ["reasoning.encrypted_content"]`)
 
 Meta's [model catalog](https://dev.meta.ai/docs/models) lists text, image, video,
@@ -127,13 +137,17 @@ audio, and PDF input for these models. OpenClaw's model catalog directly represe
 text and image input only; the other upstream modalities are not model-manifest input
 values.
 
+OpenClaw uses a 131,072-token catalog output cap for these models. Meta does not
+publish an exact maximum-output figure; this cap is not a claim about Meta's
+maximum. Output tokens include both reasoning and visible text.
+
 OpenClaw explicitly selects `high` when no thinking level is configured. This is an
 OpenClaw default, not Meta's omitted-parameter behavior: Meta's
 [reasoning documentation](https://dev.meta.ai/docs/reasoning/) says that when
 `reasoning.effort` is omitted, the model reasons at a model-determined level.
 
 <Warning>
-Muse Spark does not accept `reasoning.effort: "none"`. OpenClaw maps
+Muse Wonder and Muse Spark do not accept `reasoning.effort: "none"`. OpenClaw maps
 `--thinking off` to `minimal` for this provider.
 </Warning>
 
@@ -144,9 +158,9 @@ Muse Spark does not accept `reasoning.effort: "none"`. OpenClaw maps
   env: { vars: { MODEL_API_KEY: "<key>" } },
   agents: {
     defaults: {
-      model: { primary: "meta/muse-spark-1.3" },
+      model: { primary: "meta/muse-wonder-1.0" },
       models: {
-        "meta/muse-spark-1.3": { alias: "Muse Spark 1.3" },
+        "meta/muse-wonder-1.0": { alias: "Muse Wonder" },
       },
     },
   },
@@ -161,6 +175,18 @@ interactive shell will not help a managed service unless the env is imported
 separately.
 </Note>
 
+## Muse Code runtime
+
+By default, `meta/*` models run on the built-in OpenClaw runtime through the
+Responses API. To run them through Meta's Muse Code CLI instead, install the
+`@openclaw/muse` plugin and set `agentRuntime: { id: "muse" }` on the model or
+provider. See [Muse Code agent runtime](/plugins/muse).
+
+In **Settings → Models**, choose **Connect provider → Meta → Muse Code** to sign
+in and approve native permissions. If an AI model is already available, this
+enables Muse Code without replacing your active model. When no model is
+available, the AI setup flow also selects the verified Muse model.
+
 ## Smoke test
 
 ```bash
@@ -169,6 +195,8 @@ pnpm test:live -- extensions/meta/meta.live.test.ts
 ```
 
 The live suite exercises enabled Meta cases against `POST /v1/responses`.
+To test only Wonder, add `-t muse-wonder-1.0`. Its live cases cover text, image
+input, reasoning effort, and a tool-call round trip with encrypted reasoning replay.
 
 ## Related
 
@@ -177,7 +205,7 @@ The live suite exercises enabled Meta cases against `POST /v1/responses`.
     Choosing providers, model refs, and failover behavior.
   </Card>
   <Card title="Thinking modes" href="/tools/thinking" icon="brain">
-    Reasoning effort levels for Muse Spark.
+    Reasoning effort levels for Meta models.
   </Card>
   <Card title="Configuration reference" href="/gateway/config-agents#agent-defaults" icon="gear">
     Agent defaults and model configuration.

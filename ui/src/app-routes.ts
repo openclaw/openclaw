@@ -7,6 +7,7 @@ import type {
   Router,
   RouterHistory,
 } from "@openclaw/uirouter";
+import type { JSX } from "@solidjs/web";
 import {
   agentRouteFromPath,
   canonicalPluginTabLocation,
@@ -14,6 +15,7 @@ import {
   isSessionRouteId,
   pathForAgentPanel,
   pathForRoute,
+  locationForRoute,
   pluginSlugCandidate,
   pluginTabSlugFromPath,
   routeIdFromPath,
@@ -21,21 +23,25 @@ import {
   sameRouteLocation,
   type RouteId,
 } from "./app-route-paths.ts";
+import type { SolidRouteProps } from "./app-route-types.tsx";
 import type { ApplicationContext } from "./app/context.ts";
 import { gatewayPresentationScope } from "./app/gateway-presentation-scope.ts";
+import { retryControlUiImport } from "./app/stale-chunk-reload.ts";
+import { i18n } from "./i18n/lib/translate.ts";
 import { page as aboutPage } from "./pages/about/route.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
-import { page as agentsHomePage } from "./pages/agents-home/route.ts";
 import { page as agentsPage } from "./pages/agents/route.ts";
 import { page as approvalsPage } from "./pages/approvals/route.ts";
-import { page as appsPage } from "./pages/apps/route.ts";
+import { page as appsPage } from "./pages/apps/route.tsx";
 import { page as channelsPage } from "./pages/channels/route.ts";
 import { pages as chatPages } from "./pages/chat/route.ts";
-import { page as cloudWorkersPage } from "./pages/cloud-workers/route.ts";
+import type { ChatRouteData } from "./pages/chat/session-route-data.ts";
+import { page as clawsPage } from "./pages/claws/route.ts";
+import { page as cloudWorkersPage } from "./pages/cloud-workers/route.tsx";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
-import { page as cronPage } from "./pages/cron/route.ts";
-import { page as custodianPage } from "./pages/custodian/route.ts";
+import { page as cronPage } from "./pages/cron/route.tsx";
+import { page as custodianPage } from "./pages/custodian/route.tsx";
 import { page as dashboardsPage } from "./pages/dashboards/route.ts";
 import { page as debugPage } from "./pages/debug/route.ts";
 import {
@@ -46,31 +52,32 @@ import { page as devicesPage } from "./pages/devices/route.ts";
 import { page as labsPage } from "./pages/labs/route.ts";
 import { page as lobsterdexPage } from "./pages/lobsterdex/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
-import { page as meetingsPage } from "./pages/meetings/route.ts";
+import { page as meetingsPage } from "./pages/meetings/route.tsx";
 import { page as memoryImportPage } from "./pages/memory-import/route.ts";
 import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
 import { page as modelSetupPage } from "./pages/model-setup/route.ts";
 import { page as newSessionPage } from "./pages/new-session/route.ts";
-import { page as pluginPage } from "./pages/plugin/route.ts";
-import { pages as pluginsPages } from "./pages/plugins/route.ts";
+import { page as pluginPage } from "./pages/plugin/route.tsx";
+import { pages as pluginsPages } from "./pages/plugins/route.tsx";
 import { page as portalsPage } from "./pages/portals/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
+import { page as searchPage } from "./pages/search/route.ts";
 import { page as secretsPage } from "./pages/secrets/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { pages as skillsPages } from "./pages/skills/route.ts";
 import { page as systemsPage } from "./pages/systems/route.ts";
-import { page as tasksPage } from "./pages/tasks/route.ts";
-import { page as terminalPage } from "./pages/terminal/route.ts";
-import { page as usagePage } from "./pages/usage/route.ts";
+import { page as terminalPage } from "./pages/terminal/route.tsx";
+import { page as usagePage } from "./pages/usage/route.tsx";
 import { resolveWorkboardRouteLocation } from "./pages/workboard/route-location.ts";
-import { page as workboardPage } from "./pages/workboard/route.ts";
-import { page as worktreesPage } from "./pages/worktrees/route.ts";
+import { page as workboardPage } from "./pages/workboard/route.tsx";
+import { page as worktreesPage } from "./pages/worktrees/route.tsx";
 
 type AppRouteModule = {
-  render: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+  /** Mounted once per route renderer; props follow the current loader and presentation. */
+  renderSolid: (props: SolidRouteProps) => JSX.Element;
   /** Optional lower-sidebar content owned by the same route and loader as the page. */
-  renderSidebar?: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+  renderSidebar?: (data: unknown, loaderPending: boolean, presented?: boolean) => JSX.Element;
   retainOnNavigate?: boolean;
   renderOwnerKey?: (
     match: Pick<RouteMatch, "data" | "location">,
@@ -78,13 +85,8 @@ type AppRouteModule = {
   ) => string | undefined;
 };
 
-export type ApplicationRouter = Router<
-  RouteId,
-  ApplicationContext<RouteId>,
-  AppRouteModule,
-  unknown
->;
-type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteModule>;
+export type ApplicationRouter = Router<RouteId, ApplicationContext, AppRouteModule, unknown>;
+type AppRoute = PageDefinition<RouteId, ApplicationContext, AppRouteModule>;
 
 const APP_ROUTE_TREE = [
   ...chatPages,
@@ -96,7 +98,7 @@ const APP_ROUTE_TREE = [
   dashboardsPage,
   appsPage,
   portalsPage,
-  agentsHomePage,
+  clawsPage,
   agentsPage,
   approvalsPage,
   channelsPage,
@@ -115,6 +117,7 @@ const APP_ROUTE_TREE = [
   sessionsPage,
   systemsPage,
   secretsPage,
+  searchPage,
   usagePage,
   debugPage,
   logsPage,
@@ -122,14 +125,28 @@ const APP_ROUTE_TREE = [
   ...skillsPages,
   ...pluginsPages,
   cronPage,
-  tasksPage,
   devicePage,
   devicePermissionsPage,
   devicesPage,
   pluginPage,
 ] as const;
 
-const appRoutes = APP_ROUTE_TREE as readonly AppRoute[];
+const appRoutes: AppRoute[] = [];
+for (const route of APP_ROUTE_TREE as readonly AppRoute[]) {
+  const loader = route.loader;
+  appRoutes.push({
+    ...route,
+    component: () =>
+      retryControlUiImport(async () => {
+        const module = await route.component();
+        await i18n.prepareLocale();
+        return module;
+      }),
+    loader: loader
+      ? (context, options) => retryControlUiImport(() => loader(context, options), options.signal)
+      : undefined,
+  });
+}
 
 /** Starts route chunk downloads without running the route's loader. */
 export function warmApplicationRouteModule(
@@ -158,7 +175,7 @@ function canonicalRouteLocation(
 }
 
 export function createApplicationRouter(): ApplicationRouter {
-  const router = createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
+  const router = createRouter<RouteId, ApplicationContext, AppRouteModule>({
     routes: appRoutes,
   });
   // The shared router intentionally matches exact paths only. People, Workboard
@@ -166,12 +183,16 @@ export function createApplicationRouter(): ApplicationRouter {
   return {
     ...router,
     navigate: (routeId, context, options, location) =>
-      router.navigate(
-        routeId,
-        context,
-        options,
-        location ? canonicalRouteLocation(routeId, location, context.basePath) : undefined,
-      ),
+      context.nativeConversation?.interceptNavigation(
+        location ?? locationForRoute(routeId, context.basePath),
+      )
+        ? Promise.resolve()
+        : router.navigate(
+            routeId,
+            context,
+            options,
+            location ? canonicalRouteLocation(routeId, location, context.basePath) : undefined,
+          ),
     routeIdFromPath,
   };
 }
@@ -212,7 +233,7 @@ export async function startApplicationRouter(
   router: ApplicationRouter,
   history: RouterHistory,
   basePath: string,
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
 ): Promise<void> {
   setPluginTabSlugs(context.gateway.snapshot.hello?.controlUiTabs);
   let location = history.location();
@@ -253,12 +274,41 @@ export async function startApplicationRouter(
     listen: (listener) => {
       let listening = true;
       let recoveryQueued = false;
+      const revalidatedCache = new WeakSet<AbortController>();
+      let lastHello = context.gateway.snapshot.hello;
       let interrupted:
-        | { controller: AbortController; scope: ReturnType<typeof gatewayPresentationScope> }
+        | {
+            controller: AbortController;
+            scope: ReturnType<typeof gatewayPresentationScope>;
+            verifySession: boolean;
+          }
         | undefined;
       const currentTarget = () => {
         const state = router.getState();
         return state.pendingMatches[0] ?? state.matches[0];
+      };
+      const verifyReconnectedSession = async (
+        target: NonNullable<ReturnType<typeof currentTarget>>,
+        verifySession: boolean,
+      ) => {
+        const { client, hello } = context.gateway.snapshot;
+        const scope = gatewayPresentationScope(context.gateway);
+        const current = () =>
+          listening &&
+          context.gateway.snapshot.phase === "connected" &&
+          context.gateway.snapshot.client === client &&
+          context.gateway.snapshot.hello === hello &&
+          gatewayPresentationScope(context.gateway) === scope &&
+          currentTarget()?.abortController === target.abortController &&
+          router.getState().pendingMatches.length === 0;
+        try {
+          const { verifyChatSessionRoute } = await import("./pages/chat/route-loader.ts");
+          await verifyChatSessionRoute(context, target, verifySession, current, () =>
+            router.revalidate(context, target.routeId),
+          );
+        } catch {
+          // Failed discovery is not deletion; keep the established conversation.
+        }
       };
       const recoverSessionRoute = () => {
         const target = currentTarget();
@@ -274,13 +324,41 @@ export async function startApplicationRouter(
           return;
         }
         if (context.gateway.snapshot.phase !== "connected") {
-          if (target.status === "pending" || target.isFetching === "loader") {
-            interrupted = { controller: target.abortController, scope };
+          if (
+            target.status === "pending" ||
+            target.status === "success" ||
+            target.isFetching === "loader"
+          ) {
+            interrupted = {
+              controller: target.abortController,
+              scope,
+              // The first pending loader owns startup discovery; only interrupted
+              // connections or data already presented offline need another lookup.
+              verifySession:
+                interrupted?.verifySession === true ||
+                lastHello !== null ||
+                target.data !== undefined,
+            };
           }
           return;
         }
         if (target.status === "success" && !target.isFetching) {
+          const pendingVerification = interrupted;
           interrupted = undefined;
+          // Snapshot admission can finish after hello; verify it once even without
+          // an interrupted connection, using the loader's authoritative replacement.
+          // SAFETY: This branch accepts only session routes loaded by loadChatRoute.
+          const data = target.data as ChatRouteData | undefined;
+          if (
+            data?.kind === "session" &&
+            data.sessionResolutionFromCache === "snapshot" &&
+            !revalidatedCache.has(target.abortController)
+          ) {
+            revalidatedCache.add(target.abortController);
+            void verifyReconnectedSession(target, false);
+          } else if (pendingVerification) {
+            void verifyReconnectedSession(target, pendingVerification.verifySession);
+          }
         }
         if (!interrupted || recoveryQueued || target.status !== "error") {
           return;
@@ -318,7 +396,6 @@ export async function startApplicationRouter(
         });
       };
       const stopSessionRecovery = router.subscribe(recoverSessionRoute);
-      let lastHello = context.gateway.snapshot.hello;
       const stopGateway = context.gateway.subscribe((snapshot) => {
         recoverSessionRoute();
         if (lastHello === snapshot.hello) {
@@ -354,6 +431,13 @@ export async function startApplicationRouter(
         });
       });
       const stopHistory = history.listen((next) => {
+        if (context.nativeConversation?.interceptNavigation(next)) {
+          const current = router.getState().location;
+          if (current) {
+            history.replace(current);
+          }
+          return;
+        }
         const canonical = canonicalRouteLocation(
           routeIdFromPath(next.pathname, basePath),
           next,

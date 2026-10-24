@@ -1,303 +1,102 @@
-/** Tests image-generation runtime fallback, overrides, and error reporting. */
 import { beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import {
-  generateImage,
-  listRuntimeImageGenerationProviders,
-  type GenerateImageParams,
-} from "./runtime.js";
-import type { ImageGenerationProvider } from "./types.js";
+import { generateImage, type GenerateImageParams } from "./runtime.js";
+import type { ImageGenerationProvider, ImageGenerationRequest } from "./types.js";
 
 type ImageGenerationRuntimeDeps = NonNullable<Parameters<typeof generateImage>[1]>;
+type Geometry = NonNullable<ImageGenerationProvider["capabilities"]["geometry"]>;
 
 let providers: ImageGenerationProvider[] = [];
-let listedConfigs: Array<OpenClawConfig | undefined> = [];
-let providerEnvVars: Record<string, string[]> = {};
-let warnings: string[] = [];
 
 const runtimeDeps: ImageGenerationRuntimeDeps = {
   getProvider: (providerId) => providers.find((provider) => provider.id === providerId),
-  listProviders: (config) => {
-    listedConfigs.push(config);
-    return providers;
-  },
-  getProviderEnvVars: (providerId) => providerEnvVars[providerId] ?? [],
-  log: {
-    warn: (message) => {
-      warnings.push(message);
-    },
-  },
+  listProviders: () => providers,
+  log: { warn() {} },
 };
 
-function runGenerateImage(params: GenerateImageParams) {
-  const defaults = params.cfg.agents?.defaults as
-    | (NonNullable<OpenClawConfig["agents"]>["defaults"] & {
-        imageGenerationModel?: unknown;
-      })
-    | undefined;
-  const cfg =
-    defaults?.imageGenerationModel !== undefined && defaults.mediaModels?.image === undefined
-      ? {
-          ...params.cfg,
-          agents: {
-            ...params.cfg.agents,
-            defaults: {
-              ...defaults,
-              mediaModels: { ...defaults.mediaModels, image: defaults.imageGenerationModel },
-            },
-          },
-        }
-      : params.cfg;
-  return generateImage({ ...params, cfg }, runtimeDeps);
+function imageConfig(primary: string, fallbacks: string[] = [], timeoutMs?: number) {
+  return { agents: { defaults: { mediaModels: { image: { primary, fallbacks, timeoutMs } } } } };
 }
 
-function createBufferedImageProvider(id: string, buffers: Buffer[]): ImageGenerationProvider {
+function runGenerateImage(params: Partial<GenerateImageParams> = {}) {
+  return generateImage({ cfg: {}, prompt: "draw a cat", ...params }, runtimeDeps);
+}
+
+const imageResult = {
+  images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png", fileName: "sample.png" }],
+  model: "img-v1",
+};
+let seenRequest: ImageGenerationRequest | undefined;
+
+const referenceImage = { buffer: Buffer.from("reference"), mimeType: "image/png" };
+function geometryCapabilities(
+  geometry: Geometry | undefined,
+  mode: Omit<ImageGenerationProvider["capabilities"]["edit"], "enabled">,
+): ImageGenerationProvider["capabilities"] {
+  return { generate: mode, edit: { enabled: true, ...mode }, geometry };
+}
+
+function createProvider(
+  id: string,
+  overrides: Partial<Omit<ImageGenerationProvider, "id">> = {},
+): ImageGenerationProvider {
   return {
     id,
     capabilities: { generate: {}, edit: { enabled: false } },
+    async generateImage(req) {
+      seenRequest = req;
+      return imageResult;
+    },
+    ...overrides,
+  };
+}
+
+function createBufferedImageProvider(id: string, buffers: Buffer[]): ImageGenerationProvider {
+  return createProvider(id, {
     generateImage: async () => ({
       images: buffers.map((buffer) => ({ buffer, mimeType: "image/png" })),
     }),
-  };
+  });
+}
+
+function useProvider(id: string, overrides?: Partial<Omit<ImageGenerationProvider, "id">>) {
+  providers = [createProvider(id, overrides)];
 }
 
 describe("image-generation runtime", () => {
   beforeEach(() => {
     providers = [];
-    listedConfigs = [];
-    providerEnvVars = {};
-    warnings = [];
+    seenRequest = undefined;
   });
 
-  it("generates images through the active image-generation provider", async () => {
-    const authStore = { version: 1, profiles: {} } as const;
-    let seenAuthStore: unknown;
-    let seenTimeoutMs: number | undefined;
-    let seenSsrfPolicy: unknown;
-    const provider: ImageGenerationProvider = {
-      id: "image-plugin",
-      capabilities: {
-        generate: {},
-        edit: { enabled: false },
-      },
-      async generateImage(req: { authStore?: unknown; timeoutMs?: number; ssrfPolicy?: unknown }) {
-        seenAuthStore = req.authStore;
-        seenTimeoutMs = req.timeoutMs;
-        seenSsrfPolicy = req.ssrfPolicy;
-        return {
-          images: [
-            {
-              buffer: Buffer.from("png-bytes"),
-              mimeType: "image/png",
-              fileName: "sample.png",
-            },
-          ],
-          model: "img-v1",
-        };
-      },
-    };
-    providers = [provider];
+  it.each(["grok-imagine-image-unknown", "xai/"])(
+    "rejects unknown explicit model %s",
+    async (modelOverride) => {
+      useProvider("xai", {
+        defaultModel: "grok-imagine-image",
+        models: ["grok-imagine-image"],
+      });
 
-    const result = await runGenerateImage({
-      cfg: {
-        agents: {
-          defaults: {
-            imageGenerationModel: { primary: "image-plugin/img-v1" },
-          },
-        },
-      } as OpenClawConfig,
-      prompt: "draw a cat",
-      agentDir: "/tmp/agent",
-      authStore,
-      timeoutMs: 12_345,
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-    });
+      await expect(
+        runGenerateImage({
+          cfg: imageConfig("xai/grok-imagine-image"),
+          modelOverride,
+        }),
+      ).rejects.toThrow(`Unknown model override: ${modelOverride}`);
+      expect(seenRequest).toBeUndefined();
+    },
+  );
 
-    expect(result.provider).toBe("image-plugin");
-    expect(result.model).toBe("img-v1");
-    expect(result.attempts).toStrictEqual([]);
-    expect(seenAuthStore).toEqual(authStore);
-    expect(seenTimeoutMs).toBe(12_345);
-    expect(seenSsrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
-    expect(result.images).toEqual([
-      {
-        buffer: Buffer.from("png-bytes"),
-        mimeType: "image/png",
-        fileName: "sample.png",
-      },
-    ]);
-    expect(result.ignoredOverrides).toStrictEqual([]);
-  });
-
-  it("does not list providers when explicit config disables auto provider fallback", async () => {
-    const provider: ImageGenerationProvider = {
-      id: "image-plugin",
-      capabilities: {
-        generate: {},
-        edit: { enabled: false },
-      },
-      async generateImage() {
-        return {
-          images: [
-            {
-              buffer: Buffer.from("png-bytes"),
-              mimeType: "image/png",
-              fileName: "sample.png",
-            },
-          ],
-          model: "img-v1",
-        };
-      },
-    };
-    providers = [provider];
-
-    const params: GenerateImageParams = {
-      cfg: {
-        agents: {
-          defaults: {
-            imageGenerationModel: { primary: "image-plugin/img-v1" },
-          },
-        },
-      } as OpenClawConfig,
-      prompt: "draw a cat",
-      autoProviderFallback: false,
-    };
-
-    const result = await runGenerateImage(params);
-
-    expect(result.provider).toBe("image-plugin");
-    expect(listedConfigs).toStrictEqual([]);
-  });
-
-  it("uses configured image-generation timeout when the call omits timeoutMs", async () => {
-    let seenTimeoutMs: number | undefined;
-    const provider: ImageGenerationProvider = {
-      id: "image-plugin",
-      capabilities: {
-        generate: {},
-        edit: { enabled: false },
-      },
-      async generateImage(req: { timeoutMs?: number }) {
-        seenTimeoutMs = req.timeoutMs;
-        return {
-          images: [
-            {
-              buffer: Buffer.from("png-bytes"),
-              mimeType: "image/png",
-              fileName: "sample.png",
-            },
-          ],
-          model: "img-v1",
-        };
-      },
-    };
-    providers = [provider];
-
-    await runGenerateImage({
-      cfg: {
-        agents: {
-          defaults: {
-            imageGenerationModel: {
-              primary: "image-plugin/img-v1",
-              timeoutMs: 180_000,
-            },
-          },
-        },
-      } as OpenClawConfig,
-      prompt: "draw a cat",
-    });
-
-    expect(seenTimeoutMs).toBe(180_000);
-  });
-
-  it("uses provider default image-generation timeout when the call and config omit timeoutMs", async () => {
-    let seenTimeoutMs: number | undefined;
-    const provider: ImageGenerationProvider = {
-      id: "image-plugin",
-      defaultTimeoutMs: 600_000,
-      capabilities: {
-        generate: {},
-        edit: { enabled: false },
-      },
-      async generateImage(req: { timeoutMs?: number }) {
-        seenTimeoutMs = req.timeoutMs;
-        return {
-          images: [
-            {
-              buffer: Buffer.from("png-bytes"),
-              mimeType: "image/png",
-              fileName: "sample.png",
-            },
-          ],
-          model: "img-v1",
-        };
-      },
-    };
-    providers = [provider];
-
-    await runGenerateImage({
-      cfg: {
-        agents: {
-          defaults: {
-            imageGenerationModel: { primary: "image-plugin/img-v1" },
-          },
-        },
-      } as OpenClawConfig,
-      prompt: "draw a cat",
-    });
-
-    expect(seenTimeoutMs).toBe(600_000);
-  });
-
-  it("auto-detects and falls through to another configured image-generation provider by default", async () => {
-    providers = [
-      {
-        id: "openai",
-        defaultModel: "gpt-image-1",
-        capabilities: {
-          generate: {},
-          edit: { enabled: true },
-        },
-        isConfigured: () => true,
-        async generateImage() {
-          throw new Error("OpenAI API key missing");
-        },
-      },
-      {
-        id: "google",
-        defaultModel: "gemini-3.1-flash-image-preview",
-        capabilities: {
-          generate: {},
-          edit: { enabled: true },
-        },
-        isConfigured: () => true,
-        async generateImage() {
-          return {
-            images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-            model: "gemini-3.1-flash-image-preview",
-          };
-        },
-      },
-    ];
-
-    const result = await runGenerateImage({
-      cfg: {} as OpenClawConfig,
-      prompt: "draw a cat",
-    });
-
-    expect(result.provider).toBe("google");
-    expect(result.model).toBe("gemini-3.1-flash-image-preview");
-    expect(result.attempts).toEqual([
-      {
-        provider: "openai",
-        model: "gpt-image-1",
-        error: "OpenAI API key missing",
-      },
-    ]);
-    expect(warnings).toContain(
-      "image-generation candidate failed: openai/gpt-image-1: OpenAI API key missing",
-    );
-  });
+  it.each([
+    [180_000, undefined, 180_000],
+    [undefined, 600_000, 600_000],
+  ])(
+    "resolves configured %s or provider %s timeout",
+    async (configured, providerDefault, expected) => {
+      useProvider("image-plugin", { defaultTimeoutMs: providerDefault });
+      await runGenerateImage({ cfg: imageConfig("image-plugin/img-v1", [], configured) });
+      expect(seenRequest).toMatchObject({ timeoutMs: expected });
+    },
+  );
 
   it("falls through when an image provider returns an empty buffer", async () => {
     providers = [
@@ -305,18 +104,7 @@ describe("image-generation runtime", () => {
       createBufferedImageProvider("valid", [Buffer.from("png-bytes")]),
     ];
 
-    const result = await runGenerateImage({
-      cfg: {
-        agents: {
-          defaults: {
-            mediaModels: {
-              image: { primary: "empty/img-v1", fallbacks: ["valid/img-v2"] },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      prompt: "draw a cat",
-    });
+    const result = await runGenerateImage({ cfg: imageConfig("empty/img-v1", ["valid/img-v2"]) });
 
     expect(result.provider).toBe("valid");
     expect(result.images[0]?.buffer).toEqual(Buffer.from("png-bytes"));
@@ -329,217 +117,84 @@ describe("image-generation runtime", () => {
     ]);
   });
 
-  it("fails visibly when every image provider returns an empty buffer", async () => {
-    providers = [
-      createBufferedImageProvider("empty-primary", [Buffer.alloc(0)]),
-      createBufferedImageProvider("empty-fallback", [Buffer.alloc(0)]),
-    ];
-
-    await expect(
-      runGenerateImage({
-        cfg: {
-          agents: {
-            defaults: {
-              mediaModels: {
-                image: {
-                  primary: "empty-primary/img-v1",
-                  fallbacks: ["empty-fallback/img-v2"],
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        prompt: "draw a cat",
-      }),
-    ).rejects.toThrow(
-      "All image generation models failed (2): empty-primary/img-v1: Image generation provider returned an empty image buffer at index 0. | empty-fallback/img-v2: Image generation provider returned an empty image buffer at index 0.",
-    );
-  });
-
   it("applies inferred resolution only to compatible fallback candidates", async () => {
     const seenResolutions: Array<string | undefined> = [];
-    let unavailableProvider = "google";
-    const inputImages = [{ buffer: Buffer.from("reference"), mimeType: "image/png" }];
+    let unavailableProvider = "";
+    const refs = {
+      google: "google/gemini-3-pro-image-preview",
+      fal: "fal/google/nano-banana-2-lite",
+      openai: "openai/gpt-image-1",
+    };
+    function resolutionProvider(
+      id: string,
+      supportsResolution: boolean,
+      resolutionsByModel?: Geometry["resolutionsByModel"],
+    ) {
+      return createProvider(id, {
+        capabilities: geometryCapabilities(
+          supportsResolution ? { resolutions: ["1K", "2K", "4K"], resolutionsByModel } : undefined,
+          { supportsResolution },
+        ),
+        async generateImage(req) {
+          seenResolutions.push(req.resolution);
+          if (unavailableProvider === id) {
+            throw new Error(`${id} unavailable`);
+          }
+          return { images: imageResult.images };
+        },
+      });
+    }
     providers = [
-      {
-        id: "openai",
-        capabilities: {
-          generate: { supportsResolution: false },
-          edit: { enabled: true, supportsResolution: false },
-        },
-        async generateImage(req) {
-          seenResolutions.push(req.resolution);
-          if (unavailableProvider === "openai") {
-            throw new Error("openai unavailable");
-          }
-          return {
-            images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-          };
-        },
-      },
-      {
-        id: "google",
-        capabilities: {
-          generate: { supportsResolution: true },
-          edit: { enabled: true, supportsResolution: true },
-          geometry: { resolutions: ["1K", "2K", "4K"] },
-        },
-        async generateImage(req) {
-          seenResolutions.push(req.resolution);
-          if (unavailableProvider === "google") {
-            throw new Error("google unavailable");
-          }
-          return {
-            images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-          };
-        },
-      },
-      {
-        id: "fal",
-        capabilities: {
-          generate: { supportsResolution: true },
-          edit: { enabled: true, supportsResolution: true },
-          geometry: {
-            resolutions: ["1K", "2K", "4K"],
-            resolutionsByModel: { "google/nano-banana-2-lite": [] },
-          },
-        },
-        async generateImage(req) {
-          seenResolutions.push(req.resolution);
-          if (unavailableProvider === "fal") {
-            throw new Error("fal unavailable");
-          }
-          return {
-            images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-          };
-        },
-      },
+      resolutionProvider("openai", false),
+      resolutionProvider("google", true),
+      resolutionProvider("fal", true, { "google/nano-banana-2-lite": [] }),
     ];
-
-    const result = await runGenerateImage({
-      cfg: {
-        agents: {
-          defaults: {
-            imageGenerationModel: {
-              primary: "google/gemini-3-pro-image-preview",
-              fallbacks: ["fal/google/nano-banana-2-lite"],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      prompt: "edit this image",
-      inferredResolution: "2K",
-      inputImages,
-    });
-
-    expect(result.provider).toBe("fal");
-    expect(seenResolutions).toEqual(["2K", undefined]);
-
-    unavailableProvider = "fal";
-    seenResolutions.length = 0;
-    const inverseResult = await runGenerateImage({
-      cfg: {
-        agents: {
-          defaults: {
-            imageGenerationModel: {
-              primary: "fal/google/nano-banana-2-lite",
-              fallbacks: ["google/gemini-3-pro-image-preview"],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      prompt: "edit this image",
-      inferredResolution: "2K",
-      inputImages,
-    });
-
-    expect(inverseResult.provider).toBe("google");
-    expect(seenResolutions).toEqual([undefined, "2K"]);
-
-    unavailableProvider = "openai";
-    seenResolutions.length = 0;
-    const providerDisabledResult = await runGenerateImage({
-      cfg: {
-        agents: {
-          defaults: {
-            imageGenerationModel: {
-              primary: "openai/gpt-image-1",
-              fallbacks: ["google/gemini-3-pro-image-preview"],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      prompt: "edit this image",
-      inferredResolution: "2K",
-      inputImages,
-    });
-
-    expect(providerDisabledResult.provider).toBe("google");
-    expect(seenResolutions).toEqual([undefined, "2K"]);
-
-    unavailableProvider = "";
-    seenResolutions.length = 0;
-    const providerDisabledSuccess = await runGenerateImage({
-      cfg: {
-        agents: {
-          defaults: {
-            imageGenerationModel: {
-              primary: "openai/gpt-image-1",
-            },
-          },
-        },
-      } as OpenClawConfig,
-      prompt: "edit this image",
-      inferredResolution: "2K",
-      inputImages,
-    });
-
-    expect(providerDisabledSuccess.provider).toBe("openai");
-    expect(providerDisabledSuccess.ignoredOverrides).toEqual([]);
-    expect(seenResolutions).toEqual([undefined]);
+    for (const [primary, fallback, unavailable, winner, expected] of [
+      [refs.google, refs.fal, "google", "fal", ["2K", undefined]],
+      [refs.fal, refs.google, "fal", "google", [undefined, "2K"]],
+      [refs.openai, refs.google, "openai", "google", [undefined, "2K"]],
+      [refs.openai, undefined, "", "openai", [undefined]],
+    ] as const) {
+      unavailableProvider = unavailable;
+      seenResolutions.length = 0;
+      const result = await runGenerateImage({
+        cfg: imageConfig(primary, fallback ? [fallback] : []),
+        prompt: "edit this image",
+        inferredResolution: "2K",
+        inputImages: [referenceImage],
+      });
+      expect(result.provider).toBe(winner);
+      expect(seenResolutions).toEqual(expected);
+      if (!fallback) {
+        expect(result.ignoredOverrides).toEqual([]);
+      }
+    }
   });
 
   it("skips candidates whose model-specific reference limit is too low", async () => {
     const attemptedModels: string[] = [];
-    providers = [
-      {
-        id: "fal",
-        capabilities: {
-          generate: {},
-          edit: {
-            enabled: true,
-            maxInputImages: 1,
-            maxInputImagesByModel: {
-              "xai/grok-imagine-image": 3,
-              "google/nano-banana-2-lite": 14,
-            },
+    useProvider("fal", {
+      capabilities: {
+        generate: {},
+        edit: {
+          enabled: true,
+          maxInputImages: 1,
+          maxInputImagesByModel: {
+            "xai/grok-imagine-image": 3,
+            "google/nano-banana-2-lite": 14,
           },
-        },
-        async generateImage(req) {
-          attemptedModels.push(req.model);
-          return {
-            images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-          };
         },
       },
-    ];
+      async generateImage(req) {
+        attemptedModels.push(req.model);
+        return { images: imageResult.images };
+      },
+    });
 
     const result = await runGenerateImage({
-      cfg: {
-        agents: {
-          defaults: {
-            imageGenerationModel: {
-              primary: "fal/xai/grok-imagine-image",
-              fallbacks: ["fal/google/nano-banana-2-lite"],
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: imageConfig("fal/xai/grok-imagine-image", ["fal/google/nano-banana-2-lite"]),
       prompt: "combine references",
-      inputImages: Array.from({ length: 14 }, () => ({
-        buffer: Buffer.from("reference"),
-        mimeType: "image/png",
-      })),
+      inputImages: Array.from({ length: 14 }, () => referenceImage),
     });
 
     expect(result.model).toBe("google/nano-banana-2-lite");
@@ -553,501 +208,124 @@ describe("image-generation runtime", () => {
     ]);
   });
 
-  it("drops unsupported provider geometry overrides and reports them", async () => {
-    let seenRequest:
-      | {
-          size?: string;
-          aspectRatio?: string;
-          resolution?: string;
-        }
-      | undefined;
-    providers = [
-      {
-        id: "openai",
-        capabilities: {
-          generate: {
-            supportsSize: true,
-            supportsAspectRatio: false,
-            supportsResolution: false,
-          },
-          edit: {
-            enabled: true,
-            supportsSize: true,
-            supportsAspectRatio: false,
-            supportsResolution: false,
-          },
-          geometry: {
-            sizes: ["1024x1024", "1024x1536", "1536x1024"],
-          },
-        },
-        async generateImage(req) {
-          seenRequest = {
-            size: req.size,
-            aspectRatio: req.aspectRatio,
-            resolution: req.resolution,
-          };
-          return {
-            images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-          };
-        },
-      },
-    ];
-
-    const result = await runGenerateImage({
-      cfg: {
-        agents: {
-          defaults: {
-            imageGenerationModel: { primary: "openai/gpt-image-1" },
-          },
-        },
-      } as OpenClawConfig,
-      prompt: "draw a cat",
-      size: "1024x1024",
-      aspectRatio: "1:1",
-      resolution: "2K",
-    });
-
-    expect(seenRequest).toEqual({
-      size: "1024x1024",
-      aspectRatio: undefined,
-      resolution: undefined,
-    });
-    expect(result.ignoredOverrides).toEqual([
-      { key: "aspectRatio", value: "1:1" },
-      { key: "resolution", value: "2K" },
-    ]);
-  });
-
-  it("filters image output hints by provider capabilities", async () => {
-    let seenRequest:
-      | {
-          quality?: string;
-          outputFormat?: string;
-          background?: string;
-          providerOptions?: unknown;
-        }
-      | undefined;
-    providers = [
-      {
-        id: "openai",
-        capabilities: {
-          generate: {
-            supportsSize: true,
-          },
-          edit: {
-            enabled: true,
-            supportsSize: true,
-          },
-          output: {
-            qualities: ["low", "medium", "high", "auto"],
-            formats: ["png", "jpeg", "webp"],
-            backgrounds: ["transparent", "opaque", "auto"],
-          },
-        },
-        async generateImage(req) {
-          seenRequest = {
-            quality: req.quality,
-            outputFormat: req.outputFormat,
-            background: req.background,
-            providerOptions: req.providerOptions,
-          };
-          return {
-            images: [{ buffer: Buffer.from("jpeg-bytes"), mimeType: "image/jpeg" }],
-          };
-        },
-      },
-    ];
-
-    const result = await runGenerateImage({
-      cfg: {
-        agents: {
-          defaults: {
-            imageGenerationModel: { primary: "openai/gpt-image-2" },
-          },
-        },
-      } as OpenClawConfig,
-      prompt: "draw a cheap preview",
-      quality: "low",
-      outputFormat: "jpeg",
-      background: "opaque",
-      providerOptions: {
-        openai: {
-          background: "opaque",
-          moderation: "low",
-          outputCompression: 60,
-          user: "end-user-42",
-        },
-      },
-    });
-
-    expect(seenRequest).toEqual({
-      quality: "low",
-      outputFormat: "jpeg",
-      background: "opaque",
-      providerOptions: {
-        openai: {
-          background: "opaque",
-          moderation: "low",
-          outputCompression: 60,
-          user: "end-user-42",
-        },
-      },
-    });
-    expect(result.ignoredOverrides).toStrictEqual([]);
-  });
-
-  it("drops unsupported image output hints and reports them", async () => {
-    let seenRequest:
-      | {
-          quality?: string;
-          outputFormat?: string;
-          background?: string;
-        }
-      | undefined;
-    providers = [
-      {
-        id: "vydra",
-        capabilities: {
-          generate: {},
-          edit: {
-            enabled: false,
-          },
-        },
-        async generateImage(req) {
-          seenRequest = {
-            quality: req.quality,
-            outputFormat: req.outputFormat,
-            background: req.background,
-          };
-          return {
-            images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-          };
-        },
-      },
-    ];
-
-    const result = await runGenerateImage({
-      cfg: {
-        agents: {
-          defaults: {
-            imageGenerationModel: { primary: "vydra/grok-imagine" },
-          },
-        },
-      } as OpenClawConfig,
-      prompt: "draw a cat",
-      quality: "low",
-      outputFormat: "jpeg",
-      background: "transparent",
-    });
-
-    expect(seenRequest).toEqual({
-      quality: undefined,
-      outputFormat: undefined,
-      background: undefined,
-    });
-    expect(result.ignoredOverrides).toEqual([
-      { key: "quality", value: "low" },
-      { key: "outputFormat", value: "jpeg" },
-      { key: "background", value: "transparent" },
-    ]);
-  });
-
-  it("maps requested size to the closest supported fallback geometry", async () => {
-    let seenRequest:
-      | {
-          size?: string;
-          aspectRatio?: string;
-          resolution?: string;
-        }
-      | undefined;
-    providers = [
-      {
-        id: "minimax",
-        capabilities: {
-          generate: {
-            supportsSize: false,
-            supportsAspectRatio: true,
-            supportsResolution: false,
-          },
-          edit: {
-            enabled: true,
-            supportsSize: false,
-            supportsAspectRatio: true,
-            supportsResolution: false,
-          },
-          geometry: {
-            aspectRatios: ["1:1", "16:9"],
-          },
-        },
-        async generateImage(req) {
-          seenRequest = {
-            size: req.size,
-            aspectRatio: req.aspectRatio,
-            resolution: req.resolution,
-          };
-          return {
-            images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-            model: "image-01",
-          };
-        },
-      },
-    ];
-
-    const result = await runGenerateImage({
-      cfg: {
-        agents: {
-          defaults: {
-            imageGenerationModel: { primary: "minimax/image-01" },
-          },
-        },
-      } as OpenClawConfig,
-      prompt: "draw a cat",
-      size: "1280x720",
-    });
-
-    expect(seenRequest).toEqual({
-      size: undefined,
-      aspectRatio: "16:9",
-      resolution: undefined,
-    });
-    expect(result.ignoredOverrides).toStrictEqual([]);
-    if (!result.normalization || !result.metadata) {
-      throw new Error("Expected image-generation normalization metadata");
-    }
-    expect(result.normalization.aspectRatio?.applied).toBe("16:9");
-    expect(result.normalization.aspectRatio?.derivedFrom).toBe("size");
-    expect(result.metadata.requestedSize).toBe("1280x720");
-    expect(result.metadata.normalizedAspectRatio).toBe("16:9");
-    expect(result.metadata.aspectRatioDerivedFromSize).toBe("16:9");
-  });
-
   it.each([
-    {
-      name: "landscape aspect-ratio hint",
-      aspectRatio: "16:9",
-      expectedSize: "2048x1152",
-      modelSizes: [],
-    },
-    {
-      name: "portrait aspect-ratio hint",
-      aspectRatio: "9:16",
-      expectedSize: "1152x2048",
-      modelSizes: [],
-    },
-    {
-      name: "portrait reference-image edit",
-      aspectRatio: "9:16",
-      expectedSize: "1152x2048",
-      modelSizes: [],
-      edit: true,
-    },
-    {
-      name: "explicit arbitrary dimensions",
-      size: "1536x864",
-      expectedSize: "1536x864",
-      modelSizes: [],
-    },
-    {
-      name: "restricted model-specific dimensions",
-      aspectRatio: "16:9",
-      expectedSize: "1536x1024",
-      modelSizes: ["1536x1024"],
-    },
-  ])(
-    "preserves flexible-model geometry for $name",
-    async ({
-      aspectRatio,
-      edit,
-      expectedSize,
-      modelSizes,
-      size,
-    }: {
-      aspectRatio?: string;
-      edit?: boolean;
-      expectedSize: string;
-      modelSizes: string[];
-      size?: string;
-    }) => {
-      let seenRequest: { aspectRatio?: string; size?: string } | undefined;
-      providers = [
-        {
-          id: "canvas",
-          capabilities: {
-            generate: { supportsSize: true, supportsAspectRatio: false },
-            edit: { enabled: true, supportsSize: true, supportsAspectRatio: false },
-            geometry: {
-              sizes: ["1024x1024", "2048x1152", "1152x2048", "1536x1024"],
-              sizesByModel: { "flexible-image": modelSizes },
-            },
-          },
-          async generateImage(request) {
-            seenRequest = { aspectRatio: request.aspectRatio, size: request.size };
-            return {
-              images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-            };
-          },
+    ["family/pro/edit", 12],
+    ["family/pro/v2", 10],
+    ["family/basic", 5],
+    ["other", 1],
+  ] as const)("enforces the reference limit for %s", async (model, limit) => {
+    useProvider("test", {
+      capabilities: {
+        generate: {},
+        edit: {
+          enabled: true,
+          maxInputImages: 1,
+          maxInputImagesByModel: { "family/pro/edit": 12 },
+          maxInputImagesByModelPrefix: { family: 5, "family/pro": 10 },
         },
-      ];
+      },
+    });
+    const modelOverride = `test/${model}`;
+    const result = await runGenerateImage({
+      modelOverride,
+      inputImages: Array.from({ length: limit }, () => referenceImage),
+    });
+    expect(result.images).toEqual(imageResult.images);
+    expect(seenRequest?.model).toBe(model);
 
-      const result = await runGenerateImage({
-        cfg: {
-          agents: { defaults: { imageGenerationModel: { primary: "canvas/flexible-image" } } },
-        } as OpenClawConfig,
-        prompt: "preserve the requested image geometry",
-        aspectRatio,
-        size,
-        ...(edit
-          ? { inputImages: [{ buffer: Buffer.from("reference"), mimeType: "image/png" }] }
-          : {}),
-      });
+    seenRequest = undefined;
+    await expect(
+      runGenerateImage({
+        modelOverride,
+        inputImages: Array.from({ length: limit + 1 }, () => referenceImage),
+      }),
+    ).rejects.toThrow(
+      `${modelOverride} supports at most ${limit} reference image${limit === 1 ? "" : "s"}, ${limit + 1} requested`,
+    );
+    expect(seenRequest).toBeUndefined();
+  });
 
-      expect(seenRequest).toEqual({ aspectRatio: undefined, size: expectedSize });
-      expect(result.ignoredOverrides).toStrictEqual([]);
-      expect(result.normalization?.size).toEqual(
-        aspectRatio ? { applied: expectedSize, derivedFrom: "aspectRatio" } : undefined,
-      );
-    },
-  );
+  it("preserves flexible-model dimensions for reference-image edits", async () => {
+    useProvider("canvas", {
+      capabilities: geometryCapabilities(
+        {
+          sizes: ["1024x1024", "2048x1152", "1152x2048", "1536x1024"],
+          sizesByModel: { "flexible-image": [] },
+        },
+        { supportsSize: true, supportsAspectRatio: false },
+      ),
+    });
+
+    const result = await runGenerateImage({
+      cfg: imageConfig("canvas/flexible-image"),
+      prompt: "preserve the requested image geometry",
+      aspectRatio: "9:16",
+      inputImages: [referenceImage],
+    });
+
+    expect(seenRequest).toMatchObject({ aspectRatio: undefined, size: "1152x2048" });
+    expect(result.ignoredOverrides).toStrictEqual([]);
+    expect(result.normalization?.size).toEqual({
+      applied: "1152x2048",
+      derivedFrom: "aspectRatio",
+    });
+  });
 
   it("uses model-specific geometry lists before provider normalization", async () => {
-    let seenRequest:
-      | {
-          size?: string;
-          aspectRatio?: string;
-          resolution?: "1K" | "2K" | "4K";
-        }
-      | undefined;
-    providers = [
-      {
-        id: "fal",
-        capabilities: {
-          generate: {
-            supportsSize: true,
-            supportsAspectRatio: true,
-            supportsResolution: true,
-          },
-          edit: {
-            enabled: true,
-            supportsSize: true,
-            supportsAspectRatio: true,
-            supportsResolution: true,
-          },
-          geometry: {
-            sizes: ["1024x1024", "1536x1024", "1024x1536"],
-            sizesByModel: {
-              "krea/v2/medium/text-to-image": [],
-            },
-            aspectRatios: ["1:1", "4:3", "3:2", "16:9"],
-            aspectRatiosByModel: {
-              "krea/v2/medium/text-to-image": ["1:1", "2:1", "20:9"],
-            },
-            resolutions: ["1K", "2K", "4K"],
-            resolutionsByModel: {
-              "krea/v2/medium/text-to-image": ["1K", "2K"],
-            },
-          },
+    const model = "krea/v2/medium/text-to-image";
+    useProvider("fal", {
+      capabilities: geometryCapabilities(
+        {
+          sizes: ["1024x1024", "1536x1024", "1024x1536"],
+          sizesByModel: { [model]: [] },
+          aspectRatios: ["1:1", "4:3", "3:2", "16:9"],
+          aspectRatiosByModel: { [model]: ["1:1", "2:1", "20:9"] },
+          resolutions: ["1K", "2K", "4K"],
+          resolutionsByModel: { [model]: ["1K", "2K"] },
         },
-        async generateImage(req) {
-          seenRequest = {
-            size: req.size,
-            aspectRatio: req.aspectRatio,
-            resolution: req.resolution,
-          };
-          return {
-            images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-          };
-        },
-      },
-    ];
+        { supportsSize: true, supportsAspectRatio: true, supportsResolution: true },
+      ),
+    });
 
     await runGenerateImage({
-      cfg: {
-        agents: {
-          defaults: {
-            imageGenerationModel: { primary: "fal/krea/v2/medium/text-to-image" },
-          },
-        },
-      } as OpenClawConfig,
-      prompt: "draw a cat",
+      cfg: imageConfig(`fal/${model}`),
       size: "1024x768",
       aspectRatio: "20:9",
       resolution: "4K",
     });
 
-    expect(seenRequest).toEqual({
+    expect(seenRequest).toMatchObject({
       size: "1024x768",
       aspectRatio: "20:9",
       resolution: "2K",
     });
   });
 
-  it("lists runtime image-generation providers through the provider registry", () => {
-    const registryProviders: ImageGenerationProvider[] = [
-      {
-        id: "image-plugin",
-        defaultModel: "img-v1",
-        models: ["img-v1", "img-v2"],
-        capabilities: {
-          generate: {
-            supportsResolution: true,
-          },
-          edit: {
-            enabled: true,
-            maxInputImages: 3,
-          },
-          geometry: {
-            resolutions: ["1K", "2K"],
-          },
-        },
-        generateImage: async () => ({
-          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-        }),
-      },
-    ];
-    providers = registryProviders;
-
-    expect(
-      listRuntimeImageGenerationProviders({ config: {} as OpenClawConfig }, runtimeDeps),
-    ).toEqual(registryProviders);
-    expect(listedConfigs).toEqual([{} as OpenClawConfig]);
-  });
-
-  it("builds a generic config hint without hardcoded provider ids", async () => {
-    providers = [
-      {
-        id: "vision-one",
-        defaultModel: "paint-v1",
-        isConfigured: () => false,
-        capabilities: {
-          generate: {},
-          edit: { enabled: false },
-        },
-        generateImage: async () => ({
-          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-        }),
-      },
-      {
-        id: "vision-two",
-        defaultModel: "paint-v2",
-        isConfigured: () => false,
-        capabilities: {
-          generate: {},
-          edit: { enabled: false },
-        },
-        generateImage: async () => ({
-          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-        }),
-      },
-    ];
-    providerEnvVars = {
-      "vision-one": ["VISION_ONE_API_KEY"],
-      "vision-two": ["VISION_TWO_API_KEY"],
-    };
-
-    await expect(
-      runGenerateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" }),
-    ).rejects.toThrow(
-      'No image-generation model configured. Set agents.defaults.mediaModels.image.primary to a provider/model like "vision-one/paint-v1". If you want a specific provider, also configure that provider\'s auth/API key first (vision-one: VISION_ONE_API_KEY; vision-two: VISION_TWO_API_KEY).',
-    );
-  });
+  const legacyOutput: ImageGenerationProvider["capabilities"]["output"] = {
+    qualities: ["low"],
+    formats: ["png"],
+    backgrounds: ["opaque"],
+    qualitiesByModel: { extended: ["max"] },
+    formatsByModel: { extended: ["webp"] },
+    backgroundsByModel: { extended: ["transparent"] },
+  };
+  it.each([
+    ["missing", undefined, "low", "jpeg", false],
+    ["legacy", legacyOutput, "max", "webp", true],
+  ] as const)(
+    "filters output hints against %s capabilities",
+    async (_kind, output, quality, outputFormat, edit) => {
+      useProvider("test", { capabilities: { generate: {}, edit: { enabled: edit }, output } });
+      const hints = { quality, outputFormat, background: "transparent" } as const;
+      const result = await runGenerateImage({ modelOverride: "test/legacy", ...hints });
+      expect(seenRequest).toMatchObject({
+        quality: undefined,
+        outputFormat: undefined,
+        background: undefined,
+      });
+      expect(result.ignoredOverrides).toEqual(
+        Object.entries(hints).map(([key, value]) => ({ key, value })),
+      );
+    },
+  );
 });

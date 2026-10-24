@@ -48,7 +48,6 @@ export type CodexCyberWorkspace = {
   authProfileId?: string | undefined;
 };
 
-// Unauthorized targets, keyed by workspace and model and holding an expiry.
 // Authorization belongs to the workspace rather than any one conversation, and
 // one process can host several agent-scoped Codex homes, so an unentitled
 // workspace must not disable escalation for one that is entitled. Writes sweep
@@ -83,17 +82,15 @@ export function reserveCodexCyberProbe(params: {
   };
 }
 
-/** Remembers that this workspace cannot use the target for `cooloffMs`. */
 export function recordCodexCyberTargetUnavailable(params: {
   model: string;
   workspace?: CodexCyberWorkspace;
   cooloffMs: number;
-  now?: number;
 }): void {
   if (params.cooloffMs <= 0) {
     return;
   }
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   for (const [key, expiresAt] of unavailableTargets) {
     if (expiresAt <= now) {
       unavailableTargets.delete(key);
@@ -122,13 +119,11 @@ export type CodexCyberEscalationPlan =
         | "probe_in_flight";
     };
 
-/** Decides whether a refused turn may be retried on Daybreak. */
 export function planCodexCyberEscalation(params: {
   config: CodexCyberFailoverConfig;
   currentModel: string | undefined;
   replaySafe: boolean;
   workspace?: CodexCyberWorkspace;
-  now?: number;
 }): CodexCyberEscalationPlan {
   const { config } = params;
   if (config.mode !== "auto") {
@@ -145,7 +140,7 @@ export function planCodexCyberEscalation(params: {
   if (params.currentModel && targetKey(params.currentModel, params.workspace) === key) {
     return { kind: "skip", reason: "already_daybreak" };
   }
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   const expiresAt = unavailableTargets.get(key);
   if (expiresAt !== undefined && expiresAt <= now) {
     unavailableTargets.delete(key);
@@ -180,7 +175,6 @@ export type CodexCyberAttemptVerdict = {
 
 const AUTHORIZATION_FAILURE_RE = /\b(401|403)\b|unauthorized|not authorized|forbidden/i;
 
-/** Everything the escalation decision needs from one attempt outcome. */
 export function readCodexCyberAttemptVerdict(
   result: CodexCyberAttemptOutcome | undefined,
 ): CodexCyberAttemptVerdict {

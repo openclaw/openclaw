@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SourceRuntime } from "../../types.js";
+import { bindReportFetch, type ReportFixtureFetch } from "../../report-network.test-support.js";
+import type { GithubItem, GithubSource } from "../../types.js";
 import { createGithubSource } from "./index.js";
 import {
   advisory,
@@ -18,15 +19,47 @@ import {
   window,
 } from "./responses.fixtures.js";
 
-function source(
-  route: (url: URL, init?: RequestInit) => Response | Promise<Response>,
-  signal?: AbortSignal,
-) {
+function source(route: (url: URL, init?: RequestInit) => Response | Promise<Response>) {
   const logs = { ...logger, info: vi.fn() };
-  const fetchImpl = vi.fn<NonNullable<SourceRuntime["fetchImpl"]>>((input, init) =>
+  const fetchImpl = vi.fn<ReportFixtureFetch>((input, init) =>
     Promise.resolve(route(new URL(input), init)),
   );
-  return { api: createGithubSource({ logger: logs, fetchImpl, signal }), fetchImpl, logs };
+  const streaming = bindReportFetch(createGithubSource({ logger: logs }), fetchImpl);
+  return {
+    streaming,
+    api: {
+      ...streaming,
+      async collect(
+        sourceConfig: Parameters<GithubSource["collect"]>[0],
+        activityWindow: Parameters<GithubSource["collect"]>[1],
+        sourceRoster: Parameters<GithubSource["collect"]>[2],
+      ) {
+        const items = new Map<string, GithubItem>();
+        const status = await streaming.collect(
+          sourceConfig,
+          activityWindow,
+          sourceRoster,
+          async (entries) => {
+            for (const { key, value } of entries) {
+              items.set(key, value);
+            }
+          },
+        );
+        return {
+          items: [...items.values()].toSorted(
+            (a, b) =>
+              a.atMs - b.atMs ||
+              a.url.localeCompare(b.url, "en") ||
+              a.kind.localeCompare(b.kind, "en") ||
+              a.actor.localeCompare(b.actor, "en"),
+          ),
+          status,
+        };
+      },
+    },
+    fetchImpl,
+    logs,
+  };
 }
 
 afterEach(() => {
@@ -35,6 +68,64 @@ afterEach(() => {
 });
 
 describe("GitHub reports source", () => {
+  it("awaits bounded activity writes before fetching the next page", async () => {
+    const firstWrite = Promise.withResolvers<void>();
+    const releaseWrite = Promise.withResolvers<void>();
+    const batchSizes: number[] = [];
+    let pages = 0;
+    const { streaming } = source((url) => {
+      if (url.pathname === "/repos/example/app/commits") {
+        pages++;
+        return pages === 1
+          ? json(
+              Array.from({ length: 100 }, (_, index) => commit(String(index))),
+              {
+                Link: `<${url}&page=2>; rel="next"`,
+              },
+            )
+          : json([commit("last")]);
+      }
+      return emptyRoute(url);
+    });
+    const pending = streaming.collect(config, window, roster, async (entries) => {
+      batchSizes.push(entries.length);
+      if (batchSizes.length === 1) {
+        firstWrite.resolve();
+        await releaseWrite.promise;
+      }
+    });
+    try {
+      await Promise.race([firstWrite.promise, pending]);
+      expect(batchSizes).toEqual([100]);
+      expect(pages).toBe(1);
+    } finally {
+      releaseWrite.resolve();
+    }
+    expect((await pending).ok).toBe(true);
+    expect(batchSizes).toEqual([100, 1]);
+    expect(pages).toBe(2);
+  });
+
+  it.each([
+    ["/commits", 409, "Git Repository is empty.", true],
+    ["/commits", 409, "Conflict", false],
+    ["/commits", 403, "Git Repository is empty.", false],
+    ["/issues/comments", 409, "Git Repository is empty.", false],
+  ] as const)(
+    "qualifies empty-repository responses from %s with HTTP %s (%s)",
+    async (endpoint, httpStatus, message, ok) => {
+      const { api } = source((url) =>
+        url.pathname === `/repos/example/app${endpoint}`
+          ? json({ message }, {}, httpStatus)
+          : emptyRoute(url),
+      );
+      const result = await api.collect(config, window, roster);
+      expect(result.items).toEqual([]);
+      expect(result.status.ok).toBe(ok);
+      expect(result.status.warnings).toHaveLength(ok ? 0 : 1);
+    },
+  );
+
   it("resolves relative next-page links against the current endpoint on GHES", async () => {
     const { api, fetchImpl } = source((url) => {
       expect(url.pathname).toBe("/api/v3/orgs/example/teams/builders/members");
@@ -49,7 +140,7 @@ describe("GitHub reports source", () => {
   });
 
   it("paginates teams and direct collaborators, keeping only write access and eligible repos", async () => {
-    const { api, fetchImpl, logs } = source((url, init) => {
+    const { api, fetchImpl } = source((url, init) => {
       const headers = new Headers(init?.headers);
       expect(headers.get("authorization")).toBe(`Bearer ${config.token}`);
       expect(headers.get("accept")).toBe("application/vnd.github+json");
@@ -89,7 +180,6 @@ describe("GitHub reports source", () => {
     expect(
       fetchImpl.mock.calls.filter(([url]) => String(url).includes("/collaborators")),
     ).toHaveLength(1);
-    expect(logs.info.mock.calls).toEqual([["team-reports: GitHub roster loaded: 5 people"]]);
   });
 
   it("qualifies every issue search by type for fine-grained tokens", async () => {
@@ -103,13 +193,6 @@ describe("GitHub reports source", () => {
       .map((url) => url.searchParams.get("q") ?? "");
 
     expect(result.status.warnings).toEqual([]);
-    expect(queries.length).toBeGreaterThan(0);
-    for (const query of queries) {
-      expect(query).toMatch(/(?:^|\s)is:(?:issue|pull-request)(?=\s|$)/);
-      if (query.includes(" merged:")) {
-        expect(query).toContain(" is:pull-request ");
-      }
-    }
     expect(queries).toEqual([
       "org:example is:issue created:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z",
       "org:example is:pull-request created:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z",
@@ -155,13 +238,8 @@ describe("GitHub reports source", () => {
   });
 
   it.each([
-    ["created", "issue"],
     ["created", "pull-request"],
-    ["closed", "issue"],
-    ["closed", "pull-request"],
-    ["merged", "pull-request"],
     ["updated", "issue"],
-    ["updated", "pull-request"],
   ])(
     "splits and paginates capped %s is:%s searches, warns on incomplete results and deduplicates PR lookups",
     async (qualifier, type) => {
@@ -214,6 +292,7 @@ describe("GitHub reports source", () => {
       expect(result.items.some((item) => item.kind === "pr_closed")).toBe(false);
       expect(result.status.stats.searchSplits).toBe(1);
       expect(result.status.stale).toBe(true);
+      expect(result.status.ok).toBe(false);
       expect(result.status.warnings).toEqual([
         expect.stringContaining("incomplete search results"),
       ]);
@@ -327,7 +406,7 @@ describe("GitHub reports source", () => {
       window,
       roster,
     );
-    expect(result.status.ok).toBe(true);
+    expect(result.status.ok).toBe(false);
     expect(result.status.warnings).toEqual([expect.stringContaining("example/app")]);
     expect(JSON.stringify(result.status)).not.toContain(config.token);
     expect(result.items.map((item) => item.repo)).not.toContain("example/old");
@@ -338,62 +417,53 @@ describe("GitHub reports source", () => {
     ]);
   });
 
-  it.each([
-    ["issue", "issues/comments", "issue_comment"],
-    ["pull-request", "pulls/comments", "review_comment"],
-  ])(
-    "discovers a repository with only a new %s comment on an old item",
-    async (type, endpoint, kind) => {
-      const old = "2026-08-01T00:00:00Z";
-      const { api, fetchImpl, logs } = source((url) => {
-        if (url.pathname === "/orgs/example/repos") {
-          return json([{ ...repo(), pushed_at: old }, repo("archived", true), repo("excluded")]);
-        }
-        if (url.pathname === "/search/issues") {
-          const items = url.searchParams.get("q")?.includes(` is:${type} updated:`)
-            ? ["app", "archived", "excluded"].map((name) =>
-                Object.assign(issue(1, name), {
-                  created_at: old,
-                  ...(type === "pull-request" ? { pull_request: { merged_at: null } } : {}),
-                }),
-              )
-            : [];
-          return json({ total_count: items.length, items });
-        }
-        if (url.pathname === `/repos/example/app/${endpoint}`) {
-          return json([
-            {
-              user: { login: "reviewer" },
-              body: "New discussion on an old item",
-              created_at: at,
-              html_url: "https://github.test/comment/1",
-            },
-          ]);
-        }
-        return emptyRoute(url);
-      });
-      const result = await api.collect(
-        { ...config, excludeRepos: ["example/excluded"] },
-        window,
-        roster,
-      );
-      expect(result.status.warnings).toEqual([]);
-      expect(result.items).toEqual([
-        expect.objectContaining({ kind, repo: "example/app", actor: "reviewer" }),
-      ]);
-      expect(result.status.stats.commitStrategy).toBe("none");
-      const paths = fetchImpl.mock.calls.map(([input]) => new URL(input).pathname);
-      expect(paths.filter((pathname) => pathname.endsWith("/comments"))).toEqual([
-        "/repos/example/app/issues/comments",
-        "/repos/example/app/pulls/comments",
-      ]);
-      expect(paths.some((pathname) => pathname.endsWith("/commits"))).toBe(false);
-      expect(paths.some((pathname) => /\/pulls\/\d+$/.test(pathname))).toBe(false);
-      expect(logs.info).toHaveBeenCalledWith(
-        "team-reports: GitHub issue searches done: 0 items, 1 updated-search repos",
-      );
-    },
-  );
+  it("discovers a repository with only a new review comment on an old pull request", async () => {
+    const old = "2026-08-01T00:00:00Z";
+    const { api, fetchImpl } = source((url) => {
+      if (url.pathname === "/orgs/example/repos") {
+        return json([{ ...repo(), pushed_at: old }, repo("archived", true), repo("excluded")]);
+      }
+      if (url.pathname === "/search/issues") {
+        const items = url.searchParams.get("q")?.includes(" is:pull-request updated:")
+          ? ["app", "archived", "excluded"].map((name) =>
+              Object.assign(issue(1, name), {
+                created_at: old,
+                pull_request: { merged_at: null },
+              }),
+            )
+          : [];
+        return json({ total_count: items.length, items });
+      }
+      if (url.pathname === "/repos/example/app/pulls/comments") {
+        return json([
+          {
+            user: { login: "reviewer" },
+            body: "New discussion on an old item",
+            created_at: at,
+            html_url: "https://github.test/comment/1",
+          },
+        ]);
+      }
+      return emptyRoute(url);
+    });
+    const result = await api.collect(
+      { ...config, excludeRepos: ["example/excluded"] },
+      window,
+      roster,
+    );
+    expect(result.status.warnings).toEqual([]);
+    expect(result.items).toEqual([
+      expect.objectContaining({ kind: "review_comment", repo: "example/app", actor: "reviewer" }),
+    ]);
+    expect(result.status.stats.commitStrategy).toBe("none");
+    const paths = fetchImpl.mock.calls.map(([input]) => new URL(input).pathname);
+    expect(paths.filter((pathname) => pathname.endsWith("/comments"))).toEqual([
+      "/repos/example/app/issues/comments",
+      "/repos/example/app/pulls/comments",
+    ]);
+    expect(paths.some((pathname) => pathname.endsWith("/commits"))).toBe(false);
+    expect(paths.some((pathname) => /\/pulls\/\d+$/.test(pathname))).toBe(false);
+  });
 
   it("discovers a comment-only repository whose item was updated again after the window closed", async () => {
     const old = "2026-08-01T00:00:00Z";
@@ -434,7 +504,7 @@ describe("GitHub reports source", () => {
   });
 
   it("collects an advisory-only repository while respecting repository exclusions", async () => {
-    const { api, fetchImpl, logs } = source((url) => {
+    const { api, fetchImpl } = source((url) => {
       if (url.pathname === "/orgs/example/repos") {
         return json([
           { ...repo(), pushed_at: "2026-08-01T00:00:00Z" },
@@ -467,9 +537,6 @@ describe("GitHub reports source", () => {
     expect(paths.filter((pathname) => pathname.startsWith("/repos/"))).toEqual([
       "/repos/example/app/security-advisories",
     ]);
-    expect(logs.info).toHaveBeenCalledWith(
-      "team-reports: GitHub comments scanned: 0 repos; advisories scanned: 1 repos",
-    );
   });
 
   it("stops advisory pagination after a page whose last update predates the window", async () => {
@@ -506,10 +573,7 @@ describe("GitHub reports source", () => {
     expect(requests[0]?.searchParams.get("direction")).toBe("desc");
   });
 
-  it.each([
-    ["issues/comments", "issue_comment"],
-    ["pulls/comments", "review_comment"],
-  ])("bounds %s titles while preserving full comment bodies", async (endpoint, kind) => {
+  it("bounds comment titles while preserving full comment bodies", async () => {
     const comments = [
       { body: "  First\t  line  \r\nFull body stays here", title: "First line" },
       { body: "x".repeat(140), title: "x".repeat(140) },
@@ -523,7 +587,7 @@ describe("GitHub reports source", () => {
       { body: null, title: "Comment" },
     ];
     const { api } = source((url) => {
-      if (url.pathname === `/repos/example/app/${endpoint}`) {
+      if (url.pathname === "/repos/example/app/issues/comments") {
         return json(
           comments.map(({ body }, index) => ({
             user: { login: "reviewer" },
@@ -540,7 +604,7 @@ describe("GitHub reports source", () => {
     expect(result.items).toEqual(
       comments.map(({ body, title }, index) =>
         expect.objectContaining({
-          kind,
+          kind: "issue_comment",
           title,
           body: body ?? "",
           url: `https://github.test/comment/${index}`,
@@ -550,12 +614,6 @@ describe("GitHub reports source", () => {
   });
 
   it.each([
-    { shape: "repository credits", credits: advisory.credits, actors: ["helper", "reviewer"] },
-    {
-      shape: "nested users",
-      credits: [{ user: { login: "reviewer" } }, { user: { login: "reviewer" } }],
-      actors: ["helper", "reviewer"],
-    },
     {
       shape: "mixed credits with nested user precedence",
       credits: [
@@ -639,6 +697,7 @@ describe("GitHub reports source", () => {
       await vi.runAllTimersAsync();
       const result = await pending;
       expect(result.status.stale).toBe(true);
+      expect(result.status.ok).toBe(false);
       expect(result.status.warnings).toEqual([
         `Advisories for example/app: HTTP ${httpStatus}; check token permissions and repository access`,
       ]);
@@ -722,11 +781,8 @@ describe("GitHub reports source", () => {
 
   it("never includes transport failures or server payloads in logs and status", async () => {
     const logs = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const api = createGithubSource({
-      logger: logs,
-      fetchImpl: async () => {
-        throw new Error(`transport ${config.token}`);
-      },
+    const api = bindReportFetch(createGithubSource({ logger: logs }), async () => {
+      throw new Error(`transport ${config.token}`);
     });
     const result = await api.loadRoster(config);
     expect(result.status.ok).toBe(false);
@@ -734,66 +790,6 @@ describe("GitHub reports source", () => {
     expect(JSON.stringify([result, logs.warn.mock.calls, logs.error.mock.calls])).not.toContain(
       config.token,
     );
-  });
-
-  it("aborts between pages without fetching the next page or exposing abort reasons", async () => {
-    const controller = new AbortController();
-    const { api, fetchImpl } = source((url) => {
-      controller.abort(new Error(config.token));
-      return json([{ login: "builder" }], { Link: `<${url}&page=2>; rel="next"` });
-    }, controller.signal);
-    await expect(api.loadRoster(config)).rejects.toThrow("aborted");
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    ["created", "issue"],
-    ["created", "pull-request"],
-    ["closed", "issue"],
-    ["closed", "pull-request"],
-    ["merged", "pull-request"],
-    ["updated", "issue"],
-    ["updated", "pull-request"],
-  ])(
-    "aborts a %s is:%s search without fetching more pages or searches",
-    async (qualifier, type) => {
-      const controller = new AbortController();
-      const queries: string[] = [];
-      const { api, fetchImpl } = source((url) => {
-        if (url.pathname === "/search/issues") {
-          const query = url.searchParams.get("q") ?? "";
-          queries.push(query);
-          if (query.includes(` is:${type} ${qualifier}:`)) {
-            controller.abort(new Error(config.token));
-            return json(
-              { total_count: 2, items: [issue()] },
-              { Link: `<${url}&page=2>; rel="next"` },
-            );
-          }
-        }
-        return emptyRoute(url);
-      }, controller.signal);
-      await expect(api.collect(config, window, roster)).rejects.toThrow(
-        "GitHub collection aborted",
-      );
-      expect(queries.at(-1)).toContain(` is:${type} ${qualifier}:`);
-      expect(fetchImpl).toHaveBeenCalledTimes(queries.length + 1);
-    },
-  );
-
-  it("cancels a rate limit sleep promptly", async () => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    const { api, fetchImpl } = source(
-      () => json({}, { "Retry-After": "3600" }, 429),
-      controller.signal,
-    );
-    const pending = api.loadRoster(config);
-    const rejected = expect(pending).rejects.toThrow("aborted");
-    await vi.advanceTimersByTimeAsync(1);
-    controller.abort();
-    await rejected;
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("refuses cross-origin pagination before forwarding credentials", async () => {

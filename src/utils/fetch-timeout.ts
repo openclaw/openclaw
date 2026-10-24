@@ -1,4 +1,3 @@
-// Fetch timeout helpers wrap fetch calls with timeout and abort behavior.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -115,9 +114,6 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
   refresh: () => void;
 } {
   const { timeoutMs, signal: parentSignal } = params;
-  if (!timeoutMs && !parentSignal) {
-    return { signal: undefined, cleanup: () => {}, refresh: () => {} };
-  }
   if (!timeoutMs) {
     return { signal: parentSignal, cleanup: () => {}, refresh: () => {} };
   }
@@ -163,34 +159,19 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
   };
 }
 
-/**
- * Fetch wrapper that adds timeout support via AbortController.
- *
- * @param url - The URL to fetch
- * @param init - RequestInit options (headers, method, body, etc.)
- * @param timeoutMs - Timeout in milliseconds
- * @param fetchFn - The fetch implementation to use (defaults to global fetch)
- * @returns The fetch Response
- * @throws AbortError if the request times out
- */
 export async function fetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs: number,
   fetchFn: typeof fetch = fetch,
 ): Promise<Response> {
-  const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
+  // The wrapper timeout ends at headers; caller cancellation still follows the response body.
+  const { signal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: Math.max(1, timeoutMs),
+    signal: init.signal ?? undefined,
     operation: "fetchWithTimeout",
     url,
   });
-  const callerSignal = init.signal ?? undefined;
-  // The wrapper timeout ends once fetch returns headers, but the response body
-  // must keep following caller cancellation (and its reason) after that point.
-  const signal =
-    callerSignal && timeoutSignal
-      ? AbortSignal.any([callerSignal, timeoutSignal])
-      : (callerSignal ?? timeoutSignal);
   try {
     return await fetchFn(url, { ...init, signal });
   } finally {

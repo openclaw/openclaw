@@ -1,10 +1,18 @@
-import { render } from "lit";
 import { expect } from "vitest";
-import type { CronJob } from "../../api/types.ts";
+import type { CronJob, CronRunLogEntry } from "../../api/types.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
-import { renderCron } from "./view.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import type { CronProps } from "./view-types.ts";
+import { CronView } from "./view.tsx";
 
-type CronProps = Parameters<typeof renderCron>[0];
+export function createCronViewRun(overrides: Partial<CronRunLogEntry> = {}): CronRunLogEntry {
+  return { ts: 1, jobId: "job-1", action: "finished", status: "ok", ...overrides };
+}
+
+export function cronRunsResponse(entries: CronRunLogEntry[] = []) {
+  return { entries, total: entries.length, offset: 0, hasMore: false };
+}
 
 export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
   return {
@@ -21,14 +29,26 @@ export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}):
   } as CronJob;
 }
 
-function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
+export function scheduledJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
+  return createCronViewJob(id, {
+    name: "Nightly digest",
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "digest" },
+    state: {},
+    ...overrides,
+  });
+}
+
+export function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
+  const retired = new Promise<void>(() => {});
   return {
-    basePath: "",
-    agentId: "main",
     loading: false,
     hasLoaded: true,
     listError: null,
     canManage: true,
+    connected: true,
     jobsLoadingMore: false,
     status: {
       enabled: true,
@@ -46,9 +66,11 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     jobsSortBy: "nextRunAtMs",
     jobsSortDir: "asc",
     error: null,
+    notice: null,
     busy: false,
     form: { ...DEFAULT_CRON_FORM },
-    heartbeatScratch: "",
+    gateway: null,
+    getActionRetired: () => retired,
     fieldErrors: {},
     canSubmit: true,
     editingJob: null,
@@ -58,7 +80,7 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     channels: [],
     channelLabels: {},
     runs: [],
-    runsTotal: 0,
+    runsState: "ready",
     runsHasMore: false,
     runsLoadingMore: false,
     runsStatuses: [],
@@ -70,6 +92,7 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     thinkingSuggestions: [],
     timezoneSuggestions: [],
     deliveryToSuggestions: [],
+    failureAlertToSuggestions: [],
     accountSuggestions: [],
     onListTabChange: () => undefined,
     onDetailTabChange: () => undefined,
@@ -83,7 +106,7 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     onClone: () => undefined,
     onToggle: () => undefined,
     onRun: () => undefined,
-    onRemove: () => undefined,
+    onRemove: async () => undefined,
     onLoadMoreJobs: () => undefined,
     onJobsFiltersChange: () => undefined,
     onJobsFiltersReset: () => undefined,
@@ -94,9 +117,19 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
 }
 
 export function renderCronView(overrides: Partial<CronProps> = {}) {
-  const container = document.createElement("div");
-  render(renderCron(createCronViewProps(overrides)), container);
+  const { container } = mountSolid(() => CronView(createCronViewProps(overrides)));
+  flush();
   return container;
+}
+
+export async function openCronMenu(container: Element, selector: string) {
+  const trigger = getElement(container, `${selector} .oc-menu-trigger`, HTMLButtonElement);
+  trigger.click();
+  await waitForSolid(() => {
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(trigger.getAttribute("data-state")).toBe("open");
+  });
+  return trigger;
 }
 
 export function getButtonByText(container: Element, text: string): HTMLButtonElement {
@@ -124,19 +157,13 @@ export function getElement<T extends Element>(
 }
 
 export function selectSegmented(control: HTMLElement) {
-  const group = control.closest<HTMLElement & { value: string }>("wa-radio-group");
-  expect(group).not.toBeNull();
-  if (!group) {
-    return;
-  }
-  group.value = control.getAttribute("value") ?? "";
-  group.dispatchEvent(new Event("change", { bubbles: true }));
+  getElement(control, "input.settings-segmented__input", HTMLInputElement).click();
 }
 
 export function findToggleByLabel(container: Element, label: string) {
   return (
-    Array.from(container.querySelectorAll("wa-switch.settings-toggle")).find((toggle) =>
-      toggle.textContent?.includes(label),
+    Array.from(container.querySelectorAll(".settings-toggle")).find((toggle) =>
+      (toggle.closest(".settings-row--toggle") ?? toggle).textContent?.includes(label),
     ) ?? null
   );
 }

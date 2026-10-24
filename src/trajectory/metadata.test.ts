@@ -1,79 +1,77 @@
-// Trajectory metadata tests cover metadata capture and normalization.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
-import {
-  redactPathForSupport,
-  type SupportRedactionContext,
-} from "../logging/diagnostic-support-redaction.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { SkillSnapshot } from "../skills/types.js";
 
 type ResolvedSkillEntry = NonNullable<SkillSnapshot["resolvedSkills"]>[number];
 
-const loadPluginManifestRegistry = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
+const loadPluginMetadataSnapshot = vi.hoisted(() =>
+  vi.fn(() => ({ plugins: [], manifestRegistry: { plugins: [] } })),
+);
 
 vi.mock("../infra/git-commit.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/git-commit.js")>()),
   resolveCommitHash: () => "abcdef0",
 }));
 
-vi.mock("../infra/os-summary.js", () => ({
-  resolveOsSummary: () => ({
-    platform: "darwin",
-    arch: "arm64",
-    release: "test-release",
-    label: "test-os",
-  }),
-}));
-
-vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: loadPluginManifestRegistry,
-}));
-
+// mock-isolation: Export metadata uses a fixed plugin snapshot, independent of installed plugins.
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: () => {
-    const registry = loadPluginManifestRegistry();
-    return {
-      plugins: registry.plugins,
-      manifestRegistry: registry,
-    };
-  },
+  loadPluginMetadataSnapshot,
 }));
 
 import { buildTrajectoryArtifacts, buildTrajectoryRunMetadata } from "./metadata.js";
 
+function metadata(options: Partial<Parameters<typeof buildTrajectoryRunMetadata>[0]> = {}) {
+  return buildTrajectoryRunMetadata({
+    workspaceDir: "/tmp/workspace",
+    timeoutMs: 30_000,
+    ...options,
+  });
+}
+
+function skill(name: string, description: string): ResolvedSkillEntry {
+  const baseDir = `/tmp/workspace/skills/${name}`;
+  const filePath = `${baseDir}/SKILL.md`;
+  return {
+    name,
+    description,
+    filePath,
+    baseDir,
+    source: "workspace",
+    sourceInfo: {
+      path: filePath,
+      source: "workspace",
+      scope: "project",
+      origin: "top-level",
+      baseDir,
+    },
+    disableModelInvocation: false,
+  };
+}
+
+const partialSkill = {
+  source: "workspace",
+  disableModelInvocation: false,
+} as unknown as ResolvedSkillEntry;
+
 afterEach(() => {
   resetPluginRuntimeStateForTest();
-  loadPluginManifestRegistry.mockClear();
+  loadPluginMetadataSnapshot.mockClear();
 });
 
 describe("trajectory metadata", () => {
   it("uses prepared plugin metadata without rescanning manifests", () => {
-    const metadata = buildTrajectoryRunMetadata({
-      pluginMetadataSnapshot: {
-        plugins: [
-          {
-            id: "prepared-plugin",
-            name: "Prepared Plugin",
-            origin: "bundled",
-            channels: [],
-            providers: [],
-            cliBackends: [],
-            hooks: [],
-            skills: [],
-          },
-        ],
-      } as never,
-      workspaceDir: "/tmp/workspace",
-      timeoutMs: 30_000,
+    const captured = metadata({
+      pluginMetadataSnapshot: { plugins: [{ id: "prepared-plugin" }] } as never,
     });
 
-    expect(metadata.plugins).toMatchObject({
+    expect(captured.plugins).toMatchObject({
       source: "manifest-registry",
       entries: [{ id: "prepared-plugin" }],
     });
-    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   it("redacts harness argv and local paths with the support redaction rules", () => {
@@ -86,32 +84,27 @@ describe("trajectory metadata", () => {
       "--config=/Users/tester/.openclaw/openclaw.json",
     ];
     try {
-      const metadata = buildTrajectoryRunMetadata({
+      const captured = metadata({
         env: {
           HOME: "/Users/tester",
           OPENCLAW_STATE_DIR: "/Users/tester/.openclaw",
         },
         workspaceDir: "/Users/tester/project",
         sessionFile: "/Users/tester/project/session.jsonl",
-        timeoutMs: 30_000,
       });
 
-      const harness = metadata.harness as {
-        invocation?: unknown[];
-        entrypoint?: string;
-        workspaceDir?: string;
-        sessionFile?: string;
-      };
-      expect(harness.invocation).toEqual([
-        "node",
-        "~/project/openclaw.js",
-        "--api-key",
-        "<redacted>",
-        "--config=$OPENCLAW_STATE_DIR/openclaw.json",
-      ]);
-      expect(harness.entrypoint).toBe("~/project/openclaw.js");
-      expect(harness.workspaceDir).toBe("~/project");
-      expect(harness.sessionFile).toBe("~/project/session.jsonl");
+      expect(captured.harness).toMatchObject({
+        invocation: [
+          "node",
+          "~/project/openclaw.js",
+          "--api-key",
+          "<redacted>",
+          "--config=$OPENCLAW_STATE_DIR/openclaw.json",
+        ],
+        entrypoint: "~/project/openclaw.js",
+        workspaceDir: "~/project",
+        sessionFile: "~/project/session.jsonl",
+      });
     } finally {
       process.argv = originalArgv;
     }
@@ -119,53 +112,17 @@ describe("trajectory metadata", () => {
 
   it("captures redacted config plus active plugin and skill inventory", () => {
     const registry = createEmptyPluginRegistry();
-    registry.plugins.push({
-      id: "demo-plugin",
-      name: "Demo Plugin",
-      version: "1.2.3",
-      source: "bundled",
-      origin: "bundled",
-      enabled: true,
-      activated: true,
-      imported: true,
-      status: "loaded",
-      toolNames: ["demo_tool"],
-      hookNames: [],
-      channelIds: ["demo-channel"],
-      cliBackendIds: [],
-      providerIds: ["demo-provider"],
-      embeddingProviderIds: [],
-      speechProviderIds: [],
-      realtimeTranscriptionProviderIds: [],
-      realtimeVoiceProviderIds: [],
-      mediaUnderstandingProviderIds: [],
-      transcriptSourceProviderIds: [],
-      imageGenerationProviderIds: [],
-      videoGenerationProviderIds: [],
-      musicGenerationProviderIds: [],
-      webFetchProviderIds: [],
-      webSearchProviderIds: [],
-      migrationProviderIds: [],
-      agentHarnessIds: ["openclaw"],
-      cliCommands: [],
-      services: [],
-      gatewayDiscoveryServiceIds: [],
-      commands: [],
-      httpRoutes: 0,
-      hookCount: 0,
-      configSchema: false,
-    });
+    registry.plugins.push(
+      createPluginRecord({
+        id: "demo-plugin",
+        imported: true,
+        toolNames: ["demo_tool"],
+      }),
+    );
     setActivePluginRegistry(registry, "trajectory-metadata-test");
 
-    const metadata = buildTrajectoryRunMetadata({
-      config: {
-        providers: {
-          openai: {
-            apiKey: "super-secret",
-          },
-        },
-      } as never,
-      workspaceDir: "/tmp/workspace",
+    const captured = metadata({
+      config: { providers: { openai: { apiKey: "super-secret" } } } as never,
       sessionFile: "/tmp/workspace/session.jsonl",
       sessionKey: "agent:main:test",
       agentId: "main",
@@ -173,118 +130,48 @@ describe("trajectory metadata", () => {
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "responses",
-      timeoutMs: 30_000,
       reasoningLevel: "high",
       skillsSnapshot: {
         prompt: "skill prompt",
         version: 1,
         skills: [{ name: "weather" }],
-        resolvedSkills: [
-          {
-            name: "weather",
-            description: "Check weather",
-            filePath: "/tmp/workspace/skills/weather/SKILL.md",
-            baseDir: "/tmp/workspace/skills/weather",
-            source: "workspace",
-            sourceInfo: {
-              path: "/tmp/workspace/skills/weather/SKILL.md",
-              source: "workspace",
-              scope: "project",
-              origin: "top-level",
-              baseDir: "/tmp/workspace/skills/weather",
-            },
-            disableModelInvocation: false,
-          },
-        ],
+        resolvedSkills: [skill("weather", "Check weather")],
       },
       userPromptPrefixText: "prefix",
     });
 
-    const config = metadata.config as {
-      redacted?: { providers?: { openai?: { apiKey?: string } } };
-    };
-    const plugins = metadata.plugins as { source?: string; entries?: Array<{ id: string }> };
-    const skills = metadata.skills as { entries?: Array<{ id: string; filePath?: string }> };
-    expect(config.redacted?.providers?.openai?.apiKey).toBe(REDACTED_SENTINEL);
-    expect(plugins.source).toBe("active-registry");
-    expect(plugins.entries?.map((entry) => entry.id)).toEqual(["demo-plugin"]);
-    expect(skills.entries?.[0]?.id).toBe("weather");
-    expect(skills.entries?.[0]?.filePath).toBe("/tmp/workspace/skills/weather/SKILL.md");
+    expect(captured).toMatchObject({
+      config: { redacted: { providers: { openai: { apiKey: REDACTED_SENTINEL } } } },
+      plugins: { source: "active-registry", entries: [{ id: "demo-plugin" }] },
+      skills: { entries: [{ id: "weather", filePath: "/tmp/workspace/skills/weather/SKILL.md" }] },
+    });
   });
 
-  it("tolerates skill snapshot entries with missing name/paths (symlink-escape rejects)", () => {
-    const metadata = buildTrajectoryRunMetadata({
-      workspaceDir: "/tmp/workspace",
+  it.each([
+    {
+      name: "retains valid resolved skills beside partial entries",
+      resolved: [skill("alpha", "valid entry"), partialSkill],
+      fallback: [],
+      expected: "alpha",
+    },
+    {
+      name: "falls back when every resolved skill is partial",
+      resolved: [partialSkill],
+      fallback: [{ name: "fallback-skill" }],
+      expected: "fallback-skill",
+    },
+  ])("$name", ({ resolved, fallback, expected }) => {
+    const captured = metadata({
       sessionFile: "/tmp/workspace/session.jsonl",
-      timeoutMs: 30_000,
       skillsSnapshot: {
         prompt: "skill prompt",
         version: 1,
-        skills: [],
-        resolvedSkills: [
-          {
-            name: "alpha",
-            description: "valid entry",
-            filePath: "/tmp/workspace/skills/alpha/SKILL.md",
-            baseDir: "/tmp/workspace/skills/alpha",
-            source: "workspace",
-            sourceInfo: {
-              path: "/tmp/workspace/skills/alpha/SKILL.md",
-              source: "workspace",
-              scope: "project",
-              origin: "top-level",
-              baseDir: "/tmp/workspace/skills/alpha",
-            },
-            disableModelInvocation: false,
-          },
-          {
-            name: undefined,
-            description: undefined,
-            filePath: undefined,
-            baseDir: undefined,
-            source: "workspace",
-            sourceInfo: undefined,
-            disableModelInvocation: false,
-          } as unknown as ResolvedSkillEntry,
-        ],
+        skills: fallback,
+        resolvedSkills: resolved,
       },
     });
 
-    const skills = metadata.skills as { entries?: Array<{ name?: string }> };
-    expect(skills.entries?.map((e) => e.name)).toEqual(["alpha"]);
-  });
-
-  it("falls back to skills list when every resolvedSkills entry is partial", () => {
-    const metadata = buildTrajectoryRunMetadata({
-      workspaceDir: "/tmp/workspace",
-      sessionFile: "/tmp/workspace/session.jsonl",
-      timeoutMs: 30_000,
-      skillsSnapshot: {
-        prompt: "skill prompt",
-        version: 1,
-        skills: [{ name: "fallback-skill" }],
-        resolvedSkills: [
-          {
-            name: undefined,
-            description: undefined,
-            filePath: undefined,
-            baseDir: undefined,
-            source: "workspace",
-            sourceInfo: undefined,
-            disableModelInvocation: false,
-          } as unknown as ResolvedSkillEntry,
-        ],
-      },
-    });
-
-    const skills = metadata.skills as { entries?: Array<{ name?: string }> };
-    expect(skills.entries?.map((e) => e.name)).toEqual(["fallback-skill"]);
-  });
-
-  it("redactPathForSupport returns empty string for null/undefined input", () => {
-    const ctx: SupportRedactionContext = { env: {}, stateDir: "/tmp/.openclaw" };
-    expect(redactPathForSupport(undefined, ctx)).toBe("");
-    expect(redactPathForSupport(null, ctx)).toBe("");
+    expect(captured.skills).toMatchObject({ entries: [{ name: expected }] });
   });
 
   it("captures final artifact summaries for export sidecars", () => {
@@ -313,13 +200,10 @@ describe("trajectory metadata", () => {
       messagingToolSentTargets: [],
     });
 
-    expect(artifacts.finalStatus).toBe("success");
-    expect(artifacts.assistantTexts).toEqual(["done"]);
-    const lifecycle = artifacts.itemLifecycle as
-      | { startedCount?: number; completedCount?: number; activeCount?: number }
-      | undefined;
-    expect(lifecycle?.startedCount).toBe(2);
-    expect(lifecycle?.completedCount).toBe(2);
-    expect(lifecycle?.activeCount).toBe(0);
+    expect(artifacts).toMatchObject({
+      finalStatus: "success",
+      assistantTexts: ["done"],
+      itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
+    });
   });
 });

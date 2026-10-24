@@ -4,22 +4,20 @@ export type WorkerWorkspaceResultConflict = {
   totalCount?: number;
 };
 
+export type WorkerWorkspaceConflictReport =
+  | Required<WorkerWorkspaceResultConflict>
+  | { cleared: true };
+
 export type WorkspaceResultConflictLookup =
   | { kind: "absent" }
   | { kind: "conflict"; conflict: Required<WorkerWorkspaceResultConflict> }
   | { kind: "unknown"; reason: WorkspaceResultConflictUnknownReason };
 type WorkspaceResultConflictUnknownReason = "malformed-report" | "session-unavailable";
 
-export type WorkerWorkspaceRecoveryFailureReport = {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  error: string;
-};
-
 export const WORKSPACE_CONFLICT_TRANSCRIPT_TYPE = "cloud-workspace-conflict";
 export const WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE = "cloud-workspace-conflict-cleared";
 export const WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE = "cloud-workspace-recovery-failed";
+export const WORKSPACE_HISTORY_NOTE_TRANSCRIPT_TYPE = "cloud-workspace-history-note";
 
 const MAX_PROJECTED_CONFLICT_PATHS = 256;
 const MAX_PROJECTED_CONFLICT_PATH_BYTES = 32 * 1024;

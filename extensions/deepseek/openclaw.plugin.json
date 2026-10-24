@@ -8,7 +8,8 @@
   "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["deepseek"],
   "contracts": {
-    "usageProviders": ["deepseek"]
+    "usageProviders": ["deepseek"],
+    "webSearchProviders": ["deepseek"]
   },
   "providerEndpoints": [
     {
@@ -32,6 +33,7 @@
         "baseUrl": "https://api.deepseek.com",
         "api": "openai-completions",
         "defaultModel": "deepseek-v4-pro",
+        "family": "deepseek",
         "models": [
           {
             "id": "deepseek-v4-flash",
@@ -147,6 +149,31 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
-  }
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "DeepSeek Search API Key",
+      "help": "DeepSeek API key. Falls back to DEEPSEEK_API_KEY or models.providers.deepseek.apiKey.",
+      "sensitive": true
+    }
+  },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    }
+  ]
 }

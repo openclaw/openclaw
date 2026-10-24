@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getLineInfo, parse } from "acorn";
 import { decodeHTMLAttribute } from "entities";
 
@@ -204,11 +205,12 @@ export function findWidgetScriptSyntaxError(
       }
       const offset = bodyStart + error.pos;
       const { line, column } = getLineInfo(widgetCode, offset);
-      const snippet = (widgetCode.slice(offset - column).split(/[\r\n\u2028\u2029]/u, 1)[0] ?? "")
-        .trim()
-        .slice(0, 160);
+      const snippet = truncateUtf16Safe(
+        (widgetCode.slice(offset - column).split(/[\r\n\u2028\u2029]/u, 1)[0] ?? "").trim(),
+        160,
+      );
       return {
-        message: error.message.replace(/ \(\d+:\d+\)$/u, "").slice(0, 200),
+        message: truncateUtf16Safe(error.message.replace(/ \(\d+:\d+\)$/u, ""), 200),
         line,
         column,
         snippet,

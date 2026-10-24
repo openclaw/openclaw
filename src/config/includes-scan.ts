@@ -1,6 +1,6 @@
-// Scans included config files and resolves include graphs.
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {
   createConfigIncludeResolutionSession,
@@ -10,25 +10,13 @@ import {
   type IncludeResolver,
 } from "./includes.js";
 import { resolveIncludeRoots } from "./paths.js";
+import { visitConfigValueTree } from "./value-tree.js";
 
 // Include discovery walks nested config objects because include blocks may be embedded.
 function listDirectIncludes(parsed: unknown): string[] {
   const out: string[] = [];
-  const visit = (value: unknown) => {
-    if (!value) {
-      return;
-    }
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        visit(item);
-      }
-      return;
-    }
-    if (typeof value !== "object") {
-      return;
-    }
-    const rec = value as Record<string, unknown>;
-    const includeVal = rec[INCLUDE_KEY];
+  visitConfigValueTree(parsed, (value) => {
+    const includeVal = isRecord(value) ? value[INCLUDE_KEY] : undefined;
     if (typeof includeVal === "string") {
       out.push(includeVal);
     } else if (Array.isArray(includeVal)) {
@@ -38,11 +26,8 @@ function listDirectIncludes(parsed: unknown): string[] {
         }
       }
     }
-    for (const v of Object.values(rec)) {
-      visit(v);
-    }
-  };
-  visit(parsed);
+    return true;
+  });
   return out;
 }
 
@@ -51,13 +36,12 @@ export async function collectIncludePathsRecursive(params: {
   configPath: string;
   parsed: unknown;
   env?: NodeJS.ProcessEnv;
-  allowedRoots?: readonly string[];
 }): Promise<string[]> {
   const includedPaths = new Set<string>();
   // Canonical paths dedupe permission targets; lexical bases preserve relative
   // include contexts and may need revisiting when first reached too deeply.
   const walkedDepthByBase = new Map<string, number>();
-  const allowedRoots = params.allowedRoots ?? resolveIncludeRoots(params.env);
+  const allowedRoots = resolveIncludeRoots(params.env);
   const resolveInclude = createConfigIncludeResolutionSession(params.configPath, allowedRoots);
 
   const walk = (basePath: string, parsed: unknown, depth: number): void => {

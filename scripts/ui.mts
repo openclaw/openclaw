@@ -4,21 +4,32 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { isPidDefinitelyDead } from "../src/shared/pid-alive.ts";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
-import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
-import { resolvePnpmRunner } from "./pnpm-runner.mts";
+import {
+  distArtifactEntryArgs,
+  withDistArtifactOwnership,
+} from "./lib/dist-artifact-ownership.mts";
+import {
+  assertRealOutputRoot,
+  CONTROL_UI_BUILD_PREFIX,
+  controlUiBuildSiblingPid,
+} from "./lib/output-root-guard.mjs";
+import { prepareControlUiSettings } from "./lib/prepare-control-ui-settings.mts";
+import { isRecord } from "./lib/record-shared.mjs";
+import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 import { resolveNodePackageBin } from "./run-node-package-bin.mts";
-import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const uiDir = path.join(repoRoot, "ui");
 const requireFromUi = createRequire(path.join(uiDir, "package.json"));
 
-const WINDOWS_CMD_EXE_EXTENSIONS = new Set([".cmd", ".bat"]);
 const FORWARDED_SIGNAL_KILL_GRACE_MS = 250;
+const PUBLISH_RENAME_DELAYS_MS = [100, 200, 400, 800, 1600];
+const PUBLISH_RENAME_WAIT = new Int32Array(new SharedArrayBuffer(4));
 
 type UiBuildEnvironmentSources = {
   env?: NodeJS.ProcessEnv;
@@ -92,17 +103,7 @@ export function resolveUiBuildEnvironment(
   };
 }
 
-type UiSpawnCall = {
-  args: string[];
-  command: string;
-  options: {
-    cwd: string;
-    env: NodeJS.ProcessEnv;
-    shell: boolean;
-    stdio: "inherit";
-    windowsVerbatimArguments?: boolean;
-  };
-};
+type UiSpawnCall = ReturnType<typeof createPnpmRunnerSpawnSpec>;
 
 type UiSpawnParams = {
   comSpec?: string;
@@ -120,48 +121,20 @@ function usage(): void {
   process.stderr.write("Usage: node scripts/ui.js <install|dev|build|test> [...args]\n");
 }
 
-/**
- * Returns whether Windows needs cmd.exe for a command shim.
- */
-export function shouldUseCmdExeForCommand(
-  cmd: string,
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  if (platform !== "win32") {
-    return false;
-  }
-  const extension = path.extname(cmd).toLowerCase();
-  return WINDOWS_CMD_EXE_EXTENSIONS.has(extension);
-}
-
-/**
- * Builds the spawn call for a UI command, including Windows cmd.exe wrapping.
- */
-export function resolveSpawnCall(
+function resolveSpawnCall(
   cmd: string,
   args: string[],
   envOverride?: NodeJS.ProcessEnv,
   params: UiSpawnParams = {},
 ): UiSpawnCall {
-  const platform = params.platform ?? process.platform;
   const options: UiSpawnCall["options"] = {
     cwd: params.cwd ?? uiDir,
     stdio: "inherit",
     env: envOverride ?? process.env,
     shell: false,
+    detached: undefined,
+    windowsVerbatimArguments: undefined,
   };
-
-  if (shouldUseCmdExeForCommand(cmd, platform)) {
-    const comSpec = params.comSpec ?? resolveWindowsCmdExePath(options.env);
-    return {
-      command: comSpec,
-      args: ["/d", "/s", "/c", buildCmdExeCommandLine(cmd, args)],
-      options: {
-        ...options,
-        windowsVerbatimArguments: true,
-      },
-    };
-  }
 
   return {
     command: cmd,
@@ -170,37 +143,18 @@ export function resolveSpawnCall(
   };
 }
 
-/**
- * Builds the pnpm-backed spawn call for UI package scripts.
- */
 export function resolvePnpmSpawnCall(
   pnpmArgs: string[],
   envOverride?: NodeJS.ProcessEnv,
   params: UiSpawnParams = {},
 ): UiSpawnCall {
-  const env = envOverride ?? process.env;
-  const platform = params.platform ?? process.platform;
-  const cwd = params.cwd ?? uiDir;
-  const runner = resolvePnpmRunner({
-    cwd,
-    env,
+  return createPnpmRunnerSpawnSpec({
+    ...params,
+    cwd: params.cwd ?? uiDir,
+    env: envOverride ?? process.env,
     pnpmArgs,
-    nodeExecPath: params.nodeExecPath ?? process.execPath,
-    npmExecPath: params.npmExecPath ?? env.npm_execpath,
-    comSpec: params.comSpec,
-    platform,
+    stdio: "inherit",
   });
-  return {
-    command: runner.command,
-    args: runner.args,
-    options: {
-      cwd,
-      stdio: "inherit",
-      env,
-      shell: runner.shell,
-      windowsVerbatimArguments: runner.windowsVerbatimArguments,
-    },
-  };
 }
 
 function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
@@ -297,6 +251,7 @@ function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
   child.on("exit", (code, signal) => {
     childExit = { code, signal };
     if (forwardedSignal) {
+      forwardedSignalPids = forwardedSignalPids.filter((pid) => pid !== child.pid);
       waitForForwardedSignalChildren();
       return;
     }
@@ -347,14 +302,7 @@ function collectChildProcessTreePids(child: ChildProcess): { pids: number[]; com
 }
 
 function processTreeIsAlive(pids: number[]): boolean {
-  return pids.some((pid) => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (error) {
-      return hasErrorCode(error, "EPERM");
-    }
-  });
+  return pids.some((pid) => !isPidDefinitelyDead(pid));
 }
 
 function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals, pids: number[]): void {
@@ -377,22 +325,298 @@ function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals, pids: nu
   }
 }
 
-function runSpawnCallSync(spawnCall: UiSpawnCall, label: string): void {
+type UiSpawnResult = { status: number | null; signal: NodeJS.Signals | null };
+
+function runSpawnCallSync(spawnCall: UiSpawnCall, label: string): UiSpawnResult {
   const { command, args: spawnArgs, options } = spawnCall;
-  let result;
   try {
-    result = spawnSync(command, spawnArgs, options);
+    return spawnSync(command, spawnArgs, options);
   } catch (err) {
     console.error(`Failed to launch ${label}:`, err);
-    process.exit(1);
-    return;
+    return { status: 1, signal: null };
   }
+}
+
+function exitForSpawnResult(result: UiSpawnResult): void {
   if (result.signal) {
     process.kill(process.pid, result.signal);
     return;
   }
   if ((result.status ?? 1) !== 0) {
     process.exit(result.status ?? 1);
+  }
+}
+
+function removeUiBuildDirectory(directory: string): void {
+  try {
+    fs.rmSync(directory, { recursive: true, force: true });
+  } catch (error) {
+    // Preserve the build outcome; a later build can reclaim locked leftovers.
+    console.warn(`Could not remove temporary Control UI output ${directory}:`, error);
+  }
+}
+
+function renameWithRetry(from: string, to: string): void {
+  // Windows scanners/indexers can transiently deny freshly written or served trees.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (error) {
+      const delay = PUBLISH_RENAME_DELAYS_MS[attempt];
+      if (
+        delay === undefined ||
+        !["EPERM", "EACCES", "EBUSY"].some((code) => hasErrorCode(error, code))
+      ) {
+        throw error;
+      }
+      Atomics.wait(PUBLISH_RENAME_WAIT, 0, 0, delay);
+    }
+  }
+}
+
+function normalizeUiBuildPermissions(directory: string): void {
+  fs.chmodSync(directory, 0o755);
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      normalizeUiBuildPermissions(entryPath);
+    } else if (entry.isFile()) {
+      fs.chmodSync(entryPath, 0o644);
+    }
+  }
+}
+
+async function buildAndPublishUi(
+  toolCall: UiSpawnCall,
+  env: NodeJS.ProcessEnv,
+): Promise<UiSpawnResult> {
+  const validation = runSpawnCallSync(
+    resolveSpawnCall(
+      process.execPath,
+      [
+        "--import",
+        pathToFileURL(path.join(here, "tsx.mjs")).href,
+        path.join(here, "generate-control-ui-validators.mts"),
+        "--check",
+      ],
+      env,
+      { cwd: repoRoot },
+    ),
+    "Control UI protocol validators",
+  );
+  if (validation.signal || validation.status !== 0) {
+    return validation;
+  }
+  // Prepare before cache input capture: presenter source edits must change the
+  // canonical bytes and inventory even when the UI bundle can otherwise be reused.
+  await prepareControlUiSettings(repoRoot);
+  const dist = path.join(repoRoot, "dist");
+  const output = path.join(dist, "control-ui");
+  fs.mkdirSync(dist, { recursive: true });
+  if (!fs.existsSync(output)) {
+    // An interrupted swap can leave the previous complete build in a retired sibling.
+    const retired = fs
+      .readdirSync(dist)
+      .filter((name) => {
+        const pid = controlUiBuildSiblingPid(name);
+        return name.endsWith(".retired") && pid !== null && isPidDefinitelyDead(pid);
+      })
+      .map((name) => path.join(dist, name))
+      .toSorted((left, right) => fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs)[0];
+    if (retired) {
+      renameWithRetry(retired, output);
+    }
+  }
+  for (const name of fs.readdirSync(dist)) {
+    const pid = controlUiBuildSiblingPid(name);
+    if (pid !== null && isPidDefinitelyDead(pid)) {
+      removeUiBuildDirectory(path.join(dist, name));
+    }
+  }
+  const staging = fs.mkdtempSync(path.join(dist, `${CONTROL_UI_BUILD_PREFIX}${process.pid}-`));
+  const retired = `${staging}.retired`;
+  try {
+    const validator = (script: string, ...args: string[]): [UiSpawnCall, string] => [
+      resolveSpawnCall(process.execPath, [path.join(here, script), ...args], env, {
+        cwd: repoRoot,
+      }),
+      script,
+    ];
+    const cache =
+      env.OPENCLAW_BUILD_CACHE !== "0" && toolCall.args.length === 2 && toolCall.args[1] === "build"
+        ? await import("./lib/build-artifact-cache.mts")
+        : undefined;
+    const sourcePluginInventory =
+      cache && env.OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS === "1"
+        ? (await import("./lib/bundled-plugin-build-entries.mjs"))
+            .collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot, env })
+            .map(({ id, isolated, packageJson }) => {
+              const openclaw =
+                isRecord(packageJson) && isRecord(packageJson.openclaw)
+                  ? packageJson.openclaw
+                  : undefined;
+              return [id, isolated, openclaw?.controlUi];
+            })
+        : undefined;
+    const step = {
+      label: "ui:build",
+      cache: {
+        inputs: [
+          { path: "ui", excludeDirectories: ["node_modules"] },
+          { path: "packages", excludeDirectories: ["node_modules", "dist", ".artifacts"] },
+          ...fs
+            .readdirSync(path.join(repoRoot, "scripts/lib"))
+            .filter((file) => file.startsWith("control-ui-i18n"))
+            .map((file) => `scripts/lib/${file}`),
+          "scripts/ui.js",
+          "scripts/ui.mts",
+          "scripts/pnpm-runner.mts",
+          "scripts/run-node-package-bin.mts",
+          "scripts/lib/build-artifact-cache.mts",
+          "scripts/lib/output-root-guard.mjs",
+          "scripts/lib/build-identity.mts",
+          "package.json",
+          "pnpm-lock.yaml",
+          "tsconfig.json",
+          "docs/assets/openclaw-hero-dark.png",
+          // Package metadata discovers new generations; all copied files (including
+          // deferred chunks absent from Vite's module graph) invalidate reuse.
+          ...(() => {
+            const root = path.join(repoRoot, "dist/extensions");
+            if (!fs.existsSync(root)) {
+              return [];
+            }
+            return fs
+              .readdirSync(root, { withFileTypes: true })
+              .filter((entry) => entry.isDirectory())
+              .flatMap((entry) => {
+                const relative = `dist/extensions/${entry.name}`;
+                return [
+                  `${relative}/package.json`,
+                  `${relative}/openclaw.plugin.json`,
+                  `${relative}/dist/control-ui`,
+                ];
+              });
+          })(),
+        ],
+        outputs: ["."],
+        requiredOutputs: ["index.html", "sw.js", ".build-inputs.json"],
+        restore: "always" as const,
+      },
+    };
+    const staticInputs = cache?.listCacheFiles(repoRoot, step.cache.inputs, fs) ?? [];
+    const inputSignature = (inputs: string[]) =>
+      cache!.hashInputFiles(
+        repoRoot,
+        [
+          ...new Set([...staticInputs, ...inputs.map((file) => path.join(repoRoot, file))]),
+        ].toSorted(),
+        fs,
+        [
+          "NODE_ENV",
+          "OPENCLAW_CONTROL_UI_BASE_PATH",
+          "OPENCLAW_CONTROL_UI_RELEASE_BUILD",
+          "OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS",
+        ],
+        env,
+        JSON.stringify({
+          args: toolCall.args.slice(1),
+          platform: process.platform,
+          arch: process.arch,
+          sourcePluginInventory,
+        }),
+      );
+    const cacheState = cache?.resolveBuildStepCacheState(step, {
+      rootDir: repoRoot,
+      artifactRoot: output,
+      env,
+      inputSignature,
+    });
+    const reuseOutput =
+      cacheState?.fresh &&
+      cache?.restoreBuildStepCacheOutputs(cacheState, {
+        rootDir: repoRoot,
+        artifactRoot: staging,
+        staging: true,
+      });
+    if (reuseOutput) {
+      const { runnerImport } = await import("vite");
+      const {
+        module: { refreshControlUiBuildOutput, resolveControlUiBuildInfo },
+      } = await runnerImport<typeof import("../ui/vite.config.ts")>(
+        path.join(uiDir, "vite.config.ts"),
+        { configFile: false },
+      );
+      await refreshControlUiBuildOutput(staging, resolveControlUiBuildInfo({ env }));
+      console.log("Control UI build: reused content cache; refreshed release identity");
+    }
+    const calls: [UiSpawnCall, string][] = [
+      ...(!reuseOutput
+        ? ([
+            [
+              {
+                ...toolCall,
+                options: {
+                  ...toolCall.options,
+                  env: {
+                    ...toolCall.options.env,
+                    OPENCLAW_CONTROL_UI_PREPARED_SETTINGS_ROOT: repoRoot,
+                  },
+                },
+                args: distArtifactEntryArgs(
+                  toolCall.args[0]!,
+                  [...toolCall.args.slice(1), "--outDir", staging],
+                  { native: true },
+                ),
+              },
+              "Control UI build",
+            ],
+          ] satisfies [UiSpawnCall, string][])
+        : []),
+      validator("check-control-ui-precompressed-assets.mts", staging),
+      validator("check-control-ui-performance.mts", "--report-only", "--dist", staging),
+    ];
+    for (const [call, label] of calls) {
+      const result = runSpawnCallSync(call, label);
+      if (result.signal || result.status !== 0) {
+        return result;
+      }
+    }
+    // A cache hit refreshes identity only in staging; its validated seed is immutable.
+    if (cache && cacheState && !reuseOutput) {
+      const consumedInputs: string[] = JSON.parse(
+        fs.readFileSync(path.join(staging, ".build-inputs.json"), "utf8"),
+      );
+      cache.finalizeBuildStepCache(
+        step,
+        {
+          ...cacheState,
+          consumedInputs,
+          signature: inputSignature(consumedInputs),
+        },
+        { rootDir: repoRoot, artifactRoot: staging, env },
+      );
+    }
+    normalizeUiBuildPermissions(staging);
+    const hadOutput = fs.existsSync(output);
+    if (hadOutput) {
+      renameWithRetry(output, retired);
+    }
+    try {
+      renameWithRetry(staging, output);
+    } catch (error) {
+      if (hadOutput) {
+        renameWithRetry(retired, output);
+      }
+      throw new Error("Failed to publish Control UI build; previous output retained.", {
+        cause: error,
+      });
+    }
+    removeUiBuildDirectory(retired);
+    return { status: 0, signal: null };
+  } finally {
+    removeUiBuildDirectory(staging);
   }
 }
 
@@ -424,7 +648,7 @@ function resolveScriptAction(action: string): [tool: "vite" | "vitest", ...args:
   return null;
 }
 
-export function runUiCli(argv: string[] = process.argv.slice(2)): void {
+export async function runUiCli(argv: string[] = process.argv.slice(2)): Promise<void> {
   const [action, ...rest] = argv;
   if (!action) {
     usage();
@@ -451,7 +675,7 @@ export function runUiCli(argv: string[] = process.argv.slice(2)): void {
 
   const noPnpmBuild = action === "build" && process.env.OPENCLAW_BUILD_ALL_NO_PNPM === "1";
   if (!noPnpmBuild && !depsInstalled(action === "test" ? "test" : "build")) {
-    runSpawnCallSync(resolvePnpmSpawnCall(["install"]), "pnpm");
+    exitForSpawnResult(runSpawnCallSync(resolvePnpmSpawnCall(["install"]), "pnpm"));
   }
 
   const [tool, ...args] = script;
@@ -462,29 +686,11 @@ export function runUiCli(argv: string[] = process.argv.slice(2)): void {
     env,
   );
   if (action === "build") {
-    runSpawnCallSync(toolCall, "Control UI build");
-    if (rest.some((arg) => arg === "--help" || arg === "-h")) {
-      return;
-    }
-    for (const [validator, ...validatorArgs] of [
-      ["check-control-ui-precompressed-assets.mts"],
-      ["check-control-ui-performance.mts", "--report-only"],
-    ] as const) {
-      runSpawnCallSync(
-        resolveSpawnCall(
-          process.execPath,
-          [
-            "--import",
-            new URL("./tsx.mjs", import.meta.url).href,
-            path.join(here, validator),
-            ...validatorArgs,
-          ],
-          env,
-          { cwd: repoRoot },
-        ),
-        validator,
-      );
-    }
+    exitForSpawnResult(
+      rest.some((arg) => arg === "--help" || arg === "-h")
+        ? runSpawnCallSync(toolCall, "Control UI build")
+        : await withDistArtifactOwnership(repoRoot, () => buildAndPublishUi(toolCall, env)),
+    );
     return;
   }
 
@@ -519,5 +725,5 @@ export function isDirectScriptExecution(
 const isDirectExecution = isDirectScriptExecution();
 
 if (isDirectExecution) {
-  runUiCli();
+  await runUiCli();
 }

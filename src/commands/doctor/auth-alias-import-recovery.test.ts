@@ -20,7 +20,91 @@ import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite,
 } from "../doctor-auth-flat-profiles.js";
+import { withPersistedAuthProfileStoreRead } from "../doctor-auth-flat-profiles.test-support.js";
+import { repairAuthProfileMigration } from "./auth-profile-repair.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
+
+it("repairs credential fields while deferring an occupied JSON alias destination", async () => {
+  await withOpenClawTestState(
+    { label: "alias-stale-json-destination", layout: "home" },
+    async (fixture) => {
+      const from = "claude-cli:work";
+      const to = "anthropic:work";
+      const cfg: OpenClawConfig = {
+        plugins: { enabled: false },
+        auth: { profiles: { [from]: { provider: "claude-cli", mode: "api_key" } } },
+      };
+      runAuthProfileWriteTransaction(
+        undefined,
+        (database) => {
+          writePersistedAuthProfileStoreRaw(
+            {
+              version: 1,
+              profiles: {
+                [to]: {
+                  mode: "api_key",
+                  provider: "anthropic",
+                  apiKey: "synthetic-existing-account",
+                },
+                "example:legacy": {
+                  type: "api_key",
+                  provider: "example",
+                  api_key: "synthetic-independent-account",
+                },
+              },
+            },
+            undefined,
+            database,
+          );
+        },
+        { env: fixture.env },
+      );
+      await fixture.writeJson("agents/main/agent/auth-profiles.json", {
+        version: 1,
+        profiles: {
+          [from]: { type: "api_key", provider: "claude-cli", key: "synthetic-imported-account" },
+        },
+      });
+      const repaired = await repairAuthProfileMigration({
+        cfg,
+        env: fixture.env,
+        prompter: { shouldRepair: false, confirmAutoFix: async () => true },
+        profileIdMap: new Map([[from, to]]),
+      });
+      expect(repaired.profileIdMap.size).toBe(0);
+      expect(repaired.config.auth).toEqual(cfg.auth);
+      expect(loadPersistedSharedAuthProfileStore(fixture.env)?.profiles).toEqual({
+        [from]: {
+          type: "api_key",
+          provider: "claude-cli",
+          key: "synthetic-imported-account",
+        },
+        [to]: { type: "api_key", provider: "anthropic", key: "synthetic-existing-account" },
+        "example:legacy": {
+          type: "api_key",
+          provider: "example",
+          key: "synthetic-independent-account",
+        },
+      });
+      expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toMatchObject({
+        profiles: {
+          [from]: { key: "synthetic-imported-account" },
+          [to]: { key: "synthetic-existing-account" },
+        },
+      });
+      expect(repaired.warnings.join("\n")).toContain("Deferred stale auth profile alias");
+      expect(repaired).toMatchObject({
+        findings: expect.arrayContaining([
+          expect.objectContaining({
+            category: "fix-now",
+            fixHint: expect.stringContaining("preserve both"),
+            docsUrl: "https://docs.openclaw.ai/cli/doctor/running#auth-migration-recovery",
+          }),
+        ]),
+      });
+    },
+  );
+});
 
 it("keeps an old selection unresolved when its source ID is recreated", async () => {
   await withOpenClawTestState({ label: "alias-recreated", layout: "home" }, async (fixture) => {
@@ -76,6 +160,15 @@ it("keeps an old selection unresolved when its source ID is recreated", async ()
     expect(result.state.candidate.auth).toEqual(cfg.auth);
     expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual(replaced);
     expect(result.warningNotes.join("\n")).toContain("identity is unresolved");
+    expect(result.displayWarningNotes.join("\n")).not.toContain("identity is unresolved");
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: "fix-now",
+          fixHint: expect.stringContaining("models status"),
+        }),
+      ]),
+    );
   });
 });
 
@@ -143,13 +236,16 @@ it("keeps the recorded target when import verification rolls back", async () => 
         },
       });
       const map = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
-      const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
-        cfg,
-        env: fixture.env,
-        prompter: { confirmAutoFix: async () => true },
-        openAICodexAuthProfileIdMap: map,
-        deps: { loadPersistedAuthProfileStore: () => null },
-      });
+      const result = await withPersistedAuthProfileStoreRead(
+        () => null,
+        () =>
+          maybeMigrateAuthProfileJsonStoresToSqlite({
+            cfg,
+            env: fixture.env,
+            prompter: { confirmAutoFix: async () => true },
+            openAICodexAuthProfileIdMap: map,
+          }),
+      );
       expect(result.warnings.join("\n")).toContain("SQLite verification failed");
       const retryMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
       expect(retryMap.get("claude-cli:work")).toBe("anthropic:work");
@@ -290,6 +386,7 @@ it("recovers independently verified imports of the same alias across two stores"
         env: fixture.env,
       });
     const first = await run();
+    expect(first.findings).toEqual([]);
     expect(first.state.candidate.auth).toEqual({
       profiles: { "anthropic:work": { provider: "anthropic", mode: "api_key" } },
       order: { anthropic: ["anthropic:work"] },
@@ -300,6 +397,7 @@ it("recovers independently verified imports of the same alias across two stores"
     });
     await migrateSharedAuthStore({ detected, stateDir: fixture.stateDir, env: fixture.env });
     const retry = await run();
+    expect(retry.findings).toEqual([]);
     expect(retry.state.candidate.auth).toEqual(first.state.candidate.auth);
     expect(loadPersistedSharedAuthProfileStore(fixture.env)?.profiles["anthropic:work"]).toEqual({
       type: "api_key",

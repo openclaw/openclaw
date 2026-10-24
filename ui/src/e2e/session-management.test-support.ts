@@ -1,8 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
@@ -29,6 +30,40 @@ export function createSessionManagementE2eSuite(source = false) {
   });
 }
 
+/** Drawer visibility precedes the transform settling, which affects measured target bounds. */
+export async function waitForMobileSidebarDrawerOpen(page: Page): Promise<void> {
+  const drawer = page.locator(".shell--mobile-nav.shell--nav-drawer-open > .shell-nav");
+  await drawer.waitFor({ state: "visible" });
+  await drawer.evaluate((element) =>
+    Promise.all(element.getAnimations().map((animation) => animation.finished)),
+  );
+}
+
+/** Foreground chat startup admits the canonical roster after document load. */
+export async function waitForSessionRosterHydration(page: Page): Promise<void> {
+  await evaluateControlUiContext(page, async ({ sessions }) => {
+    const ready = () =>
+      sessions.canonicalListRevision > 0 &&
+      sessions.presentation.result !== null &&
+      !sessions.presentation.resultCached;
+    if (ready()) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const unsubscribe = sessions.subscribe(() => {
+        if (ready()) {
+          unsubscribe();
+          resolve();
+        }
+      });
+      if (ready()) {
+        unsubscribe();
+        resolve();
+      }
+    });
+  });
+}
+
 export function sessionsListResponse(
   sessions: unknown[],
   options: {
@@ -40,11 +75,7 @@ export function sessionsListResponse(
 ) {
   return {
     count: sessions.length,
-    defaults: {
-      contextTokens: null,
-      model: "gpt-5.5",
-      modelProvider: "openai",
-    },
+    defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
     hasMore: options.hasMore ?? false,
     limitApplied: 50,
     nextOffset: options.nextOffset ?? null,
@@ -77,77 +108,50 @@ export async function waitForPatch(
   throw new Error(`No matching sessions.patch request found: ${JSON.stringify(requests)}`);
 }
 
-/** Dispatches before a successful action can remove its own control from the DOM. */
-export async function activateSelfRemovingControl(control: Locator): Promise<void> {
-  await control.evaluate((element) => {
-    const target = element as HTMLElement & { disabled?: boolean };
-    const style = getComputedStyle(target);
-    const bounds = target.getBoundingClientRect();
-    const root = target.getRootNode();
-    const hitTestRoot = root instanceof ShadowRoot ? root : document;
-    const hitTarget = hitTestRoot.elementFromPoint(
-      bounds.left + bounds.width / 2,
-      bounds.top + bounds.height / 2,
-    );
-    if (
-      !target.isConnected ||
-      style.display === "none" ||
-      style.visibility === "hidden" ||
-      bounds.width <= 0 ||
-      bounds.height <= 0 ||
-      target.disabled === true ||
-      target.getAttribute("aria-disabled") === "true" ||
-      !hitTarget ||
-      (hitTarget !== target && !target.contains(hitTarget))
-    ) {
-      throw new Error("Self-removing control must be visible and enabled before activation");
-    }
-    target.click();
+/** Playwright reacquires replaced controls before dispatching the single click. */
+export const activateSelfRemovingControl = (control: Locator): Promise<void> => control.click();
+
+export const trimmedTextContents = (locator: Locator): Promise<string[]> =>
+  locator.evaluateAll((elements) => elements.map((element) => element.textContent?.trim() ?? ""));
+
+export const actionOpacity = (button: Locator): Promise<string> =>
+  button.evaluate((element) => globalThis.getComputedStyle(element).opacity);
+
+export const actionPointerEvents = (button: Locator): Promise<string> =>
+  button.evaluate((element) => globalThis.getComputedStyle(element).pointerEvents);
+
+/** The owned native menu renders each submenu beside its trigger. */
+export const sessionMenuSubmenu = (trigger: Locator): Locator =>
+  trigger.locator("..").locator(':scope > [role="menu"]');
+
+export const sessionMenuLabels = (panel: Locator): Promise<string[]> =>
+  panel.evaluate((element) =>
+    [...element.querySelectorAll('[role^="menuitem"]')]
+      .filter((item) => item.closest('[role="menu"]') === element)
+      .map((item) => item.getAttribute("aria-label") ?? ""),
+  );
+
+/** Moves to an owned menu row through its roving-focus keyboard path. */
+export async function focusSessionMenuItem(page: Page, name: string): Promise<Locator> {
+  const parent = page.getByRole("menuitem", { name, exact: true });
+  const index = await parent.evaluate((element) => {
+    const panel = element.closest('[role="menu"]');
+    const selector = '[role^="menuitem"]:not(:disabled):not([aria-disabled="true"])';
+    return [...(panel?.querySelectorAll(selector) ?? [])]
+      .filter((item) => item.closest('[role="menu"]') === panel)
+      .indexOf(element);
   });
-}
-
-export function trimmedTextContents(locator: Locator): Promise<string[]> {
-  return locator.evaluateAll((elements) =>
-    elements.map((element) => element.textContent?.trim() ?? ""),
-  );
-}
-
-export function actionOpacity(button: Locator): Promise<string> {
-  return button.evaluate((element) => globalThis.getComputedStyle(element).opacity);
-}
-
-export function actionPointerEvents(button: Locator): Promise<string> {
-  return button.evaluate((element) => globalThis.getComputedStyle(element).pointerEvents);
-}
-
-/**
- * Opens a session-menu submenu through the keyboard path. Submenu ARIA is ready
- * before Web Awesome finishes opening the dropdown, so hovering alone races the
- * menu; waiting on its focus contract first keeps navigation keys in order.
- */
-export async function openSessionMenuSubmenu(page: Page, name: string): Promise<void> {
-  const parent = page.getByRole("menuitem", { name });
-  await expect.poll(() => parent.getAttribute("aria-haspopup")).toBe("menu");
-  const index = await parent.evaluate((element) =>
-    [...(element.parentElement?.children ?? [])]
-      .filter(
-        (item) =>
-          item.localName === "wa-dropdown-item" &&
-          item.getAttribute("slot") !== "submenu" &&
-          !(item as HTMLElement & { disabled?: boolean }).disabled,
-      )
-      .indexOf(element),
-  );
   expect(index).toBeGreaterThanOrEqual(0);
+  await parent.focus();
   await expect
     .poll(() =>
-      page
-        .locator(
-          ":is(openclaw-session-menu, openclaw-chat-header-session-menu) > wa-dropdown > wa-dropdown-item:focus",
-        )
-        .count(),
+      parent.evaluate((element) => ({
+        menuItem: document.activeElement?.matches('[role^="menuitem"]'),
+        sameMenu:
+          document.activeElement?.closest('[role="menu"]') === element.closest('[role="menu"]'),
+      })),
     )
-    .toBe(1);
+    .toEqual({ menuItem: true, sameMenu: true });
   await page.keyboard.press("Home");
   for (let step = 0; step < index; step += 1) {
     await page.keyboard.press("ArrowDown");
@@ -155,11 +159,17 @@ export async function openSessionMenuSubmenu(page: Page, name: string): Promise<
   await expect
     .poll(() => parent.evaluate((element) => element === document.activeElement))
     .toBe(true);
-  await page.keyboard.press("ArrowRight");
-  await expect.poll(() => parent.getAttribute("aria-expanded")).toBe("true");
+  return parent;
 }
 
-/** Fills the owned input dialog and submits it the way Enter does. */
+export async function openSessionMenuSubmenu(page: Page, name: string): Promise<void> {
+  const parent = await focusSessionMenuItem(page, name);
+  await expect.poll(() => parent.getAttribute("aria-haspopup")).toBe("menu");
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(() => parent.getAttribute("aria-expanded")).toBe("true");
+  await sessionMenuSubmenu(parent).waitFor({ state: "visible" });
+}
+
 export async function submitInputDialog(page: Page, value: string): Promise<void> {
   const field = page.locator("openclaw-modal-dialog input");
   await field.waitFor({ state: "visible" });
@@ -178,17 +188,9 @@ export async function captureUiProof(
   if (!captureUiProofEnabled) {
     return;
   }
-  if (page.video()) {
-    await writeFile(
-      path.join(owner.artifactDir, fileName),
-      await takeControlUiViewportScreenshot(page, surface, content),
-    );
-    return;
-  }
   // Nonrecording proof keeps its existing full-document framing.
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(owner.artifactDir, fileName),
-  });
+  const destination = path.join(owner.artifactDir, fileName);
+  await (page.video()
+    ? writeFile(destination, await takeControlUiViewportScreenshot(page, surface, content))
+    : page.screenshot({ animations: "disabled", fullPage: true, path: destination }));
 }

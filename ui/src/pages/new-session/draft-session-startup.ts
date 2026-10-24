@@ -1,22 +1,19 @@
-import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
+import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/session-limits.js";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 
-type DraftSessionStartupIntent = {
-  params: SessionCreateParams;
+type DraftSessionStartupIntent = DraftStartupResumption & {
   scope: string;
-  startedAt: number;
-  deadline: number;
   interrupted: boolean;
 };
 
 /** A creation attempt the submission flow resumes after reconnecting. */
-export type DraftStartupResumption = { params: SessionCreateParams; startedAt: number };
-
-type DraftSessionStartupResume =
-  | { kind: "wait" | "expired" | "owner-changed" }
-  | ({ kind: "resume" } & DraftStartupResumption);
+export type DraftStartupResumption = {
+  params: SessionCreateParams;
+  startedAt: number;
+  background: boolean;
+};
 
 export class DraftSessionStartup {
   private pending: DraftSessionStartupIntent | null = null;
@@ -29,7 +26,7 @@ export class DraftSessionStartup {
     return this.pending !== null;
   }
 
-  start(params: SessionCreateParams): SessionCreateParams {
+  start(params: SessionCreateParams, background = false): SessionCreateParams {
     const scope = this.gateway.sessionCreateScope;
     if (!scope) {
       return params;
@@ -40,8 +37,8 @@ export class DraftSessionStartup {
         params: Object.freeze({ ...params, idempotencyKey: generateUUID() }),
         scope,
         startedAt,
-        deadline: startedAt + SESSION_CREATE_RETRY_WINDOW_MS,
         interrupted: false,
+        background,
       };
     }
     return this.pending.params;
@@ -68,11 +65,13 @@ export class DraftSessionStartup {
     return true;
   }
 
-  resume(): DraftSessionStartupResume {
+  resume():
+    | { kind: "wait" | "expired" | "owner-changed" }
+    | ({ kind: "resume" } & DraftStartupResumption) {
     if (!this.pending?.interrupted) {
       return { kind: "wait" };
     }
-    if (Date.now() >= this.pending.deadline) {
+    if (Date.now() >= this.pending.startedAt + SESSION_CREATE_RETRY_WINDOW_MS) {
       this.clear();
       return { kind: "expired" };
     }
@@ -84,7 +83,12 @@ export class DraftSessionStartup {
       return { kind: "wait" };
     }
     this.pending.interrupted = false;
-    return { kind: "resume", params: this.pending.params, startedAt: this.pending.startedAt };
+    return {
+      kind: "resume",
+      params: this.pending.params,
+      startedAt: this.pending.startedAt,
+      background: this.pending.background,
+    };
   }
 
   private matchesGateway(): boolean {

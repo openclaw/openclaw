@@ -1,8 +1,3 @@
-/**
- * Read-only channel command default resolver.
- *
- * Reads native command/skill defaults from installed plugin manifests without loading plugins.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir, STATE_DIR } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -14,9 +9,6 @@ import type { ChannelPlugin } from "./types.plugin.js";
 
 const SAFE_MANIFEST_CHANNEL_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
-/**
- * Native command/skill auto-enable defaults exposed by channel manifests.
- */
 type ChannelCommandDefaults = Pick<
   NonNullable<ChannelPlugin["commands"]>,
   "nativeCommandsAutoEnabled" | "nativeSkillsAutoEnabled"
@@ -41,32 +33,19 @@ export function readOwnRecordValue(record: Record<string, unknown>, key: string)
   return record[key];
 }
 
-/**
- * Normalizes manifest command defaults down to supported boolean fields.
- */
 export function normalizeChannelCommandDefaults(
   value: ChannelCommandDefaults | undefined,
 ): ChannelCommandDefaults | undefined {
   if (!value) {
     return undefined;
   }
-  const nativeCommandsAutoEnabled =
-    typeof value.nativeCommandsAutoEnabled === "boolean"
-      ? value.nativeCommandsAutoEnabled
-      : undefined;
-  const nativeSkillsAutoEnabled =
-    typeof value.nativeSkillsAutoEnabled === "boolean" ? value.nativeSkillsAutoEnabled : undefined;
-  if (nativeCommandsAutoEnabled === undefined && nativeSkillsAutoEnabled === undefined) {
-    return undefined;
-  }
   const defaults: ChannelCommandDefaults = {};
-  if (nativeCommandsAutoEnabled !== undefined) {
-    defaults.nativeCommandsAutoEnabled = nativeCommandsAutoEnabled;
+  for (const key of ["nativeCommandsAutoEnabled", "nativeSkillsAutoEnabled"] as const) {
+    if (typeof value[key] === "boolean") {
+      defaults[key] = value[key];
+    }
   }
-  if (nativeSkillsAutoEnabled !== undefined) {
-    defaults.nativeSkillsAutoEnabled = nativeSkillsAutoEnabled;
-  }
-  return defaults;
+  return Object.keys(defaults).length > 0 ? defaults : undefined;
 }
 
 /**

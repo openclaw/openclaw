@@ -1,15 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  projectComputerActResult,
-  projectScreenshotResult,
-} from "../agents/tools/computer-tool-result.js";
-import type { ComputerTarget } from "../agents/tools/computer-tool-shared.js";
+import { createComputerTool, type ComputerToolTransport } from "../agents/tools/computer-tool.js";
 import { createNoisyPngBuffer } from "../plugin-sdk/test-helpers/image-fixtures.js";
 import type { ComputerActResult } from "../plugins/computer-use-contract.js";
-import { createWorkerTranscriptRuntime } from "./embedded-agent-transcript.runtime.js";
+import {
+  createWorkerTranscriptRuntime,
+  type WorkerTranscriptClient,
+} from "./embedded-agent-transcript.runtime.js";
 
 describe("worker computer observation persistence", () => {
-  it.each(["screen", "window", "browser"] as const)(
+  it.each(["screen", "window"] as const)(
     "commits a large %s observation with pixels only in image content",
     async (kind) => {
       const base64 = createNoisyPngBuffer(512, 512).toString("base64");
@@ -26,31 +25,39 @@ describe("worker computer observation persistence", () => {
         },
       } satisfies ComputerActResult;
       const original = structuredClone(providerResult);
-      const target: ComputerTarget = { host: "node", nodeId: "desktop-node", screenIndex: 0 };
-      const { result } =
+      const transport: ComputerToolTransport = {
+        computerUse: {
+          contractVersion: 2,
+          provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+          actions: ["screenshot", "get_window_state"],
+          targets: ["screen", "window"],
+          deliveryModes: ["foreground"],
+          observations: ["image"],
+          features: { recording: false, agentCursor: false, multiDisplay: false },
+        },
+        resolveNode: async () => ({ nodeId: "desktop-node" }),
+        invoke: async ({ command }) =>
+          command === "screen.snapshot"
+            ? { base64, displayFrameId: "display-frame", format: "png", width: 512, height: 512 }
+            : providerResult,
+      };
+      const tool = createComputerTool({ transport });
+      const result = await tool.execute(
+        "observe",
         kind === "screen"
-          ? await projectScreenshotResult({
-              capture: {
-                base64,
-                displayFrameId: "display-frame",
-                mimeType: "image/png",
-                width: 512,
-                height: 512,
-              },
-              noteLines: [],
-              target,
-              action: "screenshot",
-              referenceWidth: 1280,
-              modelHasVision: true,
-            })
-          : await projectComputerActResult({
-              result: providerResult,
-              target,
-              action: kind === "window" ? "get_window_state" : "get_browser_state",
-              referenceWidth: 1280,
-              modelHasVision: true,
-            });
-      const commit = vi.fn(async () => {});
+          ? { action: "screenshot" }
+          : { action: "get_window_state", windowRef: "window-1" },
+      );
+      const commit = vi.fn<WorkerTranscriptClient["commit"]>(async (messages) => {
+        expect(messages).toHaveLength(1);
+        const message = messages[0];
+        if (message?.role !== "toolResult") {
+          throw new Error("The committed computer observation is missing");
+        }
+        const images = message.content.filter((part) => part.type === "image");
+        expect(images).toHaveLength(1);
+        expect(images[0]?.data.length).toBeGreaterThan(64 * 1024);
+      });
       const transcript = createWorkerTranscriptRuntime({ commit });
       await transcript.withSessionWriteSettlement(() =>
         transcript.onMessagePersisted({

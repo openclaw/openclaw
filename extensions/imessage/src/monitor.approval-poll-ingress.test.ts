@@ -1,8 +1,9 @@
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 // Imessage tests cover approval poll durable-ingress ownership.
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
-import { monitorIMessageProvider } from "./monitor.js";
+import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 const waitForTransportReadyMock = vi.hoisted(() =>
@@ -51,8 +52,9 @@ vi.mock("./approval-reaction-poller.js", () => ({
   pollPendingIMessageApprovalReactions: vi.fn(async () => {}),
 }));
 
-vi.mock("./approval-reactions.js", () => ({
-  maybeResolveIMessageApprovalReaction: vi.fn(async () => false),
+vi.mock("./approval-reactions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./approval-reactions.js")>()),
+  handleIMessageApprovalReaction: vi.fn(async () => ({ handled: false, stopPolling: false })),
 }));
 
 vi.mock("./client.js", () => ({
@@ -203,6 +205,7 @@ describe("iMessage approval poll durable ingress", () => {
     maybeResolveIMessageApprovalPollVoteMock.mockResolvedValue(true);
 
     await monitorIMessageProvider({
+      scheduler: createTestPluginServiceScheduler(),
       config: { channels: { imessage: {} } } as never,
       runtime: createRuntime() as never,
     });
@@ -217,6 +220,7 @@ describe("iMessage approval poll durable ingress", () => {
     const runtime = createRuntime();
 
     await monitorIMessageProvider({
+      scheduler: createTestPluginServiceScheduler(),
       config: { channels: { imessage: {} } } as never,
       runtime: runtime as never,
     });
@@ -231,6 +235,7 @@ describe("iMessage approval poll durable ingress", () => {
     maybeResolveIMessageApprovalPollVoteMock.mockResolvedValue(true);
 
     await monitorIMessageProvider({
+      scheduler: createTestPluginServiceScheduler(),
       config: { channels: { imessage: {} } } as never,
       runtime: createRuntime() as never,
     });
@@ -243,6 +248,7 @@ describe("iMessage approval poll durable ingress", () => {
     arrangeApprovalCommandNotification();
 
     await monitorIMessageProvider({
+      scheduler: createTestPluginServiceScheduler(),
       config: {
         channels: { imessage: { dmPolicy: "open", allowFrom: ["*"] } },
       } as never,

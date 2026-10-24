@@ -1,81 +1,52 @@
-import { ContextConsumer } from "@lit/context";
-import { initialState, Task, TaskStatus } from "@lit/task";
-import { html, nothing, type ReactiveControllerHost } from "lit";
-import { ref } from "lit/directives/ref.js";
-import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
-import { buildControlUiUserAvatarPath } from "../../../src/gateway/control-ui-user-avatar-route.js";
-import { applicationContext } from "../app/context.ts";
-import { t } from "../i18n/index.ts";
+import { createProjection, createSignal } from "solid-js";
 import { normalizeAgentTargetLabel } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
-import { formatUiError } from "../lib/format-error.ts";
-import { GatewayPageController } from "../lit/gateway-page-controller.ts";
-import { icons } from "./icons.ts";
-import {
-  renderSessionOwnerAvatar,
-  sessionSelfOwner,
-  type SessionCreatedActor,
-  type SessionOwnerOption,
-} from "./session-owner-chip.ts";
-import { syncDropdownItemRadio } from "./web-awesome.ts";
-
-type SessionOwnerMenuParams = {
-  currentOwner: SessionCreatedActor | null;
-  disabled: boolean;
-  disabledReason?: string;
-};
+import { profileAvatarUrl, profileDirectory } from "../lib/profile-directory.ts";
+import { useOptionalApplication } from "../lib/reactive/context.ts";
+import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
+import { useGatewayPage } from "../lib/reactive/gateway-page.ts";
+import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
+import { sessionSelfOwner, type SessionOwnerOption } from "../lib/session-owner.ts";
 
 /** Assignment uses the Gateway directory, independently of session filters and presence. */
-export class SessionOwnerMenu {
-  private readonly context;
-  private readonly profiles;
-  private opened = false;
-
-  constructor(host: ReactiveControllerHost & HTMLElement) {
-    this.context = new ContextConsumer(host, { context: applicationContext, subscribe: true });
-    // Bind the Gateway before Task reads its epoch, so reconnects and source replacements
-    // retire stale directory replies before the menu renders.
-    const connection = new GatewayPageController(host, {
-      getGateway: () => this.context.value?.gateway,
-    });
-    this.profiles = new Task(host, {
-      args: () => [connection.epoch, this.opened, connection.capture()?.client] as const,
-      task: ([, opened, client]) =>
-        opened && client ? client.request<UsersListResult>("users.list", {}) : initialState,
-    });
-  }
-
-  readonly load = () => {
-    this.opened = true;
-    void this.profiles.run();
+export function createSessionOwnerMenu(presented: () => boolean = () => true) {
+  const context = useOptionalApplication();
+  const agents = context ? projectAgents(context.agents) : undefined;
+  const identities = context ? projectOwner(context.agentIdentity, (owner) => owner) : undefined;
+  const profiles = context
+    ? projectOwner(profileDirectory(context.gateway), (directory) => directory)
+    : undefined;
+  const connection = useGatewayPage({ getGateway: () => context?.gateway });
+  const [searchGeneration, setSearchGeneration] = createSignal(0);
+  let opened = false;
+  const load = () => {
+    if (opened) {
+      setSearchGeneration((value) => value + 1);
+    }
+    opened = true;
+    void profiles?.read().load(true);
   };
-
-  render(params: SessionOwnerMenuParams, inline = false) {
-    const context = this.context.value;
-    const self = sessionSelfOwner(context?.gateway.snapshot.selfUser);
-    const currentOwner = params.currentOwner;
-    const currentOwnerId = currentOwner?.identity?.id ?? currentOwner?.id;
-    // The session already records its owner; directory availability must not erase the checked row.
-    const owners: SessionOwnerOption[] =
-      this.profiles.status === TaskStatus.COMPLETE
-        ? (this.profiles.value?.profiles ?? [])
-            .filter((profile) => !profile.mergedInto && profile.id !== self?.id)
-            .map((profile) => ({
-              type: "human",
-              id: profile.id,
-              identity: { type: "profile", id: profile.id },
-              label:
-                profile.displayName?.trim() ||
-                profile.githubIdentity?.login ||
-                profile.emails[0] ||
-                profile.id,
-              avatarUrl: buildControlUiUserAvatarPath(profile.id, profile.updatedAt),
-            }))
-        : currentOwner?.type === "human" && currentOwnerId && currentOwnerId !== self?.id
-          ? [{ ...currentOwner, type: currentOwner.type, id: currentOwnerId }]
-          : [];
-    for (const agent of context?.agents.state.agentsList?.agents ?? []) {
-      const identity = context?.agentIdentity.get(agent.id);
+  const readSnapshot = () => {
+    const self = sessionSelfOwner(connection.snapshot?.selfUser);
+    // Keep a same-connection directory during refresh, never a previous Gateway's result.
+    const directory = profiles?.read();
+    const owners: SessionOwnerOption[] = (directory?.result?.profiles ?? [])
+      .filter((profile) => !profile.mergedInto && profile.id !== self?.id)
+      .map((profile) => ({
+        type: "human",
+        id: profile.id,
+        identity: { type: "profile", id: profile.id },
+        label:
+          profile.displayName?.trim() ||
+          profile.githubIdentity?.login ||
+          profile.emails[0] ||
+          profile.id,
+        avatarUrl: profileAvatarUrl(profile),
+      }));
+    const identityOwner = identities?.read();
+    for (const agent of agents?.read().agentsList?.agents ?? []) {
+      const identity = identityOwner?.get(agent.id);
       owners.push({
         type: "agent",
         id: agent.id,
@@ -93,47 +64,19 @@ export class SessionOwnerMenu {
     if (self) {
       owners.unshift(self);
     }
-    const slot = inline ? nothing : "submenu";
-    return html`
-      ${owners.map((owner) => {
-        const checked = owner.type === currentOwner?.type && owner.id === currentOwnerId;
-        return html`<wa-dropdown-item
-          slot=${slot}
-          class="session-menu__item"
-          value=${`assign-owner:${owner.type}:${encodeURIComponent(owner.id)}`}
-          role="menuitemradio"
-          aria-checked=${String(checked)}
-          ${ref((element) => syncDropdownItemRadio(element, checked))}
-          ?disabled=${params.disabled || checked}
-          title=${params.disabledReason ?? nothing}
-        >
-          <span slot="icon" class="session-menu__avatar" aria-hidden="true"
-            >${renderSessionOwnerAvatar(owner)}</span
-          >
-          <span class="session-menu__text"
-            >${owner === self ? t("sessionsView.assignToMe") : (owner.label ?? owner.id)}</span
-          >
-          ${
-            checked
-              ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
-                  >${icons.check}</span
-                >`
-              : nothing
-          }
-        </wa-dropdown-item>`;
-      })}
-      ${this.profiles.render({
-        pending: () =>
-          html`<wa-dropdown-item slot=${slot} disabled>${t("common.loading")}</wa-dropdown-item>`,
-        error: (error) => html`
-          <div slot=${slot} class="session-menu__info" role="alert">
-            ${formatUiError(error, t("common.failed"))}
-          </div>
-          <wa-dropdown-item slot=${slot} class="session-menu__item" value="reload-owners"
-            >${t("common.retry")}</wa-dropdown-item
-          >
-        `,
-      })}
-    `;
-  }
+    return {
+      self,
+      owners: [...new Map(owners.map((owner) => [owner.type + ":" + owner.id, owner])).values()],
+      directory: directory?.result,
+      searchGeneration: connection.epoch + searchGeneration(),
+      connected: Boolean(connection.snapshot && connection.capture()),
+      loading: Boolean(directory?.loading),
+      error: directory?.error,
+    };
+  };
+  const snapshot = createParkedProjection(readSnapshot, presented);
+  const rows = createProjection(snapshot, null, {
+    key: (row: { type?: string; id?: string }) => `${row.type}:${row.id}`,
+  });
+  return { load, snapshot: () => rows, multipleOwners: () => rows.owners.length > 1 };
 }

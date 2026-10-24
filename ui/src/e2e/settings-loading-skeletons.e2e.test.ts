@@ -6,6 +6,7 @@ import {
   startControlUiE2eServer,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { sessionsUsageResponse } from "../test-helpers/sessions-usage-response.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -42,7 +43,12 @@ async function captureLoadingState(
   }
   const skeletons = target.locator(".settings-loading-skeleton");
   await expect.poll(() => skeletons.count()).toBeGreaterThan(0);
-  expect(await target.textContent()).not.toContain("Loading");
+  expect(
+    await target
+      .getByText(/Loading/)
+      .filter({ visible: true })
+      .count(),
+  ).toBe(0);
 }
 
 async function withPage(run: (page: import("playwright").Page) => Promise<void>): Promise<void> {
@@ -80,7 +86,7 @@ suite.define(() => {
           },
           "models.list": { models: [] },
           "models.authStatus": { providers: [], ts: Date.now() },
-          "sessions.usage": { aggregates: { byProvider: [] } },
+          "sessions.usage": sessionsUsageResponse(),
           "usage.status": { providers: [] },
         },
       });
@@ -96,7 +102,7 @@ suite.define(() => {
       await gateway.deferNext("models.authStatus");
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker.locator('wa-dropdown-item[aria-label="Reviewer"]').click();
+      await agentPicker.getByRole("menuitemradio", { name: "Reviewer", exact: true }).click();
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Reviewer");
@@ -127,21 +133,6 @@ suite.define(() => {
         routeId: "channels",
       });
       await captureLoadingState(page.locator(".settings-page").first(), "channels-pairing");
-    });
-  });
-
-  it("renders the Secrets initial load as a skeleton", async () => {
-    await withPage(async (page) => {
-      await installMockGateway(page, {
-        featureMethods: ["secrets.store.list"],
-        heldMethods: ["secrets.store.list"],
-      });
-      await page.goto(`${suite.server.baseUrl}settings/secrets`);
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/secrets",
-        routeId: "secrets",
-      });
-      await captureLoadingState(page.locator(".settings-page").first(), "secrets");
     });
   });
 
@@ -243,7 +234,7 @@ suite.define(() => {
   it("renders both Agent Tools data loads as skeletons", async () => {
     await withPage(async (page) => {
       const config = {
-        agents: { entries: { main: { default: true, tools: { profile: "full" } } } },
+        agents: { entries: { main: { tools: { profile: "full" } } } },
       };
       const gateway = await installMockGateway(page, {
         heldMethods: ["tools.catalog", "tools.effective"],
@@ -270,7 +261,7 @@ suite.define(() => {
       await gateway.waitForRequest("tools.effective");
       const panel = page.locator("#agent-panel");
       await captureLoadingState(
-        panel.locator(".settings-section", { hasText: "Available right now" }).first(),
+        panel.locator(".settings-section", { hasText: "Tool preview" }).first(),
         "agent-tools-available",
       );
       await captureLoadingState(

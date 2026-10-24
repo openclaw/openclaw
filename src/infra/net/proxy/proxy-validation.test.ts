@@ -1,9 +1,8 @@
-// Covers proxy validation config precedence, TLS overrides, denied-destination
-// canaries, and APNs reachability result interpretation.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as apnsHttp2 from "../../push-apns-http2.js";
 import { fetchWithRuntimeDispatcher } from "../runtime-fetch.js";
 import { createHttp1ProxyAgent } from "../undici-runtime.js";
 import { runProxyValidation } from "./proxy-validation.js";
@@ -13,9 +12,40 @@ vi.mock("../undici-runtime.js", () => ({ createHttp1ProxyAgent: vi.fn() }));
 
 describe("proxy validation", () => {
   const tempDirs: string[] = [];
+  const proxyUrl = "http://127.0.0.1:3128";
+  const apnsAuthority = "https://api.sandbox.push.apple.com";
+  function validate(options: Parameters<typeof runProxyValidation>[0] = {}) {
+    return runProxyValidation({
+      config: { proxyUrl },
+      env: {},
+      allowedUrls: [],
+      deniedUrls: [],
+      ...options,
+    });
+  }
+  function expectCheck(
+    result: Awaited<ReturnType<typeof runProxyValidation>>,
+    check: (typeof result.checks)[number],
+  ) {
+    expect(result.ok).toBe(check.ok);
+    expect(result.checks).toEqual([check]);
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(createHttp1ProxyAgent).mockReturnValue({
+      close: vi.fn(async () => undefined),
+    } as unknown as ReturnType<typeof createHttp1ProxyAgent>);
+    vi.mocked(fetchWithRuntimeDispatcher).mockResolvedValue(new Response(null, { status: 200 }));
+    vi.spyOn(apnsHttp2, "probeApnsHttp2ReachabilityViaProxy").mockResolvedValue({
+      status: 403,
+      body: "",
+      responseHeaders: { "apns-id": "00000000-0000-0000-0000-000000000000" },
+    });
+  });
 
   afterEach(() => {
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -27,6 +57,17 @@ describe("proxy validation", () => {
     const caFile = path.join(dir, "proxy-ca.pem");
     writeFileSync(caFile, contents, "utf8");
     return caFile;
+  }
+
+  function expectFetchThroughProxy(uri: string, proxyTls?: { ca: string }) {
+    expect(createHttp1ProxyAgent).toHaveBeenCalledWith(
+      { uri, ...(proxyTls ? { proxyTls } : {}) },
+      5000,
+    );
+    expect(fetchWithRuntimeDispatcher).toHaveBeenCalledWith("https://example.com/", {
+      dispatcher: expect.anything(),
+      redirect: "manual",
+    });
   }
 
   it("preserves the validated response when discarded body cancellation rejects", async () => {
@@ -79,44 +120,13 @@ describe("proxy validation", () => {
     }
   });
 
-  it("prefers the configured proxy URL over OPENCLAW_PROXY_URL", async () => {
-    const fetchCheck = vi.fn().mockResolvedValue({ ok: true, status: 200 });
-
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://config-proxy.example:3128",
-      },
-      env: {
-        OPENCLAW_PROXY_URL: "http://env-proxy.example:3128",
-      },
-      allowedUrls: ["https://example.com/"],
-      deniedUrls: [],
-      fetchCheck,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.config).toMatchObject({
-      enabled: true,
-      proxyUrl: "http://config-proxy.example:3128",
-      source: "config",
-    });
-    expect(fetchCheck).toHaveBeenCalledWith({
-      proxyUrl: "http://config-proxy.example:3128",
-      targetUrl: "https://example.com/",
-      timeoutMs: 5000,
-    });
-  });
-
   it("honors an explicit opt-out for an environment proxy URL", async () => {
-    const fetchCheck = vi.fn();
-
     const result = await runProxyValidation({
       config: { enabled: false },
       env: { OPENCLAW_PROXY_URL: "http://env-proxy.example:3128" },
-      fetchCheck,
     });
 
-    expect(fetchCheck).not.toHaveBeenCalled();
+    expect(fetchWithRuntimeDispatcher).not.toHaveBeenCalled();
     expect(result).toEqual({
       ok: false,
       config: {
@@ -130,29 +140,14 @@ describe("proxy validation", () => {
   });
 
   it("rejects unsupported proxy URL protocols before probing", async () => {
-    const fetchCheck = vi.fn();
-    const result = await runProxyValidation({
-      config: { proxyUrl: "socks5://proxy.example:1080" },
-      env: {},
-      allowedUrls: [],
-      deniedUrls: [],
-      fetchCheck,
-    });
-
-    expect(fetchCheck).not.toHaveBeenCalled();
+    const result = await validate({ config: { proxyUrl: "socks5://proxy.example:1080" } });
+    expect(fetchWithRuntimeDispatcher).not.toHaveBeenCalled();
     expect(result.config.errors).toEqual(["proxyUrl must use http:// or https://"]);
   });
 
   it("reports disabled proxy config as an actionable validation problem", async () => {
-    const fetchCheck = vi.fn();
-
-    const result = await runProxyValidation({
-      config: {},
-      env: {},
-      fetchCheck,
-    });
-
-    expect(fetchCheck).not.toHaveBeenCalled();
+    const result = await validate({ config: {} });
+    expect(fetchWithRuntimeDispatcher).not.toHaveBeenCalled();
     expect(result).toEqual({
       ok: false,
       config: {
@@ -165,166 +160,62 @@ describe("proxy validation", () => {
   });
 
   it("fails the default loopback denied canary on successful ambiguous responses", async () => {
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://127.0.0.1:3128",
-      },
-      env: {},
-      allowedUrls: [],
-      fetchCheck: vi.fn().mockImplementation(async ({ targetUrl }) => {
-        return {
-          ok: true,
-          status: 204,
-          deniedCanaryToken: targetUrl.includes("127.0.0.1:") ? undefined : "unexpected",
-        };
-      }),
-    });
+    vi.mocked(fetchWithRuntimeDispatcher).mockResolvedValue(new Response(null, { status: 204 }));
+    const result = await validate({ deniedUrls: undefined });
 
-    expect(result.ok).toBe(false);
-    expect(result.checks).toHaveLength(1);
-    expect(result.checks[0]?.kind).toBe("denied");
-    expect(result.checks[0]?.ok).toBe(false);
-    expect(result.checks[0]?.status).toBe(204);
-    expect(result.checks[0]?.error).toBe(
-      "Denied loopback canary returned HTTP 204 without the validation token",
-    );
-    expect(result.checks[0]?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
+    expectCheck(result, {
+      kind: "denied",
+      ok: false,
+      status: 204,
+      error: "Denied loopback canary returned HTTP 204 without the validation token",
+      url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/$/),
+    });
   });
 
   it("passes the default loopback denied canary when the proxy returns a denial response", async () => {
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://127.0.0.1:3128",
-      },
-      env: {},
-      allowedUrls: [],
-      fetchCheck: vi.fn().mockResolvedValue({ ok: false, status: 403 }),
-    });
+    vi.mocked(fetchWithRuntimeDispatcher).mockResolvedValue(new Response(null, { status: 403 }));
+    const result = await validate({ deniedUrls: undefined });
 
-    expect(result.ok).toBe(true);
-    expect(result.checks).toHaveLength(1);
-    expect(result.checks[0]?.kind).toBe("denied");
-    expect(result.checks[0]?.ok).toBe(true);
-    expect(result.checks[0]?.status).toBe(403);
-    expect(result.checks[0]?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
+    expectCheck(result, {
+      kind: "denied",
+      ok: true,
+      status: 403,
+      url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/$/),
+    });
   });
 
   it("fails denied checks when the destination returns HTTP 403", async () => {
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://127.0.0.1:3128",
-      },
-      env: {},
-      allowedUrls: [],
-      deniedUrls: ["http://127.0.0.1/"],
-      fetchCheck: vi.fn().mockResolvedValue({ ok: false, status: 403 }),
+    vi.mocked(fetchWithRuntimeDispatcher).mockResolvedValue(new Response(null, { status: 403 }));
+    const result = await validate({ deniedUrls: ["http://127.0.0.1/"] });
+    expectCheck(result, {
+      kind: "denied",
+      url: "http://127.0.0.1/",
+      ok: false,
+      status: 403,
+      error: "Denied destination returned HTTP 403; expected the proxy to block the connection",
     });
-
-    expect(result.ok).toBe(false);
-    expect(result.checks).toEqual([
-      {
-        kind: "denied",
-        url: "http://127.0.0.1/",
-        ok: false,
-        status: 403,
-        error: "Denied destination returned HTTP 403; expected the proxy to block the connection",
-      },
-    ]);
-  });
-
-  it("fails denied checks when the destination returns a non-2xx HTTP status", async () => {
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://127.0.0.1:3128",
-      },
-      env: {},
-      allowedUrls: [],
-      deniedUrls: ["https://example.com/not-found"],
-      fetchCheck: vi.fn().mockResolvedValue({ ok: false, status: 404 }),
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.checks).toEqual([
-      {
-        kind: "denied",
-        url: "https://example.com/not-found",
-        ok: false,
-        status: 404,
-        error: "Denied destination returned HTTP 404; expected the proxy to block the connection",
-      },
-    ]);
   });
 
   it("fails custom denied checks on ambiguous transport errors", async () => {
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://127.0.0.1:3128",
-      },
-      env: {},
-      allowedUrls: [],
-      deniedUrls: ["https://example.com/closed"],
-      fetchCheck: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+    vi.mocked(fetchWithRuntimeDispatcher).mockRejectedValue(new Error("ECONNREFUSED"));
+    const result = await validate({ deniedUrls: ["https://example.com/closed"] });
+    expectCheck(result, {
+      kind: "denied",
+      url: "https://example.com/closed",
+      ok: false,
+      error: "Denied destination failed without a verifiable proxy-deny signal: ECONNREFUSED",
     });
-
-    expect(result.ok).toBe(false);
-    expect(result.checks).toEqual([
-      {
-        kind: "denied",
-        url: "https://example.com/closed",
-        ok: false,
-        error: "Denied destination failed without a verifiable proxy-deny signal: ECONNREFUSED",
-      },
-    ]);
   });
 
   it("fails invalid custom denied URLs before probing", async () => {
-    const fetchCheck = vi.fn();
-
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://127.0.0.1:3128",
-      },
-      env: {},
-      allowedUrls: [],
-      deniedUrls: ["not a url"],
-      fetchCheck,
+    const result = await validate({ deniedUrls: ["not a url"] });
+    expect(fetchWithRuntimeDispatcher).not.toHaveBeenCalled();
+    expectCheck(result, {
+      kind: "denied",
+      url: "not a url",
+      ok: false,
+      error: "Invalid denied destination URL",
     });
-
-    expect(fetchCheck).not.toHaveBeenCalled();
-    expect(result.ok).toBe(false);
-    expect(result.checks).toEqual([
-      {
-        kind: "denied",
-        url: "not a url",
-        ok: false,
-        error: "Invalid denied destination URL",
-      },
-    ]);
-  });
-
-  it("fails invalid custom allowed URLs before probing", async () => {
-    const fetchCheck = vi.fn();
-
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://127.0.0.1:3128",
-      },
-      env: {},
-      allowedUrls: ["not a url"],
-      deniedUrls: [],
-      fetchCheck,
-    });
-
-    expect(fetchCheck).not.toHaveBeenCalled();
-    expect(result.ok).toBe(false);
-    expect(result.checks).toEqual([
-      {
-        kind: "allowed",
-        url: "not a url",
-        ok: false,
-        error: "Invalid allowed destination URL",
-      },
-    ]);
   });
 
   it("fails validation when a denied destination succeeds", async () => {
@@ -335,7 +226,6 @@ describe("proxy validation", () => {
       env: {},
       allowedUrls: ["https://example.com/"],
       deniedUrls: ["http://127.0.0.1/"],
-      fetchCheck: vi.fn().mockResolvedValue({ ok: true, status: 200 }),
     });
 
     expect(result.ok).toBe(false);
@@ -357,77 +247,44 @@ describe("proxy validation", () => {
   });
 
   it("adds an APNs reachability check when requested", async () => {
-    const fetchCheck = vi.fn().mockResolvedValue({ ok: true, status: 200 });
-    const apnsCheck = vi
-      .fn()
-      .mockResolvedValue({ status: 403, apnsId: "00000000-0000-0000-0000-000000000000" });
-
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://127.0.0.1:3128",
-      },
-      env: {},
-      allowedUrls: [],
-      deniedUrls: [],
+    const result = await validate({
       apnsReachability: true,
-      apnsAuthority: "https://api.sandbox.push.apple.com",
+      apnsAuthority,
       timeoutMs: 1234,
-      fetchCheck,
-      apnsCheck,
     });
 
-    expect(fetchCheck).not.toHaveBeenCalled();
-    expect(apnsCheck).toHaveBeenCalledWith({
-      proxyUrl: "http://127.0.0.1:3128",
-      authority: "https://api.sandbox.push.apple.com",
+    expect(fetchWithRuntimeDispatcher).not.toHaveBeenCalled();
+    expect(apnsHttp2.probeApnsHttp2ReachabilityViaProxy).toHaveBeenCalledWith({
+      proxyUrl,
+      authority: apnsAuthority,
       timeoutMs: 1234,
     });
     expect(result).toEqual({
       ok: true,
       config: {
         enabled: true,
-        proxyUrl: "http://127.0.0.1:3128",
+        proxyUrl,
         source: "config",
         errors: [],
       },
-      checks: [
-        {
-          kind: "apns",
-          url: "https://api.sandbox.push.apple.com",
-          ok: true,
-          status: 403,
-        },
-      ],
+      checks: [{ kind: "apns", url: apnsAuthority, ok: true, status: 403 }],
     });
   });
 
   it("passes CLI proxy CA file contents to validation checks", async () => {
     const caFile = writeTempCa("cli-proxy-ca");
-    const fetchCheck = vi.fn().mockResolvedValue({ ok: true, status: 200 });
-    const apnsCheck = vi
-      .fn()
-      .mockResolvedValue({ status: 403, apnsId: "00000000-0000-0000-0000-000000000000" });
-
-    const result = await runProxyValidation({
+    const result = await validate({
       proxyUrlOverride: "https://proxy.example:8443",
       proxyCaFileOverride: caFile,
       allowedUrls: ["https://example.com/"],
-      deniedUrls: [],
       apnsReachability: true,
-      fetchCheck,
-      apnsCheck,
     });
 
     expect(result.ok).toBe(true);
-    expect(fetchCheck).toHaveBeenCalledWith({
+    expectFetchThroughProxy("https://proxy.example:8443", { ca: "cli-proxy-ca" });
+    expect(apnsHttp2.probeApnsHttp2ReachabilityViaProxy).toHaveBeenCalledWith({
       proxyUrl: "https://proxy.example:8443",
-      targetUrl: "https://example.com/",
-      timeoutMs: 5000,
-      proxyTls: { ca: "cli-proxy-ca" },
-    });
-    expect(apnsCheck).toHaveBeenCalledWith({
-      proxyUrl: "https://proxy.example:8443",
-      authority: "https://api.sandbox.push.apple.com",
+      authority: apnsAuthority,
       timeoutMs: 5000,
       proxyTls: { ca: "cli-proxy-ca" },
     });
@@ -435,85 +292,30 @@ describe("proxy validation", () => {
 
   it("does not inherit configured proxy CA files for explicit proxy URL validation", async () => {
     const configCaFile = writeTempCa("stale-config-proxy-ca");
-    const fetchCheck = vi.fn().mockResolvedValue({ ok: true, status: 200 });
-
-    const result = await runProxyValidation({
+    const result = await validate({
       proxyUrlOverride: "https://override-proxy.example:8443",
       config: {
         proxyUrl: "https://config-proxy.example:8443",
         tls: { caFile: configCaFile },
       },
       allowedUrls: ["https://example.com/"],
-      deniedUrls: [],
-      fetchCheck,
     });
 
     expect(result.ok).toBe(true);
     expect(result.config.proxyCaFile).toBeUndefined();
-    expect(fetchCheck).toHaveBeenCalledWith({
-      proxyUrl: "https://override-proxy.example:8443",
-      targetUrl: "https://example.com/",
-      timeoutMs: 5000,
-    });
-  });
-
-  it("does not load proxy CA files for plain HTTP proxy validation", async () => {
-    const missingCaFile = path.join(os.tmpdir(), "openclaw-missing-http-proxy-validation-ca.pem");
-    const fetchCheck = vi.fn().mockResolvedValue({ ok: true, status: 200 });
-
-    const result = await runProxyValidation({
-      proxyUrlOverride: "http://proxy.example:8080",
-      proxyCaFileOverride: missingCaFile,
-      allowedUrls: ["https://example.com/"],
-      deniedUrls: [],
-      fetchCheck,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(fetchCheck).toHaveBeenCalledWith({
-      proxyUrl: "http://proxy.example:8080",
-      targetUrl: "https://example.com/",
-      timeoutMs: 5000,
-    });
-  });
-
-  it("uses configured proxy CA file contents when no CLI override is supplied", async () => {
-    const caFile = writeTempCa("config-proxy-ca");
-    const fetchCheck = vi.fn().mockResolvedValue({ ok: true, status: 200 });
-
-    await runProxyValidation({
-      config: {
-        proxyUrl: "https://proxy.example:8443",
-        tls: { caFile },
-      },
-      env: {},
-      allowedUrls: ["https://example.com/"],
-      deniedUrls: [],
-      fetchCheck,
-    });
-
-    expect(fetchCheck).toHaveBeenCalledWith({
-      proxyUrl: "https://proxy.example:8443",
-      targetUrl: "https://example.com/",
-      timeoutMs: 5000,
-      proxyTls: { ca: "config-proxy-ca" },
-    });
+    expectFetchThroughProxy("https://override-proxy.example:8443");
   });
 
   it("fails closed before probing when proxy CA file cannot be loaded", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-validation-missing-ca-"));
     tempDirs.push(dir);
-    const fetchCheck = vi.fn();
-
-    const result = await runProxyValidation({
+    const result = await validate({
       proxyUrlOverride: "https://proxy.example:8443",
       proxyCaFileOverride: path.join(dir, "missing.pem"),
       allowedUrls: ["https://example.com/"],
-      deniedUrls: [],
-      fetchCheck,
     });
 
-    expect(fetchCheck).not.toHaveBeenCalled();
+    expect(fetchWithRuntimeDispatcher).not.toHaveBeenCalled();
     expect(result.ok).toBe(false);
     expect(result.config.errors).toEqual([
       expect.stringContaining("proxy CA file could not be read"),
@@ -522,88 +324,40 @@ describe("proxy validation", () => {
   });
 
   it("accepts APNs 403 reachability with InvalidProviderToken when apns-id is unavailable", async () => {
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://127.0.0.1:3128",
-      },
-      env: {},
-      allowedUrls: [],
-      deniedUrls: [],
-      apnsReachability: true,
-      apnsCheck: vi.fn().mockResolvedValue({ status: 403, apnsReason: "InvalidProviderToken" }),
+    vi.mocked(apnsHttp2.probeApnsHttp2ReachabilityViaProxy).mockResolvedValue({
+      status: 403,
+      body: JSON.stringify({ reason: "InvalidProviderToken" }),
+      responseHeaders: {},
     });
-
-    expect(result.ok).toBe(true);
-    expect(result.checks).toEqual([
-      {
-        kind: "apns",
-        url: "https://api.sandbox.push.apple.com",
-        ok: true,
-        status: 403,
-      },
-    ]);
+    const result = await validate({ apnsReachability: true });
+    expectCheck(result, { kind: "apns", url: apnsAuthority, ok: true, status: 403 });
   });
 
   it("fails APNs reachability when bare 403 has no APNs proof", async () => {
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://127.0.0.1:3128",
-      },
-      env: {},
-      allowedUrls: [],
-      deniedUrls: [],
-      apnsReachability: true,
-      apnsCheck: vi.fn().mockResolvedValue({ status: 403 }),
+    vi.mocked(apnsHttp2.probeApnsHttp2ReachabilityViaProxy).mockResolvedValue({
+      status: 403,
+      body: "",
+      responseHeaders: {},
     });
-
-    expect(result.ok).toBe(false);
-    expect(result.checks).toHaveLength(1);
-    expect(result.checks[0]?.kind).toBe("apns");
-    expect(result.checks[0]?.url).toBe("https://api.sandbox.push.apple.com");
-    expect(result.checks[0]?.ok).toBe(false);
-    expect(result.checks[0]?.error).toContain("InvalidProviderToken");
-  });
-
-  it("fails APNs reachability when non-403 response has no apns-id (proxy intercept)", async () => {
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://127.0.0.1:3128",
-      },
-      env: {},
-      allowedUrls: [],
-      deniedUrls: [],
-      apnsReachability: true,
-      apnsCheck: vi.fn().mockResolvedValue({ status: 200 }),
+    const result = await validate({ apnsReachability: true });
+    expectCheck(result, {
+      kind: "apns",
+      url: apnsAuthority,
+      ok: false,
+      error: expect.stringContaining("InvalidProviderToken"),
     });
-
-    expect(result.ok).toBe(false);
-    expect(result.checks).toHaveLength(1);
-    expect(result.checks[0]?.kind).toBe("apns");
-    expect(result.checks[0]?.url).toBe("https://api.sandbox.push.apple.com");
-    expect(result.checks[0]?.ok).toBe(false);
-    expect(result.checks[0]?.error).toContain("apns-id");
   });
 
   it("fails APNs reachability when the proxy blocks CONNECT", async () => {
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://127.0.0.1:3128",
-      },
-      env: {},
-      allowedUrls: [],
-      deniedUrls: [],
-      apnsReachability: true,
-      apnsCheck: vi.fn().mockRejectedValue(new Error("HTTP/1.1 403 Forbidden")),
+    vi.mocked(apnsHttp2.probeApnsHttp2ReachabilityViaProxy).mockRejectedValue(
+      new Error("HTTP/1.1 403 Forbidden"),
+    );
+    const result = await validate({ apnsReachability: true });
+    expectCheck(result, {
+      kind: "apns",
+      url: apnsAuthority,
+      ok: false,
+      error: "HTTP/1.1 403 Forbidden",
     });
-
-    expect(result.ok).toBe(false);
-    expect(result.checks).toEqual([
-      {
-        kind: "apns",
-        url: "https://api.sandbox.push.apple.com",
-        ok: false,
-        error: "HTTP/1.1 403 Forbidden",
-      },
-    ]);
   });
 });

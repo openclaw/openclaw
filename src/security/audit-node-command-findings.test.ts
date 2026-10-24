@@ -1,4 +1,3 @@
-// Verifies node command security audit findings.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -6,185 +5,77 @@ import {
   collectNodeDenyCommandPatternFindings,
 } from "./audit-extra.sync.js";
 
-function expectDetailText(params: {
-  detail: string | null | undefined;
-  name: string;
-  includes?: readonly string[];
-  excludes?: readonly string[];
-}) {
-  for (const text of params.includes ?? []) {
-    expect(params.detail, `${params.name}:${text}`).toContain(text);
-  }
-  for (const text of params.excludes ?? []) {
-    expect(params.detail, `${params.name}:${text}`).not.toContain(text);
-  }
-}
-
-function requireFinding(
-  findings: ReturnType<
-    typeof collectNodeDenyCommandPatternFindings | typeof collectNodeDangerousAllowCommandFindings
-  >,
-  checkId: string,
-  label: string,
-) {
-  const finding = findings.find((entry) => entry.checkId === checkId);
-  if (!finding) {
-    throw new Error(`Expected ${checkId} finding for ${label}`);
-  }
-  return finding;
+function config(
+  commands: NonNullable<NonNullable<OpenClawConfig["gateway"]>["nodes"]>["commands"],
+  bind?: NonNullable<OpenClawConfig["gateway"]>["bind"],
+): OpenClawConfig {
+  return { gateway: { bind, nodes: { commands } } };
 }
 
 describe("security audit node command findings", () => {
   it("evaluates ineffective gateway.nodes.commands.deny entries", () => {
-    const cases = [
-      {
-        name: "flags ineffective gateway.nodes.commands.deny entries",
-        cfg: {
-          gateway: {
-            nodes: {
-              commands: { deny: ["system.*", "system.runx"] },
-            },
-          },
-        } satisfies OpenClawConfig,
-        detailIncludes: ["system.*", "system.runx", "did you mean", "system.run"],
-      },
-      {
-        name: "suggests prefix-matching commands for unknown deny entries",
-        cfg: {
-          gateway: {
-            nodes: {
-              commands: { deny: ["system.run.prep"] },
-            },
-          },
-        } satisfies OpenClawConfig,
-        detailIncludes: ["system.run.prep", "did you mean", "system.run.prepare"],
-      },
-      {
-        name: "keeps unknown deny entries without suggestions when no close command exists",
-        cfg: {
-          gateway: {
-            nodes: {
-              commands: { deny: ["zzzzzzzzzzzzzz"] },
-            },
-          },
-        } satisfies OpenClawConfig,
-        detailIncludes: ["zzzzzzzzzzzzzz"],
-        detailExcludes: ["did you mean"],
-      },
-      {
-        name: "keeps valid dangerous deny entries out of unknown warnings",
-        cfg: {
-          gateway: {
-            nodes: {
-              commands: {
-                deny: ["camera.snap", "screen.record", "camera.snapp", "system.*"],
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
-        detailIncludes: ["camera.snapp", "system.*", "did you mean", "camera.snap"],
-        detailExcludes: ["screen.record"],
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const findings = collectNodeDenyCommandPatternFindings(testCase.cfg);
-      const finding = requireFinding(
-        findings,
-        "gateway.nodes.deny_commands_ineffective",
-        testCase.name,
+    const cases: [string[], string[], string[]][] = [
+      [["system.*", "system.runx"], ["system.*", "system.runx", "did you mean", "system.run"], []],
+      [["system.run.prep"], ["system.run.prep", "did you mean", "system.run.prepare"], []],
+      [["zzzzzzzzzzzzzz"], ["zzzzzzzzzzzzzz"], ["did you mean"]],
+      [
+        ["camera.snap", "screen.record", "camera.snapp", "system.*"],
+        ["camera.snapp", "system.*", "did you mean", "camera.snap"],
+        ["screen.record"],
+      ],
+    ];
+    for (const [deny, included, excluded] of cases) {
+      const findings = collectNodeDenyCommandPatternFindings(config({ deny }));
+      const finding = findings.find(
+        (entry) => entry.checkId === "gateway.nodes.deny_commands_ineffective",
       );
-      expect(finding.severity, testCase.name).toBe("warn");
-      expectDetailText({
-        detail: finding.detail,
-        name: testCase.name,
-        includes: testCase.detailIncludes,
-        excludes: "detailExcludes" in testCase ? testCase.detailExcludes : [],
-      });
+      expect(finding, deny.join(", ")).toMatchObject({ severity: "warn" });
+      for (const text of included) {
+        expect(finding?.detail).toContain(text);
+      }
+      for (const text of excluded) {
+        expect(finding?.detail).not.toContain(text);
+      }
     }
   });
 
-  it("does not flag valid dangerous gateway.nodes.commands.deny entries as ineffective", () => {
-    const findings = collectNodeDenyCommandPatternFindings({
-      gateway: {
-        nodes: {
-          commands: {
-            deny: ["camera.snap", "camera.clip", "screen.record", "sms.send", "system.run"],
-          },
-        },
-      },
-    } satisfies OpenClawConfig);
+  it("does not flag valid gateway.nodes.commands.deny entries as ineffective", () => {
+    const findings = collectNodeDenyCommandPatternFindings(
+      config({
+        deny: [
+          "camera.snap",
+          "camera.clip",
+          "screen.record",
+          "desktop.stream",
+          "sms.send",
+          "system.run",
+        ],
+      }),
+    );
 
     expect(findings).toStrictEqual([]);
   });
 
   it("evaluates dangerous gateway.nodes.commands.allow findings", () => {
-    const cases: Array<{
-      name: string;
-      cfg: OpenClawConfig;
-      expectedSeverity?: "warn" | "critical";
-      expectedAbsent?: boolean;
-    }> = [
-      {
-        name: "loopback gateway",
-        cfg: {
-          gateway: {
-            bind: "loopback",
-            nodes: {
-              commands: { allow: ["camera.snap", "screen.record", "health.summary"] },
-            },
-          },
-        } satisfies OpenClawConfig,
-        expectedSeverity: "warn" as const,
-      },
-      {
-        name: "lan-exposed gateway",
-        cfg: {
-          gateway: {
-            bind: "lan",
-            nodes: {
-              commands: { allow: ["camera.snap", "screen.record", "health.summary"] },
-            },
-          },
-        } satisfies OpenClawConfig,
-        expectedSeverity: "critical" as const,
-      },
-      {
-        name: "denied again suppresses dangerous allow finding",
-        cfg: {
-          gateway: {
-            nodes: {
-              commands: {
-                allow: ["camera.snap", "screen.record"],
-                deny: ["camera.snap", "screen.record"],
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
-        expectedAbsent: true,
-      },
+    const commands = ["camera.snap", "screen.record", "health.summary"];
+    const cases: [OpenClawConfig, "warn" | "critical" | undefined][] = [
+      [config({ allow: commands }, "loopback"), "warn"],
+      [config({ allow: commands }, "lan"), "critical"],
+      [config({ allow: commands.slice(0, 2), deny: commands.slice(0, 2) }), undefined],
     ];
-
-    for (const testCase of cases) {
-      const findings = collectNodeDangerousAllowCommandFindings(testCase.cfg);
+    for (const [cfg, severity] of cases) {
+      const findings = collectNodeDangerousAllowCommandFindings(cfg);
       const finding = findings.find(
         (entry) => entry.checkId === "gateway.nodes.allow_commands_dangerous",
       );
-      if (testCase.expectedAbsent) {
-        expect(finding, testCase.name).toBeUndefined();
+      if (!severity) {
+        expect(finding).toBeUndefined();
         continue;
       }
-      const dangerousFinding = requireFinding(
-        findings,
-        "gateway.nodes.allow_commands_dangerous",
-        testCase.name,
-      );
-      expect(dangerousFinding.severity, testCase.name).toBe(testCase.expectedSeverity);
-      expectDetailText({
-        detail: dangerousFinding.detail,
-        name: testCase.name,
-        includes: ["camera.snap", "screen.record", "health.summary"],
-      });
+      expect(finding).toMatchObject({ severity });
+      for (const text of commands) {
+        expect(finding?.detail).toContain(text);
+      }
     }
   });
 });

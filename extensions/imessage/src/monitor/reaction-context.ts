@@ -1,4 +1,3 @@
-// Imessage plugin module implements reaction context behavior.
 import { normalizeIMessageGuid } from "../message-guid.js";
 import type { IMessagePayload } from "./types.js";
 
@@ -29,17 +28,14 @@ const TAPBACK_TEXT_PATTERNS: Array<{
   { prefix: "removed a question from", action: "removed", emoji: "❓" },
 ];
 
-function normalizeReactionValue(value: unknown): string | undefined {
-  return typeof value === "string" ? normalizeIMessageGuid(value) || undefined : undefined;
+function normalizeReactionValue(value: string | null | undefined): string | undefined {
+  return value ? normalizeIMessageGuid(value) || undefined : undefined;
 }
 
-function resolveReactionTargetGuidCandidates(...values: unknown[]): string[] {
+function resolveReactionTargetGuidCandidates(...values: (string | null | undefined)[]): string[] {
   const candidates: string[] = [];
   for (const value of values) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const raw = value.trim();
+    const raw = value?.trim();
     if (!raw) {
       continue;
     }
@@ -79,7 +75,7 @@ export function resolveIMessageReactionContext(
   const explicit =
     message.is_reaction === true ||
     message.is_tapback === true ||
-    (typeof message.associated_message_type === "number" &&
+    (message.associated_message_type != null &&
       Number.isFinite(message.associated_message_type) &&
       message.associated_message_type >= 2000 &&
       message.associated_message_type < 4000);

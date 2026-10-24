@@ -10,6 +10,25 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { whatsappApprovalCapability } from "./approval-native.js";
 import { cacheInboundMessageMeta } from "./quoted-message.js";
 
+const reactionStores = vi.hoisted(() => new Set<{ clearForTest(): void }>());
+
+vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/approval-reaction-runtime")>();
+  return {
+    ...actual,
+    createApprovalReactionTargetStore: <TTarget>(
+      params: Parameters<typeof actual.createApprovalReactionTargetStore<TTarget>>[0],
+    ) => {
+      const store = actual.createApprovalReactionTargetStore<TTarget>(params);
+      if (params.namespace === "whatsapp.approval-reactions") {
+        reactionStores.add(store);
+      }
+      return store;
+    },
+  };
+});
+
 const hoisted = vi.hoisted(() => ({
   sendMessageWhatsApp: vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" })),
   sendPollWhatsApp: vi.fn(async () => ({ messageId: "poll-1", toJid: "jid" })),
@@ -31,7 +50,6 @@ vi.mock("./runtime.js", () => ({
 
 let whatsappChannelOutbound: typeof import("./channel-outbound.js").whatsappChannelOutbound;
 let whatsappMessageAdapter: typeof import("./channel-outbound.js").whatsappMessageAdapter;
-let clearWhatsAppApprovalReactionTargetsForTest: typeof import("./approval-reactions.js").clearWhatsAppApprovalReactionTargetsForTest;
 let resolveWhatsAppApprovalReactionTargetWithPersistence: typeof import("./approval-reactions.js").resolveWhatsAppApprovalReactionTargetWithPersistence;
 
 type ApprovalAction = Extract<MessagePresentationAction, { type: "approval" }>;
@@ -39,15 +57,13 @@ type ApprovalAction = Extract<MessagePresentationAction, { type: "approval" }>;
 describe("whatsappChannelOutbound", () => {
   beforeAll(async () => {
     ({ whatsappChannelOutbound, whatsappMessageAdapter } = await import("./channel-outbound.js"));
-    ({
-      clearWhatsAppApprovalReactionTargetsForTest,
-      resolveWhatsAppApprovalReactionTargetWithPersistence,
-    } = await import("./approval-reactions.js"));
+    ({ resolveWhatsAppApprovalReactionTargetWithPersistence } =
+      await import("./approval-reactions.js"));
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
-    clearWhatsAppApprovalReactionTargetsForTest();
+    reactionStores.forEach((store) => store.clearForTest());
   });
 
   it.each([
@@ -143,6 +159,13 @@ describe("whatsappChannelOutbound", () => {
             receipt: {
               primaryPlatformMessageId: messageId,
               platformMessageIds: [messageId],
+              raw: [
+                {
+                  channel: "other-channel",
+                  messageId: "foreign-channel",
+                  toJid: "15551230000@s.whatsapp.net",
+                },
+              ],
               parts: [
                 {
                   platformMessageId: messageId,
@@ -169,6 +192,14 @@ describe("whatsappChannelOutbound", () => {
           reactionKey: "👍",
         }),
       ).resolves.toEqual({ approvalId, approvalKind, decision: "allow-once" });
+      await expect(
+        resolveWhatsAppApprovalReactionTargetWithPersistence({
+          accountId: "default",
+          remoteJid: "15551230000@s.whatsapp.net",
+          messageId: "foreign-channel",
+          reactionKey: "👍",
+        }),
+      ).resolves.toBeNull();
     },
   );
 

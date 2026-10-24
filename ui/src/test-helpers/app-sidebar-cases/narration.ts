@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 const defaults: SessionsListResult["defaults"] = {
   modelProvider: null,
@@ -34,6 +35,115 @@ function sessionsResult(rows: GatewaySessionRow[]): SessionsListResult {
 }
 
 describe("AppSidebar live narration", () => {
+  it("shows tool identity and progress only when the row has a preview line", async () => {
+    const key = "agent:main:tool-preview";
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", [key]);
+    sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.sessionOrganizer.setSessionsShowPreview(false);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(1));
+    gateway.publishEvent("session.tool", {
+      sessionKey: key,
+      runId: "run-tool",
+      stream: "tool",
+      data: { name: "exec", toolCallId: "call-tool", phase: "start" },
+    });
+    gateway.publishEvent("agent", {
+      sessionKey: key,
+      runId: "run-tool",
+      stream: "item",
+      data: {
+        kind: "tool",
+        itemId: "tool:call-tool",
+        name: "exec",
+        toolCallId: "call-tool",
+        title: "Exec",
+        phase: "update",
+        progressText: "Running focused tests",
+      },
+    });
+    await sidebar.updateComplete;
+    const row = () => sidebar.querySelector(`[data-session-key="${key}"]`);
+    expect(row()?.classList.contains("sidebar-recent-session--single-line")).toBe(true);
+    expect(row()?.querySelector(".sidebar-session-tool")).toBeNull();
+    expect(row()?.querySelector(".sidebar-recent-session__subtitle")).toBeNull();
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
+    await sidebar.updateComplete;
+    expect(row()?.querySelector(".sidebar-session-tool")?.getAttribute("aria-label")).toBe(
+      "Tool: exec",
+    );
+    expect(row()?.querySelector(".sidebar-recent-session__subtitle")?.textContent).toBe(
+      "Running focused tests",
+    );
+    expect(row()?.classList.contains("sidebar-recent-session--single-line")).toBe(false);
+    expect(
+      row()?.querySelector(".sidebar-recent-session__title-row .sidebar-session-tool"),
+    ).toBeNull();
+    expect(
+      row()?.querySelector(".sidebar-recent-session__details .sidebar-session-tool"),
+    ).not.toBeNull();
+    sidebar.sessionOrganizer.setSessionsShowPreview(false);
+    await sidebar.updateComplete;
+    expect(row()?.querySelector(".sidebar-session-tool")).toBeNull();
+    expect(row()?.querySelector(".sidebar-recent-session__subtitle")).toBeNull();
+  });
+
+  it.each(["roster", "pages", "online", "collapsed", "hidden"] as const)(
+    "releases narration while %s hides its consumer and resumes visible previews",
+    async (hidden) => {
+      const key = "agent:main:visible-preview";
+      const gateway = createGatewayHarness({} as GatewayBrowserClient);
+      const sessions = createSessionsHarness("main", [key]);
+      let acquired = createDeferred();
+      sessions.subscribeMessages.mockImplementation((subscribedKey) => {
+        acquired.resolve();
+        return Promise.resolve({ key: subscribedKey, agentId: null });
+      });
+      sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
+      const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+      sidebar.sessionOrganizer.setSessionsShowPreview(true);
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await acquired.promise;
+      expect(sessions.subscribeMessages).toHaveBeenCalledTimes(1);
+
+      if (hidden === "roster") {
+        sidebar.sidebarAgentsMode = "roster";
+      } else if (hidden === "collapsed") {
+        sidebar.navigationCollapsed = true;
+      } else if (hidden === "hidden") {
+        sidebar.navigationVisible = false;
+      } else {
+        sidebar.navigationView = hidden;
+      }
+      sidebar.invalidate();
+      await sidebar.updateComplete;
+      expect(sessions.unsubscribeMessages).toHaveBeenCalledTimes(1);
+
+      acquired = createDeferred();
+      sidebar.sidebarAgentsMode = "chip";
+      sidebar.navigationCollapsed = false;
+      sidebar.navigationVisible = true;
+      sidebar.navigationView = "sessions";
+      sidebar.invalidate();
+      await sidebar.updateComplete;
+      await acquired.promise;
+      expect(sessions.subscribeMessages).toHaveBeenCalledTimes(2);
+      gateway.publishEvent("session.narration", {
+        sessionKey: key,
+        runId: "visible-run",
+        text: "Visible work resumed.",
+      });
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector(".sidebar-recent-session__subtitle")?.textContent).toBe(
+        "Visible work resumed.",
+      );
+    },
+  );
+
   it("subscribes for a running row, renders prose, and cleans up when the run ends", async () => {
     const key = "agent:main:narrated";
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
@@ -45,20 +155,15 @@ describe("AppSidebar live narration", () => {
     await sidebar.updateComplete;
 
     await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(1));
-    expect(sessions.subscribeMessages).toHaveBeenCalledWith(key, { agentId: undefined });
+    expect(sessions.subscribeMessages).toHaveBeenCalledWith(key, {
+      agentId: undefined,
+      mode: "narration",
+    });
 
-    gateway.publishEvent("chat", {
+    gateway.publishEvent("session.narration", {
       sessionKey: key,
-      state: "delta",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "# Earlier work\n\nChecked the inputs. Final **verification** is running.",
-          },
-        ],
-      },
+      runId: "narrated-run",
+      text: "# Earlier work\n\nChecked the inputs. Final **verification** is running.",
     });
 
     await waitForFast(() =>
@@ -127,16 +232,14 @@ describe("AppSidebar live narration", () => {
     const row = sidebar.querySelector(`[data-session-key="${key}"]`);
     const questionAttention = row?.querySelector("[data-session-attention=question]");
     expect(questionAttention).not.toBeNull();
-    expect(questionAttention?.getAttribute("aria-label")).toBe("Waiting for your answer");
+    expect(questionAttention?.getAttribute("aria-label")).toBe(
+      "Waiting for your answer\nContinue?",
+    );
     expect(
-      (
-        questionAttention?.closest("openclaw-tooltip") as
-          | (HTMLElement & {
-              content?: string;
-            })
-          | null
-      )?.content,
-    ).toBe("Waiting for your answer");
+      questionAttention
+        ?.closest("openclaw-tooltip")
+        ?.querySelector(".sidebar-session-attention-tooltip__preview")?.textContent,
+    ).toBe("Continue?");
     expect(row?.querySelector(".sidebar-recent-session__subtitle")).toBeNull();
     expect(row?.textContent).not.toContain("Checking the remaining files.");
     expect(
@@ -144,76 +247,42 @@ describe("AppSidebar live narration", () => {
     ).toBe(false);
   });
 
-  it("keeps only the six newest running subscriptions and evicts the old boundary", async () => {
+  it("retains six running subscriptions across recency changes and fills a settled slot", async () => {
     const keys = Array.from({ length: 7 }, (_, index) => `agent:main:run-${index + 1}`);
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", keys);
-    const rows = keys.map((key, index) => runningRow(key, index + 1));
+    const rows = keys.map((key, index) => ({
+      ...runningRow(key, index + 1),
+      startedAt: undefined,
+    }));
     sessions.publishList({ result: sessionsResult(rows), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
-    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(6));
+    expect(sessions.subscribeMessages).toHaveBeenCalledTimes(6);
     expect(sessions.subscribeMessages.mock.calls.map(([key]) => key)).toEqual(
       expect.arrayContaining(keys.slice(1)),
     );
     expect(sessions.subscribeMessages).not.toHaveBeenCalledWith(keys[0], expect.anything());
 
+    const reordered = [{ ...rows[0]!, updatedAt: 100 }, ...rows.slice(1).toReversed()];
+    sessions.publishList({ result: sessionsResult(reordered), agentId: "main" });
+    await sidebar.updateComplete;
+    expect(sessions.subscribeMessages).toHaveBeenCalledTimes(6);
+    expect(sessions.unsubscribeMessages).not.toHaveBeenCalled();
+
+    const settled: GatewaySessionRow = { ...rows[1]!, hasActiveRun: false, status: "done" };
     sessions.publishList({
-      result: sessionsResult([{ ...rows[0]!, startedAt: 100 }, ...rows.slice(1)]),
+      result: sessionsResult(reordered.map((row) => (row.key === settled.key ? settled : row))),
       agentId: "main",
     });
-    await waitForFast(() => expect(sessions.unsubscribeMessages).toHaveBeenCalledTimes(1));
-    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(7));
+    await sidebar.updateComplete;
+    expect(sessions.unsubscribeMessages).toHaveBeenCalledTimes(1);
+    expect(sessions.subscribeMessages).toHaveBeenCalledTimes(7);
     expect(sessions.unsubscribeMessages.mock.calls[0]?.[0]).toMatchObject({ key: keys[1] });
     expect(sessions.subscribeMessages.mock.calls.at(-1)?.[0]).toBe(keys[0]);
-  });
-
-  it("keeps six background subscriptions when the open session is also running", async () => {
-    const keys = Array.from({ length: 7 }, (_, index) => `agent:main:run-${index + 1}`);
-    const gateway = createGatewayHarness({} as GatewayBrowserClient);
-    const sessions = createSessionsHarness("main", keys);
-    sessions.publishList({
-      result: sessionsResult(keys.map((key, index) => runningRow(key, index + 1))),
-      agentId: "main",
-    });
-    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
-    sidebar.activeRouteId = "chat";
-    sidebar.sessionKey = keys[0]!;
-    sidebar.sessionOrganizer.setSessionsShowPreview(true);
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-
-    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(7));
-    expect(sessions.subscribeMessages.mock.calls.map(([key]) => key)).toEqual(
-      expect.arrayContaining(keys),
-    );
-  });
-
-  it("stays inert when the synced preference is off", async () => {
-    const key = "agent:main:quiet";
-    const gateway = createGatewayHarness({} as GatewayBrowserClient);
-    const sessions = createSessionsHarness("main", [key]);
-    sessions.publishList({ result: sessionsResult([runningRow(key, 1)]), agentId: "main" });
-    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
-    sidebar.sidebarLiveActivity = false;
-    sidebar.sessionOrganizer.setSessionsShowPreview(true);
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-
-    gateway.publishEvent("chat", {
-      sessionKey: key,
-      state: "delta",
-      message: { role: "assistant", content: [{ type: "text", text: "Should stay hidden" }] },
-    });
-    await sidebar.updateComplete;
-
-    expect(sessions.subscribeMessages).not.toHaveBeenCalled();
-    expect(
-      sidebar.querySelector(`[data-session-key="${key}"] .sidebar-recent-session__subtitle`),
-    ).toBeNull();
   });
 
   it("leases open and background running sessions again after reconnect", async () => {
@@ -235,9 +304,11 @@ describe("AppSidebar live narration", () => {
     await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(2));
     expect(sessions.subscribeMessages).toHaveBeenCalledWith(openKey, {
       agentId: undefined,
+      mode: "narration",
     });
     expect(sessions.subscribeMessages).toHaveBeenCalledWith(backgroundKey, {
       agentId: undefined,
+      mode: "narration",
     });
 
     gateway.publish({ phase: "stopped" });
@@ -251,8 +322,8 @@ describe("AppSidebar live narration", () => {
     await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(4));
     expect(sessions.subscribeMessages.mock.calls.slice(2)).toEqual(
       expect.arrayContaining([
-        [backgroundKey, { agentId: undefined }],
-        [openKey, { agentId: undefined }],
+        [backgroundKey, { agentId: undefined, mode: "narration" }],
+        [openKey, { agentId: undefined, mode: "narration" }],
       ]),
     );
   });

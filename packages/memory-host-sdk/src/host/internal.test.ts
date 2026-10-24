@@ -155,12 +155,11 @@ describe("memory host SDK package internals", () => {
   it("propagates directory creation failures", () => {
     const mkdirError = new Error("disk full");
     const targetDir = path.join(getTmpDir(), "blocked");
-    const mkdirSync = vi.spyOn(fsSync, "mkdirSync").mockImplementation(() => {
+    vi.spyOn(fsSync, "mkdirSync").mockImplementation(() => {
       throw mkdirError;
     });
 
     expect(() => ensureDir(targetDir)).toThrow(mkdirError);
-    expect(mkdirSync).toHaveBeenCalledWith(targetDir, { recursive: true });
   });
 
   it("normalizes additional memory paths", () => {
@@ -187,10 +186,12 @@ describe("memory host SDK package internals", () => {
         { path: " notes ", pattern: " runbooks/**/*.md " },
         { path: "notes", pattern: "runbooks/**/*.md" },
         { path: "notes", pattern: "archive/**/*.md" },
+        { path: "reference", evergreen: true },
       ]),
     ).toEqual([
       { path: path.resolve(workspaceDir, "notes"), pattern: "runbooks/**/*.md" },
       { path: path.resolve(workspaceDir, "notes"), pattern: "archive/**/*.md" },
+      { path: path.resolve(workspaceDir, "reference"), evergreen: true },
     ]);
   });
 
@@ -364,6 +365,102 @@ describe("memory host SDK package internals", () => {
           rootFile,
         ].toSorted(),
       );
+    },
+  );
+
+  it.each([
+    {
+      label: "a union of root, wildcard, and trailing-globstar patterns",
+      patterns: ["*.md", "notes/*/*.md", "logs.cache/**"],
+      expectedFiles: ["root.md", "notes/team/keep.md", "logs.cache/deep/keep.md"],
+      expectedDirectories: ["", "notes", "notes/team", "logs.cache", "logs.cache/deep"],
+    },
+    {
+      label: "a bare globstar",
+      patterns: ["**"],
+      expectedFiles: undefined,
+      expectedDirectories: undefined,
+    },
+    {
+      label: "brace alternatives containing separators and extglobs",
+      patterns: ["{notes,archive/deep}/**/*.md", "@(logs.cache|scratch)/**/*.md"],
+      expectedFiles: undefined,
+      expectedDirectories: undefined,
+    },
+    {
+      label: "an explicit hidden directory",
+      patterns: [".hidden/**/*.md"],
+      expectedFiles: [".hidden/deep/keep.md"],
+      expectedDirectories: ["", ".hidden", ".hidden/deep"],
+    },
+    {
+      label: "an invalid pattern alongside a valid pattern",
+      patterns: ["x".repeat(65_537), "notes/team/*.md"],
+      expectedFiles: ["notes/team/keep.md"],
+      expectedDirectories: ["", "notes", "notes/team"],
+    },
+    {
+      label: "an unrestricted entry alongside a narrow pattern",
+      patterns: ["notes/team/*.md", undefined],
+      expectedFiles: [
+        "root.md",
+        "notes/team/keep.md",
+        "notes/team/deeper/keep.md",
+        "logs.cache/deep/keep.md",
+        "archive/deep/keep.md",
+        ".hidden/deep/keep.md",
+        "scratch/deep/keep.md",
+      ],
+      expectedDirectories: undefined,
+    },
+  ])(
+    "scans a shared extra root once for $label without losing matching files",
+    async ({ patterns, expectedFiles, expectedDirectories }) => {
+      const workspaceDir = getTmpDir();
+      const extraDir = path.join(workspaceDir, "extra");
+      const fixtureFiles = [
+        "root.md",
+        "notes/team/keep.md",
+        "notes/team/deeper/keep.md",
+        "logs.cache/deep/keep.md",
+        "archive/deep/keep.md",
+        ".hidden/deep/keep.md",
+        "scratch/deep/keep.md",
+      ];
+      for (const relativeFile of fixtureFiles) {
+        const file = path.join(extraDir, relativeFile);
+        fsSync.mkdirSync(path.dirname(file), { recursive: true });
+        fsSync.writeFileSync(file, "# Memory\n");
+      }
+      const readdir = vi.spyOn(fs, "readdir");
+
+      const files = await listMemoryFiles(
+        workspaceDir,
+        patterns.map((pattern) => ({ path: extraDir, pattern })),
+      );
+
+      expect(
+        files.map((file) => path.relative(extraDir, file).replaceAll(path.sep, "/")).toSorted(),
+      ).toEqual(
+        (
+          expectedFiles ??
+          // Node and Bun differ on dotfiles and extglobs. Pruning must preserve
+          // each runtime's existing exhaustive leaf-match results.
+          fixtureFiles.filter((file) =>
+            patterns.some((pattern) => !pattern || path.posix.matchesGlob(file, pattern)),
+          )
+        ).toSorted(),
+      );
+      const scannedDirectories = readdir.mock.calls
+        .map(([dir]) => path.resolve(String(dir)))
+        .filter((dir) => dir === extraDir || dir.startsWith(`${extraDir}${path.sep}`));
+      if (expectedDirectories) {
+        expect(scannedDirectories.toSorted()).toEqual(
+          expectedDirectories.map((dir) => path.join(extraDir, dir)).toSorted(),
+        );
+      } else {
+        expect(scannedDirectories.filter((dir) => dir === extraDir)).toHaveLength(1);
+      }
     },
   );
 

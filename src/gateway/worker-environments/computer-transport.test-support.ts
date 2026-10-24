@@ -3,9 +3,12 @@ import { vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { claimAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  claimAgentRunApprovalAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
-import type { ComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -14,7 +17,7 @@ import {
   NodeWorkerComputerCloseParamsSchema,
   parseNodeWorkerComputerInput,
 } from "../../worker/node-computer-protocol.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { computerCapabilities } from "../desktop/computer.test-support.js";
 import { createContext, createNodeSession } from "../node-invoke-plugin-policy.test-helpers.js";
 import type {
   NodeWorkerSupervisorNodeProof,
@@ -29,17 +32,13 @@ import {
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
+import { activePlacement } from "./placement-suite.test-support.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
-export const COMPUTER_USE: ComputerUseCapabilityDescriptor = {
-  contractVersion: 2,
-  provider: { id: "fixture-computer", label: "Fixture computer", generation: "provider-1" },
-  actions: ["screenshot", "type"],
-  targets: ["screen"],
-  deliveryModes: ["foreground"],
-  observations: ["image"],
-  features: { recording: false, agentCursor: false, multiDisplay: false },
-};
+export const COMPUTER_USE = computerCapabilities(
+  { id: "fixture-computer", label: "Fixture computer", generation: "provider-1" },
+  ["screenshot", "type"],
+);
 export const EXECUTION_ID = "00000000-0000-4000-8000-000000000001";
 export const NEXT_EXECUTION_ID = "00000000-0000-4000-8000-000000000002";
 
@@ -51,12 +50,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     placementGeneration: 3,
     owner: { kind: "worker", environmentId: "environment-1", ownerEpoch: 7 },
   };
-  const placement: WorkerSessionPlacementRecord = {
-    state: "active",
-    executionMode: "worker-turn",
-    sessionId: claim.sessionId,
-    sessionKey: "agent:main:session-1",
-    agentId: "main",
+  const placement = activePlacement(claim.sessionId, {
     generation: claim.placementGeneration,
     turnClaim: {
       owner: "worker",
@@ -65,7 +59,6 @@ export function createHarness(sharedHost = false, withPolicy = true) {
       generation: claim.placementGeneration,
       ownerEpoch: 7,
     },
-    createdAtMs: 1,
     updatedAtMs: 2,
     stateChangedAtMs: 2,
     environmentId: "environment-1",
@@ -73,12 +66,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     workspaceBaseManifestRef: "sha256:fixture",
     remoteWorkspaceDir: "/worker/workspace",
     workerBundleHash: "a".repeat(64),
-    lastTranscriptAckCursor: null,
-    lastLiveEventAckCursor: null,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
-  };
+  });
   const environment: WorkerEnvironmentRecord = {
     preparation: null,
     lastActivatedAtMs: null,
@@ -137,19 +125,14 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     beforePolicy?: () => Promise<void>;
     beforeDispatch?: () => Promise<void>;
     afterDispatch?: () => Promise<void>;
-  } = {
-    placement,
-    environment,
-    node,
-    privateCurrent: true,
-    config: {},
-  };
+  } = { placement, environment, node, privateCurrent: true, config: {} };
   const { context } = createContext({
     nodeSession: node,
     getRuntimeConfig: () => state.config,
-    validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator({
-      validateTurnClaim: (candidate) => isCurrentPlacementTurnClaim(state.placement, candidate),
-    }),
+    validateAgentRuntimeApprovalAuthority: ({ delegatedAuthority }) =>
+      validateAgentRunDelegatedAuthority(delegatedAuthority) &&
+      (delegatedAuthority.kind === "local" ||
+        isCurrentPlacementTurnClaim(state.placement, delegatedAuthority.turnClaim)),
   });
   const nativeExecutionIds: string[] = [];
   const publicInvoke = vi.fn<NodeRegistry["invoke"]>(async (invocation) => {
@@ -249,6 +232,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     store: { get: () => state.environment },
     placements: {
       get: () => state.placement,
+      getAsync: async () => structuredClone(state.placement),
       validateTurnClaim: (candidate: WorkerSessionTurnClaim) =>
         isCurrentPlacementTurnClaim(state.placement, candidate),
       registerTurnClaimClosedHandler(handler: (closed: WorkerSessionTurnClaim) => void) {
@@ -264,12 +248,23 @@ export function createHarness(sharedHost = false, withPolicy = true) {
   };
   const run = createOperationalRunInstanceRef(claim.runId);
   const authority = claimAgentRunDelegatedAuthority(run);
+  const workerLifetime = new AbortController();
+  const workerAuthority = claimAgentRunApprovalAuthority(authority, [workerLifetime.signal]);
+  const workerSource = {
+    authority: workerAuthority,
+    assertCurrent() {
+      if (!validateAgentRunDelegatedAuthority(workerAuthority)) {
+        throw new Error("Session desktop placement authority changed");
+      }
+    },
+  };
   return {
     claim,
     options,
     state,
     run,
     authority,
+    workerSource,
     privateInvoke,
     publicInvoke,
     nodeTransport,
@@ -278,6 +273,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     registry,
     nativeExecutionIds,
     releaseClaim() {
+      workerLifetime.abort();
       state.placement = { ...state.placement, turnClaim: null };
       for (const handler of closedHandlers) {
         handler(claim);
@@ -288,7 +284,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
       if (!prepared) {
         throw new Error("Expected a prepared session desktop");
       }
-      return { prepared, transport: prepared.bind(run) };
+      return { prepared, transport: prepared.bind(run, workerSource) };
     },
   };
 }

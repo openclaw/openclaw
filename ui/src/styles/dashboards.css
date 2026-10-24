@@ -1,7 +1,3 @@
-.dashboards-header {
-  align-items: center;
-}
-
 .dashboards-header__count {
   display: flex;
   align-items: baseline;
@@ -151,7 +147,7 @@
     transform var(--duration-fast) ease;
 }
 
-.dashboard-card:hover {
+.dashboard-card:has(a.dashboard-card__main):hover {
   border-color: var(--border-hover);
   box-shadow: var(--shadow-md);
   transform: translateY(-2px);

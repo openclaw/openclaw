@@ -1,6 +1,10 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveImmutableInstallIdentity } from "./candidate-install-owner.js";
+import type {
+  PluginMetadataSnapshotCandidate,
+  ScopedPluginMetadataSnapshot,
+} from "./current-plugin-metadata-snapshot.types.js";
 import {
   currentPluginMetadataConfigIdentityCache,
   getGatewayPluginMetadataSnapshot,
@@ -8,7 +12,11 @@ import {
   setCurrentPluginMetadataSnapshotState,
   selectCurrentPluginMetadataCache,
 } from "./current-plugin-metadata-state.js";
+import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import { resolveInstalledManifestRegistryIndexFingerprint } from "./manifest-registry-installed.js";
+import { safeRealpathSync } from "./path-safety.js";
+import type { InspectionNativeEsmPolicy } from "./plugin-cache-artifacts.js";
 import {
   getPluginMetadataSnapshotCache,
   getScopedPluginCaches,
@@ -17,12 +25,17 @@ import {
   getScopedPluginCache,
   runOutsidePluginCache,
   withPluginCache,
-  type PluginCache,
 } from "./plugin-cache.js";
 import {
   resolvePluginControlPlaneFingerprint,
-  type ResolvePluginControlPlaneContextParams,
+  resolvePluginDiscoveryContext,
 } from "./plugin-control-plane-context.js";
+import {
+  createPluginExecutionFrame,
+  getPluginExecutionFrame,
+  runWithPluginExecutionFrame,
+} from "./plugin-instance-invocation.js";
+import type { PluginExecutionFrame } from "./plugin-instance-invocation.types.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot-readers.js";
@@ -30,6 +43,14 @@ import type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotPluginIdScope,
 } from "./plugin-metadata-snapshot.types.js";
+import {
+  preparePluginNativeAdmissions,
+  publishInspectionNativeEsmPolicy,
+} from "./plugin-native-admission-state.js";
+import {
+  resolvePluginRuntimeArtifactSelection,
+  resolvePluginRuntimeExecutionArtifact,
+} from "./plugin-runtime-artifact-selection.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 
 type CurrentPluginMetadataSnapshotOptions = {
@@ -41,7 +62,7 @@ type CurrentPluginMetadataSnapshotOptions = {
   workspaceDir?: string;
 };
 
-type CurrentPluginMetadataSnapshotParams = {
+export type CurrentPluginMetadataSnapshotParams = {
   /** Stop before policy-state validation so async owners can prepare it before retrying. */
   allowSynchronousPolicyRead?: boolean;
   config?: OpenClawConfig;
@@ -54,24 +75,6 @@ type CurrentPluginMetadataSnapshotParams = {
   requireDefaultDiscoveryContext?: boolean;
 };
 
-type PluginMetadataSnapshotCandidate = {
-  snapshot: PluginMetadataSnapshot | undefined;
-  configFingerprint: string | undefined;
-  envFingerprint?: string;
-  defaultDiscoveryCompatible?: boolean;
-  compatiblePolicyHashes?: readonly string[];
-  compatibleConfigFingerprints?: readonly string[];
-  hasConfigIdentity?: (config: OpenClawConfig) => boolean;
-  immutableRuntimeGeneration?: boolean;
-};
-
-type ScopedPluginMetadataSnapshot = PluginMetadataSnapshotCandidate & {
-  snapshot: PluginMetadataSnapshot;
-  cache: PluginCache;
-  metadata: PluginCache["metadata"];
-  parent?: ScopedPluginMetadataSnapshot;
-};
-
 export type PluginMetadataSnapshotScopeRunner = <T>(
   params: {
     config: OpenClawConfig;
@@ -80,19 +83,89 @@ export type PluginMetadataSnapshotScopeRunner = <T>(
   run: () => T,
 ) => T;
 
-const SCOPED_PLUGIN_METADATA_SNAPSHOT_KEY = Symbol.for("openclaw.scopedPluginMetadataSnapshot");
-const scopedPluginMetadataSnapshot = resolveGlobalSingleton<
-  AsyncLocalStorage<ScopedPluginMetadataSnapshot>
->(SCOPED_PLUGIN_METADATA_SNAPSHOT_KEY, () => new AsyncLocalStorage());
+function resolveAgentWorkspaceFingerprint(config: OpenClawConfig, env?: NodeJS.ProcessEnv): string {
+  // Discovery order determines schema precedence; retain the canonical resolver's order.
+  return JSON.stringify(listAgentWorkspaceDirs(config, env));
+}
 
-function resolvePluginMetadataControlPlaneFingerprint(
-  config?: OpenClawConfig,
-  options: Omit<ResolvePluginControlPlaneContextParams, "config"> = {},
-): string {
-  return resolvePluginControlPlaneFingerprint({
-    config,
-    ...options,
-  });
+function prepareInspectionNativeEsmPolicy(
+  snapshot: PluginMetadataSnapshot,
+  workspaces: readonly string[],
+  options: CurrentPluginMetadataSnapshotOptions,
+): InspectionNativeEsmPolicy {
+  const sources = new Map<string, string>();
+  const manifests = new Map(
+    snapshot.manifestRegistry.plugins.map((manifest) => [
+      `${manifest.rootDir}\0${manifest.id}`,
+      manifest,
+    ]),
+  );
+  for (const record of snapshot.index.plugins) {
+    const identity = resolveImmutableInstallIdentity(
+      record.origin,
+      resolveInstalledPluginIndexInstallOwner(record),
+      snapshot.index.installRecords,
+    );
+    const manifest = manifests.get(`${record.rootDir}\0${record.pluginId}`);
+    if (!identity || !manifest) {
+      continue;
+    }
+    for (const entryKind of ["runtime", "setup"] as const) {
+      const source = entryKind === "runtime" ? manifest.source : manifest.setupSource;
+      if (!source) {
+        continue;
+      }
+      for (const preferBuiltPluginArtifacts of [false, true]) {
+        const artifact = resolvePluginRuntimeExecutionArtifact(
+          resolvePluginRuntimeArtifactSelection({
+            ...manifest,
+            source,
+            entryKind,
+            preferBuiltPluginArtifacts,
+          }),
+        );
+        const canonicalSource = safeRealpathSync(artifact.source);
+        if (canonicalSource) {
+          sources.set(canonicalSource, identity);
+        }
+      }
+    }
+  }
+  return {
+    workspaces: new Set(workspaces),
+    sources,
+    devSourceRoot: resolvePluginDiscoveryContext({
+      config: options.config,
+      env: options.env,
+      workspaceDir: options.workspaceDir ?? snapshot.workspaceDir,
+    }).devSourceRoot,
+  };
+}
+
+function prepareConfigCompatibility(
+  snapshot: PluginMetadataSnapshot,
+  options: CurrentPluginMetadataSnapshotOptions,
+  fingerprint: (config: OpenClawConfig, policyHash: string | undefined) => string,
+  trustConfigIdentity = false,
+) {
+  const compatiblePolicyHashes = options.compatibleConfigs?.map((config) =>
+    resolveInstalledPluginIndexPolicyHash(config, options.env),
+  );
+  const compatibleConfigFingerprints = options.compatibleConfigs?.map((config, index) =>
+    fingerprint(config, compatiblePolicyHashes?.[index]),
+  );
+  const configIdentities = [...(options.compatibleConfigs ?? [])];
+  if (options.config) {
+    const policyHash = resolveInstalledPluginIndexPolicyHash(options.config, options.env);
+    if (
+      trustConfigIdentity ||
+      policyHash === snapshot.policyHash ||
+      compatiblePolicyHashes?.includes(policyHash)
+    ) {
+      configIdentities.push(options.config);
+    }
+  }
+  return { compatibleConfigFingerprints, configIdentities };
 }
 
 function prepareCurrentPluginMetadataSnapshotPublication(
@@ -101,17 +174,17 @@ function prepareCurrentPluginMetadataSnapshotPublication(
   owner: "gateway" | "operation" = "operation",
 ): () => void {
   const fingerprint = (config: OpenClawConfig | undefined, policyHash: string | undefined) =>
-    resolvePluginMetadataControlPlaneFingerprint(config, {
+    resolvePluginControlPlaneFingerprint({
+      config,
       env: options.env,
       index: snapshot.index,
       policyHash,
       workspaceDir: options.workspaceDir ?? snapshot.workspaceDir,
     });
-  const compatiblePolicyHashes = options.compatibleConfigs?.map((config) =>
-    resolveInstalledPluginIndexPolicyHash(config, options.env),
-  );
-  const compatibleConfigFingerprints = options.compatibleConfigs?.map((config, index) =>
-    fingerprint(config, compatiblePolicyHashes?.[index]),
+  const { compatibleConfigFingerprints, configIdentities } = prepareConfigCompatibility(
+    snapshot,
+    options,
+    fingerprint,
   );
   const configFingerprint = fingerprint(options.config, snapshot.policyHash);
   const defaultDiscoveryConfigFingerprint = fingerprint({}, snapshot.policyHash);
@@ -120,16 +193,13 @@ function prepareCurrentPluginMetadataSnapshotPublication(
     snapshot.configFingerprint === defaultDiscoveryConfigFingerprint ||
     Boolean(compatibleConfigFingerprints?.includes(defaultDiscoveryConfigFingerprint));
   const envFingerprint = resolvePluginMetadataEnvFingerprint(options.env);
-  const configIdentities = [...(options.compatibleConfigs ?? [])];
-  if (options.config) {
-    const policyHash = resolveInstalledPluginIndexPolicyHash(options.config, options.env);
-    if (
-      policyHash === snapshot.policyHash ||
-      Boolean(compatiblePolicyHashes?.includes(policyHash))
-    ) {
-      configIdentities.push(options.config);
-    }
-  }
+  const agentWorkspaces =
+    owner === "gateway" && options.config
+      ? listAgentWorkspaceDirs(options.config, options.env)
+      : undefined;
+  const agentWorkspaceFingerprint = agentWorkspaces && JSON.stringify(agentWorkspaces);
+  const inspectionPolicy =
+    agentWorkspaces && prepareInspectionNativeEsmPolicy(snapshot, agentWorkspaces, options);
   return () => {
     if (getCurrentPluginMetadataSnapshotState().owner === "gateway" && owner !== "gateway") {
       throw new Error("Gateway plugin metadata can only be replaced after shutdown");
@@ -138,7 +208,6 @@ function prepareCurrentPluginMetadataSnapshotPublication(
     setCurrentPluginMetadataSnapshotState(
       snapshot,
       configFingerprint,
-      compatiblePolicyHashes,
       compatibleConfigFingerprints,
       owner === "gateway" || defaultDiscoveryCompatible
         ? snapshot.owners.modelIdNormalizationPolicies
@@ -146,7 +215,11 @@ function prepareCurrentPluginMetadataSnapshotPublication(
       owner,
       envFingerprint,
       defaultDiscoveryCompatible,
+      agentWorkspaceFingerprint,
     );
+    if (inspectionPolicy) {
+      publishInspectionNativeEsmPolicy(getProcessPluginCache(), inspectionPolicy);
+    }
     for (const config of configIdentities) {
       currentPluginMetadataConfigIdentityCache.add(config);
     }
@@ -195,15 +268,15 @@ export function adoptCurrentPluginMetadataSnapshotIfAbsent(
   prepareCurrentPluginMetadataSnapshotPublication(snapshot, options)();
 }
 
-/** Installation revokes operation facts even when it runs between metadata scopes. */
-function revokeCurrentPluginMetadataSnapshotScopes(): void {
+/** Explicit installation refreshes the command before its next metadata phase. */
+function clearCurrentPluginMetadataOperation(): void {
   const caches = new Set(getScopedPluginCaches());
   const runtimeCaches = new Set();
-  for (let scoped = scopedPluginMetadataSnapshot.getStore(); scoped; scoped = scoped.parent) {
-    if (scoped.immutableRuntimeGeneration) {
-      runtimeCaches.add(scoped.cache);
+  for (let scope = getPluginExecutionFrame()?.metadataScope; scope; scope = scope.parent) {
+    if (scope.immutableRuntimeGeneration) {
+      runtimeCaches.add(scope.cache);
     } else {
-      caches.add(scoped.cache);
+      caches.add(scope.cache);
     }
   }
   for (const cache of caches) {
@@ -227,62 +300,65 @@ export function withPluginMetadataSnapshotScope<T>(
   run: () => T,
   options: CurrentPluginMetadataSnapshotOptions = {},
 ): T {
+  return runWithPluginExecutionFrame(createPluginMetadataSnapshotFrame(snapshot, options), run);
+}
+
+/** Compose metadata and its cache before the runtime owner enters the async scope. */
+export function createPluginMetadataSnapshotFrame(
+  snapshot: PluginMetadataSnapshot,
+  options: CurrentPluginMetadataSnapshotOptions = {},
+): PluginExecutionFrame {
+  const current = getPluginExecutionFrame();
+  const cache = getPluginMetadataSnapshotCache(snapshot);
+  // A retained metadata owner can be borrowed inside a different private state view.
+  preparePluginNativeAdmissions(snapshot.index, cache);
   const workspaceDir = options.workspaceDir ?? snapshot.workspaceDir;
-  const compatiblePolicyHashes = options.compatibleConfigs?.map((config) =>
-    resolveInstalledPluginIndexPolicyHash(config, options.env),
-  );
-  const compatibleConfigFingerprints = options.compatibleConfigs?.map((config, index) =>
-    resolvePluginMetadataControlPlaneFingerprint(config, {
+  const fingerprint = (config: OpenClawConfig, policyHash: string | undefined) =>
+    resolvePluginControlPlaneFingerprint({
+      config,
       env: options.env,
-      index: snapshot.index,
-      policyHash: compatiblePolicyHashes?.[index],
+      inventoryFingerprint: withPluginCache(cache, () =>
+        resolveInstalledManifestRegistryIndexFingerprint(snapshot.index),
+      ),
+      policyHash,
       workspaceDir,
-    }),
+    });
+  const { compatibleConfigFingerprints, configIdentities } = prepareConfigCompatibility(
+    snapshot,
+    options,
+    fingerprint,
+    options.trustConfigIdentity === true,
   );
   const configFingerprint = options.config
-    ? resolvePluginMetadataControlPlaneFingerprint(options.config, {
-        env: options.env,
-        index: snapshot.index,
-        policyHash: snapshot.policyHash,
-        workspaceDir,
-      })
+    ? fingerprint(options.config, snapshot.policyHash)
     : snapshot.configFingerprint;
-  const configIdentities = new WeakSet<OpenClawConfig>();
-  if (options.config) {
-    const policyHash = resolveInstalledPluginIndexPolicyHash(options.config, options.env);
-    if (
-      options.trustConfigIdentity === true ||
-      policyHash === snapshot.policyHash ||
-      compatiblePolicyHashes?.includes(policyHash)
-    ) {
-      configIdentities.add(options.config);
-    }
-  }
-  for (const config of options.compatibleConfigs ?? []) {
-    configIdentities.add(config);
-  }
-  const cache = getPluginMetadataSnapshotCache(snapshot);
-  return withPluginCache(cache, () =>
-    scopedPluginMetadataSnapshot.run(
-      {
+  const capturedConfigIdentities = new WeakSet(configIdentities);
+  return createPluginExecutionFrame(
+    {
+      ...current,
+      cacheScope: { cache, parent: current?.cacheScope },
+      metadataScope: {
         snapshot,
         cache,
         metadata: cache.metadata,
         configFingerprint,
         envFingerprint: resolvePluginMetadataEnvFingerprint(options.env),
-        compatiblePolicyHashes,
         compatibleConfigFingerprints,
-        hasConfigIdentity: (config) => configIdentities.has(config),
+        hasConfigIdentity: (config) => capturedConfigIdentities.has(config),
         immutableRuntimeGeneration: options.trustConfigIdentity === true,
-        parent: scopedPluginMetadataSnapshot.getStore(),
+        parent: current?.metadataScope,
       },
-      run,
-    ),
+    },
+    current,
   );
 }
 
 export function runOutsidePluginMetadataSnapshotScope<T>(run: () => T): T {
-  return scopedPluginMetadataSnapshot.exit(() => runOutsidePluginCache(run));
+  const current = getPluginExecutionFrame();
+  return runWithPluginExecutionFrame(
+    createPluginExecutionFrame({ ...current, metadataScope: undefined }, current),
+    () => runOutsidePluginCache(run),
+  );
 }
 
 const NEEDS_PREPARED_POLICY = Symbol("needs-prepared-policy");
@@ -349,13 +425,9 @@ function resolveCompatiblePluginMetadataSnapshot(
     params.config && !canReuseCachedConfig
       ? resolveInstalledPluginIndexPolicyHash(params.config, params.env)
       : undefined;
-  if (requestedPolicyHash && snapshot.policyHash !== requestedPolicyHash) {
-    if (!candidate.compatiblePolicyHashes?.includes(requestedPolicyHash)) {
-      return undefined;
-    }
-  }
   if (params.config && !canReuseCachedConfig) {
-    const requestedConfigFingerprint = resolvePluginMetadataControlPlaneFingerprint(params.config, {
+    const requestedConfigFingerprint = resolvePluginControlPlaneFingerprint({
+      config: params.config,
       env,
       index: snapshot.index,
       policyHash: requestedPolicyHash,
@@ -379,6 +451,30 @@ function resolveCompatiblePluginMetadataSnapshot(
   return snapshot;
 }
 
+/** Reads Gateway-owned metadata from an operation cache only when its inputs still match. */
+export function getCompatibleProcessGatewayPluginMetadataSnapshot(
+  params: CurrentPluginMetadataSnapshotParams = {},
+): PluginMetadataSnapshot | undefined {
+  const state = getCurrentPluginMetadataSnapshotState();
+  if (state.owner !== "gateway") {
+    return undefined;
+  }
+  if (
+    !params.config ||
+    state.agentWorkspaceFingerprint !== resolveAgentWorkspaceFingerprint(params.config, params.env)
+  ) {
+    return undefined;
+  }
+  const compatible = resolveCompatiblePluginMetadataSnapshot(
+    {
+      ...state,
+      hasConfigIdentity: (config) => currentPluginMetadataConfigIdentityCache.has(config),
+    },
+    params,
+  );
+  return compatible === NEEDS_PREPARED_POLICY ? undefined : compatible;
+}
+
 export function isCurrentPluginMetadataSnapshotRuntimeGeneration(
   snapshot: Pick<PluginMetadataSnapshot, "index">,
 ): boolean {
@@ -386,7 +482,7 @@ export function isCurrentPluginMetadataSnapshotRuntimeGeneration(
   if (gatewaySnapshot && gatewaySnapshot.index === snapshot.index) {
     return true;
   }
-  for (let scoped = scopedPluginMetadataSnapshot.getStore(); scoped; scoped = scoped.parent) {
+  for (let scoped = getPluginExecutionFrame()?.metadataScope; scoped; scoped = scoped.parent) {
     if (!isScopedSnapshotInCurrentCache(scoped)) {
       continue;
     }
@@ -400,7 +496,7 @@ export function isCurrentPluginMetadataSnapshotRuntimeGeneration(
 export function getCurrentPluginMetadataSnapshot(
   params: CurrentPluginMetadataSnapshotParams = {},
 ): PluginMetadataSnapshot | undefined {
-  for (let scoped = scopedPluginMetadataSnapshot.getStore(); scoped; scoped = scoped.parent) {
+  for (let scoped = getPluginExecutionFrame()?.metadataScope; scoped; scoped = scoped.parent) {
     if (!isScopedSnapshotInCurrentCache(scoped)) {
       continue;
     }
@@ -422,39 +518,25 @@ export function getCurrentPluginMetadataSnapshot(
     return undefined;
   }
 
-  const {
-    snapshot,
-    owner,
-    configFingerprint,
-    envFingerprint,
-    defaultDiscoveryCompatible,
-    compatiblePolicyHashes,
-    compatibleConfigFingerprints,
-  } = getCurrentPluginMetadataSnapshotState();
+  const state = getCurrentPluginMetadataSnapshotState();
   const compatible = resolveCompatiblePluginMetadataSnapshot(
     {
-      snapshot,
-      configFingerprint,
-      envFingerprint,
-      defaultDiscoveryCompatible,
-      compatiblePolicyHashes,
-      compatibleConfigFingerprints,
+      ...state,
       hasConfigIdentity: (config) => currentPluginMetadataConfigIdentityCache.has(config),
-      immutableRuntimeGeneration: owner === "gateway",
+      immutableRuntimeGeneration: state.owner === "gateway",
     },
     params,
   );
   return compatible === NEEDS_PREPARED_POLICY ? undefined : compatible;
 }
 
-// Light bridges (plugin-metadata-snapshot.runtime.ts) serve reads through this
-// instance whenever the metadata system is loaded; the require fallback only
-// covers cold processes.
+// Register before callers can publish a snapshot; current-only light bridge
+// reads consume this owner without loading a cold metadata graph.
 registerPluginMetadataSnapshotReaders({
   adoptCurrentPluginMetadataSnapshotIfAbsent,
   getCurrentPluginMetadataSnapshot,
 });
 
-registerPluginMetadataProcessMemoLifecycleClear(revokeCurrentPluginMetadataSnapshotScopes, {
+registerPluginMetadataProcessMemoLifecycleClear(clearCurrentPluginMetadataOperation, {
   owner: "operation",
 });

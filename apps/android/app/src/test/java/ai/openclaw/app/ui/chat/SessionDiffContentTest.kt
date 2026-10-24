@@ -123,9 +123,12 @@ class SessionDiffContentTest {
     codeLine.performTouchInput { swipeRight() }
     codeLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers shown"))
     val scroller = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange))
-    composeRule.waitForIdle()
+    // Widths are measured on Dispatchers.Default, which waitForIdle does not track; wait for the
+    // measured range itself. A busy CI worker can delay it, but only clipping leaves it at zero.
+    composeRule.waitUntil("wide glyphs to expose their overflow instead of clipping permanently", 10_000) {
+      scroller.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange].maxValue() > 0f
+    }
     val before = scroller.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange]
-    assertTrue("Wide glyphs must expose their overflow instead of clipping permanently", before.maxValue() > 0f)
     assertEquals(0f, before.value(), 0.01f)
     codeLine.performTouchInput {
       down(center)
@@ -354,7 +357,9 @@ class SessionDiffContentTest {
               ?.text
               ?.toString(),
           )
+          assertEquals("OpenClaw text", clipboard.primaryClipDescription?.label?.toString())
           assertEquals("Text copied", ShadowToast.getTextOfLatestToast())
+          assertEquals(android.widget.Toast.LENGTH_SHORT, ShadowToast.getLatestToast().duration)
         }
         composeRule.onNodeWithText("Copy").assertDoesNotExist()
         line.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))

@@ -1,10 +1,9 @@
 // Receipt lookup and source-removal bookkeeping for legacy workspace migration.
-import { createHash } from "node:crypto";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { root } from "@openclaw/fs-safe";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { WORKSPACE_DOCTOR_CLAIM_SUFFIX } from "../agents/workspace-legacy-state.js";
 import type { WorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import {
@@ -20,13 +19,12 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { pathMayExistSync } from "./path-existence.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   readLegacyMigrationReceipt,
   resolveLegacyMigrationSourceKey,
 } from "./state-migrations.receipts.js";
 import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
-
-export { markLegacyMigrationSourceRemoved } from "./state-migrations.receipts.js";
 
 export type MigrationReceipt = {
   sourceKey: string;
@@ -42,17 +40,15 @@ type WorkspaceSetupMilestones = {
 };
 
 export function createWorkspaceSetupFingerprint(setup: WorkspaceSetupMilestones): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        kind: "setup",
-        workspacePath: setup.workspace_path,
-        version: WORKSPACE_SETUP_STATE_VERSION,
-        bootstrapSeededAt: setup.bootstrap_seeded_at,
-        setupCompletedAt: setup.setup_completed_at,
-      }),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify({
+      kind: "setup",
+      workspacePath: setup.workspace_path,
+      version: WORKSPACE_SETUP_STATE_VERSION,
+      bootstrapSeededAt: setup.bootstrap_seeded_at,
+      setupCompletedAt: setup.setup_completed_at,
+    }),
+  );
 }
 
 export function resolveWorkspaceMigrationSourceKey(source: LegacyWorkspaceStateSource): string {
@@ -107,7 +103,7 @@ function moveWorkspacePath(
 }
 
 function readWorkspaceMoveReceipts(
-  database: DatabaseSync,
+  database: EngineConnection,
   storedIdentity: WorkspaceStateIdentity,
   currentIdentity: WorkspaceStateIdentity,
 ) {
@@ -162,7 +158,7 @@ export type WorkspaceMigrationReceiptMove = {
 };
 
 function assertReceiptMoveDestinations(
-  database: DatabaseSync,
+  database: EngineConnection,
   plan: WorkspaceMigrationReceiptMove,
 ) {
   const destinationKeys = new Set<string>();
@@ -197,7 +193,7 @@ async function verifyCarriedReceiptFile(
       maxBytes: 64 * 1024,
     });
     const file = await workspace.read(path.relative(workspacePath, filePath));
-    if (createHash("sha256").update(file.buffer).digest("hex") !== sha256) {
+    if (sha256Hex(file.buffer) !== sha256) {
       throw new Error("the carried file differs from its migration receipt");
     }
   } catch (error) {
@@ -207,7 +203,7 @@ async function verifyCarriedReceiptFile(
 
 /** Prepare filesystem evidence before the move owner's synchronous write transaction. */
 export async function prepareWorkspaceMigrationReceiptMove(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   storedIdentity: WorkspaceStateIdentity;
   currentIdentity: WorkspaceStateIdentity;
   storedSetup: (WorkspaceSetupMilestones & { version: number | null }) | undefined;
@@ -354,7 +350,7 @@ export async function prepareWorkspaceMigrationReceiptMove(params: {
 
 /** Apply with the setup/alias move; preserve run history and every source-cleanup flag. */
 export function applyWorkspaceMigrationReceiptMove(
-  database: DatabaseSync,
+  database: EngineConnection,
   plan: WorkspaceMigrationReceiptMove,
 ): void {
   const current = readWorkspaceMoveReceipts(database, plan.storedIdentity, plan.currentIdentity);

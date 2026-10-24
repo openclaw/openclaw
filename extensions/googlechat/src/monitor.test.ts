@@ -1,4 +1,3 @@
-// Googlechat tests cover monitor plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,9 +7,10 @@ import {
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { GoogleChatApiError } from "./api.js";
 import {
   createGoogleChatIngressMonitor,
   type GoogleChatIngressLifecycle,
@@ -30,58 +30,52 @@ const accessMocks = vi.hoisted(() => ({
   applyGoogleChatInboundAccessPolicy: vi.fn(),
 }));
 
-const routingMocks = vi.hoisted(() => ({
-  processEvent: undefined as
-    | ((
-        event: GoogleChatEvent,
-        target: Record<string, unknown>,
-        turnAdoptionLifecycle?: GoogleChatIngressLifecycle,
-      ) => Promise<void>)
-    | undefined,
+const runtimeMocks = vi.hoisted(() => ({ openChannelIngressQueue: vi.fn() }));
+
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
+  getGoogleChatRuntime: () => ({ state: runtimeMocks }),
 }));
+
+type EventProcessor = (
+  event: GoogleChatEvent,
+  target: Record<string, unknown>,
+  turnAdoptionLifecycle?: GoogleChatIngressLifecycle,
+) => Promise<void>;
+const routingMocks = vi.hoisted(() => ({ processEvent: undefined as EventProcessor | undefined }));
 
 const inboundMocks = vi.hoisted(() => ({
   buildEnvelope: vi.fn(({ body }: { body: string }) => body),
-  resolveChannelInboundRouteEnvelope: vi.fn(),
-  toInboundMediaFactsWithMetadata: vi.fn(),
+  resolveAgentRoute: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
-  inboundMocks.toInboundMediaFactsWithMetadata.mockImplementation(
-    actual.toInboundMediaFactsWithMetadata,
-  );
   return {
     ...actual,
-    resolveChannelInboundRouteEnvelope: inboundMocks.resolveChannelInboundRouteEnvelope,
-    toInboundMediaFactsWithMetadata: inboundMocks.toInboundMediaFactsWithMetadata,
+    createChannelInboundEnvelopeBuilderAsync: async () => inboundMocks.buildEnvelope,
   };
 });
 
-vi.mock("./api.js", () => ({
-  deleteGoogleChatMessage: apiMocks.deleteGoogleChatMessage,
-  downloadGoogleChatMedia: apiMocks.downloadGoogleChatMedia,
-  sendGoogleChatMessage: apiMocks.sendGoogleChatMessage,
-  updateGoogleChatMessage: apiMocks.updateGoogleChatMessage,
+vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/routing")>()),
+  resolveAgentRoute: inboundMocks.resolveAgentRoute,
 }));
 
-vi.mock("./monitor-access.js", () => ({
-  applyGoogleChatInboundAccessPolicy: accessMocks.applyGoogleChatInboundAccessPolicy,
+// mock-isolation: Network responses come only from the monitor fixture.
+vi.mock("./api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./api.js")>()),
+  ...apiMocks,
 }));
+// mock-isolation: The fixture supplies access decisions without pairing state.
+vi.mock("./monitor-access.js", () => accessMocks);
 
+// mock-isolation: Capture ingress directly without installing HTTP webhook routes.
 vi.mock("./monitor-routing.js", () => ({
   registerGoogleChatWebhookTarget: vi.fn(),
-  setGoogleChatWebhookEventProcessor: vi.fn(
-    (
-      processEvent: (
-        event: GoogleChatEvent,
-        target: Record<string, unknown>,
-        turnAdoptionLifecycle?: GoogleChatIngressLifecycle,
-      ) => Promise<void>,
-    ) => {
-      routingMocks.processEvent = processEvent;
-    },
-  ),
+  setGoogleChatWebhookEventProcessor: vi.fn((processEvent: EventProcessor) => {
+    routingMocks.processEvent = processEvent;
+  }),
 }));
 
 beforeEach(() => {
@@ -89,22 +83,18 @@ beforeEach(() => {
   apiMocks.downloadGoogleChatMedia.mockReset();
   apiMocks.sendGoogleChatMessage.mockReset().mockResolvedValue(null);
   apiMocks.updateGoogleChatMessage.mockReset().mockResolvedValue({});
-  accessMocks.applyGoogleChatInboundAccessPolicy.mockReset();
+  accessMocks.applyGoogleChatInboundAccessPolicy.mockReset().mockResolvedValue({ ok: true });
   inboundMocks.buildEnvelope.mockReset().mockImplementation(({ body }: { body: string }) => body);
-  inboundMocks.resolveChannelInboundRouteEnvelope
+  inboundMocks.resolveAgentRoute
     .mockReset()
     .mockImplementation(({ accountId }: { accountId: string }) => ({
-      route: {
-        agentId: "agent-1",
-        accountId,
-        sessionKey: "session-1",
-      },
-      buildEnvelope: inboundMocks.buildEnvelope,
+      agentId: "agent-1",
+      accountId,
+      sessionKey: "session-1",
     }));
-  inboundMocks.toInboundMediaFactsWithMetadata.mockClear();
 });
 
-function createInboundClassificationHarness() {
+function createHarness() {
   const buildContext = vi.fn((payload: unknown) => payload);
   const runTurn = vi.fn();
   const saveMediaBuffer = vi.fn(async () => ({
@@ -118,473 +108,284 @@ function createInboundClassificationHarness() {
       media: { saveMediaBuffer },
     },
   } as unknown as GoogleChatCoreRuntime;
-  return { buildContext, core, runTurn, saveMediaBuffer };
+  const dispatch = async (
+    input: GoogleChatEvent | EventInput,
+    {
+      account = googleChatMediaTestAccount,
+      config = {},
+      runtime = createRuntimeSpies(),
+      mediaMaxMb = 10,
+      turnAdoptionLifecycle,
+    }: {
+      account?: ResolvedGoogleChatAccount;
+      config?: Record<string, unknown>;
+      runtime?: GoogleChatRuntimeEnv;
+      mediaMaxMb?: number;
+      turnAdoptionLifecycle?: GoogleChatIngressLifecycle;
+    } = {},
+  ) => {
+    if (!routingMocks.processEvent) {
+      throw new Error("Expected Google Chat webhook event processor registration");
+    }
+    await routingMocks.processEvent(
+      "id" in input ? makeEvent(input) : input,
+      { account, config, runtime, core, mediaMaxMb, path: "/googlechat" },
+      turnAdoptionLifecycle,
+    );
+  };
+  return { buildContext, core, runTurn, saveMediaBuffer, dispatch };
 }
 
 function readGoogleChatTestIngest(runTurn: ReturnType<typeof vi.fn>) {
   const runArg = runTurn.mock.calls[0]?.[0] as
-    | { adapter?: { ingest?: () => Record<string, string> } }
+    | { adapter?: { ingest?: () => TestIngest } }
     | undefined;
   return runArg?.adapter?.ingest?.();
 }
 
-const googleChatMediaTestAccount: ResolvedGoogleChatAccount = {
-  accountId: "work",
-  enabled: true,
-  config: { typingIndicator: "none" },
-  credentialSource: "inline",
+type TestIngest = Partial<Record<"rawText" | "textForAgent" | "textForCommands", string>> & {
+  timestamp?: number;
 };
 
-function createGoogleChatMediaTestEvent(params: {
+function makeAccount(
+  config: ResolvedGoogleChatAccount["config"],
+  accountId = "work",
+): ResolvedGoogleChatAccount {
+  return { accountId, enabled: true, config, credentialSource: "inline" };
+}
+const googleChatMediaTestAccount = makeAccount({ typingIndicator: "none" });
+
+type EventInput = {
   id: string;
   text?: string;
   attachments?: NonNullable<GoogleChatEvent["message"]>["attachment"];
-}): GoogleChatEvent {
+  space?: GoogleChatEvent["space"];
+  sender?: NonNullable<GoogleChatEvent["message"]>["sender"];
+  eventTime?: string;
+};
+function makeEvent(params: EventInput): GoogleChatEvent {
   return {
     type: "MESSAGE",
-    space: { name: "spaces/MEDIA", type: "DM" },
+    space: params.space ?? { name: "spaces/MEDIA", type: "DM" },
+    eventTime: params.eventTime,
     message: {
-      name: `spaces/MEDIA/messages/${params.id}`,
-      ...(params.text === undefined ? {} : { text: params.text }),
-      sender: { name: "users/alice", type: "HUMAN" },
-      ...(params.attachments ? { attachment: params.attachments } : {}),
+      name: `${params.space?.name ?? "spaces/MEDIA"}/messages/${params.id}`,
+      text: params.text,
+      sender: params.sender ?? { name: "users/alice", type: "HUMAN" },
+      attachment: params.attachments,
     },
   };
 }
 
-function allowGoogleChatMediaSender(commandAuthorized?: boolean) {
-  accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
-    ok: true,
-    commandAuthorized,
-    effectiveWasMentioned: undefined,
-    groupBotLoopProtection: undefined,
-    groupSystemPrompt: undefined,
-  });
+function attachment(name: string, contentType = "application/pdf", contentName?: string) {
+  return { contentType, contentName, attachmentDataRef: { resourceName: `media/${name}` } };
 }
 
-async function processGoogleChatTestEvent(params: {
-  event: GoogleChatEvent;
-  account: ResolvedGoogleChatAccount;
-  config: Record<string, unknown>;
-  runtime: GoogleChatRuntimeEnv;
-  core: GoogleChatCoreRuntime;
-  mediaMaxMb: number;
-  turnAdoptionLifecycle?: GoogleChatIngressLifecycle;
-}): Promise<void> {
-  if (!routingMocks.processEvent) {
-    throw new Error("Expected Google Chat webhook event processor registration");
-  }
-  await routingMocks.processEvent(
-    params.event,
+function messageFields(body: string) {
+  return { body, bodyForAgent: body, rawBody: body, commandBody: body };
+}
+
+it("suppresses bot loops before creating typing messages", async () => {
+  const eventTimeMs = Date.parse("2026-03-22T00:00:00.000Z");
+  const accountId = `bot-loop-typing-${eventTimeMs}`;
+  const conversationId = "spaces/LOOP";
+  const senderId = "users/other-bot";
+  const receiverId = "users/app";
+  const { runTurn, dispatch } = createHarness();
+  const account = makeAccount(
     {
-      account: params.account,
-      config: params.config,
-      runtime: params.runtime,
-      core: params.core,
-      mediaMaxMb: params.mediaMaxMb,
-      path: "/googlechat",
+      allowBots: true,
+      botUser: receiverId,
+      botLoopProtection: { maxEventsPerWindow: 1, windowSeconds: 60, cooldownSeconds: 60 },
+      typingIndicator: "message",
     },
-    params.turnAdoptionLifecycle,
+    accountId,
   );
-}
-
-describe("googlechat monitor bot loop protection", () => {
-  it("suppresses bot loops before creating typing messages", async () => {
-    const eventTimeMs = Date.parse("2026-03-22T00:00:00.000Z");
-    const accountId = `bot-loop-typing-${eventTimeMs}`;
-    const conversationId = "spaces/LOOP";
-    const senderId = "users/other-bot";
-    const receiverId = "users/app";
-    const runTurn = vi.fn();
-    const core = {
-      logging: { shouldLogVerbose: () => false },
-      channel: {
-        inbound: { run: runTurn },
-      },
-    } as unknown as GoogleChatCoreRuntime;
-    const runtime = createRuntimeSpies() satisfies GoogleChatRuntimeEnv;
-    const account = {
-      accountId,
-      config: {
-        allowBots: true,
-        botUser: receiverId,
-        botLoopProtection: { maxEventsPerWindow: 1, windowSeconds: 60, cooldownSeconds: 60 },
-        typingIndicator: "message",
-      },
-      credentialSource: "inline",
-    } as ResolvedGoogleChatAccount;
-    const event = {
-      type: "MESSAGE",
-      eventTime: "2026-03-22T00:00:00.001Z",
-      space: { name: conversationId, type: "DM" },
-      message: {
-        name: "spaces/LOOP/messages/2",
-        text: "loop",
-        sender: { name: senderId, type: "BOT" },
-      },
-    } satisfies GoogleChatEvent;
-
-    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
-      ok: true,
-      commandAuthorized: undefined,
-      effectiveWasMentioned: undefined,
-      groupBotLoopProtection: undefined,
-      groupSystemPrompt: undefined,
-    });
-    recordChannelBotPairLoopAndCheckSuppression({
-      scopeId: accountId,
-      conversationId,
-      senderId,
-      receiverId,
-      config: account.config.botLoopProtection,
-      defaultEnabled: true,
-      nowMs: eventTimeMs,
-    });
-
-    await processGoogleChatTestEvent({
-      event,
-      account,
-      config: {},
-      runtime,
-      core,
-      mediaMaxMb: 10,
-    });
-
-    expect(apiMocks.sendGoogleChatMessage).not.toHaveBeenCalled();
-    expect(apiMocks.downloadGoogleChatMedia).not.toHaveBeenCalled();
-    expect(runTurn).not.toHaveBeenCalled();
+  const event = makeEvent({
+    id: "2",
+    text: "loop",
+    eventTime: "2026-03-22T00:00:00.001Z",
+    space: { name: conversationId, type: "DM" },
+    sender: { name: senderId, type: "BOT" },
   });
+  recordChannelBotPairLoopAndCheckSuppression({
+    scopeId: accountId,
+    conversationId,
+    senderId,
+    receiverId,
+    config: account.config.botLoopProtection,
+    defaultEnabled: true,
+    nowMs: eventTimeMs,
+  });
+
+  await dispatch(event, { account });
+
+  expect(apiMocks.sendGoogleChatMessage).not.toHaveBeenCalled();
+  expect(apiMocks.downloadGoogleChatMedia).not.toHaveBeenCalled();
+  expect(runTurn).not.toHaveBeenCalled();
 });
 
-describe("googlechat monitor inbound space classification", () => {
-  const cases = [
-    { name: "legacy DM", space: { type: "DM" }, peerKind: "direct" },
-    { name: "modern direct message", space: { spaceType: "DIRECT_MESSAGE" }, peerKind: "direct" },
-    { name: "single-user bot DM", space: { singleUserBotDm: true }, peerKind: "direct" },
-    { name: "modern space", space: { spaceType: "SPACE" }, peerKind: "group" },
-    { name: "modern group chat", space: { spaceType: "GROUP_CHAT" }, peerKind: "group" },
-    {
-      name: "modern space over legacy DM",
-      space: { type: "DM", spaceType: "SPACE" },
-      peerKind: "group",
-    },
-  ] as const;
-
-  it.each(cases)("$name uses the expected access and route branch", async ({ space, peerKind }) => {
-    const { buildContext, core, runTurn } = createInboundClassificationHarness();
-    const account = {
-      accountId: "work",
-      config: {},
-      credentialSource: "inline",
-    } as ResolvedGoogleChatAccount;
-    const event = {
-      type: "MESSAGE",
-      space: { name: "spaces/CLASSIFY", ...space },
-      message: {
-        name: "spaces/CLASSIFY/messages/1",
-        text: "hello",
-        sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
-      },
-    } satisfies GoogleChatEvent;
-
-    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
-      ok: true,
-      commandAuthorized: undefined,
-      effectiveWasMentioned: undefined,
-      groupBotLoopProtection: undefined,
-      groupSystemPrompt: undefined,
+it.each([1, 9])(
+  "downloads only the first file and accounts for %i additional attachments",
+  async (additionalCount) => {
+    const { buildContext, dispatch, runTurn, saveMediaBuffer } = createHarness();
+    apiMocks.downloadGoogleChatMedia.mockResolvedValue({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    await dispatch({
+      id: "downloaded",
+      attachments: [
+        attachment("first", "image/png", "first.png"),
+        ...Array.from({ length: additionalCount }, (_, index) => attachment(`additional-${index}`)),
+      ],
     });
 
-    await processGoogleChatTestEvent({
-      event,
-      account,
-      config: {},
-      runtime: createRuntimeSpies(),
-      core,
-      mediaMaxMb: 10,
-    });
-
-    const isGroup = peerKind === "group";
     expect(accessMocks.applyGoogleChatInboundAccessPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ isGroup }),
+      expect.objectContaining({ rawBody: "" }),
     );
-    expect(inboundMocks.resolveChannelInboundRouteEnvelope).toHaveBeenCalledWith({
-      cfg: {},
-      channel: "googlechat",
-      accountId: "work",
-      peer: { kind: peerKind, id: "spaces/CLASSIFY" },
+    expect(saveMediaBuffer).toHaveBeenCalledOnce();
+    expect(apiMocks.downloadGoogleChatMedia).toHaveBeenCalledExactlyOnceWith({
+      account: expect.objectContaining({ accountId: "work" }),
+      resourceName: "media/first",
+      maxBytes: 10 * 1024 * 1024,
     });
+    const expectedBody = `[Google Chat: ${additionalCount} additional ${additionalCount === 1 ? "attachment was" : "attachments were"} not processed; only the first attachment is supported]`;
     expect(buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
-        conversation: expect.objectContaining({ kind: isGroup ? "channel" : "direct" }),
-        extra: expect.objectContaining({ ChatType: isGroup ? "channel" : "direct" }),
-      }),
-    );
-    expect(inboundMocks.toInboundMediaFactsWithMetadata).not.toHaveBeenCalled();
-    expect(runTurn).toHaveBeenCalledOnce();
-  });
-
-  it.each([0, 1, 9])(
-    "downloads only the first file and accounts for %i additional attachments",
-    async (additionalCount) => {
-      const { buildContext, core, runTurn, saveMediaBuffer } = createInboundClassificationHarness();
-      apiMocks.downloadGoogleChatMedia.mockResolvedValue({
-        buffer: Buffer.from("image"),
-        contentType: "image/png",
-      });
-      allowGoogleChatMediaSender();
-
-      await processGoogleChatTestEvent({
-        event: createGoogleChatMediaTestEvent({
-          id: "downloaded",
-          attachments: [
-            {
-              contentType: "image/png",
-              contentName: "first.png",
-              attachmentDataRef: { resourceName: "media/first" },
-            },
-            ...Array.from({ length: additionalCount }, (_, index) => ({
-              contentType: "application/pdf",
-              contentName: `additional-${index}.pdf`,
-              attachmentDataRef: { resourceName: `media/additional-${index}` },
-            })),
-          ],
-        }),
-        account: googleChatMediaTestAccount,
-        config: {},
-        runtime: createRuntimeSpies(),
-        core,
-        mediaMaxMb: 10,
-      });
-
-      expect(accessMocks.applyGoogleChatInboundAccessPolicy).toHaveBeenCalledWith(
-        expect.objectContaining({ rawBody: "" }),
-      );
-      expect(saveMediaBuffer).toHaveBeenCalledOnce();
-      expect(apiMocks.downloadGoogleChatMedia).toHaveBeenCalledExactlyOnceWith({
-        account: expect.objectContaining({ accountId: "work" }),
-        resourceName: "media/first",
-        maxBytes: 10 * 1024 * 1024,
-      });
-      const expectedBody = additionalCount
-        ? `[Google Chat: ${additionalCount} additional ${additionalCount === 1 ? "attachment was" : "attachments were"} not processed; only the first attachment is supported]`
-        : "";
-      expect(buildContext).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: {
-            body: expectedBody,
-            bodyForAgent: expectedBody,
-            rawBody: expectedBody,
-            commandBody: expectedBody,
-          },
-          media: [
-            expect.objectContaining({
-              path: "/tmp/googlechat-first.png",
-              url: "/tmp/googlechat-first.png",
-              contentType: "image/png",
-            }),
-            ...Array.from({ length: additionalCount }, () =>
-              expect.objectContaining({ contentType: "application/pdf" }),
-            ),
-          ],
-        }),
-      );
-      expect(readGoogleChatTestIngest(runTurn)).toMatchObject({
-        rawText: expectedBody,
-        textForAgent: expectedBody,
-        textForCommands: expectedBody,
-      });
-    },
-  );
-
-  it.each([
-    {
-      name: "Drive file with a caption",
-      text: "summarize this",
-      driveDataRef: { driveFileId: "private-drive-file" },
-    },
-    {
-      name: "Drive file without a caption",
-      text: "",
-      driveDataRef: { driveFileId: "private-drive-file" },
-    },
-    {
-      name: "attachment without a data reference",
-      text: "summarize this",
-      driveDataRef: undefined,
-    },
-  ])("explains an unsupported $name without downloading it", async ({ text, driveDataRef }) => {
-    const { buildContext, core, runTurn, saveMediaBuffer } = createInboundClassificationHarness();
-    const runtime = createRuntimeSpies();
-    allowGoogleChatMediaSender();
-
-    await processGoogleChatTestEvent({
-      event: createGoogleChatMediaTestEvent({
-        id: "unsupported",
-        text,
-        attachments: [
-          { contentType: "application/pdf", contentName: "private-file.pdf", driveDataRef },
-        ],
-      }),
-      account: googleChatMediaTestAccount,
-      config: {},
-      runtime,
-      core,
-      mediaMaxMb: 10,
-    });
-
-    const reason = driveDataRef
-      ? "Google Drive files are not downloadable"
-      : "unsupported attachment source";
-    const notice = `[Google Chat attachment unavailable: ${reason}; upload the file directly]`;
-    const expectedBody = text ? `${text}\n\n${notice}` : notice;
-    expect(apiMocks.downloadGoogleChatMedia).not.toHaveBeenCalled();
-    expect(saveMediaBuffer).not.toHaveBeenCalled();
-    expect(buildContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: {
-          body: expectedBody,
-          bodyForAgent: expectedBody,
-          rawBody: expectedBody,
-          commandBody: expectedBody,
-        },
-      }),
-    );
-    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(`[work] ${notice}`);
-    expect(readGoogleChatTestIngest(runTurn)).toMatchObject({ textForAgent: expectedBody });
-  });
-
-  it.each([
-    { name: "a caption", text: "please summarize this" },
-    { name: "no caption", text: "" },
-  ])("keeps $name and every attachment fact when the first file is oversized", async ({ text }) => {
-    const { buildContext, core, runTurn, saveMediaBuffer } = createInboundClassificationHarness();
-    const runtime = createRuntimeSpies();
-    const turnAdoptionLifecycle = {
-      admission: "exclusive",
-      onAdopted: vi.fn(async () => {}),
-      onDeferred: vi.fn(),
-      onAbandoned: vi.fn(async () => {}),
-      abortSignal: new AbortController().signal,
-    } satisfies GoogleChatIngressLifecycle;
-    apiMocks.downloadGoogleChatMedia.mockRejectedValue(
-      new MediaFetchError("max_bytes", "Google Chat media exceeds max bytes (10485760)"),
-    );
-    allowGoogleChatMediaSender(true);
-    runTurn.mockImplementation(
-      async (params: { turnAdoptionLifecycle?: GoogleChatIngressLifecycle }) => {
-        await params.turnAdoptionLifecycle?.onAdopted();
-      },
-    );
-
-    await processGoogleChatTestEvent({
-      event: createGoogleChatMediaTestEvent({
-        id: "oversized",
-        text,
-        attachments: [
-          {
-            contentType: "application/pdf",
-            contentName: "untrusted-filename.pdf",
-            attachmentDataRef: { resourceName: "media/oversized" },
-          },
-          { contentType: "image/png", contentName: "second.png" },
-        ],
-      }),
-      account: googleChatMediaTestAccount,
-      config: {},
-      runtime,
-      core,
-      mediaMaxMb: 10,
-      turnAdoptionLifecycle,
-    });
-
-    const notice = "[Google Chat attachment too large; maximum 10 MB]";
-    const additionalNotice =
-      "[Google Chat: 1 additional attachment was not processed; only the first attachment is supported]";
-    const expectedBody = [text, notice, additionalNotice].filter(Boolean).join("\n\n");
-    expect(accessMocks.applyGoogleChatInboundAccessPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ rawBody: text }),
-    );
-    expect(saveMediaBuffer).not.toHaveBeenCalled();
-    expect(buildContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: {
-          body: expectedBody,
-          bodyForAgent: expectedBody,
-          rawBody: expectedBody,
-          commandBody: expectedBody,
-        },
+        message: messageFields(expectedBody),
         media: [
-          expect.objectContaining({ contentType: "application/pdf", kind: "document" }),
-          expect.objectContaining({ contentType: "image/png", kind: "image" }),
+          expect.objectContaining({
+            path: "/tmp/googlechat-first.png",
+            url: "/tmp/googlechat-first.png",
+            contentType: "image/png",
+          }),
+          ...Array.from({ length: additionalCount }, () =>
+            expect.objectContaining({ contentType: "application/pdf" }),
+          ),
         ],
       }),
     );
-    expect(JSON.stringify(buildContext.mock.calls[0]?.[0])).not.toContain("untrusted-filename.pdf");
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("channels.googlechat.mediaMaxMb"),
-    );
-    expect(turnAdoptionLifecycle.onAdopted).toHaveBeenCalledOnce();
     expect(readGoogleChatTestIngest(runTurn)).toMatchObject({
       rawText: expectedBody,
       textForAgent: expectedBody,
       textForCommands: expectedBody,
     });
-  });
+  },
+);
 
-  it.each([
-    {
-      name: "a transient fetch failure",
-      error: new MediaFetchError("fetch_failed", "socket reset"),
+it("honors an inbound media cap below one MiB", async () => {
+  const { dispatch, runTurn, saveMediaBuffer } = createHarness();
+  const buffer = Buffer.alloc(768 * 1024);
+  apiMocks.downloadGoogleChatMedia.mockImplementation(
+    async ({ maxBytes }: { maxBytes: number }) => {
+      if (buffer.length > maxBytes) {
+        throw new MediaFetchError("max_bytes", `Google Chat media exceeds max bytes (${maxBytes})`);
+      }
+      return { buffer, contentType: "application/pdf" };
     },
+  );
+
+  await dispatch(
     {
-      name: "a retryable HTTP failure",
-      error: new MediaFetchError("http_error", "Google Chat API 503: unavailable", { status: 503 }),
+      id: "fractional-cap",
+      text: "summarize this",
+      attachments: [attachment("fractional-cap")],
     },
-    { name: "an untyped download failure", error: new Error("temporary download failure") },
-  ])("keeps $name retryable", async ({ error }) => {
-    const { core, runTurn } = createInboundClassificationHarness();
-    apiMocks.downloadGoogleChatMedia.mockRejectedValue(error);
-    allowGoogleChatMediaSender();
+    { mediaMaxMb: 0.5 },
+  );
 
-    await expect(
-      processGoogleChatTestEvent({
-        event: createGoogleChatMediaTestEvent({
-          id: "retryable",
-          text: "please summarize this",
-          attachments: [
-            {
-              contentType: "application/pdf",
-              attachmentDataRef: { resourceName: "media/retryable" },
-            },
-          ],
-        }),
-        account: googleChatMediaTestAccount,
-        config: {},
-        runtime: createRuntimeSpies(),
-        core,
-        mediaMaxMb: 10,
-      }),
-    ).rejects.toBe(error);
-    expect(runTurn).not.toHaveBeenCalled();
+  expect(apiMocks.downloadGoogleChatMedia).toHaveBeenCalledExactlyOnceWith({
+    account: googleChatMediaTestAccount,
+    resourceName: "media/fractional-cap",
+    maxBytes: 512 * 1024,
   });
+  expect(saveMediaBuffer).not.toHaveBeenCalled();
+  expect(readGoogleChatTestIngest(runTurn)).toMatchObject({
+    rawText: "summarize this\n\n[Google Chat attachment too large; maximum 0.5 MB]",
+  });
+});
 
-  it("adopts an oversized attachment so the next message in its durable lane can run", async () => {
-    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-googlechat-oversized-"));
+it.each([
+  {
+    name: "Drive file without a caption",
+    text: "",
+    driveDataRef: { driveFileId: "private-drive-file" },
+  },
+  {
+    name: "attachment without a data reference",
+    text: "summarize this",
+    driveDataRef: undefined,
+  },
+])("explains an unsupported $name without downloading it", async ({ text, driveDataRef }) => {
+  const { buildContext, dispatch, runTurn, saveMediaBuffer } = createHarness();
+  const runtime = createRuntimeSpies();
+  await dispatch(
+    {
+      id: "unsupported",
+      text,
+      attachments: [
+        { contentType: "application/pdf", contentName: "private-file.pdf", driveDataRef },
+      ],
+    },
+    { runtime },
+  );
+
+  const reason = driveDataRef
+    ? "Google Drive files are not downloadable"
+    : "unsupported attachment source";
+  const notice = `[Google Chat attachment unavailable: ${reason}; upload the file directly]`;
+  const expectedBody = text ? `${text}\n\n${notice}` : notice;
+  expect(apiMocks.downloadGoogleChatMedia).not.toHaveBeenCalled();
+  expect(saveMediaBuffer).not.toHaveBeenCalled();
+  expect(buildContext).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: messageFields(expectedBody),
+    }),
+  );
+  expect(runtime.error).toHaveBeenCalledExactlyOnceWith(`[work] ${notice}`);
+  expect(readGoogleChatTestIngest(runTurn)).toMatchObject({ textForAgent: expectedBody });
+});
+
+it("keeps a transient fetch failure retryable", async () => {
+  const error = new MediaFetchError("fetch_failed", "socket reset");
+  const { dispatch, runTurn } = createHarness();
+  apiMocks.downloadGoogleChatMedia.mockRejectedValue(error);
+  await expect(
+    dispatch({
+      id: "retryable",
+      text: "please summarize this",
+      attachments: [attachment("retryable")],
+    }),
+  ).rejects.toBe(error);
+  expect(runTurn).not.toHaveBeenCalled();
+});
+
+it.each([
+  {
+    failure: "oversized",
+    error: new MediaFetchError("max_bytes", "Google Chat media exceeds max bytes (10485760)"),
+    notice: "[Google Chat attachment too large; maximum 10 MB]",
+  },
+  {
+    failure: "missing",
+    error: new GoogleChatApiError(404, "Google Chat API 404: Not Found"),
+    notice: "[Google Chat attachment unavailable: file not found; upload the file directly]",
+  },
+])(
+  "adopts a $failure attachment so the next message in its durable lane can run",
+  async ({ error, notice, failure }) => {
+    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-googlechat-media-"));
     const stateDir = await fs.realpath(created);
     const queue = createChannelIngressQueueForTests<{ version: 1; rawEvent: string }>({
       channelId: "googlechat",
       accountId: "work",
       stateDir,
     });
-    const { buildContext, core, runTurn } = createInboundClassificationHarness();
+    const { buildContext, dispatch, runTurn } = createHarness();
     const runtime = createRuntimeSpies();
-    const account = googleChatMediaTestAccount;
     const receivedBodies: string[] = [];
-    apiMocks.downloadGoogleChatMedia.mockRejectedValueOnce(
-      new MediaFetchError("max_bytes", "Google Chat media exceeds max bytes (10485760)"),
-    );
-    allowGoogleChatMediaSender();
+    apiMocks.downloadGoogleChatMedia.mockRejectedValueOnce(error);
     runTurn.mockImplementation(
       async (params: { turnAdoptionLifecycle?: GoogleChatIngressLifecycle }) => {
         const context = buildContext.mock.calls.at(-1)?.[0] as { message: { rawBody: string } };
@@ -592,34 +393,19 @@ describe("googlechat monitor inbound space classification", () => {
         await params.turnAdoptionLifecycle?.onAdopted();
       },
     );
+    runtimeMocks.openChannelIngressQueue.mockReturnValue(queue);
     const ingress = createGoogleChatIngressMonitor({
-      accountId: account.accountId,
-      queue,
+      accountId: googleChatMediaTestAccount.accountId,
       runtime,
-      pollIntervalMs: 10,
-      dispatch: async (event, turnAdoptionLifecycle) => {
-        await processGoogleChatTestEvent({
-          event,
-          account,
-          config: {},
-          runtime,
-          core,
-          mediaMaxMb: 10,
-          turnAdoptionLifecycle,
-        });
-      },
+      dispatch: (event, turnAdoptionLifecycle) =>
+        dispatch(event, { runtime, turnAdoptionLifecycle }),
     });
-    const first = createGoogleChatMediaTestEvent({
-      id: "oversized",
+    const first = makeEvent({
+      id: failure,
       text: "first caption",
-      attachments: [
-        {
-          contentType: "application/pdf",
-          attachmentDataRef: { resourceName: "media/oversized" },
-        },
-      ],
+      attachments: [attachment(failure)],
     });
-    const second = createGoogleChatMediaTestEvent({ id: "follow-up", text: "next message" });
+    const second = makeEvent({ id: "follow-up", text: "next message" });
 
     ingress.start();
     try {
@@ -628,10 +414,8 @@ describe("googlechat monitor inbound space classification", () => {
       await ingress.receive(second);
       await ingress.waitForIdle();
 
-      expect(receivedBodies).toEqual([
-        "first caption\n\n[Google Chat attachment too large; maximum 10 MB]",
-        "next message",
-      ]);
+      expect(receivedBodies).toEqual([`first caption\n\n${notice}`, "next message"]);
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(notice));
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
       expect(await queue.listClaims()).toEqual([]);
     } finally {
@@ -639,159 +423,37 @@ describe("googlechat monitor inbound space classification", () => {
       closeOpenClawStateDatabaseForTest();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
-  });
+  },
+);
 
-  it("passes durable ingress adoption ownership into the inbound turn", async () => {
-    const { core, runTurn } = createInboundClassificationHarness();
-    const turnAdoptionLifecycle = {
-      admission: "exclusive",
-      onAdopted: vi.fn(async () => {}),
-      onDeferred: vi.fn(),
-      onAbandoned: vi.fn(async () => {}),
-      abortSignal: new AbortController().signal,
-    } satisfies GoogleChatIngressLifecycle;
-    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
-      ok: true,
-      commandAuthorized: undefined,
-      effectiveWasMentioned: undefined,
-      groupBotLoopProtection: undefined,
-      groupSystemPrompt: undefined,
-    });
-
-    await processGoogleChatTestEvent({
-      event: {
-        type: "MESSAGE",
-        space: { name: "spaces/DURABLE", type: "DM" },
-        message: {
-          name: "spaces/DURABLE/messages/1",
-          text: "hello",
-          sender: { name: "users/alice", type: "HUMAN" },
-        },
-      },
-      account: {
-        accountId: "work",
-        config: { typingIndicator: "none" },
-        credentialSource: "inline",
-      } as ResolvedGoogleChatAccount,
-      config: {},
-      runtime: createRuntimeSpies(),
-      core,
-      mediaMaxMb: 10,
-      turnAdoptionLifecycle,
-    });
-
-    expect(runTurn).toHaveBeenCalledWith(expect.objectContaining({ turnAdoptionLifecycle }));
-  });
-
-  it.each([
-    { name: "the default off mode", replyToMode: undefined, expectedThread: undefined },
-    { name: "explicit off mode", replyToMode: "off" as const, expectedThread: undefined },
-    {
-      name: "all mode",
-      replyToMode: "all" as const,
-      expectedThread: "spaces/CLASSIFY/threads/root",
-    },
-  ])("targets typing messages according to $name", async ({ replyToMode, expectedThread }) => {
-    const { core } = createInboundClassificationHarness();
-    const account = {
-      accountId: "work",
-      config: { replyToMode },
-      credentialSource: "inline",
-    } as ResolvedGoogleChatAccount;
-    const event = {
-      type: "MESSAGE",
-      space: { name: "spaces/CLASSIFY", spaceType: "SPACE" },
-      message: {
-        name: "spaces/CLASSIFY/messages/1",
+it.each([
+  ["identity", undefined, undefined, "Alvin", "_Alvin is typing..._"],
+  [
+    "account over agent",
+    "Workspace Bot",
+    "Agent Name",
+    "Identity Name",
+    "_Workspace Bot is typing..._",
+  ],
+  ["agent over identity", undefined, "Agent Name", "Identity Name", "_Agent Name is typing..._"],
+  ["fallback", " ", " ", " ", "_OpenClaw is typing..._"],
+] as const)(
+  "uses %s in the typing message",
+  async (_name, accountName, name, identity, expectedText) => {
+    const agent = { name, identity: { name: identity } };
+    const { dispatch } = createHarness();
+    const account = makeAccount(accountName === undefined ? {} : { name: accountName });
+    await dispatch(
+      {
+        id: "1",
         text: "hello",
-        thread: { name: "spaces/CLASSIFY/threads/root" },
-        sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
+        space: { name: "spaces/IDENTITY", type: "DM" },
       },
-    } satisfies GoogleChatEvent;
-
-    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
-      ok: true,
-      commandAuthorized: undefined,
-      effectiveWasMentioned: undefined,
-      groupBotLoopProtection: undefined,
-      groupSystemPrompt: undefined,
-    });
-
-    await processGoogleChatTestEvent({
-      event,
-      account,
-      config: {},
-      runtime: createRuntimeSpies(),
-      core,
-      mediaMaxMb: 10,
-    });
-
-    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledWith({
-      account,
-      space: "spaces/CLASSIFY",
-      text: "_OpenClaw is typing..._",
-      thread: expectedThread,
-    });
-  });
-
-  it.each([
-    {
-      name: "the agent identity name",
-      accountName: undefined,
-      agent: { identity: { name: "Alvin" } },
-      expectedText: "_Alvin is typing..._",
-    },
-    {
-      name: "the account name before agent names",
-      accountName: "Workspace Bot",
-      agent: { name: "Agent Name", identity: { name: "Identity Name" } },
-      expectedText: "_Workspace Bot is typing..._",
-    },
-    {
-      name: "the agent name before its identity name",
-      accountName: undefined,
-      agent: { name: "Agent Name", identity: { name: "Identity Name" } },
-      expectedText: "_Agent Name is typing..._",
-    },
-    {
-      name: "the generic fallback when names are empty",
-      accountName: " ",
-      agent: { name: " ", identity: { name: " " } },
-      expectedText: "_OpenClaw is typing..._",
-    },
-  ])("uses $name in the typing message", async ({ accountName, agent, expectedText }) => {
-    const { core } = createInboundClassificationHarness();
-    const account = {
-      accountId: "work",
-      config: accountName === undefined ? {} : { name: accountName },
-      credentialSource: "inline",
-    } as ResolvedGoogleChatAccount;
-    const event = {
-      type: "MESSAGE",
-      space: { name: "spaces/IDENTITY", type: "DM" },
-      message: {
-        name: "spaces/IDENTITY/messages/1",
-        text: "hello",
-        sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
+      {
+        account,
+        config: { agents: { entries: { "agent-1": agent } } },
       },
-    } satisfies GoogleChatEvent;
-
-    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
-      ok: true,
-      commandAuthorized: undefined,
-      effectiveWasMentioned: undefined,
-      groupBotLoopProtection: undefined,
-      groupSystemPrompt: undefined,
-    });
-
-    await processGoogleChatTestEvent({
-      event,
-      account,
-      config: { agents: { entries: { "agent-1": agent } } },
-      runtime: createRuntimeSpies(),
-      core,
-      mediaMaxMb: 10,
-    });
+    );
 
     expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledWith({
       account,
@@ -799,269 +461,42 @@ describe("googlechat monitor inbound space classification", () => {
       text: expectedText,
       thread: undefined,
     });
-  });
+  },
+);
 
-  it("continues delivery in the typing message's canonical fallback thread", async () => {
-    const requestedThread = "spaces/CLASSIFY/threads/requested";
-    const deliveredThread = "spaces/CLASSIFY/threads/fallback";
-    const runTurn = vi.fn(
-      async (params: {
-        adapter: {
-          resolveTurn: () => {
-            delivery: {
-              deliver: (payload: { text: string; replyToId: string }) => Promise<void>;
-            };
-          };
-        };
-      }) => {
-        const turn = params.adapter.resolveTurn();
-        await turn.delivery.deliver({
-          text: "two chunks",
-          replyToId: requestedThread,
-        });
-      },
-    );
-    const core = {
-      logging: { shouldLogVerbose: () => false },
-      channel: {
-        inbound: {
-          buildContext: vi.fn((payload: unknown) => payload),
-          run: runTurn,
-        },
-        text: {
-          resolveChunkMode: vi.fn(() => "markdown"),
-          chunkMarkdownTextWithMode: vi.fn(() => ["first chunk", "second chunk"]),
-        },
-      },
-    } as unknown as GoogleChatCoreRuntime;
-    const account = {
-      accountId: "work",
-      config: { replyToMode: "all" },
-      credentialSource: "inline",
-    } as ResolvedGoogleChatAccount;
-    const event = {
-      type: "MESSAGE",
-      space: { name: "spaces/CLASSIFY", spaceType: "SPACE" },
-      message: {
-        name: "spaces/CLASSIFY/messages/1",
-        text: "hello",
-        thread: { name: requestedThread },
-        sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
-      },
-    } satisfies GoogleChatEvent;
+it("forwards bot sender status to the inbound context when allowBots is true", async () => {
+  const { buildContext, dispatch } = createHarness();
+  await dispatch(
+    {
+      id: "1",
+      text: "hello",
+      space: { name: "spaces/DM", type: "DM" },
+      sender: { name: "users/sender", displayName: "Sender", type: "BOT" },
+    },
+    {
+      account: makeAccount({ allowBots: true }),
+    },
+  );
 
-    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
-      ok: true,
-      commandAuthorized: undefined,
-      effectiveWasMentioned: undefined,
-      groupBotLoopProtection: undefined,
-      groupSystemPrompt: undefined,
-    });
-    apiMocks.sendGoogleChatMessage
-      .mockResolvedValueOnce({
-        messageName: "spaces/CLASSIFY/messages/typing",
-        threadName: deliveredThread,
-      })
-      .mockResolvedValueOnce({
-        messageName: "spaces/CLASSIFY/messages/second",
-        threadName: deliveredThread,
-      });
-
-    await processGoogleChatTestEvent({
-      event,
-      account,
-      config: {},
-      runtime: createRuntimeSpies(),
-      core,
-      mediaMaxMb: 10,
-    });
-
-    expect(apiMocks.sendGoogleChatMessage).toHaveBeenNthCalledWith(1, {
-      account,
-      space: "spaces/CLASSIFY",
-      text: "_OpenClaw is typing..._",
-      thread: requestedThread,
-    });
-    expect(apiMocks.updateGoogleChatMessage).toHaveBeenCalledWith({
-      account,
-      messageName: "spaces/CLASSIFY/messages/typing",
-      text: "first chunk",
-    });
-    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledTimes(2);
-    expect(apiMocks.sendGoogleChatMessage).toHaveBeenNthCalledWith(2, {
-      account,
-      space: "spaces/CLASSIFY",
-      text: "second chunk",
-      thread: deliveredThread,
-    });
-  });
+  expect(buildContext).toHaveBeenCalledWith(
+    expect.objectContaining({ sender: expect.objectContaining({ isBot: true }) }),
+  );
 });
 
-describe("googlechat monitor sender bot status", () => {
-  function botStatusEvent(senderType: "BOT" | "HUMAN", messageId: string): GoogleChatEvent {
-    return {
-      type: "MESSAGE",
-      space: { name: "spaces/DM", type: "DM" },
-      message: {
-        name: `spaces/DM/messages/${messageId}`,
-        text: "hello",
-        sender: { name: "users/sender", displayName: "Sender", type: senderType },
-      },
-    } satisfies GoogleChatEvent;
-  }
-
-  it("forwards bot sender status to the inbound context when allowBots is true", async () => {
-    const { buildContext, core } = createInboundClassificationHarness();
-    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
-      ok: true,
-      commandAuthorized: undefined,
-      effectiveWasMentioned: undefined,
-      groupBotLoopProtection: undefined,
-      groupSystemPrompt: undefined,
-    });
-
-    await processGoogleChatTestEvent({
-      event: botStatusEvent("BOT", "1"),
-      account: {
-        accountId: "work",
-        config: { allowBots: true },
-        credentialSource: "inline",
-      } as ResolvedGoogleChatAccount,
-      config: {},
-      runtime: createRuntimeSpies(),
-      core,
-      mediaMaxMb: 10,
-    });
-
-    expect(buildContext).toHaveBeenCalledWith(
-      expect.objectContaining({ sender: expect.objectContaining({ isBot: true }) }),
-    );
-  });
-
-  it("omits bot sender status for human senders", async () => {
-    const { buildContext, core } = createInboundClassificationHarness();
-    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
-      ok: true,
-      commandAuthorized: undefined,
-      effectiveWasMentioned: undefined,
-      groupBotLoopProtection: undefined,
-      groupSystemPrompt: undefined,
-    });
-
-    await processGoogleChatTestEvent({
-      event: botStatusEvent("HUMAN", "2"),
-      account: {
-        accountId: "work",
-        config: {},
-        credentialSource: "inline",
-      } as ResolvedGoogleChatAccount,
-      config: {},
-      runtime: createRuntimeSpies(),
-      core,
-      mediaMaxMb: 10,
-    });
-
-    expect(buildContext).toHaveBeenCalledWith(
-      expect.objectContaining({ sender: expect.objectContaining({ isBot: undefined }) }),
-    );
-  });
-});
-
-describe("googlechat monitor direct messages", () => {
-  it("omits thread metadata from DM reply context and typing messages", async () => {
-    const { buildContext, core, runTurn } = createInboundClassificationHarness();
-    const runtime = createRuntimeSpies() satisfies GoogleChatRuntimeEnv;
-    const account = {
-      accountId: "work",
-      config: {
-        typingIndicator: "message",
-      },
-      credentialSource: "inline",
-    } as ResolvedGoogleChatAccount;
-    const event = {
-      type: "MESSAGE",
-      eventTime: "2026-03-22T00:00:00.001Z",
-      space: { name: "spaces/DM", type: "DM" },
-      message: {
-        name: "spaces/DM/messages/2",
-        text: "hello",
-        thread: { name: "spaces/DM/threads/thread-1" },
-        sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
-      },
-    } satisfies GoogleChatEvent;
-
-    apiMocks.sendGoogleChatMessage.mockResolvedValue({
-      messageName: "spaces/DM/messages/typing",
-    });
-    allowGoogleChatMediaSender();
-
-    await processGoogleChatTestEvent({
-      event,
-      account,
-      config: {},
-      runtime,
-      core,
-      mediaMaxMb: 10,
-    });
-
-    expect(buildContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reply: {
-          to: "googlechat:spaces/DM",
-          originatingTo: "googlechat:spaces/DM",
-          replyToId: undefined,
-          replyToIdFull: undefined,
-        },
-      }),
-    );
-    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledWith({
-      account,
-      space: "spaces/DM",
-      text: "_OpenClaw is typing..._",
-      thread: undefined,
-    });
-    expect(runTurn).toHaveBeenCalledOnce();
-  });
-
-  it("drops invalid event timestamps from inbound runtime payloads", async () => {
-    const { buildContext, core, runTurn } = createInboundClassificationHarness();
-    const runtime = createRuntimeSpies() satisfies GoogleChatRuntimeEnv;
-    const account = {
-      accountId: "work",
-      config: {
-        typingIndicator: "message",
-      },
-      credentialSource: "inline",
-    } as ResolvedGoogleChatAccount;
-    const event = {
-      type: "MESSAGE",
+it("drops invalid event timestamps from inbound runtime payloads", async () => {
+  const { buildContext, dispatch, runTurn } = createHarness();
+  const account = makeAccount({ typingIndicator: "message" });
+  await dispatch(
+    {
+      id: "2",
+      text: "hello",
       eventTime: "not-a-timestamp",
-      space: { name: "spaces/DM", type: "DM" },
-      message: {
-        name: "spaces/DM/messages/2",
-        text: "hello",
-        sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
-      },
-    } satisfies GoogleChatEvent;
+    },
+    { account },
+  );
 
-    allowGoogleChatMediaSender();
-
-    await processGoogleChatTestEvent({
-      event,
-      account,
-      config: {},
-      runtime,
-      core,
-      mediaMaxMb: 10,
-    });
-
-    expect(inboundMocks.buildEnvelope).toHaveBeenCalledWith(
-      expect.objectContaining({ timestamp: undefined }),
-    );
-    expect(buildContext).toHaveBeenCalledWith(expect.objectContaining({ timestamp: undefined }));
-    const runArg = runTurn.mock.calls[0]?.[0] as
-      | { adapter?: { ingest?: () => { timestamp?: number } } }
-      | undefined;
-    expect(runArg?.adapter?.ingest?.().timestamp).toBeUndefined();
-  });
+  const noTimestamp = expect.objectContaining({ timestamp: undefined });
+  expect(inboundMocks.buildEnvelope).toHaveBeenCalledWith(noTimestamp);
+  expect(buildContext).toHaveBeenCalledWith(noTimestamp);
+  expect(readGoogleChatTestIngest(runTurn)?.timestamp).toBeUndefined();
 });

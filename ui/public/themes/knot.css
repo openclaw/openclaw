@@ -23,6 +23,7 @@
   --primary: #d92a3f;
   --primary-hover: #c22537;
   --primary-foreground: #fafafa;
+  --accent-foreground: #fafafa;
 
   /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
   --destructive: #d32f2f;
@@ -99,6 +100,8 @@
   --accent-subtle: rgba(196, 30, 48, 0.08);
   --accent-glow: rgba(196, 30, 48, 0.12);
   --primary: #c41e30;
+  --primary-hover: var(--accent-hover);
+  --accent-foreground: var(--primary-foreground);
 
   /* Surfaces — cool white with subtle warmth */
   --bg: #f9f9fb;
@@ -110,11 +113,6 @@
   --card-foreground: #18181b;
   --card-highlight: rgba(0, 0, 0, 0.02);
   --popover-foreground: #18181b;
-  --session-hovercard-progress-surface: color-mix(
-    in srgb,
-    var(--card) 52%,
-    var(--panel-strong) 48%
-  );
 
   --panel: #f9f9fb;
   --panel-strong: #f2f2f5;

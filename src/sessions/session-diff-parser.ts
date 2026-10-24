@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { SessionDiffFile } from "../../packages/gateway-protocol/src/index.js";
+import { unquoteGitPath } from "../infra/git-path-quote.js";
 
 type FileStatus = SessionDiffFile["status"];
 type NameStatusEntry = { path: string; oldPath?: string; status: FileStatus };
@@ -7,7 +8,10 @@ type NumstatEntry = { additions: number; deletions: number; binary: boolean };
 
 /** Parses `git diff --name-status -z -M` output; R/C entries consume two paths. */
 export function parseNameStatusZ(text: string): NameStatusEntry[] {
-  const tokens = text.split("\0");
+  return parseNameStatusTokens(text.split("\0"));
+}
+
+function parseNameStatusTokens(tokens: readonly string[]): NameStatusEntry[] {
   const entries: NameStatusEntry[] = [];
   for (let i = 0; i < tokens.length; i += 1) {
     const code = tokens[i];
@@ -35,11 +39,9 @@ export function parseNameStatusZ(text: string): NameStatusEntry[] {
   return entries;
 }
 
-/** Parses `git diff --numstat -z -M`; rename entries put paths in follow-up tokens. */
-export function parseNumstatZ(text: string): Map<string, NumstatEntry> {
-  const tokens = text.split("\0");
+function parseNumstatTokens(tokens: readonly string[], start: number): Map<string, NumstatEntry> {
   const byPath = new Map<string, NumstatEntry>();
-  for (let i = 0; i < tokens.length; i += 1) {
+  for (let i = start; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (!token) {
       continue;
@@ -69,28 +71,37 @@ export function parseNumstatZ(text: string): Map<string, NumstatEntry> {
   return byPath;
 }
 
-const GIT_PATH_ESCAPES: Record<string, string> = {
-  a: "\u0007",
-  b: "\b",
-  f: "\f",
-  n: "\n",
-  r: "\r",
-  t: "\t",
-  v: "\v",
-};
+/** Git emits all raw records before the numstat records in `--raw --numstat -z`. */
+export function parseDiffInventoryZ(text: string): {
+  entries: NameStatusEntry[];
+  numstat: Map<string, NumstatEntry>;
+} {
+  const tokens = text.split("\0");
+  const nameStatus: string[] = [];
+  let index = 0;
+  while (index < tokens.length) {
+    const header = tokens[index];
+    if (!header?.startsWith(":")) {
+      break;
+    }
+    const code = header.slice(header.lastIndexOf(" ") + 1);
+    const pathCount = code[0] === "R" || code[0] === "C" ? 2 : 1;
+    nameStatus.push(code, ...tokens.slice(index + 1, index + pathCount + 1));
+    index += pathCount + 1;
+  }
+  return {
+    entries: parseNameStatusTokens(nameStatus),
+    numstat: parseNumstatTokens(tokens, index),
+  };
+}
 
 function decodeGitPath(value: string): string {
   if (!value.startsWith('"')) {
     return value;
   }
-  // Git's octal escapes encode bytes, including individual UTF-8 bytes.
-  const bytes = Buffer.from(value.slice(1, -1)).toString("latin1");
-  const decoded = bytes.replace(/\\([0-3][0-7]{2}|[abfnrtv"\\])/g, (_, escape: string) =>
-    escape.length === 3
-      ? String.fromCharCode(Number.parseInt(escape, 8))
-      : (GIT_PATH_ESCAPES[escape] ?? escape),
-  );
-  return Buffer.from(decoded, "latin1").toString("utf8");
+  const bytes = Buffer.from(value);
+  const decoded = unquoteGitPath(bytes);
+  return decoded?.end === bytes.length ? decoded.bytes.toString("utf8") : value;
 }
 
 function chunkPath(chunk: string): string | null {

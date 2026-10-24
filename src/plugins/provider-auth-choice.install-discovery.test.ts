@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -11,6 +12,7 @@ import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash, resolveAcceptedSurfaceCurrent } from "./capability-summary.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { enableExplicitlySelectedPluginInConfig } from "./enable.js";
+import { resolvePluginNpmProjectDir } from "./install-paths.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-reader.js";
 import { recordPluginInstall } from "./installs.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
@@ -62,15 +64,22 @@ afterEach(() => {
 it.each([false, true])(
   "continues installed-provider auth and model hooks without replacing the running registry (default %s)",
   async (setDefaultModel) => {
+    const model = "installed-provider/fixture-model";
+    const hookTitle = "Installed provider model hook";
     const root = fs.realpathSync(makeTrackedTempDir("onboarding-installed-provider", tempDirs));
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(root, "workspace");
-    const projectRoot = path.join(stateDir, "npm", "projects", "installed-provider");
+    const projectRoot = resolvePluginNpmProjectDir({
+      npmDir: path.join(stateDir, "npm"),
+      packageName: "@fixture/installed-provider",
+    });
     const pluginRoot = path.join(projectRoot, "node_modules", "@fixture", "installed-provider");
     const config: OpenClawConfig = { gateway: { mode: "local" } };
     const event = `installed-provider-owner-${setDefaultModel}`;
     const before = process.listenerCount(event);
     const cleanupPath = path.join(root, "provider-cleaned");
+    const writeJson = (dir: string, name: string, value: unknown) =>
+      fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
     const acceptedSurface = {
       channels: [],
       providers: ["installed-provider"],
@@ -116,33 +125,22 @@ it.each([false, true])(
         const runningRegistry = createEmptyPluginRegistry();
         setActivePluginRegistry(runningRegistry);
         install.mockImplementation(async (params) => {
-          // The initial provider lookup has already populated its lease's metadata
-          // cache. Package acquisition and execution-runtime preparation are stubbed;
-          // discovery, import, authentication, and model-hook dispatch remain real.
+          // Populate the package only after the initial metadata lookup misses it.
           fs.mkdirSync(pluginRoot, { recursive: true });
-          fs.writeFileSync(
-            path.join(projectRoot, "package.json"),
-            JSON.stringify({
-              private: true,
-              dependencies: { "@fixture/installed-provider": "1.0.0" },
-            }),
-          );
-          fs.writeFileSync(
-            path.join(pluginRoot, "package.json"),
-            JSON.stringify({
-              name: "@fixture/installed-provider",
-              version: "1.0.0",
-              openclaw: { extensions: ["./index.cjs"] },
-            }),
-          );
-          fs.writeFileSync(
-            path.join(pluginRoot, "openclaw.plugin.json"),
-            JSON.stringify({
-              id: "installed-provider",
-              providers: ["installed-provider"],
-              configSchema: { type: "object", properties: {}, additionalProperties: false },
-            }),
-          );
+          writeJson(projectRoot, "package.json", {
+            private: true,
+            dependencies: { "@fixture/installed-provider": "1.0.0" },
+          });
+          writeJson(pluginRoot, "package.json", {
+            name: "@fixture/installed-provider",
+            version: "1.0.0",
+            openclaw: { extensions: ["./index.cjs"] },
+          });
+          writeJson(pluginRoot, "openclaw.plugin.json", {
+            id: "installed-provider",
+            providers: ["installed-provider"],
+            configSchema: { type: "object", properties: {}, additionalProperties: false },
+          });
           fs.writeFileSync(
             path.join(pluginRoot, "index.cjs"),
             `const listener = () => {}; process.on(${JSON.stringify(event)}, listener);
@@ -223,28 +221,18 @@ it.each([false, true])(
             expect(fs.readFileSync(cleanupPath, "utf8")).toBe("closed");
             expect(prompter.text).toHaveBeenCalledWith({ message: "Selected provider credential" });
             if (setDefaultModel) {
-              expect(prompter.note).toHaveBeenCalledWith(
-                "installed-provider/fixture-model",
-                "Installed provider model hook",
-              );
+              expect(prompter.note).toHaveBeenCalledWith(model, hookTitle);
               expect(prepared?.config.agents?.defaults?.model).toEqual({
-                primary: "installed-provider/fixture-model",
+                primary: model,
               });
             } else {
-              expect(prompter.note).not.toHaveBeenCalledWith(
-                "installed-provider/fixture-model",
-                "Installed provider model hook",
-              );
-              expect(prepared?.agentModelOverride).toBe("installed-provider/fixture-model");
+              expect(prompter.note).not.toHaveBeenCalledWith(model, hookTitle);
+              expect(prepared?.agentModelOverride).toBe(model);
             }
             const trusted = prepared?.pendingPluginInstalls?.["installed-provider"];
             expect(trusted).toMatchObject(trustedRecord);
             const providerAuthored = prepared?.config.plugins?.installs?.["installed-provider"];
-            if (!trusted || !providerAuthored || !prepared) {
-              throw new Error(
-                "Provider preparation lost the installer or provider-authored record",
-              );
-            }
+            assert.ok(trusted && providerAuthored && prepared, "Installer or auth record lost");
             const declared = resolvePluginArtifactDeclaredSurface(pluginRoot, env, {
               config: prepared.config,
             });

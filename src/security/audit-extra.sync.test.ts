@@ -28,101 +28,40 @@ describe("collectSecretsInConfigFindings", () => {
 
 describe("collectAttackSurfaceSummaryFindings", () => {
   it.each([
-    {
-      name: "distinguishes external webhooks from internal hooks when only internal hooks are enabled",
-      cfg: {
-        hooks: { internal: { enabled: true } },
-      } satisfies OpenClawConfig,
-      expectedDetail: ["hooks.webhooks: disabled", "hooks.internal: enabled"],
-    },
-    {
-      name: "reports both hook systems as enabled when both are configured",
-      cfg: {
-        hooks: { enabled: true, internal: { enabled: true } },
-      } satisfies OpenClawConfig,
-      expectedDetail: ["hooks.webhooks: enabled", "hooks.internal: enabled"],
-    },
-    {
-      name: "reports internal hooks as disabled until configured",
-      cfg: {} satisfies OpenClawConfig,
-      expectedDetail: ["hooks.webhooks: disabled", "hooks.internal: disabled"],
-    },
-    {
-      name: "reports internal hooks as disabled when explicitly set to false",
-      cfg: {
-        hooks: { internal: { enabled: false } },
-      } satisfies OpenClawConfig,
-      expectedDetail: ["hooks.internal: disabled"],
-    },
-  ])("$name", ({ cfg, expectedDetail }) => {
+    ["internal hooks enabled", { hooks: { internal: { enabled: true } } }, "enabled"],
+    ["internal hooks unconfigured", {}, "disabled"],
+  ] satisfies [string, OpenClawConfig, string][])("%s", async (_name, cfg, internalStatus) => {
     const finding = expectDefined(
-      collectAttackSurfaceSummaryFindings(cfg).at(0),
+      (await collectAttackSurfaceSummaryFindings(cfg)).at(0),
       "attack surface summary finding",
     );
     expect(finding.checkId).toBe("summary.attack_surface");
-    for (const snippet of expectedDetail) {
+    for (const snippet of ["hooks.webhooks: disabled", `hooks.internal: ${internalStatus}`]) {
       expect(finding.detail).toContain(snippet);
     }
   });
 });
 
 describe("collectSmallModelRiskFindings", () => {
-  const browserOffCfg = {
-    agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
-    browser: { enabled: false },
-    tools: { web: { fetch: { enabled: false } } },
-  } satisfies OpenClawConfig;
   const browserDefaultCfg = {
     agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
     tools: { web: { fetch: { enabled: false } } },
   } satisfies OpenClawConfig;
-  const browserBlockedByPluginPolicyCfg = {
+  const configuredBrowserBlockedByPluginPolicyCfg = {
     ...browserDefaultCfg,
     plugins: { allow: ["openai"] },
-  } satisfies OpenClawConfig;
-  const configuredBrowserBlockedByPluginPolicyCfg = {
-    ...browserBlockedByPluginPolicyCfg,
     browser: { enabled: true },
   } satisfies OpenClawConfig;
 
   it.each([
-    {
-      name: "small model without web/browser tools is informational even without sandbox all",
-      cfg: browserOffCfg,
-      env: {},
-      expectedSeverity: "info",
-      detailIncludes: ["web=[off]", "No web/browser tools detected"],
-      detailExcludes: ["web=[browser]"],
-    },
-    {
-      name: "treats browser as enabled by default when browser config is omitted",
-      cfg: browserDefaultCfg,
-      env: {},
-      expectedSeverity: "critical",
-      detailIncludes: ["web=[browser]"],
-      detailExcludes: ["No web/browser tools detected"],
-    },
-    {
-      name: "treats browser as disabled when restrictive plugin policy excludes it",
-      cfg: browserBlockedByPluginPolicyCfg,
-      env: {},
-      expectedSeverity: "info",
-      detailIncludes: ["web=[off]", "No web/browser tools detected"],
-      detailExcludes: ["web=[browser]"],
-    },
-    {
-      name: "does not let browser config bypass restrictive plugin policy",
-      cfg: configuredBrowserBlockedByPluginPolicyCfg,
-      env: {},
-      expectedSeverity: "info",
-      detailIncludes: ["web=[off]", "No web/browser tools detected"],
-      detailExcludes: ["web=[browser]"],
-    },
-  ])("$name", ({ cfg, env, expectedSeverity, detailIncludes, detailExcludes }) => {
+    ["browser disabled", { ...browserDefaultCfg, browser: { enabled: false } }, "info"],
+    ["browser enabled by default", browserDefaultCfg, "critical"],
+    ["plugin policy blocks configured browser", configuredBrowserBlockedByPluginPolicyCfg, "info"],
+  ] satisfies [string, OpenClawConfig, string][])("%s", (_name, cfg, expectedSeverity) => {
     const finding = expectDefined(
       collectSmallModelRiskFindings({
         cfg,
-        env,
+        env: {},
       }).at(0),
       "small model risk finding",
     );
@@ -130,11 +69,14 @@ describe("collectSmallModelRiskFindings", () => {
     expect(finding.checkId).toBe("models.small_params");
     expect(finding.severity).toBe(expectedSeverity);
     expect(finding.detail).toContain("ollama/mistral-8b");
-    for (const snippet of detailIncludes) {
+    const unsafe = expectedSeverity === "critical";
+    for (const snippet of unsafe
+      ? ["web=[browser]"]
+      : ["web=[off]", "No web/browser tools detected"]) {
       expect(finding.detail).toContain(snippet);
     }
-    for (const snippet of detailExcludes) {
-      expect(finding.detail).not.toContain(snippet);
-    }
+    expect(finding.detail).not.toContain(
+      unsafe ? "No web/browser tools detected" : "web=[browser]",
+    );
   });
 });

@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { root as fsRoot } from "../infra/fs-safe.js";
-import { GITHUB_PUBLICATION_CONFIG_GUARD_JS } from "./github-publication-base.js";
+import { gitMaintenanceEnvironment } from "../infra/git-maintenance-env.js";
+import { GITHUB_PUBLICATION_CONFIG_GUARD } from "./github-publication-base.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
@@ -38,7 +39,7 @@ const objectPattern = /^[a-f0-9]{40}$/;
 const gitNullPath = process.platform === "win32" ? "NUL" : "/dev/null";
 const env = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_ATTR_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: gitNullPath, GIT_CONFIG_SYSTEM: gitNullPath,
-  GIT_CONFIG_COUNT: "0" };
+  ...${JSON.stringify(gitMaintenanceEnvironment())} };
 function git(args, options = {}) {
   const result = spawnSync("git", ["-c", "core.hooksPath=" + gitNullPath, "-c",
     "core.fsmonitor=false", "-c", "core.attributesFile=" + gitNullPath, ...args], {
@@ -62,7 +63,7 @@ const relativeOutput = path.relative(path.resolve(cwd), path.resolve(output));
 if (!relativeOutput.startsWith(".." + path.sep) && !path.isAbsolute(relativeOutput)) {
   throw Error("Publication snapshot output must be outside the workspace");
 }
-${GITHUB_PUBLICATION_CONFIG_GUARD_JS}
+${GITHUB_PUBLICATION_CONFIG_GUARD.script}
 if (text(["for-each-ref", "--count=1", "--format=%(refname)", "refs/replace"])) {
   throw Error("Publication snapshot has unsupported Git replacement metadata");
 }
@@ -132,7 +133,7 @@ try {
 } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 `;
 
-function parseGitHubRepositoryPublicationSnapshot(
+export function parseGitHubRepositoryPublicationSnapshot(
   raw: string,
   digest: string,
 ): GitHubRepositoryPublicationSnapshot {
@@ -194,6 +195,14 @@ function parseGitHubRepositoryPublicationSnapshot(
   };
 }
 
+async function readPublicationFile(root: string, file: string) {
+  return (await fsRoot(root)).read(file, {
+    maxBytes: MAX_RECONCILIATION_FILE_BYTES,
+    symlinks: "reject",
+    hardlinks: "reject",
+  });
+}
+
 export async function readGitHubRepositoryPublicationBlob(
   root: string,
   sha: string,
@@ -201,13 +210,7 @@ export async function readGitHubRepositoryPublicationBlob(
   if (!gitObjectPattern.test(sha)) {
     throw new Error("GitHub publication blob identity is invalid.");
   }
-  const { buffer: bytes } = await (
-    await fsRoot(root)
-  ).read("blobs/" + sha, {
-    maxBytes: MAX_RECONCILIATION_FILE_BYTES,
-    symlinks: "reject",
-    hardlinks: "reject",
-  });
+  const { buffer: bytes } = await readPublicationFile(root, "blobs/" + sha);
   const actual = createHash("sha1")
     .update("blob " + bytes.length + "\0")
     .update(bytes)
@@ -219,13 +222,7 @@ export async function readGitHubRepositoryPublicationBlob(
 }
 
 export async function readGitHubRepositoryPublicationMetadata(root: string, digest: string) {
-  const { buffer } = await (
-    await fsRoot(root)
-  ).read("snapshot.json", {
-    maxBytes: MAX_RECONCILIATION_FILE_BYTES,
-    symlinks: "reject",
-    hardlinks: "reject",
-  });
+  const { buffer } = await readPublicationFile(root, "snapshot.json");
   const raw = buffer.toString("utf8");
   return { raw, snapshot: parseGitHubRepositoryPublicationSnapshot(raw, digest) };
 }

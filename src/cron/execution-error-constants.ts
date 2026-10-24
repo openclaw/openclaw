@@ -1,4 +1,5 @@
 /** Stable cron execution error text shared by runtime and ledger codecs. */
+export const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
 export const CRON_JOB_EXECUTION_TIMEOUT_ERROR = "cron: job execution timed out";
 export const CRON_SETUP_TIMEOUT_ERROR = "cron: isolated agent setup timed out before runner start";
 export const CRON_PRE_EXECUTION_TIMEOUT_ERROR =

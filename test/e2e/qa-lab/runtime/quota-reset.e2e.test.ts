@@ -7,6 +7,7 @@ import {
   BACKUP_MODEL,
   BACKUP_RESPONSES_PATH,
   MARKER,
+  ORDINARY_RATE_LIMIT_RETRY_AFTER_MS,
   UTILITY_MODEL_ID,
   createQuotaResetFixture,
   installQuotaStateWriteFault,
@@ -160,6 +161,9 @@ describe.each([
           const ordinaryCooldown = afterUtilityFailure?.cooldownUntil;
           expect(ordinaryCooldown, evidence()).toBeGreaterThan(Date.now() + clock.offset);
           expect(provider.responses, evidence()).toContainEqual({
+            atMs: expect.any(Number),
+            status: 200,
+            transport: "http",
             phase: "ordinary-rate-limit-with-capacity",
             path: "/core-wham/usage",
             value: expect.objectContaining({
@@ -173,10 +177,13 @@ describe.each([
             headers: {},
           });
           let beforeRecoveryReply: ReturnType<typeof stats>;
-          provider.observeNextSuccess(() => {
-            beforeRecoveryReply = stats();
-            turns.push({ beforeRecoveryReply });
-          });
+          provider.observeNextSuccess(
+            () => {
+              beforeRecoveryReply = stats();
+              turns.push({ beforeRecoveryReply });
+            },
+            { model: "gpt-5.5", path: "/v1/responses" },
+          );
           provider.setPhase("restored");
           expect(await turn(), evidence()).toEqual({ status: "ok", output: [MARKER] });
           expect(beforeRecoveryReply?.blockedUntil, evidence()).toBeUndefined();
@@ -215,12 +222,19 @@ describe.each([
               if (cooldownUntil === undefined) {
                 throw new Error("Companion failure did not persist its retry deadline");
               }
+              // Each repeated failure waits only the provider's time; nothing escalates.
+              expect(cooldownUntil - Date.now() - clock.offset, evidence()).toBeLessThanOrEqual(
+                ORDINARY_RATE_LIMIT_RETRY_AFTER_MS,
+              );
               await advanceClock(Math.max(1, cooldownUntil - Date.now() - clock.offset + 1));
             }
           }
           provider.setPhase("restored");
           await advanceClock();
-          expect(stats()?.cooldownUntil, evidence()).toBeGreaterThan(Date.now() + clock.offset);
+          // The fourth failure's provider window has lapsed during the quota recheck.
+          expect(stats()?.cooldownUntil ?? 0, evidence()).toBeLessThanOrEqual(
+            Date.now() + clock.offset,
+          );
           expect(await turn(), evidence()).toEqual({ status: "ok", output: [MARKER] });
           expect(stats()?.blockedUntil, evidence()).toBeUndefined();
           expect(provider.errors, evidence()).toEqual([]);
@@ -230,7 +244,7 @@ describe.each([
         if (source === "codex_rate_limits") {
           const originalGeneration = stats();
           expect(originalGeneration?.lastFailureAt, evidence()).toEqual(expect.any(Number));
-          expect(originalGeneration?.failureCounts?.rate_limit, evidence()).toBeGreaterThan(0);
+          expect(originalGeneration?.lastRateLimitAt, evidence()).toEqual(expect.any(Number));
           for (const phase of [
             "additional-exhaustion",
             "workspace-exhaustion",
@@ -246,7 +260,7 @@ describe.each([
             expect(retained?.blockedReason, evidence()).toBe("subscription_limit");
             expect(retained?.blockedUntil, evidence()).toBeGreaterThan(Date.now() + clock.offset);
             expect(retained?.lastFailureAt, evidence()).toBe(originalGeneration?.lastFailureAt);
-            expect(retained?.failureCounts, evidence()).toEqual(originalGeneration?.failureCounts);
+            expect(retained?.lastRateLimitAt, evidence()).toBe(originalGeneration?.lastRateLimitAt);
             const additionalLimitRequests = provider.requests.filter(
               (request) => request.phase === phase,
             );

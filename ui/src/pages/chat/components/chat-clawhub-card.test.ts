@@ -1,17 +1,20 @@
 /* @vitest-environment jsdom */
 
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
 import { i18n } from "../../../i18n/index.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createClient,
   createContext,
   createGateway,
 } from "../../plugins/plugins-page.test-support.ts";
-import "./chat-clawhub-card.ts";
+import { ChatClawHubCard } from "./chat-clawhub-card.tsx";
 
 const iconFetch = vi.hoisted(() => ({ catalog: vi.fn(), plugin: vi.fn() }));
 vi.mock("../../plugins/icon-loader.ts", () => ({
@@ -39,16 +42,28 @@ function detail(installed: boolean) {
   };
 }
 
-function mount(handler: (method: string, params: unknown) => Promise<unknown>) {
+function mount(
+  handler: (method: string, params: unknown) => Promise<unknown>,
+  initialRecommendation: ClawHubRecommendation = recommendation,
+  agentId = "main",
+) {
   const { client, request } = createClient(handler);
   const harness = createGateway(client);
   const context = createContext(harness.gateway);
-  const provider = createApplicationContextProvider(context);
-  const card = document.createElement("openclaw-chat-clawhub-card");
-  Object.assign(card, { recommendation, agentId: "main" });
-  provider.append(card);
-  document.body.append(provider);
-  return { card, context, request, harness, client };
+  const provider = createSolidApplicationContextProvider(context);
+  const [currentRecommendation, setRecommendation] = createSignal(initialRecommendation);
+  const mounted = mountSolid(
+    () =>
+      createComponent(ChatClawHubCard, {
+        get recommendation() {
+          return currentRecommendation();
+        },
+        agentId,
+      }),
+    { wrapper: provider.wrapper },
+  );
+  const card = mounted.container.querySelector<HTMLElement>("openclaw-chat-clawhub-card")!;
+  return { card, context, request, harness, client, unmount: mounted.unmount, setRecommendation };
 }
 
 describe("ClawHub chat recommendations", () => {
@@ -59,48 +74,98 @@ describe("ClawHub chat recommendations", () => {
   });
   afterEach(() => {
     document.body.replaceChildren();
+    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it("opens the in-app listing or install review, then replaces the offer after installation", async () => {
-    let installed = false;
-    const { card, context, request, harness, client } = mount(async () => detail(installed));
-    await vi.waitFor(() =>
-      expect(card.querySelector(".chat-clawhub-card__install")?.textContent?.trim()).toBe(
-        "Install",
+  it("refreshes translated actions without reloading catalog status", async () => {
+    const translate = i18n.t.bind(i18n);
+    const subscribe = i18n.subscribe.bind(i18n);
+    let notifyLocale: Parameters<typeof i18n.subscribe>[0] | undefined;
+    let translated = false;
+    vi.spyOn(i18n, "t").mockImplementation((key, params) =>
+      translated && key === "common.dismiss" ? "Ausblenden" : translate(key, params),
+    );
+    vi.spyOn(i18n, "subscribe").mockImplementation((listener) => {
+      notifyLocale = listener;
+      return subscribe(listener);
+    });
+    const { card, request } = mount(async () => detail(false));
+    await waitForSolid(() =>
+      expect(card.querySelector(".chat-clawhub-card__dismiss")?.textContent?.trim()).toBe(
+        "Dismiss",
       ),
     );
-    expect(request).toHaveBeenCalledWith(
-      "plugins.catalog.get",
-      { id: recommendation.id },
-      expect.anything(),
-    );
-    expect(card.querySelector(".chat-clawhub-card__dismiss")?.textContent?.trim()).toBe("Dismiss");
-    card.querySelector<HTMLButtonElement>(".chat-clawhub-card__listing")!.click();
-    expect(context.navigate).toHaveBeenLastCalledWith("plugins", {
-      pathname: `/plugins/${recommendation.id}`,
-      search: "",
-    });
-    card.querySelector<HTMLButtonElement>(".chat-clawhub-card__install")!.click();
-    expect(context.navigate).toHaveBeenLastCalledWith("plugins", {
-      pathname: `/plugins/${recommendation.id}`,
-      search: "?action=install",
-    });
-    expect(request.mock.calls.every(([method]) => method !== "plugins.install")).toBe(true);
-
-    installed = true;
-    harness.emit(client, false);
-    harness.emit(client, true);
-    await vi.waitFor(() =>
-      expect(card.querySelector(".chat-clawhub-card__installed")?.textContent).toContain(
-        "Installed",
+    const reads = request.mock.calls.length;
+    translated = true;
+    notifyLocale!(i18n.getLocale());
+    await waitForSolid(() =>
+      expect(card.querySelector(".chat-clawhub-card__dismiss")?.textContent?.trim()).toBe(
+        "Ausblenden",
       ),
     );
-    expect(card.querySelector(".chat-clawhub-card__installed svg")).not.toBeNull();
-    expect(card.querySelector(".chat-clawhub-card__install")).toBeNull();
-    expect(card.querySelector(".chat-clawhub-card__dismiss")).toBeNull();
-    expect(card.querySelector(".chat-clawhub-card__listing")).not.toBeNull();
+    expect(request).toHaveBeenCalledTimes(reads);
   });
+
+  it.each(["live generation", "reconnect"] as const)(
+    "opens the install review and updates after %s",
+    async (completion) => {
+      let installed = false;
+      const { card, context, request, harness, client } = mount(async () => detail(installed));
+      await vi.waitFor(() =>
+        expect(card.querySelector(".chat-clawhub-card__install")?.textContent?.trim()).toBe(
+          "Install",
+        ),
+      );
+      expect(request).toHaveBeenCalledWith(
+        "plugins.catalog.get",
+        { id: recommendation.id },
+        expect.anything(),
+      );
+      expect(card.querySelector(".chat-clawhub-card__dismiss")?.textContent?.trim()).toBe(
+        "Dismiss",
+      );
+      card.querySelector<HTMLButtonElement>(".chat-clawhub-card__listing")!.click();
+      expect(context.navigate).toHaveBeenLastCalledWith("plugins", {
+        pathname: `/plugins/${recommendation.id}`,
+        search: "",
+      });
+      card.querySelector<HTMLButtonElement>(".chat-clawhub-card__install")!.click();
+      expect(context.navigate).toHaveBeenLastCalledWith("plugins", {
+        pathname: `/plugins/${recommendation.id}`,
+        search: "?action=install",
+      });
+      expect(request.mock.calls.every(([method]) => method !== "plugins.install")).toBe(true);
+
+      installed = true;
+      if (completion === "reconnect") {
+        harness.emit(client, false);
+        harness.emit(client, true);
+      } else {
+        harness.emit(client, true, {
+          pluginCapabilities: {
+            ok: true,
+            generation: 1,
+            descriptors: [],
+            methods: [],
+            controlUiTabs: [],
+            controlUiWidgetKinds: [],
+            pluginSurfaceUrls: {},
+          },
+        });
+      }
+      await vi.waitFor(() =>
+        expect(card.querySelector(".chat-clawhub-card__installed")?.textContent).toContain(
+          "Installed",
+        ),
+      );
+      expect(card.querySelector(".chat-clawhub-card__installed svg")).not.toBeNull();
+      expect(card.querySelector(".chat-clawhub-card__install")).toBeNull();
+      expect(card.querySelector(".chat-clawhub-card__dismiss")).toBeNull();
+      expect(card.querySelector(".chat-clawhub-card__listing")).not.toBeNull();
+    },
+  );
 
   it("rechecks official status before offering installation from an old card", async () => {
     const result = detail(false);
@@ -122,13 +187,13 @@ describe("ClawHub chat recommendations", () => {
   it("does not present a stale installed badge when status fails, and retries visibly", async () => {
     let fail = true;
     const retry = deferred<ReturnType<typeof detail>>();
-    const { card } = mount(async () => {
+    const { card, setRecommendation } = mount(async () => {
       if (fail) {
         throw new Error("Catalog unavailable");
       }
       return retry.promise;
     });
-    Object.assign(card, { recommendation: { ...recommendation, installed: true } });
+    setRecommendation({ ...recommendation, installed: true });
     await vi.waitFor(() => expect(card.textContent).toContain("Status unavailable"));
     expect(card.querySelector(".chat-clawhub-card__installed")).toBeNull();
     fail = false;
@@ -145,22 +210,243 @@ describe("ClawHub chat recommendations", () => {
     await vi.waitFor(() => expect(card.querySelector(".chat-clawhub-card")).toBeNull());
   });
 
-  it("rejects old Gateway responses after the connection changes", async () => {
-    const old = deferred<ReturnType<typeof detail>>();
-    const { card, harness, request } = mount(() => old.promise);
-    await vi.waitFor(() => expect(request).toHaveBeenCalled());
-    expect(card.querySelector(".skeleton")).not.toBeNull();
-    expect(card.textContent).not.toContain("Checking installation");
-    const next = createClient(async () => detail(false));
-    harness.emit(next.client, true);
-    await vi.waitFor(() =>
-      expect(card.querySelector(".chat-clawhub-card__install")).not.toBeNull(),
-    );
-    old.resolve(detail(true));
-    await old.promise;
-    await Promise.resolve();
+  it.each(["connection", "plugin generation"] as const)(
+    "rejects old status responses after the %s changes",
+    async (boundary) => {
+      const old = deferred<ReturnType<typeof detail>>();
+      let pending = true;
+      const { card, harness, request, client } = mount(() =>
+        pending ? old.promise : Promise.resolve(detail(false)),
+      );
+      await vi.waitFor(() => expect(request).toHaveBeenCalled());
+      expect(card.querySelector(".skeleton")).not.toBeNull();
+      expect(card.textContent).not.toContain("Checking installation");
+      if (boundary === "connection") {
+        const next = createClient(async () => detail(false));
+        harness.emit(next.client, true);
+      } else {
+        pending = false;
+        harness.emit(client, true, {
+          pluginCapabilities: {
+            ok: true,
+            generation: 1,
+            descriptors: [],
+            methods: [],
+            controlUiTabs: [],
+            controlUiWidgetKinds: [],
+            pluginSurfaceUrls: {},
+          },
+        });
+      }
+      await vi.waitFor(() =>
+        expect(card.querySelector(".chat-clawhub-card__install")).not.toBeNull(),
+      );
+      old.resolve(detail(true));
+      await old.promise;
+      await Promise.resolve();
+      expect(card.querySelector(".chat-clawhub-card__installed")).toBeNull();
+    },
+  );
+
+  it.each(["catalog", "plugin"] as const)(
+    "renders known %s artwork before the catalog status response arrives",
+    async (owner) => {
+      vi.useFakeTimers();
+      const status = deferred<ReturnType<typeof detail>>();
+      iconFetch[owner].mockResolvedValue("blob:known-artwork");
+      const { card } = mount(() => status.promise, {
+        ...recommendation,
+        ...(owner === "catalog"
+          ? { iconUrl: "https://example.com/known.png" }
+          : { pluginId: "whatsapp" }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(iconFetch[owner]).toHaveBeenCalledOnce();
+      const image = card.querySelector("img");
+      expect(image?.getAttribute("src")).toBe("blob:known-artwork");
+      image!.dispatchEvent(new Event("load"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(image!.hidden).toBe(false);
+      expect(card.querySelector(".chat-clawhub-card__icon.skeleton")).toBeNull();
+      expect(card.querySelector(".chat-clawhub-card__status-skeleton")).not.toBeNull();
+      expect(card.querySelector(".chat-clawhub-card__install")).toBeNull();
+      status.resolve(detail(false));
+      await vi.advanceTimersByTimeAsync(0);
+    },
+  );
+
+  it("retains detail-only decoded artwork through pending, failed, and retried status refreshes", async () => {
+    vi.useFakeTimers();
+    const refresh = deferred<ReturnType<typeof detail>>();
+    const retry = deferred<ReturnType<typeof detail>>();
+    const result = detail(true);
+    Object.assign(result.plugin.catalog, { imageUrl: "https://example.com/detail.png" });
+    iconFetch.catalog.mockResolvedValue("blob:detail-artwork");
+    let response = Promise.resolve(result);
+    const { card, harness, client } = mount(() => response);
+    await vi.advanceTimersByTimeAsync(0);
+    const image = card.querySelector("img")!;
+    image.dispatchEvent(new Event("load"));
+    await vi.advanceTimersByTimeAsync(0);
+    response = refresh.promise;
+    harness.emit(client, true, {
+      pluginCapabilities: {
+        ok: true,
+        generation: 1,
+        descriptors: [],
+        methods: [],
+        controlUiTabs: [],
+        controlUiWidgetKinds: [],
+        pluginSurfaceUrls: {},
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(card.querySelector(".chat-clawhub-card__status-skeleton")).not.toBeNull();
+    expect(card.querySelector("img")?.getAttribute("src")).toBe("blob:detail-artwork");
+    expect(card.querySelector("img")?.hidden).toBe(false);
+    expect(card.querySelector(".chat-clawhub-card__icon.skeleton")).toBeNull();
+
+    refresh.reject(new Error("Catalog temporarily unavailable"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(card.textContent).toContain("Status unavailable");
+    expect(card.querySelector("img")?.getAttribute("src")).toBe("blob:detail-artwork");
+    expect(card.querySelector("img")?.hidden).toBe(false);
     expect(card.querySelector(".chat-clawhub-card__installed")).toBeNull();
+    expect(iconFetch.catalog).toHaveBeenCalledOnce();
+
+    response = retry.promise;
+    card.querySelector<HTMLButtonElement>(".chat-clawhub-card__dismiss")!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(card.querySelector(".chat-clawhub-card__status-skeleton")).not.toBeNull();
+    expect(card.querySelector(".chat-clawhub-card__dismiss")).toBeNull();
+    expect(card.querySelector(".chat-clawhub-card__installed")).toBeNull();
+    expect(card.querySelector(".chat-clawhub-card__install")).toBeNull();
+    expect(card.querySelector("img")).toBe(image);
+    expect(image.hidden).toBe(false);
+    expect(iconFetch.catalog).toHaveBeenCalledOnce();
+
+    retry.resolve(result);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(card.querySelector(".chat-clawhub-card__status-skeleton")).toBeNull();
+    expect(card.querySelector(".chat-clawhub-card__installed")?.textContent).toContain("Installed");
+    expect(card.querySelector("img")).toBe(image);
+    expect(image.hidden).toBe(false);
+    expect(iconFetch.catalog).toHaveBeenCalledOnce();
   });
+
+  it.each(["before", "after"] as const)(
+    "recovers an early catalog miss returned %s URL admission",
+    async (timing) => {
+      vi.useFakeTimers();
+      const status = deferred<ReturnType<typeof detail>>();
+      const iconUrl = "https://example.com/readmitted.png";
+      const early = deferred<string | null>();
+      iconFetch.catalog.mockReturnValueOnce(early.promise).mockResolvedValueOnce("blob:readmitted");
+      const { card } = mount(() => status.promise, { ...recommendation, iconUrl });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(iconFetch.catalog).toHaveBeenCalledOnce();
+      if (timing === "before") {
+        early.resolve(null);
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      const result = detail(false);
+      Object.assign(result.plugin.catalog, { imageUrl: iconUrl });
+      status.resolve(result);
+      await vi.advanceTimersByTimeAsync(0);
+      if (timing === "after") {
+        early.resolve(null);
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      expect(iconFetch.catalog).toHaveBeenCalledTimes(2);
+      expect(card.querySelector("img")?.getAttribute("src")).toBe("blob:readmitted");
+      card.querySelector("img")!.dispatchEvent(new Event("load"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(card.querySelector(".chat-clawhub-card__icon.skeleton")).toBeNull();
+    },
+  );
+
+  it.each(["recommendation", "gateway", "disconnect"] as const)(
+    "aborts and releases stale artwork after %s replacement",
+    async (boundary) => {
+      vi.useFakeTimers();
+      const NativeUrl = URL;
+      const revokeObjectURL = vi.fn();
+      vi.stubGlobal(
+        "URL",
+        class extends NativeUrl {
+          static override revokeObjectURL = revokeObjectURL;
+        },
+      );
+      const pending = deferred<string>();
+      iconFetch.catalog.mockReturnValueOnce(pending.promise).mockResolvedValue(null);
+      const oldResult = detail(false);
+      Object.assign(oldResult.plugin.catalog, { imageUrl: "https://example.com/old.png" });
+      let current = oldResult;
+      const { card, harness, unmount, setRecommendation } = mount(async () => current);
+      await vi.advanceTimersByTimeAsync(0);
+      const { signal } = iconFetch.catalog.mock.calls[0]![0] as { signal: AbortSignal };
+      if (boundary === "recommendation") {
+        current = detail(false);
+        current.plugin.id = "ch_cmVwbGFjZW1lbnQ";
+        current.plugin.catalog.name = "Replacement";
+        setRecommendation({ ...recommendation, id: current.plugin.id, name: "Replacement" });
+      } else if (boundary === "gateway") {
+        const next = createClient(async () => detail(false));
+        harness.emit(next.client, true);
+      } else {
+        unmount();
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(signal.aborted).toBe(true);
+      pending.resolve("blob:stale-artwork");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:stale-artwork");
+      expect(card.querySelector('img[src="blob:stale-artwork"]')).toBeNull();
+    },
+  );
+
+  it.each(["plugin", "skill"] as const)(
+    "places the normalized %s publisher between the title and official badge",
+    async (kind) => {
+      vi.useFakeTimers();
+      const plugin = detail(false);
+      Object.assign(plugin.plugin.catalog, { author: "@openclaw" });
+      const cardRecommendation: ClawHubRecommendation =
+        kind === "plugin"
+          ? recommendation
+          : {
+              type: "clawhub",
+              kind: "skill",
+              id: "@openclaw/calendar",
+              skillRef: "@openclaw/calendar",
+              registry: "https://clawhub.ai",
+              name: "Calendar",
+              official: true,
+              installed: false,
+            };
+      const { card } = mount(
+        async (method) =>
+          method === "plugins.catalog.get"
+            ? plugin
+            : method === "skills.detail"
+              ? {
+                  skill: { displayName: "Calendar", isOfficial: true },
+                  owner: { handle: "openclaw", displayName: "OpenClaw Organization" },
+                }
+              : { skills: [] },
+        cardRecommendation,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      const title = card.querySelector(".chat-clawhub-card__name")!;
+      const publisher = title.querySelector(".plugin-card-author");
+      expect(publisher?.textContent).toBe("@openclaw");
+      expect(title.textContent?.trim().startsWith(cardRecommendation.name)).toBe(true);
+      expect(publisher?.nextElementSibling).toBe(title.querySelector(".plugin-official-badge"));
+      expect(publisher?.tagName).toBe("SPAN");
+    },
+  );
 
   it.each(["catalog", "plugin"] as const)(
     "keeps %s artwork skeletons through fetch and image decoding, then clears errors",
@@ -270,25 +556,27 @@ describe("ClawHub chat recommendations", () => {
         official: true,
         installed: false,
       };
-      const { card, context } = mount(async (method) =>
-        method === "skills.detail"
-          ? { skill: { displayName: "Calendar", isOfficial: true } }
-          : {
-              skills: [
-                {
-                  clawhub: {
-                    status: "linked",
-                    valid: true,
-                    registry,
-                    requestedReference,
-                    ownerHandle: "openclaw",
-                    slug: "calendar",
+      const { card, context } = mount(
+        async (method) =>
+          method === "skills.detail"
+            ? { skill: { displayName: "Calendar", isOfficial: true } }
+            : {
+                skills: [
+                  {
+                    clawhub: {
+                      status: "linked",
+                      valid: true,
+                      registry,
+                      requestedReference,
+                      ownerHandle: "openclaw",
+                      slug: "calendar",
+                    },
                   },
-                },
-              ],
-            },
+                ],
+              },
+        skill,
+        "research",
       );
-      Object.assign(card, { recommendation: skill, agentId: "research" });
       await vi.waitFor(() =>
         expect(
           card.querySelector(

@@ -1,10 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
-  expectRequestCountStable,
   controlUiSessionUrl,
   installMockGateway,
   waitForRequests,
@@ -12,199 +8,137 @@ import {
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const sessionKey = "agent:main:reply-preview";
+const timestamp = 1_800_000_000_000;
+const missing = { ok: false, unavailableReason: "not_found" };
+const entry = (role: string, content: string, id: string, seq: number) => ({
+  role,
+  content,
+  timestamp: timestamp + seq - 1,
+  __openclaw: { id, seq },
+});
+const replyEntry = (id: string, seq: number, sourceId: string, result: unknown) => ({
+  ...entry("user", `Follow-up ${id}.`, id, seq),
+  __openclaw: { id, seq, replyToId: sourceId, replyToMessage: result },
+});
 
 suite.define(() => {
+  it("renders 50 quoted references without per-reference requests, including after reconnect", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const historyMessages = Array.from({ length: 50 }, (_, index) => {
+        const id = `source-${index}`;
+        const message = { role: "assistant", content: `Original ${index}.`, __openclaw: { id } };
+        return replyEntry(`reply-${index}`, 100 + index, id, { ok: true, message });
+      });
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        historyMessages,
+        methodResponses: { "chat.message.get": missing },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const pane = page.locator(".chat-pane-cache__pane--active");
+      const strips = pane.locator(".chat-reply-attribution--inline");
+      await expect.poll(() => strips.count()).toBe(50);
+      expect(await gateway.getRequests("chat.message.get")).toHaveLength(0);
+      expect(await strips.getByRole("button").count()).toBe(50);
+      expect(await pane.locator('[data-entry-id^="source-"]').count()).toBe(0);
+
+      const connectCount = (await gateway.getRequests("connect")).length;
+      await gateway.closeLatest(1006, "synthetic reconnect");
+      await waitForRequests(gateway, "connect", connectCount + 1);
+      await expect.poll(() => strips.getByRole("button").count()).toBe(50);
+      expect(await gateway.getRequests("chat.message.get")).toHaveLength(0);
+    });
+  });
+
   it.each([
+    { name: "unconfirmed source", result: undefined, text: "" },
     {
-      name: "temporary lookup failure",
-      artifact: "temporary-failure",
-      response: {
-        __mockError: {
-          code: "UNAVAILABLE",
-          message: "Session transcript projection is rebuilding: reply-preview-session",
-        },
-      },
+      name: "unavailable source",
+      result: missing,
+      text: "Original message unavailable",
     },
-    {
-      name: "permanently unavailable source",
-      artifact: "unavailable-source",
-      response: { ok: false, unavailableReason: "not_found" },
-    },
-  ])(
-    "settles a $name without repeatedly loading the reply preview",
-    async ({ artifact, response }) => {
-      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      const artifactDir = artifactRoot
-        ? createControlUiE2eArtifactDir("chat-reply-preview-recovery", artifactRoot)
-        : undefined;
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        ...(artifactDir
-          ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
-          : {}),
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
-      const page = await context.newPage();
+  ])("renders a page's $name without fetching it", async ({ result, text }) => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        historyMessages: [
-          {
-            role: "user",
-            content: [{ type: "text", text: "Follow up on the earlier answer." }],
-            timestamp: 1_800_000_000_000,
-            __openclaw: { id: "reply-message", seq: 101, replyToId: "older-answer" },
-          },
-        ],
-        methodResponses: { "chat.message.get": response },
-        sessionKey: "agent:main:reply-preview",
+        sessionKey,
+        historyMessages: [replyEntry("reply", 101, "older-answer", result)],
       });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const pane = page.locator(".chat-pane-cache__pane--active");
+      await pane.locator('[data-entry-id="reply"]').waitFor({ state: "visible" });
+      const composer = pane.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("This draft remains usable.");
+      expect(await composer.inputValue()).toBe("This draft remains usable.");
+      const strip = pane.locator(".chat-reply-attribution--inline");
+      expect((await strip.textContent())?.replace(/\s+/g, " ").trim()).toBe(
+        `Replying to ${text}`.trim(),
+      );
+      expect(await gateway.getRequests("chat.message.get")).toHaveLength(0);
+    });
+  });
 
-      let firstCount = 0;
-      try {
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:reply-preview"));
-        const reply = page.locator(".chat-pane-cache__pane--active .chat-reply-preview--message");
-        await reply.waitFor({ state: "visible" });
-        expect(await reply.textContent()).toContain("Replying to message");
-        await gateway.waitForRequest("chat.message.get");
-        const composer = page.locator(
-          ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
-        );
-        await composer.fill("This draft remains usable.");
-        expect(await composer.inputValue()).toBe("This draft remains usable.");
-        firstCount = (await gateway.getRequests("chat.message.get")).length;
-        await expectRequestCountStable(gateway, "chat.message.get", 1);
-        if (artifact === "unavailable-source") {
-          await reply.click();
-          await page
-            .locator(".chat-pane-cache__pane--active")
-            .getByRole("alert")
-            .getByText("The original message is unavailable.", { exact: true })
-            .waitFor();
-          await expectRequestCountStable(gateway, "chat.message.get", 1);
-        }
-      } finally {
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, `${artifact}.png`),
-          });
-          await writeFile(
-            path.join(artifactDir, `${artifact}.json`),
-            JSON.stringify(
-              {
-                firstCount,
-                finalCount: (await gateway.getRequests("chat.message.get")).length,
-                replyText: await page.locator(".chat-reply-preview--message").allTextContents(),
-              },
-              null,
-              2,
-            ),
-          );
-        }
-        await suite.closeBrowserContext(context);
-      }
-    },
-  );
-
-  it.each(["temporary failure", "previous success", "not found"] as const)(
-    "refreshes a reply preview after reconnect from $0 and keeps source navigation working",
-    async (initial) => {
-      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-      const page = await context.newPage();
-      const source = {
-        role: "assistant",
-        content: [{ type: "text", text: "The current original answer." }],
-        timestamp: 1_800_000_000_000,
-        __openclaw: { id: "reconnect-source", seq: 1 },
-      };
-      // Deep enough that the source's page sits beyond the upward-prefetch
-      // reach; the refresh must come from chat.message.get, not a loaded row.
-      const interveningCount = 60;
-      const reply = {
-        role: "user",
-        content: [{ type: "text", text: "A follow-up question after reconnect." }],
-        timestamp: 1_800_000_000_001 + interveningCount,
-        __openclaw: {
-          id: "reconnect-reply",
-          seq: interveningCount + 2,
-          replyToId: "reconnect-source",
-        },
-      };
-      const messages = [
-        ...Array.from({ length: interveningCount }, (_, index) => ({
-          role: index % 2 === 0 ? "assistant" : "user",
-          content: [{ type: "text", text: `Conversation entry ${index + 2}.` }],
-          timestamp: 1_800_000_000_001 + index,
-          __openclaw: { id: `intervening-${index}`, seq: index + 2 },
-        })),
-        reply,
+  it("refreshes the page-carried original after reconnect and keeps source navigation working", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const source = entry("assistant", "The current original answer.", "reconnect-source", 1);
+      const intervening = Array.from({ length: 60 }, (_, index) =>
+        entry(index % 2 === 0 ? "assistant" : "user", `Entry ${index}.`, `gap-${index}`, index + 2),
+      );
+      const conversation = (result: unknown) => [
+        ...intervening,
+        replyEntry("reconnect-reply", 62, "reconnect-source", result),
       ];
-      const gateway = await installMockGateway(page, {
-        historyMessages: messages,
-        methodResponses: {
-          "chat.message.get":
-            initial === "temporary failure"
-              ? {
-                  __mockError: {
-                    code: "UNAVAILABLE",
-                    message: "Transcript temporarily unavailable",
-                  },
-                }
-              : initial === "not found"
-                ? { ok: false, unavailableReason: "not_found" }
-                : {
-                    ok: true,
-                    message: { ...source, content: [{ type: "text", text: "Previous preview." }] },
-                  },
-          "chat.history": {
-            cases: [
-              {
-                match: { offset: messages.length },
-                response: {
-                  messages: [source],
-                  hasMore: false,
-                  totalMessages: messages.length + 1,
-                  sessionId: "reply-preview-history",
-                },
-              },
-            ],
-          },
-          "chat.startup": {
-            messages,
-            hasMore: true,
-            nextOffset: messages.length,
-            totalMessages: messages.length + 1,
-            sessionId: "reply-preview-history",
-          },
-        },
-        sessionKey: "agent:main:reply-reconnect",
-        sessions: [{ key: "agent:main:reply-reconnect", sessionId: "reply-preview-history" }],
+      const messages = conversation(missing);
+      const tailPage = (pageMessages: unknown[]) => ({
+        messages: pageMessages,
+        hasMore: true,
+        nextOffset: messages.length,
+        totalMessages: messages.length + 1,
+        sessionId: "reply-preview-history",
       });
-
-      try {
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:reply-reconnect"));
-        const preview = page.locator(".chat-pane-cache__pane--active .chat-reply-preview--message");
-        await preview.waitFor();
-        await gateway.waitForRequest("chat.message.get");
-        await expectRequestCountStable(gateway, "chat.message.get", 1);
-        if (initial === "previous success") {
-          expect(await preview.textContent()).toContain("Previous preview.");
-        }
-        await gateway.setMethodResponse("chat.message.get", { ok: true, message: source });
-        const connectCount = (await gateway.getRequests("connect")).length;
-        await gateway.closeLatest(1006, "reply preview recovery");
-        await waitForRequests(gateway, "connect", connectCount + 1);
-        await expect.poll(() => preview.textContent()).toContain("The current original answer.");
-        await expectRequestCountStable(gateway, "chat.message.get", 2);
-
-        await preview.click();
-        await page
-          .locator(".chat-pane-cache__pane--active .chat-text")
-          .getByText("The current original answer.", { exact: true })
-          .waitFor();
-      } finally {
-        await suite.closeBrowserContext(context);
-      }
-    },
-  );
+      const historyPages = (pageMessages: unknown[]) => ({
+        cases: [
+          {
+            match: { offset: messages.length },
+            response: {
+              messages: [source],
+              hasMore: false,
+              totalMessages: messages.length + 1,
+              sessionId: "reply-preview-history",
+            },
+          },
+          // Reconnect refreshes through chat.history, which owns the same tail cursor as startup.
+          { response: tailPage(pageMessages) },
+        ],
+      });
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        historyMessages: messages,
+        sessions: [{ key: sessionKey, sessionId: "reply-preview-history" }],
+        methodResponses: {
+          "chat.history": historyPages(messages),
+          "chat.startup": tailPage(messages),
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const pane = page.locator(".chat-pane-cache__pane--active");
+      const preview = pane.locator(".chat-reply-attribution--inline");
+      await pane.locator('[data-entry-id="reconnect-reply"]').waitFor();
+      expect(await preview.getByRole("button").count()).toBe(0);
+      const refreshed = conversation({ ok: true, message: source });
+      await gateway.setMethodResponse("chat.history", historyPages(refreshed));
+      await gateway.setMethodResponse("chat.startup", tailPage(refreshed));
+      const connectCount = (await gateway.getRequests("connect")).length;
+      await gateway.closeLatest(1006, "synthetic reply refresh");
+      await waitForRequests(gateway, "connect", connectCount + 1);
+      await expect.poll(() => preview.getByRole("button").count()).toBe(1);
+      expect(await gateway.getRequests("chat.message.get")).toHaveLength(0);
+      await preview.getByRole("button").click();
+      await waitForRequests(gateway, "chat.history", 1, { offset: messages.length });
+      await pane
+        .locator(".chat-text")
+        .getByText("The current original answer.", { exact: true })
+        .waitFor();
+    });
+  });
 });

@@ -19,6 +19,7 @@ title: "Configuration — messages and talk"
     ackReactionScope: "group-mentions", // group-mentions | group-all | direct | all | off | none
     queue: {
       mode: "steer", // steer (default) | followup | collect | interrupt
+      allowCollaborativeSteering: false,
       cap: 20,
       drop: "summarize", // old | new | summarize (default)
       byChannel: {
@@ -27,7 +28,7 @@ title: "Configuration — messages and talk"
       },
     },
     inbound: {
-      debounceMs: 2000, // 0 disables
+      debounceMs: 2000, // 0 disables ordinary burst batching
       byChannel: {
         whatsapp: 5000,
         slack: 1500,
@@ -73,23 +74,32 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - `mode`: queue strategy for inbound messages that arrive while a session run is active. Default: `"steer"`.
   - `steer`: inject the new prompt into the active run.
   - `followup`: run the new prompt after the active run finishes.
-  - `collect`: batch compatible messages and run them together later.
+  - `collect`: batch compatible messages and run them together later. Messages with separate durable ingress admission (including Discord and Telegram) stay in separate followup turns; compatible Gateway `chat.send` inputs can still combine. See [Queue modes](/concepts/queue#queue-modes).
   - `interrupt`: abort the active run before starting the newest prompt.
+- `allowCollaborativeSteering`: defaults to `false`, refusing another person’s steering attempt without queueing it and offering `/followup <message>` for an explicit new turn under the submitter’s identity and current policy. When set to `true`, admitted human input in the same conversation may steer under the active turn's original identity and prepared permissions, even when the message author has fewer permissions. Same-requester steering still requires compatible permissions. Queue modes, access checks, and explicit cross-session `sessions_send(mode="steer")` authorization remain authoritative. See [Steering scope](/concepts/queue-steering#scope).
 - The queue uses a built-in 500ms debounce for steer, followup, and collect batching.
 - `cap`: maximum queued messages before the drop policy applies. Default: `20`.
 - `drop`: strategy when the cap is exceeded. `"summarize"` (default) drops oldest entries but keeps compact summaries; `"old"` drops oldest without summaries; `"new"` rejects the newest item.
 - `byChannel`: per-channel `mode` overrides keyed by provider id.
 - `debounceMsByChannel`: per-channel debounce overrides in milliseconds, keyed by provider id.
 
+Initial configuration creation writes `allowCollaborativeSteering: false` explicitly. For existing configurations, `openclaw doctor --fix` persists the default when absent, using the existing backed-up, include-aware writer. Explicit `true` and `false`, including included values, are preserved. Ordinary config reads do not write it. Manual package replacement works immediately with the runtime default; run Doctor afterward to persist it. See [config repairs](/gateway/doctor/config-migrations).
+
 Use `messages.inbound.debounceMs` for the global pre-queue debounce window.
 
 ### Inbound debounce
 
-Batches rapid text-only messages from the same sender into a single agent turn. Media/attachments flush immediately. Control commands bypass debouncing. Default `debounceMs`: `2000`.
+Batches rapid text-only messages from the same sender into a single agent turn after a quiet window. Media/attachments flush immediately. Control commands bypass debouncing.
+
+- `messages.inbound.byChannel.<channel>` overrides `messages.inbound.debounceMs`.
+- With neither set, Telegram uses `300` milliseconds; other channels have no generic debounce delay.
+- `0` disables ordinary burst batching. Telegram still automatically assembles near-limit long-paste fragments, allowing up to `1500` milliseconds for continuations.
+
+Batching is a bounded timing heuristic, not a guarantee that every part of a long message becomes one turn. See [Inbound debouncing](/concepts/messages#inbound-debouncing) and [Telegram inbound text batching](/channels/telegram/messaging#inbound-text-batching).
 
 ### Other message keys
 
-- `channels.whatsapp.responsePrefix`: outbound WhatsApp reply prefix. Doctor moves the retired inbound `messagePrefix` value here only when this canonical value is unset.
+- `channels.whatsapp.responsePrefix`: outbound WhatsApp reply prefix. Doctor moves the retired inbound `messagePrefix` value here only when this current value is unset.
 - `messages.visibleReplies`: controls visible source replies across direct, group, and channel conversations (`"message_tool"` requires `message(action=send)` for visible output; `"automatic"` posts normal replies as before).
 - `messages.usageTemplate` / `messages.responseUsage`: custom `/usage` footer template and default per-reply usage mode (`off | tokens | full`, plus legacy `on` alias for `tokens`).
 - `messages.groupChat.mentionPatterns` / `historyLimit`: group-message mention triggers and history window sizing.

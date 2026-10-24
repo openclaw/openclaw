@@ -1,16 +1,130 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { defaultRuntime } from "../../runtime.js";
 import { WizardSession } from "../../wizard/session.js";
-import { createAdmittedWizardSession, respondSetupAdmissionBusy } from "./setup-admission.js";
-import { activateGatewaySetupInference } from "./system-agent-execution.js";
+import type { GatewayClient } from "./client-types.js";
+import {
+  createAdmittedWizardSession,
+  respondSetupAdmissionBusy,
+  whenAdmittedWizardSessionSettled,
+} from "./setup-admission.js";
+import {
+  activateGatewaySetupInference,
+  createSystemAgentGatewayRuntime,
+} from "./system-agent-execution.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
+import { publishWizardLoginSession } from "./wizard-login.js";
+
+type SetupActivation = Pick<
+  Parameters<typeof activateGatewaySetupInference>[0],
+  | "kind"
+  | "agentId"
+  | "modelRef"
+  | "modelTarget"
+  | "authChoice"
+  | "apiKey"
+  | "workspace"
+  | "nativeSessionCatalogsEnabled"
+  | "selectModel"
+>;
+type AuthWizardRequest = {
+  ownerKey: string;
+  activation: SetupActivation;
+  sessionId: string;
+  pending: boolean;
+  session: Promise<WizardSession | undefined>;
+};
+const authWizardRequests = new WeakMap<
+  GatewayRequestContext["wizardSessions"],
+  AuthWizardRequest
+>();
+
+async function createSetupActivationSession(
+  params: {
+    sessionId: string;
+    ownerKey?: string;
+    assertCurrent?: () => void;
+    activation: SetupActivation;
+    context: GatewayRequestContext;
+  },
+  createSession: () => WizardSession,
+): Promise<WizardSession | undefined> {
+  const { ownerKey, activation } = params;
+  if (!ownerKey || activation.kind !== "provider-auth") {
+    return createAdmittedWizardSession(createSession);
+  }
+  const sessions = params.context.wizardSessions;
+  const previous = authWizardRequests.get(sessions);
+  if (
+    previous &&
+    (previous.pending ||
+      previous.ownerKey !== ownerKey ||
+      previous.activation.authChoice !== activation.authChoice ||
+      previous.activation.agentId !== activation.agentId ||
+      previous.activation.workspace !== activation.workspace ||
+      previous.activation.modelTarget !== activation.modelTarget ||
+      previous.activation.selectModel !== activation.selectModel ||
+      previous.activation.nativeSessionCatalogsEnabled !== activation.nativeSessionCatalogsEnabled)
+  ) {
+    return undefined;
+  }
+  if (previous) {
+    // Concurrent retries receive busy; one replacement owns cancellation and cleanup.
+    previous.pending = true;
+    try {
+      const predecessor = await previous.session;
+      params.assertCurrent?.();
+      if (predecessor) {
+        if (predecessor.getStatus() === "running" && !predecessor.cancel()) {
+          return undefined;
+        }
+        await whenAdmittedWizardSessionSettled(predecessor);
+        params.context.purgeWizardSession(previous.sessionId);
+      }
+    } finally {
+      previous.pending = false;
+    }
+  }
+  const request: AuthWizardRequest = {
+    ownerKey,
+    activation,
+    sessionId: params.sessionId,
+    pending: true,
+    session: createAdmittedWizardSession(() => {
+      params.assertCurrent?.();
+      return createSession();
+    }),
+  };
+  authWizardRequests.set(sessions, request);
+  const release = () => {
+    if (authWizardRequests.get(sessions) === request) {
+      authWizardRequests.delete(sessions);
+    }
+  };
+  try {
+    const session = await request.session;
+    if (session) {
+      void whenAdmittedWizardSessionSettled(session).then(release, release);
+    } else {
+      release();
+    }
+    return session;
+  } catch (error) {
+    release();
+    throw error;
+  } finally {
+    request.pending = false;
+  }
+}
 
 export function rejectExistingSetupWizardSession(params: {
   sessionId: string;
   context: GatewayRequestContext;
   respond: RespondFn;
 }): boolean {
-  if (!params.context.wizardSessions.has(params.sessionId)) {
+  const sessions = params.context.wizardSessions;
+  if (
+    !sessions.has(params.sessionId) &&
+    authWizardRequests.get(sessions)?.sessionId !== params.sessionId
+  ) {
     return false;
   }
   params.respond(
@@ -23,16 +137,10 @@ export function rejectExistingSetupWizardSession(params: {
 
 export async function startSetupActivationWizard(params: {
   sessionId: string;
-  activation: Pick<
-    Parameters<typeof activateGatewaySetupInference>[0],
-    | "kind"
-    | "agentId"
-    | "modelRef"
-    | "authChoice"
-    | "apiKey"
-    | "workspace"
-    | "nativeSessionCatalogsEnabled"
-  >;
+  ownerKey?: string;
+  client?: GatewayClient;
+  assertCurrent?: () => void;
+  activation: SetupActivation;
   isLocalClient?: boolean;
   timeoutMs: number;
   context: GatewayRequestContext;
@@ -41,7 +149,8 @@ export async function startSetupActivationWizard(params: {
   if (rejectExistingSetupWizardSession(params)) {
     return;
   }
-  const session = await createAdmittedWizardSession(
+  const session = await createSetupActivationSession(
+    params,
     () =>
       new WizardSession(
         async (prompter, signal, runnerSession) => {
@@ -49,19 +158,25 @@ export async function startSetupActivationWizard(params: {
             ...params.activation,
             surface: "gateway",
             isRemoteProviderAuth: params.isLocalClient !== true,
-            runtime: {
-              ...defaultRuntime,
-              exit: (code: number | undefined): never => {
-                throw new Error(`setup step exited with code ${String(code)}`);
-              },
-            },
+            runtime: createSystemAgentGatewayRuntime(),
             prompter,
             signal,
             isCancelled: () => signal.aborted,
-            beforePersistentEffect: () => runnerSession.lockCancellationForPreparation(),
-            onPreparationComplete: () => runnerSession.finishPreparation(),
-            onCommitStarted: () => runnerSession.lockCancellation(),
+            assertCurrent: params.assertCurrent,
+            beforePersistentEffect: () => {
+              params.assertCurrent?.();
+              runnerSession.lockCancellationForPreparation();
+            },
+            onPreparationComplete: () => {
+              params.assertCurrent?.();
+              runnerSession.finishPreparation();
+            },
+            onCommitStarted: () => {
+              params.assertCurrent?.();
+              runnerSession.lockCancellation();
+            },
           });
+          params.assertCurrent?.();
           signal.throwIfAborted();
           if (!result.ok) {
             if (result.disposition === "rejected-before-promotion") {
@@ -74,6 +189,8 @@ export async function startSetupActivationWizard(params: {
           }
           runnerSession.setModelActivation({
             modelRef: result.modelRef,
+            ...(result.modelName ? { modelName: result.modelName } : {}),
+            ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
             ...(result.gatewayRestartRequired ? { gatewayRestartRequired: true } : {}),
           });
         },
@@ -82,6 +199,17 @@ export async function startSetupActivationWizard(params: {
   );
   if (!session) {
     respondSetupAdmissionBusy(params.respond);
+    return;
+  }
+  if (params.client) {
+    await publishWizardLoginSession({
+      client: params.client,
+      context: params.context,
+      sessionId: params.sessionId,
+      respond: params.respond,
+      assertCurrent: () => params.assertCurrent?.(),
+      session,
+    });
     return;
   }
   params.context.wizardSessions.set(params.sessionId, session);

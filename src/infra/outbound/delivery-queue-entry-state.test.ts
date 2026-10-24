@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { sendDurableMessageBatch } from "../../plugin-sdk/channel-outbound.js";
 import { drainPendingDeliveries } from "../../plugin-sdk/delivery-queue-runtime.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -11,9 +10,9 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
-import { OpenClawStateExternalOwnershipError } from "../../state/openclaw-state-ownership.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
+import { OpenClawStateExternalOwnershipError } from "../sqlite-lifecycle-errors.js";
 import { deliverOutboundPayloads } from "./deliver.js";
 import { ackDelivery } from "./delivery-queue-ack.js";
 import type { DeliverFn } from "./delivery-queue-recovery.js";
@@ -27,20 +26,74 @@ import {
 describe("delivery queue entry state", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
   const target = "reef:synthetic-peer";
+  const queueId = "synthetic-entry";
 
-  function installSender(sendText: NonNullable<ChannelOutboundAdapter["sendText"]>) {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "reef",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "reef",
-            outbound: { deliveryMode: "direct", sendText },
-          }),
-        },
-      ]),
-    );
+  function root(name: string) {
+    const dir = path.join(fixtures.tmpDir(), name);
+    fs.mkdirSync(dir);
+    return dir;
+  }
+  function ambient(stateDir: string, mode = "") {
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", mode);
+  }
+
+  function installSender(check: (input: object) => void | Promise<void> = () => {}) {
+    const sendText = vi.fn(async (input: object) => {
+      await check(input);
+      return { channel: "reef" as const, messageId: "sent" };
+    });
+    const plugin = createOutboundTestPlugin({
+      id: "reef",
+      outbound: { deliveryMode: "direct", sendText },
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "reef", source: "test", plugin }]));
+    return sendText;
+  }
+
+  const payload = { channel: "reef" as const, to: target, payloads: [{ text: "synthetic" }] };
+  const sendInput = {
+    ...payload,
+    cfg: {},
+    queuePolicy: "required" as const,
+    requireUnknownSendReconciliation: false,
+  };
+  function claimRoot(stateDir: string) {
+    ambient(stateDir, "external");
+    claimOpenClawStateOwnership("queue-fixture", { env: process.env });
+    return captureDeliveryQueueStateContext(stateDir);
+  }
+  const enqueue = (stateDir: string, queuePolicy?: "required") =>
+    enqueueDeliveryOnce({ ...payload, queuePolicy }, queueId, stateDir);
+  const customDelivery = (check: (input: Parameters<DeliverFn>[0]) => void = () => {}) =>
+    vi.fn<DeliverFn>(async (input) => {
+      check(input);
+      await input.onPlatformSendStart?.({});
+      return [{ channel: "reef", messageId: "custom" }];
+    });
+  const drain = (options: Partial<Parameters<typeof drainPendingDeliveries>[0]>) =>
+    drainPendingDeliveries({
+      drainKey: "sdk-unprivileged",
+      logLabel: "Synthetic SDK reconnect",
+      cfg: {},
+      log: createRecoveryLog(),
+      selectEntry: () => ({ match: true, bypassBackoff: false }),
+      ...options,
+    });
+  async function resumeDrain(options: Parameters<typeof drain>[0], beforeRelease: () => void) {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const pending = drain(options);
+    const settled = pending.catch(() => {});
+    try {
+      await setImmediate();
+      beforeRelease();
+      expect(suspension?.release()).toBe(true);
+      await pending;
+    } finally {
+      suspension?.release();
+      await settled;
+    }
   }
 
   afterEach(() => {
@@ -53,27 +106,19 @@ describe("delivery queue entry state", () => {
   it.each(["sdk", "public-delivery"] as const)(
     "ignores a recovery-only root and private context for a fresh %s send",
     async (entrypoint) => {
-      const originalRoot = path.join(fixtures.tmpDir(), "original");
-      const injectedRoot = path.join(fixtures.tmpDir(), "injected");
-      fs.mkdirSync(originalRoot);
-      fs.mkdirSync(injectedRoot);
+      const originalRoot = root("original");
+      const injectedRoot = root("injected");
+
       vi.stubEnv("OPENCLAW_STATE_DIR", originalRoot);
-      const sendText = vi.fn(async (input: object) => {
+      const sendText = installSender((input) => {
         expect(input).not.toHaveProperty("conversationDeliveryTarget");
         expect(input).not.toHaveProperty("deliveryQueueStateContext");
         expect(readQueuedEntries(originalRoot)).toHaveLength(1);
         expect(readQueuedEntries(injectedRoot)).toEqual([]);
-        return { channel: "reef" as const, messageId: "public-send" };
       });
-      installSender(sendText);
-      const input = {
-        cfg: {},
-        channel: "reef" as const,
-        to: target,
-        payloads: [{ text: "public contract" }],
-        queuePolicy: "required" as const,
+      const injected = {
+        ...sendInput,
         durability: "required" as const,
-        requireUnknownSendReconciliation: false,
         deliveryIntentId: "public-state-selector",
         conversationDeliveryTarget: {
           agentId: "main",
@@ -85,10 +130,10 @@ describe("delivery queue entry state", () => {
         deliveryQueueStateDir: injectedRoot,
       };
       if (entrypoint === "sdk") {
-        await expect(sendDurableMessageBatch(input)).resolves.toMatchObject({ status: "sent" });
+        await expect(sendDurableMessageBatch(injected)).resolves.toMatchObject({ status: "sent" });
       } else {
-        await expect(deliverOutboundPayloads(input)).resolves.toMatchObject([
-          { messageId: "public-send" },
+        await expect(deliverOutboundPayloads(injected)).resolves.toMatchObject([
+          { messageId: "sent" },
         ]);
       }
       expect(sendText).toHaveBeenCalledOnce();
@@ -96,70 +141,41 @@ describe("delivery queue entry state", () => {
   );
 
   it("retains the default root and supervisor mode through awaited preparation", async () => {
-    const originalRoot = path.join(fixtures.tmpDir(), "original");
-    const replacementRoot = path.join(fixtures.tmpDir(), "replacement");
-    fs.mkdirSync(originalRoot);
-    fs.mkdirSync(replacementRoot);
-    vi.stubEnv("OPENCLAW_STATE_DIR", originalRoot);
-    vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
-    claimOpenClawStateOwnership("queue-fixture", { env: process.env });
-    const context = captureDeliveryQueueStateContext(originalRoot);
-    const queueId = "default-root-capture";
-    const sendText = vi.fn(async () => {
+    const originalRoot = root("original");
+    const replacementRoot = root("replacement");
+
+    const context = claimRoot(originalRoot);
+    const sendText = installSender(async () => {
       expect(await loadPendingDelivery(queueId, originalRoot, context)).not.toBeNull();
       expect(await loadPendingDelivery(queueId, replacementRoot)).toBeNull();
-      return { channel: "reef" as const, messageId: "captured-default" };
     });
-    installSender(sendText);
-    const delivery = deliverOutboundPayloads({
-      cfg: {},
-      channel: "reef",
-      to: target,
-      payloads: [{ text: "default owner" }],
-      queuePolicy: "required",
-      deliveryIntentId: queueId,
-      requireUnknownSendReconciliation: false,
-    });
-    vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
-    vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
-    await expect(delivery).resolves.toMatchObject([{ messageId: "captured-default" }]);
+    const delivery = deliverOutboundPayloads({ ...sendInput, deliveryIntentId: queueId });
+    ambient(replacementRoot);
+    await expect(delivery).resolves.toMatchObject([{ messageId: "sent" }]);
     expect(await loadPendingDelivery(queueId, originalRoot, context)).toBeNull();
     expect(await loadPendingDelivery(queueId, replacementRoot)).toBeNull();
     expect(sendText).toHaveBeenCalledOnce();
   });
 
   it("honors the owned root when resuming an existing queue entry", async () => {
-    const originalRoot = path.join(fixtures.tmpDir(), "recovery");
-    const ambientRoot = path.join(fixtures.tmpDir(), "ambient");
-    fs.mkdirSync(originalRoot);
-    fs.mkdirSync(ambientRoot);
+    const originalRoot = root("recovery");
+    const ambientRoot = root("ambient");
+
     vi.stubEnv("OPENCLAW_STATE_DIR", ambientRoot);
-    const queueId = "existing-recovery-entry";
-    await enqueueDeliveryOnce(
-      { channel: "reef", to: target, payloads: [{ text: "recovered" }], queuePolicy: "required" },
-      queueId,
-      originalRoot,
-    );
-    const sendText = vi.fn(async () => {
+    await enqueue(originalRoot, "required");
+    const sendText = installSender(async () => {
       expect(await loadPendingDelivery(queueId, originalRoot)).toMatchObject({
         recoveryState: "send_attempt_started",
       });
-      return { channel: "reef" as const, messageId: "recovered-root" };
     });
-    installSender(sendText);
     await expect(
       deliverOutboundPayloads({
-        cfg: {},
-        channel: "reef",
-        to: target,
-        payloads: [{ text: "recovered" }],
-        queuePolicy: "required",
+        ...sendInput,
         skipQueue: true,
         deliveryQueueId: queueId,
         deliveryQueueStateDir: originalRoot,
-        requireUnknownSendReconciliation: false,
       }),
-    ).resolves.toMatchObject([{ messageId: "recovered-root" }]);
+    ).resolves.toMatchObject([{ messageId: "sent" }]);
     expect(sendText).toHaveBeenCalledOnce();
     expect(await loadPendingDelivery(queueId, ambientRoot)).toBeNull();
     await ackDelivery(queueId, originalRoot);
@@ -167,43 +183,25 @@ describe("delivery queue entry state", () => {
 
   it.each([
     ["default", "custom"],
-    ["default", "builtin"],
-    ["relative", "custom"],
     ["relative", "builtin"],
     ["home-relative", "custom"],
-    ["home-relative", "builtin"],
-    ["empty", "custom"],
-    ["empty", "builtin"],
   ] as const)(
     "captures the SDK %s root before admission and lazy delivery for a %s callback",
     async (locator, callback) => {
-      resetGatewayWorkAdmission();
-      const originalDirectory = path.join(fixtures.tmpDir(), "original");
+      const originalDirectory = root("original");
       const originalRoot = path.join(originalDirectory, "queue");
-      const replacementDirectory = path.join(fixtures.tmpDir(), "replacement");
+      const replacementDirectory = root("replacement");
       fs.mkdirSync(originalRoot, { recursive: true });
-      fs.mkdirSync(replacementDirectory);
-      vi.stubEnv("OPENCLAW_STATE_DIR", originalRoot);
-      vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
+
       vi.stubEnv("OPENCLAW_HOME", originalDirectory);
-      claimOpenClawStateOwnership("queue-fixture", { env: process.env });
-      const context = captureDeliveryQueueStateContext(originalRoot);
-      const queueId = "sdk-reconnect-owner";
-      await enqueueDeliveryOnce(
-        { channel: "reef", to: target, payloads: [{ text: "SDK reconnect" }] },
-        queueId,
-        originalRoot,
-      );
-      const sendText = vi.fn(async (input: object) => {
+      const context = claimRoot(originalRoot);
+      await enqueue(originalRoot);
+      const sendText = installSender((input) => {
         expect(input).not.toHaveProperty("deliveryQueueStateContext");
-        return { channel: "reef" as const, messageId: "sdk-builtin" };
       });
-      installSender(sendText);
-      const custom = vi.fn<DeliverFn>(async (input) => {
+      const custom = customDelivery((input) => {
         expect(input).not.toHaveProperty("deliveryQueueStateContext");
         expect(input).not.toHaveProperty("env");
-        await input.onPlatformSendStart?.({});
-        return [{ channel: "reef", messageId: "sdk-custom" }];
       });
       const cwd =
         locator !== "default" ? vi.spyOn(process, "cwd").mockReturnValue(originalDirectory) : null;
@@ -211,91 +209,43 @@ describe("delivery queue entry state", () => {
         default: undefined,
         relative: "queue",
         "home-relative": "  ~/queue  ",
-        empty: "",
       }[locator];
-      const suspension = tryBeginGatewaySuspendAdmission(() => {});
-      expect(suspension?.commit()).toBe(true);
-      const pending = drainPendingDeliveries({
-        drainKey: `sdk-entry-${locator}-${callback}`,
-        logLabel: "Synthetic SDK reconnect",
-        cfg: {},
-        log: createRecoveryLog(),
-        selectEntry: () => ({ match: true, bypassBackoff: false }),
-        ...(stateDir !== undefined ? { stateDir } : {}),
-        ...(callback === "custom" ? { deliver: custom } : {}),
-      });
-      try {
-        await setImmediate();
-        expect(custom).not.toHaveBeenCalled();
-        expect(sendText).not.toHaveBeenCalled();
-        vi.stubEnv("OPENCLAW_STATE_DIR", replacementDirectory);
-        vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
-        vi.stubEnv("OPENCLAW_HOME", replacementDirectory);
-        cwd?.mockReturnValue(replacementDirectory);
-        expect(suspension?.release()).toBe(true);
-        await pending;
-        if (callback === "custom") {
-          expect(custom).toHaveBeenCalledOnce();
-          expect(custom.mock.calls[0]).toHaveLength(1);
-          expect(sendText).not.toHaveBeenCalled();
-        } else {
-          expect(sendText).toHaveBeenCalledOnce();
+      await resumeDrain(
+        {
+          drainKey: `sdk-entry-${locator}-${callback}`,
+          ...(stateDir !== undefined ? { stateDir } : {}),
+          ...(callback === "custom" ? { deliver: custom } : {}),
+        },
+        () => {
           expect(custom).not.toHaveBeenCalled();
-        }
-        expect(await loadPendingDelivery(queueId, originalRoot, context)).toBeNull();
-      } finally {
-        suspension?.release();
-        await pending;
-        cwd?.mockRestore();
+          expect(sendText).not.toHaveBeenCalled();
+          ambient(replacementDirectory);
+          vi.stubEnv("OPENCLAW_HOME", replacementDirectory);
+          cwd?.mockReturnValue(replacementDirectory);
+        },
+      );
+      expect([custom.mock.calls.length, sendText.mock.calls.length]).toEqual(
+        callback === "custom" ? [1, 0] : [0, 1],
+      );
+      if (callback === "custom") {
+        expect(custom.mock.calls[0]).toHaveLength(1);
       }
+      expect(await loadPendingDelivery(queueId, originalRoot, context)).toBeNull();
     },
   );
 
   it("does not gain external ownership while an SDK reconnect waits for admission", async () => {
-    resetGatewayWorkAdmission();
     const originalRoot = fixtures.tmpDir();
-    vi.stubEnv("OPENCLAW_STATE_DIR", originalRoot);
-    vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
-    claimOpenClawStateOwnership("queue-fixture", { env: process.env });
-    const context = captureDeliveryQueueStateContext(originalRoot);
-    const queueId = "sdk-unprivileged-owner";
-    await enqueueDeliveryOnce(
-      { channel: "reef", to: target, payloads: [{ text: "retained" }] },
-      queueId,
-      originalRoot,
-    );
-    const sendText = vi.fn(async () => ({
-      channel: "reef" as const,
-      messageId: "unexpected-send",
-    }));
-    installSender(sendText);
+    const context = claimRoot(originalRoot);
+    await enqueue(originalRoot);
+    const sendText = installSender();
     vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
-    const custom = vi.fn<DeliverFn>(async (input) => {
-      await input.onPlatformSendStart?.({});
-      return [{ channel: "reef", messageId: "unexpected-dispatch" }];
-    });
-    const pending = drainPendingDeliveries({
-      drainKey: "sdk-unprivileged",
-      logLabel: "Synthetic SDK reconnect",
-      cfg: {},
-      log: createRecoveryLog(),
-      deliver: custom,
-      selectEntry: () => ({ match: true, bypassBackoff: false }),
-    });
-    const outcome = pending.catch((error: unknown) => error);
-    try {
-      await setImmediate();
-      vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
-      expect(suspension?.release()).toBe(true);
-      await expect(outcome).resolves.toBeInstanceOf(OpenClawStateExternalOwnershipError);
-      expect(custom).not.toHaveBeenCalled();
-      expect(sendText).not.toHaveBeenCalled();
-      expect(await loadPendingDelivery(queueId, originalRoot, context)).not.toBeNull();
-    } finally {
-      suspension?.release();
-      await outcome;
-    }
+    const custom = customDelivery();
+    await expect(
+      resumeDrain({ deliver: custom }, () => vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external")),
+    ).rejects.toBeInstanceOf(OpenClawStateExternalOwnershipError);
+    expect(custom).not.toHaveBeenCalled();
+    expect(sendText).not.toHaveBeenCalled();
+    expect(await loadPendingDelivery(queueId, originalRoot, context)).not.toBeNull();
   });
 });

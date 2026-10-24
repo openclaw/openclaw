@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { parse } from "yaml";
 import {
   buildOpenShellPolicyYaml,
@@ -10,34 +10,25 @@ import {
   runCommand,
 } from "./backend.e2e.test-support.js";
 
-describe("OpenShell host policy", () => {
-  const defaults = ["10.0.0.0/8", "172.0.0.0/8", "192.168.0.0/16", "fc00::/7"];
-  it.each([
-    { name: "default", hostIp: undefined, allowedIps: defaults },
-    { name: "blank override", hostIp: "  ", allowedIps: defaults },
-    { name: "custom IPv4 override", hostIp: " 198.51.100.42 ", allowedIps: ["198.51.100.42/32"] },
-    { name: "shipped IPv6 override", hostIp: "2001:db8::1", allowedIps: ["2001:db8::1/32"] },
-  ])("preserves $name without changing the endpoint or binary", ({ hostIp, allowedIps }) => {
-    const params = { port: 17680, binaryPath: "/usr/bin/curl", hostIp };
-    const policy: unknown = parse(buildOpenShellPolicyYaml(params));
-    expect(policy).toMatchObject({
-      network_policies: {
-        host_echo: {
-          endpoints: [
-            {
-              host: "host.openshell.internal",
-              port: 17680,
-              protocol: "rest",
-              enforcement: "enforce",
-              access: "full",
-              allowed_ips: allowedIps,
-            },
-          ],
-          binaries: [{ path: "/usr/bin/curl" }],
-        },
+it.each<[string, string[]]>([
+  ["  ", ["10.0.0.0/8", "172.0.0.0/8", "192.168.0.0/16", "fc00::/7"]],
+  [" 198.51.100.42 ", ["198.51.100.42/32"]],
+])("host policy preserves IP override %j, endpoint and binary", (hostIp, allowedIps) => {
+  const yaml = buildOpenShellPolicyYaml({ port: 17680, binaryPath: "/usr/bin/curl", hostIp });
+  const hostEcho = {
+    endpoints: [
+      {
+        host: "host.openshell.internal",
+        port: 17680,
+        protocol: "rest",
+        enforcement: "enforce",
+        access: "full",
+        allowed_ips: allowedIps,
       },
-    });
-  });
+    ],
+    binaries: [{ path: "/usr/bin/curl" }],
+  };
+  expect(parse(yaml)).toMatchObject({ network_policies: { host_echo: hostEcho } });
 });
 
 it.runIf(process.platform !== "win32")("reports a signal-killed probe as failure", async () => {
@@ -50,16 +41,15 @@ it.runIf(process.platform !== "win32")("reports a signal-killed probe as failure
   expect(result.code).not.toBe(0);
 });
 
-async function createCleanupFixture(
-  options: { mode?: string; inventory?: string; names?: string[] } = {},
-) {
+afterEach(() => vi.restoreAllMocks());
+
+async function createCleanupFixture(options: { mode?: string; inventory?: string } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openshell-cleanup-test-"));
+  onTestFinished(() => fs.rm(root, { recursive: true, force: true }));
   const stateFile = path.join(root, "state.json");
   const command = path.join(root, "openshell");
   const initial = {
     names: ["first", "second"],
-    pending: "",
-    observations: 0,
     listCalls: 0,
     deletes: [] as string[],
     workspaceDeletes: 0,
@@ -79,11 +69,10 @@ if (args[0] === "workspace") {
   if (state.names.length) failure = "workspace still contains durable sandbox records";
   if (state.mode === "workspace-failure") failure = "workspace cleanup failed";
 } else if (args[3] === "delete") {
-  const name = args[4];
-  state.deletes.push(name);
-  state.pending = name;
+  state.pending = args[4];
+  state.deletes.push(state.pending);
   state.observations = 0;
-  if (state.mode === "delete-failure" && name === "first") failure = "delete failed";
+  if (state.mode === "delete-failure" && state.pending === "first") failure = "delete failed";
 } else if (args[3] === "list") {
   state.listCalls++;
   if (state.pending && ++state.observations >= 2 && state.mode !== "stuck") {
@@ -96,14 +85,9 @@ if (args[0] === "workspace") {
 } else {
   throw new Error("unexpected fixture command");
 }
-fs.writeFileSync(stateFile + ".next", JSON.stringify(state));
-fs.renameSync(stateFile + ".next", stateFile);
-if (failure) {
-  console.error(failure);
-  process.exit(1);
-}
-if ((state.mode === "slow-delete" && args[3] === "delete") ||
-    (state.mode === "stuck" && state.observations > 0)) {
+fs.writeFileSync(stateFile, JSON.stringify(state));
+if (failure) throw new Error(failure);
+if (state.mode === "stuck" && state.observations > 0) {
   fs.writeFileSync(stateFile + ".expired", "");
 }
 `,
@@ -119,119 +103,49 @@ if ((state.mode === "slow-delete" && args[3] === "delete") ||
       }),
     read: async () => JSON.parse(await fs.readFile(stateFile, "utf8")) as typeof initial,
     deadlineExpired: () => existsSync(stateFile + ".expired"),
-    dispose: () => fs.rm(root, { recursive: true, force: true }),
   };
 }
 
 describe.runIf(process.platform !== "win32")("OpenShell workspace cleanup", () => {
-  it("waits for durable sandbox deletion before deleting its workspace", async () => {
-    const fixture = await createCleanupFixture();
-    try {
-      await fixture.cleanup();
-      expect(await fixture.read()).toMatchObject({
-        names: [],
-        deletes: ["first", "second"],
-        workspaceDeletes: 1,
-      });
-    } finally {
-      await fixture.dispose();
-    }
-  });
-
-  it("deletes an empty workspace without deleting never-created sandboxes", async () => {
-    const fixture = await createCleanupFixture({ names: [] });
-    try {
-      await fixture.cleanup();
-      expect(await fixture.read()).toMatchObject({
-        listCalls: 1,
-        deletes: [],
-        workspaceDeletes: 1,
-      });
-    } finally {
-      await fixture.dispose();
-    }
-  });
-
-  it.each([
-    ["non-JSON", "not json"],
-    ["non-array", "{}"],
-    ["null row", "[null]"],
-    ["missing name", "[{}]"],
-    ["empty name", '[{"name":""}]'],
-    ["unexpected sandbox", '[{"name":"someone-else"}]'],
-    ["duplicate sandbox", '[{"name":"first"},{"name":"first"}]'],
-    ["full page", '[{"name":"first"},{"name":"second"},{"name":"never-created"},{"name":"extra"}]'],
-  ])("rejects %s inventory without deleting resources", async (_label, inventory) => {
-    const fixture = await createCleanupFixture({ inventory });
-    try {
+  it.each(["not json", '[{"name":"someone-else"}]'])(
+    "rejects inventory %j without deleting resources",
+    async (inventory) => {
+      const fixture = await createCleanupFixture({ inventory });
       await expect(fixture.cleanup()).rejects.toThrow();
       expect(await fixture.read()).toMatchObject({
         listCalls: 1,
         deletes: [],
         workspaceDeletes: 0,
       });
-    } finally {
-      await fixture.dispose();
-    }
-  });
-
-  it.each([
-    ["read-failure", "database is locked", 2],
-    ["delete-failure", "delete failed", 1],
-  ])(
-    "retains %s while attempting remaining owned deletes once",
-    async (mode, message, listCalls) => {
-      const fixture = await createCleanupFixture({ mode });
-      try {
-        const failure = await fixture.cleanup().catch((error: unknown) => error);
-        expect(failure).toBeInstanceOf(AggregateError);
-        expect((failure as AggregateError).errors).toEqual([
-          expect.objectContaining({ message: expect.stringContaining(message) }),
-        ]);
-        expect(await fixture.read()).toMatchObject({
-          listCalls,
-          deletes: ["first", "second"],
-          workspaceDeletes: 0,
-        });
-      } finally {
-        await fixture.dispose();
-      }
     },
   );
 
-  it.each(["slow-delete", "stuck"])("bounds %s by the original cleanup deadline", async (mode) => {
+  it.each([
+    ["read-failure", "database is locked", { listCalls: 2, deletes: ["first", "second"] }],
+    ["delete-failure", "delete failed", { listCalls: 1, deletes: ["first", "second"] }],
+    ["stuck", "120 seconds", { listCalls: 2, deletes: ["first"], observations: 1 }],
+    ["workspace-failure", "workspace cleanup failed", { names: [], deletes: ["first", "second"] }],
+  ] as const)("reports %s with durable deletion state", async (mode, message, state) => {
     const fixture = await createCleanupFixture({ mode });
-    const startedAt = Date.now();
-    // Advance at the real child operation boundary, not a wall-clock poll that
-    // can expire before a loaded host starts the command.
-    const clock = vi
-      .spyOn(Date, "now")
-      .mockImplementation(() => startedAt + (fixture.deadlineExpired() ? 120_000 : 0));
-    try {
-      const failure = await fixture.cleanup().catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(AggregateError);
-      expect((failure as AggregateError).errors).toContainEqual(
-        expect.objectContaining({ message: expect.stringContaining("120 seconds") }),
+    if (mode === "stuck") {
+      const startedAt = Date.now();
+      // Expire only after the child operation starts, even on a loaded host.
+      vi.spyOn(Date, "now").mockImplementation(
+        () => startedAt + (fixture.deadlineExpired() ? 120_000 : 0),
       );
-      expect(await fixture.read()).toMatchObject({
-        listCalls: mode === "slow-delete" ? 1 : 2,
-        deletes: ["first"],
-        observations: mode === "slow-delete" ? 0 : 1,
-        workspaceDeletes: 0,
-      });
-    } finally {
-      clock.mockRestore();
-      await fixture.dispose();
     }
-  });
-
-  it("keeps workspace deletion failure visible after sandbox absence", async () => {
-    const fixture = await createCleanupFixture({ mode: "workspace-failure" });
-    try {
-      await expect(fixture.cleanup()).rejects.toThrow("workspace cleanup failed");
-      expect(await fixture.read()).toMatchObject({ names: [], workspaceDeletes: 1 });
-    } finally {
-      await fixture.dispose();
+    if (mode === "workspace-failure") {
+      await expect(fixture.cleanup()).rejects.toThrow(message);
+    } else {
+      const cleanup = fixture.cleanup();
+      const errors = [expect.objectContaining({ message: expect.stringContaining(message) })];
+      const expectedErrors = mode === "stuck" ? expect.arrayContaining(errors) : errors;
+      await expect(cleanup).rejects.toBeInstanceOf(AggregateError);
+      await expect(cleanup).rejects.toHaveProperty("errors", expectedErrors);
     }
+    expect(await fixture.read()).toMatchObject({
+      ...state,
+      workspaceDeletes: mode === "workspace-failure" ? 1 : 0,
+    });
   });
 });

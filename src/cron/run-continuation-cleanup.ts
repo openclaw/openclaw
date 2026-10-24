@@ -1,0 +1,135 @@
+/** Removes an idle exact-run continuation through the session lifecycle owner. */
+import { hasPendingGeneratedMediaTaskForSessionKey } from "../agents/media-generation-activity.js";
+import { assertSubagentReadContext } from "../agents/subagents/registry/subagent-registry-read-cache.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  hasSessionControllerQueuedWork,
+  isCompetingSessionControllerWorkActive,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
+import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { prepareCronDescendantDeletion } from "./isolated-agent/run-subagent-registry.runtime.js";
+
+function canRemoveCronRunContinuation(marker: SessionEntry["cronRunContinuation"]): boolean {
+  if (!marker || marker.basePersisted !== true) {
+    return false;
+  }
+  if (marker.phase === "ready") {
+    return !marker.ownerRunId;
+  }
+  if (marker.phase !== "continuing" || !marker.ownerRunId) {
+    return false;
+  }
+  // A retired Gateway owner cannot settle this claim; basePersisted above
+  // guarantees deleting its exact alias does not discard the stable session.
+  const ownerLifecycleGeneration = marker.ownerLifecycleGeneration?.trim();
+  return Boolean(
+    ownerLifecycleGeneration && ownerLifecycleGeneration !== getAgentEventLifecycleGeneration(),
+  );
+}
+
+export async function removeCronRunContinuationSessionIfIdle(
+  sessionKey: string,
+  settledDeliveryId?: string,
+  queueContext?: OpenClawStateWorkerContext,
+  capturedStorePath?: string,
+): Promise<void> {
+  if (
+    !parseCronRunScopeSuffix(sessionKey).runId ||
+    hasPendingGeneratedMediaTaskForSessionKey(sessionKey)
+  ) {
+    return;
+  }
+  const context = queueContext ?? captureOpenClawStateWorkerContext();
+  const assertCurrent = () => assertSubagentReadContext(context);
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  const storePath =
+    capturedStorePath ??
+    resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+      agentId,
+      env: context.environment,
+    });
+  const readEntry = () =>
+    withSessionEntryReadOnlyInWorker(
+      {
+        agentId,
+        sessionKey,
+        storePath,
+        env: context.environment,
+        hydrateSkillPromptRefs: false,
+      },
+      assertCurrent,
+      async (read) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        return read.value;
+      },
+    );
+  const original = await readEntry();
+  if (!original || !canRemoveCronRunContinuation(original.cronRunContinuation)) {
+    return;
+  }
+  await runSessionMutation({
+    diagnosticLabel: "cron-cleanup",
+    scope: storePath,
+    identities: [sessionKey, original.sessionId],
+    run: async () => {
+      if (
+        isCompetingSessionControllerWorkActive(storePath, [sessionKey, original.sessionId]) ||
+        hasSessionControllerQueuedWork(storePath, [sessionKey, original.sessionId])
+      ) {
+        return;
+      }
+      const pendingSessionDeliveries = await loadPendingSessionDeliveries(context);
+      if (
+        hasPendingGeneratedMediaTaskForSessionKey(sessionKey) ||
+        pendingSessionDeliveries.some(
+          (entry) =>
+            entry.sessionKey === sessionKey &&
+            entry.id !== settledDeliveryId &&
+            entry.settlementOutcome === undefined &&
+            entry.acknowledgedAt === undefined,
+        )
+      ) {
+        return;
+      }
+      const descendants = await prepareCronDescendantDeletion([sessionKey], context);
+      assertCurrent();
+      if (descendants.hasUnsettled(sessionKey)) {
+        return;
+      }
+      await deleteSessionEntryLifecycle({
+        agentId,
+        env: context.environment,
+        commitGuard: () => {
+          assertCurrent();
+          if (
+            descendants.hasUnsettled(sessionKey) ||
+            hasPendingGeneratedMediaTaskForSessionKey(sessionKey)
+          ) {
+            throw new Error("cron run continuation still has unsettled background work");
+          }
+        },
+        // Exact rows alias the stable cron transcript; the stable row owns archival.
+        archiveTranscript: false,
+        expectedEntry: original,
+        expectedLifecycleRevision: original.lifecycleRevision,
+        expectedSessionId: original.sessionId,
+        expectedUpdatedAt: original.updatedAt,
+        requireWriteSuccess: true,
+        storePath,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      });
+    },
+  });
+}

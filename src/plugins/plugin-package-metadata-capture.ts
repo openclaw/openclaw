@@ -1,90 +1,30 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { createRequire, isBuiltin } from "node:module";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { escapeRegExp } from "../shared/regexp.js";
-
-export function createPluginSourceLinkCapture() {
-  const links = new Set<string>();
-  return {
-    defer(filename: string, root: string): boolean {
-      if (
-        !fs.lstatSync(filename).isSymbolicLink() ||
-        isPathInside(root, fs.realpathSync(filename))
-      ) {
-        return false;
-      }
-      links.add(filename);
-      return true;
-    },
-    contains: (filename: string) => [...links].some((link) => isPathInside(link, filename)),
-  };
-}
-
-export const pluginSourceStatIdentity = (stat: fs.BigIntStats): string =>
-  `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
-
-export function readPluginSourceBytes(source: string, boundary: string): Buffer {
-  const opened = openRootFileSync({
-    absolutePath: source,
-    rootPath: boundary,
-    boundaryLabel: "plugin build source",
-    rejectHardlinks: false,
-  });
-  if (!opened.ok) {
-    throw new Error(`Cannot capture plugin source ${source}`, { cause: opened.error });
-  }
-  try {
-    return fs.readFileSync(opened.fd);
-  } finally {
-    fs.closeSync(opened.fd);
-  }
-}
-
-export const pluginSourceContentHash = (content: Buffer | string[]) =>
-  createHash("sha256")
-    .update(Array.isArray(content) ? JSON.stringify(content) : content)
-    .digest("hex");
-
-export type PluginSourceInput = {
-  identity: string;
-  contentHash: string;
-  directory: boolean;
-  boundary: string;
-};
-
-export function verifyPluginSourceInputs(
-  inputs: ReadonlyMap<string, PluginSourceInput>,
-  sources: Iterable<string>,
-): void {
-  for (const source of sources) {
-    const input = inputs.get(source)!;
-    if (
-      fs.realpathSync(source) !== source ||
-      pluginSourceStatIdentity(fs.statSync(source, { bigint: true })) !== input.identity ||
-      pluginSourceContentHash(
-        input.directory
-          ? fs.readdirSync(source).toSorted()
-          : readPluginSourceBytes(source, input.boundary),
-      ) !== input.contentHash
-    ) {
-      throw new Error(
-        "Plugin source changed while preparing its reload; retry after the edit finishes.",
-      );
-    }
-  }
-}
+import {
+  retainLoadedPluginSourceCapture,
+  retainPluginSourceCaptureInstance,
+} from "./plugin-source-capture-directory.js";
+import {
+  mkdtempPluginCaptureSync,
+  PLUGIN_SOURCE_CAPTURE_PREFIX,
+} from "./plugin-source-capture-path.js";
+import { isPluginSourceEntry } from "./plugin-source-file.js";
 
 export type PluginDependencyResolution = { root: string; lookupDirectory: string };
 
-export function createPluginDependencyResolver() {
+export function createPluginDependencyResolver(lookupBoundary?: {
+  root: string;
+  onUnresolvable: (name: string, importer: string) => void;
+}) {
   const roots = new Map<string, PluginDependencyResolution | undefined>();
   return (name: string, importer: string): PluginDependencyResolution | undefined => {
     const key = `${path.dirname(importer)}\0${name}`;
@@ -95,6 +35,24 @@ export function createPluginDependencyResolver() {
     for (const nodeModules of createRequire(importer).resolve.paths(`${name}/`) ?? []) {
       const candidate = path.join(nodeModules, name);
       if (fs.existsSync(path.join(candidate, "package.json"))) {
+        if (
+          lookupBoundary &&
+          isPathInside(lookupBoundary.root, importer) &&
+          !isPathInside(lookupBoundary.root, nodeModules)
+        ) {
+          const manifestFile = path.join(resolvePluginModulePackageRoot(importer), "package.json");
+          const manifest = fs.existsSync(manifestFile)
+            ? asOptionalRecord(JSON.parse(fs.readFileSync(manifestFile, "utf8")))
+            : undefined;
+          // Node walks ancestor node_modules up to the filesystem root. An undeclared
+          // optional lookup must not acquire unrelated ancestor code for a rehearsal.
+          // Declared packages and links inside the copy retain containment validation.
+          if (!pluginDependencyNames(manifest).has(name)) {
+            lookupBoundary.onUnresolvable(name, importer);
+            roots.set(key, undefined);
+            return undefined;
+          }
+        }
         const resolved = {
           root: fs.realpathSync(candidate),
           lookupDirectory: path.dirname(nodeModules),
@@ -155,6 +113,9 @@ function pluginDependencyNames(manifest: Record<string, unknown> | undefined): S
 type PluginNativeDependencyScope = { prepareDependencies?: () => void };
 
 export type PluginModuleCapture = {
+  staticImports?: ReadonlySet<string>;
+  isNativeImportPattern: (specifier: string) => boolean;
+  isRequireReference: (specifier: string) => boolean;
   prepareDependency: ReturnType<typeof createPluginDependencyLookup>;
   nativeScope: PluginNativeDependencyScope;
   capture: (
@@ -197,6 +158,8 @@ export function createPluginNativeDependencyScopes(
 export function capturePluginDependencies(params: {
   root: string;
   manifestFile?: string;
+  /** Nested manifests nobody selected (benchmarks, examples) keep their declarations optional. */
+  incidental?: boolean;
   references: ReadonlyMap<string, ReadonlySet<string>>;
   resolve: ReturnType<typeof createPluginDependencyResolver>;
   capture: (name: string, dependency: PluginDependencyResolution) => void;
@@ -224,6 +187,7 @@ export function capturePluginDependencies(params: {
     if (!dependency) {
       if (
         !params.manifestFile ||
+        params.incidental ||
         name in (manifest.optionalDependencies ?? {}) ||
         name in (manifest.peerDependencies ?? {})
       ) {
@@ -238,7 +202,7 @@ export function capturePluginDependencies(params: {
   return manifest;
 }
 
-function resolvePluginModulePackageRoot(filename: string): string {
+export function resolvePluginModulePackageRoot(filename: string): string {
   let directory = path.dirname(filename);
   while (path.basename(directory) !== "node_modules") {
     if (fs.existsSync(path.join(directory, "package.json"))) {
@@ -253,23 +217,12 @@ function resolvePluginModulePackageRoot(filename: string): string {
   return path.dirname(filename);
 }
 
-export function capturePluginModuleSource(
-  filename: string,
-  capture: (root: string, source: string) => void,
-): string | undefined {
-  const real = fs.realpathSync(filename);
-  if (!fs.statSync(real).isFile()) {
-    return undefined;
-  }
-  // The admitted artifact owns byte capture; package metadata only selects its layout.
-  capture(resolvePluginModulePackageRoot(real), real);
-  return real;
-}
-
 export function capturePluginPackageMetadata(
   root: string,
   destination: string,
   copy: (source: string, target: string) => void,
+  isRetainedReference?: (source: string, real: string) => boolean,
+  resolveSource?: (source: string) => { path: string; boundary: string } | undefined,
 ) {
   const manifest = path.join(destination, "package.json");
   copy(path.join(root, "package.json"), manifest);
@@ -297,11 +250,17 @@ export function capturePluginPackageMetadata(
         continue;
       }
       const filename = fileURLToPath(url);
-      if (
-        isPathInside(root, filename) &&
-        fs.statSync(filename, { throwIfNoEntry: false })?.isFile() &&
-        isPathInside(root, fs.realpathSync(filename))
-      ) {
+      const prepared = resolveSource?.(filename);
+      const input = prepared?.path ?? filename;
+      const insideRoot = isPathInside(root, filename);
+      if (insideRoot && fs.statSync(input, { throwIfNoEntry: false })?.isFile()) {
+        const real = fs.realpathSync(input);
+        if (
+          !isPathInside(prepared?.boundary ?? root, real) &&
+          !isRetainedReference?.(filename, real)
+        ) {
+          continue;
+        }
         copy(filename, path.join(destination, path.relative(root, filename)));
         break;
       }
@@ -313,16 +272,16 @@ export function capturePluginPackageMetadata(
 export const packageName = (specifier: string) =>
   specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0]!;
 export const importTargetNames = (value: unknown): string[] => {
-  if (typeof value === "string") {
-    return value &&
-      !value.startsWith(".") &&
-      !value.startsWith("#") &&
-      !path.isAbsolute(value) &&
-      !isBuiltin(value)
-      ? [packageName(value)]
-      : [];
-  }
-  return value && typeof value === "object" ? Object.values(value).flatMap(importTargetNames) : [];
+  return [...pluginPackageTargets(value)]
+    .filter(
+      (target) =>
+        target &&
+        !target.startsWith(".") &&
+        !target.startsWith("#") &&
+        !path.isAbsolute(target) &&
+        !isBuiltin(target),
+    )
+    .map(packageName);
 };
 
 /** Capture declared targets; native loading owns conditions and subpath selection. */
@@ -336,83 +295,8 @@ function* pluginPackageTargets(value: unknown): Generator<string> {
   }
 }
 
-/** Package '*' substitutes one subpath everywhere; only its declared fixed prefix is walked. */
-function visitPluginPackageTargetFiles(params: {
-  metadata: string;
-  boundary: string;
-  target: string;
-  wildcard: boolean;
-  visit: (filename: string) => void;
-}): void {
-  if (!params.target.startsWith("./")) {
-    return;
-  }
-  const marker = randomUUID();
-  let filename: string;
-  try {
-    filename = fileURLToPath(
-      new URL(
-        params.wildcard ? params.target.replaceAll("*", marker) : params.target,
-        pathToFileURL(params.metadata),
-      ),
-    );
-  } catch {
-    // Native selection owns invalid URL/target errors; unused branches remain inert.
-    return;
-  }
-  if (!isPathInside(params.boundary, filename)) {
-    return;
-  }
-  const parts = filename.split(marker);
-  const matcher =
-    parts.length > 1
-      ? new RegExp(
-          `^${escapeRegExp(parts[0]!)}([\\s\\S]*)${parts.slice(1).map(escapeRegExp).join("\\1")}$`,
-          "i",
-        )
-      : undefined;
-  const ancestors = new Set<string>();
-  const visit = (source: string) => {
-    if (
-      path
-        .relative(params.boundary, source)
-        .split(path.sep)
-        .some((name) => name === ".git" || name === "node_modules")
-    ) {
-      return;
-    }
-    const stat = fs.statSync(source, { throwIfNoEntry: false });
-    if (!stat) {
-      return;
-    }
-    const real = fs.realpathSync(source);
-    if (!isPathInside(params.boundary, real)) {
-      return;
-    }
-    if (stat.isDirectory()) {
-      if (!matcher) {
-        return;
-      }
-      if (ancestors.has(real)) {
-        throw new Error(`Plugin source contains a directory cycle: ${source}`);
-      }
-      ancestors.add(real);
-      for (const name of fs.readdirSync(source).toSorted()) {
-        visit(path.join(source, name));
-      }
-      ancestors.delete(real);
-    } else if (stat.isFile()) {
-      if (!matcher || matcher.test(source)) {
-        params.visit(source);
-      }
-    }
-  };
-  visit(matcher ? path.dirname(parts[0]! + "_") : filename);
-}
-
 type PluginPackageCaptureState = "metadata" | "entry" | "body" | { error: unknown };
 export type PluginPackageCapture = {
-  destination: string;
   /** Absolute normalized root captured by the artifact producer. */
   readonly capturedRoot: string;
   sourceRoot: string;
@@ -426,27 +310,35 @@ export type PluginPackageCapture = {
 export const isPluginPackageFile = (root: string, file: string) =>
   isPathInside(root, file) && !path.relative(root, file).split(path.sep).includes("node_modules");
 
+function isCapturedPathInside(root: string, file: string): boolean {
+  return process.platform === "win32"
+    ? isPathInside(root, file)
+    : file === root ||
+        (file.startsWith(root) && (root.endsWith("/") || file.charCodeAt(root.length) === 47));
+}
+
 function isCapturedPackageFile(root: string, file: string): boolean {
   if (process.platform === "win32") {
     return isPluginPackageFile(root, file);
   }
-  if (file === root) {
-    return true;
-  }
-  if (!file.startsWith(root) || (!root.endsWith("/") && file.charCodeAt(root.length) !== 47)) {
-    return false;
-  }
-  return !/(?:^|\/)node_modules(?:\/|$)/u.test(file.slice(root.length));
+  return (
+    isCapturedPathInside(root, file) &&
+    !/(?:^|\/)node_modules(?:\/|$)/u.test(file.slice(root.length))
+  );
 }
 
 /** Retain the matched lookup root; dependency links need their own source-relative mapping. */
 export function findPluginCapturedPackage(
-  packages: Iterable<PluginPackageCapture>,
+  packages: ReadonlyMap<string, PluginPackageCapture>,
   filename: string,
+  directory: string,
 ) {
-  // The artifact producer already normalizes captured roots and dependency links.
+  // The artifact producer normalizes its directory, captured roots, and dependency links.
   const file = process.platform === "win32" ? filename : path.resolve(filename);
-  for (const owner of packages) {
+  if (!isCapturedPathInside(directory, file)) {
+    return undefined;
+  }
+  for (const owner of packages.values()) {
     if (isCapturedPackageFile(owner.capturedRoot, file)) {
       return { owner, root: owner.capturedRoot };
     }
@@ -462,6 +354,8 @@ export function findPluginCapturedPackage(
 /** Captured metadata and declared target preparation share the artifact lifetime. */
 export function createPluginPackageMetadataCapture(params: {
   sourceForCaptured: (filename: string) => string | undefined;
+  isRetainedReference?: (source: string, real: string) => boolean;
+  resolveSource?: (source: string) => { path: string; boundary: string } | undefined;
   packageForFile: (filename: string) =>
     | {
         sourceRoot: string;
@@ -518,20 +412,84 @@ export function createPluginPackageMetadataCapture(params: {
       ];
       for (const [key, value] of declarations) {
         for (const target of pluginPackageTargets(value)) {
-          visitPluginPackageTargetFiles({
-            metadata: sourceMetadata,
-            boundary: owner.sourceRoot,
-            target,
-            wildcard: key.includes("*"),
-            visit(filename) {
-              owner.captureTarget(
-                path.join(
-                  path.dirname(metadata),
-                  path.relative(path.dirname(sourceMetadata), filename),
-                ),
-              );
-            },
-          });
+          const boundary = owner.sourceRoot;
+          const wildcard = key.includes("*");
+          const { isRetainedReference, resolveSource } = params;
+          // Package '*' substitutes one subpath everywhere; only its fixed prefix is walked.
+          if (!target.startsWith("./")) {
+            continue;
+          }
+          const marker = randomUUID();
+          let filename: string;
+          try {
+            filename = fileURLToPath(
+              new URL(
+                wildcard ? target.replaceAll("*", marker) : target,
+                pathToFileURL(sourceMetadata),
+              ),
+            );
+          } catch {
+            // Native selection owns invalid URL/target errors; unused branches remain inert.
+            continue;
+          }
+          if (!isPathInside(boundary, filename)) {
+            continue;
+          }
+          const parts = filename.split(marker);
+          const matcher =
+            parts.length > 1
+              ? new RegExp(
+                  `^${escapeRegExp(parts[0]!)}([\\s\\S]*)${parts.slice(1).map(escapeRegExp).join("\\1")}$`,
+                  "i",
+                )
+              : undefined;
+          const ancestors = new Set<string>();
+          const visit = (source: string) => {
+            if (
+              path
+                .relative(boundary, source)
+                .split(path.sep)
+                .some((name) => name === ".git" || name === "node_modules")
+            ) {
+              return;
+            }
+            const prepared = resolveSource?.(source);
+            const input = prepared?.path ?? source;
+            const stat = fs.statSync(input, { throwIfNoEntry: false });
+            if (!stat) {
+              return;
+            }
+            const real = fs.realpathSync(input);
+            if (
+              !isPathInside(prepared?.boundary ?? boundary, real) &&
+              !(stat.isFile() && isRetainedReference?.(source, real))
+            ) {
+              return;
+            }
+            if (stat.isDirectory()) {
+              if (!matcher) {
+                return;
+              }
+              if (ancestors.has(real)) {
+                throw new Error(`Plugin source contains a directory cycle: ${source}`);
+              }
+              ancestors.add(real);
+              for (const name of fs.readdirSync(input).filter(isPluginSourceEntry).toSorted()) {
+                visit(path.join(source, name));
+              }
+              ancestors.delete(real);
+            } else if (stat.isFile()) {
+              if (!matcher || matcher.test(source)) {
+                owner.captureTarget(
+                  path.join(
+                    path.dirname(metadata),
+                    path.relative(path.dirname(sourceMetadata), source),
+                  ),
+                );
+              }
+            }
+          };
+          visit(matcher ? path.dirname(parts[0]! + "_") : filename);
         }
       }
     }
@@ -592,7 +550,7 @@ export function createPluginPackageMetadataCapture(params: {
         }
         let scope: (() => PackageScope) | undefined;
         const source = path.join(scopeDirectory, "package.json");
-        if (hasSource(source) || fs.existsSync(source)) {
+        if (hasSource(source) || fs.existsSync(params.resolveSource?.(source)?.path ?? source)) {
           const target = path.join(destination, path.relative(root, source));
           copy(source, target);
           let parsed: PackageScope | undefined;
@@ -634,23 +592,54 @@ export function createPluginPackageMetadataCapture(params: {
   };
 }
 
-const sourceCaptureDirectory = new AsyncLocalStorage<string>();
+const sourceCaptureDirectory = new AsyncLocalStorage<{ directory: string; managedRoot?: string }>();
 
 /** A compute worker's parent reclaims this scratch directory after confirmed exit. */
-export function withPluginSourceCaptureDirectory<T>(directory: string, run: () => T): T {
-  return sourceCaptureDirectory.run(directory, run);
+export function withPluginSourceCaptureDirectory<T>(
+  directory: string,
+  run: () => T,
+  managedRoot?: string,
+): T {
+  return sourceCaptureDirectory.run({ directory, managedRoot }, run);
 }
 
 /** Admissions and failed-input receipts belong to one source acquisition lifetime. */
-export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
-  const directory = fs.realpathSync(
-    fs.mkdtempSync(
-      path.join(sourceCaptureDirectory.getStore() ?? tmpdir(), "openclaw-plugin-build-"),
-    ),
-  );
-  fs.chmodSync(directory, 0o700);
-  const inputs = new Map<string, PluginSourceInput>();
-  const pendingInputs = new Set<string>();
+export function createPluginSourceCapture() {
+  const override = sourceCaptureDirectory.getStore();
+  const instance = override === undefined ? retainPluginSourceCaptureInstance() : undefined;
+  let created: string | undefined;
+  let directory: string;
+  try {
+    created =
+      override !== undefined
+        ? mkdtempPluginCaptureSync(path.join(override.directory, PLUGIN_SOURCE_CAPTURE_PREFIX))
+        : instance!.createDirectory();
+    // Copies admit only targets already in native spelling (Windows 8.3 names expanded).
+    directory = fs.realpathSync.native(created);
+    fs.chmodSync(directory, 0o700);
+  } catch (error) {
+    const cleanupErrors: unknown[] = [];
+    try {
+      if (created) {
+        fs.rmSync(created, { recursive: true, force: true });
+      }
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    try {
+      instance?.release();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    if (cleanupErrors.length > 0) {
+      throw createSqliteLifecycleAggregateError(
+        [error, ...cleanupErrors],
+        "Plugin source capture setup and cleanup failed",
+        error,
+      );
+    }
+    throw error;
+  }
   const additions = new Set<string>();
   const captureFailures = new Map<string, unknown>();
   let disposed = false;
@@ -660,7 +649,6 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     }
     try {
       const value = capture();
-      verifyPluginSourceInputs(inputs, pendingInputs);
       return { value, additions: [...additions] };
     } catch (error) {
       // Another specifier must not admit files from an incomplete capture transaction.
@@ -669,7 +657,6 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
       }
       throw error;
     } finally {
-      pendingInputs.clear();
       additions.clear();
     }
   };
@@ -678,30 +665,25 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
       throw captureFailures.get(filename);
     }
   };
-  const captureAdmitted = <T>(run: () => T) => {
-    const capture = () => acquire(run);
-    return execute ? execute(capture) : capture();
-  };
   const beginDisposal = () => {
     disposed = true;
     // Revoke cached modules before removal yields, including compiled CJS helpers.
-    const filenames = directory + path.sep;
-    const urls = pathToFileURL(filenames).href;
+    // Jiti's Windows keys use forward slashes; containment follows filesystem identity.
+    const urls = pathToFileURL(directory + path.sep).href;
     const cache = createRequire(import.meta.url).cache;
     for (const id of Object.keys(cache)) {
-      if (id.startsWith(filenames) || id.startsWith(urls)) {
+      if (id.startsWith(urls) || (path.isAbsolute(id) && isPathInside(directory, id))) {
         delete cache[id];
       }
     }
     captureFailures.clear();
   };
   return {
-    inputs,
-    pendingInputs,
     additions,
-    capture: captureAdmitted,
+    capture: acquire,
     assertModuleAvailable,
     directory,
+    outputRoot: override?.managedRoot ?? instance?.managedRoot,
     linkHost: (hostRoot: string) => {
       const modules = path.join(directory, "node_modules");
       fs.mkdirSync(modules, { recursive: true, mode: 0o700 });
@@ -710,11 +692,17 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     },
     dispose() {
       beginDisposal();
-      fs.rmSync(directory, { recursive: true, force: true });
+      if (!retainLoadedPluginSourceCapture(directory)) {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+      instance?.release();
     },
     async disposeAsync() {
       beginDisposal();
-      await fsPromises.rm(directory, { recursive: true, force: true });
+      if (!retainLoadedPluginSourceCapture(directory)) {
+        await fsPromises.rm(directory, { recursive: true, force: true });
+      }
+      await instance?.releaseAsync();
     },
   };
 }

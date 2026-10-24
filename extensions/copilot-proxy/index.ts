@@ -1,5 +1,4 @@
-// Copilot Proxy plugin entrypoint registers its OpenClaw integration.
-import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   definePluginEntry,
   type ProviderAuthContext,
@@ -23,14 +22,8 @@ function normalizeBaseUrl(value: string): string {
   if (!trimmed) {
     return DEFAULT_BASE_URL;
   }
-  let normalized = trimmed;
-  while (normalized.endsWith("/")) {
-    normalized = normalized.slice(0, -1);
-  }
-  if (!normalized.endsWith("/v1")) {
-    normalized = `${normalized}/v1`;
-  }
-  return normalized;
+  const normalized = trimmed.replace(/\/+$/, "");
+  return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
 }
 
 function validateBaseUrl(value: string): string | undefined {
@@ -39,8 +32,7 @@ function validateBaseUrl(value: string): string | undefined {
 }
 
 function parseModelIds(input: string): string[] {
-  const parsed = normalizeStringEntries(input.split(/[\n,]/));
-  return uniqueStrings(parsed);
+  return normalizeUniqueStringEntries(input.split(/[\n,]/));
 }
 
 function buildModelDefinition(modelId: string) {
@@ -74,7 +66,8 @@ export default definePluginEntry({
           run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
             const baseUrlInput = await ctx.prompter.text({
               message: "Copilot Proxy base URL",
-              initialValue: DEFAULT_BASE_URL,
+              // Prefilling the default makes typed input append to it; blank input keeps it.
+              placeholder: DEFAULT_BASE_URL,
               validate: validateBaseUrl,
             });
 

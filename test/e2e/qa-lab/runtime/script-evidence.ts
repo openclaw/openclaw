@@ -11,8 +11,13 @@ import {
   type QaProviderMode,
 } from "../../../../extensions/qa-lab/test-api.js";
 import { readLoggingConfig } from "../../../../src/logging/config.js";
-import { redactToolPayloadTextWithConfig } from "../../../../src/logging/redact.js";
-import { withFullContextToolPayloadRedaction } from "../../../../src/logging/redact.test-support.js";
+import { maskToken } from "../../../../src/logging/redact-mask.js";
+import {
+  getDefaultRedactPatterns,
+  redactText,
+  resolveRedactOptions,
+} from "../../../../src/logging/redact.js";
+import { redactRegisteredSecretValues } from "../../../../src/logging/secret-redaction-registry.js";
 import { DEFAULT_CHILD_OUTPUT_TAIL_BYTES } from "../../../helpers/bounded-child-output.js";
 
 const DEFAULT_QA_SCRIPT_EVIDENCE_DETAILS_BYTES = 32 * 1024;
@@ -169,7 +174,14 @@ export function createQaScriptEvidenceWriter(options: QaScriptEvidenceWriterOpti
   );
   const log = createSafeRedactionBuffer(maxLogBytes + DEFAULT_QA_SCRIPT_EVIDENCE_DETAILS_BYTES);
   const redact = (text: string) =>
-    redactToolPayloadTextWithConfig(text, withFullContextToolPayloadRedaction(readLoggingConfig()));
+    redactText(
+      redactRegisteredSecretValues(text, maskToken),
+      resolveRedactOptions({
+        mode: "tools",
+        patterns: [...(readLoggingConfig()?.redactPatterns ?? []), ...getDefaultRedactPatterns()],
+      }).patterns,
+      { fullContext: true },
+    );
   const boundedLogText = () => {
     if (log.overflowed()) {
       return utf8Tail(QA_SCRIPT_LOG_OVERFLOW_MESSAGE, maxLogBytes);

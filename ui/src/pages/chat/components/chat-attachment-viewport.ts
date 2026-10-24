@@ -1,4 +1,10 @@
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
+
 const CHAT_ATTACHMENT_VIEWPORT_MARGIN = "240px 0px";
+
+export function createChatAttachmentViewportRef(onVisible: () => void) {
+  return elementRef((element: Element) => observeChatAttachmentViewport(element, onVisible));
+}
 
 // Start bounded media work just before its card or image enters view so decoding
 // stays offscreen until the operator is likely to need it.

@@ -3,6 +3,21 @@ import { resolveNonNegativeIntegerOption } from "../../packages/normalization-co
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 
+/** Records a new warning key without refreshing duplicates' FIFO eviction order. */
+export function rememberBoundedKey(keys: Set<string>, key: string, maxSize: number): boolean {
+  if (keys.has(key)) {
+    return false;
+  }
+  if (keys.size >= maxSize) {
+    const oldest = keys.values().next().value;
+    if (oldest !== undefined) {
+      keys.delete(oldest);
+    }
+  }
+  keys.add(key);
+  return true;
+}
+
 /** Small in-memory TTL/LRU-style cache for replay and duplicate suppression. */
 export type DedupeCache = {
   /** Returns true for a recent duplicate; records the key and optional owner when absent. */
@@ -19,9 +34,6 @@ export type DedupeCacheOptions = {
   ttlMs: number;
   maxSize: number;
 };
-
-/** @deprecated Use resolveNonNegativeIntegerOption for new internal numeric option normalization. */
-export { resolveNonNegativeIntegerOption as resolveDedupeNonNegativeInteger };
 
 /** Creates a bounded in-memory dedupe cache with optional TTL expiry. */
 export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {

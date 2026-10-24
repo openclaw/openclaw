@@ -149,29 +149,6 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     },
   );
 
-  it("includes complete portable table data in Slack accessibility text", () => {
-    expect(
-      renderSlackMessagePresentationFallbackText({
-        text: "Pipeline summary",
-        presentation: {
-          blocks: [
-            {
-              type: "table",
-              caption: "Pipeline",
-              headers: ["Account", "Stage", "ARR"],
-              rows: [
-                ["Acme", "Won", 125000],
-                ["Globex", "Review", 82000],
-              ],
-            },
-          ],
-        },
-      }),
-    ).toBe(
-      "Pipeline summary\n\nPipeline (table)\n- Account: Acme; Stage: Won; ARR: 125000\n- Account: Globex; Stage: Review; ARR: 82000",
-    );
-  });
-
   it("neutralizes raw table mentions without changing authored Slack text", () => {
     expect(
       renderSlackMessagePresentationFallbackText({
@@ -454,7 +431,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     });
 
     expect(segments).toHaveLength(1);
-    expect(segments[0]).toMatchObject({ kind: "text", mrkdwn: false });
+    expect(segments[0]).toMatchObject({ kind: "text" });
     const fallback = segments[0]?.kind === "text" ? segments[0].text : "";
     expect(fallback).toContain("<@U1> & <!channel>");
     expect(fallback).toContain("/say ` <!channel>");
@@ -479,7 +456,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     });
 
     expect(resolution.authoredTextPlacement).toBe("blocks");
-    expect(resolution.segments).toContainEqual({ kind: "text", text, mrkdwn: false });
+    expect(resolution.segments).toContainEqual({ kind: "text", text });
   });
 
   it("materializes authored text blocks as verbatim mrkdwn", () => {

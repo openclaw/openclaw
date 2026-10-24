@@ -6,6 +6,7 @@ import {
 import type { GatewayService } from "../../daemon/service.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import type { ConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import type { PortUsage } from "../../infra/ports-types.js";
 
@@ -19,7 +20,7 @@ export const monotonicClock = { nowMs: 0 };
 export const sleep = vi.fn(async (ms: number) => {
   monotonicClock.nowMs += ms;
 });
-export const classifyPortListener = vi.fn<(_listener: unknown, _port: number) => PortListenerKind>(
+export const classifyPortListener = vi.fn<(_listener: unknown) => PortListenerKind>(
   () => "gateway",
 );
 export const callGateway = vi.fn<(opts: CallGatewayOptions) => Promise<unknown>>();
@@ -29,12 +30,61 @@ export function gatewayResponseError(message: string): GatewayProtocolRequestErr
   retainGatewayResponsePayload(error, undefined);
   return error;
 }
+export const requestStartupProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
+export const requestReadinessProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
+
+vi.mock("../../gateway/local-http-probe.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../gateway/local-http-probe.js")>();
+  return {
+    ...actual,
+    createConfiguredGatewayLocalProbe: (
+      ...args: Parameters<typeof actual.createConfiguredGatewayLocalProbe>
+    ) => {
+      const probe = actual.createConfiguredGatewayLocalProbe(...args);
+      return {
+        ...probe,
+        requestHttp: (params: Parameters<ConfiguredGatewayLocalProbe["requestHttp"]>[0]) => {
+          if (params.pathname === "/startupz") {
+            return requestStartupProbe(params);
+          }
+          // Only intercept readiness endpoints when a test provides an explicit
+          // implementation; otherwise fall through to the real loopback transport
+          // so existing real-HTTP readiness tests keep exercising real sockets.
+          if (
+            (params.pathname === "/healthz" || params.pathname === "/readyz") &&
+            requestReadinessProbe.getMockImplementation() !== undefined
+          ) {
+            return requestReadinessProbe(params);
+          }
+          return probe.requestHttp(params);
+        },
+      };
+    },
+  };
+});
+
 export const createConfigIO = vi.fn();
 export const readBestEffortConfig = vi.fn(async () => ({}));
 export const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn<
   (_opts: unknown) => Promise<{ auth: { token?: string; password?: string } }>
 >(async () => ({ auth: {} }));
-const hasActiveStartupMigrationLease = vi.fn<(_params?: unknown) => boolean>(() => false);
+export const hasActiveStartupMigrationLease = vi.fn<(_params?: unknown) => boolean>(() => false);
+
+export function createStartupMigrationActivityProbe(isActive: () => boolean) {
+  return vi.fn<
+    typeof import("../../infra/startup-migration-checkpoint.js").hasActiveStartupMigrationLease
+  >((params) => {
+    const active = isActive();
+    if (active) {
+      params?.onActivity?.({
+        owner: "migration-owner",
+        pid: 8000,
+        heartbeatAt: monotonicClock.nowMs,
+      });
+    }
+    return active;
+  });
+}
 export const readActiveGatewayLockIdentity = vi.fn();
 export const readGatewayOwnerLease =
   vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>();
@@ -43,7 +93,7 @@ export const resolveGatewayServiceProbeHosts = vi.fn<
 >(async () => ["127.0.0.1"]);
 
 vi.mock("../../infra/ports-format.js", () => ({
-  classifyPortListener: (listener: unknown, port: number) => classifyPortListener(listener, port),
+  classifyPortListener: (listener: unknown) => classifyPortListener(listener),
   formatPortDiagnostics: vi.fn(() => []),
 }));
 
@@ -73,6 +123,7 @@ vi.mock("../../gateway/probe-auth.js", () => ({
 vi.mock("../../infra/startup-migration-checkpoint.js", () => ({
   hasActiveStartupMigrationLease: (params: unknown) => hasActiveStartupMigrationLease(params),
   STARTUP_MIGRATION_LEASE_TTL_MS: 5 * 60_000,
+  STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS: 60_000,
 }));
 
 vi.mock("../../infra/gateway-owner-lease.js", () => ({
@@ -117,12 +168,47 @@ export function makeGatewayService(
   } as unknown as GatewayService;
 }
 
-export function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected first mock call");
-  }
-  return call[0];
+export function portUsage(
+  listeners: PortUsage["listeners"] = [],
+  overrides: Partial<PortUsage> = {},
+): PortUsage {
+  return {
+    port: 18789,
+    status: listeners.length ? "busy" : "free",
+    listeners,
+    hints: [],
+    ...overrides,
+  };
+}
+
+export function ownerLease(pid: number, state: "live" | "dead" = "live", startedAt = 1000) {
+  return {
+    owner: `owner-${pid}`,
+    pid,
+    host: "gateway-test-host",
+    startedAt,
+    port: 18789,
+    mode: "supervised" as const,
+    supervisor: { kind: "schtasks" as const, name: "OpenClaw Gateway" },
+    state,
+    expired: state === "dead",
+  };
+}
+
+export async function waitForRunningGateway(
+  options: Partial<
+    Extract<
+      Parameters<typeof import("./restart-health.js").waitForGatewayHealthyRestart>[0],
+      { service: unknown }
+    >
+  > = {},
+) {
+  const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+  return waitForGatewayHealthyRestart({
+    service: makeGatewayService({ status: "running", pid: 8000 }),
+    port: 18789,
+    ...options,
+  });
 }
 
 const previousGatewayLockIdentity: GatewayLockIdentity = {
@@ -220,11 +306,16 @@ export async function waitForStoppedFreeGatewayRestart(
 }
 
 export function resetRestartHealthMocks() {
+  requestStartupProbe.mockReset();
+  requestStartupProbe.mockResolvedValue(null);
+  requestReadinessProbe.mockReset();
   monotonicClock.nowMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => monotonicClock.nowMs);
   inspectPortUsage.mockReset();
   readBestEffortConfig.mockReset();
-  readBestEffortConfig.mockResolvedValue({});
+  // These transport-mocked lifecycle tests spoof OS state; they must not load
+  // native credential storage under a platform different from the running host.
+  readBestEffortConfig.mockResolvedValue({ gateway: { auth: { mode: "none" } } });
   createConfigIO.mockReset();
   createConfigIO.mockReturnValue({
     readBestEffortConfig: () => readBestEffortConfig(),

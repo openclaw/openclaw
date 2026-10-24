@@ -1,28 +1,10 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-// Leaf sanitizer for approval display text; keep free of exec-approvals imports
-// so approval-scope and exec-approvals-config can share it without a cycle.
-import {
-  computeSensitiveRedactionBitmap,
-  redactSensitiveText,
-  resolveRedactOptions,
-} from "../logging/redact.js";
-
-// Escape control characters, Unicode format/line/paragraph separators, unpaired surrogates,
-// and non-ASCII space separators that can spoof or break approval prompts in common UIs.
-// With the Unicode regex flag, valid astral characters are full code points and do not match
-// Cs; only malformed surrogate code units are escaped. Ordinary ASCII space stays unchanged.
+// Escape spoofing characters while preserving ASCII spaces and valid astral code points;
+// Unicode mode makes Cs match only unpaired surrogate units.
 const EXEC_APPROVAL_INVISIBLE_CHAR_REGEX =
   /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]/gu;
-const EXEC_APPROVAL_INVISIBLE_CHAR_SINGLE =
-  /^[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]$/u;
-
-// Hard cap on input the sanitizer will process at all. Above this size we return a constant
-// marker without running any regex work, so an attacker cannot force unbounded CPU/memory.
+// Bound display work and output for oversized commands.
 const EXEC_APPROVAL_MAX_INPUT = 256 * 1024;
-// Soft cap on displayed output. Truncation happens AFTER redaction so a secret near the
-// cutoff is not partially exposed when the cut lands mid-token below a pattern's minimum
-// length (e.g. `ghp_` needs 20+ trailing chars before the `\b` match).
 const EXEC_APPROVAL_MAX_OUTPUT = 16 * 1024;
 const EXEC_APPROVAL_TRUNCATION_MARKER = "…[truncated]";
 const EXEC_APPROVAL_OVERSIZED_MARKER =
@@ -30,25 +12,9 @@ const EXEC_APPROVAL_OVERSIZED_MARKER =
 const EXEC_APPROVAL_WARNING_OVERSIZED_MARKER =
   "[exec approval warning exceeds display size limit; full text suppressed]";
 
-const BYPASS_MASK = "***";
-
-function formatCodePointEscape(char: string): string {
-  return `\\u{${char.codePointAt(0)?.toString(16).toUpperCase() ?? "FFFD"}}`;
-}
-
-function normalizeDisplayLineBreaks(text: string): string {
-  return text.replace(/\r\n?/g, "\n").replace(/[\u2028\u2029]/g, "\n");
-}
-
-function escapeInvisibles(text: string, options?: { preserveLineBreaks?: boolean }): string {
-  return text.replace(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX, (char) =>
-    options?.preserveLineBreaks && char === "\n" ? "\n" : formatCodePointEscape(char),
-  );
-}
-
 /** Sanitized approval text plus size-cap status for callers that need UI affordances. */
 export type SanitizedExecApprovalDisplayText = {
-  /** Redacted, spoof-resistant command or warning text safe for an approval prompt. */
+  /** Spoof-resistant command or warning text for an approval prompt. */
   text: string;
   /** True when sanitized output exceeded the display cap and was shortened. */
   truncated: boolean;
@@ -56,7 +22,22 @@ export type SanitizedExecApprovalDisplayText = {
   oversized: boolean;
 };
 
-function truncateForDisplay(text: string): SanitizedExecApprovalDisplayText {
+function sanitizeExecApprovalDisplayTextInternal(
+  commandText: string,
+  options?: { preserveLineBreaks?: boolean; oversizedMarker?: string },
+): SanitizedExecApprovalDisplayText {
+  if (commandText.length > EXEC_APPROVAL_MAX_INPUT) {
+    return {
+      text: options?.oversizedMarker ?? EXEC_APPROVAL_OVERSIZED_MARKER,
+      truncated: false,
+      oversized: true,
+    };
+  }
+  const text = commandText.replace(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX, (char) =>
+    options?.preserveLineBreaks && char === "\n"
+      ? "\n"
+      : `\\u{${char.codePointAt(0)?.toString(16).toUpperCase() ?? "FFFD"}}`,
+  );
   if (text.length <= EXEC_APPROVAL_MAX_OUTPUT) {
     return { text, truncated: false, oversized: false };
   }
@@ -65,112 +46,6 @@ function truncateForDisplay(text: string): SanitizedExecApprovalDisplayText {
     truncated: true,
     oversized: false,
   };
-}
-
-// Iterate by full Unicode code point so astral-plane invisibles (e.g. U+E0061 TAG LATIN
-// SMALL LETTER A, category Cf) are matched as single characters instead of being seen as a
-// surrogate pair whose halves are category Cs and would escape the invisible-char regex.
-function buildStrippedView(original: string): { stripped: string; strippedToOrig: number[] } {
-  const strippedChars: string[] = [];
-  const strippedToOrig: number[] = [];
-  let offset = 0;
-  for (const cp of original) {
-    if (!EXEC_APPROVAL_INVISIBLE_CHAR_SINGLE.test(cp)) {
-      strippedChars.push(cp);
-      for (let k = 0; k < cp.length; k++) {
-        strippedToOrig.push(offset + k);
-      }
-    }
-    offset += cp.length;
-  }
-  return { stripped: strippedChars.join(""), strippedToOrig };
-}
-
-function sanitizeExecApprovalDisplayTextInternal(
-  commandText: string,
-  options?: { preserveLineBreaks?: boolean; oversizedMarker?: string },
-): SanitizedExecApprovalDisplayText {
-  if (commandText.length > EXEC_APPROVAL_MAX_INPUT) {
-    // Refuse to display inputs above the hard cap; anything larger must be approved through
-    // another channel. Running redaction on a multi-megabyte payload would be a DoS vector.
-    return {
-      text: options?.oversizedMarker ?? EXEC_APPROVAL_OVERSIZED_MARKER,
-      truncated: false,
-      oversized: true,
-    };
-  }
-  const rawRedacted = redactSensitiveText(commandText, { mode: "tools" });
-  // With no invisibles the two views have identical redaction coverage.
-  if (commandText.search(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX) === -1) {
-    return truncateForDisplay(escapeInvisibles(rawRedacted, options));
-  }
-  const { stripped, strippedToOrig } = buildStrippedView(commandText);
-  const strippedRedacted = redactSensitiveText(stripped, { mode: "tools" });
-  // Fast path: stripping invisibles did not expose any additional secret-like content, so the
-  // raw-view redaction is sufficient. Preserve structure and show invisible-character spoof
-  // attempts as `\u{...}` escapes.
-  if (strippedRedacted === stripped) {
-    return truncateForDisplay(escapeInvisibles(rawRedacted, options));
-  }
-  // Detect bypass by position-bitmap coverage. Run the redaction matchers on both views and
-  // map stripped-view match positions back to original coordinates. If every position the
-  // stripped view would mask is also masked by the raw view, the raw view already covered
-  // everything — for example, an ordinary multi-line PEM private key where raw produces
-  // `BEGIN/…redacted…/END` while stripped collapses to `***`. A real bypass exists only when
-  // the stripped view masks at least one original position raw missed (e.g. the tail of an
-  // `sk-` token whose prefix-boundary was broken by a spliced zero-width or NBSP character).
-  const redaction = resolveRedactOptions({ mode: "tools" });
-  const rawMask = computeSensitiveRedactionBitmap(commandText, redaction);
-  const strippedMask = computeSensitiveRedactionBitmap(stripped, redaction);
-  let bypassDetected = false;
-  for (let i = 0; i < strippedMask.length; i++) {
-    if (
-      strippedMask[i] &&
-      !rawMask[expectDefined(strippedToOrig[i], "stripped to orig entry at i")]
-    ) {
-      bypassDetected = true;
-      break;
-    }
-  }
-  if (!bypassDetected) {
-    return truncateForDisplay(escapeInvisibles(rawRedacted, options));
-  }
-  // Bypass path. Project the stripped-view mask back onto original positions, union with the
-  // raw-view mask, and emit a rendering where each contiguous masked run becomes a single
-  // `***` marker. Invisible characters that fall outside masked runs still render as visible
-  // `\u{...}` escapes so multi-line structure and spliced invisibles stay readable. The
-  // render loop advances by full code point so astral-plane invisibles are escaped as one
-  // `\u{...}` token rather than two separate surrogate escapes (or, worse, passed through
-  // unescaped because neither surrogate half matches the Cf regex).
-  const unionMask = rawMask.slice();
-  for (let i = 0; i < strippedMask.length; i++) {
-    if (strippedMask[i]) {
-      unionMask[expectDefined(strippedToOrig[i], "stripped to orig entry at i")] = true;
-    }
-  }
-  let out = "";
-  let i = 0;
-  while (i < commandText.length) {
-    if (unionMask[i]) {
-      let j = i;
-      while (j < commandText.length && unionMask[j]) {
-        j++;
-      }
-      out += BYPASS_MASK;
-      i = j;
-      continue;
-    }
-    const codePoint = commandText.codePointAt(i) ?? 0xfffd;
-    const cp = String.fromCodePoint(codePoint);
-    out +=
-      options?.preserveLineBreaks && cp === "\n"
-        ? cp
-        : EXEC_APPROVAL_INVISIBLE_CHAR_SINGLE.test(cp)
-          ? formatCodePointEscape(cp)
-          : cp;
-    i += cp.length;
-  }
-  return truncateForDisplay(out);
 }
 
 /** Sanitizes exec command text for approval UI without exposing status metadata. */
@@ -198,10 +73,10 @@ export function sanitizeExecApprovalWarningText(warningText: string): string {
 export function sanitizeExecApprovalWarningTextWithStatus(
   warningText: string,
 ): SanitizedExecApprovalDisplayText {
-  return sanitizeExecApprovalDisplayTextInternal(normalizeDisplayLineBreaks(warningText), {
-    preserveLineBreaks: true,
-    oversizedMarker: EXEC_APPROVAL_WARNING_OVERSIZED_MARKER,
-  });
+  return sanitizeExecApprovalDisplayTextInternal(
+    warningText.replace(/\r\n?/g, "\n").replace(/[\u2028\u2029]/g, "\n"),
+    { preserveLineBreaks: true, oversizedMarker: EXEC_APPROVAL_WARNING_OVERSIZED_MARKER },
+  );
 }
 
 /** Checks the existing approval code-point cap without materializing every character. */

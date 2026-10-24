@@ -1,79 +1,150 @@
-// Delivery preview tests cover dry-run delivery plan output for cron jobs.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  deleteSessionEntryLifecycle,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+  resetSessionEntryLifecycle,
+} from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
+import {
+  createChannelTestPluginBase,
+  createDirectOutboundTestAdapter,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  normalizeSessionDeliveryState,
+  type DeliveryContext,
+} from "../utils/delivery-context.shared.js";
+import { resolveCronDeliveryPreview, resolveCronDeliveryPreviews } from "./delivery-preview.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
-import type { CronJob } from "./types.js";
+import * as deliveryTargets from "./isolated-agent/delivery-target.js";
+import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
+import type { CronDelivery, CronJob, CronStoredJob } from "./types.js";
 
-const mocks = vi.hoisted(() => ({
-  resolveDeliveryTarget: vi.fn(),
-}));
+afterEach(() => resetPluginRuntimeStateForTest());
 
-vi.mock("./isolated-agent/delivery-target.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./isolated-agent/delivery-target.js")>()),
-  resolveDeliveryTarget: mocks.resolveDeliveryTarget,
-  prepareCronDeliveryTargetContexts: async (_cfg: unknown, requests: unknown[]) =>
-    requests.map(() => ({
-      ok: true,
-      value: { mainSessionKey: "agent:main:main", usedSharedMainFallback: false },
-    })),
-}));
-
-const { resolveCronDeliveryPreviews } = await import("./delivery-preview.js");
-
-async function previewForJob(job: CronJob) {
-  const previews = await resolveCronDeliveryPreviews({ cfg: {} as never, jobs: [job] });
-  return previews[job.id]!;
+const sourceRoute = { channel: "telegram", to: "recipient" };
+function currentJob(id: string, agentId = id) {
+  return makeCronJob({
+    id,
+    agentId,
+    sessionTarget: "current",
+    sessionKey: `agent:${agentId}:dashboard:current-origin`,
+    delivery: { mode: "announce" },
+  });
+}
+function sessionEntry(
+  context: DeliveryContext | undefined,
+  sessionId = "source-session",
+  updatedAt = 1,
+) {
+  return { sessionId, updatedAt, delivery: normalizeSessionDeliveryState({ context }) };
 }
 
-describe("resolveCronDeliveryPreview", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.resolveDeliveryTarget.mockResolvedValue({
-      ok: true,
-      channel: "telegram",
-      to: "direct-123",
-      mode: "implicit",
-    });
+function blockedPreview(detail = "will be blocked", destination = "last") {
+  return { label: `announce -> ${destination}`, detail: expect.stringContaining(detail) };
+}
+
+function externalPreview(to: string) {
+  return {
+    label: `announce -> telegram:${to}`,
+    detail: "commits to the destination conversation; sends one external notification",
+  };
+}
+
+function conversationPreview(destination = "current session") {
+  return {
+    label: `announce -> ${destination}`,
+    detail: "commits to this conversation (no external channel route)",
+  };
+}
+
+function target(cfg: OpenClawConfig, job: CronStoredJob, delivery = job.delivery) {
+  return resolveDeliveryTarget(cfg, "main", {
+    ...delivery,
+    sessionKey: job.sessionKey,
+    sessionTarget: job.sessionTarget,
+    sourceConversation: job.sourceConversation,
   });
+}
 
-  it("prefers sessionTarget session context over creator sessionKey", async () => {
-    const job = makeCronJob({
-      agentId: "avery",
-      sessionTarget: "session:agent:avery:telegram:direct:direct-123",
-      sessionKey: "agent:avery:telegram:group:ops:sender:direct-123",
-      delivery: undefined,
-    });
-
-    const preview = await previewForJob(job);
-
-    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
-      {},
-      "avery",
-      expect.objectContaining({
-        channel: "last",
-        sessionKey: "agent:avery:telegram:direct:direct-123",
-        sessionTarget: job.sessionTarget,
-      }),
-      expect.objectContaining({ dryRun: true }),
+async function withCurrentOrigin(
+  options: {
+    surface?: string;
+    channelCount?: number;
+    delivery?: CronDelivery;
+    source?: DeliveryContext;
+    sessionTarget?: "current" | "isolated";
+  },
+  check: (fixture: {
+    cfg: OpenClawConfig;
+    job: CronStoredJob;
+    preview: () => ReturnType<typeof resolveCronDeliveryPreview>;
+  }) => Promise<void>,
+) {
+  await withOpenClawTestState({ layout: "home" }, async (state) => {
+    setActivePluginRegistry(
+      createTestRegistry(
+        ["telegram", "discord"].slice(0, options.channelCount ?? 1).map((id) => ({
+          pluginId: id,
+          plugin: {
+            ...createChannelTestPluginBase({ id }),
+            outbound: createDirectOutboundTestAdapter({ channel: id }),
+          },
+          source: "test",
+        })),
+      ),
     );
-    expect(preview.detail).toBe(
-      "resolved from last, session agent:avery:telegram:direct:direct-123",
+    const sessionKey = `agent:main:${options.surface ?? "dashboard"}:current-origin`;
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
+      session: { store: storePath },
+    };
+    // Keep fixture maintenance outside the preview read counter.
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey, storePath },
+      sessionEntry(
+        options.source ?? (options.surface === "webchat" ? { channel: "webchat" } : undefined),
+      ),
     );
-  });
-
-  it("does not resolve routes for explicit no-delivery jobs", async () => {
-    const job = makeCronJob({
-      delivery: { mode: "none" },
-      sessionTarget: "isolated",
+    const job: CronStoredJob = makeCronJob({
+      agentId: "main",
+      sessionTarget: options.sessionTarget ?? "current",
+      sessionKey,
+      delivery: options.delivery ?? { mode: "announce" },
     });
-
-    const preview = await previewForJob(job);
-
-    expect(preview).toEqual({ label: "not requested", detail: "not requested" });
-    expect(mocks.resolveDeliveryTarget).not.toHaveBeenCalled();
+    if (options.sessionTarget === "isolated") {
+      job.sourceConversation = { sessionKey, sessionId: "source-session" };
+    }
+    await check({ cfg, job, preview: () => resolveCronDeliveryPreview({ cfg, job }) });
   });
+}
 
-  it("lists a refused agent's repair reason beside healthy delivery previews", async () => {
+it("prefers the persistent target over the creator's route", () =>
+  withCurrentOrigin({ source: sourceRoute }, async ({ cfg, job, preview }) => {
+    const sessionKey = "agent:main:telegram:direct:persistent-recipient";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath: cfg.session!.store! },
+      sessionEntry({ ...sourceRoute, to: "persistent-recipient" }, "persistent-session"),
+    );
+    job.sessionTarget = `session:${sessionKey}`;
+    expect(await preview()).toEqual(externalPreview("persistent-recipient"));
+  }));
+
+it("lists a refused agent's repair reason beside a healthy preview", () =>
+  withCurrentOrigin({ source: sourceRoute }, async ({ cfg, job }) => {
     const refusal = {
       agentId: "cleaner",
       paths: ["/synthetic/cleaner/openclaw-agent.sqlite"],
@@ -84,130 +155,334 @@ describe("resolveCronDeliveryPreview", () => {
     };
     recordAgentDatabaseAdmissions([refusal]);
     try {
-      const previews = await resolveCronDeliveryPreviews({
-        cfg: {},
-        jobs: [
-          makeCronJob({ id: "healthy", agentId: "main" }),
-          makeCronJob({ id: "refused", agentId: "cleaner" }),
-        ],
+      expect(
+        await resolveCronDeliveryPreviews({ cfg, jobs: [job, currentJob("cleaner")] }),
+      ).toEqual({
+        [job.id]: externalPreview("recipient"),
+        cleaner: {
+          label: "agent cleaner unavailable",
+          detail: `${refusal.reason}\n${refusal.repairHint}`,
+        },
       });
-      expect(previews.healthy?.label).toBe("announce -> telegram:direct-123");
-      expect(previews.refused).toEqual({
-        label: "agent cleaner unavailable",
-        detail: `${refusal.reason}\n${refusal.repairHint}`,
-      });
-      expect(mocks.resolveDeliveryTarget).toHaveBeenCalledTimes(1);
     } finally {
       recordAgentDatabaseAdmissions([]);
     }
-  });
+  }));
 
-  it("previews explicit message-tool targets on no-delivery jobs", async () => {
-    const job = makeCronJob({
-      agentId: "avery",
-      delivery: {
-        mode: "none",
-        channel: "topicchat",
-        to: "room#42",
-        threadId: 42,
-        accountId: "ops",
-      },
-      sessionTarget: "isolated",
-    });
+it.each([
+  { delivery: { mode: "none" }, channelCount: 1, label: "not requested", detail: "not requested" },
+  {
+    delivery: {
+      mode: "none",
+      channel: "telegram",
+      to: "recipient",
+      accountId: "ops",
+      threadId: 42,
+    },
+    channelCount: 1,
+    label: "none -> telegram:recipient",
+    detail: "explicit",
+  },
+  {
+    delivery: { mode: "none", threadId: 0 },
+    channelCount: 0,
+    label: "none -> last",
+    detail: expect.stringContaining("message tool target unresolved:"),
+  },
+] as const)(
+  "previews message-tool delivery $delivery",
+  ({ delivery, channelCount, label, detail }) =>
+    withCurrentOrigin({ delivery, channelCount }, async ({ cfg, job, preview }) => {
+      const resolveTarget = vi.spyOn(deliveryTargets, "resolveDeliveryTarget");
+      try {
+        expect(await preview()).toEqual({ label, detail });
+        if (label === "not requested") {
+          expect(resolveTarget).not.toHaveBeenCalled();
+        } else {
+          expect(resolveTarget).toHaveBeenCalledWith(
+            cfg,
+            "main",
+            expect.objectContaining({
+              ...delivery,
+              sessionKey: job.sessionKey,
+              sessionTarget: job.sessionTarget,
+            }),
+            expect.objectContaining({ dryRun: true }),
+          );
+        }
+      } finally {
+        resolveTarget.mockRestore();
+      }
+    }),
+);
 
-    const preview = await previewForJob(job);
+it.each(["single", "batch"] as const)(
+  "resolves %s previews without routing history beside healthy jobs",
+  (mode) =>
+    withCurrentOrigin({ source: sourceRoute }, async ({ job }) => {
+      const cfg: OpenClawConfig = { agents: { entries: { main: {}, missing: {} } } };
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "missing" });
+      expect(fs.existsSync(databasePath)).toBe(false);
+      const missing = currentJob("missing-current", "missing");
+      const explicit = {
+        ...missing,
+        id: "missing-explicit",
+        delivery: { mode: "announce", channel: "telegram", to: "explicit-recipient" },
+      } satisfies CronJob;
+      const jobs = [
+        { ...job, id: "healthy" },
+        missing,
+        { ...missing, id: "missing-last", sessionTarget: "isolated" as const },
+        explicit,
+      ];
+      const previews =
+        mode === "batch"
+          ? await resolveCronDeliveryPreviews({ cfg, jobs })
+          : Object.fromEntries(
+              await Promise.all(
+                jobs.map(async (entry) => [
+                  entry.id,
+                  await resolveCronDeliveryPreview({ cfg, job: entry }),
+                ]),
+              ),
+            );
+      expect(previews).toEqual({
+        healthy: externalPreview("recipient"),
+        "missing-current": conversationPreview(),
+        "missing-last": blockedPreview(
+          "last -> no route, will be blocked: Delivering to telegram requires target",
+        ),
+        "missing-explicit": externalPreview("explicit-recipient"),
+      });
+      expect(fs.existsSync(databasePath)).toBe(false);
+    }),
+);
 
-    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
-      {},
-      "avery",
-      expect.objectContaining({
-        channel: "topicchat",
-        to: "room#42",
-        threadId: 42,
-        accountId: "ops",
-        sessionKey: undefined,
-        sessionTarget: "isolated",
-      }),
-      expect.objectContaining({ dryRun: true }),
+it("records a lost metadata table beside two healthy delivery previews", () =>
+  withCurrentOrigin({ source: sourceRoute }, async ({ job }) => {
+    const cfg: OpenClawConfig = { agents: { entries: { main: {}, interrupted: {} } } };
+    const interrupted = currentJob("interrupted");
+    replaceSessionEntrySync(
+      { agentId: "interrupted", sessionKey: interrupted.sessionKey! },
+      { sessionId: "interrupted-source", updatedAt: 1 },
     );
-    expect(preview).toEqual({
-      label: "none -> telegram:direct-123",
-      detail: "explicit",
+    const { db } = getOpenClawAgentDatabaseIfOpen({ agentId: "interrupted" })!;
+    db.exec("DROP TABLE session_nodes");
+    const previews = await resolveCronDeliveryPreviews({
+      cfg,
+      jobs: [
+        { ...job, id: "healthy-current" },
+        interrupted,
+        {
+          ...job,
+          id: "healthy-explicit",
+          delivery: { mode: "announce", channel: "telegram", to: "other-recipient" },
+        },
+      ],
     });
-  });
-
-  it("previews current-target announce with no external route as a conversation commit", async () => {
-    mocks.resolveDeliveryTarget.mockResolvedValueOnce({
-      ok: false,
-      channel: undefined,
-      mode: "implicit",
-      error: new Error("Channel is required (no configured channels detected)."),
-    });
-    const job = makeCronJob({
-      sessionTarget: "current",
-      sessionKey: "agent:main:dashboard:c5557dcf",
-      delivery: undefined,
-    });
-
-    const preview = await previewForJob(job);
-
-    expect(preview).toEqual({
-      label: "announce -> current session",
-      detail: "commits to this conversation (no external channel route)",
-    });
-  });
-
-  it("keeps unavailable external plugin routes fail-closed", async () => {
-    mocks.resolveDeliveryTarget.mockResolvedValueOnce({
-      ok: false,
-      channel: "unavailable-plugin",
-      mode: "implicit",
-      error: new Error("Channel plugin unavailable"),
-    });
-    const job = makeCronJob({
-      sessionTarget: "current",
-      sessionKey: "agent:main:dashboard:c5557dcf",
-      delivery: undefined,
-    });
-
-    const preview = await previewForJob(job);
-
-    expect(preview).toEqual({
-      label: "announce -> last",
-      detail: "last -> no route, will fail-closed: Channel plugin unavailable",
-    });
-  });
-
-  it("does not describe unresolved no-delivery message-tool targets as fail-closed", async () => {
-    mocks.resolveDeliveryTarget.mockResolvedValueOnce({
-      ok: false,
-      mode: "implicit",
-      error: new Error("no route"),
-    });
-    const job = makeCronJob({
-      agentId: "avery",
-      delivery: {
-        mode: "none",
-        threadId: 0,
+    expect(previews).toEqual({
+      "healthy-current": externalPreview("recipient"),
+      interrupted: {
+        label: "announce -> last",
+        detail: expect.stringMatching(/^delivery preview unavailable: .*table-missing/u),
       },
-      sessionTarget: "isolated",
+      "healthy-explicit": externalPreview("other-recipient"),
     });
+  }));
 
-    const preview = await previewForJob(job);
+it("uses a recovered source route when the configured primary store is absent", () =>
+  withCurrentOrigin(
+    { source: { ...sourceRoute, accountId: "work", threadId: "topic" } },
+    async ({ cfg, job, preview }) => {
+      const primaryPath = path.join(path.dirname(cfg.session!.store!), "absent-primary.sqlite");
+      cfg.session = { store: primaryPath };
+      expect(fs.existsSync(primaryPath)).toBe(false);
 
-    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
-      {},
-      "avery",
-      expect.objectContaining({
-        threadId: 0,
-        sessionKey: undefined,
-        sessionTarget: "isolated",
-      }),
-      expect.objectContaining({ dryRun: true }),
+      await expect(target(cfg, job, { mode: "announce", channel: "last" })).resolves.toMatchObject({
+        ok: true,
+        channel: "telegram",
+        to: "recipient",
+        accountId: "work",
+        threadId: "topic",
+        mode: "implicit",
+      });
+      const expected = externalPreview("recipient");
+      expect(await preview()).toEqual(expected);
+      expect(await resolveCronDeliveryPreviews({ cfg, jobs: [job] })).toEqual({
+        [job.id]: expected,
+      });
+      expect(fs.existsSync(primaryPath)).toBe(false);
+    },
+  ));
+
+it("shares alias reads across a preview batch and refreshes routes on the next request", () =>
+  withCurrentOrigin({ channelCount: 1 }, async ({ cfg, job }) => {
+    const storePath = cfg.session!.store!;
+    for (let index = 0; index < 64; index++) {
+      replaceSessionEntrySync(
+        { agentId: "main", storePath, sessionKey: `agent:main:dashboard:other-${index}` },
+        { sessionId: `other-${index}`, updatedAt: 1 },
+      );
+    }
+    const database = getOpenClawAgentDatabaseIfOpen({ agentId: "main" })!;
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["sessions"],
+      (sql) => (sql.includes('from "session_nodes"') ? "sessions" : null),
     );
-    expect(preview).toEqual({
-      label: "none -> last",
-      detail: "message tool target unresolved: no route",
+    const jobs = Array.from({ length: 53 }, (_, index) => ({ ...job, id: `preview-${index}` }));
+    const agentsRoot = path.dirname(path.dirname(path.dirname(storePath)));
+    const checkBatch = async (label: string) => {
+      const rosterReads = vi.spyOn(fs, "readdirSync");
+      try {
+        const previews = await resolveCronDeliveryPreviews({ cfg, jobs });
+        expect(Object.keys(previews)).toEqual(jobs.map((entry) => entry.id));
+        expect(Object.values(previews).map((entry) => entry.label)).toEqual(jobs.map(() => label));
+        expect(
+          rosterReads.mock.calls.filter(([directory]) => directory === agentsRoot),
+        ).toHaveLength(1);
+      } finally {
+        rosterReads.mockRestore();
+      }
+    };
+    try {
+      await checkBatch("announce -> current session");
+      // One store-sized read scope, independent of the number of repeated jobs.
+      expect(reads.rowCounts.sessions).toBeLessThanOrEqual(4 * 65);
+    } finally {
+      reads.restore();
+    }
+    await replaceSessionEntry(
+      { agentId: "main", storePath, sessionKey: job.sessionKey! },
+      sessionEntry(sourceRoute),
+    );
+    await checkBatch("announce -> telegram:recipient");
+  }));
+
+it.each([
+  { surface: "dashboard", channelCount: 2, sessionTarget: "current" as const },
+  { surface: "webchat", channelCount: 1, sessionTarget: "current" as const },
+  { surface: "dashboard", channelCount: 2, sessionTarget: "isolated" as const },
+  { surface: "webchat", channelCount: 1, sessionTarget: "isolated" as const },
+])(
+  "keeps a $sessionTarget $surface completion in its conversation with $channelCount unrelated channels",
+  (options) =>
+    withCurrentOrigin(options, async ({ preview }) => {
+      expect(await preview()).toEqual(
+        conversationPreview(
+          options.sessionTarget === "current" ? "current session" : "creating conversation",
+        ),
+      );
+    }),
+);
+
+it.each([
+  { coordinates: { channel: "telegram" }, channelCount: 1 },
+  { coordinates: { to: "recipient" }, channelCount: 1 },
+  { coordinates: { to: "recipient" }, channelCount: 0 },
+  { coordinates: { accountId: "work" }, channelCount: 0 },
+  { coordinates: { threadId: 0 }, channelCount: 2 },
+  {
+    coordinates: { channel: "telegram", to: "recipient", accountId: "work", threadId: "topic" },
+    channelCount: 1,
+  },
+])(
+  "retains explicit delivery coordinates $coordinates with $channelCount channels",
+  ({ coordinates, channelCount }) =>
+    withCurrentOrigin(
+      { channelCount, delivery: { mode: "announce", ...coordinates } },
+      async ({ cfg, job, preview }) => {
+        const resolved = await target(cfg, job);
+        expect(resolved).toMatchObject({
+          ...(channelCount === 1 && "to" in coordinates ? coordinates : {}),
+          channel: channelCount === 1 ? "telegram" : undefined,
+          ok: channelCount === 1 && "to" in coordinates,
+        });
+        if (channelCount !== 1) {
+          expect(await preview()).toMatchObject(
+            blockedPreview("will be blocked", "to" in coordinates ? "last:recipient" : "last"),
+          );
+        }
+      },
+    ),
+);
+
+it.each(["current", "isolated"] as const)(
+  "retains an unavailable external source route for %s",
+  (sessionTarget) =>
+    withCurrentOrigin(
+      { sessionTarget, source: { channel: "unavailable-plugin", to: "recipient" } },
+      async ({ cfg, job, preview }) => {
+        const resolved = await target(cfg, job);
+        expect(resolved).toMatchObject({ ok: false, channel: "unavailable-plugin" });
+        expect((await preview()).detail).toContain("will be blocked");
+      },
+    ),
+);
+
+it("uses the creating conversation route without a public session key", () =>
+  withCurrentOrigin(
+    { sessionTarget: "isolated", source: sourceRoute },
+    async ({ job, preview }) => {
+      job.sessionKey = undefined;
+      expect(await preview()).toEqual(externalPreview("recipient"));
+    },
+  ));
+
+it("does not rebind implicit delivery when the public session key changes", () =>
+  withCurrentOrigin({ sessionTarget: "isolated" }, async ({ cfg, job, preview }) => {
+    const otherSessionKey = "agent:main:dashboard:other-conversation";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: otherSessionKey, storePath: cfg.session!.store! },
+      sessionEntry({ channel: "telegram", to: "other-recipient" }, "other-session", 2),
+    );
+    job.sessionKey = otherSessionKey;
+    expect(await preview()).toEqual(conversationPreview("creating conversation"));
+    job.delivery = { mode: "announce", channel: "telegram", to: "other-recipient" };
+    expect(await preview()).toEqual(externalPreview("other-recipient"));
+  }));
+
+it.each(["replacement-session", "source-session"])(
+  "rejects a replacement conversation's external route with sessionId=%s",
+  (sessionId) =>
+    withCurrentOrigin({ sessionTarget: "isolated" }, async ({ cfg, job, preview }) => {
+      const sessionKey = job.sessionKey!;
+      await resetSessionEntryLifecycle({
+        agentId: "main",
+        storePath: cfg.session!.store!,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+        buildNextEntry: () => ({
+          ...sessionEntry({ channel: "telegram", to: "replacement-recipient" }, sessionId, 2),
+          lifecycleRevision: "replacement-generation",
+        }),
+      });
+      expect(await preview()).toMatchObject(blockedPreview("original session generation"));
+    }),
+);
+
+it("never redirects a deleted creating conversation to the shared main route", () =>
+  withCurrentOrigin({ sessionTarget: "isolated" }, async ({ cfg, job }) => {
+    const sessionKey = job.sessionKey!;
+    const storePath = cfg.session!.store!;
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:main", storePath },
+      sessionEntry({ channel: "telegram", to: "other-recipient" }, "other-conversation", 2),
+    );
+    await deleteSessionEntryLifecycle({
+      agentId: "main",
+      storePath,
+      archiveTranscript: false,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
     });
-  });
-});
+    const { ok, channel } = await target(cfg, job);
+    expect({ ok, channel }).toEqual({ ok: false, channel: undefined });
+  }));
+
+it.each([0, 1])(
+  "keeps command announcements on their channel path with %i channels",
+  (channelCount) =>
+    withCurrentOrigin({ channelCount }, async ({ job, preview }) => {
+      job.payload = { kind: "command", argv: ["echo", "report"] };
+      expect(await preview()).toMatchObject(blockedPreview());
+    }),
+);

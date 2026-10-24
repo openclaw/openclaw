@@ -1,187 +1,150 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openMeetingWithBrowser, recoverMeetingBrowserTab } from "./browser-controller.js";
 import { isMeetingBrowserTransientNavigationError } from "./browser-navigation-errors.js";
+import type { MeetingBrowserRequestCaller } from "./platform-adapter-contract.js";
 
-describe("meeting browser navigation errors", () => {
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
+const meetingUrl = "https://meet.test/meeting";
+
+function createBrowser(onFirstEvaluation: () => void) {
+  const adoption: boolean[] = [];
+  const captureCaptions: boolean[] = [];
+  const timeouts: number[] = [];
+  const state = { evaluations: 0, adoption, captions: captureCaptions, timeouts };
+  const adapter: Parameters<typeof openMeetingWithBrowser>[0]["adapter"] = {
+    browserLabel: "Test meeting",
+    urls: {
+      accountHint: () => undefined,
+      buildJoinUrl: (session) => session.url,
+      isPreferredJoinUrl: () => true,
+      isRecoverableTab: () => true,
+      isSameMeeting: () => true,
+      localeAction: () => undefined,
+      normalizeForReuse: () => "test-meeting",
+      validateAndNormalize: (input) => String(input),
+    },
+    browser: {
+      allowsMicrophone: () => false,
+      browserControlUnavailable: () => ({
+        category: "browser-control-unavailable",
+        reason: "browser-unavailable",
+        message: "Browser unavailable.",
+      }),
+      buildLeaveScript: () => "",
+      captions: {
+        buildTranscriptScript: () => "",
+        enabled: () => false,
+        parseTranscript: () => ({ droppedLines: 0, lines: [] }),
+      },
+      classifyManualAction: () => undefined,
+      parseLeaveResult: () => ({ departed: false }),
+      parseStatus: () => ({ status: "browser-control", inCall: true }),
+      permissions: () => undefined,
+      permissionNotes: () => [],
+      buildStatusJoinScript: (params) => {
+        state.adoption.push(params.allowSessionAdoption);
+        state.captions.push(params.captureCaptions);
+        return "() => '{}'";
+      },
+    },
+  };
+  const callBrowser: MeetingBrowserRequestCaller = async (request) => {
+    if (request.path === "/tabs") {
+      return { tabs: [{ targetId: "target-1", url: meetingUrl }] };
+    }
+    if (request.path === "/act") {
+      state.timeouts.push(request.timeoutMs);
+      if (++state.evaluations === 1) {
+        onFirstEvaluation();
+      }
+    }
+    return {};
+  };
+  return { adapter, callBrowser, state };
+}
+
+function makeConfig(timeoutMs: number) {
+  return {
+    launch: true,
+    reuseExistingTab: true,
+    autoJoin: true,
+    guestName: "OpenClaw QA",
+    joinTimeoutMs: timeoutMs,
+    waitForInCallMs: timeoutMs,
+  };
+}
+
+describe("meeting browser", () => {
   it.each([
-    "page.evaluate: Execution context was destroyed, most likely because of a navigation.",
-    "Protocol error: Cannot find context with specified id",
-  ])("retries expected navigation races: %s", (message) => {
-    expect(isMeetingBrowserTransientNavigationError(new Error(message))).toBe(true);
+    ["Protocol error: Cannot find context with specified id", true],
+    ["browser unavailable", false],
+  ] as const)("classifies navigation failure %s as transient=%s", (message, transient) => {
+    expect(isMeetingBrowserTransientNavigationError(new Error(message))).toBe(transient);
   });
-
-  it("does not retry unrelated browser-control failures", () => {
-    expect(isMeetingBrowserTransientNavigationError(new Error("browser unavailable"))).toBe(false);
-  });
-});
-
-describe("meeting browser join readiness", () => {
-  it("retries a platform-owned transient in-call status", async () => {
-    const adoptionAttempts: boolean[] = [];
-    const captionCaptureAttempts: boolean[] = [];
-    let evaluationAttempts = 0;
-    const result = await openMeetingWithBrowser({
-      adapter: {
-        browserLabel: "Test meeting",
-        urls: {
-          accountHint: () => undefined,
-          buildJoinUrl: (session) => session.url,
-          isPreferredJoinUrl: () => true,
-          isRecoverableTab: () => true,
-          isSameMeeting: () => true,
-          localeAction: () => undefined,
-          normalizeForReuse: () => "test-meeting",
-          validateAndNormalize: (input) => String(input),
-        },
-        browser: {
-          allowsMicrophone: () => true,
-          browserControlUnavailable: () => ({
-            category: "browser-control-unavailable",
-            reason: "browser-unavailable",
-            message: "Browser unavailable.",
-          }),
-          buildLeaveScript: () => "",
-          buildStatusJoinScript: (params) => {
-            adoptionAttempts.push(params.allowSessionAdoption);
-            captionCaptureAttempts.push(params.captureCaptions);
-            return "() => '{}'";
-          },
-          captions: {
-            buildTranscriptScript: () => "",
-            enabled: () => true,
-            parseTranscript: () => ({ droppedLines: 0, lines: [] }),
-          },
-          classifyManualAction: (health) =>
-            health.manualAction
-              ? { category: "audio-choice-required", reason: "audio-choice", message: "Wait." }
-              : undefined,
-          parseLeaveResult: () => ({ departed: false }),
-          parseStatus: () =>
-            evaluationAttempts === 1
-              ? {
-                  inCall: true,
-                  manualAction: { reason: "audio-choice", message: "Wait." },
-                  micMuted: false,
-                }
-              : { inCall: true, micMuted: false },
-          permissions: () => undefined,
-          permissionNotes: () => [],
-          shouldRetryJoinStatus: (health) => health.manualAction?.reason === "audio-choice",
-        },
-      },
-      callBrowser: async (request) => {
-        if (request.path === "/tabs") {
-          return { tabs: [{ targetId: "target-1", url: "https://meet.test/meeting" }] };
-        }
-        if (request.path === "/act") {
-          evaluationAttempts += 1;
-        }
-        return {};
-      },
-      config: {
-        launch: true,
-        reuseExistingTab: true,
-        autoJoin: true,
-        guestName: "OpenClaw QA",
-        joinTimeoutMs: 1_000,
-        waitForInCallMs: 1_000,
-      },
+  it("retries a platform-owned transient in-call status across a wall-clock jump", async () => {
+    const { adapter, callBrowser, state } = createBrowser(() =>
+      vi.setSystemTime(Date.now() + 60_000),
+    );
+    const manualAction = { reason: "audio-choice", message: "Wait." };
+    adapter.browser = {
+      ...adapter.browser,
+      allowsMicrophone: () => true,
+      captions: { ...adapter.browser.captions, enabled: () => true },
+      classifyManualAction: (health) =>
+        health.manualAction && { category: "audio-choice-required", ...manualAction },
+      parseStatus: () => ({
+        inCall: true,
+        micMuted: false,
+        ...(state.evaluations === 1 ? { manualAction } : {}),
+      }),
+      shouldRetryJoinStatus: (health) => health.manualAction?.reason === "audio-choice",
+    };
+    const joining = openMeetingWithBrowser({
+      adapter,
+      callBrowser,
+      config: makeConfig(1_000),
       session: {
         captureCaptions: false,
         meetingSessionId: "session-1",
         mode: "agent",
-        url: "https://meet.test/meeting",
+        url: meetingUrl,
       },
     });
+    await vi.advanceTimersByTimeAsync(750);
+    const result = await joining;
 
-    expect(evaluationAttempts).toBe(2);
-    expect(adoptionAttempts).toEqual([true, false]);
-    expect(captionCaptureAttempts).toEqual([false, false]);
-    expect(result.browser).toMatchObject({
-      inCall: true,
-      micMuted: false,
-    });
+    expect(state.evaluations).toBe(2);
+    expect(state.adoption).toEqual([true, false]);
+    expect(state.captions).toEqual([false, false]);
+    expect(result.browser).toMatchObject({ inCall: true, micMuted: false });
   });
-});
-
-describe("meeting browser recovery", () => {
-  it("retries status inspection when auto-join navigation destroys the page context", async () => {
-    const adoptionAttempts: boolean[] = [];
-    let evaluationAttempts = 0;
-    const evaluationTimeouts: number[] = [];
-    const result = await recoverMeetingBrowserTab({
-      adapter: {
-        browserLabel: "Test meeting",
-        urls: {
-          accountHint: () => undefined,
-          buildJoinUrl: (session) => session.url,
-          isPreferredJoinUrl: () => true,
-          isRecoverableTab: () => true,
-          isSameMeeting: () => true,
-          localeAction: () => undefined,
-          normalizeForReuse: () => "test-meeting",
-          validateAndNormalize: (input) => String(input),
-        },
-        browser: {
-          allowsMicrophone: () => false,
-          browserControlUnavailable: () => ({
-            category: "browser-control-unavailable",
-            reason: "browser-unavailable",
-            message: "Browser unavailable.",
-          }),
-          buildLeaveScript: () => "",
-          buildStatusJoinScript: (params) => {
-            adoptionAttempts.push(params.allowSessionAdoption);
-            return "() => '{}'";
-          },
-          captions: {
-            buildTranscriptScript: () => "",
-            enabled: () => false,
-            parseTranscript: () => ({ droppedLines: 0, lines: [] }),
-          },
-          classifyManualAction: () => undefined,
-          parseLeaveResult: () => ({ departed: false }),
-          parseStatus: () => ({ status: "browser-control", inCall: true }),
-          permissions: () => undefined,
-          permissionNotes: () => [],
-        },
-      },
+  it("keeps navigation recovery within its budget across a wall-clock rollback", async () => {
+    const { adapter, callBrowser, state } = createBrowser(() => {
+      vi.setSystemTime(Date.now() - 60_000);
+      throw new Error("page.evaluate: Execution context was destroyed because of navigation");
+    });
+    const recovering = recoverMeetingBrowserTab({
+      adapter,
       allowSessionAdoption: true,
       autoJoin: true,
-      callBrowser: async (request) => {
-        if (request.path === "/tabs") {
-          return { tabs: [{ targetId: "target-1", url: "https://meet.test/meeting" }] };
-        }
-        if (request.path === "/act") {
-          evaluationAttempts += 1;
-          evaluationTimeouts.push(request.timeoutMs);
-          if (evaluationAttempts === 1) {
-            throw new Error("page.evaluate: Execution context was destroyed because of navigation");
-          }
-        }
-        return {};
-      },
-      config: {
-        launch: true,
-        reuseExistingTab: true,
-        autoJoin: true,
-        guestName: "OpenClaw QA",
-        joinTimeoutMs: 2_000,
-        waitForInCallMs: 2_000,
-      },
+      callBrowser,
+      config: makeConfig(2_000),
       locationLabel: "for testing",
       meetingSessionId: "session-1",
       mode: "listen",
-      requestedMeetingUrl: "https://meet.test/meeting",
+      requestedMeetingUrl: meetingUrl,
       timeoutMs: 500,
-      trackedMeetingUrl: "https://meet.test/meeting",
+      trackedMeetingUrl: meetingUrl,
       trackedTargetId: "target-1",
     });
+    await vi.advanceTimersByTimeAsync(250);
+    const result = await recovering;
 
-    expect(evaluationAttempts).toBe(2);
-    expect(adoptionAttempts).toEqual([true, false]);
-    expect(evaluationTimeouts[0]).toBeLessThanOrEqual(500);
-    expect(evaluationTimeouts[1]).toBeLessThan(evaluationTimeouts[0] ?? 0);
+    expect(state.evaluations).toBe(2);
+    expect(state.adoption).toEqual([true, false]);
+    expect(state.timeouts[0]).toBeLessThanOrEqual(500);
+    expect(state.timeouts[1]).toBeLessThan(state.timeouts[0] ?? 0);
     expect(result.browser).toMatchObject({
       inCall: true,
       notes: ["Test meeting navigated while recovering; retrying browser inspection."],

@@ -72,22 +72,19 @@ export function createOAuthRefreshFence(params: {
     ...rest
   } = params.credential;
   const claimId = randomBytes(16).toString("hex");
+  const marker = (kind: "access" | "refresh", secret: string) =>
+    `${OAUTH_REFRESH_FENCE_PREFIX}${claimId}:${kind}:${buildOAuthRefreshSecretDigest({
+      profileId: params.profileId,
+      provider: params.credential.provider,
+      kind,
+      secret,
+    })}`;
   return {
     ...rest,
     type: "oauth",
     provider: params.credential.provider,
-    access: `${OAUTH_REFRESH_FENCE_PREFIX}${claimId}:access:${buildOAuthRefreshSecretDigest({
-      profileId: params.profileId,
-      provider: params.credential.provider,
-      kind: "access",
-      secret: access,
-    })}`,
-    refresh: `${OAUTH_REFRESH_FENCE_PREFIX}${claimId}:refresh:${buildOAuthRefreshSecretDigest({
-      profileId: params.profileId,
-      provider: params.credential.provider,
-      kind: "refresh",
-      secret: refresh,
-    })}`,
+    access: marker("access", access),
+    refresh: marker("refresh", refresh),
     expires: 1,
   };
 }
@@ -126,17 +123,24 @@ export function isSameOAuthRefreshGeneration(params: {
   if (params.left.provider !== params.right.provider) {
     return false;
   }
-  const leftFence = parseOAuthRefreshFence(params.left);
-  const rightFence = parseOAuthRefreshFence(params.right);
-  const refreshDigest = (credential: OAuthCredential) =>
+  return (
+    readOAuthRefreshGenerationDigest({ profileId: params.profileId, credential: params.left }) ===
+    readOAuthRefreshGenerationDigest({ profileId: params.profileId, credential: params.right })
+  );
+}
+
+/** The same secret-free generation identity for a credential and its durable fence. */
+function readOAuthRefreshGenerationDigest(params: {
+  profileId: string;
+  credential: OAuthCredential;
+}): string {
+  return (
+    parseOAuthRefreshFence(params.credential)?.refreshDigest ??
     buildOAuthRefreshSecretDigest({
       profileId: params.profileId,
-      provider: credential.provider,
+      provider: params.credential.provider,
       kind: "refresh",
-      secret: credential.refresh,
-    });
-  return (
-    (leftFence?.refreshDigest ?? refreshDigest(params.left)) ===
-    (rightFence?.refreshDigest ?? refreshDigest(params.right))
+      secret: params.credential.refresh,
+    })
   );
 }

@@ -1,8 +1,6 @@
-// Qa Channel setup module handles plugin onboarding behavior.
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { DEFAULT_ACCOUNT_ID } from "./accounts.js";
-import type { CoreConfig } from "./types.js";
+import { patchScopedAccountConfig } from "openclaw/plugin-sdk/setup";
 
 export type QaChannelSetupInput = ChannelSetupInput & {
   baseUrl?: string;
@@ -15,32 +13,18 @@ export function applyQaSetup(params: {
   accountId: string;
   input: QaChannelSetupInput;
 }): OpenClawConfig {
-  const nextCfg = structuredClone(params.cfg) as CoreConfig;
-  const section = nextCfg.channels?.["qa-channel"] ?? {};
-  const accounts = { ...section.accounts };
-  const target =
-    params.accountId === DEFAULT_ACCOUNT_ID ? { ...section } : { ...accounts[params.accountId] };
-  if (typeof params.input.baseUrl === "string") {
-    target.baseUrl = params.input.baseUrl;
+  const patch: Record<string, unknown> = {};
+  for (const key of ["baseUrl", "botUserId", "botDisplayName"] as const) {
+    if (typeof params.input[key] === "string") {
+      patch[key] = params.input[key];
+    }
   }
-  if (typeof params.input.botUserId === "string") {
-    target.botUserId = params.input.botUserId;
-  }
-  if (typeof params.input.botDisplayName === "string") {
-    target.botDisplayName = params.input.botDisplayName;
-  }
-  nextCfg.channels ??= {};
-  if (params.accountId === DEFAULT_ACCOUNT_ID) {
-    nextCfg.channels["qa-channel"] = {
-      ...section,
-      ...target,
-    };
-  } else {
-    accounts[params.accountId] = target;
-    nextCfg.channels["qa-channel"] = {
-      ...section,
-      accounts,
-    };
-  }
-  return nextCfg as OpenClawConfig;
+  return patchScopedAccountConfig({
+    cfg: params.cfg,
+    channelKey: "qa-channel",
+    accountId: params.accountId,
+    patch,
+    ensureChannelEnabled: false,
+    ensureAccountEnabled: false,
+  });
 }

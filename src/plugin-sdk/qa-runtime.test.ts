@@ -1,507 +1,537 @@
+import { once } from "node:events";
+import fs from "node:fs";
 import { createServer } from "node:net";
-/**
- * Tests QA runtime command loading and private CLI gating.
- */
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  cleanupTempDirs,
-  expectPrivateQaLabRuntimeSurfaceLoad,
-  expectQaLabRuntimeSurfaceLoad,
-  restorePrivateQaCliEnv,
-} from "./qa-runtime.test-helpers.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { LiveTransportQaCliRegistrationOptions, QaDockerRunCommand } from "./qa-runtime.js";
 
+const loadPluginManifestRegistryCore = vi.hoisted(() => vi.fn());
+const loadBundledPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const tryLoadActivatedBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 const resolveOpenClawPackageRootSync = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Exercise discovery with synthetic bundled manifests, not installed plugins.
+vi.mock("../plugins/manifest-registry-build.js", () => ({ loadBundledPluginManifestRegistry }));
+// mock-isolation: Control the manifest inventory independently of host plugin state.
+vi.mock("../plugins/manifest-registry.js", () => ({ loadPluginManifestRegistryCore }));
+// mock-isolation: Keep QA discovery/runtime tests on synthetic surfaces, never installed plugins.
 vi.mock("./facade-runtime.js", () => ({
   loadBundledPluginPublicSurfaceModuleSync,
+  tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
 }));
 
+// mock-isolation: Resolve only the temporary package roots created by this fixture.
 vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRootSync,
 }));
 
-describe("plugin-sdk qa-runtime", () => {
-  const tempDirs: string[] = [];
-  const originalPrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
-  const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+beforeAll(() => {
+  vi.resetModules();
+});
 
-  beforeAll(() => {
-    vi.resetModules();
-  });
+let runner: typeof import("./qa-runner-runtime.js");
+let module: typeof import("./qa-runtime.js");
+beforeEach(async () => {
+  loadPluginManifestRegistryCore.mockReset().mockReturnValue(registry([]));
+  loadBundledPluginManifestRegistry.mockReset().mockReturnValue(registry([]));
+  tryLoadActivatedBundledPluginPublicSurfaceModuleSync.mockReset();
+  loadBundledPluginPublicSurfaceModuleSync.mockReset();
+  resolveOpenClawPackageRootSync.mockReset().mockReturnValue(null);
+  vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", undefined);
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", undefined);
+  runner = await import("./qa-runner-runtime.js");
+  module = await import("./qa-runtime.js");
+});
 
-  beforeEach(() => {
-    loadBundledPluginPublicSurfaceModuleSync.mockReset();
-    resolveOpenClawPackageRootSync.mockReset().mockReturnValue(null);
-    delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  });
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    cleanupTempDirs(tempDirs);
-    restorePrivateQaCliEnv(originalPrivateQaCli);
-    if (originalBundledPluginsDir === undefined) {
-      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    } else {
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
-    }
-  });
-
-  async function occupyLoopbackPort(): Promise<{ close: () => Promise<void>; port: number }> {
-    const server = createServer();
-    const port = await new Promise<number>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          reject(new Error("test server address unavailable"));
-          return;
-        }
-        resolve(address.port);
+async function occupyLoopbackPort(): Promise<{ close: () => Promise<void>; port: number }> {
+  const server = createServer();
+  await once(server.listen(0, "127.0.0.1"), "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("test server address unavailable");
+  }
+  return {
+    port: address.port,
+    close: async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
       });
-    });
-    return {
-      port,
-      close: async () => {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
-      },
-    };
+    },
+  };
+}
+
+const dockerRuntime = () => module.createQaDockerRuntime({ auditContext: "qa-test" });
+const healthUrl = "http://127.0.0.1:18789/healthz";
+const composeFile = "/tmp/docker-compose.yml";
+const repoRoot = "/repo";
+const commandOutput = (stdout: string) => ({ stdout, stderr: "" });
+const registerCli = (
+  run: LiveTransportQaCliRegistrationOptions["run"],
+  overrides: Partial<LiveTransportQaCliRegistrationOptions> = {},
+) => {
+  const qa = new Command();
+  module
+    .createLiveTransportQaCliRegistration({ ...registrationOptions(run), ...overrides })
+    .register(qa);
+  return (args: string[] = []) => qa.parseAsync(["node", "openclaw", "telegram", ...args]);
+};
+
+function registrationOptions(
+  run: LiveTransportQaCliRegistrationOptions["run"],
+): LiveTransportQaCliRegistrationOptions {
+  return {
+    commandName: "telegram",
+    defaultProviderMode: "mock-openai",
+    description: "Synthetic transport registration",
+    providerModeHelp: "Provider mode",
+    outputDirHelp: "Artifact directory",
+    scenarioHelp: "Run only the named scenario",
+    sutAccountHelp: "Temporary SUT account",
+    run,
+  };
+}
+
+function cancelTrackedFetchResponse(ok = true) {
+  const cancel = vi.fn(async () => {});
+  return { response: { ok, body: { cancel } }, cancel };
+}
+
+it("stays cold until the runtime seam is used", async () => {
+  vi.resetModules();
+  await import("./qa-runtime.js");
+
+  expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["Unable to resolve bundled plugin public surface qa-lab/runtime-api.js", true],
+  ["Failed to evaluate qa-lab/runtime-api.js: invalid runtime export", false],
+] as const)("classifies loader failure: %s", (message, absent) => {
+  loadBundledPluginPublicSurfaceModuleSync.mockImplementation(() => {
+    throw new Error(message);
+  });
+  if (absent) {
+    expect(module.isQaRuntimeAvailable()).toBe(false);
+  } else {
+    expect(() => module.isQaRuntimeAvailable()).toThrow(message);
   }
+});
 
-  function cancelTrackedFetchResponse(ok = true) {
-    let canceled = false;
-    return {
-      response: {
-        ok,
-        body: {
-          cancel: vi.fn(async () => {
-            canceled = true;
-          }),
-        },
-      },
-      wasCanceled: () => canceled,
-    };
+it("runs a plugin-owned transport through the private QA suite host", async () => {
+  const runLiveTransportQaSuiteCommand = vi.fn(async () => {});
+  loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+    runLiveTransportQaSuiteCommand,
+  });
+  const options = { providerMode: "mock-openai" };
+  const selectScenarioIds = vi.fn(() => ["channel-canary"]);
+
+  const request = {
+    channelId: "buzz",
+    defaultProviderMode: "mock-openai",
+    options,
+    selectScenarioIds,
+  };
+  await module.runLiveTransportQaSuiteCommand(request);
+  expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith(request);
+});
+
+it("registers shared live transport QA CLI options", async () => {
+  const run = vi.fn(async () => {});
+  const parse = registerCli(run, {
+    credentialFileHelp: "Private JSON credential file",
+    credentialOptions: {
+      sourceDescription: "Credential source for Telegram QA",
+      roleDescription: "Credential role for Telegram QA",
+    },
+    defaultProviderMode: "live-frontier",
+    description: "Run Telegram QA",
+    listScenariosHelp: "List Telegram scenarios",
+    profileHelp: "QA profile",
+    failFastHelp: "Stop after first failure",
+    allowFailuresHelp: "Allow failures",
+  });
+
+  await parse();
+  expect(run).toHaveBeenCalledWith(expect.objectContaining({ fastMode: undefined }));
+  run.mockClear();
+
+  const mappings = [
+    ["repo-root", "/tmp/repo", "repoRoot"],
+    ["output-dir", ".artifacts/qa", "outputDir"],
+    ["provider-mode", "mock-openai", "providerMode"],
+    ["model", "primary", "primaryModel"],
+    ["alt-model", "alternate", "alternateModel"],
+    ["fast", true, "fastMode"],
+    ["allow-failures", true, "allowFailures"],
+    ["list-scenarios", true, "listScenarios"],
+    ["profile", "fast", "profile"],
+    ["fail-fast", true, "failFast"],
+    ["sut-account", "sut-2", "sutAccountId"],
+    ["credential-file", "/secure/telegram-qa.json", "credentialFile"],
+    ["credential-source", "convex", "credentialSource"],
+    ["credential-role", "maintainer", "credentialRole"],
+  ] as const;
+  await parse([
+    ...mappings.flatMap(([flag, value]) => (value === true ? [`--${flag}`] : [`--${flag}`, value])),
+    "--scenario",
+    "alpha",
+    "--scenario",
+    "  ",
+    "--scenario",
+    "beta",
+  ]);
+  expect(run).toHaveBeenCalledWith({
+    ...Object.fromEntries(mappings.map(([, value, key]) => [key, value])),
+    scenarioIds: ["alpha", "beta"],
+  });
+});
+
+it("reports a blank dedicated QA scenario selection without dispatching", async () => {
+  const dispatchedScenarioIds: string[][] = [];
+  const parse = registerCli(async (options) => {
+    dispatchedScenarioIds.push(options.scenarioIds ?? []);
+  });
+
+  const previousExitCode = process.exitCode;
+  const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  try {
+    await parse(["--scenario", " \t "]);
+
+    expect(stderrWrite).toHaveBeenCalledWith(
+      "--scenario must name at least one non-empty scenario id.\n",
+    );
+    expect(process.exitCode).toBe(1);
+  } finally {
+    process.exitCode = previousExitCode;
+    stderrWrite.mockRestore();
   }
+  expect(dispatchedScenarioIds).toEqual([]);
+});
 
-  it("stays cold until the runtime seam is used", async () => {
-    vi.resetModules();
-    await import("./qa-runtime.js");
+it("shares Docker health parsing across array and jsonl compose output", async () => {
+  const runtime = dockerRuntime();
+  const dockerPsOutputs = ['[{"Health":"starting"}]', '{"State":"running"}\n'];
+  const runCommand = vi.fn(async () =>
+    commandOutput(dockerPsOutputs.shift() ?? '{"State":"running"}'),
+  );
+  const sleepImpl = vi.fn(async () => {});
 
-    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+  await runtime.waitForDockerServiceHealth(
+    "homeserver",
+    composeFile,
+    repoRoot,
+    runCommand,
+    sleepImpl,
+  );
+
+  expect(runCommand).toHaveBeenCalledTimes(2);
+  expect(sleepImpl).toHaveBeenCalledTimes(1);
+});
+
+it("cancels compose service health probe response bodies", async () => {
+  const runtime = dockerRuntime();
+  const runCommand = vi.fn<QaDockerRunCommand>(async (_command, args) =>
+    commandOutput(args.includes("ps") ? "qa-gateway-one\n" : "172.18.0.4\n"),
+  );
+  const probe = cancelTrackedFetchResponse(true);
+  const fetchImpl = vi.fn(async () => probe.response);
+
+  await expect(
+    runtime.resolveComposeServiceUrl(
+      "gateway",
+      18789,
+      composeFile,
+      repoRoot,
+      runCommand,
+      fetchImpl,
+    ),
+  ).resolves.toBe("http://172.18.0.4:18789/");
+  expect(probe.cancel).toHaveBeenCalledOnce();
+});
+
+it("cancels the guarded default health response before stripping its body", async () => {
+  const cancel = vi.fn();
+  const response = new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 503 });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => response),
+  );
+  const runtime = dockerRuntime();
+
+  await expect(runtime.fetchHealthUrl(healthUrl)).resolves.toEqual({
+    ok: false,
+  });
+  expect(cancel).toHaveBeenCalledOnce();
+});
+
+it("cancels waitForHealth response bodies after each probe", async () => {
+  const runtime = dockerRuntime();
+  const first = cancelTrackedFetchResponse(false);
+  const second = cancelTrackedFetchResponse(true);
+  const responses = [first.response, second.response];
+  const fetchImpl = vi.fn(async () => responses.shift() ?? second.response);
+  const sleepImpl = vi.fn(async () => {});
+
+  await runtime.waitForHealth(healthUrl, {
+    fetchImpl,
+    sleepImpl,
+    timeoutMs: 1000,
+    pollMs: 1,
   });
 
-  it("loads the qa-lab runtime public surface through the generic seam", async () => {
-    await expectQaLabRuntimeSurfaceLoad({
-      importRuntime: () => import("./qa-runtime.js"),
-      loadBundledPluginPublicSurfaceModuleSync,
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+  expect(first.cancel).toHaveBeenCalledOnce();
+  expect(second.cancel).toHaveBeenCalledOnce();
+});
+
+it("bounds a stalled waitForHealth probe by the remaining overall deadline", async () => {
+  const runtime = dockerRuntime();
+  let probeSignal: AbortSignal | undefined;
+  const fetchImpl = vi.fn(async (_input: string, init?: Pick<RequestInit, "signal">) => {
+    probeSignal = init?.signal ?? undefined;
+    if (!probeSignal) {
+      throw new Error("health probe signal missing");
+    }
+    if (!probeSignal.aborted) {
+      await once(probeSignal, "abort");
+    }
+    throw new Error("health probe aborted");
+  });
+  const sleepImpl = vi.fn(async () => {});
+  const startedAt = Date.now();
+
+  await expect(
+    runtime.waitForHealth(healthUrl, {
+      fetchImpl,
+      sleepImpl,
+      timeoutMs: 25,
+      pollMs: 1_000,
+    }),
+  ).rejects.toThrow("did not become healthy");
+
+  expect(Date.now() - startedAt).toBeLessThan(500);
+  expect(fetchImpl).toHaveBeenCalledTimes(1);
+  expect(probeSignal?.aborted).toBe(true);
+  expect(sleepImpl).not.toHaveBeenCalled();
+});
+
+it("resolves an unpinned QA Docker host port away from an occupied loopback default", async () => {
+  const reservation = await occupyLoopbackPort();
+  try {
+    await expect(module.resolveQaDockerHostPort(reservation.port, true)).resolves.toBe(
+      reservation.port,
+    );
+    const fallbackPort = await module.resolveQaDockerHostPort(reservation.port, false);
+    expect(fallbackPort).toBeGreaterThan(0);
+    expect(fallbackPort).not.toBe(reservation.port);
+  } finally {
+    await reservation.close();
+  }
+});
+
+type ManifestRegistryCall = { env?: NodeJS.ProcessEnv };
+type PublicSurfaceCall = {
+  artifactBasename?: string;
+  dirName?: string;
+  env?: NodeJS.ProcessEnv;
+};
+
+function firstPublicSurfaceCall(): PublicSurfaceCall | undefined {
+  return loadBundledPluginPublicSurfaceModuleSync.mock.calls[0]?.[0] as
+    | PublicSurfaceCall
+    | undefined;
+}
+
+function plugin(origin = "bundled", rootDir = "/tmp/qa-example") {
+  return { id: "qa-example", origin, rootDir, qaRunners: [{ commandName: "example" }] };
+}
+
+function registry(plugins = [plugin()]) {
+  return { plugins, diagnostics: [] };
+}
+
+function registration() {
+  return {
+    commandName: "example",
+    adapterFactory: { id: "example", matches: vi.fn(), create: vi.fn() },
+    register: vi.fn(),
+  };
+}
+
+function installRunner<T extends ReturnType<typeof registration>>(entry: T, declared = plugin()) {
+  loadPluginManifestRegistryCore.mockReturnValue(registry([declared]));
+  loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({ qaRunnerCliRegistrations: [entry] });
+  return entry;
+}
+
+function contribution(entry?: ReturnType<typeof registration>) {
+  return {
+    pluginId: "qa-example",
+    commandName: "example",
+    status: entry ? "available" : "blocked",
+    ...(entry ? { registration: entry } : {}),
+  };
+}
+
+function privateEnv(sourceRoot: string) {
+  return expect.objectContaining({
+    OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(sourceRoot, "extensions"),
+  });
+}
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function makePrivateQaSourceRoot(prefix: string) {
+  const root = tempDirs.make(prefix);
+  for (const dir of ["src", "extensions"]) {
+    fs.mkdirSync(path.join(root, dir));
+  }
+  fs.writeFileSync(path.join(root, ".git"), "gitdir: /tmp/mock\n");
+  vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "1");
+  resolveOpenClawPackageRootSync.mockReturnValue(root);
+  return root;
+}
+
+describe("QA runner discovery", () => {
+  it.each([false, true])("loads the QA Lab surface with private source mode=%s", (privateMode) => {
+    const sourceRoot = privateMode ? makePrivateQaSourceRoot("qa-runtime-root-") : undefined;
+    const surface = { defaultQaRuntimeModelForMode: vi.fn(), createQaLiveLaneGateway: vi.fn() };
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue(surface);
+    expect(runner.loadQaRuntimeModule()).toBe(surface);
+    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+      dirName: "qa-lab",
+      artifactBasename: "runtime-api.js",
+      ...(sourceRoot
+        ? {
+            env: privateEnv(sourceRoot),
+          }
+        : {}),
+    });
+  });
+  it("loads bundled plugin test APIs with the private QA source tree override", async () => {
+    const sourceRoot = makePrivateQaSourceRoot("openclaw-qa-test-api-root-");
+
+    const testApi = { marker: "matrix-test-api" };
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue(testApi);
+
+    expect(runner.loadQaRunnerBundledPluginTestApi("matrix")).toBe(testApi);
+    expect(firstPublicSurfaceCall()).toMatchObject({
+      dirName: "matrix",
+      artifactBasename: "test-api.js",
+      env: privateEnv(sourceRoot),
     });
   });
 
-  it("uses the source bundled tree for qa-lab runtime loading in private qa mode", async () => {
-    await expectPrivateQaLabRuntimeSurfaceLoad({
-      tempDirs,
-      importRuntime: () => import("./qa-runtime.js"),
-      loadBundledPluginPublicSurfaceModuleSync,
-      resolveOpenClawPackageRootSync,
-    });
-  });
-
-  it("reports the runtime as unavailable when the qa-lab surface is missing", async () => {
+  it("reports the qa runtime as unavailable when the qa-lab surface is missing", async () => {
     loadBundledPluginPublicSurfaceModuleSync.mockImplementation(() => {
       throw new Error("Unable to resolve bundled plugin public surface qa-lab/runtime-api.js");
     });
 
-    const module = await import("./qa-runtime.js");
-
-    expect(module.isQaRuntimeAvailable()).toBe(false);
+    expect(runner.isQaRuntimeAvailable()).toBe(false);
   });
 
-  it("rethrows non-absence loader failures that mention the qa-lab runtime path", async () => {
-    loadBundledPluginPublicSurfaceModuleSync.mockImplementation(() => {
-      throw new Error("Failed to evaluate qa-lab/runtime-api.js: invalid runtime export");
-    });
+  it("returns activated runner registrations declared in plugin manifests", async () => {
+    const entry = registration();
+    const adapterFactory = {
+      ...entry.adapterFactory,
+      isolatesInstances: true,
+      supportsModuleFlows: true as const,
+    };
+    const declared = {
+      ...plugin(),
+      qaRunners: [{ commandName: "example", description: "Run the example live QA lane" }],
+    };
+    const registered = installRunner({ ...entry, adapterFactory }, declared);
 
-    const module = await import("./qa-runtime.js");
-
-    expect(() => module.isQaRuntimeAvailable()).toThrow(
-      "Failed to evaluate qa-lab/runtime-api.js: invalid runtime export",
-    );
-  });
-
-  it("runs a plugin-owned transport through the private QA suite host", async () => {
-    const runLiveTransportQaSuiteCommand = vi.fn(async () => {});
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
-      runLiveTransportQaSuiteCommand,
-    });
-    const module = await import("./qa-runtime.js");
-    const options = { providerMode: "mock-openai" };
-    const selectScenarioIds = vi.fn(() => ["channel-canary"]);
-
-    await module.runLiveTransportQaSuiteCommand({
-      channelId: "buzz",
-      defaultProviderMode: "mock-openai",
-      options,
-      selectScenarioIds,
-    });
-
-    expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith({
-      channelId: "buzz",
-      defaultProviderMode: "mock-openai",
-      options,
-      selectScenarioIds,
-    });
-  });
-
-  it("registers shared live transport QA CLI options", async () => {
-    const module = await import("./qa-runtime.js");
-    const run = vi.fn(async () => {});
-    const qa = new Command();
-
-    module
-      .createLiveTransportQaCliRegistration({
-        commandName: "telegram",
-        credentialFileHelp: "Private JSON credential file",
-        credentialOptions: {
-          sourceDescription: "Credential source for Telegram QA",
-          roleDescription: "Credential role for Telegram QA",
-        },
-        defaultProviderMode: "live-frontier",
-        description: "Run Telegram QA",
-        providerModeHelp: "Provider mode",
-        listScenariosHelp: "List Telegram scenarios",
-        outputDirHelp: "Telegram output directory",
-        profileHelp: "QA profile",
-        failFastHelp: "Stop after first failure",
-        allowFailuresHelp: "Allow failures",
-        scenarioHelp: "Run only the named scenario",
-        sutAccountHelp: "Temporary SUT account",
-        run,
-      })
-      .register(qa);
-
-    await qa.parseAsync(["node", "openclaw", "telegram"]);
-    expect(run).toHaveBeenCalledWith(expect.objectContaining({ fastMode: undefined }));
-    run.mockClear();
-
-    await qa.parseAsync([
-      "node",
-      "openclaw",
-      "telegram",
-      "--repo-root",
-      "/tmp/repo",
-      "--output-dir",
-      ".artifacts/qa",
-      "--provider-mode",
-      "mock-openai",
-      "--model",
-      "primary",
-      "--alt-model",
-      "alternate",
-      "--scenario",
-      "alpha",
-      "--scenario",
-      "  ",
-      "--scenario",
-      "beta",
-      "--fast",
-      "--allow-failures",
-      "--list-scenarios",
-      "--profile",
-      "fast",
-      "--fail-fast",
-      "--sut-account",
-      "sut-2",
-      "--credential-file",
-      "/secure/telegram-qa.json",
-      "--credential-source",
-      "convex",
-      "--credential-role",
-      "maintainer",
+    expect(runner.listQaRunnerCliContributions()).toEqual([
+      {
+        ...contribution(registered),
+        description: "Run the example live QA lane",
+      },
     ]);
-
-    expect(run).toHaveBeenCalledWith({
-      repoRoot: "/tmp/repo",
-      outputDir: ".artifacts/qa",
-      providerMode: "mock-openai",
-      primaryModel: "primary",
-      alternateModel: "alternate",
-      fastMode: true,
-      allowFailures: true,
-      failFast: true,
-      profile: "fast",
-      scenarioIds: ["alpha", "beta"],
-      listScenarios: true,
-      sutAccountId: "sut-2",
-      credentialFile: "/secure/telegram-qa.json",
-      credentialSource: "convex",
-      credentialRole: "maintainer",
+    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+      dirName: "qa-example",
+      artifactBasename: "qa-runner-api.js",
     });
   });
 
-  const rejectedScenarioSelection = {
-    kind: "rejected",
-    error: expect.objectContaining({ message: expect.stringContaining("--scenario") }),
-  };
-  it.each([
-    {
-      name: "empty value",
-      args: ["--scenario", ""],
-      outcome: rejectedScenarioSelection,
-      selections: [],
-    },
-    {
-      name: "whitespace value",
-      args: ["--scenario", " \t "],
-      outcome: rejectedScenarioSelection,
-      selections: [],
-    },
-    {
-      name: "empty assignment",
-      args: ["--scenario="],
-      outcome: rejectedScenarioSelection,
-      selections: [],
-    },
-    {
-      name: "repeated blanks",
-      args: ["--scenario", "", "--scenario", "  "],
-      outcome: rejectedScenarioSelection,
-      selections: [],
-    },
-    {
-      name: "omitted default",
-      args: [],
-      outcome: { kind: "dispatched" },
-      selections: [[]],
-    },
-    {
-      name: "named scenario",
-      args: ["--scenario", "alpha"],
-      outcome: { kind: "dispatched" },
-      selections: [["alpha"]],
-    },
-    {
-      name: "mixed blanks and duplicate valid ids",
-      args: ["--scenario", "", "--scenario", " alpha ", "--scenario", "  ", "--scenario", "alpha"],
-      outcome: { kind: "dispatched" },
-      selections: [["alpha", "alpha"]],
-    },
-  ])("guards dedicated QA scenario selection: $name", async ({ args, outcome, selections }) => {
-    const module = await import("./qa-runtime.js");
-    const qa = new Command();
-    const dispatchedScenarioIds: string[][] = [];
-    module
-      .createLiveTransportQaCliRegistration({
-        commandName: "sample-transport",
-        defaultProviderMode: "mock-openai",
-        description: "Synthetic transport registration",
-        providerModeHelp: "Provider mode",
-        outputDirHelp: "Artifact directory",
-        scenarioHelp: "Run only the named scenario",
-        sutAccountHelp: "Temporary SUT account",
-        // Keep the callback inert: this checks real parsing without a provider or Gateway.
-        run: async (options) => {
-          dispatchedScenarioIds.push(options.scenarioIds ?? []);
-        },
-      })
-      .register(qa);
-
-    const actual = await qa.parseAsync(["node", "openclaw", "sample-transport", ...args]).then(
-      () => ({ kind: "dispatched" }),
-      (error: unknown) => ({ kind: "rejected", error }),
-    );
-
-    expect(actual).toEqual(outcome);
-    expect(dispatchedScenarioIds).toEqual(selections);
-  });
-
-  it("shares Docker health parsing across array and jsonl compose output", async () => {
-    const module = await import("./qa-runtime.js");
-    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
-    const dockerPsOutputs = ['[{"Health":"starting"}]', '{"State":"running"}\n'];
-    const runCommand = vi.fn(async () => ({
-      stdout: dockerPsOutputs.shift() ?? '{"State":"running"}',
-      stderr: "",
-    }));
-    const sleepImpl = vi.fn(async () => {});
-
-    await runtime.waitForDockerServiceHealth(
-      "homeserver",
-      "/tmp/docker-compose.yml",
-      "/repo",
-      runCommand,
-      sleepImpl,
-    );
-
-    expect(runCommand).toHaveBeenCalledTimes(2);
-    expect(sleepImpl).toHaveBeenCalledTimes(1);
-  });
-
-  it("normalizes multiline Docker compose service lookup output", async () => {
-    const module = await import("./qa-runtime.js");
-    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
-    const runCommand = vi.fn(async (command: string, args: string[], cwd: string) => {
-      expect(command).toBe("docker");
-      expect(cwd).toBe("/repo");
-
-      if (args.includes("ps") && args.includes("-q")) {
-        return {
-          stdout: "\nqa-gateway-one\nqa-gateway-two\n",
-          stderr: "",
-        };
-      }
-
-      if (args[0] === "inspect") {
-        expect(args.at(-1)).toBe("qa-gateway-one");
-        return {
-          stdout: "\n172.18.0.4\n172.19.0.4\n",
-          stderr: "",
-        };
-      }
-
-      throw new Error(`unexpected docker args: ${args.join(" ")}`);
+  it("rejects invalid module-flow support metadata", async () => {
+    const entry = registration();
+    installRunner({
+      ...entry,
+      adapterFactory: { ...entry.adapterFactory, supportsModuleFlows: false },
     });
-    const fetchImpl = vi.fn(async (url: string) => ({
-      ok: url === "http://172.18.0.4:18789/healthz",
-    }));
 
-    await expect(
-      runtime.resolveComposeServiceUrl(
-        "gateway",
-        18789,
-        "/tmp/docker-compose.yml",
-        "/repo",
-        runCommand,
-        fetchImpl,
+    expect(() => runner.listQaRunnerCliContributions()).toThrow(
+      'QA runner plugin "qa-example" exported an invalid transport factory for "example"',
+    );
+  });
+
+  it("reports declared runners as blocked when the plugin is present but not activated", async () => {
+    loadPluginManifestRegistryCore.mockReturnValue(registry([plugin("workspace")]));
+    tryLoadActivatedBundledPluginPublicSurfaceModuleSync.mockReturnValue(null);
+
+    expect(runner.listQaRunnerCliContributions()).toEqual([contribution()]);
+  });
+
+  it("prefers the source bundled tree for private qa discovery in repo checkouts", async () => {
+    const sourceRoot = makePrivateQaSourceRoot("openclaw-qa-runner-root-");
+
+    const entry = registration();
+    loadBundledPluginManifestRegistry.mockReturnValue(
+      registry([plugin("bundled", path.join(sourceRoot, "extensions", "qa-example"))]),
+    );
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      qaRunnerCliRegistrations: [entry],
+    });
+
+    expect(runner.listQaRunnerCliContributions()).toEqual([contribution(entry)]);
+    const manifestCall = loadBundledPluginManifestRegistry.mock.calls[0]?.[0] as
+      | ManifestRegistryCall
+      | undefined;
+    expect(manifestCall).toMatchObject({ env: privateEnv(sourceRoot) });
+    expect(firstPublicSurfaceCall()).toMatchObject({
+      dirName: "qa-example",
+      artifactBasename: "qa-runner-api.js",
+      env: privateEnv(sourceRoot),
+    });
+  });
+
+  it("fails fast when two plugins declare the same qa runner command", async () => {
+    loadPluginManifestRegistryCore.mockReturnValue(
+      registry(
+        ["alpha", "beta"].map((id) => ({
+          id,
+          origin: "workspace",
+          rootDir: `/tmp/${id}`,
+          qaRunners: [{ commandName: "matrix" }],
+        })),
       ),
-    ).resolves.toBe("http://172.18.0.4:18789/");
-
-    expect(runCommand).toHaveBeenCalledTimes(2);
-    expect(fetchImpl).toHaveBeenCalledWith("http://172.18.0.4:18789/healthz", {
-      signal: expect.any(AbortSignal),
-    });
-  });
-
-  it("cancels compose service health probe response bodies", async () => {
-    const module = await import("./qa-runtime.js");
-    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
-    const runCommand = vi.fn(async (_command: string, args: string[]) => {
-      if (args.includes("ps")) {
-        return { stdout: "qa-gateway-one\n", stderr: "" };
-      }
-      return { stdout: "172.18.0.4\n", stderr: "" };
-    });
-    const probe = cancelTrackedFetchResponse(true);
-    const fetchImpl = vi.fn(async () => probe.response);
-
-    await expect(
-      runtime.resolveComposeServiceUrl(
-        "gateway",
-        18789,
-        "/tmp/docker-compose.yml",
-        "/repo",
-        runCommand,
-        fetchImpl,
-      ),
-    ).resolves.toBe("http://172.18.0.4:18789/");
-    expect(probe.wasCanceled()).toBe(true);
-  });
-
-  it("cancels the guarded default health response before stripping its body", async () => {
-    const cancel = vi.fn();
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        cancel,
-      }),
-      { status: 503 },
     );
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => response),
-    );
-    const module = await import("./qa-runtime.js");
-    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue(null);
 
-    await expect(runtime.fetchHealthUrl("http://127.0.0.1:18789/healthz")).resolves.toEqual({
-      ok: false,
-    });
-    expect(cancel).toHaveBeenCalledOnce();
+    expect(() => runner.listQaRunnerCliContributions()).toThrow(
+      'QA runner command "matrix" declared by both "alpha" and "beta"',
+    );
   });
 
-  it("cancels waitForHealth response bodies after each probe", async () => {
-    const module = await import("./qa-runtime.js");
-    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
-    const first = cancelTrackedFetchResponse(false);
-    const second = cancelTrackedFetchResponse(true);
-    const responses = [first.response, second.response];
-    const fetchImpl = vi.fn(async () => responses.shift() ?? second.response);
-    const sleepImpl = vi.fn(async () => {});
-
-    await runtime.waitForHealth("http://127.0.0.1:18789/healthz", {
-      fetchImpl,
-      sleepImpl,
-      timeoutMs: 1000,
-      pollMs: 1,
+  it("fails when runtime registrations include an undeclared command", async () => {
+    loadPluginManifestRegistryCore.mockReturnValue(registry());
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      qaRunnerCliRegistrations: [registration(), { commandName: "extra", register: vi.fn() }],
     });
 
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(first.wasCanceled()).toBe(true);
-    expect(second.wasCanceled()).toBe(true);
-  });
-
-  it("bounds a stalled waitForHealth probe by the remaining overall deadline", async () => {
-    const module = await import("./qa-runtime.js");
-    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
-    let probeSignal: AbortSignal | undefined;
-    const fetchImpl = vi.fn(
-      async (_input: string, init?: Pick<RequestInit, "signal">) =>
-        await new Promise<never>((_resolve, reject) => {
-          probeSignal = init?.signal ?? undefined;
-          if (!probeSignal) {
-            reject(new Error("health probe signal missing"));
-            return;
-          }
-          const rejectAborted = () => reject(new Error("health probe aborted"));
-          if (probeSignal.aborted) {
-            rejectAborted();
-            return;
-          }
-          probeSignal.addEventListener("abort", rejectAborted, { once: true });
-        }),
+    expect(() => runner.listQaRunnerCliContributions()).toThrow(
+      'QA runner plugin "qa-example" exported "extra" from its QA runner surface but did not declare it in openclaw.plugin.json',
     );
-    const sleepImpl = vi.fn(async () => {});
-    const startedAt = Date.now();
-
-    await expect(
-      runtime.waitForHealth("http://127.0.0.1:18789/healthz", {
-        fetchImpl,
-        sleepImpl,
-        timeoutMs: 25,
-        pollMs: 1_000,
-      }),
-    ).rejects.toThrow("did not become healthy");
-
-    expect(Date.now() - startedAt).toBeLessThan(500);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(probeSignal?.aborted).toBe(true);
-    expect(sleepImpl).not.toHaveBeenCalled();
-  });
-
-  it("resolves an unpinned QA Docker host port away from an occupied loopback default", async () => {
-    const module = await import("./qa-runtime.js");
-    const reservation = await occupyLoopbackPort();
-    try {
-      await expect(module.resolveQaDockerHostPort(reservation.port, true)).resolves.toBe(
-        reservation.port,
-      );
-      const fallbackPort = await module.resolveQaDockerHostPort(reservation.port, false);
-      expect(fallbackPort).toBeGreaterThan(0);
-      expect(fallbackPort).not.toBe(reservation.port);
-    } finally {
-      await reservation.close();
-    }
   });
 });

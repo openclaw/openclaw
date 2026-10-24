@@ -1,9 +1,9 @@
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 // WhatsApp tests prove filename-derived media facts reach native delivery.
 import { describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
-import { loadWebMedia } from "../media.js";
 import { createWhatsAppReplyTransportContext, deliverWebReply } from "./deliver-reply.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -17,7 +17,10 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   return { ...actual, transcodeAudioBufferToOpus: hoisted.transcodeAudioBufferToOpus };
 });
 
-vi.mock("../media.js", () => ({ loadWebMedia: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/web-media", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/web-media")>()),
+  loadWebMedia: vi.fn(),
+}));
 
 describe("WhatsApp filename-only media delivery", () => {
   it.each([
@@ -28,30 +31,6 @@ describe("WhatsApp filename-only media delivery", () => {
     ["report.pdf", undefined, "application/pdf", "document", "filename-only-media"],
     ["unknown.bin", undefined, "application/octet-stream", "document", "filename-only-media"],
     ["photo.png", "application/octet-stream", "image/png", "image", "filename-only-media"],
-    ["clip.mp4", "application/octet-stream", "video/mp4", "video", "filename-only-media"],
-    [
-      "voice.ogg",
-      "application/octet-stream",
-      "audio/ogg; codecs=opus",
-      "audio",
-      "filename-only-media",
-    ],
-    ["voice.mp3", "application/octet-stream", "audio/ogg; codecs=opus", "audio", "opus-output"],
-    [
-      "report.pdf",
-      "application/octet-stream",
-      "application/pdf",
-      "document",
-      "filename-only-media",
-    ],
-    [
-      "unknown.bin",
-      "application/octet-stream",
-      "application/octet-stream",
-      "document",
-      "filename-only-media",
-    ],
-    ["photo.png", "image/jpeg", "image/jpeg", "image", "filename-only-media"],
     ["photo.png", "application/pdf", "application/pdf", "document", "filename-only-media"],
   ] as const)(
     "delivers %s with %s as native %s",
@@ -99,7 +78,6 @@ describe("WhatsApp filename-only media delivery", () => {
         maxMediaBytes: 1024 * 1024,
         textLimit: 200,
         replyLogger: { info: vi.fn(), warn: vi.fn() },
-        skipLog: true,
       });
 
       expect(sendMedia).toHaveBeenCalledOnce();

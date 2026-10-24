@@ -1,87 +1,61 @@
-import { getRuntimeConfig } from "../config/config.js";
-import { purgeExpiredSecretStoreEntries } from "../secrets/store/secret-store.js";
+import { createConfigIO } from "../config/io.factory.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import {
+  getSecretStoreExpiryDeadline,
+  purgeExpiredSecretStoreEntries,
+  subscribeSecretStoreChanges,
+} from "../secrets/store/secret-store.js";
+import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
 import {
   createGitHubOAuthLifecycle,
   installActiveGitHubOAuthLifecycle,
 } from "./github-oauth-lifecycle.js";
+import { startGitHubPublicationDiscovery } from "./github-publication-discovery.js";
 import { createModelAccountConnectService } from "./model-account-connect.js";
 import {
   broadcastChatMetadataChanged,
   type createGatewayChatMetadataLifecycle,
 } from "./server-chat-metadata-lifecycle.js";
+import { attachSessionChangeEventLifetime } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
+import { startIncognitoSessionLifetime } from "./session-incognito-lifetime.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 
 type GatewayChatMetadataLifecycle = Awaited<ReturnType<typeof createGatewayChatMetadataLifecycle>>;
-const SECRET_STORE_EXPIRY_INTERVAL_MS = 60_000;
-const GITHUB_PUBLICATION_RECONCILE_INTERVAL_MS = 60_000;
-
-function startGitHubPublicationMaintenance(
-  reconcile: () => Promise<void>,
-  logWarning: (message: string) => void,
-): GatewayPostReadySidecarHandle {
-  let current: Promise<void> | undefined;
-  let stopped = false;
-  const run = () => {
-    if (stopped || current) {
-      return;
-    }
-    const operation = reconcile()
-      .catch(() => logWarning("GitHub publication recovery failed; will retry."))
-      .finally(() => {
-        if (current === operation) {
-          current = undefined;
-        }
-      });
-    current = operation;
-  };
-  run();
-  const interval = setInterval(run, GITHUB_PUBLICATION_RECONCILE_INTERVAL_MS);
-  interval.unref?.();
-  return {
-    stop: async () => {
-      stopped = true;
-      clearInterval(interval);
-      await current;
-    },
-  };
-}
-
-function startSecretStoreExpiryMaintenance(
-  logWarning: (message: string) => void,
-): GatewayPostReadySidecarHandle {
-  let warned = false;
-  const purge = () => {
-    try {
-      purgeExpiredSecretStoreEntries();
-      warned = false;
-    } catch {
-      if (!warned) {
-        logWarning("Secret store expiry cleanup failed; will retry.");
-        warned = true;
-      }
-    }
-  };
-  purge();
-  const interval = setInterval(purge, SECRET_STORE_EXPIRY_INTERVAL_MS);
-  interval.unref?.();
-  return { stop: () => clearInterval(interval) };
-}
 
 export async function attachInitialGatewayLifetimeSidecars(params: {
+  scheduler: GatewayScheduler;
   chatMetadataLifecycle: GatewayChatMetadataLifecycle;
   gatewayRequestContext: GatewayRequestContext;
-  flushPendingSessionsChangedEvents: (context?: object) => void;
+  flushPendingSessionsChangedEvents: (context?: object) => Promise<void>;
   minimalTestGateway: boolean;
   logWarning: (message: string) => void;
   reconcileGitHubPublications?: () => Promise<void>;
   publishSidecars: GatewaySidecarStopOwner["publish"];
 }): Promise<void> {
+  // Kernel preparation precedes HTTP/internal dispatch. Incognito has no restart inventory.
+  params.publishSidecars(
+    startIncognitoSessionLifetime({
+      scheduler: params.scheduler,
+      context: params.gatewayRequestContext,
+      logWarning: params.logWarning,
+    }),
+  );
   await params.chatMetadataLifecycle.attachContext(
     params.gatewayRequestContext,
     params.publishSidecars,
   );
+  if (!params.minimalTestGateway) {
+    const { startSessionCostUsageProjectionLifetime } =
+      await import("./session-cost-usage-lifetime.js");
+    params.publishSidecars(
+      startSessionCostUsageProjectionLifetime({
+        getConfig: params.gatewayRequestContext.getRuntimeConfig,
+        warn: params.logWarning,
+      }),
+    );
+  }
   const modelAccountConnect = createModelAccountConnectService({
     getConfig: params.gatewayRequestContext.getRuntimeConfig,
     onChanged: () => broadcastChatMetadataChanged(params.gatewayRequestContext),
@@ -96,13 +70,20 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
     },
   });
   const githubOAuth = createGitHubOAuthLifecycle({
+    scheduler: params.scheduler,
     getConfig: params.gatewayRequestContext.getRuntimeConfig,
-    getPersistedConfig: () => getRuntimeConfig({ pin: false }),
+    getPersistedConfig: () => createConfigIO().loadConfigAsync(),
     warn: params.logWarning,
   });
   params.gatewayRequestContext.githubOAuthService = githubOAuth;
   const uninstallGitHubOAuth = installActiveGitHubOAuthLifecycle(githubOAuth);
   if (!params.minimalTestGateway) {
+    params.publishSidecars(
+      startGitHubPublicationDiscovery({
+        scheduler: params.scheduler,
+        projection: getSessionRowProjection(params.gatewayRequestContext),
+      }),
+    );
     githubOAuth.start();
   }
   params.publishSidecars({
@@ -115,16 +96,77 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
     },
   });
   if (!params.minimalTestGateway) {
-    params.publishSidecars(startSecretStoreExpiryMaintenance(params.logWarning));
+    const expiryScheduler = params.scheduler.scope();
+    let warned = false;
+    let running = false;
+    const scheduleExpiry = (atMs: number) => {
+      if (!expiryScheduler.signal.aborted) {
+        expiryScheduler.schedule({
+          id: "maintenance:secret-expiry",
+          atMs,
+          mode: "earliest",
+          run: sweep,
+        });
+      }
+    };
+    const sweep = async () => {
+      if (running) {
+        return;
+      }
+      running = true;
+      try {
+        await purgeExpiredSecretStoreEntries();
+        warned = false;
+        const next = getSecretStoreExpiryDeadline();
+        if (next !== null) {
+          scheduleExpiry(next ?? expiryScheduler.now());
+        }
+      } catch {
+        if (!warned) {
+          params.logWarning("Secret store expiry cleanup failed; will retry.");
+          warned = true;
+        }
+        scheduleExpiry(expiryScheduler.now() + 60_000);
+      } finally {
+        running = false;
+      }
+    };
+    const unsubscribe = subscribeSecretStoreChanges(() => scheduleExpiry(expiryScheduler.now()));
+    const unsubscribeLifecycle = registerOpenClawStateDatabaseLifecycleListener((event) => {
+      if (event.kind !== "opened") {
+        scheduleExpiry(expiryScheduler.now());
+      }
+    });
+    expiryScheduler.signal.addEventListener(
+      "abort",
+      () => {
+        unsubscribe();
+        unsubscribeLifecycle();
+      },
+      { once: true },
+    );
+    params.publishSidecars(expiryScheduler);
+    scheduleExpiry(expiryScheduler.now());
   }
-  if (params.reconcileGitHubPublications) {
+  const reconcileGitHubPublications = params.reconcileGitHubPublications;
+  if (reconcileGitHubPublications) {
     params.publishSidecars(
-      startGitHubPublicationMaintenance(params.reconcileGitHubPublications, params.logWarning),
+      params.scheduler.schedule({
+        id: "maintenance:github-publication",
+        atMs: params.scheduler.now(),
+        everyMs: 60_000,
+        run: () =>
+          reconcileGitHubPublications().catch(() =>
+            params.logWarning("GitHub publication recovery failed; will retry."),
+          ),
+      }),
     );
   }
-  params.publishSidecars({
-    stop: () => {
-      params.flushPendingSessionsChangedEvents(params.gatewayRequestContext);
-    },
-  });
+  attachSessionChangeEventLifetime(params.gatewayRequestContext, () =>
+    params.publishSidecars({
+      stop: async () => {
+        await params.flushPendingSessionsChangedEvents(params.gatewayRequestContext);
+      },
+    }),
+  );
 }

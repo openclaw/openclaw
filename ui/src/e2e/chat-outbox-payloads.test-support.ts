@@ -1,7 +1,35 @@
-import type { BrowserContext, Page } from "playwright";
+import { crc32, deflateSync } from "node:zlib";
+import type { BrowserContext, Locator, Page } from "playwright";
 import { expect } from "vitest";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
 import { readOutboxPayloadAttachments } from "./chat-flow.test-support.ts";
+function pngChunk(type: string, data: Buffer): Buffer {
+  const chunk = Buffer.alloc(data.length + 12);
+  chunk.writeUInt32BE(data.length, 0);
+  chunk.write(type, 4, "ascii");
+  data.copy(chunk, 8);
+  chunk.writeUInt32BE(crc32(chunk.subarray(4, -4)), chunk.length - 4);
+  return chunk;
+}
+
+export function sizedOutboxPng(size: number, color = 255): Buffer {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(1, 0);
+  header.writeUInt32BE(1, 4);
+  header[8] = 8;
+  header[9] = 6;
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdr = pngChunk("IHDR", header);
+  const idat = pngChunk("IDAT", deflateSync(Buffer.from([0, color, 100, 180, 255])));
+  const iend = pngChunk("IEND", Buffer.alloc(0));
+  // A CRC-covered tEXt ancillary chunk pads a decodable PNG, not trailing junk.
+  const padding = Buffer.alloc(
+    size - signature.length - ihdr.length - idat.length - iend.length - 12,
+    120,
+  );
+  padding.write("Padding\0", 0, "ascii");
+  return Buffer.concat([signature, ihdr, pngChunk("tEXt", padding), idat, iend]);
+}
 
 export const outboxPayloadFile = {
   name: "mock-original.txt",
@@ -11,10 +39,27 @@ export const outboxPayloadFile = {
 export const outboxPayloadHistory = [
   { role: "assistant", content: "Mock Gateway: payload lifecycle proof." },
 ];
+export const outboxPageOptions = {
+  serviceWorkers: "block" as const,
+  viewport: { width: 1280, height: 900 },
+};
+export const outboxButton = (target: Page | Locator, name: string) =>
+  target.getByRole("button", { name, exact: true });
 export const outboxPaneFor = (page: Page) =>
   page.locator('openclaw-chat-pane[aria-hidden="false"]');
 export const outboxComposerFor = (page: Page) =>
   outboxPaneFor(page).locator(".agent-chat__composer-combobox textarea");
+export const sendOutboxMessage = (page: Page) =>
+  outboxButton(outboxPaneFor(page), "Send message").click();
+export const outboxAttachment = {
+  type: "file",
+  mimeType: outboxPayloadFile.mimeType,
+  fileName: outboxPayloadFile.name,
+  origin: "file",
+  content: outboxPayloadFile.buffer.toString("base64"),
+};
+export const expectOutboxPayload = async (page: Page, key: string) =>
+  expect(await readOutboxPayloadBytes(page, key)).toEqual([outboxAttachment.content]);
 
 export async function readOutboxQueue(page: Page): Promise<ChatQueueItem[]> {
   return page.evaluate(() =>
@@ -78,8 +123,7 @@ export async function outboxChatUrl(
     await context.route(`${url.origin}/**`, async (route) => {
       const target = new URL(route.request().url());
       target.hostname = "127.0.0.1";
-      const response = await route.fetch({ url: target.href });
-      await route.fulfill({ response });
+      await route.continue({ url: target.href });
     });
   }
   return url.href;

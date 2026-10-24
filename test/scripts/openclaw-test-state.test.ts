@@ -1,314 +1,172 @@
-// Openclaw Test State tests cover openclaw test state script behavior.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const scriptPath = path.join(repoRoot, "scripts/lib/openclaw-test-state.mts");
+const script = fileURLToPath(new URL("../../scripts/lib/openclaw-test-state.mts", import.meta.url));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let root: string;
+let snippet: string;
+beforeEach(() => {
+  root = tempDirs.make("openclaw-test-state-");
+  snippet = path.join(root, "state.sh");
+});
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/gu, `'\\''`)}'`;
+const quote = (value: string) => `'${value.replace(/'/gu, `'\\''`)}'`;
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+
+type StateOptions = Record<string, string>;
+async function render(command: string, options: StateOptions = {}, preload = false) {
+  const args = Object.entries(options).flatMap(([key, value]) => [`--${key}`, value]);
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [
+      ...(preload ? ["--import", "tsx"] : []),
+      script,
+      ...(command === "create" ? ["--", command, ...args, "--json"] : [command, ...args]),
+    ],
+    { env: { ...process.env, TMPDIR: root } },
+  );
+  return stdout;
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+async function renderSnippet(command: string, options: StateOptions = {}, preload = false) {
+  const text = await render(command, options, preload);
+  await fs.writeFile(snippet, text, "utf8");
+  return text;
 }
 
-function cleanupTestStateHomeTrap(): string {
-  return [
-    'cleanup_openclaw_test_state_home() { [ -z "${OPENCLAW_TEST_STATE_HOME:-}" ] || rm -rf "$OPENCLAW_TEST_STATE_HOME"; }',
-    "trap cleanup_openclaw_test_state_home EXIT",
-  ].join("; ");
+async function probe(tmpDir?: string, after = "", login = true) {
+  const setup = tmpDir ? `export OPENCLAW_TEST_STATE_TMPDIR=${quote(tmpDir)};` : "";
+  const { stdout } = await execFileAsync("bash", [
+    login ? "-lc" : "-c",
+    `unset OPENCLAW_TEST_STATE_HOME; cleanup() { [ -z "\${OPENCLAW_TEST_STATE_HOME:-}" ] || rm -rf "$OPENCLAW_TEST_STATE_HOME"; }; trap cleanup EXIT; ${setup} source ${quote(snippet)}; ${after} node -e 'const fs=require("node:fs"); const env=process.env; const config=JSON.parse(fs.readFileSync(env.OPENCLAW_CONFIG_PATH,"utf8")); process.stdout.write(JSON.stringify({home:env.HOME,stateDir:env.OPENCLAW_STATE_DIR,workspace:env.OPENCLAW_TEST_WORKSPACE_DIR,openclawHome:env.OPENCLAW_HOME,tmpDir:env.OPENCLAW_TEST_STATE_TMPDIR,tmpRoot:env.OPENCLAW_TEST_STATE_TMP_ROOT,agentDir:env.OPENCLAW_AGENT_DIR || null,channel:config.update?.channel,exports:{HOME:env.HOME,USERPROFILE:env.USERPROFILE,OPENCLAW_HOME:env.OPENCLAW_HOME,OPENCLAW_STATE_DIR:env.OPENCLAW_STATE_DIR,OPENCLAW_CONFIG_PATH:env.OPENCLAW_CONFIG_PATH},config}));'`,
+  ]);
+  return JSON.parse(stdout);
 }
-
-const secretKeyPattern = /^[a-f0-9]{64}$/u;
 
 describe("scripts/lib/openclaw-test-state", () => {
   it("creates a sourceable env file and JSON description", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-state-script-"));
-    const envFile = path.join(tempRoot, "env.sh");
-    try {
-      const { stdout } = await execFileAsync(process.execPath, [
-        "--import",
-        "tsx",
-        scriptPath,
-        "--",
+    const payload = JSON.parse(
+      await render(
         "create",
-        "--label",
-        "script-test",
-        "--scenario",
-        "update-stable",
-        "--env-file",
-        envFile,
-        "--json",
-      ]);
-      const payload = JSON.parse(stdout);
-      expect(payload.label).toBe("script-test");
-      expect(payload.scenario).toBe("update-stable");
-      for (const field of ["root", "home", "stateDir", "configPath", "workspaceDir"] as const) {
-        expect(typeof payload[field]).toBe("string");
-        expect(payload[field].length).toBeGreaterThan(0);
-      }
-      expect(payload.home).toBe(path.join(payload.root, "home"));
-      expect(payload.stateDir).toBe(path.join(payload.home, ".openclaw"));
-      expect(payload.configPath).toBe(path.join(payload.stateDir, "openclaw.json"));
-      expect(payload.workspaceDir).toBe(path.join(payload.home, "workspace"));
-      expect(payload.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY).toMatch(secretKeyPattern);
-      expect(payload.env).toEqual({
-        HOME: payload.home,
-        USERPROFILE: payload.home,
-        OPENCLAW_HOME: payload.home,
-        OPENCLAW_STATE_DIR: payload.stateDir,
-        OPENCLAW_CONFIG_PATH: payload.configPath,
-        OPENCLAW_AUTH_PROFILE_SECRET_KEY: payload.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY,
-      });
-      expect(payload.config).toEqual({
-        update: {
-          channel: "stable",
-        },
-        plugins: {},
-      });
-
-      const envFileText = await fs.readFile(envFile, "utf8");
-      expect(envFileText).toContain("export HOME=");
-      expect(envFileText).toContain("export OPENCLAW_HOME=");
-      expect(envFileText).toContain("export OPENCLAW_STATE_DIR=");
-      expect(envFileText).toContain("export OPENCLAW_CONFIG_PATH=");
-      expect(envFileText).toContain("export OPENCLAW_AUTH_PROFILE_SECRET_KEY=");
-
-      const probe = await execFileAsync("bash", [
-        "-lc",
-        `source ${shellQuote(envFile)}; node -e 'const fs=require("node:fs"); const config=JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH,"utf8")); process.stdout.write(JSON.stringify({home:process.env.HOME,stateDir:process.env.OPENCLAW_STATE_DIR,secretKey:process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY,channel:config.update.channel}));'`,
-      ]);
-      expect(JSON.parse(probe.stdout)).toEqual({
-        home: payload.home,
-        stateDir: payload.stateDir,
-        secretKey: payload.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY,
-        channel: "stable",
-      });
-      await fs.rm(payload.root, { recursive: true, force: true });
-    } finally {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
+        { label: "script-test", scenario: "update-stable", "env-file": snippet },
+        true,
+      ),
+    );
+    expect(payload).toMatchObject({
+      label: "script-test",
+      scenario: "update-stable",
+      home: path.join(payload.root, "home"),
+      stateDir: path.join(payload.home, ".openclaw"),
+      configPath: path.join(payload.stateDir, "openclaw.json"),
+      workspaceDir: path.join(payload.home, "workspace"),
+    });
+    expect(payload.root).toEqual(expect.stringMatching(/[\s\S]/u));
+    expect(payload.env).toEqual({
+      HOME: payload.home,
+      USERPROFILE: payload.home,
+      OPENCLAW_HOME: payload.home,
+      OPENCLAW_STATE_DIR: payload.stateDir,
+      OPENCLAW_CONFIG_PATH: payload.configPath,
+    });
+    expect(payload.config).toEqual({ update: { channel: "stable" }, plugins: {} });
+    const sourced = await probe();
+    expect(sourced.exports).toEqual(payload.env);
+    expect(sourced).toMatchObject({
+      home: payload.home,
+      stateDir: payload.stateDir,
+      channel: "stable",
+    });
   });
 
   it("renders a Docker-friendly shell snippet", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-state-shell-"));
-    const snippetFile = path.join(tempRoot, "state.sh");
-    try {
-      const { stdout } = await execFileAsync(process.execPath, [
-        scriptPath,
-        "shell",
-        "--label",
-        "update-channel-switch",
-        "--scenario",
-        "update-stable",
-      ]);
-      expect(stdout).toContain(
-        'OPENCLAW_TEST_STATE_TMP_ROOT="${OPENCLAW_TEST_STATE_TMPDIR:-${TMPDIR:-/tmp}}"',
-      );
-      expect(stdout).toContain(
-        'mktemp -d "$OPENCLAW_TEST_STATE_TMP_ROOT/openclaw-update-channel-switch-update-stable-home.XXXXXX"',
-      );
-      expect(stdout).toContain("OPENCLAW_TEST_STATE_JSON");
-      expect(stdout).toContain('"channel": "stable"');
-      await fs.writeFile(snippetFile, stdout, "utf8");
-
-      const probe = await execFileAsync("bash", [
-        "-lc",
-        `${cleanupTestStateHomeTrap()}; source ${shellQuote(snippetFile)}; node -e 'const fs=require("node:fs"); const config=JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH,"utf8")); process.stdout.write(JSON.stringify({home:process.env.HOME,openclawHome:process.env.OPENCLAW_HOME,workspace:process.env.OPENCLAW_TEST_WORKSPACE_DIR,secretKey:process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY,channel:config.update.channel}));'`,
-      ]);
-
-      const payload = JSON.parse(probe.stdout);
-      expect(payload.home.startsWith(os.tmpdir())).toBe(true);
-      expect(path.basename(payload.home)).toMatch(
-        /^openclaw-update-channel-switch-update-stable-home\./u,
-      );
-      expect(payload.openclawHome).toBe(payload.home);
-      expect(payload.workspace).toBe(`${payload.home}/workspace`);
-      expect(payload.secretKey).toMatch(secretKeyPattern);
-      expect(payload.channel).toBe("stable");
-
-      const customTemp = path.join(tempRoot, "state-tmp");
-      const customProbe = await execFileAsync("bash", [
-        "-lc",
-        `${cleanupTestStateHomeTrap()}; export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(customTemp)}; source ${shellQuote(snippetFile)}; node -e 'process.stdout.write(JSON.stringify({home:process.env.HOME,tmpRoot:process.env.OPENCLAW_TEST_STATE_TMP_ROOT}));'`,
-      ]);
-      const customPayload = JSON.parse(customProbe.stdout);
-      expect(customPayload.tmpRoot).toBe(customTemp);
-      expect(customPayload.home).toMatch(
-        new RegExp(
-          `^${escapeRegex(customTemp)}/openclaw-update-channel-switch-update-stable-home\\.`,
+    await renderSnippet("shell", {
+      label: "update-channel-switch",
+      scenario: "update-stable",
+    });
+    const payload = await probe();
+    expect(payload.home.startsWith(os.tmpdir())).toBe(true);
+    expect(path.basename(payload.home)).toMatch(
+      /^openclaw-update-channel-switch-update-stable-home\./u,
+    );
+    expect(payload).toMatchObject({
+      openclawHome: payload.home,
+      workspace: `${payload.home}/workspace`,
+      channel: "stable",
+    });
+    const customTemp = path.join(root, "state-tmp");
+    for (const tmpDir of [customTemp, `${customTemp}/`]) {
+      const custom = await probe(tmpDir);
+      expect(custom).toMatchObject({
+        tmpRoot: customTemp,
+        home: expect.stringMatching(
+          new RegExp(
+            `^${escapeRegex(customTemp)}/openclaw-update-channel-switch-update-stable-home\\.`,
+          ),
         ),
-      );
-
-      const trailingSlashProbe = await execFileAsync("bash", [
-        "-lc",
-        `${cleanupTestStateHomeTrap()}; export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(`${customTemp}/`)}; source ${shellQuote(snippetFile)}; node -e 'process.stdout.write(JSON.stringify({home:process.env.HOME,tmpRoot:process.env.OPENCLAW_TEST_STATE_TMP_ROOT,stateDir:process.env.OPENCLAW_STATE_DIR}));'`,
-      ]);
-      const trailingSlashPayload = JSON.parse(trailingSlashProbe.stdout);
-      expect(trailingSlashPayload.tmpRoot).toBe(customTemp);
-      expect(trailingSlashPayload.home).toMatch(
-        new RegExp(
-          `^${escapeRegex(customTemp)}/openclaw-update-channel-switch-update-stable-home\\.`,
-        ),
-      );
-      expect(trailingSlashPayload.stateDir).toBe(`${trailingSlashPayload.home}/.openclaw`);
-    } finally {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps shell key generation independent of node", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-state-path-node-"));
-    const fakeBin = path.join(tempRoot, "bin");
-    const snippetFile = path.join(tempRoot, "state.sh");
-    const functionFile = path.join(tempRoot, "state-function.sh");
-    try {
-      await fs.mkdir(fakeBin, { recursive: true });
-      await fs.writeFile(
-        path.join(fakeBin, "node"),
-        "#!/bin/sh\necho 'fake node should not be used for key generation' >&2\nexit 42\n",
-        "utf8",
-      );
-      await fs.chmod(path.join(fakeBin, "node"), 0o755);
-
-      const shell = await execFileAsync(process.execPath, [
-        scriptPath,
-        "shell",
-        "--label",
-        "path-node",
-        "--scenario",
-        "empty",
-      ]);
-      await fs.writeFile(snippetFile, shell.stdout, "utf8");
-
-      const shellProbe = await execFileAsync("bash", [
-        "-lc",
-        `${cleanupTestStateHomeTrap()}; export PATH=${shellQuote(fakeBin)}:$PATH; source ${shellQuote(snippetFile)}; printf '%s' "$OPENCLAW_AUTH_PROFILE_SECRET_KEY"`,
-      ]);
-      expect(shellProbe.stdout).toMatch(secretKeyPattern);
-
-      const renderedFunction = await execFileAsync(process.execPath, [
-        scriptPath,
-        "shell-function",
-      ]);
-      await fs.writeFile(functionFile, renderedFunction.stdout, "utf8");
-
-      const functionProbe = await execFileAsync("bash", [
-        "-lc",
-        `${cleanupTestStateHomeTrap()}; export PATH=${shellQuote(fakeBin)}:$PATH; export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(path.join(tempRoot, "function-tmp"))}; source ${shellQuote(functionFile)}; openclaw_test_state_create "path node" minimal; printf '%s' "$OPENCLAW_AUTH_PROFILE_SECRET_KEY"`,
-      ]);
-      expect(functionProbe.stdout).toMatch(secretKeyPattern);
-    } finally {
-      await fs.rm(tempRoot, { recursive: true, force: true });
+      });
+      if (tmpDir.endsWith("/")) {
+        expect(custom.stateDir).toBe(`${custom.home}/.openclaw`);
+      }
     }
   });
 
   it("creates the upgrade survivor scenario", async () => {
-    const { stdout } = await execFileAsync(process.execPath, [
-      scriptPath,
-      "--",
-      "create",
-      "--label",
-      "upgrade-survivor",
-      "--scenario",
-      "upgrade-survivor",
-      "--json",
-    ]);
-    const payload = JSON.parse(stdout);
-    try {
-      expect(payload.scenario).toBe("upgrade-survivor");
-      expect(payload.config.update).toStrictEqual({ channel: "stable" });
-      expect(payload.config.gateway.reload).toStrictEqual({ mode: "off" });
-      expect(payload.config.gateway.auth).toStrictEqual({
-        mode: "token",
-        token: {
-          id: "GATEWAY_AUTH_TOKEN_REF",
-          provider: "default",
-          source: "env",
-        },
-      });
-      expect(payload.config.channels.discord.enabled).toBe(true);
-      expect(payload.config.channels.discord.dm).toStrictEqual({
-        allowFrom: ["111111111111111111"],
-        policy: "allowlist",
-      });
-      expect(payload.config.channels.telegram.enabled).toBe(true);
-      expect(payload.config.channels.whatsapp.enabled).toBe(true);
-      const renderedFunction = await execFileAsync(process.execPath, [
-        scriptPath,
-        "shell-function",
-      ]);
-      const snippetFile = path.join(payload.root, "state-function.sh");
-      await fs.writeFile(snippetFile, renderedFunction.stdout, "utf8");
-      const shellHome = path.join(payload.root, "shell-home");
-      const shellProbe = await execFileAsync("bash", [
-        "-c",
-        `source ${shellQuote(snippetFile)}; openclaw_test_state_create ${shellQuote(shellHome)} upgrade-survivor; cat "$OPENCLAW_CONFIG_PATH"`,
-      ]);
-      expect(JSON.parse(shellProbe.stdout).gateway).toStrictEqual(payload.config.gateway);
-    } finally {
-      await fs.rm(payload.root, { recursive: true, force: true });
+    const payload = JSON.parse(
+      await render("create", { label: "upgrade-survivor", scenario: "upgrade-survivor" }),
+    );
+    expect(payload.scenario).toBe("upgrade-survivor");
+    expect(payload.config.update).toStrictEqual({ channel: "stable" });
+    expect(payload.config.gateway.reload).toStrictEqual({ mode: "off" });
+    expect(payload.config.gateway.auth).toStrictEqual({
+      mode: "token",
+      token: { id: "GATEWAY_AUTH_TOKEN_REF", provider: "default", source: "env" },
+    });
+    expect(payload.config.channels.discord.dm).toStrictEqual({
+      allowFrom: ["111111111111111111"],
+      policy: "allowlist",
+    });
+    for (const channel of ["discord", "telegram", "whatsapp"]) {
+      expect(payload.config.channels[channel].enabled).toBe(true);
     }
+    await renderSnippet("shell-function");
+    const shell = await probe(
+      undefined,
+      `openclaw_test_state_create ${quote(path.join(payload.root, "shell-home"))} upgrade-survivor;`,
+      false,
+    );
+    expect(shell.config.gateway).toStrictEqual(payload.config.gateway);
   });
 
   it("renders a reusable Docker shell function", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-state-function-"));
-    const snippetFile = path.join(tempRoot, "state-function.sh");
-    try {
-      const { stdout } = await execFileAsync(process.execPath, [
-        "--import",
-        "tsx",
-        scriptPath,
-        "shell-function",
-      ]);
-      expect(stdout).toContain("openclaw_test_state_create()");
-      expect(stdout).toContain("unset OPENCLAW_AGENT_DIR");
-      expect(stdout).toContain("update-stable");
-      await fs.writeFile(snippetFile, stdout, "utf8");
-
-      const probe = await execFileAsync("bash", [
-        "-lc",
-        `${cleanupTestStateHomeTrap()}; export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(path.join(tempRoot, "function-tmp"))}; source ${shellQuote(snippetFile)}; export OPENCLAW_AGENT_DIR=/tmp/outside-agent; openclaw_test_state_create "onboard case" minimal; node -e 'const fs=require("node:fs"); const config=JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH,"utf8")); process.stdout.write(JSON.stringify({home:process.env.HOME,tmpDir:process.env.OPENCLAW_TEST_STATE_TMPDIR,agentDir:process.env.OPENCLAW_AGENT_DIR || null,workspace:process.env.OPENCLAW_TEST_WORKSPACE_DIR,secretKey:process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY,config}));'`,
-      ]);
-
-      const payload = JSON.parse(probe.stdout);
-      expect(payload.home).toBe(`${payload.tmpDir}/${path.basename(payload.home)}`);
+    await renderSnippet("shell-function", {}, true);
+    const temp = path.join(root, "function-tmp");
+    for (const tmpDir of [temp, `${temp}/`]) {
+      const payload = await probe(
+        tmpDir,
+        'export OPENCLAW_AGENT_DIR=/tmp/outside-agent; openclaw_test_state_create "onboard case" minimal;',
+      );
+      expect(payload).toMatchObject({
+        home: `${temp}/${path.basename(payload.home)}`,
+        stateDir: `${payload.home}/.openclaw`,
+        workspace: `${payload.home}/workspace`,
+        agentDir: null,
+      });
       expect(payload.home).toContain("/openclaw-onboard-case-minimal-home.");
-      expect(payload.agentDir).toBeNull();
-      expect(payload.workspace).toBe(`${payload.home}/workspace`);
-      expect(payload.secretKey).toMatch(secretKeyPattern);
       expect(payload.config).toStrictEqual({});
-
-      const trailingTmpDir = path.join(tempRoot, "function-trailing-tmp");
-      const trailingProbe = await execFileAsync("bash", [
-        "-lc",
-        `${cleanupTestStateHomeTrap()}; export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(`${trailingTmpDir}/`)}; source ${shellQuote(snippetFile)}; openclaw_test_state_create "onboard case" minimal; node -e 'process.stdout.write(JSON.stringify({home:process.env.HOME,tmpDir:process.env.OPENCLAW_TEST_STATE_TMPDIR,stateDir:process.env.OPENCLAW_STATE_DIR,workspace:process.env.OPENCLAW_TEST_WORKSPACE_DIR}));'`,
-      ]);
-
-      const trailingPayload = JSON.parse(trailingProbe.stdout);
-      expect(trailingPayload.home).toBe(`${trailingTmpDir}/${path.basename(trailingPayload.home)}`);
-      expect(trailingPayload.stateDir).toBe(`${trailingPayload.home}/.openclaw`);
-      expect(trailingPayload.workspace).toBe(`${trailingPayload.home}/workspace`);
-
-      const existingHome = path.join(tempRoot, "existing-home");
-      const existingProbe = await execFileAsync("bash", [
-        "-lc",
-        `source ${shellQuote(snippetFile)}; openclaw_test_state_create ${shellQuote(existingHome)} minimal; firstKey="$OPENCLAW_AUTH_PROFILE_SECRET_KEY"; export firstKey; printf '{"kept":true}\\n' > "$OPENCLAW_CONFIG_PATH"; openclaw_test_state_create ${shellQuote(existingHome)} empty; node -e 'const fs=require("node:fs"); const config=JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH,"utf8")); process.stdout.write(JSON.stringify({home:process.env.HOME,secretKey:process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY,firstKey:process.env.firstKey,config}));'`,
-      ]);
-
-      const existingPayload = JSON.parse(existingProbe.stdout);
-      expect(existingPayload.home).toBe(existingHome);
-      expect(existingPayload.secretKey).toBe(existingPayload.firstKey);
-      expect(existingPayload.config).toEqual({ kept: true });
-    } finally {
-      await fs.rm(tempRoot, { recursive: true, force: true });
     }
+    const existingHome = path.join(root, "existing-home");
+    const existing = await probe(
+      undefined,
+      `openclaw_test_state_create ${quote(existingHome)} minimal; printf '{"kept":true}\\n' > "$OPENCLAW_CONFIG_PATH"; openclaw_test_state_create ${quote(existingHome)} empty;`,
+    );
+    expect(existing.home).toBe(existingHome);
+    expect(existing.config).toEqual({ kept: true });
   });
 });

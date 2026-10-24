@@ -6,9 +6,9 @@ import { assertSqliteFlipProofCore } from "../helpers/sqlite-sessions-transcript
 import { runSqliteSessionsTranscriptsFlipProof } from "../helpers/sqlite-sessions-transcripts-flip-proof.ts";
 
 describe("SQLite sessions/transcripts flip built CLI proof", () => {
-  it("proves the lifecycle through the built gateway CLI entrypoint", async () => {
+  it("proves the lifecycle through the built gateway CLI entrypoint", async ({ signal }) => {
     const report = await withEnvAsync({ ZAI_API_KEY: "ambient-provider-fixture" }, () =>
-      runSqliteSessionsTranscriptsFlipProof({ requireBuiltCli: true }),
+      runSqliteSessionsTranscriptsFlipProof({ requireBuiltCli: true, signal }),
     );
 
     expect(report.gatewayEntrypoint).toEqual(

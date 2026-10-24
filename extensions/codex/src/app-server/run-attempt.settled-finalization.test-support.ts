@@ -1,0 +1,275 @@
+import path from "node:path";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { expect, it, vi } from "vitest";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
+import {
+  assistantMessage,
+  createParams,
+  createStartedThreadHarness,
+  runCodexAppServerAttempt,
+  tempDir,
+  threadStartResult,
+  userMessage,
+} from "./run-attempt-test-harness.js";
+import {
+  readCodexAppServerBinding,
+  registerCodexTestSessionIdentity,
+  type writeCodexAppServerBinding,
+} from "./session-binding.test-helpers.js";
+import * as settledTurnContext from "./settled-turn-context.js";
+import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
+import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
+
+type SettledFinalizationFixtures = {
+  expectResumeRequest: (
+    requests: Array<{ method: string; params: unknown }>,
+    params: Record<string, unknown>,
+  ) => void;
+  writeExistingBinding: (
+    sessionFile: string,
+    workspaceDir: string,
+    overrides?: Partial<Parameters<typeof writeCodexAppServerBinding>[1]>,
+  ) => Promise<void>;
+};
+
+async function settledParams(name: string, prompt: string) {
+  const sessionId = `session-${name}`;
+  const sessionFile = `agent:main:${sessionId}`;
+  const workspaceDir = path.join(tempDir, `workspace-${name}`);
+  const params = createParams(sessionFile, workspaceDir);
+  await attachSqliteSessionTarget(params, path.join(tempDir, `${name}.sqlite`), sessionId);
+  params.prompt = prompt;
+  params.onSettledTurn = async (attempt, captureContext) => {
+    attempt.settledTurnFinalizationContext = await captureContext();
+  };
+  return { params, sessionFile, workspaceDir };
+}
+
+function commandEvents(cwd: string, output: string) {
+  const command = { type: "commandExecution", id: "tool-settled", command: `echo ${output}`, cwd };
+  return [
+    itemNotification("item/started", { ...command, status: "inProgress" }),
+    itemNotification("item/completed", {
+      ...command,
+      status: "completed",
+      aggregatedOutput: `${output}\n`,
+      exitCode: 0,
+      durationMs: 12,
+    }),
+  ];
+}
+
+/** Keep finalization evidence cases under the parent suite's original hooks and ordering. */
+export function registerSettledFinalizationTests({
+  expectResumeRequest,
+  writeExistingBinding,
+}: SettledFinalizationFixtures) {
+  it.each([
+    ["preserve-only host-auth turn", undefined, true],
+    [
+      "provider overload after the tool result",
+      {
+        message: "Selected model is at capacity. Please try a different model.",
+        codexErrorInfo: "serverOverloaded",
+      },
+      false,
+    ],
+  ] as const)(
+    "preserves settled finalization eligibility for a %s",
+    async (_label, failure, preserveNativeModel) => {
+      const { params, sessionFile, workspaceDir } = await settledParams(
+        "settled-finalization-context",
+        "Send the update to Alice.",
+      );
+      const sourceSelection = { model: "gpt-5.6-luna", modelProvider: "openai" };
+      const onStart = vi.fn();
+      const harness = createStartedThreadHarness(
+        async (method) =>
+          method === "thread/start" || method === "thread/resume"
+            ? { ...threadStartResult(), ...sourceSelection }
+            : undefined,
+        { onStart, ...(preserveNativeModel ? { persistedThreads: ["thread-1"] } : {}) },
+      );
+      params.registerPluginRuntimeRefreshConsumer = vi.fn();
+      params.modelId = "synthetic-outer-model";
+      params.authProfileStore = {
+        version: 1,
+        order: { openai: ["openai:ordered"] },
+        profiles: {
+          "openai:ordered": { type: "api_key", provider: "openai", key: "synthetic-ordered-key" },
+          "openai:binding": { type: "api_key", provider: "openai", key: "synthetic-binding-key" },
+        },
+      };
+      if (preserveNativeModel) {
+        registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+        await writeExistingBinding(sessionFile, workspaceDir, {
+          threadId: "thread-1",
+          model: "synthetic-previous-model",
+          preserveNativeModel: true,
+          authProfileId: "openai:binding",
+        });
+      }
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      const emptyAssistant = { type: "agentMessage", id: "empty-assistant", text: "" };
+      // Native events arrive in wire order; local projection must not delay terminal receipt.
+      await Promise.all([
+        harness.notify(itemNotification("item/started", emptyAssistant)),
+        harness.notify(itemNotification("item/completed", emptyAssistant)),
+        ...commandEvents(workspaceDir, "sent-to-alice").map((event) => harness.notify(event)),
+        failure
+          ? harness.notify(turnCompleted({ id: "turn-1", status: "failed", error: failure }))
+          : harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" }),
+      ]);
+      const result = await run;
+      const selectedProfile = preserveNativeModel ? "openai:binding" : "openai:ordered";
+      expect(onStart).toHaveBeenCalledWith(selectedProfile, expect.anything(), expect.anything());
+      if (preserveNativeModel) {
+        expect(params.registerPluginRuntimeRefreshConsumer).not.toHaveBeenCalled();
+        expectResumeRequest(harness.requests, { threadId: "thread-1" });
+        const resume = harness.requests.find((request) => request.method === "thread/resume");
+        expect(resume?.params).not.toHaveProperty("model");
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+          preserveNativeModel: true,
+          authProfileId: selectedProfile,
+          ...sourceSelection,
+        });
+      }
+      expect(Boolean(readAttemptTerminal(result).promptError)).toBe(Boolean(failure));
+      if (!failure) {
+        expect(result.terminal).toEqual({ kind: "ok" });
+      }
+      expect(result.currentAttemptAssistant).toBeDefined();
+      expect(result).toMatchObject({
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
+      });
+      const context = result.settledTurnFinalizationContext;
+      expect(context).toMatchObject({
+        source: "harness",
+        selection: { ...sourceSelection, authProfileId: selectedProfile },
+      });
+      if (!(context instanceof settledTurnContext.CodexSettledTurnContext)) {
+        throw new Error("Expected complete settled-turn evidence from the harness");
+      }
+      expect(context.data).toEqual([
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: expect.stringContaining(params.prompt) }],
+        },
+        {
+          type: "function_call",
+          call_id: "tool-settled",
+          name: "bash",
+          arguments: JSON.stringify({ command: "echo sent-to-alice", cwd: workspaceDir }),
+        },
+        { type: "function_call_output", call_id: "tool-settled", output: "sent-to-alice\n" },
+      ]);
+    },
+  );
+  it("captures settled evidence for a stranded-reply retry whose prompt is never mirrored", async () => {
+    // The host builds the retry with a suppressed system prompt and no transcript recorder
+    // (src/auto-reply/reply/stranded-reply-recovery.ts), so this turn has no prompt row.
+    const { params, workspaceDir } = await settledParams(
+      "settled-stranded-retry",
+      "Your previous reply was not delivered because you did not call message(action=send).",
+    );
+    params.suppressNextUserMessagePersistence = true;
+    params.userTurnTranscriptRecorder = undefined;
+    const manager = await SessionManager.openAsync(
+      {
+        agentId: params.sessionTarget!.agentId!,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey!,
+        storePath: params.sessionTarget!.storePath!,
+      },
+      workspaceDir,
+    );
+    await manager.appendMessageAsync(
+      attachCodexMirrorIdentity(userMessage("Send the update to Alice.", 1), "turn-0:prompt"),
+    );
+    await manager.appendMessageAsync(assistantMessage("Update: shipped.", 2));
+    const harness = createStartedThreadHarness();
+    const warn = vi.spyOn(embeddedAgentLog, "warn");
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await Promise.all([
+      ...commandEvents(workspaceDir, "sent-to-alice").map((event) => harness.notify(event)),
+      harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" }),
+    ]);
+    const result = await run;
+
+    expect(result.terminal).toEqual({ kind: "ok" });
+    expect(warn).not.toHaveBeenCalledWith(
+      "codex settled-turn finalization context capture failed",
+      expect.anything(),
+    );
+    expect(result.settledTurnFinalizationContext).toMatchObject({
+      source: "harness",
+      data: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Send the update to Alice." }],
+        },
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Update: shipped." }],
+        },
+        expect.objectContaining({ type: "function_call", call_id: "tool-settled" }),
+        { type: "function_call_output", call_id: "tool-settled", output: "sent-to-alice\n" },
+      ],
+    });
+  });
+  it("captures settled tool evidence when an active native compaction fails terminally", async () => {
+    const { params, workspaceDir } = await settledParams(
+      "settled-compaction-failure",
+      "Finish the task and report the result.",
+    );
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    const error = {
+      message: "remote compaction failed",
+      codexErrorInfo: "other",
+      additionalDetails: null,
+    };
+    // Native events arrive in wire order; local projection must not delay terminal receipt.
+    await Promise.all([
+      ...commandEvents(workspaceDir, "completed-work").map((event) => harness.notify(event)),
+      harness.notify(
+        itemNotification("item/started", { type: "contextCompaction", id: "compact-failed" }),
+      ),
+      harness.notify({
+        method: "error",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          error,
+          willRetry: false,
+        },
+      }),
+      harness.notify(turnCompleted({ id: "turn-1", status: "failed", error })),
+    ]);
+
+    const result = await run;
+
+    expect(readAttemptTerminal(result)).toMatchObject({
+      promptError: "remote compaction failed",
+      promptErrorSource: "compaction",
+    });
+    expect(result.itemLifecycle).toEqual({ startedCount: 2, completedCount: 1, activeCount: 0 });
+    expect(result.settledTurnFinalizationContext).toMatchObject({
+      source: "harness",
+      data: [
+        expect.objectContaining({ role: "user" }),
+        expect.objectContaining({ type: "function_call" }),
+        expect.objectContaining({ type: "function_call_output", call_id: "tool-settled" }),
+      ],
+    });
+  });
+}

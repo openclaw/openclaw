@@ -1,0 +1,329 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "135ac4f40843889045a6bc2fc215a6fff1a32377",
+  "buildId": "2026.10.4-135ac4f40843-2026-10-20T06-02-07.284Z",
+  "startedAt": "2026-10-20T06:05:50.804Z",
+  "transport": "Real signed WebSocket requests to isolated built Gateway and real loopback HTTP server; HTTP server is a controlled publication transport fixture, not ClawHub.",
+  "syntheticFixture": "Only the isolated bundled-plugin directory contains authority-proof. Its RPC invokes unchanged production api.runtime.gateway.request, which creates the synthetic caller. No GatewayClient or session is fabricated.",
+  "cases": [
+    {
+      "case": "allowed-control",
+      "method": "claws.drafts.publish",
+      "caller": "Active profiled operator using Gateway credential and signed device identity",
+      "scopes": [
+        "operator.admin"
+      ],
+      "response": {
+        "ok": true,
+        "payload": {
+          "name": "@authority-fixture/authority-probe",
+          "version": "0.1.0",
+          "publicationStatus": "pending"
+        }
+      },
+      "diagnostics": [
+        {
+          "type": "gateway.rpc",
+          "method": "claws.drafts.publish",
+          "phase": "received"
+        },
+        {
+          "type": "gateway.rpc",
+          "method": "claws.drafts.publish",
+          "phase": "response",
+          "outcome": "ok",
+          "durationMs": 55.95008299999972
+        },
+        {
+          "type": "gateway.rpc",
+          "method": "claws.drafts.publish",
+          "phase": "handler",
+          "outcome": "returned",
+          "durationMs": 55.70074999999997
+        },
+        {
+          "type": "gateway.rpc",
+          "method": "claws.drafts.publish",
+          "phase": "dispatch",
+          "outcome": "returned",
+          "response": "sent",
+          "durationMs": 56.30804099999932
+        }
+      ],
+      "packagePostCount": 1,
+      "httpRequests": [
+        {
+          "phase": "allowed-control",
+          "method": "GET",
+          "route": "/api/v1/whoami",
+          "authorized": true
+        },
+        {
+          "phase": "allowed-control",
+          "method": "POST",
+          "route": "/api/v1/packages",
+          "authorized": true,
+          "bytes": 999,
+          "packageName": "@authority-fixture/authority-probe",
+          "artifactSha256": "af1e5f5528eb0e12a27d5e010de056679db0da3184a832a63033e40d3e4f173c"
+        }
+      ]
+    },
+    {
+      "case": "non-admin",
+      "method": "claws.drafts.publish",
+      "caller": "Actual connected operator without admin scope",
+      "scopes": [
+        "operator.read",
+        "operator.write"
+      ],
+      "response": {
+        "ok": false,
+        "error": {
+          "code": "FORBIDDEN",
+          "message": "missing scope: operator.admin",
+          "details": {
+            "code": "MISSING_SCOPE",
+            "missingScope": "operator.admin",
+            "requiredScopes": [
+              "operator.admin"
+            ]
+          }
+        }
+      },
+      "diagnostics": [
+        {
+          "type": "gateway.rpc",
+          "method": "claws.drafts.publish",
+          "phase": "received"
+        },
+        {
+          "type": "gateway.rpc",
+          "method": "claws.drafts.publish",
+          "phase": "response",
+          "outcome": "error",
+          "durationMs": 0.38404200000059063
+        },
+        {
+          "type": "gateway.rpc",
+          "method": "claws.drafts.publish",
+          "phase": "dispatch",
+          "outcome": "rejected",
+          "response": "sent",
+          "durationMs": 0.5102500000002692
+        }
+      ],
+      "packagePostCount": 0,
+      "httpRequests": []
+    },
+    {
+      "case": "synthetic",
+      "method": "claws.drafts.publish",
+      "caller": "Production synthetic caller created by the plugin Gateway dispatcher",
+      "triggerMethod": "authorityProof.syntheticPublish",
+      "requestedScopes": [
+        "operator.admin"
+      ],
+      "response": {
+        "ok": true,
+        "payload": {
+          "rejected": true,
+          "code": "FORBIDDEN",
+          "error": "Create, review, and publish Claws from an active administrator Control UI connection."
+        }
+      },
+      "diagnostics": [],
+      "packagePostCount": 0,
+      "httpRequests": []
+    },
+    {
+      "case": "disconnected",
+      "method": "claws.drafts.publish",
+      "caller": "Initially connected profiled administrator",
+      "scopes": [
+        "operator.admin"
+      ],
+      "transition": "Actual WebSocket closed after publication reached real HTTP whoami and before response release",
+      "close": {
+        "closed": true,
+        "code": 1000,
+        "reason": "proof connection closed"
+      },
+      "response": {
+        "closed": true,
+        "code": 1000,
+        "reason": "proof connection closed"
+      },
+      "diagnostics": [
+        {
+          "type": "gateway.rpc",
+          "method": "claws.drafts.publish",
+          "phase": "received"
+        },
+        {
+          "type": "gateway.rpc",
+          "method": "claws.drafts.publish",
+          "phase": "response",
+          "outcome": "unavailable",
+          "durationMs": 60.906707999999526
+        },
+        {
+          "type": "gateway.rpc",
+          "method": "claws.drafts.publish",
+          "phase": "handler",
+          "outcome": "returned",
+          "durationMs": 60.98258299999998
+        },
+        {
+          "type": "gateway.rpc",
+          "method": "claws.drafts.publish",
+          "phase": "dispatch",
+          "outcome": "returned",
+          "response": "unavailable",
+          "durationMs": 61.202792000000045
+        }
+      ],
+      "packagePostCount": 0,
+      "httpRequests": [
+        {
+          "phase": "disconnected",
+          "method": "GET",
+          "route": "/api/v1/whoami",
+          "authorized": true
+        }
+      ]
+    },
+    {
+      "case": "operator-device-role-revoked",
+      "method": "claws.drafts.publish",
+      "caller": "Profiled operator authenticated only by its issued device-role credential",
+      "scopes": [
+        "operator.admin"
+      ],
+      "readBeforeRevoke": true,
+      "transition": "Real device.token.revoke(role=operator) after publication reached HTTP whoami and before response release",
+      "revoke": {
+        "ok": true,
+        "payload": {
+          "role": "operator",
+          "revokedAtMs": 1792476351291
+        }
+      },
+      "close": {
+        "closed": true,
+        "code": 4001,
+        "reason": "device removed"
+      },
+      "response": {
+        "closed": true,
+        "code": 4001,
+        "reason": "device removed"
+      },
+      "diagnostics": [
+        {
+          "type": "gateway.rpc",
+          "method": "claws.drafts.publish",
+          "phase": "received"
+        },
+        {
+          "type": "gateway.rpc",
+          "method": "claws.drafts.publish",
+          "phase": "response",
+          "outcome": "suppressed",
+          "durationMs": 74.95779200000015
+        },
+        {
+          "type": "gateway.rpc",
+          "method": "claws.drafts.publish",
+          "phase": "handler",
+          "outcome": "returned",
+          "durationMs": 74.79662499999995
+        },
+        {
+          "type": "gateway.rpc",
+          "method": "claws.drafts.publish",
+          "phase": "dispatch",
+          "outcome": "returned",
+          "response": "suppressed",
+          "durationMs": 74.97837499999969
+        }
+      ],
+      "packagePostCount": 0,
+      "httpRequests": [
+        {
+          "phase": "operator-device-role-revoked",
+          "method": "GET",
+          "route": "/api/v1/whoami",
+          "authorized": true
+        }
+      ]
+    }
+  ],
+  "draftPreparation": {
+    "create": true,
+    "save": true,
+    "review": true,
+    "publisher": "authority-fixture",
+    "package": "@authority-fixture/authority-probe",
+    "version": "0.1.0",
+    "filePaths": [
+      "CLAW.md",
+      "package.json"
+    ]
+  },
+  "limitations": [
+    "Role revocation here is the real operator device-role credential revocation, not users.setRole named-policy demotion. Named delegated person publication requires an existing verified Cloudflare Access profile and host-bound person ingress grant; this isolated token-authenticated fixture does not provision that identity provider.",
+    "Disconnected/revoked callers cannot receive a terminal RPC frame; actual Gateway terminal diagnostics establish that the in-flight handler finished or was cancelled before the zero-POST assertion.",
+    "The HTTP fixture validates admission at the real upload boundary. Actual ClawHub publication/storage/finalization was proven separately in the retained CLAW-1165 end-to-end receipt."
+  ],
+  "sourceEquivalence": {
+    "testedHead": "135ac4f40843889045a6bc2fc215a6fff1a32377",
+    "files": [
+      {
+        "path": "src/gateway/server-methods/claws-drafts.ts",
+        "testedBuildBlob": "16e7eff4bf81669658b56cb6cd7ef09cdd283f09"
+      },
+      {
+        "path": "src/gateway/server-methods/gateway-personal-caller.ts",
+        "testedBuildBlob": "2c3583ee843fae0ea0f9fdecf67d2c34e20984f7"
+      },
+      {
+        "path": "src/claws/draft-publish.ts",
+        "testedBuildBlob": "bcb6aa2a6daf9522b69bf7c431f3aa3858d47a24"
+      },
+      {
+        "path": "src/gateway/operator-role-policy.ts",
+        "testedBuildBlob": "5da2445fcab7a509191a8a79b5a415ac744f7ad6"
+      },
+      {
+        "path": "src/gateway/server-methods/devices.ts",
+        "testedBuildBlob": "ad29c673a9637e230b1ddb96e9b597e0426701fb"
+      },
+      {
+        "path": "src/infra/device-pairing-publication.ts",
+        "testedBuildBlob": "4161d724ff04be9d0c7c1d1b9da699b06c5340f3"
+      },
+      {
+        "path": "src/infra/device-pairing-store-readonly.ts",
+        "testedBuildBlob": "195d8cc276206dfdb740418abced4d51db11ae0a"
+      },
+      {
+        "path": "src/gateway/server/ws-connection/authenticated-request-dispatch.ts",
+        "testedBuildBlob": "8a71ef820384f4dcf2679f318253d3c0468e28a4"
+      },
+      {
+        "path": "src/infra/clawhub-client.ts",
+        "testedBuildBlob": "a9c46337a316dbe6188e02ba4e983b54510e44e7"
+      }
+    ]
+  },
+  "harnessSha256": {
+    "driver": "fc0f1fbce2cab33443ccfb84a598d56f29102513dbfcbc4a369845bfa884ebac",
+    "runner": "e7b8e368aa9b59fa649e80c72030bb473cc018a21bddbe1f8e5675ec26e08306",
+    "plugin": "fa8490d0153880c120b4354a2e433d081b33ab06fbe544b4feea645ce0d6c331"
+  },
+  "runtimeEntrypointSha256": "5e581df2f6612e3bc75281ecf2d320304bc08704636e6aa6b86832ea4bdbbb96",
+  "finishedAt": "2026-10-20T06:05:51.392Z",
+  "counterTotalSinceProcessStart": 1,
+  "totalPackagePosts": 1
+}

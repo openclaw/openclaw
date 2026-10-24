@@ -1,4 +1,3 @@
-// Google provider module implements model/runtime integration.
 import { randomUUID } from "node:crypto";
 import {
   ActivityHandling,
@@ -15,13 +14,9 @@ import {
   type RealtimeInputConfig,
   type Session,
   StartSensitivity,
-  type ThinkingConfig,
   TurnCoverage,
 } from "@google/genai";
-import {
-  resolveExpiresAtMsFromDurationMs,
-  timestampMsToIsoString,
-} from "openclaw/plugin-sdk/number-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import type {
   RealtimeVoiceAudioFormat,
@@ -34,6 +29,7 @@ import type {
   RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolResultOptions,
+  RealtimeVoiceBargeInOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
   convertPcmToMulaw8k,
@@ -56,10 +52,24 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
+import { resolveGoogleEnvApiKey } from "./gemini-auth.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
-import { resolveGoogleGemini3ThinkingLevel } from "./thinking-api.js";
+import {
+  GOOGLE_REALTIME_DEFAULT_MODEL,
+  GOOGLE_REALTIME_VOICE_METADATA,
+} from "./realtime-voice-metadata.js";
+import {
+  buildGoogleLiveInterruptTurn,
+  buildThinkingConfig,
+  emitsCompleteInputTranscripts,
+  endsTurnOnAudioStreamEnd,
+  isGemini31LiveModel,
+  isResponseDone,
+  modelSupportsToolResultContinuation,
+  supportsAsyncFunctionCalling,
+  supportsClientContentInterrupt,
+} from "./realtime-voice-model-contract.js";
 
-const GOOGLE_REALTIME_DEFAULT_MODEL = "gemini-3.1-flash-live-preview";
 const GOOGLE_REALTIME_DEFAULT_VOICE = "Kore";
 const GOOGLE_REALTIME_DEFAULT_API_VERSION = "v1beta";
 const GOOGLE_REALTIME_INPUT_SAMPLE_RATE = 16_000;
@@ -81,9 +91,10 @@ const GOOGLE_REALTIME_TRANSCRIPT_OVERFLOW_MESSAGE =
 // Google Live requires a leading letter/underscore and caps function names at 128 characters.
 const GOOGLE_REALTIME_TOOL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/;
 const MULAW_LINEAR_SAMPLES = new Int16Array(256);
+const mulawTablePcm = mulawToPcm(Buffer.from(Array.from({ length: 256 }, (_, index) => index)));
 
 for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
-  MULAW_LINEAR_SAMPLES[i] = decodeMulawSample(i);
+  MULAW_LINEAR_SAMPLES[i] = mulawTablePcm.readInt16LE(i * 2);
 }
 
 type GoogleRealtimeSensitivity = "low" | "high";
@@ -109,46 +120,12 @@ const TURN_COVERAGE = {
   "audio-activity-and-all-video": TurnCoverage.TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO,
 } satisfies Record<GoogleRealtimeTurnCoverage, TurnCoverage>;
 
-type GoogleRealtimeVoiceProviderConfig = {
-  apiKey?: string;
-  model?: string;
-  voice?: string;
-  temperature?: number;
-  apiVersion?: string;
-  prefixPaddingMs?: number;
-  silenceDurationMs?: number;
-  startSensitivity?: GoogleRealtimeSensitivity;
-  endSensitivity?: GoogleRealtimeSensitivity;
-  activityHandling?: GoogleRealtimeActivityHandling;
-  turnCoverage?: GoogleRealtimeTurnCoverage;
-  automaticActivityDetectionDisabled?: boolean;
-  enableAffectiveDialog?: boolean;
-  sessionResumption?: boolean;
-  contextWindowCompression?: boolean;
-  thinkingLevel?: GoogleRealtimeThinkingLevel;
-  thinkingBudget?: number;
-};
+type GoogleRealtimeVoiceProviderConfig = Partial<ReturnType<typeof normalizeProviderConfig>>;
 
-type GoogleRealtimeLiveConfig = {
+type GoogleRealtimeLiveConfig = GoogleRealtimeVoiceProviderConfig & {
   apiKey: string;
   instructions?: string;
   tools?: RealtimeVoiceTool[];
-  model?: string;
-  voice?: string;
-  temperature?: number;
-  apiVersion?: string;
-  prefixPaddingMs?: number;
-  silenceDurationMs?: number;
-  startSensitivity?: GoogleRealtimeSensitivity;
-  endSensitivity?: GoogleRealtimeSensitivity;
-  activityHandling?: GoogleRealtimeActivityHandling;
-  turnCoverage?: GoogleRealtimeTurnCoverage;
-  automaticActivityDetectionDisabled?: boolean;
-  enableAffectiveDialog?: boolean;
-  sessionResumption?: boolean;
-  contextWindowCompression?: boolean;
-  thinkingLevel?: GoogleRealtimeThinkingLevel;
-  thinkingBudget?: number;
 };
 
 type GoogleRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & GoogleRealtimeLiveConfig;
@@ -157,10 +134,6 @@ type GoogleLiveTranscriptAccumulator = {
   text: string;
   byteCount: number;
 };
-
-function trimToUndefined(value: unknown): string | undefined {
-  return normalizeOptionalString(value);
-}
 
 function asSensitivity(value: unknown): GoogleRealtimeSensitivity | undefined {
   const normalized = normalizeOptionalString(value)?.toLowerCase();
@@ -211,88 +184,31 @@ function asTurnCoverage(value: unknown): GoogleRealtimeTurnCoverage | undefined 
   }
 }
 
-function asNonNegativeInteger(value: unknown): number | undefined {
-  return asSafeIntegerInRange(value, { min: 0 });
-}
-
-function asGoogleRealtimeThinkingBudget(value: unknown): number | undefined {
-  const budget = asFiniteNumber(value);
-  return budget !== undefined &&
-    Number.isSafeInteger(budget) &&
-    (budget === -1 || (budget >= 0 && budget <= 24_576))
-    ? budget
-    : undefined;
-}
-
-function resolveGoogleRealtimeProviderConfigRecord(
-  config: Record<string, unknown>,
-): Record<string, unknown> | undefined {
+function normalizeProviderConfig(config: RealtimeVoiceProviderConfig, cfg?: OpenClawConfig) {
   const providers = asOptionalRecord(config.providers);
-  return asOptionalRecord(providers?.google) ?? asOptionalRecord(config.google) ?? config;
-}
-
-function normalizeProviderConfig(
-  config: RealtimeVoiceProviderConfig,
-  cfg?: OpenClawConfig,
-): GoogleRealtimeVoiceProviderConfig {
-  const raw = resolveGoogleRealtimeProviderConfigRecord(config);
+  const raw = asOptionalRecord(providers?.google) ?? asOptionalRecord(config.google) ?? config;
   return {
     apiKey: normalizeResolvedSecretInputString({
-      value: raw?.apiKey ?? cfg?.models?.providers?.google?.apiKey,
+      value: raw.apiKey ?? cfg?.models?.providers?.google?.apiKey,
       path: "plugins.entries.voice-call.config.realtime.providers.google.apiKey",
     }),
-    model: trimToUndefined(raw?.model),
-    voice: trimToUndefined(raw?.speakerVoice) ?? trimToUndefined(raw?.voice),
-    temperature: asFiniteNumber(raw?.temperature),
-    apiVersion: trimToUndefined(raw?.apiVersion),
-    prefixPaddingMs: asNonNegativeInteger(raw?.prefixPaddingMs),
-    silenceDurationMs: asNonNegativeInteger(raw?.silenceDurationMs),
-    startSensitivity: asSensitivity(raw?.startSensitivity),
-    endSensitivity: asSensitivity(raw?.endSensitivity),
-    activityHandling: asActivityHandling(raw?.activityHandling),
-    turnCoverage: asTurnCoverage(raw?.turnCoverage),
-    automaticActivityDetectionDisabled: asBoolean(raw?.automaticActivityDetectionDisabled),
-    enableAffectiveDialog: asBoolean(raw?.enableAffectiveDialog),
-    sessionResumption: asBoolean(raw?.sessionResumption),
-    contextWindowCompression: asBoolean(raw?.contextWindowCompression),
-    thinkingLevel: asThinkingLevel(raw?.thinkingLevel),
-    thinkingBudget: asGoogleRealtimeThinkingBudget(raw?.thinkingBudget),
+    model: normalizeOptionalString(raw.model),
+    voice: normalizeOptionalString(raw.speakerVoice) ?? normalizeOptionalString(raw.voice),
+    temperature: asFiniteNumber(raw.temperature),
+    apiVersion: normalizeOptionalString(raw.apiVersion),
+    prefixPaddingMs: asSafeIntegerInRange(raw.prefixPaddingMs, { min: 0 }),
+    silenceDurationMs: asSafeIntegerInRange(raw.silenceDurationMs, { min: 0 }),
+    startSensitivity: asSensitivity(raw.startSensitivity),
+    endSensitivity: asSensitivity(raw.endSensitivity),
+    activityHandling: asActivityHandling(raw.activityHandling),
+    turnCoverage: asTurnCoverage(raw.turnCoverage),
+    automaticActivityDetectionDisabled: asBoolean(raw.automaticActivityDetectionDisabled),
+    enableAffectiveDialog: asBoolean(raw.enableAffectiveDialog),
+    sessionResumption: asBoolean(raw.sessionResumption),
+    contextWindowCompression: asBoolean(raw.contextWindowCompression),
+    thinkingLevel: asThinkingLevel(raw.thinkingLevel),
+    thinkingBudget: asSafeIntegerInRange(raw.thinkingBudget, { min: -1, max: 24_576 }),
   };
-}
-
-function resolveEnvApiKey(): string | undefined {
-  return trimToUndefined(process.env.GEMINI_API_KEY) ?? trimToUndefined(process.env.GOOGLE_API_KEY);
-}
-
-// Gemini 3.1 Live replaces client-content text and async tools with realtime text
-// and sequential function responses; explicit older models keep their prior contract.
-function isGemini31LiveModel(model: string): boolean {
-  const modelId = model.startsWith("models/") ? model.slice("models/".length) : model;
-  return modelId.startsWith("gemini-3.1-") && modelId.includes("-live");
-}
-
-function supportsAsyncFunctionCalling(model: string): boolean {
-  return !isGemini31LiveModel(model);
-}
-
-function buildThinkingConfig(
-  config: GoogleRealtimeLiveConfig,
-  model: string,
-): ThinkingConfig | undefined {
-  if (isGemini31LiveModel(model)) {
-    const thinkingLevel = resolveGoogleGemini3ThinkingLevel({
-      modelId: model,
-      thinkingLevel: config.thinkingLevel,
-      thinkingBudget: config.thinkingBudget,
-    });
-    return thinkingLevel
-      ? { thinkingLevel: thinkingLevel as ThinkingConfig["thinkingLevel"] }
-      : undefined;
-  }
-  if (typeof config.thinkingBudget === "number") {
-    return { thinkingBudget: config.thinkingBudget };
-  }
-  return undefined;
 }
 
 function buildRealtimeInputConfig(
@@ -307,15 +223,13 @@ function buildRealtimeInputConfig(
     : undefined;
   const turnCoverage = config.turnCoverage ? TURN_COVERAGE[config.turnCoverage] : undefined;
   const automaticActivityDetection = {
-    ...(typeof config.automaticActivityDetectionDisabled === "boolean"
+    ...(config.automaticActivityDetectionDisabled !== undefined
       ? { disabled: config.automaticActivityDetectionDisabled }
       : {}),
     ...(startSensitivity ? { startOfSpeechSensitivity: startSensitivity } : {}),
     ...(endSensitivity ? { endOfSpeechSensitivity: endSensitivity } : {}),
-    ...(typeof config.prefixPaddingMs === "number"
-      ? { prefixPaddingMs: config.prefixPaddingMs }
-      : {}),
-    ...(typeof config.silenceDurationMs === "number"
+    ...(config.prefixPaddingMs !== undefined ? { prefixPaddingMs: config.prefixPaddingMs } : {}),
+    ...(config.silenceDurationMs !== undefined
       ? { silenceDurationMs: config.silenceDurationMs }
       : {}),
   };
@@ -373,7 +287,7 @@ function buildGoogleLiveConnectConfig(
   const thinkingConfig = buildThinkingConfig(config, model);
   return {
     responseModalities: [Modality.AUDIO],
-    ...(typeof config.temperature === "number" && config.temperature > 0
+    ...(config.temperature !== undefined && config.temperature > 0
       ? { temperature: config.temperature }
       : {}),
     speechConfig: {
@@ -388,27 +302,10 @@ function buildGoogleLiveConnectConfig(
     ...(realtimeInputConfig ? { realtimeInputConfig } : {}),
     inputAudioTranscription: {},
     outputAudioTranscription: {},
-    ...(!isGemini31LiveModel(model) && typeof config.enableAffectiveDialog === "boolean"
+    ...(!isGemini31LiveModel(model) && config.enableAffectiveDialog !== undefined
       ? { enableAffectiveDialog: config.enableAffectiveDialog }
       : {}),
     ...(thinkingConfig ? { thinkingConfig } : {}),
-  };
-}
-
-function toGoogleModelResource(model: string): string {
-  return model.startsWith("models/") ? model : `models/${model}`;
-}
-
-function buildBrowserInitialSetup(model: string) {
-  return {
-    setup: {
-      model: toGoogleModelResource(model),
-      generationConfig: {
-        responseModalities: [Modality.AUDIO],
-      },
-      inputAudioTranscription: {},
-      outputAudioTranscription: {},
-    },
   };
 }
 
@@ -447,9 +344,9 @@ function formatGoogleLiveCloseEvent(
   if (!event) {
     return "code=unknown reason=unknown";
   }
-  const code = typeof event.code === "number" ? event.code : "unknown";
+  const code = event.code ?? "unknown";
   const reason = event.reason?.trim() || "none";
-  const clean = typeof event.wasClean === "boolean" ? ` clean=${event.wasClean}` : "";
+  const clean = event.wasClean !== undefined ? ` clean=${event.wasClean}` : "";
   return `code=${code} reason=${reason}${clean}`;
 }
 
@@ -459,8 +356,7 @@ type GoogleLiveConnectionAttempt = {
 };
 
 type GooglePendingToolResponse = {
-  callId: string;
-  payload: string;
+  payload: FunctionResponse;
   byteLength: number;
 };
 
@@ -475,7 +371,6 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private intentionallyClosed = false;
   // Native reconnect keeps the already accepted FIFO prefix stable.
   private readonly pendingAudio = createRealtimeVoiceAudioQueue("reject-newest");
-  private sessionReadyFired = false;
   private consecutiveSilenceMs = 0;
   private audioStreamEnded = false;
   private responseInterrupted = false;
@@ -506,7 +401,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   constructor(private readonly config: GoogleRealtimeVoiceBridgeConfig) {
     this.audioFormat = config.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ;
     this.model = config.model ?? GOOGLE_REALTIME_DEFAULT_MODEL;
-    this.supportsToolResultContinuation = supportsAsyncFunctionCalling(this.model);
+    this.supportsToolResultContinuation = modelSupportsToolResultContinuation(this.model);
   }
 
   async connect(): Promise<void> {
@@ -519,18 +414,15 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (this.connectAttempt) {
       return this.connectAttempt.promise;
     }
-    let cancel = () => {};
-    const cancelled = new Promise<void>((resolve) => {
-      cancel = resolve;
-    });
+    const cancelled = createDeferred();
     const attempt: GoogleLiveConnectionAttempt = {
-      promise: cancelled,
-      cancel,
+      promise: cancelled.promise,
+      cancel: cancelled.resolve,
     };
     this.connectionOwner = attempt;
     this.connectAttempt = attempt;
     const connection = this.connectOwned(attempt);
-    attempt.promise = Promise.race([connection, cancelled]).finally(() => {
+    attempt.promise = Promise.race([connection, cancelled.promise]).finally(() => {
       if (this.connectAttempt === attempt) {
         this.connectAttempt = undefined;
       }
@@ -543,7 +435,6 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.closeNotified = false;
     this.setupCompleteReceived = false;
     this.sessionConfigured = false;
-    this.sessionReadyFired = false;
     this.consecutiveSilenceMs = 0;
     this.audioStreamEnded = false;
     const resumesExistingSession =
@@ -662,13 +553,10 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.pendingAudio.enqueue(audio);
       return;
     }
-    const silent = this.isSilence(audio);
+    // Only silence that may end the audio stream counts; 3.8 needs every silent frame.
+    const silent = endsTurnOnAudioStreamEnd(this.model) && this.isSilence(audio);
     if (silent && this.audioStreamEnded) {
       return;
-    }
-    if (!silent) {
-      this.consecutiveSilenceMs = 0;
-      this.audioStreamEnded = false;
     }
 
     const pcm16k = this.toGoogleInputPcm16k(audio);
@@ -680,13 +568,12 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     });
 
     if (!silent) {
+      this.consecutiveSilenceMs = 0;
+      this.audioStreamEnded = false;
       return;
     }
 
-    const silenceThresholdMs =
-      typeof this.config.silenceDurationMs === "number"
-        ? Math.max(0, Math.floor(this.config.silenceDurationMs))
-        : DEFAULT_AUDIO_STREAM_END_SILENCE_MS;
+    const silenceThresholdMs = this.config.silenceDurationMs ?? DEFAULT_AUDIO_STREAM_END_SILENCE_MS;
     this.consecutiveSilenceMs += Math.round(
       realtimeVoiceAudioDurationMs(this.audioFormat, audio.length),
     );
@@ -697,6 +584,25 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   setMediaTimestamp(_ts: number): void {}
+
+  handleBargeIn(options?: RealtimeVoiceBargeInOptions): void {
+    if (!supportsClientContentInterrupt(this.model)) {
+      return;
+    }
+    if (!this.session || !this.connected || !this.sessionConfigured) {
+      return;
+    }
+    if (options?.audioPlaybackActive !== true && options?.force !== true) {
+      return;
+    }
+    try {
+      this.session.sendClientContent(buildGoogleLiveInterruptTurn());
+    } catch (error) {
+      this.config.onError?.(
+        error instanceof Error ? error : new Error("Google Live barge-in interrupt failed"),
+      );
+    }
+  }
 
   sendUserMessage(text: string): void {
     const normalized = text.trim();
@@ -784,15 +690,12 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
     try {
       const session = this.session;
-      const canSendImmediately = Boolean(
-        session && (!this.resumingSession || this.sessionConfigured),
-      );
-      if (session && canSendImmediately) {
+      if (session && (!this.resumingSession || this.sessionConfigured)) {
         session.sendToolResponse({
           functionResponses: [normalizedResponse],
         });
       } else {
-        this.queueToolResponseForReconnect(callId, serializedResponse);
+        this.queueToolResponseForReconnect(normalizedResponse, serializedResponse);
       }
       if (options?.willContinue !== true) {
         this.pendingFunctionNames.delete(callId);
@@ -815,6 +718,14 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     const hadConnection = Boolean(
       this.connectionOwner || this.connectAttempt || this.session || this.reconnectTimer,
     );
+    const session = this.detachSession({ clearInputAudio: true });
+    session?.close();
+    if (hadConnection) {
+      this.notifyClose("completed");
+    }
+  }
+
+  private detachSession({ clearInputAudio }: { clearInputAudio: boolean }): Session | null {
     this.intentionallyClosed = true;
     this.connected = false;
     this.setupCompleteReceived = false;
@@ -823,9 +734,11 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
-    this.clearPendingAudio();
-    this.consecutiveSilenceMs = 0;
-    this.audioStreamEnded = false;
+    if (clearInputAudio) {
+      this.pendingAudio.clear();
+      this.consecutiveSilenceMs = 0;
+      this.audioStreamEnded = false;
+    }
     this.resetToolCallOwnership();
     this.flushPendingTranscripts();
     const owner = this.connectionOwner;
@@ -833,10 +746,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.cancelConnectAttempt(owner);
     const session = this.session;
     this.session = null;
-    session?.close();
-    if (hadConnection) {
-      this.notifyClose("completed");
-    }
+    return session;
   }
 
   isConnected(): boolean {
@@ -847,20 +757,12 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     return this.audioFormat.encoding === "pcm16" ? isPcm16Silence(audio) : isMulawSilence(audio);
   }
 
-  private toInputPcm(audio: Buffer): Buffer {
-    return this.audioFormat.encoding === "pcm16" ? audio : mulawToPcm(audio);
-  }
-
   private toGoogleInputPcm16k(audio: Buffer): Buffer {
-    if (
-      this.audioFormat.encoding === "g711_ulaw" &&
-      this.audioFormat.sampleRateHz === 8_000 &&
-      GOOGLE_REALTIME_INPUT_SAMPLE_RATE === 16_000
-    ) {
+    if (this.audioFormat.encoding === "g711_ulaw" && this.audioFormat.sampleRateHz === 8_000) {
       return convertMulaw8kToPcm16k(audio);
     }
     return resamplePcm(
-      this.toInputPcm(audio),
+      this.audioFormat.encoding === "pcm16" ? audio : mulawToPcm(audio),
       this.audioFormat.sampleRateHz,
       GOOGLE_REALTIME_INPUT_SAMPLE_RATE,
     );
@@ -873,16 +775,12 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private handleMessage(message: LiveServerMessage): void {
-    const owner = this.connectionOwner;
     this.captureSessionLifecycle(message);
     if (message.setupComplete) {
       this.handleSetupComplete();
     }
     if (message.serverContent) {
       this.handleServerContent(message.serverContent);
-      if (this.connectionOwner !== owner) {
-        return;
-      }
     }
     if (message.toolCall) {
       this.handleToolCall(message.toolCall);
@@ -898,18 +796,14 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private captureSessionLifecycle(message: LiveServerMessage): void {
-    const raw = message as unknown as {
-      goAway?: { timeLeft?: string };
-      sessionResumptionUpdate?: { newHandle?: string; resumable?: boolean };
-    };
-    const update = raw.sessionResumptionUpdate;
+    const update = message.sessionResumptionUpdate;
     if (update?.resumable === false) {
       this.resumptionHandle = undefined;
     } else if (update?.resumable && update.newHandle) {
       this.resumptionHandle = update.newHandle;
     }
-    if (raw.goAway?.timeLeft) {
-      this.config.onError?.(new Error(`Google Live session goAway: ${raw.goAway.timeLeft}`));
+    if (message.goAway?.timeLeft) {
+      this.config.onError?.(new Error(`Google Live session goAway: ${message.goAway.timeLeft}`));
     }
   }
 
@@ -940,20 +834,13 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     for (const chunk of this.pendingAudio.drain()) {
       this.sendAudio(chunk);
     }
-    if (!this.sessionReadyFired) {
-      this.sessionReadyFired = true;
-      this.config.onReady?.();
-    }
+    this.config.onReady?.();
   }
 
   private handleServerContent(content: LiveServerContent): void {
-    const owner = this.connectionOwner;
     if (content.interrupted) {
       this.responseInterrupted = true;
       this.config.onClearAudio("barge-in");
-      if (this.connectionOwner !== owner) {
-        return;
-      }
     }
 
     if (content.inputTranscription) {
@@ -963,8 +850,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
 
     if (content.outputTranscription) {
-      // outputAudioTranscription is requested in the session config. Keep that
-      // official stream canonical; modelTurn text has no transcript turn identity.
+      // Keep requested outputAudioTranscription canonical; modelTurn text has no turn identity.
       if (!this.appendTranscript("assistant", content.outputTranscription)) {
         return;
       }
@@ -982,25 +868,15 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         const audio = this.toOutputAudio(pcm, sampleRate);
         if (audio.length > 0) {
           this.config.onAudio(audio);
-          if (this.connectionOwner !== owner) {
-            return;
-          }
           this.config.onMark?.(`audio-${randomUUID()}`);
-          if (this.connectionOwner !== owner) {
-            return;
-          }
         }
-        continue;
       }
     }
-    // Output transcription precedes these model boundaries; input transcription
-    // is independently ordered and must not be finalized by an assistant turn.
     if (content.generationComplete || content.interrupted || content.turnComplete) {
       this.flushPendingTranscript("assistant");
     }
-    if (content.turnComplete && this.connectionOwner === owner) {
-      // Google finishes interrupted turns with turnComplete too. generationComplete
-      // can precede playback completion, so only the native turn boundary releases output.
+    const done = isResponseDone(this.model, content.interactionStatus, this.responseInterrupted);
+    if (content.turnComplete && done) {
       const status = this.responseInterrupted ? "cancelled" : "completed";
       this.responseInterrupted = false;
       this.config.onResponseDone?.({ status });
@@ -1008,38 +884,31 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private appendTranscript(role: RealtimeVoiceRole, transcript: GoogleLiveTranscription): boolean {
-    const owner = this.connectionOwner;
-    // Live 3.1 emits complete input utterances without the optional finished flag.
-    const completeInput = role === "user" && isGemini31LiveModel(this.model);
-    const text = transcript.text;
-    if (text) {
-      const pending = this.pendingTranscripts[role];
-      const textBytes = Buffer.byteLength(text, "utf8");
-      if (pending.byteCount + textBytes > GOOGLE_REALTIME_MAX_PENDING_TRANSCRIPT_BYTES) {
+    // Live 3.1 and 3.8 emit complete input utterances without the optional finished flag.
+    const completeInput = role === "user" && emitsCompleteInputTranscripts(this.model);
+    if (transcript.text) {
+      const pending = this.pendingTranscripts[role],
+        bytes = Buffer.byteLength(transcript.text, "utf8");
+      if (pending.byteCount + bytes > GOOGLE_REALTIME_MAX_PENDING_TRANSCRIPT_BYTES) {
         this.resetPendingTranscripts();
         this.failConnection(new Error(GOOGLE_REALTIME_TRANSCRIPT_OVERFLOW_MESSAGE));
         return false;
       }
-      pending.text += text;
-      pending.byteCount += textBytes;
+      pending.text += transcript.text;
+      pending.byteCount += bytes;
       if (!completeInput) {
-        this.emitTranscript(role, text, false);
-        if (this.connectionOwner !== owner) {
-          return false;
-        }
+        this.emitTranscript(role, transcript.text, false);
       }
     }
     if (transcript.finished || completeInput) {
       this.flushPendingTranscript(role);
     }
-    return this.connectionOwner === owner;
+    return true;
   }
 
   private flushPendingTranscript(role: RealtimeVoiceRole): void {
-    const pending = this.pendingTranscripts[role];
-    const completeText = pending.text.trim();
-    pending.text = "";
-    pending.byteCount = 0;
+    const completeText = this.pendingTranscripts[role].text.trim();
+    this.pendingTranscripts[role] = { text: "", byteCount: 0 };
     if (completeText) {
       this.emitTranscript(role, completeText, true);
     }
@@ -1075,21 +944,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     this.terminalError = error;
-    this.intentionallyClosed = true;
-    this.connected = false;
-    this.setupCompleteReceived = false;
-    this.sessionConfigured = false;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = undefined;
-    }
-    this.resetToolCallOwnership();
-    this.flushPendingTranscripts();
-    const owner = this.connectionOwner;
-    this.connectionOwner = undefined;
-    this.cancelConnectAttempt(owner);
-    const session = this.session;
-    this.session = null;
+    const session = this.detachSession({ clearInputAudio: false });
     try {
       this.config.onError?.(error);
     } finally {
@@ -1105,14 +960,10 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (this.closeNotified) {
       return;
     }
-    this.clearPendingAudio();
+    this.pendingAudio.clear();
     this.responseInterrupted = false;
     this.closeNotified = true;
     this.config.onClose?.(reason);
-  }
-
-  private clearPendingAudio(): void {
-    this.pendingAudio.clear();
   }
 
   private cancelConnectAttempt(attempt: GoogleLiveConnectionAttempt | undefined): void {
@@ -1179,17 +1030,15 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.pendingToolResponseBytes = 0;
   }
 
-  private queueToolResponseForReconnect(callId: string, payload: string): void {
-    const payloadBytes = Buffer.byteLength(payload, "utf8");
+  private queueToolResponseForReconnect(payload: FunctionResponse, serialized: string): void {
+    const payloadBytes = Buffer.byteLength(serialized, "utf8");
     if (
       this.pendingToolResponses.length >= GOOGLE_REALTIME_MAX_PENDING_TOOL_RESPONSES ||
       this.pendingToolResponseBytes + payloadBytes > GOOGLE_REALTIME_MAX_PENDING_TOOL_RESPONSE_BYTES
     ) {
       throw new Error("Google Live reconnect tool-response buffer limit exceeded");
     }
-    // Store the serialized wire shape so a stalled reconnect cannot retain an
-    // arbitrarily large caller-owned object graph through the tool result.
-    this.pendingToolResponses.push({ callId, payload, byteLength: payloadBytes });
+    this.pendingToolResponses.push({ payload, byteLength: payloadBytes });
     this.pendingToolResponseBytes += payloadBytes;
   }
 
@@ -1197,7 +1046,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     const retained: GooglePendingToolResponse[] = [];
     let removed = false;
     for (const response of this.pendingToolResponses) {
-      if (response.callId === callId) {
+      if (response.payload.id === callId) {
         this.pendingToolResponseBytes -= response.byteLength;
         removed = true;
       } else {
@@ -1220,7 +1069,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
           break;
         }
         session.sendToolResponse({
-          functionResponses: [JSON.parse(response.payload) as FunctionResponse],
+          functionResponses: [response.payload],
         });
         this.pendingToolResponses.shift();
         this.pendingToolResponseBytes -= response.byteLength;
@@ -1296,46 +1145,27 @@ function convertMulaw8kToPcm16k(muLaw: Buffer): Buffer {
   return pcm;
 }
 
-function decodeMulawSample(value: number): number {
-  const muLaw = ~value & 0xff;
-  const sign = muLaw & 0x80;
-  const exponent = (muLaw >> 4) & 0x07;
-  const mantissa = muLaw & 0x0f;
-  let sample = ((mantissa << 3) + 132) << exponent;
-  sample -= 132;
-  return sign ? -sample : sample;
-}
-
 async function createGoogleRealtimeBrowserSession(
   req: RealtimeVoiceBrowserSessionCreateRequest,
 ): Promise<RealtimeVoiceBrowserSession> {
   const providerConfig = normalizeProviderConfig(req.providerConfig);
-  const prefixPaddingMs = asNonNegativeInteger(req.prefixPaddingMs);
-  const silenceDurationMs = asNonNegativeInteger(req.silenceDurationMs);
+  const prefixPaddingMs = asSafeIntegerInRange(req.prefixPaddingMs, { min: 0 });
+  const silenceDurationMs = asSafeIntegerInRange(req.silenceDurationMs, { min: 0 });
   const config = {
     ...providerConfig,
     ...(prefixPaddingMs !== undefined ? { prefixPaddingMs } : {}),
     ...(silenceDurationMs !== undefined ? { silenceDurationMs } : {}),
   };
-  const apiKey = config.apiKey || resolveEnvApiKey();
+  const apiKey = config.apiKey || resolveGoogleEnvApiKey();
   if (!apiKey) {
     throw new Error("Google Gemini API key missing");
   }
   const model = req.model ?? config.model ?? GOOGLE_REALTIME_DEFAULT_MODEL;
   const voice = req.voice ?? config.voice ?? GOOGLE_REALTIME_DEFAULT_VOICE;
   const nowMs = Date.now();
-  const expiresAtMs = resolveExpiresAtMsFromDurationMs(GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS, {
-    nowMs,
-  });
-  const newSessionExpiresAtMs = resolveExpiresAtMsFromDurationMs(
-    GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS,
-    { nowMs },
-  );
-  const expireTime = timestampMsToIsoString(expiresAtMs);
-  const newSessionExpireTime = timestampMsToIsoString(newSessionExpiresAtMs);
-  if (expiresAtMs === undefined || !expireTime || !newSessionExpireTime) {
-    throw new Error("Google realtime browser session expiry is outside the supported Date range");
-  }
+  const expireTime = new Date(nowMs + GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS).toISOString();
+  const newSessionExpiresAtMs = nowMs + GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS;
+  const newSessionExpireTime = new Date(newSessionExpiresAtMs).toISOString();
   const ai = createGoogleGenAI({
     apiKey,
     httpOptions: {
@@ -1381,7 +1211,14 @@ async function createGoogleRealtimeBrowserSession(
       outputEncoding: "pcm16",
       outputSampleRateHz: 24_000,
     },
-    initialMessage: buildBrowserInitialSetup(model),
+    initialMessage: {
+      setup: {
+        model: model.startsWith("models/") ? model : `models/${model}`,
+        generationConfig: { responseModalities: [Modality.AUDIO] },
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+      },
+    },
     model,
     voice,
     expiresAt: newSessionExpiresAtMs,
@@ -1389,11 +1226,14 @@ async function createGoogleRealtimeBrowserSession(
 }
 
 export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
+  const resolveConfig: NonNullable<RealtimeVoiceProviderPlugin["resolveConfig"]> = ({
+    cfg,
+    rawConfig,
+  }) => normalizeProviderConfig(rawConfig, cfg);
+  const isConfigured: RealtimeVoiceProviderPlugin["isConfigured"] = ({ providerConfig }) =>
+    Boolean(normalizeProviderConfig(providerConfig).apiKey || resolveGoogleEnvApiKey());
   return {
-    id: "google",
-    label: "Google Live Voice",
-    defaultModel: GOOGLE_REALTIME_DEFAULT_MODEL,
-    autoSelectOrder: 20,
+    ...GOOGLE_REALTIME_VOICE_METADATA,
     capabilities: {
       transports: ["provider-websocket", "gateway-relay"],
       inputAudioFormats: [
@@ -1411,34 +1251,21 @@ export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       supportsVideoFrames: true,
       supportsSessionResumption: true,
     },
-    resolveConfig: ({ cfg, rawConfig }) => normalizeProviderConfig(rawConfig, cfg),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || resolveEnvApiKey()),
+    // Retained for public synchronous SDK calls through 2026-12-31.
+    resolveConfig,
+    isConfigured,
+    resolveConfigAsync: async (context) => resolveConfig(context),
+    isConfiguredAsync: async (context) => isConfigured(context),
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey = config.apiKey || resolveEnvApiKey();
+      const apiKey = config.apiKey || resolveGoogleEnvApiKey();
       if (!apiKey) {
         throw new Error("Google Gemini API key missing");
       }
       return new GoogleRealtimeVoiceBridge({
         ...req,
+        ...config,
         apiKey,
-        model: config.model,
-        voice: config.voice,
-        temperature: config.temperature,
-        apiVersion: config.apiVersion,
-        prefixPaddingMs: config.prefixPaddingMs,
-        silenceDurationMs: config.silenceDurationMs,
-        startSensitivity: config.startSensitivity,
-        endSensitivity: config.endSensitivity,
-        activityHandling: config.activityHandling,
-        turnCoverage: config.turnCoverage,
-        automaticActivityDetectionDisabled: config.automaticActivityDetectionDisabled,
-        enableAffectiveDialog: config.enableAffectiveDialog,
-        sessionResumption: config.sessionResumption,
-        contextWindowCompression: config.contextWindowCompression,
-        thinkingLevel: config.thinkingLevel,
-        thinkingBudget: config.thinkingBudget,
       });
     },
     createBrowserSession: createGoogleRealtimeBrowserSession,

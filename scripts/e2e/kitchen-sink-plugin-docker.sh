@@ -37,6 +37,10 @@ npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixtu
 SCENARIOS
 )"
 KITCHEN_SINK_SCENARIOS="${OPENCLAW_KITCHEN_SINK_PLUGIN_SCENARIOS:-$DEFAULT_KITCHEN_SINK_SCENARIOS}"
+if [[ "${OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB:-0}" = "1" ]]; then
+  echo "The OpenClaw Kitchen Sink package is delisted from ClawHub; use the default fixture scenarios or npm scenarios." >&2
+  exit 2
+fi
 MAX_MEMORY_MIB="$(
   if [[ -n "${OPENCLAW_KITCHEN_SINK_PLUGIN_MAX_MEMORY_MIB:-}" ]]; then
     docker_e2e_read_nonnegative_decimal_env OPENCLAW_KITCHEN_SINK_PLUGIN_MAX_MEMORY_MIB 2304
@@ -72,19 +76,6 @@ openclaw_resolve_frozen_plugin_harness_capabilities \
   "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" || capability_status=$?
 [ "$capability_status" -eq 0 ] || exit "$capability_status"
 openclaw_append_frozen_plugin_harness_docker_env
-if [[ "${OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB:-0}" = "1" ]]; then
-  for env_name in \
-    OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB \
-    OPENCLAW_CLAWHUB_URL \
-    CLAWHUB_URL \
-    CLAWHUB_TOKEN \
-    CLAWHUB_AUTH_TOKEN; do
-    env_value="${!env_name:-}"
-    if [[ -n "$env_value" && "$env_value" != "undefined" && "$env_value" != "null" ]]; then
-      DOCKER_ENV_ARGS+=(-e "$env_name")
-    fi
-  done
-fi
 
 echo "Running kitchen-sink plugin Docker E2E..."
 docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true

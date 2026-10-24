@@ -1,15 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
-import {
-  parsePluginInstallRecordMap,
-  serializePluginInstallRecordMap,
-} from "../config/plugin-install-record-map.js";
+import { parsePluginInstallRecordMap } from "../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
+  areBundledPluginsDisabled,
   isPluginInPackageBundledRoots,
   resolveBundledDirFromPackageRoot,
   resolveBundledPluginsDir,
@@ -21,15 +19,13 @@ import {
   resolvePluginPackageEntries,
 } from "../plugins/discovery.js";
 import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "../plugins/installed-plugin-index-row.js";
-import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-build.js";
 import { resolvePackageExtensionEntries } from "../plugins/manifest.js";
 import { pluginCacheRealpathSync } from "../plugins/plugin-cache-files.js";
-import { inspectPluginSourceDependencies } from "../plugins/plugin-generation-source-inspection.js";
 import type { ConfigMachineStateDatabase } from "../state/config-machine-state.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { sha256Hex } from "./crypto-digest.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
+import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { resolveUserPath } from "./home-dir.js";
 import {
   executeSqliteQuerySync,
@@ -38,28 +34,51 @@ import {
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
-import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { isPathInside } from "./path-guards.js";
 import { resolveUpdateCandidatePluginPath } from "./update-candidate-paths.js";
-import { resolveUpdateCandidatePluginSourceEntries } from "./update-candidate-plugin-sources.js";
+import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import {
-  assertUpdateCandidatePluginCopySource,
+  inspectUpdateCandidatePluginSource,
+  resolveUpdateCandidatePluginSourceEntries,
+} from "./update-candidate-plugin-sources.js";
+import { verifyUpdateCandidatePluginTree } from "./update-candidate-plugin-tree-links.js";
+import { UpdateCandidatePluginTreePlanSchema } from "./update-candidate-plugin-tree-schema.js";
+import {
   copyUpdateCandidatePluginTrees,
   prepareUpdateCandidatePluginTrees,
-  UpdateCandidatePluginTreePlanSchema,
 } from "./update-candidate-plugin-tree.js";
 import { relocateRuntimePath } from "./update-runtime-relocation.js";
+
+/** Discovery captured in the serving updater, before entering the candidate worker. */
+export type UpdateCandidateBundledSource = {
+  packageRoot: string;
+  directory?: string;
+};
 
 function bundledPluginRedirects(
   candidateRoot: string,
   env?: NodeJS.ProcessEnv,
+  sourceBundle?: UpdateCandidateBundledSource,
 ): Map<string, string> {
   const redirects = new Map<string, string>();
-  const sourceDir = resolveBundledPluginsDir(env);
+  if (areBundledPluginsDisabled(env)) {
+    return redirects;
+  }
+  // A candidate worker's argv/module discovery names the candidate itself.
+  // Retain the serving updater's actual selection, including overrides or no bundle.
+  const sourceDir = sourceBundle ? sourceBundle.directory : resolveBundledPluginsDir(env);
   const sourcePackageRoot = sourceDir && resolveOpenClawPackageRootSync({ cwd: sourceDir });
   const candidateDir = resolveBundledDirFromPackageRoot(candidateRoot);
   if (
     !sourceDir ||
     !sourcePackageRoot ||
+    (sourceBundle &&
+      (pluginCacheRealpathSync(sourcePackageRoot, true) !==
+        pluginCacheRealpathSync(sourceBundle.packageRoot, true) ||
+        !isPluginInPackageBundledRoots({
+          rootDir: sourceDir,
+          packageRoot: sourceBundle.packageRoot,
+        }))) ||
     !candidateDir ||
     !isPluginInPackageBundledRoots({ rootDir: candidateDir, packageRoot: candidateRoot })
   ) {
@@ -150,12 +169,7 @@ async function resolvePluginFilePackageRoot(file: string): Promise<string> {
   for (let current = directory; ; current = path.dirname(current)) {
     const manifestExists = await fs.access(path.join(current, "package.json")).then(
       () => true,
-      (error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return false;
-        }
-        throw error;
-      },
+      (error: unknown) => ignoreMissingUpdateCandidateFile(error) ?? false,
     );
     if (manifestExists) {
       return current;
@@ -171,91 +185,73 @@ type UpdateCandidatePluginProjectionParams = {
   stateDir: string;
   targetStateDir: string;
   candidateRoot: string;
+  sourceBundledPlugins?: UpdateCandidateBundledSource;
   env?: NodeJS.ProcessEnv;
 };
 
 export const UpdateCandidatePluginPlanSchema = z.object({
   bytes: z.number().int().nonnegative(),
-  stateDir: z.string(),
-  installRecordsHash: z.string().nullable(),
-  configInstallRecordsHash: z.string(),
-  configLoadPaths: z.array(z.string()),
-  bindings: z.array(
-    z.object({
-      source: z.string(),
-      real: z.string().nullable(),
-      dev: z.string().nullable(),
-      ino: z.string().nullable(),
-    }),
-  ),
+  warnings: z.array(z.string()),
   pluginPaths: z.record(z.string(), z.string()),
-  recordPaths: z.record(
-    z.string(),
-    z.object({
-      installPath: z.string().optional(),
-      sourcePath: z.string().optional(),
-    }),
-  ),
   aliases: z.array(z.object({ alias: z.string(), target: z.string(), file: z.boolean() })),
   trees: UpdateCandidatePluginTreePlanSchema,
 });
 type UpdateCandidatePluginPlan = z.infer<typeof UpdateCandidatePluginPlanSchema>;
 
-function installRecordsHash(records: Record<string, PluginInstallRecord>): string {
-  return sha256Hex(serializePluginInstallRecordMap(records));
+async function statPluginLocator(source: string) {
+  return fs.stat(source, { bigint: true }).catch(ignoreMissingUpdateCandidateFile);
 }
 
-async function readCopiedPluginIndex(shared: string): Promise<
-  | {
-      value: Record<string, unknown>;
-      records: Record<string, PluginInstallRecord>;
-    }
-  | undefined
-> {
-  if (
-    await fs.stat(shared).then(
-      () => true,
-      (error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return false;
-        }
-        throw error;
-      },
-    )
-  ) {
-    const db = openNodeSqliteDatabase(shared, { readOnly: true });
-    try {
-      if (tableExists(db, "config_machine_state")) {
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<ConfigMachineStateDatabase>(db)
-            .selectFrom("config_machine_state")
-            .select("value_json")
-            .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
-        );
-        if (row) {
-          const parsed: unknown = JSON.parse(row.value_json);
-          if (!isRecord(parsed) || !isRecord(parsed.index)) {
-            throw new Error("Invalid copied plugin index");
-          }
-          const installed = parsePluginInstallRecordMap(parsed.index.installRecords);
-          if (!installed) {
-            throw new Error("Invalid copied plugin install records");
-          }
-          return { value: parsed, records: installed };
-        }
-      }
-    } finally {
-      db.close();
-    }
+export type UpdateCandidatePluginIndex = {
+  value: Record<string, unknown>;
+  records: Record<string, PluginInstallRecord>;
+};
+
+export function readUpdateCandidatePluginIndex(
+  db: import("./sql-connection.js").EngineConnection,
+): UpdateCandidatePluginIndex | undefined {
+  if (!tableExists(db, "config_machine_state")) {
+    return undefined;
   }
-  return undefined;
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<ConfigMachineStateDatabase>(db)
+      .selectFrom("config_machine_state")
+      .select("value_json")
+      .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
+  );
+  if (!row) {
+    return undefined;
+  }
+  const parsed: unknown = JSON.parse(row.value_json);
+  if (!isRecord(parsed) || !isRecord(parsed.index)) {
+    throw new Error("Invalid copied plugin index");
+  }
+  const installed = parsePluginInstallRecordMap(parsed.index.installRecords);
+  if (!installed) {
+    throw new Error("Invalid copied plugin install records");
+  }
+  return { value: parsed, records: installed };
 }
 
-/** Inventory reads only private SQLite state and freezes the complete plugin projection. */
+async function readCopiedPluginIndex(shared: string) {
+  const stat = await fs.stat(shared).catch(ignoreMissingUpdateCandidateFile);
+  if (!stat) {
+    return undefined;
+  }
+  const db = openNodeSqliteDatabase(shared, { readOnly: true });
+  try {
+    return readUpdateCandidatePluginIndex(db);
+  } finally {
+    db.close();
+  }
+}
+
+/** Inventory private SQLite records and the plugin paths needed by this candidate. */
 export async function prepareUpdateCandidatePlugins(
   params: UpdateCandidatePluginProjectionParams & {
     sharedStateDatabasePath?: string;
+    sharedStatePluginIndex?: UpdateCandidatePluginIndex;
     onProgress?: () => void | Promise<void>;
   },
 ): Promise<UpdateCandidatePluginPlan> {
@@ -263,18 +259,14 @@ export async function prepareUpdateCandidatePlugins(
   const targetStateDir = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
   const shared =
     params.sharedStateDatabasePath ?? path.join(targetStateDir, "state", "openclaw.sqlite");
-  const copied = await readCopiedPluginIndex(shared);
+  const copied = params.sharedStatePluginIndex ?? (await readCopiedPluginIndex(shared));
   const records = copied?.records ?? params.config.plugins?.installs ?? {};
   const resolve = (locator: string) => resolveUserPath(locator, params.env);
-  const canonicalStateRoot = await fs.realpath(sourceRoot).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return sourceRoot;
-    }
-    throw error;
-  });
+  const canonicalStateRoot = await fs
+    .realpath(sourceRoot)
+    .catch((error: unknown) => ignoreMissingUpdateCandidateFile(error) ?? sourceRoot);
   const project = (source: string) =>
     resolveUpdateCandidatePluginPath(canonicalStateRoot, targetStateDir, source);
-  const bindings: UpdateCandidatePluginPlan["bindings"] = [];
   const locators: Array<{
     source: string;
     real: string;
@@ -301,24 +293,17 @@ export async function prepareUpdateCandidatePlugins(
   }
   const bundledRedirects =
     sources.size > 0
-      ? bundledPluginRedirects(params.candidateRoot, params.env)
+      ? bundledPluginRedirects(params.candidateRoot, params.env, params.sourceBundledPlugins)
       : new Map<string, string>();
   const pluginPaths: Record<string, string> = {};
   for (const source of sources) {
-    const stat = await fs.stat(source, { bigint: true }).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const stat = await statPluginLocator(source);
     if (!stat) {
       // Keep a missing locator private and missing; candidate validation owns the failure.
       pluginPaths[source] = project(source);
-      bindings.push({ source, real: null, dev: null, ino: null });
       continue;
     }
     const real = await fs.realpath(source);
-    bindings.push({ source, real, dev: stat.dev.toString(), ino: stat.ino.toString() });
     const bundled = bundledRedirects.get(real);
     if (bundled) {
       pluginPaths[source] = bundled;
@@ -343,21 +328,23 @@ export async function prepareUpdateCandidatePlugins(
       roots.set(owner, project(owner));
     }
   }
-  for (const source of roots.keys()) {
-    assertUpdateCandidatePluginCopySource(source, targetStateDir);
-  }
-  const dependencies = inspectPluginSourceDependencies(
-    resolveUpdateCandidatePluginSourceEntries(
-      discoverConfiguredPluginLoadPaths({
-        loadPaths: locators.map(({ real }) => real),
-        env: params.env,
-      }).candidates,
-      params.config,
-    ),
+  const warnings: string[] = [];
+  const entries = resolveUpdateCandidatePluginSourceEntries(
+    discoverConfiguredPluginLoadPaths({
+      loadPaths: locators.map(({ real }) => real),
+      env: params.env,
+    }).candidates,
+    params.config,
   );
-  for (const source of [...dependencies.packageRoots, ...dependencies.files]) {
-    if (![...roots.keys()].some((root) => isPathInside(root, source))) {
-      roots.set(source, project(source));
+  const inspections = entries.flatMap((entry) => {
+    const inspection = inspectUpdateCandidatePluginSource(entry, warnings);
+    return inspection ? [inspection] : [];
+  });
+  for (const inspection of inspections) {
+    for (const source of inspection.packageRoots.concat(inspection.files)) {
+      if (![...roots.keys()].some((root) => isPathInside(root, source))) {
+        roots.set(source, project(source));
+      }
     }
   }
   const trees = await prepareUpdateCandidatePluginTrees({
@@ -367,7 +354,6 @@ export async function prepareUpdateCandidatePlugins(
     candidateRoot: params.candidateRoot,
     onProgress: params.onProgress,
   });
-  dependencies.assertSourceCurrent();
   const aliases: UpdateCandidatePluginPlan["aliases"] = [];
   for (const { source, real, file, preserveBasename } of locators) {
     const copy = trees.copies.find(([directory]) => isPathInside(directory, real));
@@ -381,96 +367,36 @@ export async function prepareUpdateCandidatePlugins(
     }
     pluginPaths[source] = alias;
   }
-  const recordPaths = Object.fromEntries(
-    Object.entries(records).map<[string, Pick<PluginInstallRecord, "installPath" | "sourcePath">]>(
-      ([id, record]) => {
-        const locations: Pick<PluginInstallRecord, "installPath" | "sourcePath"> = {};
-        for (const key of ["installPath", "sourcePath"] as const) {
-          const locator =
-            key === "sourcePath" && record.source !== "path" ? undefined : record[key];
-          if (!locator) {
-            continue;
-          }
-          const projected = pluginPaths[resolve(locator)];
-          if (!projected) {
-            throw new Error("Plugin record locator was not inventoried");
-          }
-          locations[key] = projected;
-        }
-        return [id, locations];
-      },
-    ),
-  );
   return {
     bytes: trees.bytes + aliases.length * 4096,
-    stateDir: sourceRoot,
-    installRecordsHash: copied ? installRecordsHash(copied.records) : null,
-    configInstallRecordsHash: installRecordsHash(params.config.plugins?.installs ?? {}),
-    configLoadPaths: [...(params.config.plugins?.load?.paths ?? [])],
-    bindings,
+    warnings,
     pluginPaths,
-    recordPaths,
     aliases,
     trees,
   };
 }
 
-/** Rebind admitted paths only; newer records or locator owners require a fresh inventory. */
+/** Project every copied locator through the private inventory; source edits are best effort. */
 export async function copyUpdateCandidatePlugins(
   plan: UpdateCandidatePluginPlan,
-  params: UpdateCandidatePluginProjectionParams,
+  params: UpdateCandidatePluginProjectionParams & {
+    onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
+  },
 ): Promise<Record<string, string>> {
   const targetStateDir = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
-  if (plan.stateDir !== path.resolve(params.stateDir)) {
-    throw new Error("Plugin state root changed after snapshot inventory");
-  }
   const shared = path.join(targetStateDir, "state", "openclaw.sqlite");
   const copied = await readCopiedPluginIndex(shared);
-  if ((copied ? installRecordsHash(copied.records) : null) !== plan.installRecordsHash) {
-    throw new Error("Plugin install records changed after snapshot inventory");
-  }
-  if (
-    installRecordsHash(params.config.plugins?.installs ?? {}) !== plan.configInstallRecordsHash ||
-    !isDeepStrictEqual(params.config.plugins?.load?.paths ?? [], plan.configLoadPaths)
-  ) {
-    throw new Error("Configured plugin locators changed after snapshot inventory");
-  }
-  const assertBindings = async () => {
-    for (const binding of plan.bindings) {
-      const stat = await fs.stat(binding.source, { bigint: true }).catch((error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
-      const real = stat ? await fs.realpath(binding.source) : null;
-      if (
-        real !== binding.real ||
-        (stat?.dev.toString() ?? null) !== binding.dev ||
-        (stat?.ino.toString() ?? null) !== binding.ino
-      ) {
-        throw new Error(`Plugin locator changed after snapshot inventory: ${binding.source}`);
-      }
-    }
-  };
   const rebase = (file: string) =>
     relocateRuntimePath(file, [
       { sourceRoot: plan.trees.privateRoot, destinationRoot: targetStateDir },
     ]);
-  await assertBindings();
   await copyUpdateCandidatePluginTrees(plan.trees, params);
-  await assertBindings();
   for (const entry of plan.aliases) {
     const alias = rebase(entry.alias);
     const target = rebase(entry.target);
     // Preserve the entry basename/ID while imports use the canonical copied owner.
     const [existing, targetIdentity] = await Promise.all([
-      fs.stat(alias, { bigint: true }).catch((error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      }),
+      statPluginLocator(alias),
       fs.stat(target, { bigint: true }),
     ]);
     // A case-equivalent name can already be this file; unlinking it destroys the target.
@@ -483,23 +409,31 @@ export async function copyUpdateCandidatePlugins(
         entry.file ? "file" : process.platform === "win32" ? "junction" : "dir",
       );
     }
+    if ((await fs.lstat(alias)).isSymbolicLink()) {
+      await verifyUpdateCandidatePluginTree(alias, {
+        privateRoot: targetStateDir,
+        candidateRoot: plan.trees.candidateRoot,
+        hostLinks: new Set(),
+        onCodeLink: params.onCodeLink,
+      });
+    }
   }
   if (copied) {
-    const projected = structuredClone(copied.records);
-    for (const [id, locations] of Object.entries(plan.recordPaths)) {
-      const record = projected[id];
-      if (!record) {
-        throw new Error("Plugin install records changed after snapshot inventory");
-      }
-      if (locations.sourcePath) {
-        record.sourcePath = rebase(locations.sourcePath);
-      }
-      if (locations.installPath) {
-        record.installPath = rebase(locations.installPath);
+    for (const record of Object.values(copied.records)) {
+      for (const key of ["installPath", "sourcePath"] as const) {
+        const locator = key === "sourcePath" && record.source !== "path" ? undefined : record[key];
+        if (!locator) {
+          continue;
+        }
+        const projected = plan.pluginPaths[resolveUserPath(locator, params.env)];
+        if (!projected) {
+          throw new Error("Plugin record locator was not inventoried");
+        }
+        record[key] = rebase(projected);
       }
     }
     // Preserve the copied index wrapper; metadata naming source paths must be rebuilt.
-    const next = { ...copied.value, index: { installRecords: projected } };
+    const next = { ...copied.value, index: { installRecords: copied.records } };
     const db = openNodeSqliteDatabase(shared);
     try {
       executeSqliteQuerySync(

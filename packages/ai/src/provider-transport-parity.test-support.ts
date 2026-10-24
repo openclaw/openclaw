@@ -1,7 +1,44 @@
-import type { Context, Model } from "@openclaw/llm-core";
+import type {
+  AssistantMessage,
+  Context,
+  Model,
+  SimpleStreamOptions,
+  UserMessage,
+} from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, expect, vi } from "vitest";
+import { afterEach, beforeAll, expect, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "./host.js";
+import type { AnthropicOptions } from "./provider-options.js";
+import { createZeroUsage } from "./usage.test-support.js";
+
+export function textBlock(text: string, cache_control?: { type: string; ttl?: string }) {
+  return { type: "text" as const, text, ...(cache_control ? { cache_control } : {}) };
+}
+
+export function userMessage(
+  content: UserMessage["content"],
+  overrides: Partial<UserMessage> = {},
+): UserMessage {
+  return { role: "user", content, timestamp: 1, ...overrides };
+}
+
+export function assistantMessage(
+  model: Model,
+  content: AssistantMessage["content"],
+  overrides: Partial<AssistantMessage> = {},
+): AssistantMessage {
+  return {
+    role: "assistant",
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    timestamp: 1,
+    stopReason: "stop",
+    usage: createZeroUsage(),
+    content,
+    ...overrides,
+  };
+}
 
 export const anthropicModel = {
   id: "claude-sonnet-4-6",
@@ -32,6 +69,12 @@ export const context = {
   ],
 } satisfies Context;
 
+const thinkingSeed = { type: "thinking", thinking: "seed", signature: "seed-signature" };
+const thinkingDelta = { type: "thinking_delta", thinking: " + thought" };
+const signatureDelta = { type: "signature_delta", signature: "final-signature" };
+const textSeed = { type: "text", text: "Hello" };
+const textDelta = { type: "text_delta", text: " world" };
+
 export const anthropicEvents = [
   {
     type: "message_start",
@@ -41,32 +84,12 @@ export const anthropicEvents = [
       usage: { input_tokens: 7, output_tokens: 0 },
     },
   },
-  {
-    type: "content_block_start",
-    index: 0,
-    content_block: { type: "thinking", thinking: "seed", signature: "seed-signature" },
-  },
-  {
-    type: "content_block_delta",
-    index: 0,
-    delta: { type: "thinking_delta", thinking: " + thought" },
-  },
-  {
-    type: "content_block_delta",
-    index: 0,
-    delta: { type: "signature_delta", signature: "final-signature" },
-  },
+  { type: "content_block_start", index: 0, content_block: thinkingSeed },
+  { type: "content_block_delta", index: 0, delta: thinkingDelta },
+  { type: "content_block_delta", index: 0, delta: signatureDelta },
   { type: "content_block_stop", index: 0 },
-  {
-    type: "content_block_start",
-    index: 1,
-    content_block: { type: "text", text: "Hello" },
-  },
-  {
-    type: "content_block_delta",
-    index: 1,
-    delta: { type: "text_delta", text: " world" },
-  },
+  { type: "content_block_start", index: 1, content_block: textSeed },
+  { type: "content_block_delta", index: 1, delta: textDelta },
   { type: "content_block_stop", index: 1 },
   {
     type: "message_delta",
@@ -97,10 +120,6 @@ export function registerParityHostLifecycle() {
     configureAiTransportHost(initialHost);
     vi.unstubAllEnvs();
   });
-
-  afterAll(() => {
-    configureAiTransportHost(initialHost);
-  });
 }
 
 export async function captureAnthropicRequest(
@@ -109,7 +128,10 @@ export async function captureAnthropicRequest(
     model?: Partial<Model<"anthropic-messages">>;
     apiKey?: string;
     transportApi?: Model["api"];
-    reasoning?: "low" | "off";
+    reasoning?: SimpleStreamOptions["reasoning"];
+    temperature?: number;
+    thinkingDisplay?: AnthropicOptions["thinkingDisplay"];
+    toolChoice?: AnthropicOptions["toolChoice"];
     cacheRetention?: "short" | "long" | "none";
     events?: readonly Record<string, unknown>[];
     context?: Context;
@@ -133,10 +155,7 @@ export async function captureAnthropicRequest(
     if (!isRecord(payload)) {
       throw new Error("Expected an Anthropic request object");
     }
-    requests.push({
-      payload,
-      headers: new Headers(init?.headers),
-    });
+    requests.push({ payload, headers: new Headers(init?.headers) });
     return createAnthropicResponse(options.events ?? anthropicEvents);
   };
   configureAiTransportHost({
@@ -155,7 +174,10 @@ export async function captureAnthropicRequest(
   const model = { ...anthropicModel, ...options.model };
   const streamOptions = {
     apiKey: options.apiKey ?? "sk-test",
-    reasoning: options.reasoning ?? "low",
+    reasoning: Object.hasOwn(options, "reasoning") ? options.reasoning : "low",
+    temperature: options.temperature,
+    thinkingDisplay: options.thinkingDisplay,
+    toolChoice: options.toolChoice,
     cacheRetention: options.cacheRetention,
     headers: options.headers,
     cacheTtlPruning: options.cacheTtlPruning,
@@ -173,7 +195,7 @@ export async function captureAnthropicRequest(
       }
     },
   } as const;
-  const [{ streamSimpleAnthropic }, { createAnthropicMessagesTransportStreamFn }] =
+  const [{ streamSimpleAnthropic }, { createAnthropicMessagesTransportStreamFn: createTransport }] =
     await Promise.all([
       import("./providers/anthropic.js"),
       import("./transports/anthropic-transport-stream.js"),
@@ -182,12 +204,10 @@ export async function captureAnthropicRequest(
   const stream =
     implementation === "provider"
       ? streamSimpleAnthropic(model, requestContext, streamOptions)
-      : await Promise.resolve(
-          createAnthropicMessagesTransportStreamFn()(
-            { ...model, api: options.transportApi ?? model.api },
-            requestContext,
-            streamOptions,
-          ),
+      : await createTransport()(
+          { ...model, api: options.transportApi ?? model.api },
+          requestContext,
+          streamOptions,
         );
   const result = await stream.result();
   expect(result.stopReason).toBe("stop");

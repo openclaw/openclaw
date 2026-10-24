@@ -31,7 +31,7 @@
   },
   "modelCatalog": {
     "modelsDev": {
-      "kimi": "kimi-for-coding"
+      "kimi": "kimi-code-plan-cn"
     },
     "providers": {
       "kimi": {
@@ -41,6 +41,7 @@
           "User-Agent": "claude-code/0.1.0"
         },
         "defaultModel": "kimi-for-coding",
+        "family": "moonshot",
         "models": [
           {
             "id": "k3",
@@ -48,7 +49,6 @@
             "reasoning": true,
             "upstreamModel": "moonshot/kimi-k3",
             "thinkingLevelMap": {
-              "off": null,
               "minimal": "low",
               "low": "low",
               "medium": "high",
@@ -75,7 +75,6 @@
             "reasoning": true,
             "upstreamModel": "moonshot/kimi-k3",
             "thinkingLevelMap": {
-              "off": null,
               "minimal": "low",
               "low": "low",
               "medium": "high",
@@ -134,7 +133,7 @@
   "modelPricing": {
     "providers": {
       "kimi": {
-        "openRouter": {
+        "modelsDev": {
           "provider": "moonshotai"
         },
         "liteLLM": {
@@ -142,7 +141,7 @@
         }
       },
       "kimi-coding": {
-        "openRouter": {
+        "modelsDev": {
           "provider": "moonshotai"
         },
         "liteLLM": {

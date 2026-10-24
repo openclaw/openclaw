@@ -1,6 +1,5 @@
-/* Shared jsdom harness for the Cloud workers snapshot suites. Keep DOM-only helpers
-   here; the e2e suite imports the plain fixture module instead. */
 import { expectDefined } from "@openclaw/normalization-core";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -8,10 +7,11 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { snapshotListFixture } from "./cloud-worker-snapshots.test-support.ts";
-import "./cloud-workers-page.ts";
+import { CloudWorkersPage } from "./cloud-workers-page.tsx";
 
 export function button(container: Element, label: string) {
   return expectDefined(
@@ -22,17 +22,13 @@ export function button(container: Element, label: string) {
   );
 }
 
-/** Each suite mocks the dialog and toast modules itself; this only resets them. */
 export function setupSnapshotsDomSuite() {
   beforeEach(async () => {
     vi.clearAllMocks();
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
     await i18n.setLocale("en");
   });
-  afterEach(() => {
-    document.body.replaceChildren();
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 }
 
 export function mountPage(
@@ -40,76 +36,46 @@ export function mountPage(
   options: {
     result?: ReturnType<typeof snapshotListFixture>;
     config?: Record<string, unknown>;
-    failMutation?: boolean;
-    response?: (method: string) => unknown;
+    response?: (method: string, params?: Record<string, unknown>) => unknown;
     scopes?: string[];
   } = {},
 ) {
-  let result = options.result ?? snapshotListFixture();
+  const result = options.result ?? snapshotListFixture();
   let config = options.config ?? {};
   const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-    const response = options.response?.(method);
+    const response = options.response?.(method, params);
     if (response !== undefined) {
       return response;
     }
-    if (method === "environments.list") {
-      return { environments: [] };
-    }
-    if (method === "projects.list") {
-      return {
-        projects: [
-          { id: "app", displayName: "App", repoRoot: "/projects/app", source: "registered" },
-        ],
-      };
-    }
-    if (method === "worktrees.list") {
-      return { worktrees: [] };
-    }
-    if (method === "environments.prepare") {
-      return { environmentId: "build-app", preparationKey: "build-key", reused: false };
-    }
-    if (method === "environments.destroy") {
-      return {};
-    }
-    if (method === "config.get") {
-      return {
-        config,
-        sourceConfig: config,
-        raw: JSON.stringify(config),
-        hash: "snapshot-config",
-        valid: true,
-        issues: [],
-      };
-    }
-    if (method === "crabbox.images.list") {
-      return result;
-    }
-    if (method === "config.patch") {
-      config = { ...config, ...JSON.parse(String(params?.raw)) };
-      return { ok: true, config, hash: "snapshot-config-updated" };
-    }
-    if (
-      ["crabbox.images.pin", "crabbox.images.delete", "crabbox.images.rollback"].includes(method)
-    ) {
-      if (options.failMutation) {
-        throw new Error("Provider is unavailable");
-      }
-      if (method === "crabbox.images.delete") {
-        result = {
-          ...result,
-          images: result.images.filter((image) => image.checkpointId !== params?.checkpointId),
+    switch (method) {
+      case "environments.list":
+        return { environments: [] };
+      case "projects.list":
+        return {
+          projects: [
+            { id: "app", displayName: "App", repoRoot: "/projects/app", source: "registered" },
+          ],
         };
-        return { status: "deleted" };
-      }
-      result = {
-        ...result,
-        images: result.images.map((image) =>
-          image.checkpointId === params?.checkpointId
-            ? { ...image, pinned: params?.pinned ? { atMs: 1234 } : undefined }
-            : image,
-        ),
-      };
-      return result.images.find((image) => image.checkpointId === params?.checkpointId);
+      case "worktrees.list":
+        return { worktrees: [] };
+      case "environments.prepare":
+        return { environmentId: "build-app", preparationKey: "build-key", reused: false };
+      case "environments.destroy":
+        return {};
+      case "config.get":
+        return {
+          config,
+          sourceConfig: config,
+          raw: JSON.stringify(config),
+          hash: "snapshot-config",
+          valid: true,
+          issues: [],
+        };
+      case "crabbox.images.list":
+        return result;
+      case "config.patch":
+        config = { ...config, ...JSON.parse(String(params?.raw)) };
+        return { ok: true, config, hash: "snapshot-config-updated" };
     }
     throw new Error(`Unexpected request ${method}`);
   });
@@ -120,19 +86,27 @@ export function mountPage(
   const context = {
     gateway: harness.gateway,
     runtimeConfig,
+    router: { subscribe: () => () => {} },
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
-  const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-cloud-workers-page");
-  provider.append(page);
-  document.body.append(provider);
+  const mounted = mountSolid(() =>
+    createComponent(ApplicationProvider, {
+      value: context,
+      get children() {
+        return createComponent(CloudWorkersPage, {});
+      },
+    }),
+  );
   return {
-    page,
+    page: expectDefined(
+      mounted.container.querySelector("openclaw-cloud-workers-page"),
+      "Cloud workers page",
+    ),
     request,
     harness,
     client,
     dispose: () => {
-      provider.remove();
+      mounted.unmount();
       runtimeConfig.dispose();
     },
   };

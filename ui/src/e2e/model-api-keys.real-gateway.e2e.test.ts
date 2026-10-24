@@ -10,6 +10,7 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.js";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.js";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.js";
+import { expandProvider } from "./model-providers.test-support.ts";
 
 let instance: OpenClawTestInstance;
 const key = "synthetic-shared-model-key";
@@ -19,7 +20,9 @@ const suite = createControlUiE2eSuite({
   async startServer() {
     instance = await createOpenClawTestInstance({
       name: "shared-model-api-keys",
-      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
+      reserveIdlePort: false,
+      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined, NODE_ENV: undefined },
+      gatewayArgs: ["--verbose", "--ws-log", "full", "--log-level", "debug"],
       config: {
         gateway: { controlUi: { enabled: true } },
         agents: {
@@ -60,6 +63,15 @@ async function persistedAuth() {
   };
 }
 
+function authRefreshDiagnostics() {
+  return instance
+    .logs()
+    .split("\n")
+    .filter((line) => /models\.authRefresh|request dispatch failed/u.test(line))
+    .slice(-20)
+    .join("\n");
+}
+
 suite.define(() => {
   it("edits and removes a key with identical durable state through Models and CLI", async () => {
     const handoff = await instance.cli(["dashboard", "--json"]);
@@ -74,11 +86,10 @@ suite.define(() => {
         async ({ page }) => {
           await page.goto(url.href);
           await waitForControlUiGatewayReady(page);
-          const card = page.locator('[data-provider-id="fixture"]');
-          await card.waitFor();
+          const card = await expandProvider(page, "fixture");
           await page.screenshot({ path: path.join(suite.artifactDir, "before-edit.png") });
           await card.getByRole("button", { name: "Set API key" }).click();
-          await card.getByLabel("API key").fill(key);
+          await card.getByLabel("API key", { exact: true }).fill(key);
           await card.getByRole("button", { name: "Save", exact: true }).click();
           await expect.poll(() => card.textContent()).toContain("Secret saved.");
           const saved = await persistedAuth();
@@ -93,8 +104,15 @@ suite.define(() => {
           expect(saved.model).toBe("fixture/current");
           expect(await card.textContent()).not.toContain("could not refresh");
 
-          await card.getByRole("button", { name: "Remove key", exact: true }).click();
-          await expect.poll(() => card.textContent()).toContain("Saved API keys removed.");
+          // Remove provider confirms first, then deletes the saved key.
+          await card.getByRole("button", { name: "Remove provider: Fixture", exact: true }).click();
+          await page
+            .locator("openclaw-modal-dialog")
+            .getByRole("button", { name: "Remove provider", exact: true })
+            .click();
+          await expect
+            .poll(async () => (await persistedAuth()).profiles["fixture:manual"])
+            .toBeUndefined();
           const removed = await persistedAuth();
           observations.push({ action: "ui-remove", state: removed });
           await page.screenshot({ path: path.join(suite.artifactDir, "removed.png") });
@@ -103,40 +121,26 @@ suite.define(() => {
           expect(removed.auth?.profiles?.["fixture:manual"]).toBeUndefined();
           expect(removed.model).toBe("fixture/current");
 
-          const args = [
-            "models",
-            "auth",
-            "paste-api-key",
-            "--provider",
-            "fixture",
-            "--agent",
-            "main",
-          ];
+          const authArgs = ["models", "auth"];
+          const agentArgs = ["--agent", "main"];
+          const args = [...authArgs, "paste-api-key", "--provider", "fixture", ...agentArgs];
           const pasted = spawnSync(process.execPath, ["scripts/run-node.mjs", ...args], {
             env: instance.env,
             input: key,
             encoding: "utf8",
             timeout: 30_000,
           });
-          observations.push({
-            action: "cli-save",
-            args,
-            code: pasted.status,
-            stdout: pasted.stdout,
-            stderr: pasted.stderr,
-          });
           expect(pasted.status, pasted.stderr).toBe(0);
-          expect(pasted.stderr).not.toContain("could not refresh");
+          expect(pasted.stderr, authRefreshDiagnostics()).not.toContain("could not refresh");
           expect(await persistedAuth()).toEqual(saved);
-          const logoutArgs = [
-            "models",
-            "auth",
-            "logout",
-            "fixture:manual",
-            "--agent",
-            "main",
-            "--yes",
-          ];
+          const logoutArgs = [...authArgs, "logout", "fixture:manual", ...agentArgs, "--yes"];
+          const refused = await instance.cli(logoutArgs);
+          expect(refused.code, refused.stderr).toBe(1);
+          expect(refused.stderr).toContain("stop the Gateway");
+          expect(await persistedAuth()).toEqual(saved);
+
+          // CLI logout is offline-only; transfer custody after proving live-owner refusal.
+          await instance.stopGateway();
           const loggedOut = await instance.cli(logoutArgs);
           observations.push({
             action: "cli-remove",
@@ -146,12 +150,20 @@ suite.define(() => {
           });
           expect(loggedOut.code, loggedOut.stderr).toBe(0);
           expect(loggedOut.stdout).toContain("Removed auth profile");
-          expect(loggedOut.stderr).not.toContain("could not refresh");
+          expect(loggedOut.stderr, authRefreshDiagnostics()).not.toContain("could not refresh");
           expect(await persistedAuth()).toEqual(removed);
+          await instance.startGateway();
           await page.reload();
           await waitForControlUiGatewayReady(page);
+          // With no saved key left, the row offers nothing to remove.
+          const summary = card.locator("button.provider-row__summary");
+          if ((await summary.count()) > 0) {
+            await expandProvider(page, "fixture");
+          }
           await expect
-            .poll(() => card.getByRole("button", { name: "Remove key", exact: true }).count())
+            .poll(() =>
+              card.getByRole("button", { name: "Remove provider: Fixture", exact: true }).count(),
+            )
             .toBe(0);
           await page.screenshot({ path: path.join(suite.artifactDir, "after-cli-removal.png") });
         },

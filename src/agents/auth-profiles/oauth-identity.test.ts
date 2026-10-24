@@ -1,384 +1,276 @@
-/**
- * Tests OAuth identity and mirroring gates.
- * Includes direct and fuzz coverage for account/email comparison so refreshed
- * credentials cannot poison another auth store.
- */
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it } from "vitest";
-import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
+import { describe, expect, it, vi } from "vitest";
+import * as facadeLoader from "../../plugin-sdk/facade-loader.js";
 import {
+  createApiKeyCredential,
+  createOAuthRefreshCredential,
+  oidcIdentity,
+} from "./credential-fixtures.test-support.js";
+import {
+  isSafeToCopyOAuthRoutingScope,
   isSafeToCopyOAuthIdentity,
-  normalizeAuthEmailToken,
-  normalizeAuthIdentityToken,
   shouldMirrorRefreshedOAuthCredential,
 } from "./oauth-identity.js";
+import { createOAuthRefreshFence } from "./oauth-refresh-marker.js";
+import {
+  isSafeOAuthOwnerRefreshResult,
+  isSafeToAdoptBootstrapOAuthIdentity,
+  isSafeToAdoptMainStoreOAuthIdentity,
+  isSafeOAuthPostClaimSettlement,
+  overlayRuntimeExternalOAuthProfiles,
+} from "./oauth-shared.js";
 import { makeSeededRandom, maybe, randomAsciiString as randomString } from "./oauth-test-utils.js";
-import type { AuthProfileCredential, OAuthCredential } from "./types.js";
-
-describe("normalizeAuthIdentityToken", () => {
-  it("returns trimmed value when non-empty", () => {
-    expect(normalizeAuthIdentityToken("acct-123")).toBe("acct-123");
-    expect(normalizeAuthIdentityToken("  acct-123  ")).toBe("acct-123");
-  });
-
-  it("returns undefined for undefined, empty, or whitespace-only input", () => {
-    expect(normalizeAuthIdentityToken(undefined)).toBeUndefined();
-    expect(normalizeAuthIdentityToken("")).toBeUndefined();
-    expect(normalizeAuthIdentityToken("   ")).toBeUndefined();
-    expect(normalizeAuthIdentityToken("\t\n\r")).toBeUndefined();
-  });
-
-  it("preserves case (accountIds are case-sensitive)", () => {
-    expect(normalizeAuthIdentityToken("Acct-ABC")).toBe("Acct-ABC");
-    expect(normalizeAuthIdentityToken("acct-abc")).toBe("acct-abc");
-  });
-});
-
-describe("normalizeAuthEmailToken", () => {
-  it("lowercases and trims email", () => {
-    expect(normalizeAuthEmailToken("USER@Example.COM")).toBe("user@example.com");
-    expect(normalizeAuthEmailToken("  user@example.com  ")).toBe("user@example.com");
-  });
-
-  it("returns undefined for undefined/empty/whitespace", () => {
-    expect(normalizeAuthEmailToken(undefined)).toBeUndefined();
-    expect(normalizeAuthEmailToken("")).toBeUndefined();
-    expect(normalizeAuthEmailToken("   ")).toBeUndefined();
-  });
-
-  it("preserves internal plus-addressing and unicode", () => {
-    expect(normalizeAuthEmailToken("User+Tag@Example.com")).toBe("user+tag@example.com");
-    expect(normalizeAuthEmailToken("  JOSÉ@Example.com ")).toBe("josé@example.com");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Fuzz tests. Seeded Mulberry32 so the run is reproducible.
-// ---------------------------------------------------------------------------
+import type { OAuthCredential, RuntimeAuthProfileStore } from "./types.js";
 
 describe("isSafeToCopyOAuthIdentity (unified copy gate, used for mirror and adopt)", () => {
-  describe("positive matches", () => {
-    it("accepts matching accountIds", () => {
-      expect(isSafeToCopyOAuthIdentity({ accountId: "x" }, { accountId: "x" })).toBe(true);
-    });
-
-    it("accepts matching emails (case-insensitive)", () => {
+  it("preserves Copilot credentials when the shipped policy artifact is missing", () => {
+    const load = vi
+      .spyOn(facadeLoader, "loadBundledPluginPublicSurfaceModuleSyncCore")
+      .mockImplementation(() => {
+        throw new facadeLoader.MissingPublicSurfaceError("Missing Copilot policy artifact");
+      });
+    try {
       expect(
-        isSafeToCopyOAuthIdentity({ email: "u@example.com" }, { email: "U@Example.com" }),
-      ).toBe(true);
-    });
-
-    it("accepts when both sides expose identical identity across accountId + email", () => {
-      expect(
-        isSafeToCopyOAuthIdentity(
-          { accountId: "x", email: "u@example.com" },
-          { accountId: "x", email: "u@example.com" },
-        ),
-      ).toBe(true);
-    });
-  });
-
-  describe("upgrade tolerance (primary motivator)", () => {
-    it("accepts existing-no-identity adopting incoming-with-accountId", () => {
-      // The #26322 upgrade case: existing cred predates accountId capture,
-      // incoming has it. Must allow or the fix regresses on existing installs.
-      expect(isSafeToCopyOAuthIdentity({}, { accountId: "x" })).toBe(true);
-    });
-
-    it("accepts existing-no-identity adopting incoming-with-email", () => {
-      expect(isSafeToCopyOAuthIdentity({}, { email: "u@example.com" })).toBe(true);
-    });
-
-    it("accepts when both sides lack identity metadata", () => {
-      expect(isSafeToCopyOAuthIdentity({}, {})).toBe(true);
-    });
-  });
-
-  describe("identity regression is refused (incoming drops existing's identity)", () => {
-    it("refuses when incoming has no identity and existing has accountId", () => {
-      // Was previously allowed under the permissive relaxed rule; the
-      // narrower rule refuses because it would strip identity evidence.
-      expect(isSafeToCopyOAuthIdentity({ accountId: "x" }, {})).toBe(false);
-    });
-
-    it("refuses when incoming has no identity and existing has email", () => {
-      expect(isSafeToCopyOAuthIdentity({ email: "u@example.com" }, {})).toBe(false);
-    });
-  });
-
-  describe("non-overlapping identity fields are refused", () => {
-    it("refuses when existing has only accountId and incoming has only email", () => {
-      expect(isSafeToCopyOAuthIdentity({ accountId: "x" }, { email: "u@example.com" })).toBe(false);
-    });
-
-    it("refuses when existing has only email and incoming has only accountId", () => {
-      expect(isSafeToCopyOAuthIdentity({ email: "u@example.com" }, { accountId: "x" })).toBe(false);
-    });
-  });
-
-  describe("positive mismatch still refuses (CWE-284 protection)", () => {
-    it("refuses mismatching accountIds even when emails match", () => {
-      expect(
-        isSafeToCopyOAuthIdentity(
-          { accountId: "a", email: "u@example.com" },
-          { accountId: "b", email: "u@example.com" },
+        isSafeToCopyOAuthRoutingScope(
+          { provider: "github-copilot", enterpriseUrl: "acme.ghe.com" },
+          { provider: "github-copilot", enterpriseUrl: "acme.ghe.com" },
         ),
       ).toBe(false);
-    });
-
-    it("refuses mismatching emails when both sides expose only email", () => {
-      expect(
-        isSafeToCopyOAuthIdentity({ email: "a@example.com" }, { email: "b@example.com" }),
-      ).toBe(false);
-    });
-
-    it("keeps accountId case-sensitive in the copy gate", () => {
-      expect(isSafeToCopyOAuthIdentity({ accountId: "X" }, { accountId: "x" })).toBe(false);
-    });
-  });
-
-  describe("normalization", () => {
-    it("ignores surrounding whitespace on accountId", () => {
-      expect(isSafeToCopyOAuthIdentity({ accountId: "  acct-1  " }, { accountId: "acct-1" })).toBe(
+      expect(isSafeToCopyOAuthRoutingScope({ provider: "openai" }, { provider: "openai" })).toBe(
         true,
       );
-    });
-
-    it("ignores email case and whitespace", () => {
-      expect(
-        isSafeToCopyOAuthIdentity({ email: "  U@Example.com  " }, { email: "u@example.com" }),
-      ).toBe(true);
-    });
-
-    it("treats empty/whitespace-only identity as absent (allowed to upgrade)", () => {
-      expect(
-        isSafeToCopyOAuthIdentity({ accountId: "   ", email: "" }, { accountId: "acct-main" }),
-      ).toBe(true);
-    });
+    } finally {
+      load.mockRestore();
+    }
   });
 
-  describe("reflexivity", () => {
-    it("is reflexive", () => {
-      const a = { accountId: "acct-1", email: "u@example.com" };
-      expect(isSafeToCopyOAuthIdentity(a, a)).toBe(true);
-    });
-  });
-});
-
-describe("shouldMirrorRefreshedOAuthCredential", () => {
-  type MirrorCase = {
-    name: string;
-    refreshed?: OAuthCredential;
-    existing: AuthProfileCredential | undefined;
-    shouldMirror: boolean;
-    reason: string;
-  };
-  const refreshed = {
-    type: "oauth",
-    provider: "openai",
-    access: "fresh-access",
-    refresh: "fresh-refresh",
-    expires: 2_000,
-    accountId: "acct-1",
-  } as const;
-
-  const cases: MirrorCase[] = [
-    {
-      name: "empty main store",
-      existing: undefined,
-      shouldMirror: true,
-      reason: "no-existing-credential",
-    },
-    {
-      name: "matching older oauth credential",
-      existing: {
-        type: "oauth",
-        provider: "openai",
-        access: "old",
-        refresh: "old-refresh",
-        expires: 1_000,
-        accountId: "acct-1",
-      },
-      shouldMirror: true,
-      reason: "incoming-fresher",
-    },
-    {
-      name: "non-finite existing expiry",
-      existing: {
-        type: "oauth",
-        provider: "openai",
-        access: "old",
-        refresh: "old-refresh",
-        expires: Number.NaN,
-        accountId: "acct-1",
-      },
-      shouldMirror: true,
-      reason: "incoming-fresher",
-    },
-    {
-      name: "out-of-range existing expiry",
-      existing: {
-        type: "oauth",
-        provider: "openai",
-        access: "old",
-        refresh: "old-refresh",
-        expires: MAX_DATE_TIMESTAMP_MS + 1,
-        accountId: "acct-1",
-      },
-      shouldMirror: true,
-      reason: "incoming-fresher",
-    },
-    {
-      name: "out-of-range refreshed expiry",
-      refreshed: {
-        ...refreshed,
-        expires: MAX_DATE_TIMESTAMP_MS + 1,
-      },
-      existing: {
-        type: "oauth",
-        provider: "openai",
-        access: "old",
-        refresh: "old-refresh",
-        expires: 1_000,
-        accountId: "acct-1",
-      },
-      shouldMirror: false,
-      reason: "incoming-not-fresher",
-    },
-    {
-      name: "identity upgrade",
-      existing: {
-        type: "oauth",
-        provider: "openai",
-        access: "old",
-        refresh: "old-refresh",
-        expires: 1_000,
-      },
-      shouldMirror: true,
-      reason: "incoming-fresher",
-    },
-    {
-      name: "api key override",
-      existing: createApiKeyCredential("openai", "operator-key"),
-      shouldMirror: false,
-      reason: "non-oauth-existing-credential",
-    },
-    {
-      name: "provider mismatch",
-      existing: {
-        type: "oauth",
-        provider: "anthropic",
-        access: "old",
-        refresh: "old-refresh",
-        expires: 1_000,
-        accountId: "acct-1",
-      },
-      shouldMirror: false,
-      reason: "provider-mismatch",
-    },
-    {
-      name: "identity mismatch",
-      existing: {
-        type: "oauth",
-        provider: "openai",
-        access: "old",
-        refresh: "old-refresh",
-        expires: 1_000,
-        accountId: "acct-2",
-      },
-      shouldMirror: false,
-      reason: "identity-mismatch-or-regression",
-    },
-    {
-      name: "strictly fresher existing credential",
-      existing: {
-        type: "oauth",
-        provider: "openai",
-        access: "main-fresh",
-        refresh: "main-fresh-refresh",
-        expires: 3_000,
-        accountId: "acct-1",
-      },
-      shouldMirror: false,
-      reason: "incoming-not-fresher",
-    },
-  ];
-
-  it.each(cases)(
-    "returns $reason for $name",
-    ({ existing, refreshed: caseRefreshed, shouldMirror, reason }) => {
-      expect(
-        shouldMirrorRefreshedOAuthCredential({
-          existing,
-          refreshed: caseRefreshed ?? refreshed,
-        }),
-      ).toEqual({ shouldMirror, reason });
-    },
-  );
-
-  it("refuses identity regression from a known-account main credential", () => {
+  it.each([
+    ["same enterprise host", "HTTPS://ACME.GHE.COM/", "acme.ghe.com", true],
+    ["public and enterprise", undefined, "acme.ghe.com", false],
+    ["unsupported host", "attacker.example", "attacker.example", false],
+  ])("keeps GitHub Copilot routing scope isolated: %s", (_name, existing, incoming, expected) => {
     expect(
-      shouldMirrorRefreshedOAuthCredential({
-        existing: {
-          type: "oauth",
-          provider: "openai",
-          access: "main-identity-access",
-          refresh: "main-identity-refresh",
-          expires: 1_000,
-          accountId: "acct-main",
-        },
-        refreshed: {
-          type: "oauth",
-          provider: "openai",
-          access: "fresh-access",
-          refresh: "fresh-refresh",
-          expires: 2_000,
-        },
-      }),
-    ).toEqual({
-      shouldMirror: false,
-      reason: "identity-mismatch-or-regression",
-    });
+      isSafeToCopyOAuthRoutingScope(
+        { provider: "github-copilot", enterpriseUrl: existing },
+        { provider: "github-copilot", enterpriseUrl: incoming },
+      ),
+    ).toBe(expected);
+  });
+
+  it("rejects identity-less cross-tenant credentials even when identity adoption is otherwise allowed", () => {
+    expect(
+      isSafeToCopyOAuthIdentity(
+        { provider: "github-copilot", enterpriseUrl: "acme.ghe.com" },
+        { provider: "github-copilot", enterpriseUrl: "other.ghe.com", accountId: "acct-main" },
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["non-overlapping fields", { accountId: "x" }, { email: "u@example.com" }],
+    [
+      "account mismatch despite matching email",
+      { accountId: "a", email: "u@example.com" },
+      { accountId: "A", email: "u@example.com" },
+    ],
+    ["email mismatch", { email: "a@example.com" }, { email: "b@example.com" }],
+  ] as const)("refuses %s", (_name, existing, incoming) => {
+    expect(isSafeToCopyOAuthIdentity(existing, incoming)).toBe(false);
+  });
+
+  it("normalizes case while preserving plus-addressing", () => {
+    const existing = { email: "User+Tag@Example.com" };
+    expect(isSafeToCopyOAuthIdentity(existing, { email: "user+tag@example.com" })).toBe(true);
+    expect(isSafeToCopyOAuthIdentity(existing, { email: "user@example.com" })).toBe(false);
   });
 });
 
 describe("isSafeToCopyOAuthIdentity fuzz", () => {
-  it("is reflexive: share(a, a) is always true", () => {
-    const rng = makeSeededRandom(0x0172_0417);
-    for (let i = 0; i < 1000; i += 1) {
-      const a = {
-        accountId: maybe(rng, randomString(rng, 64)),
-        email: maybe(rng, randomString(rng, 64)),
-      };
-      expect(isSafeToCopyOAuthIdentity(a, a)).toBe(true);
-    }
-  });
-
-  it("always refuses distinct non-empty accountIds (primary CWE-284 invariant)", () => {
-    const rng = makeSeededRandom(0xfaceb00c);
-    for (let i = 0; i < 500; i += 1) {
-      const idA = `A-${randomString(rng, 32) || "x"}`;
-      const idB = `B-${randomString(rng, 32) || "y"}`;
-      expect(isSafeToCopyOAuthIdentity({ accountId: idA }, { accountId: idB })).toBe(false);
-    }
-  });
-
-  it("unified rule never refuses a same-account pair and never accepts a different-account pair", () => {
-    // Over random identity pairs that share accountId but vary in every
-    // other field, the gate must always accept. Over pairs with distinct
-    // non-empty accountIds it must always refuse.
+  it("accepts matching accountIds even when email identity differs", () => {
     const rng = makeSeededRandom(0x9a_9b_9c_9d);
+    const email = () => maybe(rng, randomString(rng, 32));
     for (let i = 0; i < 500; i += 1) {
       const shared = `acct-${randomString(rng, 32) || "x"}`;
-      const a = {
-        accountId: shared,
-        email: maybe(rng, randomString(rng, 32)),
-      };
-      const b = {
-        accountId: shared,
-        email: maybe(rng, randomString(rng, 32)),
-      };
+      const a = { accountId: shared, email: email() };
+      const b = { accountId: shared, email: email() };
       expect(isSafeToCopyOAuthIdentity(a, b)).toBe(true);
     }
   });
 });
+
+describe("shouldMirrorRefreshedOAuthCredential", () => {
+  const refreshed = createOAuthRefreshCredential({ expires: 2_000, accountId: "acct-1" });
+  const older = { ...refreshed, access: "old", refresh: "old-refresh", expires: 1_000 };
+  const decide = (
+    existing: Parameters<typeof shouldMirrorRefreshedOAuthCredential>[0]["existing"],
+    incoming = refreshed,
+  ) => shouldMirrorRefreshedOAuthCredential({ existing, refreshed: incoming });
+  it.each([
+    [undefined, true, "no-existing-credential"],
+    [older, true, "incoming-fresher"],
+    [createApiKeyCredential("openai", "operator-key"), false, "non-oauth-existing-credential"],
+    [{ ...older, provider: "anthropic" }, false, "provider-mismatch"],
+    [{ ...refreshed, expires: 3_000 }, false, "incoming-not-fresher"],
+  ] as const)("returns mirror decision %j -> %s/%s", (existing, shouldMirror, reason) => {
+    expect(decide(existing)).toEqual({ shouldMirror, reason });
+  });
+  it("rejects an out-of-range refreshed expiry", () => {
+    expect(decide(older, { ...refreshed, expires: MAX_DATE_TIMESTAMP_MS + 1 })).toEqual({
+      shouldMirror: false,
+      reason: "incoming-not-fresher",
+    });
+  });
+  it("refuses removing the known-account identity", () => {
+    expect(decide(older, { ...refreshed, accountId: undefined })).toEqual({
+      shouldMirror: false,
+      reason: "identity-mismatch-or-regression",
+    });
+  });
+});
+
+const credential = (overrides: Partial<OAuthCredential> = {}) =>
+  createOAuthRefreshCredential({ expires: Date.now() + 600_000, ...overrides });
+const known = { accountId: "acct-a" };
+
+it.each([
+  ["known same identity", known, known, true, true],
+  ["known different identity", known, { accountId: "acct-b" }, false, false],
+  ["both identities unknown", {}, {}, true, false],
+  ["unknown identity becomes known", {}, known, true, false],
+  ["known identity becomes unknown", known, {}, false, false],
+  ["provider changes", known, { ...known, provider: "anthropic" }, false, false],
+] as const)(
+  "applies exact-owner and different-owner rules for %s",
+  (_name, claimed, refreshed, exactOwner, differentOwner) => {
+    expect(isSafeOAuthOwnerRefreshResult(credential(claimed), credential(refreshed))).toBe(
+      exactOwner,
+    );
+    expect(isSafeOAuthPostClaimSettlement(credential(claimed), credential(refreshed))).toBe(
+      differentOwner,
+    );
+  },
+);
+
+describe("OIDC registered identity", () => {
+  const existing = credential({ provider: "oidc-provider", ...oidcIdentity() });
+  const otherIssuer = "https://other.example.test";
+  it.each([
+    ["same subject and registration", oidcIdentity(), true],
+    ["changed subject", oidcIdentity({ sub: "subject-b" }), false],
+    ["different issuer", { ...oidcIdentity({ iss: otherIssuer }), issuer: otherIssuer }, false],
+    [
+      "different client",
+      { ...oidcIdentity({ aud: "client-other" }), clientId: "client-other" },
+      false,
+    ],
+    ["missing bound account identity", { accountId: undefined }, false],
+    ["secret-free fence identity", { idToken: undefined }, true],
+    ["removed registration", { issuer: undefined, clientId: undefined }, false],
+  ] as const)("gates adoption, mirroring and settlement for %s", (_name, metadata, safe) => {
+    // Equal email labels must not substitute for a registered OIDC identity.
+    const claimed = { ...existing, email: "same@example.test" };
+    const incoming = {
+      ...claimed,
+      access: "rotated-access",
+      refresh: "rotated-refresh",
+      expires: claimed.expires + 600_000,
+      ...metadata,
+    };
+    expect(isSafeToAdoptMainStoreOAuthIdentity(claimed, incoming)).toBe(safe);
+    expect(isSafeToAdoptBootstrapOAuthIdentity(claimed, incoming)).toBe(safe);
+    expect(
+      shouldMirrorRefreshedOAuthCredential({ existing: claimed, refreshed: incoming }).shouldMirror,
+    ).toBe(safe);
+    expect(isSafeOAuthOwnerRefreshResult(claimed, incoming)).toBe(safe);
+    expect(isSafeOAuthPostClaimSettlement(claimed, incoming)).toBe(safe);
+  });
+
+  it.each([
+    { issuer: "https://auth.x.ai", idToken: "provider-managed-id-token" },
+    { clientId: "chutes-client" },
+  ])("preserves provider account identity without an OIDC registration pair: %j", (metadata) => {
+    const claimed = {
+      ...existing,
+      issuer: undefined,
+      clientId: undefined,
+      idToken: undefined,
+      accountId: "account-a",
+      ...metadata,
+    };
+    const refreshed = { ...claimed, access: "rotated-access", refresh: "rotated-refresh" };
+    expect(isSafeOAuthOwnerRefreshResult(claimed, refreshed)).toBe(true);
+    expect(isSafeOAuthPostClaimSettlement(claimed, refreshed)).toBe(true);
+    expect(isSafeToAdoptMainStoreOAuthIdentity(claimed, refreshed)).toBe(true);
+  });
+
+  it("settles registered identity through a secret-free fence", () => {
+    const refreshed = { ...existing, access: "new-access", refresh: "new-refresh" };
+    const fence = createOAuthRefreshFence({ profileId: "provider:custom", credential: existing });
+    expect(isSafeOAuthPostClaimSettlement(existing, refreshed)).toBe(true);
+    expect(isSafeOAuthPostClaimSettlement(fence, refreshed)).toBe(true);
+    const anonymous = { ...fence, accountId: undefined };
+    expect(isSafeToAdoptMainStoreOAuthIdentity(anonymous, refreshed)).toBe(false);
+  });
+});
+
+it.each(["runtime", "authoritative", "persisted"] as const)(
+  "preserves only valid provenance for %s overlays",
+  (mode) => {
+    const persisted = mode === "persisted";
+    const authoritative = mode === "authoritative" ? true : undefined;
+    const id = "openai:default",
+      priorId = "minimax:minimax-cli";
+    const oauth = credential();
+    const store: RuntimeAuthProfileStore = {
+      version: 1,
+      profiles: {
+        [id]: persisted ? { ...oauth } : createApiKeyCredential("openai", "sk-test"),
+        [priorId]: credential({ provider: "minimax-portal" }),
+      },
+      order: { openai: [id] },
+      ...(persisted
+        ? {
+            runtimePersistedProfileIds: [id],
+            runtimeCredentialSources: {
+              [id]: { databasePath: "synthetic-owner.sqlite", provider: "openai" },
+            },
+          }
+        : {
+            runtimeExternalProfileIds: [priorId],
+            runtimeExternalProfileIdsAuthoritative: authoritative,
+          }),
+    };
+    const overlays = authoritative
+      ? []
+      : [
+          {
+            profileId: id,
+            credential: oauth,
+            ...(persisted ? { persistence: "persisted" as const } : {}),
+          },
+        ];
+    const overlaid: RuntimeAuthProfileStore = overlayRuntimeExternalOAuthProfiles(store, overlays, {
+      runtimeExternalProfileIdsAuthoritative: authoritative,
+    });
+    expect(overlaid.runtimeExternalProfileIds).toEqual(
+      persisted ? undefined : authoritative ? [priorId] : [priorId, id],
+    );
+    expect(overlaid.runtimeExternalProfileIdsAuthoritative).toBe(authoritative);
+    if (persisted) {
+      expect(overlaid.runtimePersistedProfileIds).toBeUndefined();
+      expect(overlaid.runtimeCredentialSources).toEqual({});
+    }
+    const profile = expectDefined(overlaid.profiles[id], "overlaid profile");
+    if (!authoritative) {
+      expect(profile).toMatchObject({ type: "oauth", access: oauth.access });
+    }
+    profile.provider = "mutated";
+    overlaid.order!.openai!.push("mutated");
+    expect(store.profiles[id]).toMatchObject({
+      type: persisted ? "oauth" : "api_key",
+      provider: "openai",
+    });
+    expect(store.order?.openai).toEqual([id]);
+  },
+);

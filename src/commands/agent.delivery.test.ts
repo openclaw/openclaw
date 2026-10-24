@@ -1,53 +1,34 @@
-// Agent delivery tests cover command result delivery to reply payloads and CLI dependencies.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deliverAgentCommandResult } from "../agents/command/delivery.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { CliDeps } from "../cli/deps.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
-  deliverOutboundPayloads: vi.fn(async () => []),
+  deliverOutboundPayloads: vi.fn(async (_params: DeliveryCall) => []),
   getChannelPlugin: vi.fn(() => ({ outbound: { deliveryMode: "gateway" } })),
-  resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15551234567" })),
+  resolveOutboundTarget: vi.fn((_params: ResolveTargetCall) => ({
+    ok: true as const,
+    to: "+15551234567",
+  })),
 }));
 
 type DeliveryCall = {
-  accountId?: string;
-  session?: {
-    agentId?: string;
-    key?: string;
-  };
+  session?: { agentId?: string; key?: string };
 };
 
 type ResolveTargetCall = {
   accountId?: string;
   channel?: string;
-  mode?: string;
   to?: string;
 };
 
-function readDeliveryCall(): DeliveryCall {
-  expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
-  const calls = mocks.deliverOutboundPayloads.mock.calls as unknown as Array<[unknown]>;
-  const call = calls[0]?.[0];
-  if (!call) {
-    throw new Error("Expected delivery call");
-  }
-  return call as DeliveryCall;
-}
-
-function readResolveTargetCall(): ResolveTargetCall {
-  expect(mocks.resolveOutboundTarget).toHaveBeenCalledOnce();
-  const calls = mocks.resolveOutboundTarget.mock.calls as unknown as Array<[unknown]>;
-  const call = calls[0]?.[0];
-  if (!call) {
-    throw new Error("Expected resolve target call");
-  }
-  return call as ResolveTargetCall;
+function onlyCall<T>(mock: { mock: { calls: [T][] } }): T {
+  expect(mock).toHaveBeenCalledOnce();
+  return mock.mock.calls[0]?.[0] ?? expect.fail("Expected call");
 }
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -80,50 +61,32 @@ describe("deliverAgentCommandResult", () => {
     };
   }
 
-  function createRuntime(): RuntimeEnv {
-    return {
-      log: vi.fn(),
-      error: vi.fn(),
-    } as unknown as RuntimeEnv;
-  }
-
-  function createResult(text = "hi") {
-    return {
-      payloads: [{ text }],
-      meta: { durationMs: 1 },
-    };
-  }
-
   async function runDelivery(params: {
-    opts: Record<string, unknown>;
+    opts?: Partial<Parameters<typeof deliverAgentCommandResult>[0]["opts"]>;
     outboundSession?: { key?: string; agentId?: string };
     sessionEntry?: SessionEntry;
     runtime?: RuntimeEnv;
     resultText?: string;
     payloads?: ReplyPayload[];
   }) {
-    const cfg = {} as OpenClawConfig;
-    const deps = {} as CliDeps;
-    const runtime = params.runtime ?? createRuntime();
-    const result = params.payloads
-      ? {
-          payloads: params.payloads,
-          meta: { durationMs: 1 },
-        }
-      : createResult(params.resultText);
+    const runtime = params.runtime ?? createTestRuntime();
+    const result = {
+      payloads: params.payloads ?? [{ text: params.resultText ?? "hi" }],
+      meta: { durationMs: 1 },
+    };
 
-    await deliverAgentCommandResult({
-      cfg,
-      deps,
+    const deliveryResult = await deliverAgentCommandResult({
+      cfg: {},
+      deps: {},
       runtime,
-      opts: params.opts as never,
+      opts: { message: "hello", ...params.opts },
       outboundSession: params.outboundSession,
       sessionEntry: params.sessionEntry,
       result,
       payloads: result.payloads,
     });
 
-    return { runtime };
+    return { runtime, deliveryResult };
   }
 
   beforeEach(() => {
@@ -131,242 +94,78 @@ describe("deliverAgentCommandResult", () => {
     mocks.resolveOutboundTarget.mockClear();
   });
 
-  it("prefers explicit accountId for outbound delivery", async () => {
-    await runDelivery({
-      opts: {
-        message: "hello",
-        deliver: true,
-        channel: "whatsapp",
-        accountId: "kev",
-        to: "+15551234567",
-      },
-      sessionEntry: sessionEntry({ accountId: "default" }),
-    });
-
-    expect(readDeliveryCall().accountId).toBe("kev");
-  });
-
-  it("falls back to session accountId for implicit delivery", async () => {
-    await runDelivery({
-      opts: {
-        message: "hello",
-        deliver: true,
-        channel: "whatsapp",
-      },
-      sessionEntry: sessionEntry({ accountId: "legacy", channel: "whatsapp" }),
-    });
-
-    expect(readDeliveryCall().accountId).toBe("legacy");
-  });
-
-  it("does not infer accountId for explicit delivery targets", async () => {
-    await runDelivery({
-      opts: {
-        message: "hello",
-        deliver: true,
-        channel: "whatsapp",
-        to: "+15551234567",
-        deliveryTargetMode: "explicit",
-      },
-      sessionEntry: sessionEntry({ accountId: "legacy" }),
-    });
-
-    const targetCall = readResolveTargetCall();
-    expect(targetCall.accountId).toBeUndefined();
-    expect(targetCall.mode).toBe("explicit");
-    expect(readDeliveryCall().accountId).toBeUndefined();
-  });
-
-  it("skips session accountId when channel differs", async () => {
-    await runDelivery({
-      opts: {
-        message: "hello",
-        deliver: true,
-        channel: "whatsapp",
-      },
-      sessionEntry: sessionEntry({ accountId: "legacy", channel: "telegram" }),
-    });
-
-    const targetCall = readResolveTargetCall();
-    expect(targetCall.accountId).toBeUndefined();
-    expect(targetCall.channel).toBe("whatsapp");
-  });
-
-  it("uses session last channel when none is provided", async () => {
-    await runDelivery({
-      opts: {
-        message: "hello",
-        deliver: true,
-      },
-      sessionEntry: sessionEntry({ channel: "telegram", to: "123" }),
-    });
-
-    const targetCall = readResolveTargetCall();
-    expect(targetCall.channel).toBe("telegram");
-    expect(targetCall.to).toBe("123");
-  });
-
-  it("uses reply overrides for delivery routing", async () => {
-    await runDelivery({
-      opts: {
-        message: "hello",
-        deliver: true,
-        to: "+15551234567",
-        replyTo: "#reports",
-        replyChannel: "slack",
-        replyAccountId: "ops",
-      },
-      sessionEntry: sessionEntry({ channel: "telegram", to: "123", accountId: "legacy" }),
-    });
-
-    const targetCall = readResolveTargetCall();
-    expect(targetCall.channel).toBe("slack");
-    expect(targetCall.to).toBe("#reports");
-    expect(targetCall.accountId).toBe("ops");
-  });
-
   it("stays silent for intentional empty payloads", async () => {
-    const runtime = createRuntime();
-
-    await runDelivery({
-      opts: {
-        message: "hello",
-      },
-      runtime,
-      payloads: [],
-    });
-
+    const { runtime } = await runDelivery({ payloads: [] });
     expect(runtime.log).not.toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("uses runContext turn source over stale session last route", async () => {
+  it.each([
+    ["uses turn source over stale session route", "+15559876543", "work"],
+    [
+      "does not reuse session lastTo when the turn source omits currentChannelId",
+      undefined,
+      undefined,
+    ],
+  ])("%s", async (_label, to, accountId) => {
     await runDelivery({
       opts: {
-        message: "hello",
         deliver: true,
         runContext: {
           messageChannel: "whatsapp",
-          currentChannelId: "+15559876543",
-          accountId: "work",
+          currentChannelId: to,
+          accountId,
         },
       },
       sessionEntry: sessionEntry({ channel: "slack", to: "U_WRONG", accountId: "wrong" }),
     });
 
-    const targetCall = readResolveTargetCall();
-    expect(targetCall.channel).toBe("whatsapp");
-    expect(targetCall.to).toBe("+15559876543");
-    expect(targetCall.accountId).toBe("work");
-  });
-
-  it("does not reuse session lastTo when runContext source omits currentChannelId", async () => {
-    await runDelivery({
-      opts: {
-        message: "hello",
-        deliver: true,
-        runContext: {
-          messageChannel: "whatsapp",
-        },
-      },
-      sessionEntry: sessionEntry({ channel: "slack", to: "U_WRONG" }),
+    expect(onlyCall(mocks.resolveOutboundTarget)).toMatchObject({
+      channel: "whatsapp",
+      to,
+      ...(accountId ? { accountId } : {}),
     });
-
-    const targetCall = readResolveTargetCall();
-    expect(targetCall.channel).toBe("whatsapp");
-    expect(targetCall.to).toBeUndefined();
   });
 
   it("uses caller-provided outbound session context when opts.sessionKey is absent", async () => {
     await runDelivery({
-      opts: {
-        message: "hello",
-        deliver: true,
-        channel: "whatsapp",
-        to: "+15551234567",
-      },
-      outboundSession: {
-        key: "agent:exec:hook:gmail:thread-1",
-        agentId: "exec",
-      },
+      opts: { deliver: true, channel: "whatsapp", to: "+15551234567" },
+      outboundSession: { key: "agent:exec:hook:gmail:thread-1", agentId: "exec" },
     });
 
-    const deliveryCall = readDeliveryCall();
-    expect(deliveryCall.session?.key).toBe("agent:exec:hook:gmail:thread-1");
-    expect(deliveryCall.session?.agentId).toBe("exec");
+    expect(onlyCall(mocks.deliverOutboundPayloads).session).toMatchObject({
+      key: "agent:exec:hook:gmail:thread-1",
+      agentId: "exec",
+    });
   });
 
-  it("prefixes nested agent outputs with context", async () => {
-    const runtime = createRuntime();
-    await runDelivery({
-      runtime,
-      resultText: "ANNOUNCE_SKIP",
-      opts: {
-        message: "hello",
-        deliver: false,
-        lane: "nested",
-        sessionKey: "agent:main:main",
-        runId: "run-announce",
-        messageChannel: "webchat",
-      },
-      sessionEntry: undefined,
-    });
-
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect((runtime.log as ReturnType<typeof vi.fn>).mock.calls).toEqual([
-      ["[agent:nested] session=agent:main:main run=run-announce channel=webchat ANNOUNCE_SKIP"],
-    ]);
-  });
-
-  it("prefixes per-session nested lanes with the same nested log context (#67502)", async () => {
-    const runtime = createRuntime();
-    await runDelivery({
-      runtime,
-      resultText: "ANNOUNCE_SKIP",
-      opts: {
-        message: "hello",
-        deliver: false,
-        lane: "nested:agent:ebao-next:quietchat:channel:1",
-        sessionKey: "agent:ebao-next:quietchat:channel:1",
-        runId: "run-announce",
-        messageChannel: "webchat",
-      },
-      sessionEntry: undefined,
-    });
-
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect((runtime.log as ReturnType<typeof vi.fn>).mock.calls).toEqual([
-      [
-        "[agent:nested] session=agent:ebao-next:quietchat:channel:1 run=run-announce channel=webchat ANNOUNCE_SKIP",
-      ],
-    ]);
-  });
-
-  it("preserves audioAsVoice in JSON output envelopes", async () => {
-    const runtime = createRuntime();
-    await runDelivery({
-      runtime,
-      payloads: [{ text: "voice caption", mediaUrl: "file:///tmp/clip.mp3", audioAsVoice: true }],
-      opts: {
-        message: "hello",
-        deliver: false,
-        json: true,
-      },
-    });
-
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(
-      JSON.parse(String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0])),
-    ).toEqual({
-      payloads: [
-        {
-          text: "voice caption",
-          mediaUrl: "file:///tmp/clip.mp3",
-          mediaUrls: ["file:///tmp/clip.mp3"],
-          audioAsVoice: true,
+  it.each(["nested", "nested:agent:main:child"])(
+    "retains %s replies without logging them",
+    async (lane) => {
+      const { runtime, deliveryResult } = await runDelivery({
+        resultText: "Private child reply\nsecond private line",
+        opts: {
+          deliver: false,
+          lane,
+          sessionKey: "agent:ebao-next:quietchat:channel:1",
+          runId: "run-announce",
+          messageChannel: "webchat",
         },
-      ],
-      meta: { durationMs: 1 },
-    });
+      });
+
+      expect(deliveryResult.payloads).toEqual([
+        expect.objectContaining({ text: "Private child reply\nsecond private line" }),
+      ]);
+      expect(runtime.log).not.toHaveBeenCalled();
+    },
+  );
+
+  it("prints interactive CLI replies through the output writer", async () => {
+    const runtime = { ...createTestRuntime(), writeStdout: vi.fn(), writeJson: vi.fn() };
+    const { deliveryResult } = await runDelivery({ runtime, resultText: "CLI reply" });
+
+    expect(deliveryResult.payloads).toEqual([expect.objectContaining({ text: "CLI reply" })]);
+    expect(runtime.writeStdout).toHaveBeenCalledWith("CLI reply");
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 });

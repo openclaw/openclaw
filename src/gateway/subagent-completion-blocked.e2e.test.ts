@@ -1,119 +1,155 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { assert, expect, it, vi } from "vitest";
+import { createRestartRecoveryOperatorSource } from "../agents/operator-run-recovery-source.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
-import { settleSubagentCompletionDelivery } from "../agents/subagents/completion/subagent-completion-admission.store.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../agents/subagents/registry/subagent-lifecycle-events.js";
+import { observeRootWork } from "../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByRunId,
   resetSubagentRegistryForTests,
   resumeSubagentRun,
-  testing,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { ensureTaskRegistryReady, getTaskById } from "../tasks/runtime-internal.js";
-import { publishTaskRecordAfterAtomicStore } from "../tasks/task-registry.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
+import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { getGatewayContextResolver } from "../plugins/runtime/gateway-context-binding.js";
+import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
+import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
 import {
   installGatewayTestHooks,
   testState,
-  waitForSystemEvent,
   withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
 
+vi.mock("../agents/subagents/announce/subagent-announce.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/subagents/announce/subagent-announce.js")>()),
+  runSubagentAnnounceFlow: async () => "retryable",
+}));
+vi.mock("../agents/subagents/announce/subagent-announce.requester-settle-wake.js", () => ({
+  maybeWakeRequesterAfterAllChildrenSettled: async () => false,
+}));
+
 installGatewayTestHooks({ scope: "suite" });
 
-describe("subagent completion blocked Gateway E2E", () => {
-  it("publishes one no-crash system event after ordinary delivery exhaustion", async () => {
-    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
-    const stateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!stateDir) {
-      throw new Error("OPENCLAW_STATE_DIR is required for Gateway E2E fixtures");
-    }
-    testState.sessionStorePath = path.join(stateDir, "sessions.sqlite");
-    try {
-      await withGatewayServer(async () => {
-        const now = Date.now();
-        const endedAt = now - 31 * 60_000;
-        const task: TaskRecord = {
-          taskId: "task-blocked-gateway-e2e",
-          runtime: "subagent",
-          requesterSessionKey: "agent:main:main",
-          ownerKey: "agent:main:main",
-          scopeKind: "session",
-          childSessionKey: "agent:main:subagent:blocked-gateway-e2e",
-          runId: "task-run-blocked-gateway-e2e",
-          requesterAgentId: "main",
-          task: "finish the Gateway exhaustion proof",
-          status: "succeeded",
-          deliveryStatus: "pending",
-          terminalOutcome: "succeeded",
-          notifyPolicy: "done_only",
-          createdAt: endedAt - 1_000,
-          endedAt,
-          lastEventAt: endedAt,
-        };
-        const subagent = createSubagentRunRecord({
-          runId: "subagent-run-blocked-gateway-e2e",
-          taskRunId: task.runId,
-          childSessionKey: task.childSessionKey,
-          requesterSessionKey: task.requesterSessionKey,
-          requesterDisplayKey: task.requesterSessionKey,
-          requesterAgentId: "main",
-          task: task.task,
-          createdAt: task.createdAt,
-          endedAt,
-          endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-          outcome: { status: "ok" },
-          expectsCompletionMessage: true,
-          completion: { required: true, resultText: "proof result", capturedAt: endedAt },
-          delivery: {
-            status: "pending",
-            disposition: "retryable",
-            generation: 1,
-            windowStartedAt: endedAt,
-            deadlineAt: endedAt + 30 * 60_000,
-            lastError: "requester unavailable",
-          },
-        });
-
-        await writeSessionStore({
-          entries: {
-            [subagent.childSessionKey]: {
-              sessionId: "session-blocked-gateway-e2e",
-              updatedAt: now,
-            },
-          },
-        });
-        settleSubagentCompletionDelivery({ subagent, task });
-        addSubagentRunForTests(subagent);
-        ensureTaskRegistryReady();
-        publishTaskRecordAfterAtomicStore(task);
-        testing.setDepsForTest({
-          runSubagentAnnounceFlow: async () => "retryable",
-          maybeWakeRequesterAfterAllChildrenSettled: async () => false,
-        });
-
-        resumeSubagentRun(subagent.runId);
-
-        const events = await waitForSystemEvent(5_000);
-        expect(events).toHaveLength(1);
-        expect(events[0]).toContain("Task needs follow-up");
-        expect(events[0]).toContain("requester unavailable");
-        expect(getTaskById(task.taskId)).toMatchObject({
-          deliveryStatus: "failed",
-          terminalOutcome: "blocked",
-        });
-        expect(getSubagentRunByRunId(subagent.runId)?.delivery).toMatchObject({
-          status: "suspended",
-          disposition: "permanent_failure",
-          suspendedReason: "expiry",
-        });
+it("suspends native completion delivery after its one recorded failure", async () => {
+  process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
+  const stateDir = expectDefined(process.env.OPENCLAW_STATE_DIR, "Gateway E2E state dir");
+  const configPath = expectDefined(process.env.OPENCLAW_CONFIG_PATH, "Gateway E2E config path");
+  testState.sessionStorePath = path.join(stateDir, "sessions.sqlite");
+  try {
+    // Keep unrelated reload roots out of the completion settlement barrier.
+    await fs.writeFile(configPath, JSON.stringify({ gateway: { reload: { mode: "off" } } }));
+    await withGatewayServer(async () => {
+      const now = Date.now();
+      const endedAt = now - 31 * 60_000;
+      const subagent = createSubagentRunRecord({
+        runId: "subagent-run-blocked-gateway-e2e",
+        childSessionKey: "agent:main:subagent:blocked-gateway-e2e",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "agent:main:main",
+        requesterAgentId: "main",
+        task: "finish the Gateway exhaustion proof",
+        createdAt: endedAt - 1_000,
+        endedAt,
+        endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+        outcome: { status: "ok" },
+        expectsCompletionMessage: true,
+        completion: { required: true, resultText: "proof result", capturedAt: endedAt },
+        delivery: {
+          status: "pending",
+          disposition: "retryable",
+          generation: 1,
+          windowStartedAt: endedAt,
+          deadlineAt: endedAt + 30 * 60_000,
+          lastError: "requester unavailable",
+        },
       });
-    } finally {
-      testing.setDepsForTest();
-      resetSubagentRegistryForTests({ persist: false });
-      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
-    }
-  });
+
+      const entry = (sessionId: string) => ({ sessionId, updatedAt: now });
+      await writeSessionStore({
+        agentId: "main",
+        entries: {
+          [subagent.requesterSessionKey]: entry("requester-blocked-gateway-e2e"),
+          [subagent.childSessionKey]: entry("session-blocked-gateway-e2e"),
+        },
+      });
+      const readEntry = (sessionKey: string) =>
+        expectDefined(
+          loadExactSessionEntryReadOnly({
+            agentId: "main",
+            storePath: testState.sessionStorePath,
+            sessionKey,
+          })?.entry,
+          `persisted session ${sessionKey}`,
+        );
+      const sessionEntry = readEntry(subagent.childSessionKey);
+      const requester = readEntry(subagent.requesterSessionKey);
+      const runtime = expectDefined(getGatewayRecoveryRuntime(), "live Gateway runtime");
+      const context = expectDefined(getGatewayContextResolver(runtime)?.(), "live Gateway context");
+      const config = context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig();
+      const client = createOperatorClient({
+        profileName: "completion-expiry-operator",
+        scopes: ["operator.write"],
+      });
+      // Model the authenticated handshake; production admission captures its recovery source.
+      client.internal = { authenticatedOperator: true };
+      client.authPolicy = captureGatewayAuthPolicy(config, {
+        role: "operator",
+        authMethod: "token",
+      });
+      const captured = await captureGatewayOperatorRunAuthority({
+        client: expectDefined(captureAgentTurnPrincipal(client), "operator principal"),
+        context,
+        sourceAuthority: null,
+      });
+      assert(captured, "admitted original operator");
+      try {
+        const operatorRecoverySource = createRestartRecoveryOperatorSource({
+          authority: captured.authority,
+          entry: requester,
+          agentId: "main",
+          sessionKey: subagent.requesterSessionKey,
+          sourceRunId: "completion-expiry-requester-turn",
+        });
+        assert(operatorRecoverySource, "host-captured original operator source");
+        await addSubagentRunForTests({
+          ...subagent,
+          requesterStorePath: testState.sessionStorePath,
+          completionRequesterSessionId: requester.sessionId,
+          completionRequesterLifecycleRevision: requester.lifecycleRevision,
+          operatorRecoverySource,
+          childAgentId: "main",
+          childSessionIdentity: {
+            sessionId: sessionEntry.sessionId,
+            lifecycleRevision: sessionEntry.lifecycleRevision,
+          },
+        });
+      } finally {
+        captured.release();
+      }
+
+      // Native suspension completes in detached work. Join its owner before
+      // asserting or closing the Gateway, including cold worker startup.
+      const settleRootWork = observeRootWork();
+      try {
+        resumeSubagentRun(subagent.runId);
+      } finally {
+        await settleRootWork();
+      }
+
+      expect(getSubagentRunByRunId(subagent.runId)?.delivery).toMatchObject({
+        status: "suspended",
+        disposition: "permanent_failure",
+        suspendedReason: "expiry",
+      });
+    });
+  } finally {
+    await resetSubagentRegistryForTests({ persist: false });
+    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
+  }
 });

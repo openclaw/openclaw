@@ -3,9 +3,8 @@ import { join } from "node:path";
 import { readCurrentConfigForResolution } from "../config/io.runtime.js";
 import { resolveInstallAgentDir } from "./install-agent-dir.js";
 
-/** Prepare one config, environment, and directory decision for a standalone SDK operation. */
-export function getAgentDirResolution(agentDir?: string) {
-  return resolveInstallAgentDir((env) => readCurrentConfigForResolution({ env }), { agentDir });
+function getAgentDirResolution() {
+  return resolveInstallAgentDir((env) => readCurrentConfigForResolution({ env }));
 }
 
 /** Standalone SDK default; configured sessions pass their resolved agentDir. */

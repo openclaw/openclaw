@@ -1,29 +1,36 @@
 /** Strips internal scaffolding from text before user-facing delivery. */
-import { CURRENT_MESSAGE_MARKER, HISTORY_CONTEXT_MARKER } from "../../auto-reply/reply/history.js";
+import {
+  CURRENT_MESSAGE_MARKER,
+  HISTORY_CONTEXT_MARKER,
+  RECENT_HISTORY_CONTEXT_MARKER,
+} from "../../auto-reply/reply/history.js";
 import {
   INBOUND_METADATA_MARKERS,
   stripInboundMetadata,
 } from "../../auto-reply/reply/strip-inbound-meta.js";
+import { RUNTIME_CONTEXT_HEADER } from "../../llm/types.js";
 import { coerceChatContentText } from "../../shared/chat-content.js";
 import { escapeRegExp } from "../../shared/regexp.js";
 import {
   assistantTraceTextFilter,
+  legacyBracketToolCallTextFilter,
+  minimaxToolCallTextFilter,
   plainToolCallTextFilter,
-  stripLegacyBracketToolCallBlocks,
-  stripMinimaxToolCallXml,
-  stripToolCallXmlTags,
+  toolCallXmlTextFilter,
 } from "../../shared/text/assistant-visible-text.js";
 import {
   findCodeRegions,
   isInsideCode,
   stripLinesOutsideCode,
 } from "../../shared/text/code-regions.js";
-import { stripFinalTags } from "../../shared/text/final-tags.js";
+import { createFinalTagProbe, stripFinalTags } from "../../shared/text/final-tags.js";
 import {
   applyTextFilters,
+  createConditionalTextProjector,
   duplicateParagraphTextFilter,
   leadingEmptyLinesTextFilter,
   type TextFilter,
+  type TextProjection,
 } from "../../shared/text/text-projection.js";
 import { EXEC_NO_OUTPUT_PLACEHOLDER } from "../bash-tools.exec-output.js";
 import {
@@ -62,8 +69,14 @@ type VerifiedConversationContext = {
   incompleteMarkdownWrapper?: RegExp;
 };
 
+const CONVERSATION_CONTEXT_MARKERS = [
+  HISTORY_CONTEXT_MARKER,
+  RECENT_HISTORY_CONTEXT_MARKER,
+  CURRENT_MESSAGE_MARKER,
+];
+
 function hasConversationContextMarker(text: string): boolean {
-  return text.includes(HISTORY_CONTEXT_MARKER) || text.includes(CURRENT_MESSAGE_MARKER);
+  return CONVERSATION_CONTEXT_MARKERS.some((marker) => text.includes(marker));
 }
 
 function prepareVerifiedConversationContext(
@@ -73,22 +86,20 @@ function prepareVerifiedConversationContext(
     return undefined;
   }
   const sourceCodeRegions = findCodeRegions(source);
-  const ownsConversationContext = [HISTORY_CONTEXT_MARKER, CURRENT_MESSAGE_MARKER].some(
-    (marker) => {
-      let markerOffset = source.indexOf(marker);
-      while (markerOffset !== -1) {
-        const markerEnd = markerOffset + marker.length;
-        const startsLine = markerOffset === 0 || source[markerOffset - 1] === "\n";
-        const endsLine =
-          markerEnd === source.length || source[markerEnd] === "\n" || source[markerEnd] === "\r";
-        if (startsLine && endsLine && !isInsideCode(markerOffset, sourceCodeRegions)) {
-          return true;
-        }
-        markerOffset = source.indexOf(marker, markerEnd);
+  const ownsConversationContext = CONVERSATION_CONTEXT_MARKERS.some((marker) => {
+    let markerOffset = source.indexOf(marker);
+    while (markerOffset !== -1) {
+      const markerEnd = markerOffset + marker.length;
+      const startsLine = markerOffset === 0 || source[markerOffset - 1] === "\n";
+      const endsLine =
+        markerEnd === source.length || source[markerEnd] === "\n" || source[markerEnd] === "\r";
+      if (startsLine && endsLine && !isInsideCode(markerOffset, sourceCodeRegions)) {
+        return true;
       }
-      return false;
-    },
-  );
+      markerOffset = source.indexOf(marker, markerEnd);
+    }
+    return false;
+  });
   if (!ownsConversationContext) {
     return undefined;
   }
@@ -222,6 +233,133 @@ export function createVerifiedConversationContextStreamFilter(
   };
 }
 
+// Line-delimited tokens that can begin a removable runtime-context block. Every one is a
+// complete generated delimiter, so ordinary prose ("o", "<", "This context") never activates.
+const RUNTIME_CONTEXT_STREAM_DELIMITERS = [
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+  RUNTIME_CONTEXT_HEADER,
+] as const;
+const RUNTIME_CONTEXT_STREAM_DELIMITERS_LOWER = RUNTIME_CONTEXT_STREAM_DELIMITERS.map((token) =>
+  token.toLowerCase(),
+);
+// The canonical carrier grammar accepts any whitespace between words, so a reflowed preface or
+// notice still has to activate. The probe runs over a whitespace-normalized tail: a run of
+// arbitrary width collapses to one space, so even a carrier split by hundreds of spaces keeps
+// its recognized prefix without rescanning the accumulated reply.
+const RUNTIME_CONTEXT_STREAM_CARRIER =
+  /openclaw\s+runtime\s+(?:context|event)\b|this\s+context\s+is\s+runtime-generated\b/u;
+// Longest probe ("this context is runtime-generated") plus the truncated head of the next word.
+const RUNTIME_CONTEXT_STREAM_SCAN_LENGTH = 64;
+
+function isWhitespaceOnly(value: string): boolean {
+  return /^[ \t\r]*$/u.test(value);
+}
+
+/** Keep carrier words adjacent across whitespace runs, including runs split between deltas. */
+function normalizeRuntimeContextScan(text: string): string {
+  return text.replace(/\s+/gu, " ").toLowerCase();
+}
+
+/** Track whether everything published on the current line is still whitespace. */
+function advanceLineStart(atLineStart: boolean, appended: string): boolean {
+  if (appended === "") {
+    return atLineStart;
+  }
+  const lastNewline = appended.lastIndexOf("\n");
+  return lastNewline >= 0
+    ? isWhitespaceOnly(appended.slice(lastNewline + 1))
+    : atLineStart && isWhitespaceOnly(appended);
+}
+
+function hasRuntimeContextStreamTrigger(lowerText: string): boolean {
+  if (RUNTIME_CONTEXT_STREAM_DELIMITERS_LOWER.some((token) => lowerText.includes(token))) {
+    return true;
+  }
+  // Generated carrier words are never split internally, so the literal probes keep the
+  // whitespace-tolerant regex off ordinary prose.
+  return (
+    (lowerText.includes("openclaw") || lowerText.includes("runtime-generated")) &&
+    RUNTIME_CONTEXT_STREAM_CARRIER.test(lowerText)
+  );
+}
+
+function isPartialRuntimeContextDelimiter(line: string): boolean {
+  const tail = line.trim();
+  return (
+    tail.length > 0 &&
+    RUNTIME_CONTEXT_STREAM_DELIMITERS.some(
+      (delimiter) => tail.length < delimiter.length && delimiter.startsWith(tail),
+    )
+  );
+}
+
+function createRuntimeContextStreamProjector(): (input: TextProjection) => TextProjection {
+  let active = false;
+  let published = "";
+  let atLineStart = true;
+  let withheld = "";
+  let scanTail = "";
+  return (input) => {
+    if (input.delta === null) {
+      // Every subscriber projection starts with replace(previousStream?.raw ?? ""). Only a
+      // replacement that itself carried carrier bytes may latch the scrub; an empty or
+      // marker-free replacement has to keep the fast path or the per-delta cost comes back.
+      const text = stripInternalRuntimeContext(input.text, { streaming: true });
+      const scan = normalizeRuntimeContextScan(input.text);
+      active = hasRuntimeContextStreamTrigger(scan) || text !== input.text;
+      published = text;
+      scanTail = scan.slice(-RUNTIME_CONTEXT_STREAM_SCAN_LENGTH);
+      atLineStart = isWhitespaceOnly(text.slice(text.lastIndexOf("\n") + 1));
+      withheld = "";
+      return { text, delta: null };
+    }
+    // Provider deltas have no size limit, so the trigger has to see the whole incoming chunk
+    // before only the bounded overlap is retained; otherwise a coalesced private block could
+    // publish its body without ever activating the scrub.
+    const scan = normalizeRuntimeContextScan(scanTail + input.delta);
+    scanTail = scan.slice(-RUNTIME_CONTEXT_STREAM_SCAN_LENGTH);
+    if (!active && hasRuntimeContextStreamTrigger(scan)) {
+      active = true;
+    }
+    if (active) {
+      // A complete delimiter owns the rest of the reply: the canonical streaming scrub
+      // latches so the context body can never follow it into the preview.
+      const text = stripInternalRuntimeContext(input.text, { streaming: true });
+      const delta = text.startsWith(published) ? text.slice(published.length) : null;
+      published = text;
+      atLineStart = text.length === 0 || text.endsWith("\n");
+      withheld = "";
+      return text === input.text && delta === input.delta ? input : { text, delta };
+    }
+    // A delimiter is removable only as a whole line, so a hold can start only where a
+    // line starts - never from an ordinary line that already failed the prefix test.
+    const complete = withheld + input.delta;
+    const lastNewline = complete.lastIndexOf("\n");
+    const candidate =
+      lastNewline >= 0
+        ? complete.slice(lastNewline + 1)
+        : withheld || atLineStart
+          ? complete
+          : undefined;
+    if (candidate !== undefined && isPartialRuntimeContextDelimiter(candidate)) {
+      const prefix = complete.slice(0, complete.length - candidate.length);
+      withheld = candidate;
+      published = prefix ? published + prefix : published;
+      return { text: published, delta: prefix };
+    }
+    if (withheld) {
+      withheld = "";
+      published = input.text;
+      atLineStart = advanceLineStart(true, complete);
+      return { text: input.text, delta: complete };
+    }
+    published = input.text;
+    atLineStart = advanceLineStart(atLineStart, input.delta);
+    return input;
+  };
+}
+
 // Share descriptors only; createTextProjection owns each stream's mutable state.
 const userFacingFilters: Partial<
   Record<`${"normal" | "error"}${"" | "-stream"}`, readonly TextFilter[]>
@@ -233,29 +371,33 @@ export function userFacingTextFilters(
 ): readonly TextFilter[] {
   const key = `${errorContext ? "error" : "normal"}${streaming ? "-stream" : ""}` as const;
   return (userFacingFilters[key] ??= [
-    { transform: stripFinalTags, activationTokens: ["<"] },
     {
-      transform: streaming
-        ? (text) => stripInternalRuntimeContext(text, { streaming: true })
-        : stripInternalRuntimeContext,
-      activationTokens: [
-        streaming ? "<" : INTERNAL_RUNTIME_CONTEXT_BEGIN,
-        INTERNAL_RUNTIME_CONTEXT_END,
-        OPENCLAW_RUNTIME_CONTEXT_NOTICE,
-      ],
+      transform: stripFinalTags,
+      create: () => createConditionalTextProjector(stripFinalTags, createFinalTagProbe()),
     },
+    streaming
+      ? {
+          transform: (text) => stripInternalRuntimeContext(text, { streaming: true }),
+          create: createRuntimeContextStreamProjector,
+        }
+      : {
+          transform: stripInternalRuntimeContext,
+          activationTokens: [
+            INTERNAL_RUNTIME_CONTEXT_BEGIN,
+            INTERNAL_RUNTIME_CONTEXT_END,
+            OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+            RUNTIME_CONTEXT_HEADER,
+          ],
+        },
     { transform: stripInboundMetadata, activationTokens: INBOUND_METADATA_MARKERS },
-    { transform: stripMinimaxToolCallXml, activationTokens: ["<"] },
-    {
-      transform: (text) => stripToolCallXmlTags(text, { stripFunctionCallsXmlPayloads: true }),
-      activationTokens: ["<"],
-    },
+    minimaxToolCallTextFilter,
+    toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }),
     {
       transform: stripInternalPlaceholderLines,
       activationTokens: [EXEC_NO_OUTPUT_PLACEHOLDER, "[tool calls omitted]"],
     },
     ...(errorContext ? [assistantTraceTextFilter] : []),
-    { transform: stripLegacyBracketToolCallBlocks, activationTokens: ["["] },
+    legacyBracketToolCallTextFilter,
     plainToolCallTextFilter,
     leadingEmptyLinesTextFilter,
     duplicateParagraphTextFilter,

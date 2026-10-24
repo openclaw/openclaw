@@ -1,655 +1,436 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EmbeddedRunTrigger } from "../../agents/embedded-agent-runner/run/params.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { resolveAdmittedRunActiveAssertion as activeAssertion } from "../../agents/admitted-run-context.js";
+import { runWithAgentToolSourceExecutionScope as withSource } from "../../agents/agent-tool-source-execution-guard.js";
 import {
-  getPreparedModelRuntimePluginGeneration,
-  withPreparedModelRuntimePluginGenerationScope,
-} from "../../agents/prepared-model-runtime-generation-scope.js";
-import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
+  clearPromptCacheObservations,
+  completePromptCacheObservation,
+} from "../../agents/embedded-agent-runner/prompt-cache-observability.js";
+import { beginOpenAIObservation } from "../../agents/embedded-agent-runner/prompt-cache-observability.test-support.js";
 import {
-  createNestedToolActivity,
-  projectNestedToolActivityForHooks,
-} from "../../sessions/nested-tool-activity.js";
-import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
+  clearTestEmbeddedRun,
+  createEmbeddedRunHandle,
+  registerTestEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
-  createSkillExperienceReviewScheduler,
-  type ExperienceReviewCandidate,
-  type SkillExperienceReviewParams,
-} from "./experience-review-scheduler.js";
-import { prepareSkillExperienceReviewCandidate } from "./experience-review.js";
+  deleteSessionEntryLifecycle,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { readSqliteDatabaseScopedWriteTokensForPath } from "../../infra/sqlite-database-admission.js";
+import { runBeforeAgentReplyForTurn } from "../../plugins/before-agent-reply.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import type { WorkshopChange } from "./changes.kernel.js";
+import { runSkillExperienceReview } from "./experience-review.js";
+import { createExperienceReviewCandidate } from "./experience-review.test-support.js";
+import { createWorkshopSkill, writeWorkshopSkillFile } from "./library.js";
+import type { runSkillWorkshopReview } from "./review-run.js";
+import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
-function completedRun(
-  options: {
-    messages?: number;
-    modelIterations?: number;
-    success?: boolean;
-    error?: string;
-    agentId?: string;
-    sessionKey?: string;
-    runId?: string;
-    mode?: "off" | "propose" | "auto";
-    trigger?: EmbeddedRunTrigger;
-    skillWorkshopAvailable?: boolean;
-  } = {},
-): SkillExperienceReviewParams {
-  const messageCount = options.messages ?? options.modelIterations ?? 10;
-  return {
-    event: {
-      success: options.success ?? true,
-      ...(options.error ? { error: options.error } : {}),
-      messages: [
-        { role: "user", content: "Repair the workflow." },
-        ...Array.from({ length: messageCount }, () => ({
-          role: "assistant",
-          content: "work",
-        })),
-      ],
-    },
-    ctx: {
-      agentId: options.agentId ?? "main",
-      runId: options.runId ?? "run-1",
-      sessionId: "session-1",
-      sessionKey: options.sessionKey ?? "agent:main:main",
-      workspaceDir: "/workspace",
-      modelProviderId: "openai",
-      modelId: "gpt-test",
-      authProfileId: "openai:work",
-      modelIterations: options.modelIterations,
-      skillWorkshopAvailable: options.skillWorkshopAvailable ?? true,
-      foregroundPromptContext: {
-        agentId: options.agentId ?? "main",
-        agentDir: "/agent",
-        workspaceDir: "/workspace",
-        cwd: "/workspace",
-        sandboxSessionKey: options.sessionKey ?? "agent:main:main",
-        trigger: options.trigger ?? "user",
-        reasoningLevel: "on",
+const mocks = vi.hoisted(() => ({
+  runSkillWorkshopReview: vi.fn(),
+  runEmbeddedAgent: vi.fn(),
+  listWorkshopChanges: vi.fn(),
+  postWorkshopChangeNotice: vi.fn(async () => {}),
+}));
+vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/embedded-agent.js")>()),
+  runEmbeddedAgent: mocks.runEmbeddedAgent,
+}));
+vi.mock("./review-run.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./review-run.js")>()),
+  runSkillWorkshopReview: mocks.runSkillWorkshopReview,
+}));
+vi.mock("./library.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./library.js")>()),
+  listWorkshopChanges: mocks.listWorkshopChanges,
+}));
+vi.mock("./review-outcome.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./review-outcome.js")>()),
+  postWorkshopChangeNotice: mocks.postWorkshopChangeNotice,
+}));
+
+let state: OpenClawTestState;
+let candidate: Awaited<ReturnType<typeof createExperienceReviewCandidate>>;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ layout: "state-only" });
+  candidate = await createExperienceReviewCandidate(
+    "review",
+    [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
+    { workspaceDir: state.workspaceDir, modelId: "gpt-test" },
+  );
+  setRuntimeConfigSnapshot(candidate.config);
+  mocks.runSkillWorkshopReview.mockReset();
+  mocks.runEmbeddedAgent.mockReset();
+  mocks.listWorkshopChanges.mockReset().mockResolvedValue([]);
+  mocks.postWorkshopChangeNotice.mockClear();
+});
+afterEach(async () => {
+  clearPromptCacheObservations();
+  mocks.runEmbeddedAgent.mockReset();
+  resetGlobalHookRunner();
+  vi.restoreAllMocks();
+  await state.cleanup();
+});
+
+type ReviewParams = Parameters<typeof runSkillWorkshopReview>[0];
+const completedReview = { meta: { durationMs: 1 } };
+async function useRealReview() {
+  const review = await vi.importActual<{ runSkillWorkshopReview: typeof runSkillWorkshopReview }>(
+    "./review-run.js",
+  );
+  mocks.runSkillWorkshopReview.mockImplementation(review.runSkillWorkshopReview);
+}
+function withAdmission(run: (assertCurrent: ReturnType<typeof activeAssertion>) => Promise<void>) {
+  mocks.runSkillWorkshopReview.mockImplementation(async (params: ReviewParams) => {
+    try {
+      const admitted = await params.preparedRunAdmission.admit("embedded");
+      const assertCurrent = activeAssertion(admitted, params.abortSignal);
+      expect(assertCurrent).toBeDefined();
+      await run(assertCurrent);
+      return completedReview;
+    } finally {
+      params.preparedRunAdmission.close();
+    }
+  });
+}
+it.each(["success", "failure"])(
+  "releases a detached review's prompt diagnostics after %s while preserving its source session",
+  async (outcome) => {
+    await useRealReview();
+    const foreground = { sessionId: candidate.source.sessionId };
+    beginOpenAIObservation(foreground);
+    completePromptCacheObservation({ ...foreground, usage: { cacheRead: 8_000 } });
+    let reviewSessionId = "";
+    mocks.runEmbeddedAgent.mockImplementation(async (params: ReviewParams) => {
+      reviewSessionId = params.sessionId;
+      beginOpenAIObservation({ sessionId: reviewSessionId });
+      completePromptCacheObservation({
+        sessionId: reviewSessionId,
+        usage: { cacheRead: 8_000 },
+      });
+      if (outcome === "failure") {
+        throw new Error("review provider failed");
+      }
+      return completedReview;
+    });
+
+    const review = runSkillExperienceReview(candidate);
+    if (outcome === "failure") {
+      await expect(review).rejects.toThrow("review provider failed");
+    } else {
+      await review;
+    }
+
+    expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(beginOpenAIObservation({ sessionId: reviewSessionId }).previousCacheRead).toBeNull();
+    expect(beginOpenAIObservation(foreground).previousCacheRead).toBe(8_000);
+  },
+);
+
+it("yields an in-flight review when interactive work starts", async () => {
+  await useRealReview();
+  const ownHandle = createEmbeddedRunHandle();
+  const interactiveHandle = createEmbeddedRunHandle({ abort: vi.fn() });
+  mocks.runEmbeddedAgent.mockImplementation(async (params: ReviewParams) => {
+    registerTestEmbeddedRun(params.sessionId, ownHandle, params.sessionKey);
+    try {
+      expect(params.abortSignal?.aborted).toBe(false);
+      registerTestEmbeddedRun("interactive-session", interactiveHandle, "agent:other:interactive");
+      expect(params.abortSignal?.aborted).toBe(true);
+      expect(interactiveHandle.abort).not.toHaveBeenCalled();
+      return { meta: { durationMs: 1, aborted: true } };
+    } finally {
+      clearTestEmbeddedRun("interactive-session", interactiveHandle);
+      clearTestEmbeddedRun(params.sessionId, ownHandle);
+    }
+  });
+  await expect(runSkillExperienceReview(candidate)).rejects.toThrow("yielded to foreground");
+  expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
+});
+
+it("does not dispatch user reply hooks for a detached experience review", async () => {
+  const handler = vi.fn(() => ({ handled: true }));
+  const reviewModel = vi.fn(() => completedReview);
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([
+      { hookName: "before_agent_reply", handler, eligibleTriggers: ["user"] },
+    ]),
+  );
+  await expect(
+    runBeforeAgentReplyForTurn({
+      runId: "review-user-reply-hook",
+      trigger: candidate.ctx.foregroundPromptContext.trigger,
+      event: { cleanedBody: "Remember the verified procedure." },
+      context: { sessionKey: candidate.source.sessionKey },
+    }),
+  ).resolves.toEqual({ handled: true });
+  expect(handler).toHaveBeenCalledOnce();
+  handler.mockClear();
+
+  await useRealReview();
+  mocks.runEmbeddedAgent.mockImplementation(async (params: ReviewParams) => {
+    const admitted = await params.preparedRunAdmission.admit("embedded");
+    const hookResult = await runBeforeAgentReplyForTurn({
+      runId: params.runId,
+      trigger: params.trigger,
+      event: { cleanedBody: params.prompt },
+      context: { sessionKey: params.sessionKey, sessionId: params.sessionId },
+      assertCurrent: activeAssertion(admitted, params.abortSignal),
+    });
+    return hookResult?.handled ? completedReview : reviewModel();
+  });
+
+  await runSkillExperienceReview(candidate);
+
+  expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
+  expect(handler).not.toHaveBeenCalled();
+  expect(reviewModel).toHaveBeenCalledOnce();
+});
+
+it("announces changes committed before the review run failed", async () => {
+  const committed: WorkshopChange = {
+    id: "c1",
+    agentId: "main",
+    skillName: "actual-budget-operations",
+    action: "patch",
+    actor: "review",
+    summary: "tightened reconciliation step",
+    createdAtMs: 1,
+  };
+  mocks.listWorkshopChanges.mockResolvedValue([committed]);
+  mocks.runSkillWorkshopReview.mockResolvedValue({
+    meta: { durationMs: 1, error: { kind: "timeout", message: "model request timed out" } },
+  });
+
+  await expect(runSkillExperienceReview(candidate)).rejects.toThrow("model request timed out");
+  expect(mocks.postWorkshopChangeNotice).toHaveBeenCalledWith(
+    expect.objectContaining({
+      generation: expect.objectContaining({
+        sessionKey: candidate.source.sessionKey,
+        sessionId: candidate.source.sessionId,
+      }),
+      changes: [committed],
+    }),
+  );
+});
+
+it("keeps prepared effects live through receipt pressure without MAIN SQL and denies revocation", async () => {
+  withAdmission(async (assertCurrent) => {
+    const session = await SessionManager.openAsync(candidate.source, state.workspaceDir);
+    const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    for (let index = 0; index < 5; index += 1) {
+      assertCurrent!();
+    }
+    expect(sql.queries).toEqual([]);
+    sql.restore();
+    await session.appendMessageWithTranscriptAnchorAsync(
+      { role: "user", content: "Continue the foreground task.", timestamp: 2 },
+      { config: candidate.config },
+    );
+    const refreshedSql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    // The model response resumes before the next tool can prepare its source scope.
+    assertCurrent!();
+    await withSource(assertCurrent, async () => {
+      expect(
+        readSqliteDatabaseScopedWriteTokensForPath(
+          candidate.source.storePath,
+          Array.from({ length: 5_000 }, (_, index) => `unrelated-review-${index}`),
+        ),
+      ).toHaveLength(5_000);
+      assertCurrent!();
+    });
+    expect(refreshedSql.queries).toEqual([]);
+    refreshedSql.restore();
+    await upsertSessionEntryCore(candidate.source, { permissionMode: "read-only" });
+    expect(() => assertCurrent!()).toThrow("no longer active");
+  });
+  await runSkillExperienceReview(candidate);
+  expect(mocks.runSkillWorkshopReview).toHaveBeenCalledOnce();
+});
+
+it.each(["permission", "reset", "replacement", "deletion", "rewrite", "membership"] as const)(
+  "refuses a Workshop file write after source %s during preparation",
+  async (change) => {
+    const { source, config } = candidate;
+    await upsertSessionEntryCore(source, {
+      permissionMode: "guarded",
+      lifecycleRevision: "original",
+    });
+    const context = { config, agentId: "main", actor: "review" as const };
+    const original =
+      "---\nname: procedure\ndescription: Follow the verified procedure\n---\n\nOriginal steps.\n";
+    await createWorkshopSkill(context, { name: "procedure", content: original });
+    const skillDir = path.join(resolveWorkshopSkillsDir(config, "main"), "procedure");
+    const mutations = {
+      permission: () => upsertSessionEntryCore(source, { permissionMode: "read-only" }),
+      reset: () => upsertSessionEntryCore(source, { lifecycleRevision: "reset-revision" }),
+      replacement: () =>
+        upsertSessionEntryCore(source, { sessionId: `${source.sessionId}:replacement` }),
+      rewrite: async () => {
+        const session = await SessionManager.openAsync(source, state.workspaceDir);
+        await session.removeTrailingEntriesAsync((entry) => entry.type === "message");
       },
-    },
-    config: { skills: { workshop: { autonomous: { mode: options.mode ?? "propose" } } } },
-    source: {
-      agentId: options.agentId ?? "main",
-      sessionId: "session-1",
-      sessionKey: options.sessionKey ?? "agent:main:main",
-      storePath: "/session-store",
-      entryId: "completed-message",
-      generation: "generation-1",
-      rawSeq: 1,
-      effectiveParentId: null,
-      activeMessagePosition: 0,
-    },
-  };
-}
-
-function captureCandidate(params: SkillExperienceReviewParams): ExperienceReviewCandidate {
-  const source = params.source!;
-  return {
-    ctx: {
-      runId: params.ctx.runId,
-      workspaceDir: params.ctx.workspaceDir!,
-      modelProviderId: params.ctx.modelProviderId!,
-      modelId: params.ctx.modelId!,
-      authProfileId: params.ctx.authProfileId,
-      foregroundPromptContext: params.ctx.foregroundPromptContext,
-    },
-    config: params.config,
-    source,
-  };
-}
-
-async function flushMicrotasks(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
-afterEach(() => vi.useRealTimers());
-
-describe("skill experience review scheduler", () => {
-  it("runs detached review work outside the foreground prepared generation", async () => {
-    const generation: PreparedModelRuntimePluginGeneration = {
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: {} as never,
+      membership: () =>
+        addSessionMember(source, {
+          identityId: "new-member",
+          addedBy: "owner",
+          expectedSessionId: source.sessionId,
+        }),
+      deletion: () =>
+        deleteSessionEntryLifecycle({
+          agentId: "main",
+          storePath: source.storePath,
+          target: { canonicalKey: source.sessionKey, storeKeys: [source.sessionKey] },
+          archiveTranscript: false,
+        }),
     };
-    const observedGenerations: Array<PreparedModelRuntimePluginGeneration | undefined> = [];
-    let finishReview: (() => void) | undefined;
-    const reviewFinished = new Promise<void>((resolve) => {
-      finishReview = resolve;
+    let changed = false;
+    const mkdir = fs.mkdir.bind(fs);
+    vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
+      const result = await mkdir(...args);
+      if (args[0] === skillDir && !changed) {
+        changed = true;
+        await mutations[change]();
+      }
+      return result;
     });
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => {
-        observedGenerations.push(getPreparedModelRuntimePluginGeneration());
-        return false;
-      },
-      runReview: async (candidate) => {
-        observedGenerations.push(getPreparedModelRuntimePluginGeneration());
-        await prepareSkillExperienceReviewCandidate(candidate, candidate.config);
-        observedGenerations.push(getPreparedModelRuntimePluginGeneration());
-        finishReview?.();
-      },
-      setTimer: (callback) => setTimeout(callback, 0),
+    withAdmission(async (assertLive) => {
+      const write = (content: string) =>
+        withSource(assertLive, () =>
+          writeWorkshopSkillFile(
+            { ...context, assertLive },
+            { name: "procedure", filePath: "SKILL.md", content },
+          ),
+        );
+      await expect(write(original.replace("Original", "Changed"))).rejects.toThrow(
+        "no longer active",
+      );
+      await expect(write("must stay denied")).rejects.toThrow();
     });
+    await runSkillExperienceReview(candidate);
+    expect(changed).toBe(true);
+    expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toBe(original);
+  },
+);
 
-    withPreparedModelRuntimePluginGenerationScope(generation, () => {
-      scheduler.schedule(completedRun());
-    });
-    await reviewFinished;
-
-    expect(observedGenerations).toEqual([undefined, undefined, undefined]);
-    scheduler.clear();
-  });
-
-  it("runs one deep turn after the idle window", async () => {
-    vi.useFakeTimers();
-    const runReview = vi.fn().mockResolvedValue(undefined);
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview,
-    });
-    scheduler.schedule(completedRun({ modelIterations: 10 }));
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(runReview).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(runReview).toHaveBeenCalledWith(
-      expect.objectContaining({
-        source: expect.objectContaining({
-          sessionId: "session-1",
-          sessionKey: "agent:main:main",
-        }),
-        ctx: expect.objectContaining({
-          foregroundPromptContext: expect.objectContaining({ reasoningLevel: "on" }),
-        }),
-      }),
+it.each([
+  { enabled: true, hasUsage: true, failed: false },
+  { enabled: true, hasUsage: true, failed: true },
+  { enabled: false, hasUsage: true, failed: false },
+  { enabled: true, hasUsage: false, failed: false },
+  { enabled: true, hasUsage: true, failed: false, unpriced: true },
+])(
+  "settles review usage without foreground attribution: %j",
+  async ({ enabled, hasUsage, failed, unpriced }) => {
+    const usageCandidate = await createExperienceReviewCandidate(
+      "usage-review",
+      [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
+      { workspaceDir: state.workspaceDir, modelId: "usage-fixture" },
     );
-    expect(runReview.mock.calls[0]?.[0]).not.toHaveProperty("transcript");
-    scheduler.clear();
-  });
-
-  it("does not count nested tool activity as model iterations", async () => {
-    vi.useFakeTimers();
-    const runReview = vi.fn().mockResolvedValue(undefined);
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview,
-    });
-    const run = completedRun({ messages: 2 });
-    const activities = Array.from({ length: 8 }, (_, index) =>
-      createNestedToolActivity({
-        runId: "run-1",
-        scopeId: "scope-1",
-        afterEntryId: null,
-        startOrder: index,
-        parentToolCallId: "outer-exec",
-        toolCallId: `nested-${index}`,
-        toolName: "read",
-        input: {},
-        result: { content: [{ type: "text", text: "file contents" }] },
-        isError: false,
-        startedAt: index,
-        timestamp: index + 1,
-      }),
+    usageCandidate.config.diagnostics = { enabled };
+    const provider = expectDefined(
+      usageCandidate.config.models?.providers?.openai,
+      "fixture provider",
     );
-    run.event.messages = projectNestedToolActivityForHooks(run.event.messages, activities);
-
-    scheduler.schedule(run);
-    await vi.advanceTimersByTimeAsync(30_000);
-
-    expect(runReview).not.toHaveBeenCalled();
-    scheduler.clear();
-  });
-
-  it("uses the exact harness iteration count when messages diverge", async () => {
-    vi.useFakeTimers();
-    const runReview = vi.fn().mockResolvedValue(undefined);
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview,
-    });
-
-    scheduler.schedule(completedRun({ messages: 1, modelIterations: 10 }));
-    await vi.advanceTimersByTimeAsync(30_000);
-
-    expect(runReview).toHaveBeenCalledOnce();
-    expect(runReview.mock.calls[0]?.[0]).not.toHaveProperty("modelIterations");
-    scheduler.clear();
-  });
-
-  it.each([
-    { modelIterations: 0, completions: 12 },
-    { modelIterations: 4, completions: 3 },
-  ])("does not pool $modelIterations-iteration turns", async ({ modelIterations, completions }) => {
-    vi.useFakeTimers();
-    const runReview = vi.fn().mockResolvedValue(undefined);
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview,
-    });
-
-    for (let index = 0; index < completions; index += 1) {
-      scheduler.schedule(completedRun({ messages: 10, modelIterations, runId: `run-${index}` }));
-    }
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(runReview).not.toHaveBeenCalled();
-    scheduler.clear();
-  });
-
-  it("defers while the system is active", async () => {
-    vi.useFakeTimers();
-    const runReview = vi.fn().mockResolvedValue(undefined);
-    const isSystemActive = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
-    const scheduler = createSkillExperienceReviewScheduler({ isSystemActive, runReview });
-    scheduler.schedule(completedRun());
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(runReview).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(runReview).toHaveBeenCalledOnce();
-    scheduler.clear();
-  });
-
-  it("rechecks current autonomy and tool policy before a delayed review", async () => {
-    vi.useFakeTimers();
-    const runReview = vi.fn().mockResolvedValue(undefined);
-    const review = vi.fn(async (candidate: ExperienceReviewCandidate) => {
-      const prepared = await prepareSkillExperienceReviewCandidate(candidate, {
-        skills: { workshop: { autonomous: { mode: "propose" } } },
-        tools: { deny: ["skill_workshop"] },
-      });
-      if (prepared) {
-        await runReview(prepared);
+    provider.models = unpriced
+      ? []
+      : [
+          {
+            id: "usage-fixture",
+            name: "Usage fixture",
+            reasoning: false,
+            input: ["text"],
+            contextWindow: 100_000,
+            maxTokens: 2048,
+            cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 1 },
+          },
+        ];
+    const events: Extract<DiagnosticEventPayload, { type: "model.usage" }>[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => {
+      if (event.type === "model.usage") {
+        events.push(event);
       }
     });
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview: review,
-    });
-
-    scheduler.schedule(completedRun());
-    await vi.advanceTimersByTimeAsync(30_000);
-
-    expect(review).toHaveBeenCalledOnce();
-    expect(runReview).not.toHaveBeenCalled();
-    scheduler.clear();
-  });
-
-  it("rechecks group policy while preserving main-session sandbox identity", async () => {
-    const groupParams = completedRun({ sessionKey: "agent:main:whatsapp:group:safe-room" });
-    groupParams.ctx.foregroundPromptContext.messageProvider = "whatsapp";
-    groupParams.ctx.foregroundPromptContext.groupId = "safe-room";
-    await expect(
-      prepareSkillExperienceReviewCandidate(captureCandidate(groupParams), {
-        skills: { workshop: { autonomous: { mode: "propose" } } },
-        channels: {
-          whatsapp: { groups: { "safe-room": { tools: { deny: ["skill_workshop"] } } } },
+    mocks.runSkillWorkshopReview.mockImplementation(
+      async (params: Parameters<typeof runSkillWorkshopReview>[0]) => ({
+        meta: {
+          durationMs: 123,
+          ...(failed ? { error: { kind: "timeout", message: "synthetic review failed" } } : {}),
+          agentMeta: {
+            sessionId: params.sessionId,
+            provider: "openai",
+            model: "usage-fixture",
+            ...(hasUsage
+              ? {
+                  usage: { input: 10, output: 5 },
+                  diagnosticUsage: { input: 100, output: 40, cacheRead: 20, cacheWrite: 10 },
+                }
+              : {}),
+            lastCallUsage: { input: 10, output: 5 },
+            contextTokens: 100_000,
+            promptTokens: 10,
+          },
         },
       }),
-    ).resolves.toBeUndefined();
-
-    const mainParams = completedRun();
-    await expect(
-      prepareSkillExperienceReviewCandidate(captureCandidate(mainParams), {
-        skills: { workshop: { autonomous: { mode: "propose" } } },
-        agents: { defaults: { sandbox: { mode: "non-main" } } },
-      }),
-    ).resolves.toBeDefined();
-  });
-
-  it("extends quiet time and replaces the pending candidate after later work", async () => {
-    vi.useFakeTimers();
-    const runReview = vi.fn().mockResolvedValue(undefined);
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview,
-    });
-
-    scheduler.schedule(completedRun({ runId: "older" }));
-    await vi.advanceTimersByTimeAsync(29_000);
-    scheduler.schedule(completedRun({ runId: "newer", messages: 12, modelIterations: 12 }));
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(runReview).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-
-    expect(runReview).toHaveBeenCalledWith(
-      expect.objectContaining({ ctx: expect.objectContaining({ runId: "newer" }) }),
     );
-    scheduler.clear();
-  });
-
-  it("replaces queued evidence when the same run later aborts", async () => {
-    vi.useFakeTimers();
-    const runReview = vi.fn().mockResolvedValue(undefined);
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview,
-    });
-
-    scheduler.schedule(completedRun({ runId: "retried-run" }));
-    scheduler.schedule(
-      completedRun({ runId: "retried-run", messages: 12, modelIterations: 12, success: false }),
-    );
-    await vi.advanceTimersByTimeAsync(30_000);
-
-    expect(runReview).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({ runId: "retried-run" }),
-        turnAborted: true,
-      }),
-    );
-    scheduler.clear();
-  });
-
-  it.each([
-    { agentId: "qa", reviewCount: 0 },
-    { agentId: "beta", reviewCount: 1 },
-  ])("limits cancellation by $agentId to its own queued run", async ({ agentId, reviewCount }) => {
-    vi.useFakeTimers();
-    const runReview = vi.fn().mockResolvedValue(undefined);
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview,
-    });
-
-    const run = { sessionKey: "global", runId: "retried-run" };
-    scheduler.schedule(completedRun({ ...run, agentId: "qa" }));
-    scheduler.schedule(completedRun({ ...run, agentId, success: false, error: "boom" }));
-    await vi.runAllTimersAsync();
-
-    expect(runReview).toHaveBeenCalledTimes(reviewCount);
-    scheduler.clear();
-  });
-
-  it("forwards every member role through delayed policy checks", async () => {
-    vi.useFakeTimers();
-    const memberRoleIds = Array.from({ length: 150 }, (_, index) => `role-${index}`);
-    const params = completedRun();
-    params.ctx.foregroundPromptContext.memberRoleIds = memberRoleIds;
-    const reviewed: ExperienceReviewCandidate[] = [];
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview: async (candidate) => {
-        const prepared = await prepareSkillExperienceReviewCandidate(candidate, params.config);
-        if (prepared) {
-          reviewed.push(prepared);
+    try {
+      const pending = runSkillExperienceReview(usageCandidate);
+      if (failed) {
+        await expect(pending).rejects.toThrow("synthetic review failed");
+      } else {
+        await pending;
+      }
+      expect(events).toHaveLength(enabled && hasUsage ? 1 : 0);
+      if (enabled && hasUsage) {
+        const event = expectDefined(events[0], "Workshop review usage diagnostic");
+        expect(event).toMatchObject({
+          agentId: "main",
+          sessionKey: expect.stringMatching(
+            /^agent:main:internal-session-effects:skill-workshop-review/,
+          ),
+          sessionId: expect.stringMatching(/^internal-session-effects-skill-workshop-review/),
+          provider: "openai",
+          model: "usage-fixture",
+          usage: {
+            input: 100,
+            output: 40,
+            cacheRead: 20,
+            cacheWrite: 10,
+            promptTokens: 130,
+            total: 170,
+          },
+          lastCallUsage: { input: 10, output: 5 },
+          context: { limit: 100_000, used: 10 },
+          durationMs: 123,
+        });
+        if (unpriced) {
+          expect(event.costUsd).toBeUndefined();
+        } else {
+          expect(event.costUsd).toBeCloseTo(0.0002);
         }
-      },
-    });
-
-    scheduler.schedule(params);
-    await vi.advanceTimersByTimeAsync(30_000);
-
-    expect(reviewed[0]?.ctx.foregroundPromptContext.memberRoleIds).toEqual(memberRoleIds);
-    scheduler.clear();
-  });
-
-  it("discards a stale timer callback when a later completion rearms the session", async () => {
-    vi.useFakeTimers();
-    let resolveActivity: ((active: boolean) => void) | undefined;
-    const runReview = vi.fn().mockResolvedValue(undefined);
-    const isSystemActive = vi
-      .fn()
-      .mockReturnValueOnce(
-        new Promise<boolean>((resolve) => {
-          resolveActivity = resolve;
-        }),
-      )
-      .mockReturnValue(false);
-    const scheduler = createSkillExperienceReviewScheduler({ isSystemActive, runReview });
-
-    scheduler.schedule(completedRun({ runId: "older" }));
-    await vi.advanceTimersByTimeAsync(30_000);
-    scheduler.schedule(completedRun({ runId: "newer" }));
-    resolveActivity?.(false);
-    await Promise.resolve();
-    expect(runReview).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(runReview).toHaveBeenCalledOnce();
-    expect(runReview.mock.calls[0]?.[0].ctx.runId).toBe("newer");
-    scheduler.clear();
-  });
-
-  it("does not re-arm evidence during asynchronous review preparation", async () => {
-    vi.useFakeTimers();
-    let finishPreparation: (() => void) | undefined;
-    const runReview = vi.fn().mockResolvedValue(undefined);
-    const review = vi.fn(async (candidate: ExperienceReviewCandidate) => {
-      const prepared = await prepareSkillExperienceReviewCandidate(candidate, candidate.config);
-      await new Promise<void>((resolve) => {
-        finishPreparation = resolve;
-      });
-      if (prepared) {
-        await runReview(prepared);
+        expect(event.channel).toBeUndefined();
       }
-    });
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview: review,
-    });
-
-    scheduler.schedule(completedRun({ runId: "deep-turn" }));
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(review).toHaveBeenCalledOnce();
-    expect(runReview).not.toHaveBeenCalled();
-
-    scheduler.schedule(completedRun({ runId: "shallow-turn", modelIterations: 1 }));
-    finishPreparation?.();
-    await flushMicrotasks();
-    expect(runReview).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(runReview).toHaveBeenCalledOnce();
-    scheduler.clear();
-  });
-
-  it.each([
-    {
-      name: "distinct session keys",
-      first: { agentId: "main", sessionKey: "agent:main:first" },
-      second: { agentId: "main", sessionKey: "agent:main:second" },
-    },
-    {
-      name: "distinct owners of global",
-      first: { agentId: "qa", sessionKey: "global" },
-      second: { agentId: "beta", sessionKey: "global" },
-    },
-  ])("serializes reviews for $name", async ({ first, second }) => {
-    vi.useFakeTimers();
-    let finishFirst: (() => void) | undefined;
-    const runReview = vi
-      .fn()
-      .mockReturnValueOnce(
-        new Promise<void>((resolve) => {
-          finishFirst = resolve;
-        }),
-      )
-      .mockResolvedValue(undefined);
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview,
-    });
-
-    scheduler.schedule(completedRun(first));
-    scheduler.schedule(completedRun(second));
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(runReview).toHaveBeenCalledOnce();
-    expect(runReview.mock.calls[0]?.[0].source).toMatchObject(first);
-
-    finishFirst?.();
-    await Promise.resolve();
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(runReview).toHaveBeenCalledTimes(2);
-    expect(runReview.mock.calls[1]?.[0].source).toMatchObject(second);
-    scheduler.clear();
-  });
-
-  it("drops the pending review after a failure", async () => {
-    const callbacks: Array<() => void> = [];
-    const setTimer = vi.fn((callback: () => void) => {
-      callbacks.push(callback);
-      const timer = setTimeout(() => {}, 60_000);
-      timer.unref();
-      return timer;
-    });
-    const runReview = vi.fn().mockRejectedValue(new Error("provider unavailable"));
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview,
-      setTimer,
-    });
-    scheduler.schedule(completedRun());
-    callbacks[0]?.();
-    await flushMicrotasks();
-    expect(runReview).toHaveBeenCalledOnce();
-    expect(setTimer).toHaveBeenCalledOnce();
-    callbacks[0]?.();
-    await flushMicrotasks();
-    expect(runReview).toHaveBeenCalledOnce();
-    scheduler.clear();
-  });
-
-  it("skips errored, disabled, unavailable, and internal runs", async () => {
-    vi.useFakeTimers();
-    const runReview = vi.fn().mockResolvedValue(undefined);
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview,
-    });
-    scheduler.schedule(completedRun({ success: false, error: "failed" }));
-    scheduler.schedule(completedRun({ mode: "off", sessionKey: "agent:main:off" }));
-    scheduler.schedule(
-      completedRun({ skillWorkshopAvailable: false, sessionKey: "agent:main:hidden" }),
-    );
-    scheduler.schedule(completedRun({ trigger: "cron", sessionKey: "agent:main:cron-run" }));
-    await vi.runAllTimersAsync();
-    expect(runReview).not.toHaveBeenCalled();
-    scheduler.clear();
-  });
-
-  it("marks an interrupted deep turn", async () => {
-    vi.useFakeTimers();
-    const runReview = vi.fn().mockResolvedValue(undefined);
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview,
-    });
-    scheduler.schedule(completedRun({ success: false }));
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ turnAborted: true }));
-    scheduler.clear();
-  });
-});
-
-describe("skill experience review prompt", () => {
-  it("caps used and existing skill lists", () => {
-    const skills = Array.from({ length: 120 }, (_, index) => ({
-      name: `skill-${String(index).padStart(3, "0")}-${"x".repeat(180)}`,
-      source: "workspace" as const,
-      activation: "read" as const,
-    }));
-    const prompt = buildSkillExperienceReviewPrompt(
-      {
-        usedSkills: skills,
-        existingSkills: skills,
-      },
-      "propose",
-    );
-    expect(prompt).toContain("more used skills omitted");
-    expect(prompt).toContain("(+70 more not shown)");
-    expect(Math.max(...prompt.split("\n").map((line) => line.length))).toBeLessThanOrEqual(2_000);
-  });
-
-  it("renders a deterministic and capped used-skills receipt", () => {
-    const usedSkills = Array.from({ length: 120 }, (_, index) => ({
-      name: `skill-${String(index).padStart(3, "0")}-${"x".repeat(180)}`,
-      source: index % 2 === 0 ? ("workspace" as const) : ("bundled" as const),
-      activation: index % 3 === 0 ? ("command" as const) : ("read" as const),
-    }));
-    const build = (skills: typeof usedSkills) =>
-      buildSkillExperienceReviewPrompt({ usedSkills: skills }, "propose");
-    const prompt = build(usedSkills.toReversed());
-
-    expect(prompt).toBe(build(usedSkills));
-    const receipt = prompt.slice(
-      prompt.indexOf("Skills actually used in this trajectory"),
-      prompt.indexOf("\n\nExisting Workshop-generated skills:"),
-    );
-    expect(receipt).toContain(
-      "Skills actually used in this trajectory (authoritative runtime receipt):",
-    );
-    expect(receipt.length).toBeLessThanOrEqual(2_000);
-    expect(receipt).toContain("- skill-000-");
-    expect(receipt).toContain("more used skills omitted");
-  });
-
-  it("caps existing skills by entry count and line length", () => {
-    const prompt = buildSkillExperienceReviewPrompt(
-      {
-        existingSkills: Array.from({ length: 120 }, (_, index) => ({
-          name: `skill-${String(index)}`,
-          description: "d".repeat(500),
-        })),
-      },
-      "propose",
-    );
-
-    expect(prompt).toContain("- skill-49");
-    expect(prompt).not.toContain("- skill-50");
-    expect(prompt).toContain("(+70 more not shown)");
-    for (const line of prompt.split("\n")) {
-      if (line.startsWith("- skill-")) {
-        expect(line.length).toBeLessThanOrEqual(200);
-      }
+    } finally {
+      stop();
     }
-  });
-
-  it.each(["auto", "propose"] as const)("preserves interrupted evidence in %s mode", (mode) => {
-    const prompt = buildSkillExperienceReviewPrompt({ turnAborted: true }, mode);
-    expect(prompt).toContain("Only capture procedures that visibly worked");
-  });
-
-  it("authorizes complete procedures in automatic mode without the draft-only limit", () => {
-    const prompt = buildSkillExperienceReviewPrompt(
-      {
-        existingSkills: [{ name: "inventory-is-discovered-with-file-tools" }],
-      },
-      "auto",
-    );
-    expect(prompt).toContain("direct Workshop maintenance with normal file tools");
-    expect(prompt).toContain("complete relevant procedures and supporting files");
-    expect(prompt).toContain("conversation is evidence, not permission to resume tasks");
-    expect(prompt).not.toContain("Only skill_workshop executes");
-    expect(prompt).not.toContain("at most one create");
-    expect(prompt).not.toContain("inventory-is-discovered-with-file-tools");
-  });
-});
-
-describe("skill experience review preparation", () => {
-  it.each([
-    { agentId: "direct", eligible: true },
-    { agentId: "isolated", eligible: false },
-  ])("rechecks $agentId sandbox policy for global reviews", async ({ agentId, eligible }) => {
-    const params = completedRun({ sessionKey: "global" });
-    params.ctx.agentId = agentId;
-    params.ctx.foregroundPromptContext.agentId = agentId;
-    const result = await prepareSkillExperienceReviewCandidate(captureCandidate(params), {
-      session: { scope: "global" },
-      agents: {
-        entries: {
-          direct: { sandbox: { mode: "off" } },
-          isolated: { sandbox: { mode: "all" } },
-        },
-      },
-      skills: { workshop: { autonomous: { mode: "propose" } } },
-    });
-
-    expect(result !== undefined).toBe(eligible);
-  });
-
-  it("keeps an eligible foreground candidate", async () => {
-    const params = completedRun();
-    await expect(
-      prepareSkillExperienceReviewCandidate(captureCandidate(params), params.config),
-    ).resolves.toBeDefined();
-  });
-});
+  },
+);

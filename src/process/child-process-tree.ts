@@ -24,11 +24,13 @@ export function isChildProcessTreeAlive(child: Pick<ChildProcess, "pid">): boole
 export function signalChildProcessTree(
   child: Pick<ChildProcess, "kill" | "pid" | "exitCode" | "signalCode" | "once">,
   signal: "SIGTERM" | "SIGKILL",
+  onComplete?: () => void,
 ): void {
   if (typeof child.pid === "number" && child.pid > 0) {
     const usedProcessGroup = shouldDetachChildForProcessTree();
     signalProcessTree(child.pid, signal, {
       detached: usedProcessGroup,
+      onComplete,
     });
     // Tree kills can leave already-exited descendants reparented to us as
     // untracked zombies (#97616). Reap after the Node-tracked root exits so
@@ -38,7 +40,11 @@ export function signalChildProcessTree(
     return;
   }
 
-  child.kill(signal);
+  try {
+    child.kill(signal);
+  } finally {
+    onComplete?.();
+  }
 }
 
 export function forceKillChildProcessTree(

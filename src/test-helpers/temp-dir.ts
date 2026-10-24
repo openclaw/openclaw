@@ -1,4 +1,3 @@
-// Temporary directory helpers create and clean up isolated test directories.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -9,10 +8,15 @@ import path from "node:path";
 // Roots are canonicalized (realpath) because macOS tmpdir sits behind a symlink
 // (/var -> /private/var) while production code realpaths state/session paths;
 // symlinked roots break tests that compare or intercept fs paths by equality.
+// Keep case directories private even with group-writable host umasks: secure
+// filesystem helpers validate every ancestor of their workspace.
 type PrefixRootState = {
   path: string;
   activeCount: number;
 };
+type RootOptions = { prefix: string; parentDir?: string };
+type DirOptions = RootOptions & { subdir?: string };
+const removeOptions = { recursive: true, force: true, maxRetries: 20, retryDelay: 25 };
 
 const asyncPrefixRoots = new Map<string, PrefixRootState>();
 const pendingAsyncPrefixRoots = new Map<string, Promise<PrefixRootState>>();
@@ -20,14 +24,11 @@ const syncPrefixRoots = new Map<string, PrefixRootState>();
 let nextAsyncDirIndex = 0;
 let nextSyncDirIndex = 0;
 
-function getRootKey(options: { prefix: string; parentDir?: string }): string {
+function getRootKey(options: RootOptions): string {
   return `${options.parentDir ?? os.tmpdir()}\u0000${options.prefix}`;
 }
 
-async function acquireAsyncPrefixRoot(options: {
-  prefix: string;
-  parentDir?: string;
-}): Promise<PrefixRootState> {
+async function acquireAsyncPrefixRoot(options: RootOptions): Promise<PrefixRootState> {
   const key = getRootKey(options);
   const cached = asyncPrefixRoots.get(key);
   if (cached) {
@@ -57,7 +58,7 @@ async function acquireAsyncPrefixRoot(options: {
   }
 }
 
-function acquireSyncPrefixRoot(options: { prefix: string; parentDir?: string }): PrefixRootState {
+function acquireSyncPrefixRoot(options: RootOptions): PrefixRootState {
   const key = getRootKey(options);
   const cached = syncPrefixRoots.get(key);
   if (cached) {
@@ -72,79 +73,44 @@ function acquireSyncPrefixRoot(options: { prefix: string; parentDir?: string }):
   return state;
 }
 
-async function releaseAsyncPrefixRoot(options: {
-  prefix: string;
-  parentDir?: string;
-}): Promise<void> {
+function releasePrefixRoot(
+  roots: Map<string, PrefixRootState>,
+  options: RootOptions,
+): PrefixRootState | undefined {
   const key = getRootKey(options);
-  const state = asyncPrefixRoots.get(key);
-  if (!state) {
-    return;
+  const state = roots.get(key);
+  if (!state || --state.activeCount > 0) {
+    return undefined;
   }
-  state.activeCount -= 1;
-  if (state.activeCount > 0) {
-    return;
-  }
-  asyncPrefixRoots.delete(key);
-  await fs.rm(state.path, {
-    recursive: true,
-    force: true,
-    maxRetries: 20,
-    retryDelay: 25,
-  });
-}
-
-function releaseSyncPrefixRoot(options: { prefix: string; parentDir?: string }) {
-  const key = getRootKey(options);
-  const state = syncPrefixRoots.get(key);
-  if (!state) {
-    return;
-  }
-  state.activeCount -= 1;
-  if (state.activeCount > 0) {
-    return;
-  }
-  syncPrefixRoots.delete(key);
-  fsSync.rmSync(state.path, {
-    recursive: true,
-    force: true,
-    maxRetries: 20,
-    retryDelay: 25,
-  });
+  roots.delete(key);
+  return state;
 }
 
 export async function withTestDir<T>(
-  options: {
-    prefix: string;
-    parentDir?: string;
-    subdir?: string;
-  },
+  options: DirOptions,
   run: (dir: string) => Promise<T>,
 ): Promise<T> {
   const root = await acquireAsyncPrefixRoot(options);
-  const base = path.join(root.path, `dir-${String(nextAsyncDirIndex)}`);
-  nextAsyncDirIndex += 1;
+  const base = path.join(root.path, `dir-${nextAsyncDirIndex++}`);
   try {
-    await fs.mkdir(base, { recursive: true });
+    await fs.mkdir(base, { recursive: true, mode: 0o700 });
     const dir = options.subdir ? path.join(base, options.subdir) : base;
     if (options.subdir) {
-      await fs.mkdir(dir, { recursive: true });
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
     }
     return await run(dir);
   } finally {
-    await fs.rm(base, {
-      recursive: true,
-      force: true,
-      maxRetries: 20,
-      retryDelay: 25,
-    });
-    await releaseAsyncPrefixRoot(options);
+    await fs.rm(base, removeOptions);
+    const released = releasePrefixRoot(asyncPrefixRoots, options);
+    if (released) {
+      await fs.rm(released.path, removeOptions);
+    }
   }
 }
 
 // Suite-level tracker for tests that need a stable root across multiple cases
 // while still creating isolated child directories.
-export function createSuiteTempRootTracker(options: { prefix: string; parentDir?: string }) {
+export function createSuiteTempRootTracker(options: RootOptions) {
   let root = "";
   let nextIndex = 0;
 
@@ -158,7 +124,7 @@ export function createSuiteTempRootTracker(options: { prefix: string; parentDir?
     },
     make: async (prefix = "case"): Promise<string> => {
       const dir = path.join(root, `${prefix}-${nextIndex++}`);
-      await fs.mkdir(dir, { recursive: true });
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
       return dir;
     },
     cleanup: async (): Promise<void> => {
@@ -168,41 +134,26 @@ export function createSuiteTempRootTracker(options: { prefix: string; parentDir?
       const currentRoot = root;
       root = "";
       nextIndex = 0;
-      await fs.rm(currentRoot, {
-        recursive: true,
-        force: true,
-        maxRetries: 20,
-        retryDelay: 25,
-      });
+      await fs.rm(currentRoot, removeOptions);
     },
   };
 }
 
-export function withTempDirSync<T>(
-  options: {
-    prefix: string;
-    parentDir?: string;
-    subdir?: string;
-  },
-  run: (dir: string) => T,
-): T {
+export function withTempDirSync<T>(options: DirOptions, run: (dir: string) => T): T {
   const root = acquireSyncPrefixRoot(options);
-  const base = path.join(root.path, `dir-${String(nextSyncDirIndex)}`);
-  nextSyncDirIndex += 1;
+  const base = path.join(root.path, `dir-${nextSyncDirIndex++}`);
   try {
-    fsSync.mkdirSync(base, { recursive: true });
+    fsSync.mkdirSync(base, { recursive: true, mode: 0o700 });
     const dir = options.subdir ? path.join(base, options.subdir) : base;
     if (options.subdir) {
-      fsSync.mkdirSync(dir, { recursive: true });
+      fsSync.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
     return run(dir);
   } finally {
-    fsSync.rmSync(base, {
-      recursive: true,
-      force: true,
-      maxRetries: 20,
-      retryDelay: 25,
-    });
-    releaseSyncPrefixRoot(options);
+    fsSync.rmSync(base, removeOptions);
+    const released = releasePrefixRoot(syncPrefixRoots, options);
+    if (released) {
+      fsSync.rmSync(released.path, removeOptions);
+    }
   }
 }

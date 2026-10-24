@@ -1,17 +1,20 @@
-import { createServer, type ServerResponse } from "node:http";
-import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import { createServer } from "node:http";
+import { text as readBody } from "node:stream/consumers";
+import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../../../packages/gateway-protocol/src/client-info.js";
-import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
+import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { respondJson } from "../../../helpers/gateway-integration-fixtures.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import {
+  connectOperator,
+  messageRole,
+  messageText,
+  runCleanups,
+  startSessionGateway,
+} from "./agent-session.test-support.js";
+import { listenLoopback, writeFixtureReply } from "./gateway-recovery.test-support.js";
 
 const TEST_TIMEOUT_MS = 120_000;
-const REQUEST_TIMEOUT_MS = 20_000;
-const MODEL_REF = "mock-openai/gpt-5.6-luna";
 const SESSION_A_KEY = "agent:qa:qa:session-scope-continuity-a";
 const SESSION_B_KEY = "agent:qa:qa:session-scope-continuity-b";
 const SESSION_A_USER_1 = "SESSION-SCOPE-A-USER-1";
@@ -29,7 +32,6 @@ const MARKERS = [
   SESSION_B_ASSISTANT_1,
 ] as const;
 
-type GatewayHandle = QaGatewayChild;
 type AgentResult = {
   runId?: string;
   status?: string;
@@ -52,49 +54,7 @@ type CanonicalTurn = {
 
 const cleanups: Array<() => Promise<void>> = [];
 
-afterEach(async () => {
-  const errors: unknown[] = [];
-  for (const cleanup of cleanups.splice(0).toReversed()) {
-    try {
-      await cleanup();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "session scope continuity cleanup failed");
-  }
-});
-
-function writeAssistantResponse(response: ServerResponse, text: string, index: number): void {
-  const message = {
-    type: "message",
-    id: `qa-session-scope-message-${index}`,
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  writeOpenAiResponsesSse(response, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...message, status: "in_progress", content: [] },
-    },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    {
-      type: "response.completed",
-      response: {
-        id: `qa-session-scope-response-${index}`,
-        status: "completed",
-        output: [message],
-        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-      },
-    },
-  ]);
-}
+afterEach(() => runCleanups(cleanups, "agent-session-scope-continuity cleanup failed"));
 
 async function startDeterministicProvider() {
   const requests: Array<Record<string, unknown>> = [];
@@ -102,44 +62,36 @@ async function startDeterministicProvider() {
   const server = createServer((request, response) => {
     void (async () => {
       if (request.method === "GET" && request.url === "/v1/models") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({
-            data: [{ id: "gpt-5.6-luna", object: "model" }],
-          }),
-        );
+        respondJson(response, { data: [{ id: "gpt-5.6-luna", object: "model" }] });
         return;
       }
       if (request.method !== "POST" || request.url !== "/v1/responses") {
         response.writeHead(404).end();
         return;
       }
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
       requests.push(body);
       const reply = replies[requests.length - 1];
       if (!reply) {
         response.writeHead(500).end("unexpected provider call");
         return;
       }
-      writeAssistantResponse(response, reply, requests.length);
+      writeFixtureReply(
+        response,
+        reply,
+        `qa-session-scope-message-${requests.length}`,
+        `qa-session-scope-response-${requests.length}`,
+      );
     })().catch((error: unknown) => {
       response.writeHead(500).end(error instanceof Error ? error.message : String(error));
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("deterministic provider did not bind a loopback port");
-  }
+  const baseUrl = await listenLoopback(
+    server,
+    "deterministic provider did not bind a loopback port",
+  );
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl,
     requests,
     stop: async () => {
       await new Promise<void>((resolve, reject) => {
@@ -149,80 +101,10 @@ async function startDeterministicProvider() {
   };
 }
 
-async function connectOperator(gateway: GatewayHandle): Promise<GatewayClient> {
-  return await new Promise<GatewayClient>((resolve, reject) => {
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      if (error) {
-        client.stop();
-        reject(error);
-        return;
-      }
-      resolve(client);
-    };
-    const client = new GatewayClient({
-      url: gateway.wsUrl,
-      token: gateway.token,
-      env: gateway.runtimeEnv,
-      role: "operator",
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      clientDisplayName: "Session scope continuity client",
-      clientVersion: "1.0.0",
-      platform: process.platform,
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      scopes: ["operator.admin", "operator.read", "operator.write"],
-      deviceIdentity: null,
-      requestTimeoutMs: REQUEST_TIMEOUT_MS,
-      onHelloOk: () => finish(),
-      onConnectError: (error) => finish(error),
-      onClose: (code, reason) => finish(new Error(`Gateway closed (${code}): ${reason}`)),
-    });
-    const timeout = setTimeout(
-      () => finish(new Error(`Gateway client connection timed out:\n${gateway.logs()}`)),
-      REQUEST_TIMEOUT_MS,
-    );
-    timeout.unref();
-    client.start();
-  });
-}
-
-function messageRole(message: unknown): "user" | "assistant" | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const role = (message as { role?: unknown }).role;
-  return role === "user" || role === "assistant" ? role : undefined;
-}
-
-function messageText(message: unknown): string {
-  if (!message || typeof message !== "object") {
-    return "";
-  }
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .flatMap((part) =>
-      part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string"
-        ? [(part as { text: string }).text]
-        : [],
-    )
-    .join("\n");
-}
-
 function markerTurns(messages: unknown[]): CanonicalTurn[] {
   return messages.flatMap((message) => {
     const role = messageRole(message);
-    if (!role) {
+    if (role !== "user" && role !== "assistant") {
       return [];
     }
     const text = messageText(message);
@@ -238,31 +120,25 @@ function providerMarkerTurns(request: Record<string, unknown>): CanonicalTurn[] 
   return markerTurns(Array.isArray(request.input) ? request.input : []);
 }
 
-async function runAgentTurn(params: {
-  client: GatewayClient;
-  sessionKey: string;
-  userText: string;
-  runId: string;
-}): Promise<void> {
-  const accepted = await params.client.request<AgentResult>("agent", {
-    sessionKey: params.sessionKey,
-    message: params.userText,
+async function runAgentTurn(
+  client: GatewayClient,
+  sessionKey: string,
+  message: string,
+  runId: string,
+): Promise<void> {
+  const accepted = await client.request<AgentResult>("agent", {
+    sessionKey,
+    message,
     deliver: false,
-    idempotencyKey: params.runId,
+    idempotencyKey: runId,
   });
-  expect(accepted).toMatchObject({
-    status: "accepted",
-    runId: params.runId,
-  });
-  const terminal = await params.client.request<AgentResult>(
+  expect(accepted).toMatchObject({ status: "accepted", runId });
+  const terminal = await client.request<AgentResult>(
     "agent.wait",
-    { runId: params.runId, timeoutMs: 30_000 },
+    { runId, timeoutMs: 30_000 },
     { timeoutMs: 35_000 },
   );
-  expect(terminal).toMatchObject({
-    status: "ok",
-    runId: params.runId,
-  });
+  expect(terminal).toMatchObject({ status: "ok", runId });
 }
 
 async function readSession(client: GatewayClient, sessionKey: string): Promise<SessionRow> {
@@ -293,44 +169,16 @@ describe("agent session scope continuity", () => {
       cleanups.push(() => provider.stop());
       const gatewayOwner = createQaGatewayChild();
       cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
-      const gateway = await gatewayOwner.start({
-        repoRoot: process.cwd(),
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: ["dist/entry.js"],
-          cwd: process.cwd(),
-          usePackagedPlugins: true,
-        },
-        providerBaseUrl: `${provider.baseUrl}/v1`,
-        providerMode: "mock-openai",
-        primaryModel: MODEL_REF,
-        alternateModel: MODEL_REF,
-        transportBaseUrl: "http://127.0.0.1",
-        controlUiEnabled: false,
-        fastMode: true,
-        runtimeEnvPatch: {
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        },
-        mutateConfig: (config) => ({ ...config, plugins: { enabled: false } }),
+      const gateway = await startSessionGateway(gatewayOwner, provider.baseUrl, {
+        useRepoCli: false,
       });
-      const client = await connectOperator(gateway);
+      const client = await connectOperator(gateway, "Session scope continuity client");
       cleanups.push(() => client.stopAndWait({ timeoutMs: 1_000 }));
 
-      await runAgentTurn({
-        client,
-        sessionKey: SESSION_A_KEY,
-        userText: SESSION_A_USER_1,
-        runId: "qa-session-scope-a-turn-1",
-      });
+      await runAgentTurn(client, SESSION_A_KEY, SESSION_A_USER_1, "qa-session-scope-a-turn-1");
       const sessionAAfterTurn1 = await readSession(client, SESSION_A_KEY);
 
-      await runAgentTurn({
-        client,
-        sessionKey: SESSION_A_KEY,
-        userText: SESSION_A_USER_2,
-        runId: "qa-session-scope-a-turn-2",
-      });
+      await runAgentTurn(client, SESSION_A_KEY, SESSION_A_USER_2, "qa-session-scope-a-turn-2");
       const sessionAAfterTurn2 = await readSession(client, SESSION_A_KEY);
       expect(sessionAAfterTurn2.sessionId).toBe(sessionAAfterTurn1.sessionId);
 
@@ -348,12 +196,7 @@ describe("agent session scope continuity", () => {
         { role: "user", marker: SESSION_A_USER_2 },
       ]);
 
-      await runAgentTurn({
-        client,
-        sessionKey: SESSION_B_KEY,
-        userText: SESSION_B_USER_1,
-        runId: "qa-session-scope-b-turn-1",
-      });
+      await runAgentTurn(client, SESSION_B_KEY, SESSION_B_USER_1, "qa-session-scope-b-turn-1");
       const sessionB = await readSession(client, SESSION_B_KEY);
       expect(sessionB.sessionId).not.toBe(sessionAAfterTurn1.sessionId);
 

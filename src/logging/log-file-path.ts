@@ -1,4 +1,3 @@
-// Log file path helpers resolve log output paths for local runtime logs.
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
@@ -29,8 +28,8 @@ function encodeLogProfileSegment(profile: string): string {
   return encoded;
 }
 
-function resolveLogProfileSegment(env: NodeJS.ProcessEnv): string | null {
-  const profile = env.OPENCLAW_PROFILE?.trim();
+function resolveLogProfileSegment(): string | null {
+  const profile = process.env.OPENCLAW_PROFILE?.trim();
   if (!profile || profile.toLowerCase() === "default") {
     return null;
   }
@@ -42,31 +41,17 @@ function resolveLogProfileSegment(env: NodeJS.ProcessEnv): string | null {
 }
 
 /** Resolves today's default rolling log path for the active CLI profile. */
-export function resolveDefaultRollingLogFile(options?: {
-  date?: Date;
-  env?: NodeJS.ProcessEnv;
-  logDir?: string;
-}): string {
-  const date = options?.date ?? new Date();
-  const env = options?.env ?? process.env;
-  const logDir =
-    options?.logDir ?? (canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : DEFAULT_POSIX_TMP_ROOT);
-  const profileSegment = resolveLogProfileSegment(env);
+export function resolveDefaultRollingLogFile(): string {
+  const date = new Date();
+  const logDir = canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : DEFAULT_POSIX_TMP_ROOT;
+  const profileSegment = resolveLogProfileSegment();
   const profileSuffix = profileSegment ? `-${profileSegment}` : "";
   return path.join(logDir, `${LOG_PREFIX}${profileSuffix}-${formatLocalDate(date)}${LOG_SUFFIX}`);
 }
 
 /** Resolves the configured log file or today's rolling default log path. */
-export function resolveConfiguredLogFilePath(
-  config?: OpenClawConfig | null,
-  options?: { date?: Date; env?: NodeJS.ProcessEnv; logDir?: string },
-): string {
-  return config?.logging?.file ?? resolveDefaultRollingLogFile(options);
-}
-
-/** Returns whether a path is one of OpenClaw's dated rolling log files. */
-export function isRollingLogFilePath(file: string): boolean {
-  return ROLLING_LOG_FILE_RE.test(path.basename(file));
+export function resolveConfiguredLogFilePath(config?: OpenClawConfig | null): string {
+  return config?.logging?.file ?? resolveDefaultRollingLogFile();
 }
 
 /** Returns whether a configured path had the legacy default rolling filename shape. */

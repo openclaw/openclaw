@@ -72,9 +72,8 @@ function extractMarkdownFences(markdown: string): MarkdownFence[] {
     if (!opening) {
       continue;
     }
-    const indent = opening[1];
     const marker = opening[2];
-    if (indent === undefined || !marker) {
+    if (!marker) {
       continue;
     }
     const body: string[] = [];
@@ -151,12 +150,10 @@ function auditConfigMarkdown(
   for (const fence of extractMarkdownFences(params.markdown)) {
     stats.fencesSeen += 1;
     if (!isConfigFence(fence.info)) {
-      stats.fencesSkipped += 1;
       stats.skippedUnsupportedLanguage += 1;
       continue;
     }
     if (/\bvalidate=false\b/iu.test(fence.info)) {
-      stats.fencesSkipped += 1;
       stats.skippedOptOut += 1;
       continue;
     }
@@ -165,17 +162,14 @@ function auditConfigMarkdown(
     try {
       parsed = JSON5.parse(fence.body);
     } catch {
-      stats.fencesSkipped += 1;
       stats.skippedParseFailure += 1;
       continue;
     }
     if (!isRecord(parsed)) {
-      stats.fencesSkipped += 1;
       stats.skippedNonObject += 1;
       continue;
     }
     if (!isWholeConfig(parsed)) {
-      stats.fencesSkipped += 1;
       stats.skippedFragment += 1;
       continue;
     }
@@ -214,6 +208,7 @@ function auditConfigMarkdown(
     }
   }
 
+  stats.fencesSkipped = stats.fencesSeen - stats.candidatesValidated;
   return {
     findings: findings.toSorted(
       (left, right) =>

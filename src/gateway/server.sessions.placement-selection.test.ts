@@ -122,6 +122,7 @@ test("sessions.dispatch admits the runtime offered after a repository child's pa
     }),
     expect.any(Function),
     undefined,
+    undefined,
   );
   expect(result.error?.message).toBe("admitted to placement service");
 });

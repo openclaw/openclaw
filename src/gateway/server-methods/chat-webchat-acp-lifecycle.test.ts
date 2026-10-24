@@ -1,19 +1,19 @@
 // Bound ACP events must persist a coherent source or target session owner.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockSubsystemLogger } from "../../../test/helpers/mock-subsystem-logger.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
-import type { SubsystemLogger } from "../../logging/subsystem.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
-import { installInMemoryTaskRegistryRuntime } from "../../test-utils/task-registry-runtime.js";
-import { registerChatAbortController } from "../chat-abort.js";
+import { heartbeatNotifications } from "../../infra/heartbeat-events.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "../server-chat-state.js";
+import { registerRpcSourceForTest } from "./rpc-source-fixtures.test-support.js";
 
 const agentEventHandlerMocks = vi.hoisted(() => ({
   create: vi.fn(),
-  persistLifecycle: vi.fn(async () => {}),
+  persistLifecycle: vi.fn(async (_params: unknown) => {}),
 }));
 vi.mock("../../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../../audit/audit-config.js", () => ({
@@ -22,31 +22,27 @@ vi.mock("../../audit/audit-config.js", () => ({
   resolveAuditMessageMode: () => "off",
 }));
 vi.mock("../../audit/audit-recorder.js", () => ({
-  createAuditEventRecorder: () => ({ stop: vi.fn(async () => {}) }),
+  createAuditEventRecorder: () => ({
+    record: vi.fn(),
+    recordTool: vi.fn(),
+    stop: vi.fn(async () => {}),
+  }),
 }));
 vi.mock("../server-chat.js", () => ({
   createAgentEventHandler: (...args: unknown[]) => agentEventHandlerMocks.create(...args),
 }));
-vi.mock("../session-lifecycle-state.js", () => ({
-  persistGatewaySessionLifecycleEvent: agentEventHandlerMocks.persistLifecycle,
+vi.mock("../session-lifecycle-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-lifecycle-state.js")>()),
+  prepareGatewaySessionLifecycleEvent: (params: unknown) => () =>
+    agentEventHandlerMocks.persistLifecycle(params),
 }));
 const { startGatewayEventSubscriptions } = await import("../server-runtime-subscriptions.js");
 type SubscriptionParams = Parameters<typeof startGatewayEventSubscriptions>[0];
-const mockLog: SubsystemLogger = {
-  subsystem: "gateway-test",
-  isEnabled: () => true,
-  trace: vi.fn(),
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  fatal: vi.fn(),
-  raw: vi.fn(),
-  child: () => mockLog,
-};
+const mockLog = createMockSubsystemLogger("gateway-test", { isEnabled: () => true });
 function createParams(): SubscriptionParams {
   const chatRunState = createChatRunState();
   return {
+    scheduler: createTestGatewayScheduler(),
     signal: new AbortController().signal,
     log: mockLog,
     broadcast: vi.fn(),
@@ -58,26 +54,22 @@ function createParams(): SubscriptionParams {
     toolEventRecipients: chatRunState.toolEventRecipients,
     sessionEventSubscribers: createSessionEventSubscriberRegistry(),
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-    chatAbortControllers: new Map(),
     restartRecoveryCandidates: new Map(),
-    terminalSessions: { closeTaskSessions: vi.fn() },
     refreshConnectedUserProfiles: vi.fn(),
   };
 }
+
 describe("bound ACP terminal lifecycle", () => {
   let unsubs: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
   beforeEach(() => {
     vi.clearAllMocks();
-    installInMemoryTaskRegistryRuntime();
   });
   afterEach(async () => {
     await unsubs?.agentUnsub();
-    unsubs?.heartbeatUnsub();
+    heartbeatNotifications.onEvent = () => {};
     unsubs?.transcriptUnsub();
     unsubs?.lifecycleUnsub();
-    void unsubs?.taskUnsub();
     resetAgentEventsForTest();
-    resetTaskRegistryForTests({ persist: false });
   });
   it.each([false, true])(
     "keeps bound ACP terminal ownership together (chat link=%s)",
@@ -86,13 +78,11 @@ describe("bound ACP terminal lifecycle", () => {
       const sourceKey = "agent:main:dashboard:source";
       const targetKey = "agent:claude:acp:target";
       const params = createParams();
-      const registration = registerChatAbortController({
-        chatAbortControllers: params.chatAbortControllers,
+      const registration = registerRpcSourceForTest({
         runId,
         agentId: "main",
         sessionId: "source-session",
         sessionKey: sourceKey,
-        timeoutMs: 60_000,
       });
       if (linked) {
         params.chatRunState.registry.add(runId, {

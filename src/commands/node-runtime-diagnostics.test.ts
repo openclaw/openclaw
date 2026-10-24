@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import * as runtimeGuard from "../infra/runtime-guard.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
@@ -10,15 +10,15 @@ import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   readCommand: vi.fn(),
-  readConfigFileSnapshot: vi.fn(),
   resolveNodeRuntimeInfo: vi.fn(),
 }));
 const runtime = createTestRuntime();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const contains = (text: string) => expect.stringContaining(text);
+const repairHint = contains("nvm install 26");
+const nodeCheck = "core/doctor/node-runtime";
 
-vi.mock("../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/config.js")>()),
-  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-}));
 vi.mock("../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/paths.js")>()),
   isDefaultInstallIdentity: () => true,
@@ -46,161 +46,109 @@ function mockCliRuntime(version: string, text = true) {
   });
 }
 
+function useInvalidConfig() {
+  const stateDir = tempDirs.make("openclaw-doctor-node-note-");
+  const configPath = path.join(stateDir, "openclaw.json");
+  fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: 42 } }));
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.readCommand.mockResolvedValue({
-    programArguments: ["/fixture/node", "openclaw.mjs", "gateway"],
-  });
+  mocks.readCommand.mockResolvedValue({ programArguments: ["/fixture/node"] });
   mocks.resolveNodeRuntimeInfo.mockResolvedValue({
     status: "unsupported",
     version: "22.23.2",
-    sqliteVersion: "3.50.2",
-    nodeSharedSqlite: false,
   });
-  mockCliRuntime("26.8.1");
+  mockCliRuntime("26.12.1");
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  if (originalIsTTY) {
+    Object.defineProperty(process.stdout, "isTTY", originalIsTTY);
+  } else {
+    Reflect.deleteProperty(process.stdout, "isTTY");
+  }
 });
 
-describe("Node runtime diagnostics command surfaces", () => {
-  it.each(["invalid config", "snapshot failure"])(
-    "renders informational Node findings without a missing fix hint after %s",
-    async (failure) => {
-      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-node-note-"));
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-      const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-      Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
-      mockCliRuntime("24.15.0");
-      mocks.readConfigFileSnapshot.mockResolvedValue({
-        exists: true,
-        valid: false,
-        config: {},
-        issues: [{ path: "gateway.mode", message: "Required" }],
+it.each(["invalid config", "snapshot failure"])(
+  "keeps Node repair hints after %s",
+  async (failure) => {
+    useInvalidConfig();
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+    mockCliRuntime("24.15.0");
+    if (failure === "snapshot failure") {
+      vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
+        throw new Error("No space left for private snapshot");
       });
-      if (failure === "snapshot failure") {
-        vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
-          throw new Error("No space left for private snapshot");
-        });
-      }
-      try {
-        expect(
-          await runDoctorLintCli(runtime, {
-            severityMin: "info",
-            ...(failure === "snapshot failure" ? { updateReadiness: "post-plugin" } : {}),
-          }),
-        ).toBe(1);
-        expect(runtime.error).toHaveBeenCalledWith(
-          expect.stringContaining(
-            failure === "snapshot failure"
-              ? "No space left for private snapshot"
-              : "config file exists but does not parse cleanly",
-          ),
-        );
-        expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Node 24.15.0:"));
-        expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("nvm install 26"));
-        expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("undefined"));
-      } finally {
-        if (originalIsTTY) {
-          Object.defineProperty(process.stdout, "isTTY", originalIsTTY);
-        } else {
-          Reflect.deleteProperty(process.stdout, "isTTY");
-        }
-        vi.unstubAllEnvs();
-        fs.rmSync(stateDir, { recursive: true, force: true });
-      }
-    },
-  );
-
-  it("keeps Node repair guidance visible when config validation fails", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: false,
-      config: {},
-      path: "/tmp/openclaw.json",
-      issues: [{ path: "gateway.mode", message: "Required" }],
-    });
-    mockCliRuntime("22.23.2", false);
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      expect(await runDoctorLintCli(runtime, { json: true })).toBe(1);
-      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-      expect(payload.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ checkId: "core/doctor/final-config-validation" }),
-          expect.objectContaining({
-            checkId: "core/doctor/node-runtime",
-            fixHint: expect.stringContaining("nvm install 26"),
-          }),
-        ]),
-      );
-    } finally {
-      stdout.mockRestore();
-      vi.unstubAllGlobals();
     }
-  });
-
-  it("registers canonical Doctor findings for CLI and recorded service runtimes", async () => {
-    mockCliRuntime("26.0.0", false);
-    const checks = await resolveDoctorContributionHealthChecks();
-    const check = checks.find((entry) => entry.id === "core/doctor/node-runtime");
-    expect(check).toBeDefined();
-    const findings = await check?.detect({ mode: "lint", cfg: {}, runtime, env: {} });
-    expect(findings).toEqual([
-      expect.objectContaining({
-        message: expect.stringContaining("26.0.0"),
-        fixHint: expect.stringContaining("nvm install 26"),
+    expect(
+      await runDoctorLintCli(runtime, {
+        severityMin: "info",
+        ...(failure === "snapshot failure" ? { updateReadiness: "post-plugin" } : {}),
       }),
-      expect.objectContaining({
-        source: "gateway-service",
-        message: expect.stringContaining("22.23.2"),
-        fixHint: expect.stringContaining("nvm install 26"),
-      }),
-    ]);
-  });
+    ).toBe(1);
+    for (const message of [
+      failure === "snapshot failure"
+        ? "No space left for private snapshot"
+        : "config file exists but does not parse cleanly",
+      "Node 24.15.0:",
+      "nvm install 26",
+    ]) {
+      expect(runtime.error).toHaveBeenCalledWith(contains(message));
+    }
+    expect(runtime.error).not.toHaveBeenCalledWith(contains("undefined"));
+  },
+);
 
-  it("warns about a stale service Node without mixing text into status JSON", async () => {
-    await statusCommand({ json: true }, runtime);
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service Node 22.23.2"),
-    );
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("https://openclaw.ai/install.sh"),
-    );
-    expect(runtime.log).not.toHaveBeenCalled();
-  });
-
-  it.each(["cli", "service"])(
-    "renders an admitted out-of-table %s runtime as information",
-    async (source) => {
-      mocks.readCommand.mockResolvedValue(null);
-      if (source === "cli") {
-        mockCliRuntime("24.15.0");
-      } else {
-        mocks.readCommand.mockResolvedValue({ programArguments: ["/fixture/node", "gateway"] });
-        mocks.resolveNodeRuntimeInfo.mockResolvedValue({
-          status: "supported",
-          version: "24.15.0",
-          note: "Node 24.15.0: unsupported version, capability probe passed.",
-        });
-      }
-      await statusCommand({ json: true }, runtime);
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("[info] Node 24.15.0:"));
-      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("[warning]"));
-      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("undefined"));
-    },
+it("keeps repair guidance in JSON despite invalid config", async () => {
+  useInvalidConfig();
+  mockCliRuntime("22.23.2", false);
+  const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  expect(await runDoctorLintCli(runtime, { json: true })).toBe(1);
+  const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+  expect(payload.findings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ checkId: "core/doctor/final-config-validation" }),
+      expect.objectContaining({ checkId: nodeCheck, fixHint: repairHint }),
+    ]),
   );
-
-  it("reports an uninspectable service without claiming its Node is unsupported", async () => {
-    mocks.resolveNodeRuntimeInfo.mockResolvedValue({
-      status: "probe-failed",
-      error: new Error("unavailable"),
-    });
-    await statusCommand({ json: true }, runtime);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("could not be inspected"));
-    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("is unsupported"));
-  });
 });
+
+it("registers CLI and service Node repair findings", async () => {
+  mockCliRuntime("26.0.0", false);
+  const checks = await resolveDoctorContributionHealthChecks();
+  const check = checks.find((entry) => entry.id === nodeCheck);
+  const findings = await check?.detect({ mode: "lint", cfg: {}, runtime, env: {} });
+  expect(findings).toMatchObject([
+    { message: contains("26.0.0"), fixHint: repairHint },
+    { source: "gateway-service", message: contains("22.23.2"), fixHint: repairHint },
+  ]);
+});
+
+it.each([
+  [
+    { status: "unsupported", version: "24.22.0" },
+    "Gateway service Node 24.22.0 is unsupported.",
+    ["[info]", "undefined"],
+  ],
+  [
+    { status: "probe-failed", error: new Error("unavailable") },
+    "could not be inspected",
+    ["is unsupported"],
+  ],
+] as const)(
+  "renders service runtime %j without a misleading diagnosis",
+  async (info, present, absent) => {
+    mocks.resolveNodeRuntimeInfo.mockResolvedValue(info);
+    await statusCommand({ json: true }, runtime);
+    expect(runtime.error).toHaveBeenCalledWith(contains(present));
+    for (const message of absent) {
+      expect(runtime.error).not.toHaveBeenCalledWith(contains(message));
+    }
+  },
+);

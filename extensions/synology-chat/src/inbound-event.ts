@@ -1,4 +1,3 @@
-// Synology Chat plugin module implements inbound event behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sendMessage } from "./client.js";
 import type { SynologyInboundMessage } from "./inbound-context.js";
@@ -9,59 +8,10 @@ import type { SynologyIngressLifecycle } from "./webhook-ingress.js";
 
 const CHANNEL_ID = "synology-chat";
 
-type SynologyChannelLog = {
-  info?: (...args: unknown[]) => void;
-};
-
-function resolveSynologyChatInboundRoute(params: {
-  cfg: OpenClawConfig;
-  account: ResolvedSynologyChatAccount;
-  userId: string;
-}) {
-  const rt = getSynologyRuntime();
-  const route = rt.channel.routing.resolveAgentRoute({
-    cfg: params.cfg,
-    channel: CHANNEL_ID,
-    accountId: params.account.accountId,
-    peer: {
-      kind: "direct",
-      id: params.userId,
-    },
-  });
-  return {
-    rt,
-    route,
-    sessionKey: buildSynologyChatInboundSessionKey({
-      agentId: route.agentId,
-      accountId: params.account.accountId,
-      userId: params.userId,
-      identityLinks: params.cfg.session?.identityLinks,
-    }),
-  };
-}
-
-async function deliverSynologyChatReply(params: {
-  account: ResolvedSynologyChatAccount;
-  sendUserId: string;
-  payload: { text?: string; body?: string };
-}): Promise<{ visibleReplySent: boolean }> {
-  const text = params.payload.text ?? params.payload.body;
-  if (!text) {
-    return { visibleReplySent: false };
-  }
-  const ok = await sendMessage(
-    params.account.incomingUrl,
-    text,
-    params.sendUserId,
-    params.account.allowInsecureSsl,
-  );
-  return { visibleReplySent: ok };
-}
-
 export async function dispatchSynologyChatInboundEvent(params: {
   account: ResolvedSynologyChatAccount;
   msg: SynologyInboundMessage;
-  log?: SynologyChannelLog;
+  log?: { info?: (...args: unknown[]) => void };
   turnAdoptionLifecycle?: SynologyIngressLifecycle;
 }): Promise<null> {
   const rt = getSynologyRuntime();
@@ -70,13 +20,20 @@ export async function dispatchSynologyChatInboundEvent(params: {
   // The Chat API user_id (for sending) may differ from the webhook
   // user_id (used for sessions/pairing). Use chatUserId for API calls.
   const sendUserId = params.msg.chatUserId ?? params.msg.from;
-  const resolved = resolveSynologyChatInboundRoute({
+  const route = rt.channel.routing.resolveAgentRoute({
     cfg: currentCfg,
-    account: params.account,
+    channel: CHANNEL_ID,
+    accountId: params.account.accountId,
+    peer: { kind: "direct", id: params.msg.from },
+  });
+  const sessionKey = buildSynologyChatInboundSessionKey({
+    agentId: route.agentId,
+    accountId: params.account.accountId,
     userId: params.msg.from,
+    identityLinks: currentCfg.session?.identityLinks,
   });
 
-  await resolved.rt.channel.inbound.run({
+  await rt.channel.inbound.run({
     channel: CHANNEL_ID,
     accountId: params.account.accountId,
     raw: params.msg,
@@ -98,12 +55,12 @@ export async function dispatchSynologyChatInboundEvent(params: {
             ? params.msg.chatType
             : "direct";
         const channelIngress = await params.msg.resolveChannelIngress({
-          agentId: resolved.route.agentId,
-          sessionKey: resolved.sessionKey,
+          agentId: route.agentId,
+          sessionKey,
           messageId: input.id,
           inboundEventKind: "user_request",
         });
-        const msgCtx = resolved.rt.channel.inbound.buildContext({
+        const msgCtx = rt.channel.inbound.buildContext({
           channelIngress,
           channel: CHANNEL_ID,
           accountId: params.account.accountId,
@@ -120,11 +77,11 @@ export async function dispatchSynologyChatInboundEvent(params: {
             label: params.msg.senderName || params.msg.from,
           },
           route: {
-            agentId: resolved.route.agentId,
-            dmScope: resolved.route.dmScope,
+            agentId: route.agentId,
+            dmScope: route.dmScope,
             accountId: params.account.accountId,
-            routeSessionKey: resolved.sessionKey,
-            dispatchSessionKey: resolved.sessionKey,
+            routeSessionKey: sessionKey,
+            dispatchSessionKey: sessionKey,
           },
           reply: {
             to: `synology-chat:${params.msg.from}`,
@@ -144,9 +101,9 @@ export async function dispatchSynologyChatInboundEvent(params: {
           channel: CHANNEL_ID,
           accountId: params.account.accountId,
           route: {
-            agentId: resolved.route.agentId,
-            dmScope: resolved.route.dmScope,
-            sessionKey: resolved.route.sessionKey,
+            agentId: route.agentId,
+            dmScope: route.dmScope,
+            sessionKey: route.sessionKey,
           },
           ctxPayload: msgCtx,
           delivery: {
@@ -154,11 +111,16 @@ export async function dispatchSynologyChatInboundEvent(params: {
               to: sendUserId,
             }),
             deliver: async (payload) => {
-              return await deliverSynologyChatReply({
-                account: params.account,
-                sendUserId,
-                payload,
-              });
+              const text = payload.text;
+              const visibleReplySent = text
+                ? await sendMessage(
+                    params.account.incomingUrl,
+                    text,
+                    sendUserId,
+                    params.account.allowInsecureSsl,
+                  )
+                : false;
+              return { visibleReplySent: Boolean(visibleReplySent) };
             },
           },
           dispatcherOptions: {

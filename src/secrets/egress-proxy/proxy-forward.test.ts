@@ -1,7 +1,14 @@
-import { IncomingMessage, ServerResponse, type ClientRequest } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  IncomingMessage,
+  ServerResponse,
+  type ClientRequest,
+} from "node:http";
 import { Agent, request as httpsRequest } from "node:https";
+import type { AddressInfo } from "node:net";
 import { Socket } from "node:net";
-import { Writable, type Readable } from "node:stream";
+import { PassThrough, Writable, type Readable } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { resolveSecretSentinel, sealSecretSentinel } from "../sentinel.js";
@@ -66,8 +73,6 @@ describe("secret egress forwarding resource ownership", () => {
   it.each([
     ["run revocation", "drain"],
     ["run revocation", "next turn"],
-    ["proxy stop", "drain"],
-    ["proxy stop", "next turn"],
     ["client disconnect", "drain"],
     ["client disconnect", "next turn"],
   ] as const)("stops buffered submission after %s while waiting for %s", async (cause, wait) => {
@@ -132,11 +137,6 @@ describe("secret egress forwarding resource ownership", () => {
         response.emit("close");
       } else {
         active = false;
-        if (cause === "proxy stop") {
-          for (const resource of resources) {
-            resource.destroy();
-          }
-        }
       }
       completeWrite();
       await setImmediate();
@@ -155,6 +155,99 @@ describe("secret egress forwarding resource ownership", () => {
       }
       request.destroy();
       response.destroy();
+      agent.destroy();
+    }
+  });
+});
+
+describe("secret egress forwarded response heads", () => {
+  // Serves one real loopback request through the proxy forwarder. The upstream
+  // response is emitted on a later tick, like the real client, so a throw from
+  // writeHead would escape instead of landing in the forwarder's own try block.
+  it("closes a rejected bodyless head instead of framing a 502 body", async () => {
+    const uncaught: unknown[] = [];
+    let failClient: (error: unknown) => void = () => {};
+    const onUncaught = (error: unknown) => {
+      uncaught.push(error);
+      failClient(error);
+    };
+    const resources: Array<Readable | Writable> = [];
+    const agent = new Agent();
+    vi.mocked(httpsRequest).mockImplementationOnce(((...args: unknown[]) => {
+      const callback = args.find((entry) => typeof entry === "function") as (
+        message: IncomingMessage,
+      ) => void;
+      const upstreamResponse = new IncomingMessage(new Socket());
+      upstreamResponse.statusCode = 304;
+      upstreamResponse.headers = { trailer: "Expires" };
+      upstreamResponse.on("error", () => {});
+      process.nextTick(() => {
+        callback(upstreamResponse);
+        if (!upstreamResponse.destroyed) {
+          upstreamResponse.push("file");
+          upstreamResponse.push(null);
+        }
+      });
+      return new PassThrough() as unknown as ClientRequest;
+    }) as never);
+    const server = createServer((request, response) => {
+      forwardSecretEgressRequest({
+        request,
+        response,
+        host: "localhost",
+        upstreamTlsAgent: agent,
+        prepareRequest: () => ({
+          target: new URL("https://localhost:1/"),
+          headers: {},
+          substituted: false,
+        }),
+        acquireBody: createSecretEgressBodyBudget(),
+        isActive: () => true,
+        ownResource: (resource) => {
+          resources.push(resource);
+          return resource;
+        },
+        releaseResponse() {},
+        resolveSentinel() {
+          return undefined;
+        },
+        audit() {},
+      });
+    });
+    process.on("uncaughtException", onUncaught);
+    try {
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const { port } = server.address() as AddressInfo;
+      const result = await new Promise<{
+        status?: number;
+        clientError?: NodeJS.ErrnoException;
+      }>((resolve, reject) => {
+        failClient = reject;
+        httpRequest({ host: "127.0.0.1", port, path: "/", agent: false }, (response) => {
+          response.resume();
+          resolve({ status: response.statusCode });
+          response.on("error", (clientError) =>
+            resolve({ status: response.statusCode, clientError }),
+          );
+        })
+          .on("error", (clientError) => resolve({ clientError }))
+          .end();
+      });
+      await setImmediate();
+      expect(uncaught).toEqual([]);
+      expect(result.status).toBeUndefined();
+      expect(result.clientError?.code).toBe("ECONNRESET");
+    } finally {
+      process.off("uncaughtException", onUncaught);
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      for (const resource of resources) {
+        resource.destroy();
+      }
       agent.destroy();
     }
   });

@@ -2,10 +2,6 @@ import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Feishu helper module supports card test helpers behavior.
 import { expect } from "vitest";
 
-type MockCalls = {
-  mock: { calls: unknown[][] };
-};
-
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
@@ -61,16 +57,4 @@ export function expectFeishuCardButtonRow(card: unknown): Record<string, unknown
     }
     return button;
   });
-}
-
-export function expectSentCardHasP2pAction(sendCardMock: MockCalls) {
-  expect(sendCardMock.mock.calls.length).toBeGreaterThan(0);
-  const hasP2pAction = sendCardMock.mock.calls.some(([arg]) => {
-    const buttons = expectFeishuCardButtonRow(readFeishuObjectRecord(arg)?.card);
-    return buttons.some((button) => {
-      const value = readFeishuObjectRecord(button.value);
-      return readFeishuObjectRecord(value?.c)?.t === "p2p";
-    });
-  });
-  expect(hasP2pAction).toBe(true);
 }

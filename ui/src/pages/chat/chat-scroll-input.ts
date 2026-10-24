@@ -2,6 +2,71 @@ import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
 
 const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 
+export function forwardChatWheelToTranscript(
+  event: WheelEvent,
+  transcript: HTMLElement | null,
+): void {
+  if (
+    !transcript ||
+    event.defaultPrevented ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    event.shiftKey ||
+    !event.deltaY ||
+    Math.abs(event.deltaX) > Math.abs(event.deltaY)
+  ) {
+    return;
+  }
+  const path = event.composedPath();
+  if (path.includes(transcript)) {
+    return;
+  }
+  for (const target of path) {
+    if (target === event.currentTarget) {
+      break;
+    }
+    if (!(target instanceof HTMLElement)) {
+      continue;
+    }
+    const style = getComputedStyle(target);
+    const contextCanScroll =
+      event.deltaY < 0
+        ? target.scrollTop > 0
+        : target.scrollTop + target.clientHeight < target.scrollHeight - 1;
+    if (
+      /^(auto|scroll)$/.test(style.overflowY) &&
+      ((target.scrollHeight > target.clientHeight &&
+        (!target.closest(".chat-footer__context") || contextCanScroll)) ||
+        style.overscrollBehaviorY === "contain" ||
+        style.overscrollBehaviorY === "none")
+    ) {
+      return;
+    }
+  }
+
+  // Deliver intent to the existing history and reader-takeover owners before
+  // moving: setting scrollTop alone leaves queued follow/reveal work active.
+  const forwarded = new WheelEvent("wheel", {
+    deltaX: event.deltaX,
+    deltaY: event.deltaY,
+    deltaMode: event.deltaMode,
+    cancelable: true,
+  });
+  if (!transcript.dispatchEvent(forwarded)) {
+    return;
+  }
+  event.preventDefault();
+  const style = getComputedStyle(transcript);
+  const unit =
+    event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+      ? transcript.clientHeight
+      : event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.2
+        : 1;
+  transcript.scrollBy({ top: event.deltaY * unit, behavior: "instant" });
+}
+
 export function isTranscriptScrollKey(event: KeyboardEvent): boolean {
   if (event.defaultPrevented || !SCROLL_KEYS.has(event.key)) {
     return false;
@@ -78,4 +143,42 @@ export function isTranscriptScrollKey(event: KeyboardEvent): boolean {
     }
   }
   return true;
+}
+
+const HISTORY_TOUCH_INTENT_PX = 8;
+const HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
+
+export class TranscriptHistoryInput {
+  private touchY: number | null = null;
+
+  reset(): void {
+    this.touchY = null;
+  }
+
+  isUpward(event: Event): boolean {
+    let upward =
+      (event instanceof WheelEvent && event.deltaY < 0) ||
+      (event instanceof KeyboardEvent &&
+        HISTORY_UPWARD_KEYS.has(event.key) &&
+        isTranscriptScrollKey(event));
+    if (typeof TouchEvent !== "undefined" && event instanceof TouchEvent) {
+      const touchY = event.touches[0]?.clientY ?? null;
+      if (event.type === "touchstart") {
+        this.touchY = touchY;
+        return false;
+      }
+      if (event.type === "touchend" || event.type === "touchcancel") {
+        this.touchY = null;
+        return false;
+      }
+      const previousTouchY = this.touchY;
+      if (touchY !== null && previousTouchY !== null) {
+        upward = touchY - previousTouchY >= HISTORY_TOUCH_INTENT_PX;
+        if (upward || touchY < previousTouchY) {
+          this.touchY = touchY;
+        }
+      }
+    }
+    return upward;
+  }
 }

@@ -1,56 +1,67 @@
-import type { TemplateResult } from "lit";
+import type { JSX } from "@solidjs/web";
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
-import type { SkillStatusReport } from "../../api/types.ts";
-import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type {
-  ClawHubSkillSecurityVerdict,
   ClawHubSkillDetail,
-  SkillOperation,
-  SkillMessageMap,
+  ClawHubSkillSecurityVerdict,
+  loadClawHubDetail,
+  SkillsState,
 } from "../../lib/skills/index.ts";
+
+export type SkillsRouteData = {
+  gateway: ApplicationContext["gateway"];
+  gatewaySnapshot: ApplicationGatewaySnapshot;
+  agents: ApplicationContext["agents"];
+  selectedAgentId: string | null;
+  selectionIntentRevision: number;
+  report: SkillStatusReport | null;
+  error: string | null;
+  clawhubRef?: string;
+};
+
+export type SkillsPageProps = { routeData?: SkillsRouteData; surface?: "discovery" | "settings" };
+
+export type ClawHubDetailReceipt = {
+  client: GatewayBrowserClient | null;
+  epoch: number;
+  agentId: string | null;
+  agentRevision: number;
+  ref: string;
+  completion: ReturnType<typeof loadClawHubDetail>;
+};
 
 export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
 export type SkillDetailTab = "overview" | "card";
 
+export type SkillsPresentation = {
+  skillsFilter: string;
+  skillsStatusFilter: SkillsStatusFilter;
+  skillsDetailKey: string | null;
+  skillsDetailTab: SkillDetailTab;
+  clawhubSearchQuery: string;
+};
+
 export type SkillsProps = {
+  state: SkillsState & SkillsPresentation;
+  mutationSkills: SkillStatusEntry[];
+  saving: boolean;
+  toggleSavingSkillKey?: string;
+  toggleDisabled?: boolean;
+  readClawHubDetail: () => ClawHubSkillDetail | null;
+  readClawHubVerdicts: () => Record<string, ClawHubSkillSecurityVerdict>;
+  readClawHubSearch: () => boolean;
+  clawhubSearchEpoch: number;
   surface?: "discovery" | "settings";
   libraryEntries?: SkillLibraryEntry[];
   onLibraryOpen?: (skillId: string) => void;
-  library?: TemplateResult;
+  library?: JSX.Element;
   showInventory?: boolean;
-  personalImport?: boolean;
   canUpdate: boolean;
   canInstall: boolean;
-  connected: boolean;
   loading: boolean;
-  report: SkillStatusReport | null;
   error: string | null;
-  filter: string;
-  statusFilter: SkillsStatusFilter;
-  edits: Record<string, string>;
-  operation: SkillOperation;
-  messages: SkillMessageMap;
-  detailKey: string | null;
-  detailTab: SkillDetailTab;
-  clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict>;
-  clawhubVerdictsLoading: boolean;
-  clawhubVerdictsError: string | null;
-  skillCardContents: Record<string, string>;
-  skillCardLoadingKey: string | null;
-  skillCardErrors: Record<string, string>;
-  clawhubQuery: string;
-  clawhubResults: ClawHubSearchResult[] | null;
-  clawhubIconUrls?: Record<string, string>;
-  clawhubSearchLoading: boolean;
-  clawhubSearchError: string | null;
-  clawhubDetail: ClawHubSkillDetail | null;
-  clawhubDetailRef: string | null;
-  clawhubDetailLoading: boolean;
-  clawhubDetailError: string | null;
-  clawhubInstallMessage: {
-    kind: "success" | "error";
-    text: string;
-  } | null;
   onFilterChange: (next: string) => void;
   onStatusFilterChange: (next: SkillsStatusFilter) => void;
   onRefresh: () => void;

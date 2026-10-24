@@ -51,6 +51,9 @@ const LOOSE_CREDENTIAL_PAIR_RE =
 const MEDIA_DATA_URL_RE =
   /data:(?:audio|image|video)\/[a-z0-9.+-]+(?:;[^,;\s]+)*;base64,[ \t]*(?:\r?\n[ \t]*)?[a-z0-9+/_=-]+(?:[ \t]*\r?\n[ \t]*[a-z0-9+/_=-]+)*/giu;
 const MAX_DIAGNOSTIC_JSON_LENGTH = 16 * 1024;
+const UNCHANGED_DIAGNOSTIC_TEXT_MAX_ENTRIES = 2_048;
+const UNCHANGED_DIAGNOSTIC_TEXT_MAX_LENGTH = 2_048;
+const unchangedDiagnosticText = new Set<string>();
 const BRACKET_PROSE_PATTERN = String.raw`(\[+)([A-Za-z][A-Za-z0-9 _.-]*|\s*\d+\s+(?!(?:true|false|null)(?![\w-]))[A-Za-z][A-Za-z0-9 _.=-]*)(\]+)`;
 const BRACKET_PROSE_RE = new RegExp(`^${BRACKET_PROSE_PATTERN}$`, "u");
 const BRACKET_PROSE_PART_RE = new RegExp(String.raw`(?<!\[)${BRACKET_PROSE_PATTERN}`, "gu");
@@ -109,7 +112,9 @@ function normalizeDiagnosticFieldName(value: string): string {
   return value.toLowerCase().replaceAll(DIAGNOSTIC_FIELD_SEPARATOR_RE, "");
 }
 
-function isCredentialFieldName(normalized: string): boolean {
+/** Classifies credential-bearing fields, including case-insensitive HTTP header names. */
+export function isCredentialFieldName(name: string): boolean {
+  const normalized = normalizeDiagnosticFieldName(name);
   if (!normalized || NON_CREDENTIAL_FIELD_NAMES.has(normalized)) {
     return false;
   }
@@ -165,6 +170,9 @@ type DiagnosticMediaField =
       source?: string | Uint8Array;
     };
 export type DiagnosticProjectionPolicy = {
+  maxNodes?: number;
+  maxKeys?: number;
+  redactCredentials?: boolean;
   omitField?: (key: string) => boolean;
   propertyScope?: "enumerable" | "error";
   projectBinary?: (binary: Uint8Array) => unknown;
@@ -216,11 +224,14 @@ export function projectDiagnosticValue(
   policy: DiagnosticProjectionPolicy = {},
   seen = new WeakSet<object>(),
   mediaPayload = false,
-  state = { changed: false, nodesRemaining: 64 },
+  state = { changed: false, nodesRemaining: policy.maxNodes ?? 64 },
 ): unknown {
   try {
     if (typeof value === "string") {
-      const projected = redactDiagnosticText(value);
+      const projected =
+        policy.redactCredentials === false
+          ? value.replace(MEDIA_DATA_URL_RE, "<redacted>")
+          : redactDiagnosticText(value);
       state.changed ||= projected !== value;
       return projected;
     }
@@ -244,7 +255,10 @@ export function projectDiagnosticValue(
       state.changed = true;
       return "[Truncated]";
     }
-    if (!diagnosticRecords.has(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+    if (
+      !Array.isArray(value) &&
+      (!diagnosticRecords.has(value) || Object.getPrototypeOf(value) !== Object.prototype)
+    ) {
       try {
         // Brand-check without provider getters; retain only numeric retry timing.
         Headers.prototype.has.call(value, "retry-after");
@@ -258,7 +272,8 @@ export function projectDiagnosticValue(
     const keys = Reflect.ownKeys(value);
     // Snapshot descriptors before recursion; the map restores numeric key order from proxies.
     const descriptors: PropertyDescriptorMap = Object.create(null);
-    for (let index = 0; index < Math.min(keys.length, 64); index += 1) {
+    const maxKeys = policy.maxKeys ?? 64;
+    for (let index = 0; index < Math.min(keys.length, maxKeys); index += 1) {
       const key = keys[index];
       if (typeof key !== "string") {
         continue;
@@ -268,15 +283,18 @@ export function projectDiagnosticValue(
         descriptors[key] = descriptor;
       }
     }
-    state.changed ||= keys.length > 64;
+    state.changed ||= keys.length > maxKeys;
     seen.add(value);
     const out = (Array.isArray(value) ? [] : {}) as Record<string, unknown>;
     const rawName =
       typeof descriptors.name?.value === "string" ? descriptors.name.value : descriptors.key?.value;
     const redactValueField =
-      keys.length > 64 ||
-      (typeof rawName === "string" && isCredentialFieldName(normalizeDiagnosticFieldName(rawName)));
-    const redactMedia = mediaPayload || keys.length > 64 || isDiagnosticMediaPayload(descriptors);
+      policy.redactCredentials !== false &&
+      (keys.length > maxKeys ||
+        (typeof rawName === "string" &&
+          isCredentialFieldName(normalizeDiagnosticFieldName(rawName))));
+    const redactMedia =
+      mediaPayload || keys.length > maxKeys || isDiagnosticMediaPayload(descriptors);
     for (const key in descriptors) {
       const descriptor = expectDefined(descriptors[key], "diagnostic descriptor");
       if (
@@ -290,7 +308,10 @@ export function projectDiagnosticValue(
       }
       const child = descriptor.value;
       const normalized = policy.omitField?.(key) ? undefined : normalizeDiagnosticFieldName(key);
-      if (normalized === undefined || isCredentialFieldName(normalized)) {
+      if (
+        normalized === undefined ||
+        (policy.redactCredentials !== false && isCredentialFieldName(normalized))
+      ) {
         state.changed = true;
         continue;
       }
@@ -319,6 +340,21 @@ export function projectDiagnosticValue(
 
 /** Redacts bounded structured JSON while preserving harmless diagnostic text byte-for-byte. */
 export function redactDiagnosticText(value: string): string {
+  if (unchangedDiagnosticText.has(value)) {
+    return value;
+  }
+  const projected = projectDiagnosticText(value);
+  // Only this fixed policy is cached; downstream configured/exact-secret redaction stays live.
+  if (projected === value && value.length <= UNCHANGED_DIAGNOSTIC_TEXT_MAX_LENGTH) {
+    if (unchangedDiagnosticText.size >= UNCHANGED_DIAGNOSTIC_TEXT_MAX_ENTRIES) {
+      unchangedDiagnosticText.clear();
+    }
+    unchangedDiagnosticText.add(value);
+  }
+  return projected;
+}
+
+function projectDiagnosticText(value: string): string {
   const text = redactCredentialText(value).replace(MEDIA_DATA_URL_RE, "<redacted>");
   if (!looksLikeDiagnosticJson(text)) {
     return text;

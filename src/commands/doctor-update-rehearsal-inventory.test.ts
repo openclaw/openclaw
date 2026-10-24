@@ -1,0 +1,373 @@
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as entrypoint from "../daemon/gateway-entrypoint.js";
+import * as packageRoot from "../infra/openclaw-root.js";
+import * as snapshots from "../infra/update-candidate-rehearsal.js";
+import * as updateCheck from "../infra/update-check.js";
+import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
+import * as drivers from "../infra/update-run-driver.js";
+import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
+import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
+import * as commands from "../process/exec.js";
+import { defaultRuntime } from "../runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import * as databasePreflight from "./doctor-database-preflight.js";
+import {
+  preflightUpdateDoctorCli,
+  rehearseDeferredUpdateDoctorSchema,
+} from "./doctor-update-schema-guard.js";
+import { externalDoctorEnv } from "./doctor-update.test-support.js";
+
+const selection = vi.hoisted(() => ({
+  entries: [] as { pluginId: string; migration: PluginDoctorStateMigration }[],
+}));
+vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
+  const registry = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
+  const { preparePluginDoctorMigrationResources } =
+    await import("../plugins/doctor-migration-resources.js");
+  return {
+    ...registry,
+    preparePluginDoctorMigrationBackupResources: (
+      params: Parameters<typeof registry.preparePluginDoctorMigrationBackupResources>[0],
+    ) => preparePluginDoctorMigrationResources(selection.entries, params),
+  };
+});
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  selection.entries = [];
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+function childResult(cleanup: "normal" | "uncertain" = "normal") {
+  return { ...createCommandResult(), cleanup };
+}
+
+function writePrivate(file: string, contents: string) {
+  fs.writeFileSync(file, contents, { mode: 0o600 });
+}
+
+function prepareFixture(source: OpenClawTestState) {
+  const driver = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
+  recordUpdateRunStep(driver.runId, { step: "openclaw doctor", status: "in_progress" });
+  closeOpenClawStateDatabaseForTest();
+  const root = fs.realpathSync(dirs.make("openclaw-update-canary-"));
+  const external = fs.realpathSync(dirs.make("rehearsal-external-"));
+  writePrivate(path.join(external, "retained.txt"), "external acknowledged data");
+  for (const directory of ["state", "workspace"]) {
+    fs.mkdirSync(path.join(root, directory), { mode: 0o700 });
+  }
+  const statePath = path.join(root, "state", "openclaw.sqlite");
+  fs.copyFileSync(resolveOpenClawStateSqlitePath(source.env), statePath);
+  fs.chmodSync(statePath, 0o600);
+  const configPath = path.join(root, "openclaw.json");
+  const workspace = path.join(root, "workspace");
+  writePrivate(
+    configPath,
+    `{
+    "agents": {"defaults": {"workspace": ${JSON.stringify(workspace)}, "cwd": ${JSON.stringify(workspace)}}, "entries": {}},
+    "logging": {"file": ${JSON.stringify(path.join(root, "canary.log"))}},
+    "gateway": {"mode": "local", "bind": "loopback", "port": 12345,
+      "auth": {"mode": "token", "token": "00000000-0000-4000-8000-000000000000"},
+      "tls": {"enabled": false}, "tailscale": {"mode": "off"}, "controlUi": {"enabled": false}},
+    "cron": {"enabled": false, "triggers": {"enabled": false}},
+    "hooks": {"enabled": false, "internal": {"enabled": false}},
+    "transcripts": {"enabled": false, "autoStart": []}, "discovery": {"mdns": {"mode": "off"}}
+  }`,
+  );
+  const bytes = fs.statSync(statePath).size;
+  const env: NodeJS.ProcessEnv = {
+    ...buildUpdateRehearsalPathEnv(root),
+    ...externalDoctorEnv(),
+  };
+  const cleanup = vi.fn(async (assertDirectoryCurrent?: (directory: string) => void) => {
+    assertDirectoryCurrent?.(root);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(source.root);
+  vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
+  vi.spyOn(entrypoint, "resolveGatewayInstallEntrypoint").mockResolvedValue(
+    path.join(source.root, "not-executed.js"),
+  );
+  // Inventory, filesystem guards, native state reads and the collector run normally.
+  vi.spyOn(snapshots, "prepareUpdateCandidateRehearsal").mockResolvedValue({
+    stateDir: root,
+    configPath,
+    workspaceDir: workspace,
+    env,
+    port: 12345,
+    snapshotCapacity: {
+      reason: "explicit-tmpdir",
+      sqliteBytes: bytes,
+      pluginBytes: 0,
+      requiredBytes: bytes,
+      candidates: [],
+      selection: { kind: "explicit-tmpdir", directory: root },
+    },
+    cleanupDirectories: [root],
+    prepareRuntime: async (assertCurrent) => assertCurrent(),
+    cleanup,
+  });
+  const launch = vi.spyOn(commands, "runUtf8CommandWithTimeout").mockResolvedValue(childResult());
+  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const schemas: databasePreflight.DoctorDatabasePreflight = {
+    updateSchemaRehearsal: { runId: driver.runId, updaterVersion: "2026.9.2" },
+    incompatible: [],
+    indeterminate: [],
+  };
+  return {
+    schemas,
+    root,
+    external,
+    configPath,
+    statePath,
+    env,
+    runtime,
+    launch,
+    cleanup,
+    invoke: () => rehearseDeferredUpdateDoctorSchema(schemas, runtime),
+  };
+}
+
+async function fixture(run: (f: ReturnType<typeof prepareFixture>) => Promise<void>) {
+  await withOpenClawTestState({ scenario: "minimal" }, async (source) => {
+    const f = prepareFixture(source);
+    await run(f);
+    for (const { migration: selected } of selection.entries) {
+      expect(selected.detectLegacyState).not.toHaveBeenCalled();
+      expect(selected.migrateLegacyState).not.toHaveBeenCalled();
+    }
+    expect(fs.readFileSync(path.join(f.external, "retained.txt"), "utf8")).toBe(
+      "external acknowledged data",
+    );
+  });
+}
+
+function migration(
+  id: string,
+  collectBackupResources?: PluginDoctorStateMigration["collectBackupResources"],
+) {
+  return {
+    id,
+    label: id,
+    ...(collectBackupResources ? { collectBackupResources } : {}),
+    detectLegacyState: vi.fn(() => null),
+    migrateLegacyState: vi.fn(() => ({ changes: [], warnings: [] })),
+  };
+}
+
+it("consumes declared paths, admits legacy plugins with one typed reported warning, and never detects or migrates during inventory", async () => {
+  await fixture(async (f) => {
+    const legacy = migration("old");
+    const declared = migration("declared", (params) => {
+      expect(params).toMatchObject({
+        requireLocalResources: true,
+        stateDir: f.root,
+        config: { agents: { defaults: { workspace: path.join(f.root, "workspace") } } },
+      });
+      return [
+        { path: path.join(f.root, "plugin.sqlite"), kind: "sqlite" },
+        { path: path.join(f.root, "future", "destination"), kind: "directory" },
+      ];
+    });
+    writePrivate(path.join(f.root, "plugin.sqlite"), "fixture data; no native open");
+    selection.entries = [
+      { pluginId: "legacy-plugin", migration: legacy },
+      { pluginId: "legacy-plugin", migration: migration("second") },
+      { pluginId: "declared-plugin", migration: declared },
+    ];
+    await f.invoke();
+    expect(f.launch).toHaveBeenCalledOnce();
+    const fact = JSON.parse(f.runtime.log.mock.calls[0]![0]);
+    expect(fact).toMatchObject({
+      kind: "doctor-schema-rehearsal",
+      stateDir: f.root,
+      warnings: [{ kind: "undeclared-migration-resources", pluginId: "legacy-plugin" }],
+    });
+    expect(fact.warnings).toHaveLength(1);
+    expect(f.runtime.error).toHaveBeenCalledExactlyOnceWith(`Warning: ${fact.warnings[0].message}`);
+    expect(f.cleanup).toHaveBeenCalledOnce();
+  });
+});
+
+it.each([
+  "malformed-declaration",
+  "default-alias",
+  "hardlink",
+  "companion-alias",
+  "missing-config",
+  "missing-state",
+  "live-result-selector",
+] as const)("refuses %s before launching any writer", async (mode) => {
+  await fixture(async (f) => {
+    const declared = path.join(f.root, "declared.sqlite");
+    if (mode === "default-alias") {
+      fs.symlinkSync(f.external, path.join(f.root, "undeclared-data"));
+    }
+    if (mode === "hardlink") {
+      fs.linkSync(path.join(f.external, "retained.txt"), path.join(f.root, "unowned"));
+    }
+    if (mode === "companion-alias") {
+      fs.symlinkSync(path.join(f.external, "retained.txt"), `${declared}-wal`);
+    }
+    if (mode === "missing-config" || mode === "missing-state") {
+      fs.unlinkSync(mode === "missing-config" ? f.configPath : f.statePath);
+    }
+    if (mode === "live-result-selector") {
+      f.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = path.join(f.external, "result.json");
+    }
+    const entry = migration("declared", () =>
+      mode === "malformed-declaration"
+        ? ([{ path: declared, kind: "invalid" }] as unknown as { path: string; kind: "file" }[])
+        : [{ path: declared, kind: "sqlite" }],
+    );
+    selection.entries = [{ pluginId: "test-plugin", migration: entry }];
+    await expect(f.invoke()).rejects.toThrow(
+      mode === "malformed-declaration"
+        ? /Invalid migration/
+        : mode === "live-result-selector"
+          ? /retained live selectors/
+          : mode === "missing-config" || mode === "missing-state"
+            ? /missing/
+            : /escapes|unsafe ownership or links/,
+    );
+    expect(f.launch).not.toHaveBeenCalled();
+    expect(f.cleanup).toHaveBeenCalledOnce();
+  });
+});
+
+it("defers a declared external owner without authorizing its configured migration root", async () => {
+  await fixture(async (f) => {
+    const entry = migration("external", () => [{ path: f.external, kind: "directory" }]);
+    selection.entries = [{ pluginId: "reef", migration: entry }];
+    const config = JSON.parse(fs.readFileSync(f.configPath, "utf8"));
+    config.channels = { reef: { stateDir: f.external } };
+    fs.writeFileSync(f.configPath, JSON.stringify(config));
+    await f.invoke();
+    expect(f.launch).toHaveBeenCalledOnce();
+    expect(JSON.parse(f.runtime.log.mock.calls[0]![0]).notices).toEqual([
+      "rehearsal: reef state migrations deferred; declared data outside the rehearsal root left untouched",
+    ]);
+  });
+});
+
+it.each([
+  "new-default-alias",
+  "absent-destination-retarget",
+  "config-replaced",
+  "parent-retired",
+  "root-replaced",
+] as const)("rechecks %s before launching any writer", async (mode) => {
+  await fixture(async (f) => {
+    let held = true;
+    if (mode === "parent-retired") {
+      const readDriver = drivers.readUpdateRunDriver;
+      vi.spyOn(drivers, "readUpdateRunDriver").mockImplementation((pid) =>
+        held ? readDriver(pid) : undefined,
+      );
+    }
+    selection.entries = [
+      {
+        pluginId: "test-plugin",
+        migration: migration("declared", () => {
+          if (mode === "parent-retired") {
+            held = false;
+          }
+          return [{ path: path.join(f.root, "future", "destination"), kind: "directory" }];
+        }),
+      },
+    ];
+    const displaced = path.join(f.external, "original-copy");
+    const retained = path.join(f.root, "replacement-data");
+    f.runtime.log.mockImplementationOnce(() => {
+      if (mode === "config-replaced") {
+        fs.renameSync(f.configPath, `${f.configPath}.old`);
+        writePrivate(f.configPath, "{}");
+      } else if (mode === "root-replaced") {
+        fs.renameSync(f.root, displaced);
+        fs.mkdirSync(f.root, { mode: 0o700 });
+        writePrivate(retained, "replacement must survive");
+      } else if (mode !== "parent-retired") {
+        fs.symlinkSync(
+          f.external,
+          path.join(f.root, mode === "absent-destination-retarget" ? "future" : "new-data"),
+        );
+      }
+    });
+    await expect(f.invoke()).rejects.toThrow(
+      mode === "root-replaced"
+        ? /rehearsal root changed/
+        : mode === "parent-retired"
+          ? /parent identity changed/
+          : /unsafe ownership or links|identity changed/,
+    );
+    expect(f.launch).not.toHaveBeenCalled();
+    if (mode === "root-replaced") {
+      expect(fs.readFileSync(retained, "utf8")).toBe("replacement must survive");
+      expect(f.cleanup).not.toHaveBeenCalled();
+      expect(fs.existsSync(path.join(displaced, "state", "openclaw.sqlite"))).toBe(true);
+    } else {
+      expect(f.cleanup).toHaveBeenCalledOnce();
+    }
+  });
+});
+
+it("retains a copy when the admitted child cannot confirm settlement", async () => {
+  await fixture(async (f) => {
+    f.launch.mockResolvedValue(childResult("uncertain"));
+    await expect(f.invoke()).rejects.toThrow(/did not settle/);
+    expect(f.cleanup).not.toHaveBeenCalled();
+    expect(fs.existsSync(f.statePath)).toBe(true);
+  });
+});
+
+it.each(["initial admission", "CLI schema selection"] as const)(
+  "retains the original parent across %s",
+  async (phase) => {
+    await fixture(async (f) => {
+      const readDriver = drivers.readUpdateRunDriver;
+      let replaced = false;
+      vi.spyOn(drivers, "readUpdateRunDriver").mockImplementation((pid) => {
+        const current = readDriver(pid);
+        return current && replaced ? { ...current, startIdentity: "replacement-parent" } : current;
+      });
+      const exit =
+        phase === "CLI schema selection"
+          ? vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
+              throw new Error("Unexpected CLI exit after lost parent");
+            })
+          : undefined;
+      if (phase === "initial admission") {
+        vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockImplementation(async () => {
+          replaced = true;
+          return "package";
+        });
+      } else {
+        vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+        vi.spyOn(databasePreflight, "prepareDoctorDatabasePreflight").mockImplementation(
+          async () => {
+            replaced = true;
+            return f.schemas;
+          },
+        );
+      }
+      await expect(
+        phase === "initial admission" ? f.invoke() : preflightUpdateDoctorCli({}),
+      ).rejects.toThrow(/parent identity changed/);
+      expect(f.launch).not.toHaveBeenCalled();
+      expect(snapshots.prepareUpdateCandidateRehearsal).not.toHaveBeenCalled();
+      expect(f.cleanup).not.toHaveBeenCalled();
+      if (exit) {
+        expect(exit).not.toHaveBeenCalled();
+      }
+    });
+  },
+);

@@ -24,6 +24,7 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-mention-gating";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -46,14 +47,11 @@ const BOT_USER_ID = "@openclaw:example.org";
 const INBOUND_EVENT_ID = "$inbound-1";
 
 beforeAll(() => {
-  // send.ts/replies.ts read text helpers and the monitor's mention gating from
-  // the module runtime slot; bind the real chunking/table implementations so
-  // rendered wire content is part of the recorded lifecycle (mirrors the
-  // feishu adoption's runtime stub). Media helpers stay absent: these
-  // scenarios are text-only and a media lookup should fail loudly.
+  // Real text/mention helpers keep rendered wire content in the lifecycle proof.
   installMatrixTestRuntime({
     logging: { shouldLogVerbose: () => false },
     channel: {
+      inbound: createPluginRuntimeMock().channel.inbound,
       text: {
         resolveMarkdownTableMode,
         convertMarkdownTables,
@@ -177,8 +175,6 @@ type MatrixTraceReplyOptions = {
 };
 
 async function setupMatrixTrace(recorder: WireRecorder) {
-  const client = createRecordingMatrixClient(recorder);
-
   let capturedDeliver: MatrixTraceDeliver | undefined;
   let capturedOnReplyStart: (() => Promise<void> | void) | undefined;
   let capturedOnIdle: (() => void) | undefined;
@@ -206,7 +202,7 @@ async function setupMatrixTrace(recorder: WireRecorder) {
   const { handler } = createMatrixHandlerTestHarness({
     streaming: "partial",
     blockStreamingEnabled: true,
-    client,
+    client: createRecordingMatrixClient(recorder),
     resolveMarkdownTableMode: () => resolveMarkdownTableMode({ cfg: {}, channel: "matrix" }),
     createReplyDispatcherWithTyping: (options: Record<string, unknown> | undefined) => {
       capturedDeliver = options?.deliver as MatrixTraceDeliver | undefined;

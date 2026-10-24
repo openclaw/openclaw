@@ -1,0 +1,465 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, expect, it, vi } from "vitest";
+import { buildChildEnv } from "../../scripts/ci-run-node-test-shard.mts";
+import {
+  createChangedNodeTestShards,
+  createNodeWorkerE2eTestShards,
+  hasControlUiPerformanceAffectingChange,
+  resolveChangedNodeTestTargets,
+} from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import {
+  createNodeTestShardBundles,
+  createSelectedNodeTestShardBundles,
+  resolveUiE2ePrTestSelection,
+  type CompactNodeTestShard,
+} from "../../scripts/lib/ci-node-test-plan.mts";
+import {
+  isReleaseOnlyRuntimeTestFile,
+  listPrExemptRuntimeTestFiles,
+  PR_PROTECTED_RUNTIME_TEST_FILES,
+} from "../../scripts/lib/ci-proof-test-inventory.mts";
+import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fallbackGroups, selectedFiles } from "./ci-changed-node-test-plan.test-support.js";
+
+afterEach(() => vi.unstubAllEnvs());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+// Real-checkout compositions share the planner's process-scoped import-graph cache.
+// Small synthetic graphs and canonical process selection remain in the unit file.
+function canonicalOwner(jobs: CompactNodeTestShard[], shardName: string) {
+  const job = expectDefined(
+    jobs.find((candidate) => candidate.groups.some((group) => group.shard_name === shardName)),
+    `canonical job for ${shardName}`,
+  );
+  const group = expectDefined(
+    job.groups.find((candidate) => candidate.shard_name === shardName),
+    `canonical group for ${shardName}`,
+  );
+  return { job, group };
+}
+
+it("selects the forced-cron process owner through its runtime-worker descriptor", () => {
+  expect(resolveChangedNodeTestTargets(["src/cron/service/run-queue.ts"])).toContain(
+    "src/cli/gateway-cli/run-loop.forced-cron.process.test.ts",
+  );
+});
+
+it("keeps the aggressive fixed smoke within two Node rows", () => {
+  let smoke: string[] = [];
+  resolveChangedNodeTestTargets(["src/infra/new-unlisted-module.ts"], {
+    selectionMode: "aggressive",
+    onSelection: ({ rule, targets }) => {
+      if (rule === "fixed-smoke") {
+        smoke = targets;
+      }
+    },
+  });
+  expect(smoke).toEqual([
+    "src/config/io.load-async.test.ts",
+    "src/plugins/loader.runtime-registry.test.ts",
+  ]);
+  const rows = createChangedNodeTestShards(["src/infra/new-unlisted-module.ts"], {
+    selectedTestTargets: smoke,
+    selectionMode: "aggressive",
+    runnerBackend: "hybrid",
+    dedicatedBuildArtifacts: false,
+    dedicatedUiTests: true,
+    dedicatedUiE2e: true,
+  });
+  expect(selectedFiles(rows).toSorted()).toEqual(smoke.toSorted());
+  expect(rows?.filter((row) => !row.requiresDist).length).toBeLessThanOrEqual(2);
+});
+
+it("keeps the hybrid hourly plan within the main-tier cap", () => {
+  const workerRows = createNodeWorkerE2eTestShards();
+  const hourly = [
+    ...createNodeTestShardBundles({
+      runnerBackend: "hybrid",
+      compactMode: "pull-request",
+      compactNodeJobCap: 77 - workerRows.length,
+      mainValidation: true,
+      includeProofTests: true,
+      includeReleaseOnlyToolingShards: true,
+      includePrExemptRuntimeTests: true,
+      includeReleaseOnlyRuntimeTests: false,
+      includeReleaseOnlyPluginShards: false,
+    }),
+    ...workerRows,
+  ];
+  expect(hourly.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
+  expect(hourly.length).toBeLessThanOrEqual(79);
+});
+
+it.each(["test/scripts/bench-gateway-installed.test.ts", "scripts/bench-gateway-startup.ts"])(
+  "opts in the installed benchmark for %s beside hub inputs",
+  (changedPath) => {
+    const target = "test/scripts/bench-gateway-installed.test.ts";
+    expect(listPrExemptRuntimeTestFiles()).toContain(target);
+    const options = {
+      runnerBackend: "github",
+      includeReleaseOnlyRuntimeTests: false,
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyToolingShards: false,
+    };
+    const precise = createChangedNodeTestShards([changedPath], options);
+    expect(precise, changedPath).not.toBeNull();
+    expect(selectedFiles(precise), changedPath).toContain(target);
+    const withHub = createChangedNodeTestShards(["tsconfig.json", changedPath], options);
+    expect(withHub, changedPath).not.toBeNull();
+    const withHubFiles = selectedFiles(withHub);
+    expect(withHubFiles, changedPath).toContain(target);
+    expect(withHubFiles).not.toContain(
+      "extensions/acpx/src/runtime-advertised-model.process.test.ts",
+    );
+  },
+);
+
+it("retains package and plugin consumers together in a mixed diff", () => {
+  const changedPaths = [
+    "packages/gateway-protocol/src/frame-guards.ts",
+    "extensions/codex/src/session-upstream-marker.ts",
+  ];
+
+  const fallbackReasons: string[] = [];
+  const shards = createChangedNodeTestShards(changedPaths, {
+    onFallback: (reason) => fallbackReasons.push(reason),
+  });
+  expect(shards, fallbackReasons.join("\n")).not.toBeNull();
+  expect(selectedFiles(shards)).toEqual(
+    expect.arrayContaining([
+      "packages/gateway-protocol/src/frame-guards.test.ts",
+      "extensions/codex/src/session-upstream-marker.test.ts",
+    ]),
+  );
+  const extensionGroups = fallbackGroups(shards ?? []).filter((group) =>
+    group.configs.some((config) => config.includes("vitest.extension")),
+  );
+  expect(extensionGroups.length).toBeGreaterThan(0);
+  expect(extensionGroups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
+});
+
+it.each(["packages/markdown-core/src/render-aware-chunking.ts"])(
+  "selects channel chunk-contract suites when %s changes",
+  (source) => {
+    // Channels import the chunker through the Plugin SDK facade, below the PR import-walk depth.
+    expect(
+      resolveChangedNodeTestTargets([source], {
+        selectionMode: "aggressive",
+        includePrExemptRuntimeTests: false,
+        includeReleaseOnlyRuntimeTests: false,
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        "extensions/googlechat/src/format.test.ts",
+        "extensions/signal/src/format.test.ts",
+        "extensions/slack/src/format.test.ts",
+        "extensions/sms/src/send.test.ts",
+        "extensions/telegram/src/format.test.ts",
+        "extensions/whatsapp/src/send.delivery-recovery.test.ts",
+      ]),
+    );
+  },
+);
+
+// #170662 moved transcript layout completion to a microtask. PR selection omitted
+// these mocked-Gateway cases, so the resulting renderer freeze first failed on main.
+it.each([
+  {
+    name: "the #170662 diff",
+    paths: [
+      "docs/web/control-ui.md",
+      "ui/src/lib/reactive/README.md",
+      "ui/src/pages/chat/components/chat-transcript-controller.test.ts",
+      "ui/src/pages/chat/components/chat-transcript-layout-solid.tsx",
+      "ui/src/pages/chat/components/chat-transcript-layout.ts",
+      "ui/src/pages/chat/components/chat-transcript-message-reveal.test.ts",
+      "ui/src/pages/chat/components/chat-transcript-replies.test.ts",
+      "ui/src/pages/chat/components/chat-transcript-virtualizer-host.ts",
+      "ui/src/pages/chat/solid-render-lifecycle.test.tsx",
+      "ui/src/pages/chat/solid-render-lifecycle.ts",
+    ],
+  },
+  { name: "message reveal", paths: ["ui/src/pages/chat/components/chat-message-reveal.ts"] },
+  { name: "Solid render lifecycle", paths: ["ui/src/pages/chat/solid-render-lifecycle.ts"] },
+])("selects transcript browser owners for $name", ({ paths }) => {
+  const selection = resolveUiE2ePrTestSelection(paths);
+  expect(selection.mode).toBe("owners");
+  for (const file of [
+    "ui/src/e2e/chat-collapsed-reply-reveal.e2e.test.ts",
+    "ui/src/e2e/chat-position-rail.e2e.test.ts",
+    "ui/src/e2e/chat-reply-preview-recovery.e2e.test.ts",
+  ]) {
+    expect(selection.reasons[file], file).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^direct route\/component dependency: /u)]),
+    );
+  }
+});
+
+it.each(["node", "bun-all"])("keeps exact UI and core owners with %s timings", (runtimePolicy) => {
+  vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", runtimePolicy);
+  const paths = [
+    "ui/src/components/markdown-file-links.ts",
+    "src/agents/live-provider-owner.ts",
+    "ui/config/control-ui-boot-modules.json",
+  ];
+  const options = {
+    runnerBackend: "hybrid",
+    dedicatedUiE2e: true,
+    includeReleaseOnlyRuntimeTests: false,
+  };
+  const shards = createChangedNodeTestShards(paths, options);
+  expect(shards).not.toBeNull();
+  expect(hasControlUiPerformanceAffectingChange([paths[2]!])).toBe(true);
+  const targets = selectedFiles(shards);
+  expect(targets).toEqual(
+    expect.arrayContaining([
+      "ui/src/components/markdown-file-links.test.ts",
+      "ui/src/app/control-ui-chunking.test.ts",
+      "ui/src/app/vite-config.node.test.ts",
+      "src/agents/live-model-filter.test.ts",
+      "src/agents/live-model-dynamic-candidates.test.ts",
+      "src/agents/live-target-matcher.test.ts",
+      "src/agents/model-compat.test.ts",
+      "test/scripts/pr-worktree-provision.test.ts",
+    ]),
+  );
+  // These whole-UI and transitive consumers belonged to the old broad fallback.
+  for (const unrelated of [
+    "test/ui.presenter-next-run.test.ts",
+    "test/talk-browser-defaults.test.ts",
+    "src/audit/execution-decision-facts.test.ts",
+    "src/auto-reply/reply/commands-export-session.test.ts",
+    "src/gateway/server-methods/session-change-event.fallback.test.ts",
+    "test/scripts/pr-merge-recovery.test.ts",
+    "test/scripts/mobile-release-ci.test.ts",
+  ]) {
+    expect(targets, unrelated).not.toContain(unrelated);
+  }
+  expect(new Set(targets).size).toBe(targets.length);
+  expect(new Set(shards?.map((shard) => shard.checkName)).size).toBe(shards?.length);
+  expect(
+    targets
+      .filter(isReleaseOnlyRuntimeTestFile)
+      .every((file) => PR_PROTECTED_RUNTIME_TEST_FILES.includes(file)),
+  ).toBe(true);
+  expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
+  const placement = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
+  let canonical: CompactNodeTestShard[];
+  let selectedCanonical: CompactNodeTestShard[];
+  try {
+    canonical = createNodeTestShardBundles({
+      compactMode: "pull-request",
+      runnerBackend: "hybrid",
+      includeReleaseOnlyPluginShards: false,
+      includeReleaseOnlyToolingShards: true,
+      includeProofTests: false,
+      includeReleaseOnlyRuntimeTests: true,
+      // Match the focused selector's admitted owner inventory before comparing resources.
+      includePrExemptRuntimeTests: true,
+    });
+    selectedCanonical = expectDefined(
+      createSelectedNodeTestShardBundles(
+        (shards ?? []).flatMap(
+          (job) => job.groups?.flatMap((group) => group.includePatterns ?? []) ?? [],
+        ),
+        {
+          runnerBackend: options.runnerBackend,
+          includeReleaseOnlyRuntimeTests: true,
+          includePrExemptRuntimeTests: true,
+        },
+      ),
+      "canonical selected UI consumer owners",
+    );
+  } finally {
+    placement.mockRestore();
+  }
+  // Precise tooling is repacked without unrelated compiler fixtures whose full
+  // inventory promotes their shared job. Compare against the same selected owner.
+  const toolingTargets = (shards ?? []).flatMap((job) =>
+    (job.groups ?? []).flatMap((group) =>
+      group.configs.includes("test/vitest/vitest.tooling.config.ts")
+        ? (group.includePatterns ?? [])
+        : [],
+    ),
+  );
+  const canonicalTooling = expectDefined(
+    createSelectedNodeTestShardBundles(toolingTargets, {
+      runnerBackend: "hybrid",
+      includeReleaseOnlyRuntimeTests: true,
+      includePrExemptRuntimeTests: true,
+    }),
+    "canonical selected tooling owners",
+  );
+  const envScratch = tempDirs.make("changed-node-plan-env-");
+  for (const job of shards ?? []) {
+    for (const group of job.groups ?? []) {
+      const owners = group.configs.includes("test/vitest/vitest.tooling.config.ts")
+        ? canonicalTooling
+        : canonical;
+      const { group: owner } = canonicalOwner(owners, group.shard_name);
+      if (group.includePatterns) {
+        expect(group.includePatterns.length).toBeGreaterThan(0);
+      } else {
+        expect(group).toEqual(owner);
+      }
+      expect(group.configs.every((config) => owner.configs.includes(config))).toBe(true);
+      // Tooling capacity follows selected files; an excluded compiler can require a larger full job.
+      const { job: selectedJob, group: selectedGroup } = canonicalOwner(
+        selectedCanonical,
+        group.shard_name,
+      );
+      for (const key of [
+        "configs",
+        "env",
+        "runner",
+        "fallbackMaxWorkers",
+        "minTotalMemoryBytes",
+        "pretestBuildMode",
+        "requiresDist",
+      ] as const) {
+        expect(group[key], `${group.shard_name} group ${key}`).toEqual(selectedGroup[key]);
+      }
+      for (const key of ["runner", "pretestBuildMode", "requiresDist", "timeoutMinutes"] as const) {
+        expect(job[key], `${group.shard_name} job ${key}`).toEqual(selectedJob[key]);
+      }
+      expect(
+        Object.fromEntries(
+          Object.entries(job.env ?? {}).filter(([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS"),
+        ),
+        `${group.shard_name} job environment`,
+      ).toEqual(
+        Object.fromEntries(
+          Object.entries(selectedJob.env ?? {}).filter(
+            ([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS",
+          ),
+        ),
+      );
+      // Bounding can coalesce compatible settled serial rows after canonical selection.
+      // Compare the child budget the executor receives instead of projecting raw job concurrency
+      // backward across that phase boundary.
+      const childWorkers = buildChildEnv(
+        { kind: "group", name: group.shard_name, plan: group },
+        {
+          OPENCLAW_VITEST_MAX_WORKERS: job.planConcurrency === 1 ? "8" : "2",
+          ...job.env,
+        },
+        envScratch,
+        0,
+      ).OPENCLAW_VITEST_MAX_WORKERS;
+      const selectedChildWorkers = buildChildEnv(
+        { kind: "group", name: selectedGroup.shard_name, plan: selectedGroup },
+        {
+          OPENCLAW_VITEST_MAX_WORKERS: selectedJob.planConcurrency === 1 ? "8" : "2",
+          ...selectedJob.env,
+        },
+        envScratch,
+        0,
+      ).OPENCLAW_VITEST_MAX_WORKERS;
+      expect(childWorkers, `${group.shard_name} child worker ceiling`).toBe(selectedChildWorkers);
+    }
+  }
+  expect(createChangedNodeTestShards([paths[1]!, "ui/src/AGENTS.md"], options)).toEqual(
+    createChangedNodeTestShards([paths[1]!], options),
+  );
+  for (const hub of ["package.json", "tsconfig.json"]) {
+    const withHub = createChangedNodeTestShards([...paths, hub], options);
+    expect(withHub).not.toBeNull();
+    expect(selectedFiles(withHub)).toEqual(expect.arrayContaining(targets));
+    expect(selectedFiles(withHub)).not.toContain(
+      "extensions/acpx/src/runtime-advertised-model.process.test.ts",
+    );
+  }
+});
+
+it("keeps new-plugin, core, and manifest changes within the complete PR matrix cap", () => {
+  // Exact changed set from PR #159879, whose preflight originally emitted 134 rows.
+  const changedPaths = [
+    ".github/labeler.yml",
+    "docs/.generated/config-baseline.counts.json",
+    "docs/.generated/config-baseline.sha256",
+    "docs/.i18n/glossary.zh-CN.json",
+    "docs/channels/slack.md",
+    "docs/cli/transcripts.md",
+    "docs/docs.json",
+    "docs/plugins/meeting-plugins.md",
+    "docs/plugins/plugin-inventory.md",
+    "docs/plugins/reference.md",
+    "docs/plugins/reference/slack-huddles.md",
+    "docs/plugins/sdk-runtime.md",
+    "docs/plugins/slack-huddles.md",
+    "extensions/slack-huddles/README.md",
+    "extensions/slack-huddles/cli-metadata.ts",
+    "extensions/slack-huddles/index.ts",
+    "extensions/slack-huddles/openclaw.plugin.json",
+    "extensions/slack-huddles/package.json",
+    "extensions/slack-huddles/src/cli-output-mode.ts",
+    "extensions/slack-huddles/src/cli.ts",
+    "extensions/slack-huddles/src/config.test.ts",
+    "extensions/slack-huddles/src/config.ts",
+    "extensions/slack-huddles/src/errors.ts",
+    "extensions/slack-huddles/src/node-host.ts",
+    "extensions/slack-huddles/src/node-invoke-policy.test.ts",
+    "extensions/slack-huddles/src/node-invoke-policy.ts",
+    "extensions/slack-huddles/src/runtime-probes.ts",
+    "extensions/slack-huddles/src/runtime-setup.ts",
+    "extensions/slack-huddles/src/runtime.ts",
+    "extensions/slack-huddles/src/transports/chrome.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-page-scripts.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-platform-adapter.audio.test.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-platform-adapter.test-helpers.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-platform-adapter.test.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-platform-adapter.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-selectors.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-status-call-source.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-status-prejoin-source.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-urls.test.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-urls.ts",
+    "extensions/slack-huddles/src/transports/types.ts",
+    "extensions/slack-huddles/tsconfig.json",
+    "package.json",
+    "pnpm-lock.yaml",
+    "scripts/generate-plugin-inventory-doc.mts",
+    "scripts/lib/official-external-plugin-catalog.json",
+    "src/meeting-bot/status-call-ownership-source.ts",
+    "src/meeting-bot/status-call-source.test.ts",
+    "src/meeting-bot/status-call-source.ts",
+    "src/plugins/bundled-plugin-metadata.test.ts",
+    "src/plugins/official-external-meeting-catalog.test.ts",
+    "src/plugins/official-external-plugin-catalog.test.ts",
+    "test/scripts/bundled-plugin-build-entries.test.ts",
+  ];
+  const shards = expectDefined(
+    createChangedNodeTestShards(changedPaths, {
+      runnerBackend: "hybrid",
+      compactNodeJobCap: 130,
+      dedicatedBuildArtifacts: false,
+      includeReleaseOnlyRuntimeTests: false,
+      includePrExemptRuntimeTests: false,
+      dedicatedUiE2e: true,
+      dedicatedUiTests: true,
+    }),
+    "new plugin and global-input owner plan",
+  );
+  expect(shards.filter((shard) => !shard.requiresDist).length).toBeLessThanOrEqual(130);
+  expect(new Set(shards.map((shard) => shard.checkName)).size).toBe(shards.length);
+  const files = selectedFiles(shards);
+  expect(files).toContain("src/plugins/official-external-plugin-catalog.test.ts");
+  // Global inputs keep protection for suites split out of protected owners.
+  for (const split of [
+    "src/cli/run-main.bare-root.test.ts",
+    "src/cli/run-main.command-dispatch.test.ts",
+    "src/cli/run-main.gateway-startup.test.ts",
+    "src/plugins/official-external-plugin-catalog.hosted.test.ts",
+  ]) {
+    expect(files, split).toContain(split);
+  }
+  expect(files).toContain("src/plugins/bundled-plugin-metadata.test.ts");
+  expect(files).toContain("test/scripts/bundled-plugin-build-entries.test.ts");
+  expect(shards.some((shard) => shard.checkName.startsWith("checks-node-changed-extensions"))).toBe(
+    true,
+  );
+  expect(
+    shards.some((shard) => shard.configs.includes("test/vitest/vitest.boundary.config.ts")),
+  ).toBe(true);
+});

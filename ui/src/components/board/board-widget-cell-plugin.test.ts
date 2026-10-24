@@ -1,37 +1,39 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
-import "./board-widget-cell.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import {
+  callbacks,
+  cleanupCells,
+  mountElement as mount,
+} from "./board-widget-cell.test-support.ts";
+import "./board-widget-cell.solid.tsx";
 
-function callbacks(): BoardWidgetCellCallbacks {
-  const noAction = vi.fn(async () => undefined);
+const reportLoad = vi.hoisted(() => ({
+  promise: Promise.resolve(),
+  requested: vi.fn(),
+  fail: false,
+}));
+vi.mock("../../lib/board/widgets/report.tsx", async (importOriginal) => {
+  reportLoad.requested();
+  await reportLoad.promise;
+  const actual = await importOriginal<typeof import("../../lib/board/widgets/report.tsx")>();
   return {
-    appViewGeneration: () => 0,
-    grant: noAction,
-    movePointerDown: vi.fn(),
-    resizePointerDown: vi.fn(),
-    moveToTab: noAction,
-    resizeTo: noAction,
-    setHeightMode: noAction,
-    reportContentHeight: vi.fn(),
-    remove: noAction,
-    nudge: noAction,
-    focus: vi.fn(),
-    focusChanged: vi.fn(),
-    frameLoadFailed: noAction,
-    widgetAppView: vi.fn(async () => ({ status: "stale" as const, error: "unused" })),
-    refreshWidgetAppView: vi.fn(async () => ({ status: "stale" as const, error: "unused" })),
+    ...actual,
+    ReportWidget: (props: Parameters<typeof actual.ReportWidget>[0]) => {
+      if (reportLoad.fail) {
+        throw new Error("Report temporarily unavailable");
+      }
+      return actual.ReportWidget(props);
+    },
   };
-}
-
-afterEach(() => {
-  document.body.replaceChildren();
 });
+
+afterEach(cleanupCells);
 
 // The session progress element arrives via a lazy chunk; a cold transform can
 // exceed vi.waitFor's 1s default on loaded machines, so these waits get a
@@ -39,6 +41,36 @@ afterEach(() => {
 const CHUNK_LOAD_WAIT = { timeout: 10_000 };
 
 describe("plugin board widget cells", () => {
+  it("updates a healthy frame when only its URL resolver changes", async () => {
+    const widget: BoardWidget = {
+      name: "external-report",
+      tabId: "main",
+      contentKind: "plugin",
+      pluginKind: "reports:external",
+      frameUrl: "https://reports.example.test/report",
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    };
+    const cell = document.createElement("openclaw-board-widget-cell");
+    cell.widget = widget;
+    cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
+    cell.callbacks = callbacks();
+    cell.widgetFrameUrl = () => "/report/initial";
+    mount(cell);
+    await cell.updateComplete;
+    const frame = cell.querySelector("iframe")!;
+    expect(frame.getAttribute("src")).toBe("/report/initial");
+
+    cell.widgetFrameUrl = () => "/report/refreshed";
+    await cell.updateComplete;
+    await waitForSolid(() => expect(frame.getAttribute("src")).toBe("/report/refreshed"));
+    expect(cell.querySelector("iframe")).toBe(frame);
+    expect(cell.widget).toBe(widget);
+  });
+
   it.each([false, true])(
     "preserves a removable unavailable widget (Labs disabled: %s)",
     async (labsDisabled) => {
@@ -82,7 +114,7 @@ describe("plugin board widget cells", () => {
       cell.sessionKey = "agent:main:test";
       cell.callbacks = cellCallbacks;
       provider.append(cell);
-      document.body.append(provider);
+      mount(provider);
       await cell.updateComplete;
 
       const placeholder = cell.querySelector('[data-test-id="board-disabled-plugin"]');
@@ -109,7 +141,14 @@ describe("plugin board widget cells", () => {
     },
   );
 
-  it("renders an advertised pure report independently of optional plugin UI", async () => {
+  it("loads and retries an active report independently, retaining it while hidden", async () => {
+    const loadGate = Promise.withResolvers<void>();
+    reportLoad.promise = loadGate.promise;
+    reportLoad.fail = true;
+    onTestFinished(() => {
+      reportLoad.fail = false;
+      loadGate.resolve();
+    });
     const request = vi.fn();
     const registrations = vi.fn(() => []);
     const provider = createApplicationContextProvider({
@@ -141,9 +180,33 @@ describe("plugin board widget cells", () => {
     };
     cell.rect = { name: "summary", x: 0, y: 0, w: 6, h: 4 };
     cell.sessionKey = "agent:main:dashboard";
+    cell.active = false;
     cell.callbacks = callbacks();
     provider.append(cell);
-    document.body.append(provider);
+    mount(provider);
+    await cell.updateComplete;
+    expect(reportLoad.requested).not.toHaveBeenCalled();
+    cell.active = true;
+    await waitForSolid(() => {
+      expect(reportLoad.requested).toHaveBeenCalledOnce();
+      expect(cell.querySelector(".board-widget__plugin-loading")).not.toBeNull();
+    });
+    expect(cell.querySelector("openclaw-report-widget")).toBeNull();
+    loadGate.resolve();
+    await vi.waitFor(
+      () =>
+        expect(cell.querySelector(".lazy-view-error")?.textContent).toContain(
+          "Report temporarily unavailable",
+        ),
+      CHUNK_LOAD_WAIT,
+    );
+    reportLoad.fail = false;
+    cell.active = false;
+    await cell.updateComplete;
+    cell.active = true;
+    await cell.updateComplete;
+    expect(cell.querySelector(".lazy-view-error")).not.toBeNull();
+    cell.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
     await vi.waitFor(
       () =>
         expect(cell.querySelector("openclaw-report-widget")?.textContent).toContain(
@@ -154,6 +217,20 @@ describe("plugin board widget cells", () => {
     expect(cell.querySelector("iframe")).toBeNull();
     expect(request).not.toHaveBeenCalled();
     expect(registrations).not.toHaveBeenCalled();
+    const report = cell.querySelector("openclaw-report-widget");
+    cell.active = false;
+    await cell.updateComplete;
+    await waitForSolid(() => expect(cell.querySelector("openclaw-report-widget")).toBe(report));
+    cell.active = true;
+    cell.widget = {
+      ...cell.widget!,
+      props: { blocks: [{ type: "text", text: "Updated saved report" }] },
+    };
+    await waitForSolid(() => {
+      expect(cell.querySelector("openclaw-report-widget")).toBe(report);
+      expect(report?.textContent).toContain("Updated saved report");
+      expect(reportLoad.requested).toHaveBeenCalledOnce();
+    });
   });
 
   it("renders an advertised session progress card and its empty state", async () => {
@@ -214,57 +291,37 @@ describe("plugin board widget cells", () => {
 
     for (const [index, scenario] of responses.entries()) {
       const request = vi.fn(async () => scenario.response);
+      const result = {
+        sessions: [
+          { key: "global", agentId: "main", status: "failed", startedAt: 0, endedAt: 2 },
+          { key: "global", agentId: "research", status: "done", startedAt: 0, endedAt: 2 },
+          {
+            key: "agent:main:notes",
+            agentId: "main",
+            status: "failed",
+            startedAt: 0,
+            endedAt: 2,
+          },
+          {
+            key: "agent:research:notes",
+            agentId: "research",
+            status: "done",
+            startedAt: 0,
+            endedAt: 2,
+          },
+        ],
+      };
       const context = {
         agentSelection: {
           state: { scopeId: null },
           subscribe: () => () => undefined,
         },
         sessions: {
-          state: {
-            result: {
-              sessions: [
-                { key: "global", agentId: "main", status: "failed", startedAt: 0, endedAt: 2 },
-                { key: "global", agentId: "research", status: "done", startedAt: 0, endedAt: 2 },
-                {
-                  key: "agent:main:notes",
-                  agentId: "main",
-                  status: "failed",
-                  startedAt: 0,
-                  endedAt: 2,
-                },
-                {
-                  key: "agent:research:notes",
-                  agentId: "research",
-                  status: "done",
-                  startedAt: 0,
-                  endedAt: 2,
-                },
-              ],
-            },
-          },
+          state: { result },
           subscribe: () => () => undefined,
           subscribeList: () => () => undefined,
           listSnapshot: () => ({
-            result: {
-              sessions: [
-                { key: "global", agentId: "main", status: "failed", startedAt: 0, endedAt: 2 },
-                { key: "global", agentId: "research", status: "done", startedAt: 0, endedAt: 2 },
-                {
-                  key: "agent:main:notes",
-                  agentId: "main",
-                  status: "failed",
-                  startedAt: 0,
-                  endedAt: 2,
-                },
-                {
-                  key: "agent:research:notes",
-                  agentId: "research",
-                  status: "done",
-                  startedAt: 0,
-                  endedAt: 2,
-                },
-              ],
-            },
+            result,
             agentId: null,
             loading: false,
             error: null,
@@ -315,7 +372,7 @@ describe("plugin board widget cells", () => {
       cell.active = index !== 0;
       cell.callbacks = callbacks();
       provider.append(cell);
-      document.body.append(provider);
+      mount(provider);
 
       if (index === 0) {
         await cell.updateComplete;
@@ -323,6 +380,8 @@ describe("plugin board widget cells", () => {
         cell.active = true;
       }
 
+      await cell.updateComplete;
+      await vi.dynamicImportSettled();
       await vi.waitFor(
         () =>
           expect(request).toHaveBeenCalledWith("progressCard.get", {
@@ -360,6 +419,7 @@ describe("plugin board widget cells", () => {
 
   it("surfaces a failed session progress read and retries it", async () => {
     const sessionKey = "agent:main:protected";
+    const gatewayListeners = new Set<Parameters<ApplicationGateway["subscribe"]>[0]>();
     let attempts = 0;
     let onEvent: Parameters<ApplicationGateway["subscribeEvents"]>[0] | undefined;
     const deniedSessionKey = "agent:main:private";
@@ -406,7 +466,10 @@ describe("plugin board widget cells", () => {
             ],
           },
         },
-        subscribe: () => () => undefined,
+        subscribe: (listener: Parameters<ApplicationGateway["subscribe"]>[0]) => {
+          gatewayListeners.add(listener);
+          return () => gatewayListeners.delete(listener);
+        },
         subscribeEvents: (listener: NonNullable<typeof onEvent>) => {
           onEvent = listener;
           return () => {
@@ -436,7 +499,7 @@ describe("plugin board widget cells", () => {
     cell.session = { sessionKey: "agent:main:dashboard", agentId: "main" };
     cell.callbacks = callbacks();
     provider.append(cell);
-    document.body.append(provider);
+    mount(provider);
 
     await vi.waitFor(
       () => expect(cell.querySelector('[data-test-id="session-progress-error"]')).not.toBeNull(),
@@ -470,6 +533,15 @@ describe("plugin board widget cells", () => {
       "Recovered progress",
     );
     expect(request).toHaveBeenCalledTimes(3);
+    cell.session = { ...cell.session! };
+    for (const listener of gatewayListeners) {
+      listener(context.gateway.snapshot);
+    }
+    await cell.updateComplete;
+    await waitForSolid(() => {
+      expect(cell.querySelector('[data-test-id="session-progress-error"]')).not.toBeNull();
+      expect(request).toHaveBeenCalledTimes(3);
+    });
     cell
       .querySelector<HTMLButtonElement>('[data-test-id="session-progress-error"] button')
       ?.click();
@@ -600,7 +672,7 @@ describe("plugin board widget cells", () => {
     cell.active = true;
     cell.callbacks = callbacks();
     provider.append(cell);
-    document.body.append(provider);
+    mount(provider);
 
     await vi.waitFor(
       () =>

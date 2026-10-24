@@ -37,25 +37,24 @@ export const currentPluginMetadataConfigIdentityCache = {
 export function setCurrentPluginMetadataSnapshotState(
   snapshot: PluginMetadataSnapshot | undefined,
   configFingerprint: string | undefined,
-  compatiblePolicyHashes?: readonly string[],
   compatibleConfigFingerprints?: readonly string[],
   modelIdNormalizationPolicies?: PluginMetadataSnapshot["owners"]["modelIdNormalizationPolicies"],
   owner: "gateway" | "operation" = "operation",
   envFingerprint?: string,
   defaultDiscoveryCompatible = false,
+  agentWorkspaceFingerprint?: string,
 ): void {
   const state = getProcessPluginCache().metadata.current;
   state.snapshot = snapshot;
   state.owner = owner;
   state.configFingerprint = snapshot ? configFingerprint : undefined;
+  state.agentWorkspaceFingerprint = snapshot ? agentWorkspaceFingerprint : undefined;
   state.envFingerprint = snapshot ? envFingerprint : undefined;
   state.defaultDiscoveryCompatible = Boolean(snapshot && defaultDiscoveryCompatible);
-  state.compatiblePolicyHashes = snapshot ? compatiblePolicyHashes : undefined;
   state.compatibleConfigFingerprints = snapshot ? compatibleConfigFingerprints : undefined;
   setCurrentManifestModelIdNormalizationPolicies(
     snapshot ? modelIdNormalizationPolicies : undefined,
   );
-  state.revision = Symbol("plugin-metadata-snapshot");
 }
 
 /** Clears the snapshot, its identity cache, and process-wide model normalization. */
@@ -94,10 +93,9 @@ export function getCurrentPluginMetadataSnapshotState() {
     snapshot: state.snapshot,
     owner: state.owner,
     configFingerprint: state.configFingerprint,
+    agentWorkspaceFingerprint: state.agentWorkspaceFingerprint,
     envFingerprint: state.envFingerprint,
     defaultDiscoveryCompatible: state.defaultDiscoveryCompatible,
-    compatiblePolicyHashes: state.compatiblePolicyHashes,
     compatibleConfigFingerprints: state.compatibleConfigFingerprints,
-    revision: state.revision,
   };
 }

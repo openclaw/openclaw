@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
   AuthProfileMigrationRequiredError,
@@ -10,13 +10,18 @@ import {
 import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
 import { setRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { resolvePreparedRuntimeWorkspaces } from "../agents/embedded-agent-runner/run/prepared-runtime-context.js";
+import { runEmbeddedAgent as runEmbeddedAgentOwner } from "../agents/embedded-agent.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth-runtime-config.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import * as configModule from "../config/config.js";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   activateSecretsRuntimeSnapshotWithSource,
@@ -27,26 +32,92 @@ import { looksLikeSecretSentinel } from "../secrets/sentinel.js";
 import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { verifySystemAgentInferenceWithFallback } from "./inference-fallback.js";
-import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
+import {
+  resolveSystemAgentConfiguredRouteFromConfig,
+  type SystemAgentConfiguredRoute,
+} from "./inference-route.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
-import { completeSetupInference, verifySetupInference } from "./setup-inference-turn.js";
+import { completeSetupInference } from "./setup-inference-completion.js";
+import { verifySetupInference, verifySetupInferenceConfig } from "./setup-inference-turn.js";
+import * as setupInference from "./setup-inference.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
   resolveSystemAgentVerifiedInferenceRoute,
 } from "./verified-inference.js";
 
+// mock-isolation: The setup entrypoint exercises real route/auth owners, never a live model.
+vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
+
 const key = "synthetic-setup-test-key";
 const secretRef = { source: "store", provider: "default", id: "SETUP_TEST_KEY" } as const;
+const modelTransport = { modelId: "test-model", modelApi: "openai-responses" } as const;
+const probeResult = {
+  meta: {
+    durationMs: 1,
+    finalAssistantVisibleText: "OK",
+    executionTrace: { winnerProvider: "fixture", winnerModel: "test-model" },
+  },
+};
+const readConfigFileSnapshotOwner = readConfigFileSnapshot;
 const readSnapshot = () =>
-  readConfigFileSnapshot({ observe: false, pluginValidation: "core-only" });
+  readConfigFileSnapshotOwner({ observe: false, pluginValidation: "core-only" });
 let temp: TempHomeEnv;
 let configPath: string;
+
+async function configuredRoute(
+  snapshot: Awaited<ReturnType<typeof readSnapshot>>,
+  config = snapshot.runtimeConfig,
+) {
+  const route = await resolveSystemAgentConfiguredRouteFromConfig(
+    config,
+    "main",
+    { pluginMetadataPlugins: [] },
+    snapshot,
+  );
+  expect(route).not.toBeNull();
+  return route!;
+}
+
+function directAuth(
+  route: { runConfig: OpenClawConfig | undefined; agentDir?: string },
+  store: AuthProfileStore = { version: 1, profiles: {} },
+  allowAuthProfileFallback = false,
+) {
+  return resolveApiKeyForProviderCore({
+    cfg: route.runConfig,
+    provider: "fixture",
+    ...modelTransport,
+    agentDir: route.agentDir,
+    store,
+    allowAuthProfileFallback,
+    secretSentinels: true,
+  });
+}
+
+function bindRoute(
+  route: SystemAgentConfiguredRoute,
+  authFingerprint: string | undefined,
+  authProfileId?: string,
+) {
+  return createSystemAgentVerifiedInferenceBinding({
+    configuredRoute: route,
+    executionRoute: route,
+    auth: {
+      agentHarnessId: "openclaw",
+      ...modelTransport,
+      authFingerprint,
+      ...(authProfileId ? { authProfileId } : {}),
+    },
+  });
+}
 
 async function readRuntime() {
   const snapshot = await readSnapshot();
   expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
   return snapshot.runtimeConfig ?? snapshot.config;
 }
+
+const saveConfig = (config: OpenClawConfig) => fs.writeFile(configPath, JSON.stringify(config));
 
 async function activate() {
   const snapshot = await readSnapshot();
@@ -64,7 +135,7 @@ async function activate() {
 }
 
 function storeKey(value: string) {
-  writeSecretStoreEntry({
+  return writeSecretStoreEntry({
     scope: { kind: "team" },
     name: secretRef.id,
     value,
@@ -92,31 +163,125 @@ beforeEach(async () => {
           baseUrl: "https://provider.example/v1",
           apiKey: secretRef,
           models: [
-            {
-              id: "test-model",
+            buildCatalogModel("test-model", {
               name: "Fixture",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: 32000,
               maxTokens: 1000,
-            },
+            }),
           ],
         },
       },
     },
   };
-  await fs.writeFile(configPath, JSON.stringify(config));
-  storeKey(key);
+  await saveConfig(config);
+  await storeKey(key);
   await activate();
+  const reader = vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(readSnapshot);
+  onTestFinished(() => reader.mockRestore());
 });
 
 afterEach(async () => {
+  vi.mocked(runEmbeddedAgentOwner).mockReset();
   clearAuthProfileMigrationDiagnostics();
   clearSecretsRuntimeSnapshot();
   vi.unstubAllEnvs();
   await temp?.restore();
 });
+
+it.each(
+  (["utility-only", "primary failure", "primary success"] as const).flatMap((scenario) =>
+    (["verify", "complete"] as const).map((entrypoint) => ({ scenario, entrypoint })),
+  ),
+)(
+  "$entrypoint checks an uncreated agent's inherited primary without creating it: $scenario",
+  async ({ scenario, entrypoint }) => {
+    const agentId = "bot-00000000-0000-4000-8000-000000000001";
+    const config = (await readSnapshot()).sourceConfig;
+    config.meta = { ...config.meta, migrations: { utilityModelSeparation: true } };
+    const defaults = config.agents?.defaults;
+    const existingAgent = config.agents?.entries?.main;
+    assert(defaults && existingAgent);
+    defaults.utilityModel = "fixture/test-model";
+    if (scenario === "utility-only") {
+      delete defaults.model;
+    }
+    // An existing agent's override must not qualify the candidate's inherited route.
+    existingAgent.model = "fixture/existing-agent-model";
+    await saveConfig(config);
+    await activate();
+    const before = await fs.readFile(configPath, "utf8");
+    const runEmbeddedAgent = vi.fn<typeof runEmbeddedAgentOwner>(async (params) => {
+      expect(params).toMatchObject({
+        agentId,
+        model: "test-model",
+        agentDir: resolveAgentDir(config, agentId),
+        sessionPersistence: "detached",
+        authProfileStateMode: "read-only",
+      });
+      assert(params.sessionFile && params.config);
+      // Exercise the real runner's roster/workspace admission before replacing
+      // the external model turn. A route-only fake misses unconfigured owners.
+      const workspaces = resolvePreparedRuntimeWorkspaces({
+        ...params,
+        sessionFile: params.sessionFile,
+      });
+      expect(workspaces.requestedWorkspaceResolution).toMatchObject({
+        agentId,
+        workspaceDir: params.workspaceDir,
+        usedFallback: false,
+      });
+      expect(params.config.agents?.entries?.[agentId]).toEqual({});
+      const auth = await directAuth({ runConfig: params.config, agentDir: params.agentDir });
+      expect(looksLikeSecretSentinel(auth.apiKey ?? "")).toBe(true);
+      expect(await fs.readFile(configPath, "utf8")).toBe(before);
+      if (scenario === "primary failure") {
+        throw new Error("Synthetic primary inference unavailable");
+      }
+      return probeResult;
+    });
+    vi.mocked(runEmbeddedAgentOwner).mockImplementation(runEmbeddedAgent);
+    const request = {
+      agentId,
+      modelTarget: "primary" as const,
+      runtime: { log() {}, error() {}, exit() {} },
+      deps: {
+        readConfigFileSnapshot: readSnapshot,
+      },
+    };
+    const result =
+      entrypoint === "verify"
+        ? await verifySetupInference(request)
+        : await completeSetupInference({
+            ...request,
+            prompt: "Ask for your name.",
+          });
+
+    expect(result.ok, result.ok ? undefined : result.error).toBe(scenario === "primary success");
+    if (scenario === "utility-only") {
+      expect(result).toMatchObject({
+        ok: false,
+        status: "unavailable",
+        error: expect.stringContaining("No primary model"),
+      });
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    } else {
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(result).toMatchObject(
+        scenario === "primary success"
+          ? { ok: true, modelRef: "fixture/test-model" }
+          : {
+              ok: false,
+              error: expect.stringContaining("Synthetic primary inference unavailable"),
+            },
+      );
+    }
+    expect(await fs.readFile(configPath, "utf8")).toBe(before);
+    expect((await readSnapshot()).sourceConfig.agents?.entries).not.toHaveProperty(agentId);
+    await expect(fs.stat(path.dirname(resolveAgentDir(config, agentId)))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  },
+);
 
 it.each(["fixture", "unrelated"])(
   "scopes verified setup binding to its selected provider when %s requires migration",
@@ -135,23 +300,16 @@ it.each(["fixture", "unrelated"])(
     const provider = cfg.models?.providers?.fixture;
     assert(provider);
     delete provider.apiKey;
-    await fs.writeFile(configPath, JSON.stringify(cfg));
+    await saveConfig(cfg);
     const snapshot = await readSnapshot();
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(
-      snapshot.runtimeConfig,
-      "main",
-      { pluginMetadataPlugins: [] },
-      snapshot,
-    );
-    expect(route).not.toBeNull();
+    const route = await configuredRoute(snapshot);
     const auth = await resolveApiKeyForProviderCore({
       provider: "fixture",
       cfg: route!.runConfig,
       agentDir,
       profileId,
       lockedProfile: true,
-      modelId: "test-model",
-      modelApi: "openai-responses",
+      ...modelTransport,
       secretSentinels: true,
     });
     const legacyPath = path.join(temp.home, "migration-source.json");
@@ -170,18 +328,7 @@ it.each(["fixture", "unrelated"])(
         sources: [{ kind: "auth-profiles", path: legacyPath }],
       }),
     );
-    const binding = createSystemAgentVerifiedInferenceBinding({
-      configuredRoute: route!,
-      executionRoute: route!,
-      auth: {
-        agentHarnessId: "openclaw",
-        authProfileId: profileId,
-        modelId: "test-model",
-        modelApi: "openai-responses",
-        authFingerprint: fingerprintResolvedProviderAuth(auth),
-      },
-      deps: { pluginMetadataPlugins: [] },
-    });
+    const binding = bindRoute(route, fingerprintResolvedProviderAuth(auth), profileId);
     if (affectedProvider === "fixture") {
       await expect(binding).rejects.toMatchObject({ code: "AUTH_PROFILE_MIGRATION_REQUIRED" });
     } else {
@@ -194,13 +341,7 @@ it("keeps protected credentials through a fresh setup read and verified-route re
   const snapshot = await readSnapshot();
   const source = snapshot.runtimeConfig;
   expect(source).not.toEqual(snapshot.sourceConfig);
-  const route = await resolveSystemAgentConfiguredRouteFromConfig(
-    source,
-    "main",
-    { pluginMetadataPlugins: [] },
-    snapshot,
-  );
-  expect(route).not.toBeNull();
+  const route = await configuredRoute(snapshot);
   expect(route!.runConfig.agents?.entries).toHaveProperty("openclaw");
   expect(snapshot.sourceConfig.agents?.defaults?.maxConcurrent).toBeUndefined();
   expect(route!.runConfig.agents?.defaults?.maxConcurrent).toBeGreaterThan(0);
@@ -208,79 +349,56 @@ it("keeps protected credentials through a fresh setup read and verified-route re
     resolveManagedSecretRefRuntimeProviderAuth({ cfg: route!.runConfig, provider: "fixture" })
       ?.apiKey,
   ).toBe(key);
-  const auth = await resolveApiKeyForProviderCore({
-    cfg: route!.runConfig,
-    provider: "fixture",
-    modelId: "test-model",
-    modelApi: "openai-responses",
-    agentDir: route!.agentDir,
-    store: { version: 1, profiles: {} },
-    allowAuthProfileFallback: false,
-    secretSentinels: true,
-  });
-  const binding = await createSystemAgentVerifiedInferenceBinding({
-    configuredRoute: route!,
-    executionRoute: route!,
-    auth: {
-      agentHarnessId: "openclaw",
-      modelId: "test-model",
-      modelApi: "openai-responses",
-      authFingerprint: fingerprintResolvedProviderAuth(auth),
-    },
-    deps: { pluginMetadataPlugins: [] },
-  });
-  const deps = { readConfigFileSnapshot: readSnapshot, pluginMetadataPlugins: [] };
-  expect(await resolveSystemAgentVerifiedInferenceRoute(binding, deps)).not.toBeNull();
+  const binding = await bindRoute(route, fingerprintResolvedProviderAuth(await directAuth(route)));
+  expect(await resolveSystemAgentVerifiedInferenceRoute(binding)).not.toBeNull();
   // Neither the persisted input nor the configured-route fingerprint may contain the key.
   expect(source.models?.providers?.fixture?.apiKey).toEqual(secretRef);
   expect(JSON.stringify(binding.executionFingerprint)).not.toContain(key);
   expect(await fs.readFile(configPath, "utf8")).not.toContain(key);
 
-  storeKey("synthetic-rotated-key");
+  await storeKey("synthetic-rotated-key");
   await activate();
-  expect(await resolveSystemAgentVerifiedInferenceRoute(binding, deps)).toBeNull();
+  expect(await resolveSystemAgentVerifiedInferenceRoute(binding)).toBeNull();
 });
 
+it.each(["fixture", "Fixture", " Fixture "])(
+  "keeps a staged replacement credential authoritative for %s",
+  async (providerKey) => {
+    const sourceConfig = (await readSnapshot()).sourceConfig;
+    const originalProvider = sourceConfig.models!.providers!.fixture;
+    assert(originalProvider);
+    delete sourceConfig.models!.providers!.fixture;
+    sourceConfig.models!.providers![providerKey] = originalProvider;
+    await saveConfig(sourceConfig);
+    await activate();
+    const snapshot = await readSnapshot();
+    // Same-route credential repair: the unsaved candidate, not disk, owns the new key.
+    const candidate = cloneConfigWithResolutionFacts(snapshot.runtimeConfig);
+    const provider = candidate.models?.providers?.[providerKey];
+    assert(provider);
+    provider.apiKey = "synthetic-replacement-key";
+    const candidateRoute = await configuredRoute(snapshot, candidate);
+    const replacementAuth = await directAuth(candidateRoute);
+    const probeFingerprint = fingerprintResolvedProviderAuth(replacementAuth);
+    expect(probeFingerprint).toBeDefined();
+    const binding = await bindRoute(candidateRoute, probeFingerprint);
+    expect(binding.auth.authFingerprint).toBe(probeFingerprint);
+    expect((await readRuntime()).models?.providers?.[providerKey]?.apiKey).toEqual(secretRef);
+  },
+);
+
 it.each([
-  {
-    label: "protected key",
-    entrypoint: "verify",
-    rotateBeforeBinding: false,
-    alternateProfile: false,
-  },
-  {
-    label: "key rotated during probe",
-    entrypoint: "verify",
-    rotateBeforeBinding: true,
-    alternateProfile: false,
-  },
-  {
-    label: "alternate profile available",
-    entrypoint: "verify",
-    rotateBeforeBinding: false,
-    alternateProfile: true,
-  },
-  {
-    label: "completion",
-    entrypoint: "complete",
-    rotateBeforeBinding: false,
-    alternateProfile: false,
-  },
-  {
-    label: "existing-model activation",
-    entrypoint: "activate",
-    rotateBeforeBinding: false,
-    alternateProfile: false,
-  },
-  {
-    label: "non-default fallback owner",
-    entrypoint: "fallback",
-    rotateBeforeBinding: false,
-    alternateProfile: false,
-  },
-])(
-  "verifies the actual setup entrypoint: $label",
-  async ({ entrypoint, rotateBeforeBinding, alternateProfile }) => {
+  ["protected key", "verify", false, false],
+  ["key rotated during probe", "verify", true, false],
+  ["staged reference rotated during probe", "candidate", true, false],
+  ["existing-model activation rotated during probe", "activate", true, false],
+  ["alternate profile available", "verify", false, true],
+  ["completion", "complete", false, false],
+  ["existing-model activation", "activate", false, false],
+  ["non-default fallback owner", "fallback", false, false],
+] as const)(
+  "verifies the actual setup entrypoint: %s",
+  async (_label, entrypoint, rotateBeforeBinding, alternateProfile) => {
     if (entrypoint === "fallback") {
       const config = (await readSnapshot()).sourceConfig;
       config.agents!.ownership = "explicit";
@@ -289,7 +407,7 @@ it.each([
         model: "fixture/test-model",
         params: { temperature: 0.1 },
       };
-      await fs.writeFile(configPath, JSON.stringify(config));
+      await saveConfig(config);
       await activate();
       expect((await readRuntime()).agents?.entries).toHaveProperty("engineering");
     }
@@ -300,18 +418,13 @@ it.each([
         credential: { type: "api_key", provider: "fixture", key: "synthetic-alternate-key" },
       });
     }
-    const runEmbeddedAgent = vi.fn<
-      NonNullable<
-        NonNullable<Parameters<typeof verifySetupInference>[0]["deps"]>["runEmbeddedAgent"]
-      >
-    >(async (params) => {
+    const runEmbeddedAgent = vi.fn<typeof runEmbeddedAgentOwner>(async (params) => {
       // Replace only the model turn; use the real planner and credential resolver.
       const store = ensureAuthProfileStore(params.agentDir);
       const prepared = prepareAgentRuntimeAuth({
         config: params.config,
         provider: "fixture",
-        modelId: "test-model",
-        modelApi: "openai-responses",
+        ...modelTransport,
         modelBaseUrl: "https://provider.example/v1",
         agentDir: params.agentDir,
         env: {},
@@ -327,34 +440,22 @@ it.each([
         throw new Error("Expected the configured direct provider credential");
       }
       expect(attempt.allowAuthProfileFallback).toBe(false);
-      const auth = await resolveApiKeyForProviderCore({
-        cfg: params.config,
-        provider: "fixture",
-        modelId: "test-model",
-        modelApi: "openai-responses",
-        agentDir: params.agentDir,
+      const auth = await directAuth(
+        { runConfig: params.config, agentDir: params.agentDir },
         store,
-        allowAuthProfileFallback: attempt.allowAuthProfileFallback,
-        secretSentinels: true,
-      });
+        attempt.allowAuthProfileFallback,
+      );
       expect(looksLikeSecretSentinel(auth.apiKey ?? "")).toBe(true);
       params.onSuccessfulAuthBinding?.({
         agentHarnessId: "openclaw",
-        modelId: "test-model",
-        modelApi: "openai-responses",
+        ...modelTransport,
         authFingerprint: fingerprintResolvedProviderAuth(auth),
       });
       if (rotateBeforeBinding) {
-        storeKey("synthetic-rotated-key");
+        await storeKey("synthetic-rotated-key");
         await activate();
       }
-      return {
-        meta: {
-          durationMs: 1,
-          finalAssistantVisibleText: "OK",
-          executionTrace: { winnerProvider: "fixture", winnerModel: "test-model" },
-        },
-      };
+      return probeResult;
     });
     const runtime = {
       log() {},
@@ -363,48 +464,54 @@ it.each([
         throw new Error("Unexpected exit");
       },
     };
-    const deps = {
-      readConfigFileSnapshot: readSnapshot,
-      createTempDir: () => fs.mkdtemp(path.join(temp.home, "probe-")),
-      runEmbeddedAgent,
-    };
-    const attemptedOwners: string[] = [];
+    vi.mocked(runEmbeddedAgentOwner).mockImplementation(runEmbeddedAgent);
+    const attemptedOwners: Array<string | undefined> = [];
+    if (entrypoint === "fallback") {
+      const verify = vi
+        .spyOn(setupInference, "verifySetupInference")
+        .mockImplementation(async (params) => {
+          attemptedOwners.push(params.agentId);
+          return params.agentId === "main"
+            ? { ok: false, status: "auth", error: "Primary owner unavailable" }
+            : verifySetupInference({ ...params, bindSession: true });
+        });
+      onTestFinished(() => verify.mockRestore());
+    }
+    const boundVerification =
+      entrypoint === "verify"
+        ? await verifySetupInference({ agentId: "main", bindSession: true, runtime })
+        : entrypoint === "fallback"
+          ? await verifySystemAgentInferenceWithFallback({
+              runtime,
+            })
+          : undefined;
     const result =
-      entrypoint === "complete"
-        ? await completeSetupInference({ prompt: "Reply with OK", runtime, deps })
-        : entrypoint === "activate"
-          ? await activateSetupInference({
+      boundVerification ??
+      (entrypoint === "candidate"
+        ? await verifySetupInferenceConfig({
+            config: (await readSnapshot()).sourceConfig,
+            requireExecutionOwner: true,
+            runtime,
+          })
+        : entrypoint === "complete"
+          ? await completeSetupInference({ prompt: "Reply with OK", runtime })
+          : await activateSetupInference({
               kind: "existing-model",
               surface: "gateway",
               runtime,
-              deps,
-            })
-          : entrypoint === "fallback"
-            ? await verifySystemAgentInferenceWithFallback({
-                runtime,
-                deps: {
-                  verify: async (params) => {
-                    attemptedOwners.push(params.agentId);
-                    return params.agentId === "main"
-                      ? { ok: false, status: "auth", error: "Primary owner unavailable" }
-                      : verifySetupInference({ ...params, deps });
-                  },
-                },
-              })
-            : await verifySetupInference({ agentId: "main", bindSession: true, runtime, deps });
+            }));
     expect(result.ok, result.ok ? undefined : result.error).toBe(!rotateBeforeBinding);
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    if (result.ok && "binding" in result) {
+    if (boundVerification?.ok) {
       expect(
-        await resolveSystemAgentVerifiedInferenceRoute(result.binding, {
-          readConfigFileSnapshot: readSnapshot,
-          pluginMetadataPlugins: [],
-        }),
+        await resolveSystemAgentVerifiedInferenceRoute(boundVerification.binding),
       ).not.toBeNull();
       if (entrypoint === "fallback") {
         expect(attemptedOwners).toEqual(["main", "engineering"]);
-        expect(result.binding.execution.agentId).toBe("engineering");
-        expect(result.binding.execution.runConfig.agents?.entries?.openclaw?.params).toEqual({
+        expect(boundVerification.binding.execution.agentId).toBe("engineering");
+        expect(
+          boundVerification.binding.execution.runConfig.agents?.entries?.openclaw?.params,
+        ).toEqual({
           temperature: 0.1,
         });
       }
@@ -426,28 +533,19 @@ it.each([
     let snapshot = await readSnapshot();
     let candidate = cloneConfigWithResolutionFacts(snapshot.runtimeConfig);
     const provider = candidate.models?.providers?.fixture;
-    if (!provider) {
-      throw new Error("Missing fixture provider");
-    }
+    assert(provider);
     const expectedRef = field === "reference" ? { ...secretRef, id: "OTHER_KEY" } : secretRef;
     provider.apiKey = expectedRef;
     if (field === "destination") {
       provider.baseUrl = "https://other.example/v1";
     }
     if (saved) {
-      await fs.writeFile(configPath, JSON.stringify(candidate));
+      await saveConfig(candidate);
       snapshot = await readSnapshot();
       candidate = snapshot.runtimeConfig;
     }
-    // A changed candidate with the old read, or a fresh read whose new source is
-    // not active yet: neither may reuse credentials prepared for the old owner.
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(
-      candidate,
-      "main",
-      { pluginMetadataPlugins: [] },
-      snapshot,
-    );
-    expect(route).not.toBeNull();
+    // A fresh read not activated yet cannot reuse the old owner's credentials.
+    const route = await configuredRoute(snapshot, candidate);
     expect(
       resolveManagedSecretRefRuntimeProviderAuth({ cfg: route!.runConfig, provider: "fixture" }),
     ).toBeUndefined();
@@ -458,13 +556,7 @@ it.each([
 it("retains the materialized view when no prepared runtime is active", async () => {
   clearSecretsRuntimeSnapshot();
   const snapshot = await readSnapshot();
-  const route = await resolveSystemAgentConfiguredRouteFromConfig(
-    snapshot.runtimeConfig,
-    "main",
-    { pluginMetadataPlugins: [] },
-    snapshot,
-  );
-  expect(route).not.toBeNull();
+  const route = await configuredRoute(snapshot);
   expect(route!.runConfig.agents?.defaults?.maxConcurrent).toBeGreaterThan(0);
   expect(route!.runConfig.models?.providers?.fixture?.apiKey).toEqual(secretRef);
   expect(

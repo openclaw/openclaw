@@ -4,26 +4,27 @@ import {
   type TypeBoxValidationError,
 } from "@openclaw/normalization-core/json-schema";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 // Compiles plugin manifest schemas for validation without runtime loading.
 import { Format } from "typebox/format";
-import { Compile, type Validator as TypeBoxValidator } from "typebox/schema";
+import { Check, Compile, Pointer, type Validator as TypeBoxValidator } from "typebox/schema";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import {
   applyJsonSchemaDefaults,
   findJsonSchemaShapeError,
 } from "../shared/json-schema-defaults.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
-import { PluginLruCache } from "./plugin-lru-cache.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 type CachedValidator = {
   hasDefaults: boolean;
   validate: TypeBoxValidator;
   schema: JsonSchemaValue;
-  schemaFingerprint: string;
 };
 
 /**
@@ -32,7 +33,8 @@ type CachedValidator = {
  */
 export type JsonSchemaValue = JsonSchemaObject | boolean;
 
-const schemaCache = new PluginLruCache<CachedValidator>(512);
+const schemaCache = new LruCache<CachedValidator>(512);
+const immutableSchemaValidators = new WeakMap<object, CachedValidator>();
 const annotationOnlyFormats = [
   "date-time",
   "date",
@@ -56,22 +58,14 @@ const annotationOnlyFormats = [
   "uuid",
 ] as const;
 
-function fingerprintSchema(schema: JsonSchemaValue): string {
-  return JSON.stringify(schema);
-}
-
 function schemaHasDefaults(schema: unknown): boolean {
   if (!schema || typeof schema !== "object") {
     return false;
   }
   if (Array.isArray(schema)) {
-    return schema.some((item) => schemaHasDefaults(item));
+    return schema.some(schemaHasDefaults);
   }
-  const record = schema as Record<string, unknown>;
-  if (Object.hasOwn(record, "default")) {
-    return true;
-  }
-  return Object.values(record).some((value) => schemaHasDefaults(value));
+  return Object.hasOwn(schema, "default") || Object.values(schema).some(schemaHasDefaults);
 }
 
 // Transfer only defaults selected by the source; re-evaluating branches on resolved
@@ -101,7 +95,7 @@ function applyValidatedSourceDefaults(
 }
 
 function compileSchema(schema: JsonSchemaValue): TypeBoxValidator {
-  return Compile(normalizeJsonSchemaForTypeBox(schema) as never);
+  return withPluginFormatSemantics(() => Compile(normalizeJsonSchemaForTypeBox(schema) as never));
 }
 
 function relaxConditionalRequiredKeywords(
@@ -133,7 +127,8 @@ function relaxConditionalRequiredKeywords(
 
 function withPluginFormatSemantics<T>(callback: () => T): T {
   const previousFormats = Format.Entries();
-  // TypeBox format checks are global; snapshot/restore keeps plugin schema semantics local.
+  // Compiled checks capture format functions; interpreted errors read the global registry.
+  // Scope both paths without changing other TypeBox consumers.
   Format.Set("uri", (value) => URL.canParse(value));
   for (const format of annotationOnlyFormats) {
     Format.Set(format, () => true);
@@ -159,27 +154,14 @@ function checkSchemaWithCurrentFormats(
   return normalizeTypeBoxValidationErrors(validate.Errors(value)[1]);
 }
 
-function isDefaultActivatedConditionalFailure(params: {
-  schema: JsonSchemaValue;
-  validate: TypeBoxValidator;
-  originalValue: unknown;
-  defaultedValue: unknown;
-}): boolean {
-  const relaxedConditionalValidator = compileSchema(
-    relaxConditionalRequiredKeywords(params.schema),
-  );
-  if (checkSchemaWithCurrentFormats(relaxedConditionalValidator, params.defaultedValue)) {
-    return false;
-  }
-  return checkSchemaWithCurrentFormats(params.validate, params.originalValue) === null;
-}
-
 /**
  * Sanitized validation error surfaced to config diagnostics, gateway hooks, and SDK callers.
  * `path`/`message` stay raw for programmatic handling; `text` is terminal-safe display text.
  */
 export type JsonSchemaValidationError = {
   path: string;
+  /** Exact property segments; display paths can collapse literal dots or slashes. */
+  valuePath?: readonly string[];
   message: string;
   text: string;
   additionalProperty?: string;
@@ -196,9 +178,9 @@ export function parseJsonSchemaIssuePath(
   return path.split(".").map((segment) => parseConfigPathArrayIndex(segment) ?? segment);
 }
 
-function normalizeErrorPath(instancePath: string | undefined): string {
-  const path = instancePath?.replace(/^\//, "").replace(/\//g, ".");
-  return path && path.length > 0 ? path : "<root>";
+function normalizeErrorPath(valuePath: readonly string[]): string {
+  const path = valuePath.join(".").replace(/\//g, ".");
+  return path || "<root>";
 }
 
 function appendPathSegment(path: string, segment: string): string {
@@ -210,19 +192,6 @@ function appendPathSegment(path: string, segment: string): string {
     return trimmed;
   }
   return `${path}.${trimmed}`;
-}
-
-function firstStringParam(value: unknown): string | null {
-  if (typeof value === "string" && value.trim()) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    const first = value.find(
-      (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-    );
-    return first ?? null;
-  }
-  return null;
 }
 
 function resolveMissingProperties(error: TypeBoxValidationError): string[] {
@@ -240,10 +209,12 @@ function resolveMissingProperties(error: TypeBoxValidationError): string[] {
   return properties.filter((property): property is string => typeof property === "string");
 }
 
-function extractAllowedValues(error: TypeBoxValidationError): unknown[] | null {
+function getAllowedValuesSummary(
+  error: TypeBoxValidationError,
+): ReturnType<typeof summarizeAllowedValues> {
   if (error.keyword === "enum") {
     const allowedValues = error.params?.allowedValues;
-    return Array.isArray(allowedValues) ? allowedValues : null;
+    return Array.isArray(allowedValues) ? summarizeAllowedValues(allowedValues) : null;
   }
 
   if (error.keyword === "const") {
@@ -251,27 +222,20 @@ function extractAllowedValues(error: TypeBoxValidationError): unknown[] | null {
     if (!params || !Object.hasOwn(params, "allowedValue")) {
       return null;
     }
-    return [params.allowedValue];
+    return summarizeAllowedValues([params.allowedValue]);
   }
 
   return null;
-}
-
-function getAllowedValuesSummary(
-  error: TypeBoxValidationError,
-): ReturnType<typeof summarizeAllowedValues> {
-  const allowedValues = extractAllowedValues(error);
-  if (!allowedValues) {
-    return null;
-  }
-  return summarizeAllowedValues(allowedValues);
 }
 
 function resolveAdditionalProperty(error: TypeBoxValidationError): string | undefined {
   if (error.keyword !== "additionalProperties") {
     return undefined;
   }
-  return firstStringParam(error.params?.additionalProperty) ?? undefined;
+  const value = error.params?.additionalProperty;
+  return Array.isArray(value)
+    ? value.find((entry): entry is string => readNonBlankString(entry) !== undefined)
+    : readNonBlankString(value);
 }
 
 function resolveAdditionalProperties(error: TypeBoxValidationError): string[] {
@@ -320,8 +284,9 @@ function formatValidationErrors(
     const missingProperties = resolveMissingProperties(error);
     const allowedValuesSummary = getAllowedValuesSummary(error);
     const additionalProperty = resolveAdditionalProperty(error);
+    const baseValuePath = Pointer.Indices(error.instancePath ?? "");
+    const basePath = normalizeErrorPath(baseValuePath);
     return (missingProperties.length ? missingProperties : [undefined]).map((missingProperty) => {
-      const basePath = normalizeErrorPath(error.instancePath);
       const path =
         missingProperty === undefined ? basePath : appendPathSegment(basePath, missingProperty);
       const baseMessage =
@@ -335,6 +300,8 @@ function formatValidationErrors(
       const safeMessage = sanitizeTerminalText(message);
       const formattedError: JsonSchemaValidationError = {
         path,
+        valuePath:
+          missingProperty === undefined ? baseValuePath : [...baseValuePath, missingProperty],
         message,
         text: `${safePath}: ${safeMessage}`,
       };
@@ -371,14 +338,13 @@ export function validatePluginSchemaValue(
   params: Parameters<typeof validateJsonSchemaValue>[0] & { origin: PluginOrigin },
 ): PluginSchemaValidationResult {
   const { origin, ...validationParams } = params;
-  if (origin === "bundled") {
-    const result = validateJsonSchemaValue(validationParams);
-    return result.ok ? result : { ...result, schemaError: false };
-  }
   try {
     const result = validateJsonSchemaValue(validationParams);
     return result.ok ? result : { ...result, schemaError: false };
   } catch (error) {
+    if (origin === "bundled") {
+      throw error;
+    }
     // The thrown text can embed raw manifest content (TypeBox echoes a bad regex
     // pattern), and callers log it, so it is sanitized like every other error path.
     const text = sanitizeTerminalText(error instanceof Error ? error.message : String(error));
@@ -388,43 +354,52 @@ export function validatePluginSchemaValue(
 
 /**
  * Validate a plugin-owned value against a JSON Schema, optionally hydrating schema defaults.
- * The cache key is caller-owned so repeated plugin/schema validations can reuse compiled TypeBox validators.
+ * Schema contents own compiled-validator identity, independently of callers and default application.
  */
 export function validateJsonSchemaValue(params: {
   schema: JsonSchemaValue;
-  cacheKey: string;
+  /** Accepted for SDK compatibility; schema contents now own cache identity. */
+  cacheKey?: string;
   value: unknown;
   /** Persisted input paired with this runtime value, before secret resolution. */
   sourceValue?: unknown;
   applyDefaults?: boolean;
   cache?: boolean;
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
-  const cacheKey = params.applyDefaults ? `${params.cacheKey}::defaults` : params.cacheKey;
-  let cached = params.cache === false ? undefined : schemaCache.get(cacheKey);
-  if (!cached || cached.schema !== params.schema) {
-    const schemaError = findJsonSchemaShapeError(params.schema);
-    if (schemaError) {
-      throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
+  const schemaObject =
+    params.cache !== false && typeof params.schema === "object" ? params.schema : undefined;
+  let cached = schemaObject ? immutableSchemaValidators.get(schemaObject) : undefined;
+  if (!cached) {
+    let cacheKey: string;
+    try {
+      cacheKey = JSON.stringify(params.schema);
+    } catch (error) {
+      const schemaError = findJsonSchemaShapeError(params.schema);
+      throw schemaError ? new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`)) : error;
     }
-  }
-  const schemaFingerprint =
-    !cached || cached.schema !== params.schema ? fingerprintSchema(params.schema) : undefined;
-  if (
-    !cached ||
-    (cached.schema !== params.schema && cached.schemaFingerprint !== schemaFingerprint)
-  ) {
-    const validate = compileSchema(params.schema);
-    cached = {
-      hasDefaults: params.applyDefaults ? schemaHasDefaults(params.schema) : false,
-      validate,
-      schema: params.schema,
-      schemaFingerprint: schemaFingerprint ?? fingerprintSchema(params.schema),
-    };
-    if (params.cache !== false) {
-      schemaCache.set(cacheKey, cached);
+    cached = params.cache === false ? undefined : schemaCache.get(cacheKey);
+    if (!cached || cached.schema !== params.schema) {
+      const schemaError = findJsonSchemaShapeError(params.schema);
+      if (schemaError) {
+        throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
+      }
     }
-  } else if (cached.schema !== params.schema) {
-    cached.schema = params.schema;
+    if (!cached) {
+      cached = {
+        hasDefaults: schemaHasDefaults(params.schema),
+        validate: compileSchema(params.schema),
+        schema: params.schema,
+      };
+      if (params.cache !== false) {
+        schemaCache.set(cacheKey, cached);
+      }
+    } else if (cached.schema !== params.schema) {
+      cached.schema = params.schema;
+    }
+    if (schemaObject && isDeeplyFrozenPlainData(schemaObject)) {
+      // Keep this owner's schema; the content LRU may later bind an equivalent mutable source.
+      immutableSchemaValidators.set(schemaObject, { ...cached, schema: schemaObject });
+    }
   }
 
   return withPluginFormatSemantics(() => {
@@ -440,12 +415,11 @@ export function validateJsonSchemaValue(params: {
       !(
         params.applyDefaults &&
         value !== originalValue &&
-        isDefaultActivatedConditionalFailure({
-          schema: params.schema,
-          validate: cached.validate,
-          originalValue,
-          defaultedValue: value,
-        })
+        Check(
+          normalizeJsonSchemaForTypeBox(relaxConditionalRequiredKeywords(params.schema)),
+          value,
+        ) &&
+        cached.validate.Check(originalValue)
       )
     ) {
       return { ok: false, errors: formatValidationErrors(errors) };

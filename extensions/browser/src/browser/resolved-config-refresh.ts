@@ -1,12 +1,8 @@
-/**
- * Runtime config refresh helpers for Browser profiles that can be hot-reloaded
- * without restarting the whole Browser plugin server.
- */
 import { isDeepStrictEqual } from "node:util";
 import { loadBrowserConfigForRuntimeRefresh } from "./config-refresh-source.js";
 import { resolveBrowserConfig, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import { beginProfileTransition, getProfileLifecycle } from "./server-context.lifecycle.js";
-import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
+import type { BrowserServerState } from "./server-context.types.js";
 
 function changedProfileInvariants(
   current: ResolvedBrowserProfile,
@@ -14,27 +10,20 @@ function changedProfileInvariants(
   previousConfig: BrowserServerState["resolved"],
   nextConfig: BrowserServerState["resolved"],
 ): string[] {
-  const changed: string[] = [];
+  const changed: string[] = (["cdpUrl", "cdpPort", "driver"] as const).filter(
+    (key) => current[key] !== next[key],
+  );
   const currentUsesLocalManagedLaunch =
     current.driver === "openclaw" && !current.attachOnly && current.cdpIsLoopback;
   const nextUsesLocalManagedLaunch =
     next.driver === "openclaw" && !next.attachOnly && next.cdpIsLoopback;
-  if (current.cdpUrl !== next.cdpUrl) {
-    changed.push("cdpUrl");
-  }
-  if (current.cdpPort !== next.cdpPort) {
-    changed.push("cdpPort");
-  }
-  if (current.driver !== next.driver) {
-    changed.push("driver");
+  if ((current.engine ?? "chromium") !== (next.engine ?? "chromium")) {
+    changed.push("engine");
   }
   if (currentUsesLocalManagedLaunch && nextUsesLocalManagedLaunch) {
-    if (current.headless !== next.headless) {
-      changed.push("headless");
-    }
-    if (current.executablePath !== next.executablePath) {
-      changed.push("executablePath");
-    }
+    changed.push(
+      ...(["headless", "executablePath"] as const).filter((key) => current[key] !== next[key]),
+    );
     if (previousConfig.noSandbox !== nextConfig.noSandbox) {
       changed.push("noSandbox");
     }
@@ -42,50 +31,16 @@ function changedProfileInvariants(
       changed.push("extraArgs");
     }
   }
-  if (current.attachOnly !== next.attachOnly) {
-    changed.push("attachOnly");
-  }
-  if (current.cdpIsLoopback !== next.cdpIsLoopback) {
-    changed.push("cdpIsLoopback");
-  }
-  if ((current.userDataDir ?? "") !== (next.userDataDir ?? "")) {
-    changed.push("userDataDir");
-  }
-  if ((current.mcpCommand ?? "") !== (next.mcpCommand ?? "")) {
-    changed.push("mcpCommand");
-  }
+  changed.push(
+    ...(["attachOnly", "cdpIsLoopback"] as const).filter((key) => current[key] !== next[key]),
+    ...(["userDataDir", "mcpCommand"] as const).filter(
+      (key) => (current[key] ?? "") !== (next[key] ?? ""),
+    ),
+  );
   if (!isDeepStrictEqual(current.mcpArgs, next.mcpArgs)) {
     changed.push("mcpArgs");
   }
   return changed;
-}
-
-function queueRemovedProfileCleanup(params: {
-  current: BrowserServerState;
-  name: string;
-  runtime: ProfileRuntimeState;
-  initial: boolean;
-}) {
-  const actor = getProfileLifecycle(params.runtime);
-  if (!params.initial && (!actor.blockedReason || actor.transitionReason)) {
-    return;
-  }
-  params.runtime.lastTargetId = null;
-  void beginProfileTransition({
-    state: params.current,
-    runtime: params.runtime,
-    reason: params.initial ? "profile removed from config" : "profile removal cleanup retry",
-    terminal: "config-removed",
-    advanceConfigRevision: params.initial,
-    closeRelay: params.runtime.profile.driver === "extension",
-    exposeReason: true,
-  })
-    .then(() => {
-      if (params.current.profiles.get(params.name) === params.runtime) {
-        params.current.profiles.delete(params.name);
-      }
-    })
-    .catch(() => {});
 }
 
 function applyResolvedConfig(
@@ -126,25 +81,11 @@ function applyResolvedConfig(
   };
   for (const [name, runtime] of current.profiles) {
     const actor = getProfileLifecycle(runtime);
-    if (actor.terminal === "config-removed") {
-      queueRemovedProfileCleanup({ current, name, runtime, initial: false });
-      continue;
-    }
     if (actor.terminal) {
       continue;
     }
     const nextProfile = resolveProfile(current.resolved, name);
     if (nextProfile) {
-      if (actor.blockedReason && !actor.transitionReason) {
-        void beginProfileTransition({
-          state: current,
-          runtime,
-          reason: "profile invariant cleanup retry",
-          captureProfileResources: false,
-          exposeReason: true,
-        }).catch(() => {});
-        continue;
-      }
       const changed = changedProfileInvariants(
         runtime.profile,
         nextProfile,
@@ -158,7 +99,6 @@ function applyResolvedConfig(
           state: current,
           runtime,
           reason,
-          advanceConfigRevision: true,
           closeRelay: previousProfile.driver === "extension",
           exposeReason: true,
         }).catch(() => {});
@@ -167,11 +107,25 @@ function applyResolvedConfig(
       runtime.profile = nextProfile;
       continue;
     }
-    queueRemovedProfileCleanup({ current, name, runtime, initial: true });
+    // Failed cleanup stays visible; an explicit stop or restart repairs it.
+    runtime.lastTargetId = null;
+    void beginProfileTransition({
+      state: current,
+      runtime,
+      reason: "profile removed from config",
+      terminal: "config-removed",
+      closeRelay: runtime.profile.driver === "extension",
+      exposeReason: true,
+    })
+      .then(() => {
+        if (current.profiles.get(name) === runtime) {
+          current.profiles.delete(name);
+        }
+      })
+      .catch(() => {});
   }
 }
 
-/** Refreshes the Browser runtime's resolved config from disk when hot reload is enabled. */
 export function refreshResolvedBrowserConfigFromDisk(params: {
   current: BrowserServerState;
   refreshConfigFromDisk: boolean;

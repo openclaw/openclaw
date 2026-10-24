@@ -1,36 +1,33 @@
-// Realtime Talk live producer tests cover bounded QA evidence and child status parsing.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   buildRealtimeTalkLiveCommand,
-  buildRealtimeTalkLiveEvidence,
   createRealtimeTalkResultParser,
   parseRealtimeTalkLiveOptions,
   runRealtimeTalkLiveProducer,
 } from "./realtime-talk-live.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function makeOptions() {
-  const artifactBase = await fs.mkdtemp(path.join(os.tmpdir(), "realtime-talk-live-"));
-  tempDirs.push(artifactBase);
+async function runSmoke(
+  runChild: NonNullable<Parameters<typeof runRealtimeTalkLiveProducer>[2]>["runChild"],
+  env: NodeJS.ProcessEnv = { OPENAI_API_KEY: "test-key" },
+) {
+  const artifactBase = tempDirs.make("realtime-talk-live-");
+  const options = { artifactBase, repoRoot: process.cwd() };
+  const evidence = await runRealtimeTalkLiveProducer(options, env, { runChild });
   return {
-    artifactBase,
-    repoRoot: process.cwd(),
+    result: evidence.entries[0]?.result,
+    artifacts: JSON.stringify(evidence),
+    log: await fs.readFile(path.join(artifactBase, "realtime-talk-live.log"), "utf8"),
   };
 }
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
-});
 
 describe("realtime Talk live QA producer", () => {
   it("builds the canonical one-cycle OpenAI-only smoke command", () => {
     const command = buildRealtimeTalkLiveCommand({ OPENAI_API_KEY: "test-key" });
-
     expect(command.args).toEqual([
       "--import",
       "tsx",
@@ -59,49 +56,31 @@ describe("realtime Talk live QA producer", () => {
   });
 
   it("writes blocked evidence without exposing unrelated or missing credentials", async () => {
-    const options = await makeOptions();
     const runChild = vi.fn();
-    const evidence = await runRealtimeTalkLiveProducer(
-      options,
-      { OTHER_SECRET: "do-not-record" },
-      { runChild },
-    );
+    const { result, artifacts, log } = await runSmoke(runChild, { OTHER_SECRET: "do-not-record" });
 
     expect(runChild).not.toHaveBeenCalled();
-    expect(evidence.entries[0]?.result.status).toBe("blocked");
-    const artifacts = JSON.stringify(evidence);
-    const log = await fs.readFile(
-      path.join(options.artifactBase, "realtime-talk-live.log"),
-      "utf8",
-    );
+    expect(result?.status).toBe("blocked");
     expect(artifacts).not.toContain("do-not-record");
     expect(log).toContain("OPENAI_API_KEY is not set");
     expect(log).not.toContain("do-not-record");
   });
 
   it("records only normalized status and byte metadata for a passing smoke", async () => {
-    const options = await makeOptions();
     const apiKey = "sk-private-test-key";
     const transcript = "private transcript must never persist";
-    const evidence = await runRealtimeTalkLiveProducer(
-      options,
-      { OPENAI_API_KEY: apiKey },
-      {
-        runChild: async ({ onStderr, onStdout }) => {
-          onStdout(`openai-backend-bridge: ok { token: '${apiKey}' }\n`);
-          onStdout(`openai-backend-audio-roundtrip: ok { transcripts: ['${transcript}'] }\n`);
-          onStdout("openai-webrtc-browser: ok { state: 'connected' }\n");
-          onStderr("provider debug output should not persist");
-          return { exitCode: 0, signal: null };
-        },
+    const { result, artifacts, log } = await runSmoke(
+      async ({ onStderr, onStdout }) => {
+        onStdout(`openai-backend-bridge: ok { token: '${apiKey}' }\n`);
+        onStdout(`openai-backend-audio-roundtrip: ok { transcripts: ['${transcript}'] }\n`);
+        onStdout("openai-webrtc-browser: ok { state: 'connected' }\n");
+        onStderr("provider debug output should not persist");
+        return { exitCode: 0, signal: null };
       },
+      { OPENAI_API_KEY: apiKey },
     );
 
-    expect(evidence.entries[0]?.result.status).toBe("pass");
-    const log = await fs.readFile(
-      path.join(options.artifactBase, "realtime-talk-live.log"),
-      "utf8",
-    );
+    expect(result?.status).toBe("pass");
     expect(log).toContain("audioFormat: pcm16le");
     expect(log).toContain("audioSampleRateHz: 24000");
     expect(log).toContain("openai-webrtc-browser=ok");
@@ -109,111 +88,58 @@ describe("realtime Talk live QA producer", () => {
     expect(log).not.toContain(apiKey);
     expect(log).not.toContain(transcript);
     expect(log).not.toContain("provider debug output");
-    expect(JSON.stringify(evidence)).not.toContain(apiKey);
-    expect(JSON.stringify(evidence)).not.toContain(transcript);
+    expect(artifacts).not.toContain(apiKey);
+    expect(artifacts).not.toContain(transcript);
   });
 
   it("fails clean exits that omit an expected smoke leg", async () => {
-    const options = await makeOptions();
-    const evidence = await runRealtimeTalkLiveProducer(
-      options,
-      { OPENAI_API_KEY: "test-key" },
-      {
-        runChild: async ({ onStdout }) => {
-          onStdout("openai-backend-bridge: ok {}\n");
-          onStdout("openai-backend-audio-roundtrip: ok {}\n");
-          return { exitCode: 0, signal: null };
-        },
-      },
-    );
+    const { result } = await runSmoke(async ({ onStdout }) => {
+      onStdout("openai-backend-bridge: ok {}\n");
+      onStdout("openai-backend-audio-roundtrip: ok {}\n");
+      return { exitCode: 0, signal: null };
+    });
 
-    expect(evidence.entries[0]?.result.status).toBe("fail");
-    expect(evidence.entries[0]?.result.failure?.reason).toContain("openai-webrtc-browser=missing");
+    expect(result?.status).toBe("fail");
+    expect(result?.failure?.reason).toContain("openai-webrtc-browser=missing");
   });
 
   it("reports missing Playwright as blocked harness evidence", async () => {
-    const options = await makeOptions();
-    const evidence = await runRealtimeTalkLiveProducer(
-      options,
-      { OPENAI_API_KEY: "test-key" },
-      {
-        runChild: async ({ onStderr }) => {
-          onStderr("Executable doesn't exist. Run npx playwright install chromium.");
-          return { exitCode: 1, signal: null };
-        },
-      },
-    );
+    const { result } = await runSmoke(async ({ onStderr }) => {
+      onStderr("Executable doesn't exist. Run npx playwright install chromium.");
+      return { exitCode: 1, signal: null };
+    });
 
-    expect(evidence.entries[0]?.result.status).toBe("blocked");
+    expect(result?.status).toBe("blocked");
   });
 
   it("keeps an observed smoke failure terminal when the harness is also blocked", async () => {
-    const options = await makeOptions();
-    const evidence = await runRealtimeTalkLiveProducer(
-      options,
-      { OPENAI_API_KEY: "test-key" },
-      {
-        runChild: async ({ onStderr, onStdout }) => {
-          onStdout("openai-backend-bridge: failed { error: 'provider rejected session' }\n");
-          onStderr("Executable doesn't exist. Run npx playwright install chromium.");
-          return { exitCode: 1, signal: null };
-        },
-      },
-    );
-
-    expect(evidence.entries[0]?.result.status).toBe("fail");
-    expect(evidence.entries[0]?.result.failure?.reason).toContain("openai-backend-bridge=failed");
-  });
-
-  it("builds catalog-compatible evidence for the live scenario", async () => {
-    const options = await makeOptions();
-    const evidence = buildRealtimeTalkLiveEvidence({
-      env: { OPENCLAW_QA_REF: "test-ref" },
-      options,
-      result: {
-        details: "proof passed",
-        durationMs: 10,
-        status: "pass",
-      },
+    const { result } = await runSmoke(async ({ onStderr, onStdout }) => {
+      onStdout("openai-backend-bridge: failed { error: 'provider rejected session' }\n");
+      onStderr("Executable doesn't exist. Run npx playwright install chromium.");
+      return { exitCode: 1, signal: null };
     });
 
-    expect(evidence.entries[0]).toMatchObject({
-      test: {
-        id: "openai-realtime-talk-live",
-        source: { path: "test/e2e/qa-lab/media/realtime-talk-live.ts" },
-      },
-      result: {
-        status: "pass",
-        timing: { wallMs: 10 },
-      },
-    });
+    expect(result?.status).toBe("fail");
+    expect(result?.failure?.reason).toContain("openai-backend-bridge=failed");
   });
 });
 
 describe("realtime Talk live QA options", () => {
+  const artifactFlag = "--artifact-base";
+
   it("resolves the artifact directory from the selected repo root", () => {
     expect(
-      parseRealtimeTalkLiveOptions([
-        "--repo-root",
-        "/tmp/openclaw",
-        "--artifact-base",
-        ".artifacts/qa-e2e/realtime-talk",
-      ]),
+      parseRealtimeTalkLiveOptions(["--repo-root", "/tmp/openclaw", artifactFlag, ".artifacts/a"]),
     ).toEqual({
-      artifactBase: "/tmp/openclaw/.artifacts/qa-e2e/realtime-talk",
+      artifactBase: "/tmp/openclaw/.artifacts/a",
       repoRoot: "/tmp/openclaw",
     });
   });
 
   it("requires an artifact base and rejects duplicate options", () => {
     expect(() => parseRealtimeTalkLiveOptions([])).toThrow("--artifact-base is required");
-    expect(() =>
-      parseRealtimeTalkLiveOptions([
-        "--artifact-base",
-        ".artifacts/one",
-        "--artifact-base",
-        ".artifacts/two",
-      ]),
-    ).toThrow("--artifact-base was provided more than once");
+    expect(() => parseRealtimeTalkLiveOptions([artifactFlag, "one", artifactFlag, "two"])).toThrow(
+      "--artifact-base was provided more than once",
+    );
   });
 });

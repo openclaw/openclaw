@@ -1,6 +1,6 @@
-// Shared harness for the gateway-store test suites (base + restart split);
-// keeps the fake client and store factory in one place under the max-lines cap.
-import { vi } from "vitest";
+// Native client observation shared by the Gateway store fixtures.
+import { onTestFinished, vi } from "vitest";
+import * as browserGateway from "../api/gateway.ts";
 import type {
   GatewayBrowserClient,
   GatewayBrowserClientOptions,
@@ -31,58 +31,82 @@ export function createGatewayEvent(
   };
 }
 
-class FakeGatewayClient {
-  started = 0;
-  stopped = 0;
-  readonly instanceId: string;
+const NativeGatewayBrowserClient = browserGateway.GatewayBrowserClient;
+const constructedOptions = new WeakMap<GatewayBrowserClient, GatewayBrowserClientOptions>();
 
-  constructor(readonly opts: GatewayBrowserClientOptions) {
-    this.instanceId = opts.instanceId ?? "";
-  }
-
-  start() {
-    this.started += 1;
-  }
-
-  stop() {
-    this.stopped += 1;
-  }
-
-  request = vi.fn((_method: string, _params: unknown): Promise<unknown> =>
-    Promise.reject(new Error("unexpected gateway request")),
+function captureGatewayClients(): void {
+  const constructor = vi.spyOn(browserGateway, "GatewayBrowserClient").mockImplementation(
+    class extends NativeGatewayBrowserClient {
+      constructor(options: GatewayBrowserClientOptions) {
+        super(options);
+        constructedOptions.set(this, options);
+      }
+    },
   );
+  onTestFinished(() => constructor.mockRestore());
+}
 
-  addEventListener() {
-    return () => {};
+function observeGatewayClient(client: GatewayBrowserClient) {
+  const testOptions = constructedOptions.get(client);
+  if (!testOptions) {
+    throw new Error("expected a natively constructed Gateway fixture client");
   }
+  // These fixtures drive admission callbacks, not the socket recovery handshake.
+  Object.defineProperties(client, {
+    recoveryScope: { configurable: true, writable: true, value: undefined },
+    recoveryScopeReady: { configurable: true, writable: true, value: undefined },
+  });
+  const observed = Object.assign(client, {
+    testOptions,
+    started: 0,
+    stopped: 0,
+    request: vi.spyOn(client, "request").mockRejectedValue(new Error("unexpected gateway request")),
+  });
+  vi.spyOn(observed, "start").mockImplementation(() => {
+    observed.started += 1;
+  });
+  const stop = observed.stop.bind(observed);
+  vi.spyOn(observed, "stop").mockImplementation(() => {
+    observed.stopped += 1;
+    stop();
+  });
+  return observed;
 }
 
 export function createGatewayStoreTestStore(
   params: {
     settings?: ReturnType<typeof loadSettings>;
+    configureClient?: (client: ReturnType<typeof observeGatewayClient>) => void;
     persistDefaultConnectionSettings?: boolean;
+    ownsWarmBoot?: boolean;
     resourceBasePath?: string;
+    getModelCatalogTarget?: () => GatewayBrowserClientOptions["modelCatalog"];
     clientOptions?: Pick<
       GatewayBrowserClientOptions,
       "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
     >;
   } = {},
 ) {
-  const clients: FakeGatewayClient[] = [];
-  const gateway = createApplicationGateway(
-    params.settings ?? loadSettings(),
-    "",
-    "",
-    (opts) => {
-      const client = new FakeGatewayClient(opts);
-      clients.push(client);
-      return client as unknown as GatewayBrowserClient;
-    },
-    {
-      persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
-      resourceBasePath: params.resourceBasePath,
-      clientOptions: params.clientOptions,
-    },
+  captureGatewayClients();
+  const clients: ReturnType<typeof observeGatewayClient>[] = [];
+  const observedClients = new WeakSet<GatewayBrowserClient>();
+  const gateway = createApplicationGateway(params.settings ?? loadSettings(), "", "", {
+    persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
+    ownsWarmBoot: params.ownsWarmBoot,
+    resourceBasePath: params.resourceBasePath,
+    getModelCatalogTarget: params.getModelCatalogTarget,
+    clientOptions: params.clientOptions,
+  });
+  onTestFinished(
+    gateway.subscribe((snapshot) => {
+      const client = snapshot.client;
+      if (client && !observedClients.has(client)) {
+        observedClients.add(client);
+        const observed = observeGatewayClient(client);
+        clients.push(observed);
+        params.configureClient?.(observed);
+      }
+    }),
   );
   const current = () => {
     const client = clients.at(-1);

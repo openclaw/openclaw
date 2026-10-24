@@ -21,7 +21,6 @@ internal enum class ChatComposerSendStartResult {
 internal data class ChatComposerSendRequest(
   val commandId: String,
   val owner: ChatComposerOwner,
-  val inputSnapshot: String,
   val message: String,
   val attachments: List<PendingAttachment>,
 )
@@ -78,13 +77,13 @@ internal class ChatComposerStateStore(
   ) {
     synchronized(lock) {
       val resolvedOwner = textDrafts.resolveAdmission(commandId, admitted)?.owner ?: fallbackOwner
-      finishActiveSendLocked(setOf(fallbackOwner, resolvedOwner), resolvedOwner, commandId)
+      finishActiveSendLocked(fallbackOwner, resolvedOwner, commandId)
     }
   }
 
   fun tryBeginTrackedSend(owner: ChatComposerOwner): String? =
     synchronized(lock) {
-      if (hasSendGateLocked(owner)) return@synchronized null
+      if (owner in sendStatesState.value) return@synchronized null
       UUID.randomUUID().toString().also { id ->
         sendStatesState.value =
           sendStatesState.value + (owner to ChatComposerSendState(activeOperationIds = setOf(id)))
@@ -103,9 +102,17 @@ internal class ChatComposerStateStore(
 
   fun hasPendingImport(owner: ChatComposerOwner): Boolean = synchronized(lock) { attachmentStore.hasPendingImport(owner) }
 
+  /** Only unsettled work blocks leaving; completed send receipts await their UI without holding navigation. */
+  fun hasPendingGatewaySwitchWork(owner: ChatComposerOwner): Boolean =
+    synchronized(lock) {
+      sendStatesState.value[owner]?.activeOperationIds?.isNotEmpty() == true ||
+        attachmentStore.hasPendingImport(owner) ||
+        mediaOwners.containsValue(owner)
+    }
+
   fun beginSend(owner: ChatComposerOwner): ChatComposerSendStart =
     synchronized(lock) {
-      if (hasSendGateLocked(owner) || hasPendingImport(owner)) {
+      if (owner in sendStatesState.value || hasPendingImport(owner)) {
         return@synchronized ChatComposerSendStart(ChatComposerSendStartResult.Unavailable)
       }
       val inputSnapshot = textDrafts[owner]
@@ -124,7 +131,7 @@ internal class ChatComposerStateStore(
         sendStatesState.value + (owner to ChatComposerSendState(activeOperationIds = setOf(commandId)))
       ChatComposerSendStart(
         result = ChatComposerSendStartResult.Started,
-        request = ChatComposerSendRequest(commandId, owner, inputSnapshot, inputSnapshot.trim(), attachments),
+        request = ChatComposerSendRequest(commandId, owner, inputSnapshot.trim(), attachments),
       )
     }
 
@@ -133,15 +140,15 @@ internal class ChatComposerStateStore(
     accepted: Boolean?,
   ) {
     synchronized(lock) {
-      if (accepted == null) {
-        val currentOwner = textDrafts.pendingAdmission(request.commandId)?.owner ?: request.owner
-        finishActiveSendLocked(setOf(request.owner, currentOwner), currentOwner, request.commandId)
-        return
-      }
-      val pending = textDrafts.resolveAdmission(request.commandId, accepted)
+      val pending =
+        if (accepted == null) {
+          textDrafts.pendingAdmission(request.commandId)
+        } else {
+          textDrafts.resolveAdmission(request.commandId, accepted)
+        }
       val resolvedOwner = pending?.owner ?: request.owner
-      if (pending == null) {
-        finishActiveSendLocked(setOf(request.owner), request.owner, request.commandId)
+      if (accepted == null || pending == null) {
+        finishActiveSendLocked(request.owner, resolvedOwner, request.commandId)
         return
       }
       if (accepted) {
@@ -151,7 +158,7 @@ internal class ChatComposerStateStore(
         )
       }
       finishActiveSendLocked(
-        owners = setOf(request.owner, resolvedOwner),
+        owner = request.owner,
         resolvedOwner = resolvedOwner,
         activeOperationId = request.commandId,
         pendingAdmissionId = request.commandId,
@@ -213,9 +220,7 @@ internal class ChatComposerStateStore(
   ): Int? =
     synchronized(lock) {
       if (mediaOwners.remove(mediaAuthorizationId) != owner) return@synchronized null
-      attachmentStore.add(owner, candidates).also { omitted ->
-        recordAttachmentOmissionLocked(owner, omitted, ChatComposerAttachmentNotice.Attachment)
-      }
+      addAttachments(owner, candidates)
     }
 
   fun removeAttachments(
@@ -272,9 +277,7 @@ internal class ChatComposerStateStore(
           shouldMigrateComposerDraft(source, to, mainSessionKey)
         }
       if (mediaSources.isNotEmpty()) {
-        for ((id, owner) in mediaOwners.toMap()) {
-          if (owner in mediaSources) mediaOwners[id] = to
-        }
+        mediaOwners.replaceAll { _, owner -> if (owner in mediaSources) to else owner }
       }
 
       val textSources = textDrafts.migrateMatching(to = to, mainSessionKey = mainSessionKey)
@@ -338,15 +341,13 @@ internal class ChatComposerStateStore(
     }
   }
 
-  private fun hasSendGateLocked(owner: ChatComposerOwner): Boolean = owner in sendStatesState.value
-
   private fun finishActiveSendLocked(
-    owners: Set<ChatComposerOwner>,
+    owner: ChatComposerOwner,
     resolvedOwner: ChatComposerOwner,
     activeOperationId: String,
     pendingAdmissionId: String? = null,
   ) {
-    val sources = owners + resolvedOwner
+    val sources = setOf(owner, resolvedOwner)
     val merged = mergeSendStatesLocked(sources)
     val pendingAdmissionIds =
       pendingAdmissionId?.let { merged.pendingAdmissionIds + it } ?: merged.pendingAdmissionIds

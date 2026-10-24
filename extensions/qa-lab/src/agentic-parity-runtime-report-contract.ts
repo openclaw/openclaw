@@ -1,7 +1,8 @@
 import type { QaRuntimeParityCacheUsage } from "./agentic-parity-cache-usage.js";
+import type { RuntimeId } from "./runtime-id.js";
 import type { RuntimeParityCacheDiagnostics } from "./runtime-parity-cache-diagnostics.js";
 import type { QaRuntimeTiming } from "./runtime-parity-timing.js";
-import type { RuntimeId, RuntimeParityDrift, RuntimeParityUsagePolicy } from "./runtime-parity.js";
+import type { RuntimeParityDrift, RuntimeParityUsagePolicy } from "./runtime-parity.js";
 
 export type QaRuntimeParityScenarioReport = {
   name: string;
@@ -9,8 +10,8 @@ export type QaRuntimeParityScenarioReport = {
   runtimeParityUsage: RuntimeParityUsagePolicy;
   drift: RuntimeParityDrift | "missing";
   driftDetails?: string;
-  openclawStatus: "pass" | "fail" | "missing";
-  codexStatus: "pass" | "fail" | "missing";
+  openclawStatus: "pass" | "fail" | "skip" | "missing";
+  codexStatus: "pass" | "fail" | "skip" | "missing";
   openclawTokens: number;
   codexTokens: number;
   openclawUsage: QaRuntimeParityCacheUsage | null;

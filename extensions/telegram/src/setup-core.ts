@@ -1,5 +1,4 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Telegram plugin module implements setup core behavior.
 import {
   createEnvPatchedAccountSetupAdapter,
   patchChannelConfigForAccount,
@@ -12,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
-import { isNumericTelegramSenderUserId } from "./allow-from.js";
+import { isNumericTelegramSenderUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
 import { namedAccountPromotionKeys, singleAccountKeysToMove } from "./setup-contract.js";
 
 const t = createSetupTranslator();
@@ -45,15 +44,8 @@ export function getTelegramUserIdHelpLines(): string[] {
   ];
 }
 
-function normalizeTelegramAllowFromInput(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^(telegram|tg):/i, "")
-    .trim();
-}
-
 export function parseTelegramAllowFromId(raw: string): string | null {
-  const stripped = normalizeTelegramAllowFromInput(raw);
+  const stripped = normalizeTelegramAllowFromEntry(raw);
   return isNumericTelegramSenderUserId(stripped) ? stripped : null;
 }
 
@@ -78,16 +70,24 @@ export async function promptTelegramAllowFromForAccount(params: {
     parseId: parseTelegramAllowFromId,
     invalidWithoutTokenNote: t("wizard.telegram.allowFromInvalid"),
     resolveEntries: async ({ entries }) =>
-      entries.map((entry) => {
-        const id = parseTelegramAllowFromId(entry);
-        return { input: entry, resolved: Boolean(id), id };
+      entries.map((input) => {
+        const id = parseTelegramAllowFromId(input);
+        return { input, resolved: Boolean(id), id };
       }),
   });
+  return applyTelegramAllowFrom(params.cfg, accountId, unique);
+}
+
+export function applyTelegramAllowFrom(
+  cfg: OpenClawConfig,
+  accountId: string,
+  allowFrom: string[],
+) {
   return patchChannelConfigForAccount({
-    cfg: params.cfg,
+    cfg,
     channel,
     accountId,
-    patch: { dmPolicy: "allowlist", allowFrom: unique },
+    patch: { dmPolicy: "allowlist", allowFrom },
     setupSurface: telegramSetupAdapter,
   });
 }

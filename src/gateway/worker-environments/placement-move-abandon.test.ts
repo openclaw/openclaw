@@ -1,54 +1,72 @@
 import fs from "node:fs/promises";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../../infra/node-commands.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../../worker/node-workspace-protocol.js";
 import { environmentsHandlers } from "../server-methods/environments.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import { BUILD, transport, workspaceTransfer } from "./node-worker-tunnel.test-support.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { expectPlacement } from "./placement-lifecycle.test-support.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { placementSource } from "./placement-suite.test-support.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "./placement-target.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerEnvironmentService } from "./service.js";
 import { BUNDLE_ARTIFACT, createProvider } from "./service.test-support.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { createWorkerEnvironmentStore } from "./store.js";
+import {
+  createWorkerWorkspaceOperationCoordinator,
+  type WorkerWorkspaceOperationCoordinator,
+} from "./workspace-operation-coordinator.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type ActivePlacement = Extract<ReturnType<WorkerSessionPlacementStore["get"]>, { state: "active" }>;
 
 describe("offline device placement abandonment", () => {
   let root: string;
   let database: OpenClawStateDatabase;
   let placements: WorkerSessionPlacementStore;
+  let stopServices: Array<() => Promise<void>>;
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+    stopServices = [];
     root = tempDirs.make("openclaw-device-abandon-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
+    try {
+      for (const stop of stopServices) {
+        await stop();
+      }
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
-  function seedEnvironment(
-    active: Extract<ReturnType<WorkerSessionPlacementStore["get"]>, { state: "active" }>,
-    providerId = "device",
-  ): void {
+  function seedEnvironment(active: ActivePlacement, providerId = "device"): void {
     seedAttachedPlacementEnvironment(database, {
       environmentId: active.environmentId,
       sessionId: active.sessionId,
@@ -59,26 +77,45 @@ describe("offline device placement abandonment", () => {
     });
   }
 
-  function requestFor(
-    active: Extract<ReturnType<WorkerSessionPlacementStore["get"]>, { state: "active" }>,
-    abandonSource = true,
-  ) {
+  function requestFor(active: ActivePlacement, abandonSource = true) {
     return {
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
       agentId: active.agentId,
-      source: {
-        generation: active.generation,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
+      source: placementSource(active),
       target: { kind: "gateway" as const },
       ...(abandonSource ? { abandonSource: true as const } : {}),
     };
   }
 
+  async function dispatchDevice(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    request: Parameters<typeof harness.service.dispatch>[0] = REQUEST,
+  ) {
+    const active = await harness.service.dispatch(request);
+    harness.markEnvironmentNodeDeviceId("device-1");
+    seedEnvironment(active);
+    return active;
+  }
+
+  function turnInput(
+    active: ActivePlacement,
+    claimId: string,
+    runId: string,
+    kind: "worker" | "local" = "worker",
+  ) {
+    return {
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId,
+      runId,
+      owner: { kind, environmentId: active.environmentId, ownerEpoch: active.activeOwnerEpoch },
+    };
+  }
+
   async function deviceTeardown(liveTunnel: boolean, providerId = "device", sharedHost = true) {
-    const harness = createHarness(database, placements);
+    const harness = await createHarness(database, placements);
     const active = await harness.service.dispatch(REQUEST);
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(active, providerId);
@@ -93,7 +130,7 @@ describe("offline device placement abandonment", () => {
         Number(sharedHost),
         active.environmentId,
       );
-    const store = createWorkerEnvironmentStore({ database, now: () => 1_000 });
+    const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
     let connected = false;
     const nodeTransport = transport();
     const nodes = await nodeTransport.listCurrentNodes();
@@ -124,18 +161,18 @@ describe("offline device placement abandonment", () => {
     }
     const provider = createProvider({ id: providerId, destroy: vi.fn(async () => {}) });
     const environments = createWorkerEnvironmentService({
+      scheduler: createTestGatewayScheduler(),
       store,
       getConfig: () => ({}),
       resolveProvider: () => provider,
       prepareInstallation: async () => BUNDLE_ARTIFACT,
       bootstrapWorker: async () => BUILD,
-      executeInference: vi.fn(),
       nodeTunnelManager: manager,
       now: () => 1_000,
     });
     vi.mocked(harness.environments.get).mockImplementation(environments.get);
     vi.mocked(harness.environments.destroy).mockImplementation(environments.destroy);
-    onTestFinished(async () => {
+    stopServices.push(async () => {
       connected = true;
       await environments.stop();
     });
@@ -177,7 +214,7 @@ describe("offline device placement abandonment", () => {
       attachedSessionIds: [],
       lastError: FORCED_WORKER_ABANDONMENT_ERROR,
     });
-    expect(fixture.invoke).toHaveBeenLastCalledWith(
+    expect(fixture.invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         command: NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
         params: expect.objectContaining({
@@ -187,8 +224,7 @@ describe("offline device placement abandonment", () => {
         }),
       }),
     );
-    expect(fixture.invoke).toHaveBeenNthCalledWith(
-      fixture.invoke.mock.calls.length - 1,
+    expect(fixture.invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
         params: expect.objectContaining({
@@ -214,10 +250,11 @@ describe("offline device placement abandonment", () => {
       expectRetainedDeviceCleanup(fixture);
       expect(fail).toHaveBeenCalledWith(
         expect.objectContaining({ recoveryError: FORCED_WORKER_ABANDONMENT_ERROR }),
+        undefined,
       );
       expect(transfer.close).toHaveBeenCalledWith(active.environmentId);
       expect(invoke).not.toHaveBeenCalled();
-      expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+      expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
       await finishDeviceCleanup(fixture);
       expect(invoke).toHaveBeenCalledTimes(2);
     },
@@ -235,10 +272,10 @@ describe("offline device placement abandonment", () => {
     await expect(harness.service.move(requestFor(active))).resolves.toMatchObject({
       state: "local",
     });
-    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledTimes(2);
     expectRetainedDeviceCleanup(fixture);
     await finishDeviceCleanup(fixture);
-    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(invoke).toHaveBeenCalledTimes(4);
   });
 
   it("force destroys an unreachable device and accepts its already fenced placement for abandonment", async () => {
@@ -298,10 +335,7 @@ describe("offline device placement abandonment", () => {
     );
     const request = requestFor(active);
     await expect(harness.service.move(request)).rejects.toThrow("not connected");
-    expect(placements.get(active.sessionId)).toMatchObject({
-      state: "failed",
-      recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
-    });
+    expectPlacement(placements, "failed", { recoveryError: FORCED_WORKER_ABANDONMENT_ERROR });
     await expect(harness.service.move(request)).resolves.toMatchObject({ state: "local" });
   });
 
@@ -327,7 +361,7 @@ describe("offline device placement abandonment", () => {
       state: "attached",
       ownerEpoch: active.activeOwnerEpoch,
     });
-    expect(placements.get(active.sessionId)).toMatchObject({ state: "active" });
+    expectPlacement(placements, "active");
     expect(provider.destroy).not.toHaveBeenCalled();
   });
 
@@ -343,34 +377,23 @@ describe("offline device placement abandonment", () => {
   it.each(["before", "after"])(
     "retires stale worker authority with a result pending %s move admission",
     async (pendingAt) => {
-      let afterMoveBegin = () => {};
+      let afterMoveBegin: () => Promise<void> = async () => {};
       const beforeMoveBegin = vi.fn(async (abandoned: { runId: string } | undefined) => {
         expect(abandoned).toMatchObject({ runId: "offline-device-run" });
         expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active" });
-        expect(placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+        expect(await placements.getPlacementMoveAsync(REQUEST.sessionId)).toBeUndefined();
       });
-      const harness = createHarness(database, placements, {
+      const harness = await createHarness(database, placements, {
         beforeMoveBegin,
         afterMoveBegin: () => afterMoveBegin(),
       });
-      const active = await harness.service.dispatch(REQUEST);
-      harness.markEnvironmentNodeDeviceId("device-1");
-      seedEnvironment(active);
-      const claim = placements.claimTurn({
-        sessionId: active.sessionId,
-        sessionKey: active.sessionKey,
-        agentId: active.agentId,
-        claimId: "offline-device-claim",
-        runId: "offline-device-run",
-        owner: {
-          kind: "worker",
-          environmentId: active.environmentId,
-          ownerEpoch: active.activeOwnerEpoch,
-        },
-      });
-      placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      const active = await dispatchDevice(harness);
+      const claim = await placements.claimTurn(
+        turnInput(active, "offline-device-claim", "offline-device-run"),
+      );
+      await placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
       if (pendingAt === "before") {
-        placements.markWorkspaceResultPending(claim);
+        await placements.markWorkspaceResultPending(claim);
       } else {
         afterMoveBegin = () => placements.markWorkspaceResultPending(claim);
       }
@@ -382,36 +405,28 @@ describe("offline device placement abandonment", () => {
 
       expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
       expect(harness.environments.destroy).toHaveBeenCalledOnce();
-      expect(harness.log).toEqual(
-        expect.arrayContaining([
-          "placement:draining",
-          "placement:reconciling",
-          "placement:failed",
-          "teardown:destroy",
-          "placement:local",
-        ]),
-      );
-      expect(harness.log.indexOf("placement:draining")).toBeLessThan(
-        harness.log.indexOf("placement:reconciling"),
-      );
-      expect(harness.log.indexOf("placement:reconciling")).toBeLessThan(
-        harness.log.indexOf("placement:failed"),
-      );
-      expect(harness.log.indexOf("placement:failed")).toBeLessThan(
-        harness.log.indexOf("teardown:destroy"),
-      );
-      expect(harness.log.indexOf("teardown:destroy")).toBeLessThan(
-        harness.log.indexOf("placement:local"),
-      );
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      const ordered = [
+        "placement:draining",
+        "placement:reconciling",
+        "placement:failed",
+        "teardown:destroy",
+        "placement:local",
+      ];
+      expect(harness.log).toEqual(expect.arrayContaining(ordered));
+      for (let index = 1; index < ordered.length; index++) {
+        expect(harness.log.indexOf(ordered[index - 1]!)).toBeLessThan(
+          harness.log.indexOf(ordered[index]!),
+        );
+      }
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.validateTurnClaim(claim)).toBe(false);
       expect(placements.isWorkerTurnToolAuthorized(claim, "sessions_send")).toBe(false);
       expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
-      expect(() => placements.acceptWorkspaceResult(claim)).toThrow(
+      await expect(placements.acceptWorkspaceResult(claim)).rejects.toThrow(
         "Cannot update stale worker workspace result",
       );
       expect(
-        placements.completeWorkerSessionToolOperation({
+        await placements.completeWorkerSessionToolOperation({
           sourceSessionId: claim.sessionId,
           sourceClaimId: claim.claimId,
           toolCallId: "late-tool-result",
@@ -419,63 +434,40 @@ describe("offline device placement abandonment", () => {
           resultJson: '{"status":"late"}',
         }),
       ).toBe(false);
-      expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+      expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
       expect(beforeMoveBegin).toHaveBeenCalledOnce();
     },
   );
 
   it("refuses an ordinary non-abandoning move for an offline paired device with an existing pending cloud workspace result", async () => {
-    const harness = createHarness(database, placements);
+    const harness = await createHarness(database, placements);
     const active = await harness.service.dispatch(REQUEST);
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(active);
-    const claim = placements.claimTurn({
-      sessionId: active.sessionId,
-      sessionKey: active.sessionKey,
-      agentId: active.agentId,
-      claimId: "offline-device-preserve-claim",
-      runId: "offline-device-preserve-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
-    placements.markWorkspaceResultPending(claim);
-    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+    const claim = await placements.claimTurn(
+      turnInput(active, "offline-device-preserve-claim", "offline-device-preserve-run"),
+    );
+    await placements.markWorkspaceResultPending(claim);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
 
     await expect(harness.service.move(requestFor(active, false))).rejects.toThrow(
       `Cannot drain session ${active.sessionId} with a pending cloud workspace result`,
     );
 
-    expect(placements.listPendingWorkspaceResults()).toEqual([
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
       expect.objectContaining({ claimId: claim.claimId, runId: claim.runId }),
     ]);
     expect(placements.validateTurnClaim(claim)).toBe(true);
-    expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
-    expect(placements.get(active.sessionId)).toMatchObject({
-      state: "active",
-      generation: active.generation,
-    });
+    expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
+    expectPlacement(placements, "active", { generation: active.generation });
   });
 
   it("forces an offline remote-exec device onto the Gateway without waiting for its local claim", async () => {
-    const harness = createHarness(database, placements);
-    const active = await harness.service.dispatch({ ...REQUEST, executionMode: "remote-exec" });
-    harness.markEnvironmentNodeDeviceId("device-1");
-    seedEnvironment(active);
-    const claim = placements.claimTurn({
-      sessionId: active.sessionId,
-      sessionKey: active.sessionKey,
-      agentId: active.agentId,
-      claimId: "offline-remote-exec-claim",
-      runId: "offline-remote-exec-run",
-      owner: {
-        kind: "local",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const harness = await createHarness(database, placements);
+    const active = await dispatchDevice(harness, { ...REQUEST, executionMode: "remote-exec" });
+    const claim = await placements.claimTurn(
+      turnInput(active, "offline-remote-exec-claim", "offline-remote-exec-run", "local"),
+    );
     const closeToolState = vi.spyOn(placements, "closeWorkerTurnToolState");
     const closed = vi.fn();
     const unregister = placements.registerTurnClaimClosedHandler(closed);
@@ -492,17 +484,19 @@ describe("offline device placement abandonment", () => {
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
     expect(harness.log).not.toContain("workspace:reconcile");
     expect(placements.validateTurnClaim(claim)).toBe(false);
-    expect(placements.listPendingWorkspaceResults()).toEqual([]);
-    expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
-    expect(() =>
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+    expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
+    await expect(
       placements.startReconcile({
         sessionId: active.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: active.generation + 1,
       }),
-    ).toThrow("Cannot reconcile stale worker placement");
-    expect(() => placements.releaseTurn(claim)).toThrow("turn claim changed before release");
+    ).rejects.toThrow("Cannot reconcile stale worker placement");
+    await expect(placements.releaseTurn(claim)).rejects.toThrow(
+      "turn claim changed before release",
+    );
     expect(closeToolState).toHaveBeenCalledOnce();
     expect(closed).toHaveBeenCalledOnce();
     unregister();
@@ -519,30 +513,17 @@ describe("offline device placement abandonment", () => {
       throw new Error("move barrier interrupted after durable begin");
     });
     const options = { beforeMoveBegin, afterMoveBegin, deviceRunnerAvailable: false };
-    const harness = createHarness(database, placements, options);
-    const active = await harness.service.dispatch(REQUEST);
-    harness.markEnvironmentNodeDeviceId("device-1");
-    seedEnvironment(active);
-    placements.claimTurn({
-      sessionId: active.sessionId,
-      sessionKey: active.sessionKey,
-      agentId: active.agentId,
-      claimId: "offline-retry-claim",
-      runId: "offline-retry-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const harness = await createHarness(database, placements, options);
+    const active = await dispatchDevice(harness);
+    await placements.claimTurn(turnInput(active, "offline-retry-claim", "offline-retry-run"));
     const request = requestFor(active);
 
     await expect(harness.service.move(request)).rejects.toThrow(
       "move barrier interrupted after durable begin",
     );
 
-    expect(placements.get(active.sessionId)).toMatchObject({ state: "draining" });
-    expect(placements.getPlacementMove(active.sessionId)).toMatchObject({
+    expectPlacement(placements, "draining");
+    expect(await placements.getPlacementMoveAsync(active.sessionId)).toMatchObject({
       source: request.source,
       target: request.target,
       abandonSource: true,
@@ -572,7 +553,7 @@ describe("offline device placement abandonment", () => {
 
     expect(beforeMoveBegin).toHaveBeenCalledOnce();
     expect(persistedPartials).toEqual(["offline-retry-run"]);
-    expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
@@ -586,32 +567,13 @@ describe("offline device placement abandonment", () => {
       if (scenario.outcome === "persist-error") {
         throw new Error("partial transcript persistence failed");
       }
-      placements.releaseTurn({
-        sessionId: source.sessionId,
-        claimId: "offline-device-claim",
-        runId: "offline-device-run",
-        placementGeneration: source.generation,
-        owner: {
-          kind: "worker",
-          environmentId: source.environmentId,
-          ownerEpoch: source.activeOwnerEpoch,
-        },
-      });
+      await placements.releaseTurn(claim);
       if (scenario.outcome === "rotated-claim") {
-        placements.claimTurn({
-          sessionId: source.sessionId,
-          sessionKey: source.sessionKey,
-          agentId: source.agentId,
-          claimId: "replacement-device-claim",
-          runId: "replacement-device-run",
-          owner: {
-            kind: "worker",
-            environmentId: source.environmentId,
-            ownerEpoch: source.activeOwnerEpoch,
-          },
-        });
+        await placements.claimTurn(
+          turnInput(source, "replacement-device-claim", "replacement-device-run"),
+        );
       } else {
-        placements.startDrain({
+        await placements.startDrain({
           sessionId: source.sessionId,
           environmentId: source.environmentId,
           ownerEpoch: source.activeOwnerEpoch,
@@ -619,22 +581,11 @@ describe("offline device placement abandonment", () => {
         });
       }
     });
-    const harness = createHarness(database, placements, { beforeMoveBegin });
-    const source = await harness.service.dispatch(REQUEST);
-    harness.markEnvironmentNodeDeviceId("device-1");
-    seedEnvironment(source);
-    placements.claimTurn({
-      sessionId: source.sessionId,
-      sessionKey: source.sessionKey,
-      agentId: source.agentId,
-      claimId: "offline-device-claim",
-      runId: "offline-device-run",
-      owner: {
-        kind: "worker",
-        environmentId: source.environmentId,
-        ownerEpoch: source.activeOwnerEpoch,
-      },
-    });
+    const harness = await createHarness(database, placements, { beforeMoveBegin });
+    const source = await dispatchDevice(harness);
+    const claim = await placements.claimTurn(
+      turnInput(source, "offline-device-claim", "offline-device-run"),
+    );
 
     await expect(harness.service.move(requestFor(source))).rejects.toThrow(
       scenario.outcome === "persist-error"
@@ -643,7 +594,7 @@ describe("offline device placement abandonment", () => {
     );
 
     expect(beforeMoveBegin).toHaveBeenCalledOnce();
-    expect(placements.getPlacementMove(source.sessionId)).toBeUndefined();
+    expect(await placements.getPlacementMoveAsync(source.sessionId)).toBeUndefined();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(placements.get(source.sessionId)?.state).toBe(
       scenario.outcome === "stale-source" ? "draining" : "active",
@@ -657,7 +608,7 @@ describe("offline device placement abandonment", () => {
   });
 
   it("keeps an ordinary offline move reconcile-first", async () => {
-    const harness = createHarness(database, placements);
+    const harness = await createHarness(database, placements);
     const active = await harness.service.dispatch(REQUEST);
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(active);
@@ -668,8 +619,8 @@ describe("offline device placement abandonment", () => {
     await expect(harness.service.move(requestFor(active, false))).rejects.toThrow(
       "reconnect it before retrying",
     );
-    expect(placements.get(active.sessionId)).toMatchObject({ state: "draining" });
-    expect(placements.getPlacementMove(active.sessionId)).toMatchObject({
+    expectPlacement(placements, "draining");
+    expect(await placements.getPlacementMoveAsync(active.sessionId)).toMatchObject({
       abandonSource: false,
     });
     expect(harness.environments.destroy).not.toHaveBeenCalled();
@@ -679,7 +630,7 @@ describe("offline device placement abandonment", () => {
     { name: "available", available: true, providerId: "device", error: "use Move session" },
     { name: "unknown", available: false, providerId: "test", error: "known runner binding" },
   ])("rejects a $name abandonment source before draining", async (scenario) => {
-    const harness = createHarness(database, placements, {
+    const harness = await createHarness(database, placements, {
       deviceRunnerAvailable: scenario.available,
     });
     const active = await harness.service.dispatch(REQUEST);
@@ -689,55 +640,135 @@ describe("offline device placement abandonment", () => {
     seedEnvironment(active, scenario.providerId);
 
     await expect(harness.service.move(requestFor(active))).rejects.toThrow(scenario.error);
-    expect(placements.get(active.sessionId)).toMatchObject({ state: "active" });
-    expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+    expectPlacement(placements, "active");
+    expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
+  it.each(["intent", "generation", "authority"] as const)(
+    "refuses abandoned Stop cleanup when its %s changes while waiting for the workspace",
+    async (change) => {
+      const coordinator = createWorkerWorkspaceOperationCoordinator();
+      const queued = createDeferredCore();
+      let observeCleanup = false;
+      const workspaceOperations: WorkerWorkspaceOperationCoordinator = {
+        run: (environmentId, operation, signal) => {
+          if (observeCleanup) {
+            queued.resolve();
+          }
+          return coordinator.run(environmentId, operation, signal);
+        },
+      };
+      const harness = await createHarness(database, placements, { workspaceOperations });
+      const active = await dispatchDevice(harness);
+      const begun = await placements.beginPlacementMove(requestFor(active));
+      const held = createDeferredCore();
+      const release = createDeferredCore();
+      const holding = coordinator.run(active.environmentId, async () => {
+        held.resolve();
+        await release.promise;
+      });
+      await held.promise;
+      observeCleanup = true;
+      let authorized = true;
+      const revoked = new Error("Stop authority revoked while cleanup waits");
+      const stopping = harness.service
+        .reclaim(REQUEST, () => {
+          if (!authorized) {
+            throw revoked;
+          }
+        })
+        .catch((error: unknown) => error);
+      try {
+        await Promise.race([
+          queued.promise,
+          stopping.then((result) => {
+            throw result instanceof Error
+              ? result
+              : new Error("Stop did not wait for the workspace");
+          }),
+        ]);
+        expectPlacement(placements, "draining", {
+          generation: begun.placement.generation,
+          turnClaim: null,
+        });
+        expect(harness.environments.destroy).not.toHaveBeenCalled();
+        if (change === "intent") {
+          await placements.cancelPlacementMove({
+            sessionId: REQUEST.sessionId,
+            operationId: begun.intent.operationId,
+          });
+        } else if (change === "generation") {
+          database.db
+            .prepare(
+              "UPDATE worker_session_placements SET transition_generation = transition_generation + 1 WHERE session_id = ?",
+            )
+            .run(REQUEST.sessionId);
+        } else {
+          authorized = false;
+        }
+        release.resolve();
+        const result = await stopping;
+        if (change === "authority") {
+          expect(result).toBe(revoked);
+        } else {
+          expect(result).toBeInstanceOf(Error);
+          expect(result).toMatchObject({
+            message: expect.stringContaining("abandonment source changed before teardown"),
+          });
+        }
+        expect(harness.environments.destroy).not.toHaveBeenCalled();
+        expectPlacement(placements, "draining", { turnClaim: null });
+        expect(await placements.listPendingWorkspaceResultsAsync(REQUEST.sessionId)).toEqual([]);
+      } finally {
+        release.resolve();
+        await Promise.all([holding, stopping]);
+      }
+    },
+  );
+
   it("retains the durable decision when authorization closes after teardown", async () => {
-    const harness = createHarness(database, placements);
-    const active = await harness.service.dispatch(REQUEST);
-    harness.markEnvironmentNodeDeviceId("device-1");
-    seedEnvironment(active);
-    let checks = 0;
+    let revoked = false;
+    const harness = await createHarness(database, placements, {
+      afterDestroy: () => {
+        revoked = true;
+      },
+    });
+    const active = await dispatchDevice(harness);
 
     await expect(
       harness.service.move(requestFor(active), undefined, () => {
-        checks += 1;
-        if (checks === 2) {
+        if (revoked) {
           throw new Error("session access revoked after teardown");
         }
       }),
     ).rejects.toThrow("session access revoked after teardown");
 
-    expect(placements.get(active.sessionId)).toMatchObject({
-      state: "failed",
+    expectPlacement(placements, "failed", {
       recoveryError: "Worker result abandoned by forced operator teardown",
     });
-    expect(placements.getPlacementMove(active.sessionId)).toMatchObject({
+    expect(await placements.getPlacementMoveAsync(active.sessionId)).toMatchObject({
       abandonSource: true,
       lastError: "session access revoked after teardown",
     });
     await harness.service.reconcile();
-    expect(placements.get(active.sessionId)).toMatchObject({ state: "local" });
+    expectPlacement(placements, "local");
   });
 
   it("recovers a crash after the durable drain without remote reconciliation", async () => {
-    const harness = createHarness(database, placements, { failMoveAfterBegin: true });
-    const active = await harness.service.dispatch(REQUEST);
-    harness.markEnvironmentNodeDeviceId("device-1");
-    seedEnvironment(active);
+    const harness = await createHarness(database, placements, { failMoveAfterBegin: true });
+    const active = await dispatchDevice(harness);
 
     await expect(harness.service.move(requestFor(active))).rejects.toThrow(
       "move barrier interrupted",
     );
     const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-    const restarted = createHarness(database, restartedStore);
+    const restarted = await createHarness(database, restartedStore);
     restarted.markEnvironmentNodeDeviceId("device-1");
     await restarted.service.reconcile();
 
-    expect(restartedStore.get(active.sessionId)).toMatchObject({ state: "local" });
-    expect(restartedStore.getPlacementMove(active.sessionId)).toBeUndefined();
+    expectPlacement(restartedStore, "local");
+    expect(await restartedStore.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
     expect(restarted.log).not.toContain("workspace:reconcile");
   });
 });

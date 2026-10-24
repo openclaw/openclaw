@@ -1,5 +1,8 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.ui.SessionFilter
+import ai.openclaw.app.ui.resolveSessionBrowserEntries
+import ai.openclaw.app.ui.sidebarSessionPresentation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -174,6 +177,109 @@ class ChatControllerSessionSearchTest {
       val searchCall = gateway.calls.last { it.method == "sessions.list" }
       assertEquals("trip", paramField(searchCall.paramsJson, "search"))
       assertEquals("200", paramField(searchCall.paramsJson, "limit"))
+    }
+
+  @Test
+  fun sessionNavigationUsesGatewayProvenanceWithoutChangingPins() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith(
+        "sessions.list",
+        """{"sessions":[
+          {"key":"agent:main:dashboard:work","pinned":true,"isBackground":true,"createdActor":{"type":"human"},"createdVia":"run","label":"Cron maintenance"},
+          {"key":"agent:main:dashboard:spawned","pinned":true,"spawnedBy":"agent:main:main","createdVia":"spawn"},
+          {"key":"agent:main:cron:daily","pinned":true,"createdActor":{"type":"human"},"label":"Daily planning"},
+          {"key":"cron:legacy","pinned":true},
+          {"key":"agent:main:system-probe","pinned":true,"createdActor":{"type":"system"},"label":"Named probe"},
+          {"key":"agent:main:unnamed-run","pinned":true,"createdVia":"run","derivedTitle":"Generated title","autoLabel":"Device name"},
+          {"key":"agent:main:unnamed-internal","pinned":true,"createdVia":"internal","label":"  "},
+          {"key":"agent:main:human-run","pinned":true,"createdVia":"run","createdActor":{"type":"human"}},
+          {"key":"agent:main:named-run","pinned":true,"createdVia":"run","label":"Batch work"},
+          {"key":"agent:main:display-name","pinned":true,"createdVia":"internal","displayName":"Investigation"},
+          {"key":"agent:main:subject","pinned":true,"createdVia":"internal","subject":"Incident"},
+          {"key":"agent:main:legacy","pinned":true},
+          {"key":"agent:main:hook:work","pinned":true,"classification":"hook","isBackground":true},
+          {"key":"agent:main:dashboard:archived","pinned":true,"archived":true},
+          {"key":"agent:main:dashboard:current","pinned":false}
+        ]}""",
+      )
+      val controller = newController(gateway)
+      val rows = controller.fetchSessionList(search = null, archived = false)
+      val expectedPinned =
+        setOf(
+          "agent:main:dashboard:work",
+          "agent:main:dashboard:spawned",
+          "agent:main:human-run",
+          "agent:main:named-run",
+          "agent:main:display-name",
+          "agent:main:subject",
+          "agent:main:legacy",
+          "agent:main:hook:work",
+        )
+
+      assertEquals(
+        expectedPinned,
+        sidebarSessionPresentation(rows, knownGroups = emptyList(), expanded = true).pinned.map { it.key }.toSet(),
+      )
+      assertEquals(
+        expectedPinned + "agent:main:dashboard:current",
+        resolveSessionBrowserEntries(rows, "agent:main:dashboard:current", SessionFilter.Recent, recentFirst = true).map { it.key }.toSet(),
+      )
+      val automationKeys =
+        setOf("agent:main:cron:daily", "cron:legacy", "agent:main:system-probe", "agent:main:unnamed-run", "agent:main:unnamed-internal")
+      assertEquals(
+        automationKeys,
+        resolveSessionBrowserEntries(rows, "agent:main:dashboard:current", SessionFilter.Automations, recentFirst = true).map { it.key }.toSet(),
+      )
+      assertEquals(
+        automationKeys - "agent:main:system-probe",
+        resolveSessionBrowserEntries(
+          rows.map { if (it.key == "agent:main:system-probe") it.copy(archived = true) else it },
+          "agent:main:system-probe",
+          SessionFilter.Automations,
+          recentFirst = true,
+        ).map { it.key }.toSet(),
+      )
+      for (selectedKey in listOf("agent:main:cron:daily", "agent:main:system-probe", "agent:main:dashboard:archived")) {
+        assertEquals(
+          expectedPinned + selectedKey,
+          sidebarSessionPresentation(rows, knownGroups = emptyList(), expanded = true, currentSessionKey = selectedKey).pinned.map { it.key }.toSet(),
+        )
+        assertEquals(
+          expectedPinned + selectedKey + "agent:main:dashboard:current",
+          resolveSessionBrowserEntries(rows, selectedKey, SessionFilter.Recent, recentFirst = true).map { it.key }.toSet(),
+        )
+        assertEquals(
+          listOf(selectedKey),
+          resolveSessionBrowserEntries(rows, selectedKey, SessionFilter.Current, recentFirst = true).map { it.key },
+        )
+        assertEquals(
+          automationKeys,
+          resolveSessionBrowserEntries(rows, selectedKey, SessionFilter.Automations, recentFirst = true).map { it.key }.toSet(),
+        )
+      }
+      assertEquals(
+        listOf("agent:main:dashboard:archived"),
+        resolveSessionBrowserEntries(rows, "agent:main:cron:daily", SessionFilter.Archived, recentFirst = true).map { it.key },
+      )
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"session":{"key":"agent:main:system-probe","updatedAt":200}}""",
+      )
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"session":{"key":"agent:main:subject","subject":null}}""",
+      )
+      assertEquals(
+        expectedPinned - "agent:main:subject",
+        sidebarSessionPresentation(controller.sessions.value, knownGroups = emptyList(), expanded = true).pinned.map { it.key }.toSet(),
+      )
+      assertEquals(14, rows.count { it.pinned == true })
+      assertEquals(14, controller.sessions.value.count { it.pinned == true })
+      assertTrue(gateway.calls.all { it.method == "sessions.list" })
     }
 
   @Test

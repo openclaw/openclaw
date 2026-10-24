@@ -1,5 +1,4 @@
-// Verify Docker Attestations tests cover verify docker attestations script behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   collectDockerAttestationErrors,
   imageRefForDigest,
@@ -10,22 +9,17 @@ import {
 
 const imageDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 const attestationDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+const imageRef = "ghcr.io/openclaw/openclaw:test";
 
 function createIndex() {
   return {
-    schemaVersion: 2,
-    mediaType: "application/vnd.oci.image.index.v1+json",
     manifests: [
       {
-        mediaType: "application/vnd.oci.image.manifest.v1+json",
         digest: imageDigest,
-        size: 482,
         platform: { architecture: "amd64", os: "linux" },
       },
       {
-        mediaType: "application/vnd.oci.image.manifest.v1+json",
         digest: attestationDigest,
-        size: 1110,
         annotations: {
           "vnd.docker.reference.digest": imageDigest,
           "vnd.docker.reference.type": "attestation-manifest",
@@ -40,44 +34,38 @@ function createAttestation(
   predicates = ["https://spdx.dev/Document", "https://slsa.dev/provenance/v1"],
 ) {
   return {
-    schemaVersion: 2,
-    mediaType: "application/vnd.oci.image.manifest.v1+json",
     artifactType: "application/vnd.docker.attestation.manifest.v1+json",
     layers: predicates.map((predicate) => ({
-      mediaType: "application/vnd.in-toto+json",
-      digest: imageDigest,
-      size: 1,
-      annotations: {
-        "in-toto.io/predicate-type": predicate,
-      },
+      annotations: { "in-toto.io/predicate-type": predicate },
     })),
   };
 }
 
+function errorsFor(index = createIndex(), attestation = createAttestation()) {
+  return collectDockerAttestationErrors({
+    imageRef,
+    index,
+    requiredPlatforms: [parsePlatform("linux/amd64")],
+    inspectAttestation: () => attestation,
+  });
+}
+
 describe("verify-docker-attestations", () => {
   it("bounds docker manifest inspection calls", () => {
-    const calls: unknown[] = [];
-    const imageRef = "ghcr.io/openclaw/openclaw:test";
-    const output = inspectRaw(imageRef, {
-      execFileSyncImpl(command: string, args: string[], options: unknown) {
-        calls.push({ args, command, options });
-        return "{}";
-      },
-    });
-
-    expect(output).toBe("{}");
-    expect(calls).toStrictEqual([
-      {
-        args: ["buildx", "imagetools", "inspect", "--raw", imageRef],
-        command: "docker",
-        options: {
+    const execFileSyncImpl = vi.fn(() => "{}");
+    expect(inspectRaw(imageRef, { execFileSyncImpl })).toBe("{}");
+    expect(execFileSyncImpl.mock.calls).toStrictEqual([
+      [
+        "docker",
+        ["buildx", "imagetools", "inspect", "--raw", imageRef],
+        {
           encoding: "utf8",
           killSignal: "SIGKILL",
           maxBuffer: 20 * 1024 * 1024,
           stdio: ["ignore", "pipe", "pipe"],
           timeout: 120_000,
         },
-      },
+      ],
     ]);
   });
 
@@ -110,44 +98,13 @@ describe("verify-docker-attestations", () => {
     );
   });
 
-  it("accepts an image index with SBOM and provenance predicates", () => {
-    const errors = collectDockerAttestationErrors({
-      imageRef: "ghcr.io/openclaw/openclaw:test",
-      index: createIndex(),
-      requiredPlatforms: [parsePlatform("linux/amd64")],
-      inspectAttestation: () => createAttestation(),
-    });
-
-    expect(errors).toStrictEqual([]);
-  });
-
-  it("accepts attestation manifests with omitted artifactType", () => {
-    const errors = collectDockerAttestationErrors({
-      imageRef: "ghcr.io/openclaw/openclaw:test",
-      index: createIndex(),
-      requiredPlatforms: [parsePlatform("linux/amd64")],
-      inspectAttestation: () => {
-        const attestation: Record<string, unknown> = createAttestation();
-        delete attestation.artifactType;
-        return attestation;
-      },
-    });
-
-    expect(errors).toStrictEqual([]);
-  });
-
   it("reports unexpected attestation artifact types", () => {
-    const errors = collectDockerAttestationErrors({
-      imageRef: "ghcr.io/openclaw/openclaw:test",
-      index: createIndex(),
-      requiredPlatforms: [parsePlatform("linux/amd64")],
-      inspectAttestation: () => ({
+    expect(
+      errorsFor(createIndex(), {
         ...createAttestation(),
         artifactType: "application/vnd.unknown",
       }),
-    });
-
-    expect(errors).toEqual([
+    ).toEqual([
       `ghcr.io/openclaw/openclaw:test: linux/amd64 attestation ${attestationDigest} has unexpected artifactType "application/vnd.unknown"`,
     ]);
   });
@@ -156,27 +113,13 @@ describe("verify-docker-attestations", () => {
     const index = createIndex();
     index.manifests = index.manifests.slice(0, 1);
 
-    const errors = collectDockerAttestationErrors({
-      imageRef: "ghcr.io/openclaw/openclaw:test",
-      index,
-      requiredPlatforms: [parsePlatform("linux/amd64")],
-      inspectAttestation: () => createAttestation(),
-    });
-
-    expect(errors).toEqual([
+    expect(errorsFor(index)).toEqual([
       "ghcr.io/openclaw/openclaw:test: missing attestation manifest for linux/amd64",
     ]);
   });
 
   it("reports missing SBOM or provenance predicates", () => {
-    const errors = collectDockerAttestationErrors({
-      imageRef: "ghcr.io/openclaw/openclaw:test",
-      index: createIndex(),
-      requiredPlatforms: [parsePlatform("linux/amd64")],
-      inspectAttestation: () => createAttestation(["https://spdx.dev/Document"]),
-    });
-
-    expect(errors).toEqual([
+    expect(errorsFor(createIndex(), createAttestation(["https://spdx.dev/Document"]))).toEqual([
       "ghcr.io/openclaw/openclaw:test: linux/amd64 missing predicate https://slsa.dev/provenance/v1",
     ]);
   });

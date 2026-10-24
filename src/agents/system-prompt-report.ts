@@ -4,11 +4,18 @@
  * Session metadata uses this report to account for prompt size, bootstrap file
  * injection, skills, and tool schema footprint without storing raw prompt text.
  */
+import {
+  splitSystemPromptCacheBoundary,
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+} from "@openclaw/ai/internal/shared";
+import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
 import type { BootstrapInjectionStat } from "./bootstrap-budget.types.js";
-import type { AgentTool } from "./runtime/index.js";
+import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
+type PromptReportTool = { name: string; parameters: unknown; description?: string; label?: string };
 
 type ToolReportEntry = SessionSystemPromptReport["tools"]["entries"][number];
 
@@ -23,11 +30,7 @@ const toolSchemaStatsCache = new WeakMap<
 >();
 
 function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChars: number }> {
-  const prompt = skillsPrompt.trim();
-  if (!prompt) {
-    return [];
-  }
-  return Array.from(prompt.matchAll(/<skill>[\s\S]*?<\/skill>/gi), (match) => {
+  return Array.from(skillsPrompt.matchAll(/<skill>[\s\S]*?<\/skill>/gi), (match) => {
     const block = match[0];
     const name = block.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() || "(unknown)";
     return { name, blockChars: block.length };
@@ -35,7 +38,7 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
 }
 
 function buildToolSchemaStats(
-  parameters: AgentTool["parameters"],
+  parameters: unknown,
 ): Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash"> {
   if (!parameters || typeof parameters !== "object") {
     return { schemaChars: 0, schemaHash: sha256Hex(""), propertiesCount: null };
@@ -50,17 +53,12 @@ function buildToolSchemaStats(
   } catch {
     schemaJson = "";
   }
+  const properties = (parameters as Record<string, unknown>).properties;
   const stats = {
     schemaChars: schemaJson.length,
     schemaHash: sha256Hex(schemaJson),
-    propertiesCount: (() => {
-      const schema = parameters as Record<string, unknown>;
-      const props = typeof schema.properties === "object" ? schema.properties : null;
-      if (!props || typeof props !== "object") {
-        return null;
-      }
-      return Object.keys(props as Record<string, unknown>).length;
-    })(),
+    propertiesCount:
+      properties && typeof properties === "object" ? Object.keys(properties).length : null,
   };
   // Tool parameter objects are reused across runs; cache their stable size/hash
   // so report generation stays cheap during frequent prompt rebuilds.
@@ -82,25 +80,87 @@ function resolveSummaryHash(summary: string): string {
   return hash;
 }
 
-function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools"]["entries"] {
+function buildToolsEntries(
+  tools: PromptReportTool[],
+  catalogEntries?: readonly ToolSearchCatalogEntry[],
+): SessionSystemPromptReport["tools"]["entries"] {
   return tools.map((tool) => {
     const name = tool.name;
     const summary = tool.description?.trim() || tool.label?.trim() || "";
     const summaryChars = summary.length;
     const schemaStats = buildToolSchemaStats(tool.parameters);
-    return { name, summaryChars, summaryHash: resolveSummaryHash(summary), ...schemaStats };
+    const catalogEntry = catalogEntries?.find(
+      (entry) => entry.directVisible && entry.name === name,
+    );
+    const provenance = catalogEntry ?? classifyAgentToolSource(tool);
+    return {
+      name,
+      summaryChars,
+      summaryHash: resolveSummaryHash(summary),
+      ...schemaStats,
+      source: provenance.source,
+      sourceName: provenance.sourceName,
+      serverName: provenance.mcp?.serverName,
+    };
   });
 }
 
+function buildDeferredToolsReport(
+  catalogEntries: readonly ToolSearchCatalogEntry[],
+): NonNullable<SessionSystemPromptReport["tools"]["deferred"]> {
+  const entries = catalogEntries
+    .filter((entry) => !entry.directVisible)
+    .map((entry) => {
+      // Remote/client schemas may be lazy hostile objects. Only their owner's
+      // detached JSON publication can supply a size without traversing them.
+      const published = getPublishedRuntimeToolInputSchema(entry.parameters);
+      const schemaChars =
+        published?.json.length ??
+        (entry.source === "openclaw" ? buildToolSchemaStats(entry.parameters).schemaChars : null);
+      return {
+        name: entry.name,
+        source: entry.source,
+        sourceName: entry.sourceName,
+        serverName: entry.mcp?.serverName,
+        schemaChars,
+      };
+    });
+  return {
+    entries,
+    schemaChars: entries.reduce((sum, entry) => sum + (entry.schemaChars ?? 0), 0),
+  };
+}
+
 function measureRenderedProjectContextChars(systemPrompt: string): number {
-  // Include the project heading; without Silent Replies, the range extends to the prompt end.
+  // Project Context ends before the run-scoped capability and catalog instructions.
   const startMarker = "\n# Project Context\n";
   const start = systemPrompt.indexOf(startMarker);
   if (start === -1) {
     return 0;
   }
-  const end = systemPrompt.indexOf("\n## Silent Replies\n", start + startMarker.length);
+  const end = systemPrompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY, start + startMarker.length);
   return (end === -1 ? systemPrompt.length : end) - start;
+}
+
+function resolveRenderedSkillsPrompt(systemPrompt: string, skillsPrompt: string): string {
+  const catalog = skillsPrompt.trim();
+  if (!catalog) {
+    return "";
+  }
+  // The renderer places the catalog after this boundary. Workspace examples and
+  // provider headings in the stable prefix are not the rendered Skills section.
+  const prompt = splitSystemPromptCacheBoundary(systemPrompt)?.dynamicSuffix ?? systemPrompt;
+  for (const heading of prompt.matchAll(/(?:^|\n)## Skills\n/g)) {
+    const sectionStart = heading.index + heading[0].length;
+    const catalogStart = prompt.indexOf(catalog, sectionStart);
+    const nextSection = prompt.indexOf("\n#", sectionStart);
+    // Match the whole known catalog, allowing headings inside its descriptions,
+    // only when it starts in the rendered Skills section.
+    if (catalogStart >= 0 && (nextSection < 0 || catalogStart < nextSection)) {
+      return catalog;
+    }
+  }
+  return "";
 }
 
 /** Builds the stored report for a rendered system prompt and its inputs. */
@@ -119,14 +179,16 @@ export function buildSystemPromptReport(params: {
   systemPrompt: string;
   injectedWorkspaceFiles: BootstrapInjectionStat[];
   skillsPrompt: string;
-  tools: AgentTool[];
+  tools: PromptReportTool[];
+  catalogEntries?: readonly ToolSearchCatalogEntry[];
   currentTurn?: SessionSystemPromptReport["currentTurn"];
 }): SessionSystemPromptReport {
   const systemPromptChars = params.systemPrompt.length;
   const projectContextChars = measureRenderedProjectContextChars(params.systemPrompt);
-  const toolsEntries = buildToolsEntries(params.tools);
+  const toolsEntries = buildToolsEntries(params.tools, params.catalogEntries);
   const toolsSchemaChars = toolsEntries.reduce((sum, t) => sum + (t.schemaChars ?? 0), 0);
-  const skillsEntries = parseSkillBlocks(params.skillsPrompt);
+  const skillsPrompt = resolveRenderedSkillsPrompt(params.systemPrompt, params.skillsPrompt);
+  const skillsEntries = parseSkillBlocks(skillsPrompt);
 
   return {
     source: params.source,
@@ -149,14 +211,17 @@ export function buildSystemPromptReport(params: {
     ...(params.currentTurn ? { currentTurn: params.currentTurn } : {}),
     injectedWorkspaceFiles: params.injectedWorkspaceFiles,
     skills: {
-      promptChars: params.skillsPrompt.length,
-      hash: sha256Hex(params.skillsPrompt),
+      promptChars: skillsPrompt.length,
+      hash: sha256Hex(skillsPrompt),
       entries: skillsEntries,
     },
     tools: {
       listChars: 0,
       schemaChars: toolsSchemaChars,
       entries: toolsEntries,
+      ...(params.catalogEntries
+        ? { deferred: buildDeferredToolsReport(params.catalogEntries) }
+        : {}),
     },
   };
 }

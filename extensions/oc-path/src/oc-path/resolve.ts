@@ -12,7 +12,13 @@
 
 import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
 import type { OcPath } from "./oc-path.js";
-import { isOrdinalSeg, isPositionalSeg, parseOrdinalSeg, resolvePositionalSeg } from "./oc-path.js";
+import {
+  isOrdinalSeg,
+  isPositionalSeg,
+  parseOrdinalSeg,
+  resolvePositionalSeg,
+  unquoteSeg,
+} from "./oc-path.js";
 
 type OcPathMatch =
   | { readonly kind: "root"; readonly node: MdAst }
@@ -22,7 +28,6 @@ type OcPathMatch =
   | {
       readonly kind: "item-field";
       readonly node: AstItem;
-      readonly block: AstBlock;
       /** The kv.value string, surfaced for convenience. */
       readonly value: string;
     };
@@ -38,7 +43,7 @@ export function resolveMdOcPath(ast: MdAst, path: OcPath): OcPathMatch | null {
     if (key === undefined) {
       return null;
     }
-    const entry = ast.frontmatter.find((e) => e.key === key);
+    const entry = ast.frontmatter.find((e) => e.key === unquoteSeg(key));
     if (entry === undefined) {
       return null;
     }
@@ -49,7 +54,7 @@ export function resolveMdOcPath(ast: MdAst, path: OcPath): OcPathMatch | null {
     return { kind: "root", node: ast };
   }
 
-  const block = ast.blocks.find((b) => b.slug === path.section!.toLowerCase());
+  const block = ast.blocks.find((b) => b.slug === unquoteSeg(path.section!).toLowerCase());
   if (block === undefined) {
     return null;
   }
@@ -76,7 +81,7 @@ export function resolveMdOcPath(ast: MdAst, path: OcPath): OcPathMatch | null {
     }
     item = block.items[Number(concrete)];
   } else {
-    item = block.items.find((i) => i.slug === path.item!.toLowerCase());
+    item = block.items.find((i) => i.slug === unquoteSeg(path.item!).toLowerCase());
   }
   if (item === undefined) {
     return null;
@@ -88,8 +93,8 @@ export function resolveMdOcPath(ast: MdAst, path: OcPath): OcPathMatch | null {
   if (item.kv === undefined) {
     return null;
   }
-  if (item.kv.key.toLowerCase() !== path.field.toLowerCase()) {
+  if (item.kv.key.toLowerCase() !== unquoteSeg(path.field).toLowerCase()) {
     return null;
   }
-  return { kind: "item-field", node: item, block, value: item.kv.value };
+  return { kind: "item-field", node: item, value: item.kv.value };
 }

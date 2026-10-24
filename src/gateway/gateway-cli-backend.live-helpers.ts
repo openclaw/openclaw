@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
@@ -126,7 +127,7 @@ export function parseJsonStringArray(name: string, raw?: string): string[] | und
     return undefined;
   }
   const parsed = JSON.parse(trimmed);
-  if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
+  if (!isStringArray(parsed)) {
     throw new Error(`${name} must be a JSON array of strings.`);
   }
   return parsed;
@@ -228,7 +229,7 @@ export function resolveCliBackendLiveProviderSkipDecision(params: {
     action: "fail",
     message:
       `${message} Set ${CLI_BACKEND_LIVE_ADVISORY_ENV}=1 and ` +
-      `${CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV}=1 only for advisory live probes.`,
+      `${CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV}=1 only for advisory live checks.`,
   };
 }
 

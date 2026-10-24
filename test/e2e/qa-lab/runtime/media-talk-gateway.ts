@@ -74,7 +74,7 @@ const SCENARIOS = {
       SOURCE_PATH,
       "src/agents/embedded-agent-runner/run/attempt-tool-run-context.ts",
       "extensions/codex/src/app-server/dynamic-tool-build.ts",
-      "src/infra/outbound/message-action-tts.ts",
+      "src/infra/outbound/message-action-send.ts",
     ],
   },
   "active-talk-agent-run-status": {
@@ -84,7 +84,7 @@ const SCENARIOS = {
     docsRefs: ["docs/nodes/talk.md", "docs/web/control-ui.md"],
     codeRefs: [
       SOURCE_PATH,
-      "src/gateway/server-methods/talk-client.ts",
+      "src/gateway/talk/handlers/client.ts",
       "src/talk/agent-run-control.ts",
       "src/agents/embedded-agent-runner/runs.ts",
     ],

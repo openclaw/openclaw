@@ -1,28 +1,15 @@
 // Suites load this fixture before the CLI so runtime dependencies see the mocks.
 import { Command } from "commander";
 import { vi } from "vitest";
-import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import type { ClientSocketRecord } from "../infra/client-credential-store.js";
+import { applyExecApprovalsUpdate } from "../infra/exec-approvals-mutation.kernel.js";
+import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { registerExecApprovalsCli } from "./exec-approvals-cli.js";
 
-const mocks = vi.hoisted(() => {
-  const runtimeErrors: string[] = [];
-  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
+const mocks = await vi.hoisted(async () => {
+  const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
+  const { defaultRuntime, runtimeErrors, runtimeLogs } = createCliRuntimeMock(vi);
   const readBestEffortConfig = vi.fn(async () => ({}));
-  const defaultRuntime = {
-    log: vi.fn(),
-    error: vi.fn((...args: unknown[]) => {
-      runtimeErrors.push(stringifyArgs(args));
-    }),
-    writeStdout: vi.fn((value: string) => {
-      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-    }),
-    writeJson: vi.fn((value: unknown, space = 2) => {
-      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-    }),
-    exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
-    }),
-  };
   return {
     callGatewayFromCli: vi.fn(
       async (
@@ -33,16 +20,7 @@ const mocks = vi.hoisted(() => {
       ): Promise<unknown> => {
         if (method.endsWith(".get")) {
           if (method === "config.get") {
-            return {
-              config: {
-                tools: {
-                  exec: {
-                    security: "full",
-                    ask: "off",
-                  },
-                },
-              },
-            };
+            return { config: { tools: { exec: { security: "full", ask: "off" } } } };
           }
           const snapshot = {
             path: "/tmp/exec-approvals.json",
@@ -68,10 +46,17 @@ const mocks = vi.hoisted(() => {
     defaultRuntime,
     readBestEffortConfig,
     runtimeErrors,
+    runtimeLogs,
   };
 });
 
-export const { callGatewayFromCli, defaultRuntime, readBestEffortConfig, runtimeErrors } = mocks;
+export const {
+  callGatewayFromCli,
+  defaultRuntime,
+  readBestEffortConfig,
+  runtimeErrors,
+  runtimeLogs,
+} = mocks;
 export const localSnapshot: ExecApprovalsSnapshot = {
   path: "/tmp/local-exec-approvals.json",
   exists: true,
@@ -79,8 +64,19 @@ export const localSnapshot: ExecApprovalsSnapshot = {
   hash: "hash-local",
   file: { version: 1, agents: {} },
 };
+let localSocket: ClientSocketRecord | null = null;
+
+export function setLocalSocket(path: string, token: string): void {
+  localSocket = {
+    socket_key: "current",
+    socket_path: path,
+    socket_token: token,
+    updated_at_ms: 1,
+  };
+}
 
 function resetLocalSnapshot() {
+  localSocket = null;
   localSnapshot.exists = true;
   localSnapshot.raw = "{}";
   localSnapshot.hash = "hash-local";
@@ -90,6 +86,11 @@ function resetLocalSnapshot() {
 vi.mock("./gateway-rpc.js", () => ({
   callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
     mocks.callGatewayFromCli(method, opts, params, extra),
+}));
+
+vi.mock("./local-state-owner.js", () => ({
+  runWithLocalStateOwner: ({ runLocal }: { runLocal: (scope: unknown) => unknown }) =>
+    runLocal({ env: process.env, assertCurrent() {} }),
 }));
 
 vi.mock("./nodes-cli/rpc.js", async () => {
@@ -118,36 +119,50 @@ vi.mock("../infra/exec-approvals.js", async () => {
   );
   return {
     ...actual,
-    readExecApprovalsSnapshot: () => localSnapshot,
+    readExecApprovalsSnapshotAsync: async () => localSnapshot,
     updateExecApprovals: vi.fn(
-      async ({
-        baseHash,
-        update,
-      }: {
-        baseHash?: string;
-        update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
-      }) => {
+      async ({ baseHash, update }: Parameters<typeof actual.updateExecApprovals>[0]) => {
         if (baseHash !== undefined && baseHash !== localSnapshot.hash) {
           return null;
         }
-        const next = update(structuredClone(localSnapshot.file));
+        const next = applyExecApprovalsUpdate(structuredClone(localSnapshot.file), update);
         if (next !== null) {
           localSnapshot.file = next;
           localSnapshot.raw = JSON.stringify(next);
           localSnapshot.hash = "hash-local-written";
         }
-        return structuredClone(localSnapshot);
+        const snapshot = structuredClone(localSnapshot);
+        if (update.kind === "replace" && update.preserveSocket) {
+          setLocalSocket(
+            update.file.socket?.path?.trim() ||
+              localSocket?.socket_path ||
+              "/tmp/local-exec-approvals.sock",
+            update.file.socket?.token?.trim() || localSocket?.socket_token || "fixture-token",
+          );
+          snapshot.file.socket = {
+            ...snapshot.file.socket,
+            path: localSocket?.socket_path ?? undefined,
+            token: localSocket?.socket_token ?? undefined,
+          };
+        }
+        return snapshot;
       },
     ),
   };
 });
 
+// mock-isolation: CLI fixtures use synthetic socket data without admitting the real credential owner.
+vi.mock("../infra/exec-approvals-socket.js", () => ({
+  readExecApprovalsSocket: async () => structuredClone(localSocket),
+}));
+
 export function loggedOutput(): string {
-  return defaultRuntime.log.mock.calls.map(([line]) => String(line ?? "")).join("\n");
+  return runtimeLogs.join("\n");
 }
 
 export function resetExecApprovalsCliMocks(): void {
   resetLocalSnapshot();
+  runtimeLogs.length = 0;
   runtimeErrors.length = 0;
   callGatewayFromCli.mockClear();
   readBestEffortConfig.mockClear();

@@ -98,8 +98,8 @@ function runRestartDrainFixture(stateDir: string): Promise<RestartDrainProof> {
     let failure: Error | undefined;
     let stderr = "";
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
-    const startupTimer = setTimeout(() => {
-      failure = new Error("Gateway restart fixture did not commit drain within 30 seconds");
+    const completionTimer = setTimeout(() => {
+      failure = new Error("Gateway restart fixture did not finish within 30 seconds");
       child.kill();
     }, 30_000);
     childStderr.setEncoding("utf8");
@@ -111,11 +111,14 @@ function runRestartDrainFixture(stateDir: string): Promise<RestartDrainProof> {
         return;
       }
       if (message.type === "ingress-restart-drain-committed") {
-        clearTimeout(startupTimer);
         idleTimer = setTimeout(() => {
           failure = new Error("Ingress did not become idle within 3 seconds of restart drain");
           child.kill();
         }, 3_000);
+        return;
+      }
+      if (message.type === "ingress-restart-idle") {
+        clearTimeout(idleTimer);
         return;
       }
       if (message.type === "ingress-restart-proof" && "proof" in message) {
@@ -126,7 +129,7 @@ function runRestartDrainFixture(stateDir: string): Promise<RestartDrainProof> {
       failure = error;
     });
     child.on("close", (code, signal) => {
-      clearTimeout(startupTimer);
+      clearTimeout(completionTimer);
       clearTimeout(idleTimer);
       if (failure) {
         reject(
@@ -230,9 +233,9 @@ it("releases a claim without an attempt when suspension closes during the claim"
     const payload: StoredEvent = { version: 1, rawEvent: JSON.stringify(raw) };
     const claimReady = createDeferredCore();
     const returnClaim = createDeferredCore();
-    const claimNext = queue.claimNext.bind(queue);
-    const claimNextSpy = vi.spyOn(queue, "claimNext").mockImplementationOnce(async (...args) => {
-      const claim = await claimNext(...args);
+    const claimEvent = queue.claim.bind(queue);
+    const claimSpy = vi.spyOn(queue, "claim").mockImplementationOnce(async (...args) => {
+      const claim = await claimEvent(...args);
       // Keep the monitor awaiting the result after the real SQLite claim commits.
       claimReady.resolve();
       await returnClaim.promise;
@@ -266,7 +269,7 @@ it("releases a claim without an attempt when suspension closes during the claim"
       ]);
       expect(pending[0]).not.toHaveProperty("lastAttemptAt");
       expect(pending[0]).not.toHaveProperty("lastError");
-      expect(claimNextSpy).toHaveBeenCalledOnce();
+      expect(claimSpy).toHaveBeenCalledOnce();
       expect(activity.at(-1)).toBe(false);
 
       expect(suspension?.release()).toBe(true);
@@ -285,7 +288,7 @@ it("releases a claim without an attempt when suspension closes during the claim"
       await monitor.stop();
       suspension?.rollback();
       suspension?.release();
-      claimNextSpy.mockRestore();
+      claimSpy.mockRestore();
     }
   });
 });

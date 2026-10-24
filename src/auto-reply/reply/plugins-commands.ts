@@ -1,4 +1,3 @@
-// Provides plugin command discovery and handler registration helpers.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -43,11 +42,10 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
   }
 
   if (action === "install" || action === "add") {
-    const specParts = [...rest];
     let force = false;
     let acceptCapabilities = false;
-    while (specParts.length > 0) {
-      const flag = specParts.at(-1);
+    while (rest.length > 0) {
+      const flag = rest.at(-1);
       if (flag === "--force" && !force) {
         force = true;
       } else if (flag === "--accept-capabilities" && !acceptCapabilities) {
@@ -55,17 +53,17 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
       } else {
         break;
       }
-      specParts.pop();
+      rest.pop();
     }
-    const hasMisplacedFlag = specParts.some(
+    const hasMisplacedFlag = rest.some(
       (part) => part === "--force" || part === "--accept-capabilities",
     );
-    const spec = specParts.join(" ").trim();
+    const spec = rest.join(" ").trim();
     if (!spec || hasMisplacedFlag) {
       return {
         action: "error",
         message:
-          "Usage: /plugins install <path|archive|npm-spec|npm-pack:path|git:repo|clawhub:pkg> [--force] [--accept-capabilities]",
+          "Usage: /plugins install <package|npm:package|path|archive|npm-pack:path|git:repo|clawhub:pkg> [--force] [--accept-capabilities]",
       };
     }
     return { action: "install", acceptCapabilities, force, spec };

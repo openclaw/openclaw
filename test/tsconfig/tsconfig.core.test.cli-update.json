@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.core.test.shard.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-cli-update.tsbuildinfo"
+  },
+  "include": [
+    "../../src/infra/update-managed-service-handoff-*.test.ts",
+    "../../src/infra/update-managed-service-handoff-*.test.tsx",
+    "../../src/cli/update-cli/**/*.test.ts",
+    "../../src/cli/update-cli/**/*.test.tsx",
+    "../../src/cli/update*.test.ts",
+    "../../src/cli/update*.test.tsx"
+  ]
+}

@@ -1,27 +1,29 @@
-// Provides shared fixtures for exec approval tests.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach } from "vitest";
 import { cleanupTempDirs } from "../../test/helpers/temp-dir.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { CommandResolution, ExecutableResolution } from "./exec-command-resolution.js";
 
 const tempDirs = new Set<string>();
 
-afterEach(() => {
+afterEach(async () => {
+  for (const tempDir of tempDirs) {
+    await closeOpenClawStateDatabaseByPathAsync(
+      resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: tempDir }),
+    );
+  }
   cleanupTempDirs(tempDirs);
 });
 
-// Shared exec-approval fixtures keep parser, allowlist, and wrapper tests on
-// the same mock resolution shape.
 export function makePathEnv(binDir: string): NodeJS.ProcessEnv {
-  if (process.platform !== "win32") {
-    return { PATH: binDir };
-  }
-  return { PATH: binDir, PATHEXT: ".EXE;.CMD;.BAT;.COM" };
+  return process.platform === "win32"
+    ? { PATH: binDir, PATHEXT: ".EXE;.CMD;.BAT;.COM" }
+    : { PATH: binDir };
 }
 
-/** Create a real temp directory for exec-approval tests that need filesystem paths. */
 export function makeExecApprovalsTempDir(): string {
   const tempDir = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-")),
@@ -30,7 +32,6 @@ export function makeExecApprovalsTempDir(): string {
   return tempDir;
 }
 
-/** Create an executable file in a test bin directory. */
 export function makeExecutable(dir: string, name: string): string {
   const fileName = process.platform === "win32" ? `${name}.exe` : name;
   const exe = path.join(dir, fileName);
@@ -39,13 +40,9 @@ export function makeExecutable(dir: string, name: string): string {
   return exe;
 }
 
-/** Build a minimal executable resolution for command-policy tests. */
-export function makeMockExecutableResolution(params: {
-  rawExecutable: string;
-  executableName: string;
-  resolvedPath?: string;
-  resolvedRealPath?: string;
-}): ExecutableResolution {
+export function makeMockExecutableResolution(
+  params: Omit<ExecutableResolution, "kind">,
+): ExecutableResolution {
   return {
     kind: "executable",
     rawExecutable: params.rawExecutable,
@@ -55,15 +52,9 @@ export function makeMockExecutableResolution(params: {
   };
 }
 
-/** Build a command resolution for command-policy tests. */
-export function makeMockCommandResolution(params: {
-  execution: ExecutableResolution;
-  policy?: ExecutableResolution;
-  effectiveArgv?: string[];
-  wrapperChain?: string[];
-  policyBlocked?: boolean;
-  blockedWrapper?: string;
-}): CommandResolution {
+export function makeMockCommandResolution(
+  params: Omit<CommandResolution, "kind" | "policy"> & { policy?: ExecutableResolution },
+): CommandResolution {
   return {
     kind: "command",
     execution: params.execution,
@@ -82,41 +73,22 @@ type ShellParserParityFixtureCase = {
   executables: string[];
 };
 
-type ShellParserParityFixture = {
-  cases: ShellParserParityFixtureCase[];
-};
-
 type WrapperResolutionParityFixtureCase = {
   id: string;
   argv: string[];
   expectedRawExecutable: string | null;
 };
 
-type WrapperResolutionParityFixture = {
-  cases: WrapperResolutionParityFixtureCase[];
-};
-
-export function loadShellParserParityFixtureCases(): ShellParserParityFixtureCase[] {
-  const fixturePath = path.join(
-    process.cwd(),
-    "test",
-    "fixtures",
-    "exec-allowlist-shell-parser-parity.json",
-  );
-  const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as ShellParserParityFixture;
+function loadFixtureCases<T>(name: string): T[] {
+  const fixturePath = path.join(process.cwd(), "test", "fixtures", name);
+  const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as { cases: T[] };
   return fixture.cases;
 }
 
-/** Load wrapper resolution parity cases generated from shell-parser fixtures. */
+export function loadShellParserParityFixtureCases(): ShellParserParityFixtureCase[] {
+  return loadFixtureCases("exec-allowlist-shell-parser-parity.json");
+}
+
 export function loadWrapperResolutionParityFixtureCases(): WrapperResolutionParityFixtureCase[] {
-  const fixturePath = path.join(
-    process.cwd(),
-    "test",
-    "fixtures",
-    "exec-wrapper-resolution-parity.json",
-  );
-  const fixture = JSON.parse(
-    fs.readFileSync(fixturePath, "utf8"),
-  ) as WrapperResolutionParityFixture;
-  return fixture.cases;
+  return loadFixtureCases("exec-wrapper-resolution-parity.json");
 }

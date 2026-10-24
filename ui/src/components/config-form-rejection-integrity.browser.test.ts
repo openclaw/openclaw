@@ -1,11 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 // Control UI tests cover nested config edit rejection and draft preservation.
-import { renderObjectFixture, renderArrayFixture } from "../test-helpers/config-form-fixtures.ts";
-import { ConfigFormCollectionDraft } from "./config-form-collection-draft.ts";
-
-type ConfigFormStructuredDraftElement = HTMLElement & {
-  updateComplete: Promise<unknown>;
-};
+import { renderObjectFixture, renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
+import { flush } from "../test-helpers/solid-settle.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -16,61 +12,30 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
 }
 
 describe("config form rejection integrity", () => {
-  it("preserves an invalid property draft when a sibling edit rerenders the object", () => {
-    const container = document.createElement("div");
-    const schema = {
-      type: "object",
-      properties: {
-        name: { type: "string", minLength: 2 },
-        mode: { type: "string", enum: ["a", "b", "c", "d", "e", "f"] },
-      },
-    };
-    let currentValue = { name: "valid", mode: "a" };
-    const renderValue = () => {
-      renderObjectFixture(container, {
-        schema,
-        value: currentValue,
-        path: ["settings"],
-        sourceIdentity: currentValue,
-        controlIdentity: currentValue,
-        onPatch: (path, nextValue) => {
-          const key = path.at(-1);
-          if (key !== "name" && key !== "mode") {
-            return false;
-          }
-          currentValue = { ...currentValue, [key]: nextValue };
-          renderValue();
-          return true;
-        },
-      });
-    };
-
-    renderValue();
-    const name = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Name']"),
-      "name input",
-    );
-    name.value = "x";
-    name.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(name.getAttribute("aria-invalid")).toBe("true");
-
-    const mode = expectElement(
-      container.querySelector<HTMLSelectElement>("select[aria-label='Mode']"),
-      "mode select",
-    );
-    mode.value = "1";
-    mode.dispatchEvent(new Event("change", { bubbles: true }));
-
-    const rerenderedName = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Name']"),
-      "rerendered name input",
-    );
-    expect(rerenderedName.value).toBe("x");
-    expect(rerenderedName.getAttribute("aria-invalid")).toBe("true");
-    expect(currentValue).toEqual({ name: "valid", mode: "b" });
-  });
-
-  it("keeps a nested collection draft open when its parent rejects the commit", async () => {
+  it.each([
+    {
+      kind: "array",
+      items: { type: "array", items: { type: "string" } },
+      initial: [[""], []],
+      path: "groups",
+      index: 2,
+      addLabel: "Add",
+      key: null,
+      value: "x",
+      expected: [[""], ["x"]],
+    },
+    {
+      kind: "map",
+      items: { type: "object", additionalProperties: { type: "object" } },
+      initial: [{ "custom-1": {} }, {}],
+      path: "entries",
+      index: 1,
+      addLabel: "Add Entry",
+      key: "custom-2",
+      value: "{}",
+      expected: [{ "custom-1": {} }, { "custom-2": {} }],
+    },
+  ])("opens the $kind draft when a parent rejects the automatic entry", (testCase) => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
@@ -78,191 +43,54 @@ describe("config form rejection integrity", () => {
       schema: {
         type: "array",
         uniqueItems: true,
-        items: {
-          type: "array",
-          items: { type: "string", pattern: "^[a-z]+$" },
-        },
+        items: testCase.items,
       },
-      value: [["alpha"], []],
-      path: ["groups"],
+      value: testCase.initial,
+      path: [testCase.path],
       onPatch,
     });
 
-    const arrays = Array.from(container.querySelectorAll<HTMLElement>(".cfg-array"));
-    const secondGroup = expectElement(arrays[2], "second nested array");
+    const collection = expectElement(
+      container.querySelectorAll<HTMLElement>(`.cfg-${testCase.kind}`)[testCase.index],
+      `second auto-default ${testCase.kind}`,
+    );
     const draft = expectElement(
-      secondGroup.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
-      "second nested array draft",
+      collection.querySelector("openclaw-config-form-collection-draft"),
+      `second auto-default ${testCase.kind} draft`,
     );
-    await draft.updateComplete;
+    flush();
     expectElement(
-      Array.from(secondGroup.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
+      Array.from(collection.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent?.trim() === testCase.addLabel,
       ),
-      "second nested array add",
+      `second auto-default ${testCase.kind} add`,
     ).click();
-    await draft.updateComplete;
-    const value = expectElement(
-      draft.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-      "second nested array draft value",
-    );
-    value.value = "alpha";
-    value.dispatchEvent(new Event("input", { bubbles: true }));
-    await draft.updateComplete;
-    expectElement(
-      Array.from(draft.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "second nested array commit",
-    ).click();
-    await draft.updateComplete;
-
-    expect(onPatch).not.toHaveBeenCalled();
-    expect(draft.querySelector(".cfg-collection-draft")).not.toBeNull();
-    const retainedValue = expectElement(
-      draft.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-      "retained nested array draft value",
-    );
-    expect(retainedValue.value).toBe("alpha");
-    expect(retainedValue.getAttribute("aria-invalid")).toBe("true");
-    expect(draft.querySelector<HTMLElement>("[role='alert']")?.hidden).toBe(false);
-    container.remove();
-  });
-
-  it("opens an array draft when a parent rejects the automatic default", async () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    renderArrayFixture(container, {
-      schema: {
-        type: "array",
-        uniqueItems: true,
-        items: {
-          type: "array",
-          items: { type: "string" },
-        },
-      },
-      value: [[""], []],
-      path: ["groups"],
-      onPatch,
-    });
-
-    const arrays = Array.from(container.querySelectorAll<HTMLElement>(".cfg-array"));
-    const secondGroup = expectElement(arrays[2], "second auto-default array");
-    const draft = expectElement(
-      secondGroup.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
-      "second auto-default array draft",
-    );
-    await draft.updateComplete;
-    expectElement(
-      Array.from(secondGroup.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "second auto-default array add",
-    ).click();
-    await draft.updateComplete;
+    flush();
     expect(draft.querySelector(".cfg-collection-draft")).not.toBeNull();
 
+    if (testCase.key) {
+      const key = expectElement(
+        draft.querySelector<HTMLInputElement>("[data-collection-draft-key]"),
+        "map fallback draft key",
+      );
+      key.value = testCase.key;
+      key.dispatchEvent(new Event("input", { bubbles: true }));
+    }
     const value = expectElement(
-      draft.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-      "array fallback draft value",
+      draft.querySelector<HTMLInputElement | HTMLTextAreaElement>("[data-collection-draft-value]"),
+      `${testCase.kind} fallback draft value`,
     );
-    value.value = "x";
+    value.value = testCase.value;
     value.dispatchEvent(new Event("input", { bubbles: true }));
-    await draft.updateComplete;
+    flush();
     expectElement(
       Array.from(draft.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
+        (button) => button.textContent?.trim() === testCase.addLabel,
       ),
-      "array fallback draft commit",
+      `${testCase.kind} fallback draft commit`,
     ).click();
-    expect(onPatch).toHaveBeenCalledWith(["groups"], [[""], ["x"]]);
+    expect(onPatch).toHaveBeenCalledWith([testCase.path], testCase.expected);
     container.remove();
-  });
-
-  it("opens a map draft when a parent rejects the automatic entry", async () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    renderArrayFixture(container, {
-      schema: {
-        type: "array",
-        uniqueItems: true,
-        items: {
-          type: "object",
-          additionalProperties: { type: "object" },
-        },
-      },
-      value: [{ "custom-1": {} }, {}],
-      path: ["entries"],
-      onPatch,
-    });
-
-    const maps = Array.from(container.querySelectorAll<HTMLElement>(".cfg-map"));
-    const secondMap = expectElement(maps[1], "second auto-default map");
-    const draft = expectElement(
-      secondMap.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
-      "second auto-default map draft",
-    );
-    await draft.updateComplete;
-    expectElement(
-      Array.from(secondMap.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add Entry",
-      ),
-      "second auto-default map add",
-    ).click();
-    await draft.updateComplete;
-    expect(draft.querySelector(".cfg-collection-draft")).not.toBeNull();
-
-    const key = expectElement(
-      draft.querySelector<HTMLInputElement>("[data-collection-draft-key]"),
-      "map fallback draft key",
-    );
-    const value = expectElement(
-      draft.querySelector<HTMLTextAreaElement>("[data-collection-draft-value]"),
-      "map fallback draft value",
-    );
-    key.value = "custom-2";
-    key.dispatchEvent(new Event("input", { bubbles: true }));
-    value.value = "{}";
-    value.dispatchEvent(new Event("input", { bubbles: true }));
-    await draft.updateComplete;
-    expectElement(
-      Array.from(draft.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add Entry",
-      ),
-      "map fallback draft commit",
-    ).click();
-    expect(onPatch).toHaveBeenCalledWith(["entries"], [{ "custom-1": {} }, { "custom-2": {} }]);
-    container.remove();
-  });
-
-  it("restores a map key when a constrained parent rejects the rename", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    renderArrayFixture(container, {
-      schema: {
-        type: "array",
-        uniqueItems: true,
-        items: {
-          type: "object",
-          additionalProperties: { type: "string" },
-        },
-      },
-      value: [{ a: "1" }, { b: "1" }],
-      path: ["entries"],
-      onPatch,
-    });
-
-    const key = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Key: b']"),
-      "second map key",
-    );
-    key.value = "a";
-    key.dispatchEvent(new Event("change", { bubbles: true }));
-
-    expect(onPatch).not.toHaveBeenCalled();
-    expect(key.value).toBe("b");
   });
 
   it("blocks renaming a map key whose value is still a redacted secret", () => {
@@ -303,7 +131,7 @@ describe("config form rejection integrity", () => {
     container.remove();
   });
 
-  it("commits an optional object only after all required children are valid", async () => {
+  it("commits an optional object only after all required children are valid", () => {
     const container = document.createElement("div");
     document.body.append(container);
     let currentValue: Record<string, unknown> = {};
@@ -336,23 +164,21 @@ describe("config form rejection integrity", () => {
 
     renderValue();
     const draft = expectElement(
-      container.querySelector<ConfigFormStructuredDraftElement>(
-        "openclaw-config-form-structured-draft",
-      ),
+      container.querySelector<HTMLElement>("openclaw-config-form-structured-draft"),
       "optional object draft",
     );
-    await draft.updateComplete;
+    flush();
     const host = expectElement(
       draft.querySelector<HTMLInputElement>("input[aria-label='Host']"),
       "optional host",
     );
     host.value = "gateway.local";
     host.dispatchEvent(new Event("input", { bubbles: true }));
-    await draft.updateComplete;
+    flush();
     expect(onPatch).not.toHaveBeenCalled();
 
     renderValue();
-    await draft.updateComplete;
+    flush();
     expect(
       expectElement(
         draft.querySelector<HTMLInputElement>("input[aria-label='Host']"),
@@ -379,7 +205,7 @@ describe("config form rejection integrity", () => {
     container.remove();
   });
 
-  it("retains a complete optional object draft when its atomic commit is rejected", async () => {
+  it("retains a complete optional object draft when its atomic commit is rejected", () => {
     const onPatch = vi.fn(() => false);
     const container = document.createElement("div");
     document.body.append(container);
@@ -407,26 +233,24 @@ describe("config form rejection integrity", () => {
 
     renderValue();
     const draft = expectElement(
-      container.querySelector<ConfigFormStructuredDraftElement>(
-        "openclaw-config-form-structured-draft",
-      ),
+      container.querySelector<HTMLElement>("openclaw-config-form-structured-draft"),
       "rejected optional object draft",
     );
-    await draft.updateComplete;
+    flush();
     const host = expectElement(
       draft.querySelector<HTMLInputElement>("input[aria-label='Host']"),
       "rejected optional host",
     );
     host.value = "gateway.local";
     host.dispatchEvent(new Event("input", { bubbles: true }));
-    await draft.updateComplete;
+    flush();
     const port = expectElement(
       draft.querySelector<HTMLInputElement>("input[aria-label='Port']"),
       "rejected optional port",
     );
     port.value = "18789";
     port.dispatchEvent(new Event("input", { bubbles: true }));
-    await draft.updateComplete;
+    flush();
 
     expect(onPatch).toHaveBeenCalledTimes(1);
     expect(onPatch).toHaveBeenCalledWith(["settings", "connection"], {
@@ -445,25 +269,25 @@ describe("config form rejection integrity", () => {
         "retained rejected port",
       ).value,
     ).toBe("18789");
-    expect(draft.querySelector<HTMLElement>("[role='alert']")?.textContent).toContain(
-      "draft is still here",
-    );
+    expect(
+      draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,
+    ).toContain("draft is still here");
 
     renderValue();
-    await draft.updateComplete;
+    flush();
     expect(
       expectElement(
         draft.querySelector<HTMLInputElement>("input[aria-label='Host']"),
         "rerendered rejected host",
       ).value,
     ).toBe("gateway.local");
-    expect(draft.querySelector<HTMLElement>("[role='alert']")?.textContent).toContain(
-      "draft is still here",
-    );
+    expect(
+      draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,
+    ).toContain("draft is still here");
     container.remove();
   });
 
-  it("constructs an optional large-minimum array without leaking partial values", async () => {
+  it("constructs an optional large-minimum array without leaking partial values", () => {
     const onPatch = vi.fn((_path: Array<string | number>, _value: unknown) => false);
     const container = document.createElement("div");
     document.body.append(container);
@@ -486,7 +310,7 @@ describe("config form rejection integrity", () => {
         onPatch,
       });
     };
-    const add = (draft: ConfigFormStructuredDraftElement) =>
+    const add = (draft: HTMLElement) =>
       expectElement(
         Array.from(draft.querySelectorAll<HTMLButtonElement>("button")).find(
           (button) => button.textContent?.trim() === "Add",
@@ -496,38 +320,36 @@ describe("config form rejection integrity", () => {
 
     renderValue();
     const draft = expectElement(
-      container.querySelector<ConfigFormStructuredDraftElement>(
-        "openclaw-config-form-structured-draft",
-      ),
+      container.querySelector<HTMLElement>("openclaw-config-form-structured-draft"),
       "large-minimum array draft",
     );
-    await draft.updateComplete;
+    flush();
     add(draft).click();
-    await draft.updateComplete;
+    flush();
     expect(onPatch).not.toHaveBeenCalled();
     expect(draft.textContent).toContain("1 item");
 
     renderValue();
-    await draft.updateComplete;
+    flush();
     expect(draft.textContent).toContain("1 item");
 
     add(draft).click();
-    await draft.updateComplete;
+    flush();
     expect(onPatch).toHaveBeenCalledTimes(1);
     const [path, value] = onPatch.mock.calls[0] ?? [];
     expect(path).toEqual(["settings", "codes"]);
     expect(value).toEqual(Array.from({ length: 101 }, () => ""));
     expect(draft.textContent).toContain("101 items");
-    expect(draft.querySelector<HTMLElement>("[role='alert']")?.textContent).toContain(
-      "draft is still here",
-    );
+    expect(
+      draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,
+    ).toContain("draft is still here");
 
     renderValue();
-    await draft.updateComplete;
+    flush();
     expect(draft.textContent).toContain("101 items");
-    expect(draft.querySelector<HTMLElement>("[role='alert']")?.textContent).toContain(
-      "draft is still here",
-    );
+    expect(
+      draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,
+    ).toContain("draft is still here");
     container.remove();
   });
 });

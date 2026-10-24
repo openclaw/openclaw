@@ -1,25 +1,35 @@
-import { vi } from "vitest";
-import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
-import { createMockReplyOperation } from "./test-helpers.js";
+import { expect, vi } from "vitest";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import type { FollowupRun } from "./queue/types.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
+import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 
 const followupTurnTestState = vi.hoisted(() => ({
   execute: vi.fn(),
-  loadEntryReadOnly: vi.fn(),
-  reset: vi.fn(),
 }));
 
 vi.mock("./agent-runner-execution.js", () => ({
   executeAgentTurn: (...args: unknown[]) => followupTurnTestState.execute(...args),
 }));
 
-vi.mock("./agent-runner-session-reset.js", () => ({
-  resetReplyRunSession: (...args: unknown[]) => followupTurnTestState.reset(...args),
-}));
-
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntryReadOnly: (...args: unknown[]) =>
-    followupTurnTestState.loadEntryReadOnly(...args),
-}));
+// mock-isolation: Forward the real persistence owners without loading the unrelated accessor barrel graph.
+vi.mock("../../config/sessions/session-accessor.js", async () => {
+  const { bindSessionPendingInputSources, withSessionPendingInputPersistence } =
+    await import("../../config/sessions/session-accessor.pending-inputs.js");
+  const { loadSessionEntry, patchSessionEntryTarget, replaceSessionEntry } =
+    await import("../../config/sessions/session-accessor.sqlite-entry.js");
+  const { persistSessionTranscriptTurn } =
+    await import("../../config/sessions/session-accessor.transcript-turn.js");
+  return {
+    bindSessionPendingInputSources,
+    loadSessionEntry,
+    patchSessionEntryTarget,
+    persistSessionTranscriptTurn,
+    replaceSessionEntry,
+    withSessionPendingInputPersistence,
+  };
+});
 
 const { executeFollowupTurn } = await import("./followup-turn-execution.js");
 
@@ -27,19 +37,6 @@ export const executeFollowupTurnForTest = executeFollowupTurn;
 
 export function getFollowupTurnTestState() {
   return followupTurnTestState;
-}
-
-export function createFollowupTurnTestTypingController() {
-  return {
-    onReplyStart: vi.fn(async () => {}),
-    startTypingLoop: vi.fn(async () => {}),
-    startTypingOnText: vi.fn(async () => {}),
-    refreshTypingTtl: vi.fn(),
-    isActive: vi.fn(() => false),
-    markRunComplete: vi.fn(),
-    markDispatchIdle: vi.fn(),
-    cleanup: vi.fn(),
-  };
 }
 
 export function createFollowupTurnTestTurn(
@@ -81,7 +78,6 @@ export function createFollowupTurnTestTurn(
       key: "main",
       current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "on" }),
       publish: () => undefined,
-      adopt: () => undefined,
     },
     sendPolicy: "allow",
     preflightCompactionApplied: false,
@@ -89,9 +85,80 @@ export function createFollowupTurnTestTurn(
   };
 }
 
+export async function executeQueuedFollowupTurnForTest(
+  queued: FollowupRun,
+  params: { runId: string; opts?: InternalGetReplyOptions; admit: boolean },
+) {
+  let turn = createFollowupTurnTestTurn({
+    runId: params.runId,
+    queued,
+    config: queued.run.config,
+  });
+  const defaults = {
+    typing: createMockTypingController(),
+    typingMode: "never" as const,
+    defaultModel: "claude",
+    opts: params.opts,
+  };
+  let admittedOperation: AdmittedFollowupTurn["operation"] | undefined;
+  try {
+    if (params.admit) {
+      const [{ prepareReplyAgentTurn }, replyAdmission, configuredOwners] = await Promise.all([
+        import("./reply-agent-turn-preparation.js"),
+        import("./reply-turn-admission.js"),
+        import("../../state/user-channel-identity-operations.js"),
+      ]);
+      const lease = vi
+        .spyOn(replyAdmission, "admitReplyTurn")
+        .mockImplementationOnce(async ({ captureRunSelection, mailboxClaim }) => {
+          captureRunSelection?.();
+          expect(mailboxClaim, "queued admission must own its selected source").toBeDefined();
+          if (!mailboxClaim) {
+            throw new Error("Expected the queued source's mailbox claim");
+          }
+          admittedOperation = createReplyOperation({
+            sessionKey: queued.run.sessionKey ?? queued.run.sessionId,
+            sessionId: queued.run.sessionId,
+            agentId: queued.run.agentId,
+            resetTriggered: false,
+            turnKind: "queued_followup",
+            mailboxClaim,
+          });
+          return { status: "owned", operation: admittedOperation };
+        });
+      const durableOwner = vi
+        .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
+        .mockResolvedValue(undefined);
+      try {
+        const admission = await prepareReplyAgentTurn({ queued, defaults });
+        expect(admission.kind).toBe("admitted");
+        if (admission.kind !== "admitted") {
+          throw new Error("Expected queued owner admission");
+        }
+        turn = admission.turn;
+      } finally {
+        lease.mockRestore();
+        durableOwner.mockRestore();
+      }
+    }
+    return await executeFollowupTurn({
+      turn,
+      defaults,
+      onToolResult: async () => {},
+      onCompactionNoticePayload: async () => {},
+    });
+  } finally {
+    try {
+      await turn.releaseSourceAdmission?.();
+    } finally {
+      admittedOperation?.complete();
+      await admittedOperation?.ownerSettlement;
+    }
+  }
+}
+
 export function resetFollowupTurnTestState() {
   vi.clearAllMocks();
-  followupTurnTestState.loadEntryReadOnly.mockReturnValue(undefined);
   followupTurnTestState.execute.mockResolvedValue({
     runId: "run-1",
     outcome: { kind: "rejected", payload: { text: "done" } },

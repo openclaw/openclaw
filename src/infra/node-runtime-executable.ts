@@ -1,5 +1,8 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
+import { nodeRuntimePathEntries } from "../../node-runtime-env.mjs";
+
+// Tooling imports this bootstrap directly in Node before a TypeScript loader is available.
 
 const NODE_RUNTIME_PROBE_TIMEOUT_MS = 5_000;
 const NODE_RUNTIME_CACHE_MAX_ENTRIES = 16;
@@ -25,10 +28,9 @@ function buildNodeExecutableCandidates(env: NodeJS.ProcessEnv): string[] {
           .filter(Boolean)
           .map((extension) => `node${extension.toLowerCase()}`)
       : ["node"];
-  const candidates = (env.PATH ?? "")
-    .split(path.delimiter)
-    .filter(Boolean)
-    .flatMap((directory) => names.map((name) => path.join(directory, name)));
+  const candidates = nodeRuntimePathEntries(env.PATH).flatMap((directory) =>
+    names.map((name) => path.join(directory, name)),
+  );
   if (process.platform === "darwin") {
     candidates.push(
       "/opt/homebrew/bin/node",

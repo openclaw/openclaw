@@ -1,11 +1,6 @@
 // Composes dependency-heavy runtime validators onto the leaf agent-defaults schema.
-import { z } from "zod";
 import { AgentDefaultsBaseSchema } from "./zod-schema.agent-defaults-base.js";
-import {
-  AgentContextLimitsSchema,
-  AgentSandboxSchema,
-  HeartbeatSchema,
-} from "./zod-schema.agent-runtime.js";
+import { AgentContextLimitsSchema, AgentSandboxSchema } from "./zod-schema.agent-runtime.js";
 import {
   BlockStreamingChunkSchema,
   BlockStreamingCoalesceSchema,
@@ -21,9 +16,6 @@ export const AgentDefaultsSchema = AgentDefaultsBaseSchema.safeExtend({
   blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   humanDelay: HumanDelaySchema.optional(),
   typingMode: TypingModeSchema.optional(),
-  heartbeat: HeartbeatSchema.unwrap()
-    .safeExtend({ agentId: z.string().trim().min(1).optional() })
-    .optional(),
   sandbox: AgentSandboxSchema,
 })
   .strict()

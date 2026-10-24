@@ -11,7 +11,7 @@ Docker is **optional**. Use it for an isolated, throwaway Gateway environment or
 
 The default Docker sandbox backend uses only the `docker` CLI. Set the backend to `"podman"` to select native Podman directly. Sandboxing is off by default and does not require the Gateway itself to run in a container. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
 
-Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting) for the one-cell-per-tenant model.
+Hosting mutually untrusted users? Run a separate Gateway for each trust boundary, ideally under separate OS users or hosts. See [Security trust model](/gateway/security/trust-model).
 
 ## Prerequisites
 
@@ -127,6 +127,7 @@ the same Compose files and overlays as your current deployment:
 
 ```bash
 docker compose pull openclaw-gateway openclaw-cli
+docker compose stop openclaw-gateway
 docker compose up -d openclaw-gateway
 ```
 
@@ -228,12 +229,155 @@ Run `docker compose` from the repo root. If you enabled `OPENCLAW_EXTRA_MOUNTS` 
 ### Upgrading container images
 
 When you replace the OpenClaw image but keep the same mounted state/config, the
-new Gateway runs startup-safe upgrade migrations and plugin convergence before
-readiness. Routine image upgrades should not require a separate
-`openclaw doctor --fix` pass.
+image entrypoint runs `openclaw doctor --fix --non-interactive` under exclusive
+maintenance ownership before starting the Gateway. This covers the default image
+command and Compose's foreground Gateway command, including its selected profile.
+Routine image upgrades do not require a separate Doctor pass.
 
-If startup cannot complete those repairs safely, the Gateway exits instead of
-reporting healthy. With a restart policy, Docker, Podman, or Kubernetes may show
+Keep one Gateway replica per state volume, and stop the old container before
+starting its replacement. The startup repair needs exclusive maintenance
+ownership of that state; an overlapping Gateway can prevent it from completing.
+For Compose, use the same files and overlays as your running deployment:
+
+```bash
+docker compose pull openclaw-gateway openclaw-cli
+docker compose stop openclaw-gateway
+docker compose up -d openclaw-gateway
+```
+
+In Docker Swarm, keep `replicas: 1` and use `update_config.order: stop-first` and
+`rollback_config.order: stop-first`. In Kubernetes, keep `replicas: 1` and use a
+`Recreate` Deployment strategy, as the [provided manifest](/install/kubernetes)
+does. A shared volume is not a way to scale Gateway replicas. Back up the state
+before upgrading; see [Backups](/install/backups).
+
+Activation retains a full pre-repair copy of local state under
+`<state-dir>.update-captures/` the first time Doctor captures in a container.
+Later starts of the same container (`docker stop`/`docker start`, restart
+policies, host reboots) still run the Doctor repair pass but skip that repeated
+full copy, keep it, and still retire other Doctor copies older than 30 days;
+repair-specific backups still apply. If a capture fails, the next
+start tries again. A new image, a recreated container, or a container whose
+`/tmp` does not persist across restarts captures again.
+
+### Read-only container root
+
+A read-only container root still needs writable runtime storage. For example,
+with `HOME=/state` and `OPENCLAW_STATE_DIR=/state`, provide these mounts:
+
+| Path                                                                   | Purpose                                                                                                  | Storage                             |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `/state`                                                               | SQLite databases and sidecars, credentials, and state ownership locks under `/state/tmp/openclaw-<uid>/` | Persistent writable volume          |
+| Configured workspace directories, such as `/workspace`                 | Agent files and workspace migrations                                                                     | Persistent writable volume          |
+| `/state/.cache` or the absolute directory selected by `XDG_CACHE_HOME` | Private SQLite snapshot staging                                                                          | Writable volume or tmpfs            |
+| `/tmp`                                                                 | Runtime temporary files and the container activation marker                                              | Writable tmpfs                      |
+| `/state.update-captures`                                               | Retained pre-repair state captures                                                                       | Separate persistent writable volume |
+
+Set ownership so the container's UID/GID can create files and directories in each
+writable location. Database files and their parent directories must be writable;
+mounting only the database file writable is insufficient for SQLite sidecars.
+Configured plugin storage or other file outputs may need additional mounts.
+See [Gateway lock](/gateway/gateway-lock#state-and-config-locks) for the lock paths.
+`TMPDIR` does not relocate state ownership locks.
+
+The capture path is a sibling of the resolved state directory, not a child. A
+writable `/state` therefore does not make `/state.update-captures` writable. If
+that sibling is unavailable, standalone Doctor reports that the original state
+capture was unavailable and continues. This warning does not identify the cause
+of a later fatal filesystem error. Keep the capture volume private: it contains
+raw pre-repair state and credentials, and is excluded from normal backups and
+support exports.
+
+For a read-only config bind such as `/run/config/openclaw.json`, set
+`OPENCLAW_CONFIG_PATH=/run/config/openclaw.json` and
+`OPENCLAW_CONFIG_READONLY=1` in both the Gateway and CLI container environments.
+Doctor can still repair writable state, but config repairs must be applied in
+your external deployment source. Invalid or legacy config that blocks startup
+must be migrated there before restarting. See
+[Externally managed config](/cli/config#externally-managed-config).
+
+If startup reports `EROFS`, inspect the path and operation in the error and check
+that its mount is writable. Changing file modes cannot make a read-only mount
+writable. Do not delete state or lock files to repair a mount error, and do not
+disable native filesystem checks.
+
+On older Linux hosts such as Synology DSM, an unavailable `openat2` syscall can
+make older images report that another Gateway owns even an empty state volume.
+Current images use the guarded filesystem fallback; keep native filesystem
+checks enabled. Doctor reports the underlying lock failure and recovery action
+instead of treating every acquisition error as an active Gateway. Permission
+errors require a writable state mount for the container user. If the filesystem
+cannot provide exclusive file creation for state ownership, stop OpenClaw, back
+up its state, and move the state volume to a local filesystem that supports it.
+Ordinary database transactions use SQLite locking on that volume. Do not delete
+state or lock files to bypass ownership.
+
+Other CLI commands and help pass through unchanged. If you replace the image's
+entrypoint, run Doctor against the same mounted state/config before launching the
+Gateway; a custom entrypoint bypasses this activation step.
+
+This includes agent database schema upgrades, shared-state audit migrations, and
+legacy workspace setup imports. Before advancing database schemas, Doctor saves
+verified SQLite copies beside the originals as
+`<database>.pre-startup-migration-<id>.bak`. Fully declared table migrations may
+instead use `.scoped.bak` archives; restore those with
+`openclaw database restore-migration-backup`, never by replacing the database file.
+See [declared migration scopes](/reference/database-schemas/versioning#declared-migration-backup-scopes).
+The shared database and affected agent
+databases use the same backup ID. Config backups and retired workspace-file
+archives follow the normal Doctor repair rules. Keep these files with your
+pre-upgrade backup; a rollback must restore the matching state as well as the old
+image. See [rollback](/install/updating#rollback).
+
+Retries with the same candidate build, database files, and target schemas verify and reuse the
+first completed backup group for the full database inventory, including after a
+partially completed migration. A temporary `.bak.capturing` file records an
+unfinished capture and is durably removed before migration starts. An interrupted
+capture is recaptured; a missing or damaged member of a completed group stops
+migration and preserves the surviving snapshots for recovery. Repeated
+failed attempts therefore do not create another full backup group each time.
+Older backup groups remain available for operator-managed rollback.
+Doctor records these originals for `openclaw update cleanup --dry-run`. They stay
+protected until Doctor verifies that the migration completed and a later update
+finishes successfully. Cleanup can then retire the recorded group after your
+confirmation. Older unrecorded `.bak` files are listed as protected. Keep these
+files with your pre-upgrade backups while you still need the matching rollback.
+
+On FUSE filesystems such as Unraid's `shfs`, a missing native no-replace rename
+does not require an operator step in native `auto` mode when same-directory
+hardlinks are supported. fs-safe preserves the source inode and bytes through
+exclusive hardlink publication and unlink. Native `require` mode still refuses
+the unsupported primitive. Doctor recovers interrupted source/claim pairs without
+replacing another file. Its separate missing-addon/native-off compatibility path
+syncs the source and directory before removing the old name; native moves do not
+promise per-move crash durability. Archive hardening and durable recovery
+checkpoints remain owned by Doctor.
+SQLite backup verification rechecks snapshot bytes when FUSE modification or change timestamps drift, while still rejecting changed contents or file identities.
+
+Readiness remains false while the default or system agent database is refused,
+and the readiness response includes the admission reason. A refused optional
+agent remains isolated while healthy agents can serve requests.
+
+Missing or drifted required SQLite indexes are rebuilt by the schema migration
+owner before session startup completes. Repair warnings identify the agent,
+database path, rebuilt indexes, and elapsed time. Current-schema shape refusal
+reports list all affected databases in stable path order. Missing required tables,
+incompatible columns, and other changes that cannot be reconstructed safely still require Doctor; startup
+does not recreate a missing data table as an empty one.
+
+On Linux hosts without file creation timestamps, normal SQLite writes and
+permission repairs can change the reported file birth time. These changes do
+not invalidate the open database; actual file replacement still stops admission.
+
+Startup exits with code `78` when required state cannot be migrated safely:
+for example, source identities conflict, data is unreadable, another writer owns
+the state, or the filesystem provides no safe, durable way to publish a claim.
+The retained source, claim, and backups are recovery inputs; do not delete them to
+silence the error. If the filesystem lacks the required primitives, stop the
+Gateway and expose the same data through its native backing filesystem before
+retrying (for example, an Unraid pool path instead of the `shfs` share).
+
+With a restart policy, Docker, Podman, or Kubernetes may show
 the Gateway container restarting. Keep the mounted state volume, then run the
 same image once with `openclaw doctor --fix` as the container command, using the
 same state/config mounts the Gateway uses:
@@ -245,7 +389,12 @@ podman run --rm -v <openclaw-state>:/home/node/.openclaw <image> openclaw doctor
 
 After doctor finishes, restart the Gateway container with its default command.
 In Kubernetes, run the same command in a one-off Job or debug pod mounted to the
-same PVC, then restart the Deployment or StatefulSet.
+same PVC. First scale the Gateway workload to zero and wait for its pods to
+terminate; in Swarm, scale the Gateway service to zero and wait for its tasks to
+stop. Keep the workload stopped until Doctor finishes, then restore one replica.
+If ownership is still refused after the old container has stopped, follow
+[Gateway lock recovery](/gateway/gateway-lock#recover-a-crashed-foreign-owner).
+Do not delete lock files or repeatedly restart competing containers.
 
 After the container is running again, run the read-only deployment preflight
 against the same mounted state:
@@ -271,6 +420,12 @@ runtime. Ordinary source builds generate its runtime through the separate
 external-plugin build path; root npm artifacts continue to exclude it. Selected
 plugins must compile successfully; unselected external plugin source and
 runtime output are pruned.
+
+The install layer stages every workspace's `package.json` so frozen-lockfile
+validation can check the complete workspace. The build stage installs workspace
+dependencies needed to compile plugin assets; the production stage installs only
+core, shared packages, and required or selected plugins. Staging a plugin manifest
+does not select that plugin for the runtime image.
 
 For example, these commands build separate, multi-architecture standalone
 FakeCo Gateway images for ClickClack, Slack, and Microsoft Teams. ClawRouter is
@@ -335,9 +490,9 @@ export OTEL_SERVICE_NAME="openclaw-gateway"
 ./scripts/docker/setup.sh
 ```
 
-Official prebuilt images already bundle `diagnostics-otel`; install `clawhub:@openclaw/diagnostics-otel` yourself only if you removed it. To enable export, allow and enable the `diagnostics-otel` plugin in config, then set `diagnostics.otel.enabled=true` (see the full example in [OpenTelemetry export](/gateway/opentelemetry)). Collector auth headers go through `diagnostics.otel.headers`, not Docker environment variables.
+Official prebuilt images already bundle `diagnostics-otel`; install `@openclaw/diagnostics-otel` yourself only if you removed it. To enable export, allow and enable the `diagnostics-otel` plugin in config, then set `diagnostics.otel.enabled=true` (see the full example in [OpenTelemetry export](/gateway/opentelemetry)). Collector auth headers go through `diagnostics.otel.headers`, not Docker environment variables.
 
-Prometheus metrics reuse the already-published Gateway port. Install `clawhub:@openclaw/diagnostics-prometheus`, enable the `diagnostics-prometheus` plugin, then scrape:
+Prometheus metrics reuse the already-published Gateway port. Install `@openclaw/diagnostics-prometheus`, enable the `diagnostics-prometheus` plugin, then scrape:
 
 ```text
 http://<gateway-host>:18789/api/diagnostics/prometheus
@@ -347,7 +502,7 @@ The route is protected by Gateway authentication; don't expose a separate public
 
 ### Health checks
 
-Container probe endpoints (no auth required):
+Container check endpoints (no auth required):
 
 ```bash
 curl -fsS http://127.0.0.1:18789/healthz   # liveness
@@ -356,7 +511,7 @@ curl -fsS http://127.0.0.1:18789/readyz    # deep, channel-aware readiness
 ```
 
 The image's built-in `HEALTHCHECK` pings `/healthz`; repeated failures mark the container `unhealthy` so orchestrators can restart or replace it.
-Use `/startupz` for an orchestrator startup or readiness probe so a failed channel account does not remove the otherwise healthy Gateway and Control UI from service. Use `/readyz` for monitoring that intentionally treats hard channel failures as not ready. See [Health checks](/gateway/health#http-probes) for response details.
+Use `/startupz` for an orchestrator startup or readiness check so a failed channel account does not remove the otherwise healthy Gateway and Control UI from service. Use `/readyz` for monitoring that intentionally treats hard channel failures as not ready. See [Health checks](/gateway/health#http-probes) for response details.
 
 Authenticated deep health snapshot:
 

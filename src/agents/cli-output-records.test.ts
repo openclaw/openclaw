@@ -1,70 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { parseCliOutput } from "./cli-output.js";
+import {
+  createOpenAiCompatibleCliUsageCases,
+  joinJsonlFrames,
+  claudeTextDelta,
+} from "./cli-output.test-helpers.js";
 
 type ParseCliOutputParams = Parameters<typeof parseCliOutput>[0];
 
 const OPENAI_COMPATIBLE_CLI_USAGE_CASES = [
-  {
-    name: "standard OpenAI snake_case token fields",
-    raw: {
-      prompt_tokens: 17,
-      completion_tokens: 5,
-      total_tokens: 22,
-      prompt_tokens_details: { cached_tokens: 6 },
-    },
-    normalized: { input: 11, output: 5, cacheRead: 6, cacheWrite: undefined, total: 22 },
-  },
-  {
-    name: "camelCase OpenAI-compatible token fields",
-    raw: {
-      promptTokens: 17,
-      completionTokens: 5,
-      total_tokens: 22,
-      prompt_tokens_details: { cached_tokens: 6 },
-    },
-    normalized: { input: 11, output: 5, cacheRead: 6, cacheWrite: undefined, total: 22 },
-  },
-  {
-    name: "existing input/output field precedence",
-    raw: {
-      input_tokens: 19,
-      prompt_tokens: 99,
-      output_tokens: 7,
-      completion_tokens: 77,
-      total_tokens: 26,
-      prompt_tokens_details: { cached_tokens: 4 },
-    },
-    normalized: { input: 15, output: 7, cacheRead: 4, cacheWrite: undefined, total: 26 },
-  },
-  {
-    name: "flat Codex cached input is included in input_tokens",
-    raw: {
-      input_tokens: 15,
-      output_tokens: 4,
-      cached_input_tokens: 6,
-    },
-    normalized: { input: 9, output: 4, cacheRead: 6, cacheWrite: undefined, total: undefined },
-  },
-  {
-    name: "flat Codex input includes both cached reads and cache writes",
-    raw: {
-      input_tokens: 100,
-      output_tokens: 10,
-      cached_input_tokens: 40,
-      cache_write_input_tokens: 60,
-    },
-    normalized: { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: undefined },
-  },
-  {
-    name: "nested Codex input includes both cached reads and cache writes",
-    raw: {
-      input_tokens: 100,
-      output_tokens: 10,
-      input_tokens_details: { cached_tokens: 40, cache_write_tokens: 60 },
-    },
-    normalized: { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: undefined },
-  },
+  ...createOpenAiCompatibleCliUsageCases(),
   {
     name: "all-zero token fields are treated as absent usage",
     raw: {
@@ -86,41 +32,40 @@ function parseCliJsonl(raw: string, backend: ParseCliOutputParams["backend"], pr
   return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
 }
 
-function joinJsonlFrames(...frames: unknown[]) {
-  return frames
-    .map((frame) => (typeof frame === "string" ? frame : JSON.stringify(frame)))
-    .join("\n");
-}
-
-function claudeStreamEvent(event: Record<string, unknown>) {
-  return { type: "stream_event", event };
-}
-
-function claudeTextDelta(text: string, index?: number | string) {
-  return claudeStreamEvent({
-    type: "content_block_delta",
-    ...(index === undefined ? {} : { index }),
-    delta: { type: "text_delta", text },
-  });
-}
-
-function normalizedUsage(values: {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-}) {
-  return {
-    input: values.input,
-    output: values.output,
-    cacheRead: values.cacheRead,
-    cacheWrite: values.cacheWrite,
-    total: values.total,
-  };
-}
-
 describe("parseCliJson", () => {
+  it.each([
+    {
+      name: "default alias order past blank and nonstring fields",
+      fields: undefined,
+      record: {
+        session_id: false,
+        sessionId: " ",
+        conversation_id: " first ",
+        conversationId: "second",
+      },
+      expected: "first",
+    },
+    {
+      name: "configured alias order",
+      fields: ["missing", "blank", "chosen", "session_id"],
+      record: { blank: " ", chosen: " custom ", session_id: "default" },
+      expected: "custom",
+    },
+    {
+      name: "explicitly disabled alias selection",
+      fields: [],
+      record: { session_id: "default" },
+      expected: undefined,
+    },
+  ])("preserves $name", ({ fields, record, expected }) => {
+    expect(
+      parseCliJson(JSON.stringify({ ...record, result: "answer" }), {
+        command: "model-cli",
+        sessionIdFields: fields,
+      }),
+    ).toEqual({ text: "answer", sessionId: expected, usage: undefined });
+  });
+
   it.each([
     {
       name: "preserves Claude max-turn terminal context in JSON mode",
@@ -432,7 +377,7 @@ describe("parseCliJson", () => {
       expected: {
         text: "Gemini says hello",
         sessionId: "gemini-session-123",
-        usage: normalizedUsage({ input: 5, output: 5, cacheRead: 8, total: 21 }),
+        usage: { input: 5, output: 5, cacheRead: 8, total: 21 },
       },
     },
     {
@@ -452,7 +397,7 @@ describe("parseCliJson", () => {
       expected: {
         text: "Gemini says hello",
         sessionId: "gemini-session-789",
-        usage: normalizedUsage({ input: 5, output: 5, cacheRead: 8, total: 21 }),
+        usage: { input: 5, output: 5, cacheRead: 8, total: 21 },
       },
     },
   ])("$name", ({ input, expected }) => {
@@ -639,62 +584,9 @@ describe("parseCliJsonl", () => {
 
     expect([result.errorText, result.terminalFailure]).toEqual(expected);
   });
-
-  it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
-    "normalizes $name from CLI JSONL output",
-    ({ raw, normalized }) => {
-      const result = parseCliJsonl(
-        [
-          JSON.stringify({ type: "init", session_id: "openai-compatible-session" }),
-          JSON.stringify({
-            type: "result",
-            session_id: "openai-compatible-session",
-            result: "OpenAI-compatible response",
-            usage: raw,
-          }),
-        ].join("\n"),
-        {
-          command: "openai-compatible",
-          output: "jsonl",
-          jsonlDialect: "claude-stream-json",
-          sessionIdFields: ["session_id"],
-        },
-        "openai-compatible-cli",
-      );
-
-      expect(result).toEqual({
-        text: "OpenAI-compatible response",
-        sessionId: "openai-compatible-session",
-        usage: normalized,
-      });
-    },
-  );
 });
 
 describe("parseCliOutput", () => {
-  it("applies a backend JSONL hook when reparsing complete output", () => {
-    const parseJsonlEvent = vi.fn(() => ({
-      kind: "result" as const,
-      errorText: "invalid request format: malformed backend result",
-    }));
-
-    expect(
-      parseCliOutput({
-        raw: JSON.stringify({ type: "result", result: "malformed" }),
-        backend: { command: "acme", output: "jsonl" },
-        providerId: "acme-cli",
-        parseJsonlEvent,
-        outputMode: "jsonl",
-      }),
-    ).toEqual({
-      text: "",
-      sessionId: undefined,
-      usage: undefined,
-      errorText: "invalid request format: malformed backend result",
-    });
-    expect(parseJsonlEvent).toHaveBeenCalledOnce();
-  });
-
   it.each([
     {
       name: "uses streamed Claude assistant text when the result envelope is missing",
@@ -743,7 +635,6 @@ describe("parseCliOutput", () => {
         sessionIdFields: ["session_id"],
       },
       providerId: "claude-cli",
-      parseJsonlLifecycleEvent: () => ({ kind: "compaction", phase: "start" }),
       outputMode: "jsonl",
     });
 

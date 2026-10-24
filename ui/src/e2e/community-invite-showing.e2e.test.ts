@@ -1,589 +1,205 @@
-import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import {
-  createControlUiMockBootstrapConfig,
   controlUiSessionUrl,
+  createControlUiMockBootstrapConfig,
   installMockGateway,
-  startControlUiE2eServer,
-  waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import {
-  createControlUiE2eContextOptions,
-  createControlUiE2eSuite,
-} from "./control-ui-e2e-suite.test-support.ts";
-import { sessionsListResponse } from "./session-management.test-support.ts";
+import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
-  name: "Control UI community invite showing E2E",
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
+  name: "Control UI community card E2E",
   startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-
-const STORAGE_KEY = "openclaw:control-ui:community-invite";
-
-async function traceInviteMounts(page: Page) {
-  await page.addInitScript(() => {
-    const trace = { mounts: 0 };
-    const seen = new WeakSet<Element>();
-    (window as Window & { communityInviteTrace?: typeof trace }).communityInviteTrace = trace;
-    new MutationObserver((records) => {
-      for (const record of records) {
-        for (const node of record.addedNodes) {
-          if (node instanceof Element) {
-            for (const card of [node, ...node.querySelectorAll(".community-invite-card")]) {
-              if (card.matches(".community-invite-card") && !seen.has(card)) {
-                seen.add(card);
-                trace.mounts += 1;
-              }
-            }
-          }
-        }
-      }
-    }).observe(document, { childList: true, subtree: true });
-  });
-  return () =>
-    page.evaluate(
-      () =>
-        (window as Window & { communityInviteTrace?: { mounts: number } }).communityInviteTrace
-          ?.mounts ?? 0,
-    );
-}
-
-async function waitForInvitePolicy(page: Page, enabled: boolean) {
-  await page.waitForFunction((expected) => {
-    const app = document.querySelector("openclaw-app") as
-      | (HTMLElement & {
-          runtime?: {
-            context: {
-              config: { current: { serverVersion: string | null; communityInvite: boolean } };
-            };
-          };
-        })
-      | null;
-    const config = app?.runtime?.context.config.current;
-    return config?.serverVersion != null && config.communityInvite === expected;
-  }, enabled);
-}
-
-async function settleSidebarIdleWork(page: Page) {
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        requestIdleCallback(
-          () => requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-          { timeout: 3000 },
-        );
-      }),
-  );
-}
+const dismissalKey = "openclaw:control-ui:community-invite:v2";
+const sessions = Array.from({ length: 32 }, (_, index) =>
+  createControlUiSessionRow(
+    index === 0 ? "agent:main:main" : `agent:main:task-${index}`,
+    index === 0 ? "Home" : `Project task ${index}`,
+    1792411200000 - index * 60000,
+  ),
+);
 
 suite.define(() => {
-  it("keeps the first policy-confirmed sidebar layout stable while invitation artwork loads", async () => {
-    type LayoutWindow = Window & {
-      sidebarInviteFirstLayout?: { invitationHeight: number; sidebarHeight: number };
-    };
-
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
-    });
-    const page = await context.newPage();
-    await page.addInitScript(() => {
-      const observer = new MutationObserver(() => {
-        const app = document.querySelector("openclaw-app") as
-          | (HTMLElement & {
-              runtime?: { context: { config: { current: { communityInvite: boolean } } } };
-            })
-          | null;
-        const sidebar = document.querySelector("openclaw-app-sidebar") as
-          | (HTMLElement & { updateComplete: Promise<unknown> })
-          | null;
-        const row = sidebar?.querySelector(".sidebar-recent-session__link");
-        if (
-          !app?.runtime?.context.config.current.communityInvite ||
-          !sidebar ||
-          !row?.getBoundingClientRect().height
-        ) {
-          return;
-        }
-        observer.disconnect();
-        // Capture the first policy-confirmed render, not a later settled card.
-        void sidebar.updateComplete.then(() => {
-          const invitation = sidebar.querySelector(".sidebar-shell__invite");
-          const body = sidebar.querySelector(".sidebar-shell__body");
-          if (!invitation || !body) {
-            throw new Error("Expected the first sidebar layout");
-          }
-          (window as LayoutWindow).sidebarInviteFirstLayout = {
-            invitationHeight: invitation.getBoundingClientRect().height,
-            sidebarHeight: body.getBoundingClientRect().height,
-          };
-        });
-      });
-      observer.observe(document, { childList: true, subtree: true });
-    });
-    await installMockGateway(page, {
-      communityInviteDismissed: false,
-      methodResponses: {
-        "sessions.list": sessionsListResponse(
-          Array.from({ length: 13 }, (_, index) =>
-            createControlUiSessionRow(
-              `agent:main:early-${index}`,
-              `Early session ${index}`,
-              Date.now() - index * 60_000,
-            ),
-          ),
-        ),
-      },
-      sessionKey: "agent:main:early-0",
-    });
-    let releaseArtwork!: () => void;
-    let artworkRequested!: () => void;
-    const artworkReady = new Promise<void>((resolve) => {
-      releaseArtwork = resolve;
-    });
-    const artworkRequest = new Promise<void>((resolve) => {
-      artworkRequested = resolve;
-    });
-    await page.route("**/community-art/discord-invite.webp*", async (route) => {
-      artworkRequested();
-      await artworkReady;
-      await route.continue();
-    });
-    try {
-      await page.mouse.move(900, 500);
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:early-0"));
-      const firstLayout = await page.waitForFunction(
-        () => (window as LayoutWindow).sidebarInviteFirstLayout,
-      );
-      const initial = await firstLayout.jsonValue();
-      if (!initial) {
-        throw new Error("Expected the first policy-confirmed sidebar layout");
-      }
-      expect(initial.invitationHeight).toBeGreaterThan(0);
-      await page.getByRole("button", { name: "Show more" }).click();
-      const row = page.locator('.sidebar-recent-session[data-session-key="agent:main:early-10"]');
-      await row.hover();
-      const before = await row.boundingBox();
-      expect(before).not.toBeNull();
-      await artworkRequest;
-      await settleSidebarIdleWork(page);
-      releaseArtwork();
-      await page.locator(".invite__art").evaluate((image: HTMLImageElement) => image.decode());
-      await settleSidebarIdleWork(page);
-      expect(await row.boundingBox()).toEqual(before);
-      expect(await row.evaluate((element) => element.matches(":hover"))).toBe(true);
-      expect(
-        await page
-          .locator(".sidebar-shell__body")
-          .evaluate((element) => element.getBoundingClientRect().height),
-      ).toBeCloseTo(initial.sidebarHeight, 2);
-      await row.getByRole("button", { name: "Open session menu" }).click();
-      await page.getByRole("menuitem", { name: "Move to group" }).waitFor();
-    } finally {
-      releaseArtwork();
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it.each(["pointer", "keyboard", "drag", "touch"] as const)(
-    "defers a late invitation during %s interaction without blocking navigation",
-    async (interaction) => {
-      await suite.withPage(
-        {
-          locale: "en-US",
-          serviceWorkers: "block",
-          hasTouch: interaction === "touch",
-          viewport: { width: 1280, height: 900 },
-        },
-        async ({ context, page }) => {
-          const dismissalWriter = interaction === "pointer" ? await context.newPage() : null;
-          if (dismissalWriter) {
-            await dismissalWriter.route("**/invitation-preference", (route) =>
-              route.fulfill({
-                contentType: "text/html",
-                body: "<!doctype html><title>Invitation preference writer</title>",
-              }),
-            );
-            await dismissalWriter.goto(`${suite.server.baseUrl}invitation-preference`);
-            await page.bringToFront();
-          }
-          const gateway = await installMockGateway(page, {
-            communityInviteDismissed: false,
-            methodResponses: {
-              "sessions.list": sessionsListResponse(
-                Array.from({ length: 13 }, (_, index) =>
-                  createControlUiSessionRow(
-                    `agent:main:session-${index}`,
-                    `Session ${index}`,
-                    Date.now() - index * 60_000,
-                    {
-                      ...(index === 0 ? { category: "Alpha" } : {}),
-                      ...(index === 1 ? { category: "Beta" } : {}),
-                    },
-                  ),
-                ),
-              ),
-            },
-            sessionKey: "agent:main:session-0",
-            sessionGroups: ["Alpha", "Beta"],
-          });
-          let communityInvite = true;
-          let releasePolicy!: () => void;
-          const policyReady = new Promise<void>((resolve) => {
-            releasePolicy = resolve;
-          });
-          await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, async (route) => {
-            await policyReady;
-            await route.fulfill({
-              json: { ...createControlUiMockBootstrapConfig(), communityInvite },
+  for (const mobile of [false, true]) {
+    for (const mode of ["light", "dark"] as const) {
+      it(`keeps the ${mobile ? "mobile" : "desktop"} ${mode} card flush and dismissal persistent`, async () =>
+        suite.withPage(
+          {
+            viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 },
+            hasTouch: mobile,
+            colorScheme: mode,
+          },
+          async ({ page }) => {
+            const resize = (height: number) =>
+              page.setViewportSize({ width: mobile ? 390 : 1280, height });
+            const rail = (view: string) =>
+              page.locator(`.sidebar-rail [data-navigation-view="${view}"]`);
+            const expectDismissed = async () => {
+              await rail("sessions").waitFor({ state: "attached" });
+              expect(await card.count()).toBe(0);
+            };
+            await seedChatSettings(page, suite.server.baseUrl, {
+              themeMode: mode,
+              sidebarAgentsMode: "chip",
+              navWidth: 320,
             });
-          });
-          const refreshPolicy = async (enabled: boolean) => {
-            communityInvite = enabled;
-            const response = page.waitForResponse(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`);
-            await gateway.closeLatest(1001, "policy refresh");
-            await response;
-            await waitForInvitePolicy(page, enabled);
-          };
-          try {
-            await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-0"));
-            await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(12);
-            const showMore = page.getByRole("button", { name: "Show more" });
-            if (interaction === "touch") {
-              await showMore.tap();
-            } else {
-              await showMore.click();
+            await installMockGateway(page, { communityInvite: true, sessions });
+            const url = controlUiSessionUrl(suite.server.baseUrl, "agent:main:main");
+            await page.goto(url);
+            if (mobile) {
+              await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+              await waitForMobileSidebarDrawerOpen(page);
             }
-            await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(13);
-            const sidebar = page.locator("openclaw-app-sidebar");
-            const row = page.locator(
-              '.sidebar-recent-session[data-session-key="agent:main:session-10"]',
-            );
-            const menu = row.getByRole("button", { name: "Open session menu" });
-            const composer = page.locator(".agent-chat__composer-combobox textarea");
             const card = page.locator(".community-invite-card");
-            await expect.poll(() => card.count()).toBe(0);
-            if (interaction === "touch") {
-              await menu.tap();
-              await page.getByRole("menuitem", { name: "Move to group" }).waitFor();
-            } else if (interaction === "keyboard") {
-              await page.mouse.move(900, 500);
-              await menu.focus();
-            } else if (interaction === "drag") {
-              await composer.focus();
-              const bounds = await row.boundingBox();
-              if (!bounds) {
-                throw new Error("Expected a draggable session row");
-              }
-              // Start on the row's non-focusable top inset, then leave the sidebar.
-              await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + 1);
-              await page.mouse.down();
-              await page.mouse.move(bounds.x + bounds.width / 2 + 20, bounds.y + 10, { steps: 5 });
-              await expect
-                .poll(() => row.getAttribute("class"))
-                .toContain("sidebar-recent-session--dragging");
-              // Native drag moves are dragover events; hover can remain on the source.
-              await page.mouse.move(900, 450, { steps: 5 });
-            } else {
-              await row.hover();
+            const close = card.getByRole("button", { name: "Dismiss and don't show again" });
+            await close.waitFor();
+            const closeAppearance = await close.evaluate((node) => {
+              const target = node.getBoundingClientRect();
+              const backdrop = getComputedStyle(node, "::before");
+              const header = node.closest(".invite__header")!.getBoundingClientRect();
+              const glyph = node.querySelector("svg")!.getBoundingClientRect();
+              const backdropInset = (Number.parseFloat(backdrop.width) - glyph.width) / 2;
+              return {
+                targetWidth: target.width,
+                targetHeight: target.height,
+                background: getComputedStyle(node).backgroundColor,
+                backdropWidth: Number.parseFloat(backdrop.width),
+                backdropHeight: Number.parseFloat(backdrop.height),
+                visibleTop: glyph.top - header.top - backdropInset,
+                visibleRight: header.right - glyph.right - backdropInset,
+                contained:
+                  target.left >= header.left &&
+                  target.top >= header.top &&
+                  target.right <= header.right &&
+                  target.bottom <= header.bottom,
+              };
+            });
+            expect(closeAppearance.background).toBe("rgba(0, 0, 0, 0)");
+            expect(closeAppearance.visibleTop).toBeCloseTo(8, 0);
+            expect(closeAppearance.visibleRight).toBeCloseTo(8, 0);
+            expect(closeAppearance.contained).toBe(true);
+            expect(closeAppearance.backdropWidth).toBeLessThanOrEqual(24);
+            expect(closeAppearance.backdropHeight).toBeLessThanOrEqual(24);
+            expect(closeAppearance.targetWidth).toBeGreaterThanOrEqual(mobile ? 44 : 24);
+            expect(closeAppearance.targetHeight).toBeGreaterThanOrEqual(mobile ? 44 : 24);
+            const shell = page.locator(".sidebar-shell");
+            const list = page.locator(".sidebar-shell__body");
+            const cardBounds = (await card.boundingBox())!;
+            const shellBounds = (await shell.boundingBox())!;
+            const listBounds = (await list.boundingBox())!;
+            expect(cardBounds.x).toBeCloseTo(shellBounds.x, 0);
+            expect(cardBounds.width).toBeCloseTo(shellBounds.width, 0);
+            expect(cardBounds.y + cardBounds.height).toBeCloseTo(
+              shellBounds.y + shellBounds.height,
+              0,
+            );
+            expect(listBounds.y + listBounds.height).toBeLessThanOrEqual(cardBounds.y);
+            expect(listBounds.height).toBeGreaterThan(120);
+            const artwork = card.locator(".invite__art");
+            await expect
+              .poll(() =>
+                artwork.evaluate(
+                  (node) =>
+                    node instanceof HTMLImageElement && node.complete && node.naturalWidth === 1024,
+                ),
+              )
+              .toBe(true);
+            expect(await artwork.getAttribute("src")).toContain(`community-invite-${mode}.webp`);
+            const artworkBounds = (await artwork.boundingBox())!;
+            expect(artworkBounds.height).toBeGreaterThan(80);
+            expect(cardBounds.height - artworkBounds.height).toBeLessThan(190);
+            expect(
+              await card
+                .locator(".invite__body")
+                .evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingLeft)),
+            ).toBeGreaterThanOrEqual(12);
+            for (let index = 0; index < 3; index += 1) {
+              await page.getByRole("button", { name: "Show more", exact: true }).click();
             }
-            const before = await row.boundingBox();
-            releasePolicy();
-            await waitForInvitePolicy(page, true);
-            await settleSidebarIdleWork(page);
-            expect(await row.boundingBox()).toEqual(before);
+            await resize(mobile ? 568 : 540);
+            await page.locator('[data-session-key="agent:main:task-31"]').scrollIntoViewIfNeeded();
+            expect(await list.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
+            const shortListBounds = (await list.boundingBox())!;
+            const shortCardBounds = (await card.boundingBox())!;
+            expect(shortListBounds.height).toBeGreaterThan(80);
+            expect(shortListBounds.y + shortListBounds.height).toBeLessThanOrEqual(
+              shortCardBounds.y,
+            );
+            expect(shortCardBounds.y + shortCardBounds.height).toBeLessThanOrEqual(
+              mobile ? 568 : 540,
+            );
+            await resize(mobile ? 844 : 900);
+            await list.evaluate((node) => {
+              node.scrollTop = 0;
+            });
+            await rail("pages").click();
+            await close.waitFor();
+            await rail("sessions").click();
+            await page.keyboard.press("Tab");
+            await close.focus();
+            expect(await close.evaluate((node) => node.matches(":focus-visible"))).toBe(true);
+            expect(
+              await close.evaluate((node) => getComputedStyle(node, "::before").outlineStyle),
+            ).toBe("solid");
+            if (mobile && mode === "light") {
+              await close.tap({ position: { x: 2, y: 2 } });
+            } else {
+              await page.keyboard.press("Enter");
+            }
+            await card.waitFor({ state: "detached" });
+            expect(
+              await page.evaluate((key) => localStorage.getItem(key), dismissalKey),
+            ).not.toBeNull();
+            expect(await rail("sessions").evaluate((node) => node === document.activeElement)).toBe(
+              true,
+            );
+            await page.goto(`${suite.server.baseUrl}new`);
+            await expectDismissed();
+            await page.goto(url);
+            await expectDismissed();
+            await page.reload();
+            if (mobile) {
+              await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+            }
+            await page.locator(".sidebar-shell").waitFor();
             expect(await card.count()).toBe(0);
-            if (interaction === "drag") {
-              expect(await row.getAttribute("class")).toContain("sidebar-recent-session--dragging");
-              await page.keyboard.press("Escape");
-              await page.mouse.up();
-              await page.mouse.move(900, 450);
-              await expect
-                .poll(() => row.getAttribute("class"))
-                .not.toContain("sidebar-recent-session--dragging");
-              await composer.focus();
-            } else {
-              if (interaction === "keyboard") {
-                await page.keyboard.press("Tab");
-                expect(await sidebar.evaluate((element) => element.matches(":focus-within"))).toBe(
-                  true,
-                );
-                expect(await card.count()).toBe(0);
-                await page.keyboard.press("Shift+Tab");
-                await menu.press("Enter");
-              } else if (interaction === "pointer") {
-                await menu.click();
-              }
-              await page.getByRole("menuitem", { name: "Move to group" }).waitFor();
-              await page.locator("openclaw-session-menu wa-dropdown-item:focus").waitFor();
-              // A background render must not admit new geometry while a popover owns focus.
-              await gateway.emitGatewayEvent("presence", { presence: [] });
-              await settleSidebarIdleWork(page);
-              expect(await card.count()).toBe(0);
-              if (interaction === "touch") {
-                await composer.tap();
-              } else {
-                await page.keyboard.press("Escape");
-                await page.mouse.move(900, 500);
-                expect(await card.count()).toBe(0);
-                await composer.focus();
-              }
+            await page.setViewportSize(
+              mobile ? { width: 1280, height: 700 } : { width: 390, height: 568 },
+            );
+            if (!mobile) {
+              await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
             }
-            await card.waitFor({ state: "visible" });
-            if (interaction === "touch") {
-              await menu.tap();
-            } else {
-              await row.hover();
-            }
-            await card.locator("img").evaluate((image: HTMLImageElement) => image.decode());
-            expect(await card.isVisible()).toBe(true);
-            if (dismissalWriter) {
-              await refreshPolicy(false);
-              await card.waitFor({ state: "detached" });
-              await refreshPolicy(true);
-              await settleSidebarIdleWork(page);
-              expect(await card.count()).toBe(0);
-              // A real cross-tab storage event cancels the pending presentation.
-              await dismissalWriter.evaluate((key) => {
-                localStorage.setItem(key, JSON.stringify({ dismissedAtMs: Date.now() }));
-              }, STORAGE_KEY);
-              await settleSidebarIdleWork(page);
-              await composer.click();
-              await settleSidebarIdleWork(page);
-              expect(await card.count()).toBe(0);
-              await refreshPolicy(true);
-              expect(await card.count()).toBe(0);
-            }
-          } finally {
-            releasePolicy();
-            if (interaction === "drag") {
-              await page.mouse.up();
-            }
-          }
-        },
-      );
-    },
-  );
-
-  it("honors deployment policy before showing and preserves browser dismissals", async () => {
-    const viewport = { height: 900, width: 1280 };
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport,
-    });
-    const page = await context.newPage();
-    const mountedInvites = await traceInviteMounts(page);
-    await installMockGateway(page, { communityInviteDismissed: false });
-    let communityInvite = false;
-    let releaseBootstrap!: () => void;
-    const bootstrapReady = new Promise<void>((resolve) => {
-      releaseBootstrap = resolve;
-    });
-    const imageRequests: string[] = [];
-    page.on("request", (request) => {
-      if (request.url().includes("community-art/")) {
-        imageRequests.push(request.url());
-      }
-    });
-    await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, async (route) => {
-      await bootstrapReady;
-      await route.fulfill({
-        json: { ...createControlUiMockBootstrapConfig(), communityInvite },
-      });
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat/main`);
-      await page.locator(".sidebar-shell__footer").waitFor();
-      const card = page.locator(".community-invite-card");
-      await settleSidebarIdleWork(page);
-      expect(await card.count()).toBe(0);
-      expect(await mountedInvites()).toBe(0);
-      expect(imageRequests).toEqual([]);
-      const bootstrapResponse = page.waitForResponse(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`);
-      releaseBootstrap();
-      await bootstrapResponse;
-      await waitForInvitePolicy(page, false);
-      await settleSidebarIdleWork(page);
-      expect(await card.count()).toBe(0);
-      expect(await mountedInvites()).toBe(0);
-      expect(imageRequests).toEqual([]);
-      expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
-      communityInvite = true;
-      await page.reload();
-      await waitForInvitePolicy(page, true);
-      await card.waitFor({ state: "visible" });
-      await card.locator("img").evaluate((image: HTMLImageElement) => image.decode());
-      await expect
-        .poll(() => card.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("1");
-      await page.getByRole("button", { name: "Dismiss and don't show again" }).click();
-      await card.waitFor({ state: "detached" });
-      const dismissal = await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY);
-      expect(dismissal).not.toBeNull();
-
-      for (const enabled of [false, true]) {
-        communityInvite = enabled;
-        await page.reload();
-        await waitForInvitePolicy(page, enabled);
-        await page.locator(".sidebar-shell__footer").waitFor();
-        await settleSidebarIdleWork(page);
-        expect(await card.count()).toBe(0);
-        expect(await mountedInvites()).toBe(0);
-        expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBe(
-          dismissal,
-        );
-      }
-    } finally {
-      releaseBootstrap();
-      await suite.closeBrowserContext(context);
+            await page.locator(".sidebar-shell").waitFor();
+            expect(await card.count()).toBe(0);
+          },
+        ));
     }
-  });
+  }
 
-  it("shows immediately, survives Join, and stays dismissed across gateway connections on one origin", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    await installMockGateway(page, { communityInviteDismissed: false });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat/main`);
-      const card = page.locator(".community-invite-card");
-      await card.waitFor({ state: "visible" });
-
-      expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
-
-      const cta = page.getByRole("link", { name: "Join us on Discord", exact: true });
-      expect(await cta.getAttribute("href")).toBe("https://discord.gg/clawd");
-      expect(await cta.getAttribute("target")).toBe("_blank");
-      expect((await cta.getAttribute("rel"))?.split(/\s+/u)).toEqual(
-        expect.arrayContaining(["noopener", "noreferrer"]),
-      );
-      await context.route("https://discord.gg/**", (route) => route.abort());
-      const popupPromise = context.waitForEvent("page");
-      await cta.click();
-      const popup = await popupPromise;
-      await popup.close();
-      await card.waitFor({ state: "visible" });
-      expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
-
-      await page.getByRole("button", { name: "Dismiss and don't show again" }).click();
-      await card.waitFor({ state: "detached" });
-      expect(
-        JSON.parse(
-          (await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)) ?? "null",
-        ),
-      ).toMatchObject({
-        dismissedAtMs: expect.any(Number),
-      });
-
-      await page.reload();
-      await page.locator("openclaw-app-sidebar").waitFor();
-      expect(await card.count()).toBe(0);
-
-      const otherGatewayPage = await context.newPage();
-      await installMockGateway(otherGatewayPage, { communityInviteDismissed: false });
-      const otherGatewayUrl = new URL(`${suite.server.baseUrl}chat/main`);
-      otherGatewayUrl.hash = new URLSearchParams({
-        gatewayUrl: "ws://127.0.0.1:29991/another-gateway",
-      }).toString();
-      await otherGatewayPage.goto(otherGatewayUrl.href);
-      const confirmation = otherGatewayPage.locator("openclaw-gateway-url-confirmation");
-      await confirmation.waitFor({ state: "visible" });
-      await confirmation
-        .getByRole("button", { name: "Switch to 127.0.0.1:29991", exact: true })
-        .click();
-      await otherGatewayPage.locator("openclaw-app-sidebar").waitFor();
-      expect(await otherGatewayPage.locator(".community-invite-card").count()).toBe(0);
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("does not mount the workspace invite in Settings", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    await installMockGateway(page, { communityInviteDismissed: false });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      await waitForControlUiSettingsTakeover(page);
+  it("honors earlier dismissals and deployment policy when re-enabled", async () =>
+    suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      await installMockGateway(page, { communityInvite: true });
+      await page.addInitScript((key) => localStorage.setItem(key, "dismissed"), dismissalKey);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+      await page.locator(".sidebar-shell").waitFor();
       expect(await page.locator(".community-invite-card").count()).toBe(0);
-      expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("dismisses for this page and reports when the preference cannot be saved", async () => {
-    const viewport = { height: 900, width: 1280 };
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport,
-    });
-    const page = await context.newPage();
-    const mountedInvites = await traceInviteMounts(page);
-    await page.addInitScript((key) => {
-      const setItem = Storage.prototype.setItem.bind(localStorage);
-      Storage.prototype.setItem = function (storageKey, value) {
-        if (storageKey === key) {
-          throw new DOMException("full", "QuotaExceededError");
-        }
-        setItem(storageKey, value);
-      };
-    }, STORAGE_KEY);
-    await installMockGateway(page, { communityInviteDismissed: false });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat/main`);
-      const card = page.locator(".community-invite-card");
-      await card.waitFor({ state: "visible" });
-      await page.getByRole("button", { name: "Dismiss and don't show again" }).click();
-      await card.waitFor({ state: "detached" });
-      await page
-        .getByText("Invitation dismissed, but your preference couldn't be saved.")
-        .waitFor();
-      expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
-      expect(await mountedInvites()).toBe(1);
-
-      await page.keyboard.press("Control+Shift+,");
-      await waitForControlUiSettingsTakeover(page);
-      await page.keyboard.press("Escape");
-      await page.locator(".sidebar-shell__footer").waitFor();
-      await settleSidebarIdleWork(page);
-      expect(await card.count()).toBe(0);
-      expect(await mountedInvites()).toBe(1);
-      expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("hides after a malformed cross-tab state update", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    await installMockGateway(page, { communityInviteDismissed: false });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat/main`);
-      const card = page.locator(".community-invite-card");
-      await card.waitFor({ state: "visible" });
-
-      await page.evaluate((key) => {
-        localStorage.setItem(key, "{");
-        window.dispatchEvent(new StorageEvent("storage", { key, newValue: "{" }));
-      }, STORAGE_KEY);
-
-      await card.waitFor({ state: "detached" });
-      expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBe("{");
-    } finally {
-      await context.close();
-    }
-  });
+      await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
+        route.fulfill({
+          json: { ...createControlUiMockBootstrapConfig(), communityInvite: false },
+        }),
+      );
+      await page.reload();
+      await page.locator(".sidebar-shell").waitFor();
+      expect(await page.locator(".community-invite-card").count()).toBe(0);
+      await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
+        route.fulfill({ json: { ...createControlUiMockBootstrapConfig(), communityInvite: true } }),
+      );
+      await page.reload();
+      await page.locator(".sidebar-shell").waitFor();
+      expect(await page.locator(".community-invite-card").count()).toBe(0);
+    }));
 });

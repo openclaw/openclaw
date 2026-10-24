@@ -1,151 +1,123 @@
-// OC Path tests cover find plugin behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { findOcPaths } from "../find.js";
 import { parseJsonc } from "../jsonc/parse.js";
 import { parseJsonl } from "../jsonl/parse.js";
-import { formatOcPath, isPattern, OcPathError, parseOcPath } from "../oc-path.js";
+import { formatOcPath, OcPathError, parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
 import { resolveOcPath, setOcPath } from "../universal.js";
+import { parseYaml } from "../yaml/parse.js";
 
-function requireFirstResult<T>(results: readonly T[]): T {
-  return expectDefined(results[0], "first OC path match");
+function leafValues(results: ReturnType<typeof findOcPaths>): string[] {
+  return results.map(({ match }) => {
+    if (match.kind !== "leaf") {
+      throw new Error("Expected a leaf match");
+    }
+    return match.valueText;
+  });
 }
 
-describe("isPattern", () => {
-  it("detects single-segment * in any slot", () => {
-    expect(isPattern(parseOcPath("oc://X/*/y"))).toBe(true);
-    expect(isPattern(parseOcPath("oc://X/a/*"))).toBe(true);
-    expect(isPattern(parseOcPath("oc://X/a/b/*"))).toBe(true);
-  });
-
-  it("detects ** in any slot", () => {
-    expect(isPattern(parseOcPath("oc://X/**"))).toBe(true);
-    expect(isPattern(parseOcPath("oc://X/a/**/c"))).toBe(true);
-  });
-
-  it("detects wildcards inside dotted sub-segments", () => {
-    expect(isPattern(parseOcPath("oc://X/a.*.c"))).toBe(true);
-    expect(isPattern(parseOcPath("oc://X/a.**.c"))).toBe(true);
-  });
-
-  it("returns false for plain paths", () => {
-    expect(isPattern(parseOcPath("oc://X/a/b/c"))).toBe(false);
-    expect(isPattern(parseOcPath("oc://X/a.b.c"))).toBe(false);
-  });
-
-  it("treats `*` inside an identifier as literal", () => {
-    expect(isPattern(parseOcPath("oc://X/foo*bar"))).toBe(false);
-    expect(isPattern(parseOcPath("oc://X/a*"))).toBe(false);
-  });
-});
-
-describe("wildcard guard", () => {
-  const ast = parseJsonc('{"steps":[{"id":"a","command":"foo"}]}').ast;
-
-  it("resolveOcPath throws OcPathError for wildcard pattern", () => {
-    expect(() => resolveOcPath(ast, parseOcPath("oc://wf/steps/*/command"))).toThrow(/findOcPaths/);
-    try {
-      resolveOcPath(ast, parseOcPath("oc://wf/**"));
-      expect.fail("should have thrown");
-    } catch (err) {
-      expect(err).toBeInstanceOf(OcPathError);
-      expect((err as OcPathError).code).toBe("OC_PATH_WILDCARD_IN_RESOLVE");
-    }
-  });
-
-  it("setOcPath returns wildcard-not-allowed for wildcard pattern", () => {
-    const r = setOcPath(ast, parseOcPath("oc://wf/steps/*/command"), "bar");
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.reason).toBe("wildcard-not-allowed");
-    }
-  });
-
-  it("setOcPath wildcard guard reason carries actionable detail", () => {
-    const r = setOcPath(ast, parseOcPath("oc://wf/**"), "bar");
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.detail).toContain("findOcPaths");
-    }
-  });
-});
-
-describe("findOcPaths — non-wildcard fast-path", () => {
-  it("wraps resolveOcPath result for plain path", () => {
-    const ast = parseJsonc('{"name":"x"}').ast;
-    const out = findOcPaths(ast, parseOcPath("oc://wf/name"));
-    expect(out).toHaveLength(1);
-    expect(requireFirstResult(out).match.kind).toBe("leaf");
-    expect(formatOcPath(requireFirstResult(out).path)).toBe("oc://wf/name");
-  });
-
-  it("returns empty for unresolved plain path", () => {
-    const ast = parseJsonc('{"name":"x"}').ast;
-    expect(findOcPaths(ast, parseOcPath("oc://wf/missing"))).toHaveLength(0);
-  });
-});
-
-describe("findOcPaths — JSONC kind", () => {
-  const jsonc = parseJsonc(
-    "{\n" +
-      '  "plugins": {\n' +
-      '    "github": {"enabled": true},\n' +
-      '    "gitlab": {"enabled": false},\n' +
-      '    "slack": {"enabled": true}\n' +
-      "  }\n" +
-      "}\n",
-  ).ast;
-
-  it("* in item slot enumerates each plugin", () => {
-    const out = findOcPaths(jsonc, parseOcPath("oc://config/plugins/*/enabled"));
-    expect(out).toHaveLength(3);
-    const keys = out.map((m) => m.path.item);
-    expect(keys.toSorted((a, b) => (a ?? "").localeCompare(b ?? ""))).toEqual([
-      "github",
-      "gitlab",
-      "slack",
+describe("empty string keys", () => {
+  it.each([
+    { file: "f.json", parse: parseJsonc, raw: '{"":"old","keep":"unchanged"}', suffix: '""' },
+    { file: "f.yaml", parse: parseYaml, raw: '"": old\nkeep: unchanged\n', suffix: '""' },
+    { file: "f.jsonl/L1", parse: parseJsonl, raw: '{"":"old","keep":"unchanged"}\n', suffix: '""' },
+    {
+      file: "f.json",
+      parse: parseJsonc,
+      raw: '{"":{"value":"old"},"keep":"unchanged"}',
+      suffix: '""/value',
+    },
+    {
+      file: "f.yaml",
+      parse: parseYaml,
+      raw: '"":\n  value: old\nkeep: unchanged\n',
+      suffix: '""/value',
+    },
+    {
+      file: "f.jsonl/L1",
+      parse: parseJsonl,
+      raw: '{"":{"value":"old"},"keep":"unchanged"}\n',
+      suffix: '""/value',
+    },
+  ])("finds, resolves, and edits $suffix in $file", ({ file, parse, raw, suffix }) => {
+    const ast = parse(raw);
+    const prefix = "oc://" + file;
+    const results = findOcPaths(ast, parseOcPath(prefix + "/*"));
+    expect(results.map(({ path }) => formatOcPath(path))).toEqual([
+      prefix + '/""',
+      prefix + "/keep",
     ]);
-  });
-
-  it("returns boolean leaves with leafType", () => {
-    const out = findOcPaths(jsonc, parseOcPath("oc://config/plugins/*/enabled"));
-    for (const m of out) {
-      expect(m.match.kind).toBe("leaf");
-      if (m.match.kind === "leaf") {
-        expect(m.match.leafType).toBe("boolean");
-      }
+    for (const { path, match } of results) {
+      expect(resolveOcPath(ast, parseOcPath(formatOcPath(path)))).toEqual(match);
     }
+    const target = parseOcPath(prefix + "/" + suffix);
+    expect(resolveOcPath(ast, target)).toMatchObject({ kind: "leaf", valueText: "old" });
+    const edited = setOcPath(ast, target, "new");
+    expect(edited.raw).toBe(raw.replace("old", "new"));
+    expect(resolveOcPath(edited, target)).toMatchObject({ kind: "leaf", valueText: "new" });
+    expect(resolveOcPath(edited, parseOcPath(prefix + "/keep"))).toMatchObject({
+      kind: "leaf",
+      valueText: "unchanged",
+    });
+    expect(ast.raw).toBe(raw);
   });
 
   it.each([
-    {
-      name: "quotes positional object keys",
-      raw: '{"items":{"zeta.key":10,"alpha":20}}',
-      pattern: "oc://config/items/$first",
-      expectedPath: 'oc://config/items/"zeta.key"',
-      expectedValue: "10",
-    },
-    {
-      name: "emits positional array indexes",
-      raw: '{"items":[10,20,30]}',
-      pattern: "oc://config/items/$last",
-      expectedPath: "oc://config/items/2",
-      expectedValue: "30",
-    },
-  ])("$name", ({ raw, pattern, expectedPath, expectedValue }) => {
-    const ast = parseJsonc(raw).ast;
-    const out = findOcPaths(ast, parseOcPath(pattern));
-
-    expect(out).toHaveLength(1);
-    const result = requireFirstResult(out);
-    expect(formatOcPath(result.path)).toBe(expectedPath);
-    expect(result.match.kind === "leaf" && result.match.valueText).toBe(expectedValue);
+    { file: "f.json", parse: parseJsonc },
+    { file: "f.yaml", parse: parseYaml },
+    { file: "f.jsonl/L1", parse: parseJsonl },
+  ])("does not treat an empty key as array index zero in $file", ({ file, parse }) => {
+    const ast = parse('["unchanged"]\n');
+    const target = parseOcPath("oc://" + file + '/""');
+    expect(resolveOcPath(ast, target)).toBeNull();
+    expect(() => setOcPath(ast, target, "new")).toThrow(
+      expect.objectContaining({ reason: "unresolved" }),
+    );
   });
 });
 
-describe("findOcPaths — slash-deep JSONC paths", () => {
-  const jsonc = parseJsonc(
+describe("single-match wildcard guards", () => {
+  const ast = parseJsonc('{"steps":[{"id":"a","command":"foo"}]}');
+
+  it("rejects recursive patterns in resolve with an actionable error", () => {
+    expect(() => resolveOcPath(ast, parseOcPath("oc://wf/**"))).toThrow(OcPathError);
+    expect(() => resolveOcPath(ast, parseOcPath("oc://wf/**"))).toThrow(
+      expect.objectContaining({
+        name: "OcPathError",
+        code: "OC_PATH_WILDCARD_IN_RESOLVE",
+        message: expect.stringContaining("findOcPaths"),
+      }),
+    );
+  });
+
+  it("rejects wildcard writes with an actionable reason", () => {
+    expect(() => setOcPath(ast, parseOcPath("oc://wf/steps/*/command"), "bar")).toThrow(
+      expect.objectContaining({
+        reason: "wildcard-not-allowed",
+        detail: expect.stringContaining("findOcPaths"),
+      }),
+    );
+  });
+});
+
+describe("findOcPaths — JSONC", () => {
+  it("returns no matches for an unresolved concrete path", () => {
+    expect(findOcPaths(parseJsonc('{"name":"x"}'), parseOcPath("oc://wf/missing"))).toEqual([]);
+  });
+
+  it.each([
+    ['{"items":{"zeta.key":10,"alpha":20}}', "$first", '"zeta.key"', "10"],
+    ['{"items":[10,20,30]}', "$last", "2", "30"],
+  ])("concretizes positional paths in %s", (raw, position, key, value) => {
+    const ast = parseJsonc(raw);
+    const pattern = parseOcPath("oc://config/items/" + position);
+    const out = findOcPaths(ast, pattern);
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual(["oc://config/items/" + key]);
+    expect(leafValues(out)).toEqual([value]);
+    expect(resolveOcPath(ast, pattern)).toMatchObject({ kind: "leaf", valueText: value });
+  });
+
+  const deep = parseJsonc(
     JSON.stringify({
       mcp: {
         servers: {
@@ -158,472 +130,556 @@ describe("findOcPaths — slash-deep JSONC paths", () => {
         { id: "reviewer", tools: { exec: { security: "allowlist" } } },
       ],
     }),
-  ).ast;
+  );
 
-  it("expands * in a slash-deep JSON object path", () => {
+  it("finds leaves recursively in slash-deep objects", () => {
+    const out = findOcPaths(deep, parseOcPath("oc://openclaw.json/mcp/**/GITHUB_TOKEN"));
+    expect(leafValues(out)).toEqual(["gh-token", "gl-token"]);
+  });
+
+  it("expands a trailing recursive wildcard into each node exactly once", () => {
+    const ast = parseJsonc('{"alpha":{"inner":1},"beta":2}');
+    const out = findOcPaths(ast, parseOcPath("oc://f.json/**"));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual([
+      "oc://f.json",
+      "oc://f.json/alpha",
+      "oc://f.json/alpha.inner",
+      "oc://f.json/beta",
+    ]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(ast, path)).toEqual(match);
+    }
+  });
+
+  it("matches zero sub-segments for a mid-path recursive wildcard", () => {
+    const ast = parseJsonc('{"mcp":{"GITHUB_TOKEN":"t","nest":{"GITHUB_TOKEN":"u"}}}');
+    const out = findOcPaths(ast, parseOcPath("oc://f.json/mcp/**/GITHUB_TOKEN"));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual([
+      "oc://f.json/mcp/GITHUB_TOKEN",
+      "oc://f.json/mcp/nest/GITHUB_TOKEN",
+    ]);
+    expect(leafValues(out)).toEqual(["t", "u"]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(ast, path)).toEqual(match);
+    }
+  });
+
+  it("filters object members by boolean values and preserves leaf types", () => {
+    const ast = parseJsonc(
+      '{"plugins":{"github":{"enabled":true},"slack":{"enabled":false},"jira":{"enabled":true}}}',
+    );
+    const out = findOcPaths(ast, parseOcPath("oc://config/plugins/[enabled=true]/enabled"));
+    expect(out.map(({ path }) => path.item)).toEqual(["github", "jira"]);
+    expect(out.map(({ match }) => match)).toEqual([
+      { kind: "leaf", leafType: "boolean", valueText: "true", line: 1 },
+      { kind: "leaf", leafType: "boolean", valueText: "true", line: 1 },
+    ]);
+  });
+
+  const quoted = parseJsonc(
+    '{\n  "models":{"vendor/model":{"alias":"one","contextWindow":1000000},"vendor/model.v2":{"alias":"two"},"plain":{"alias":"three"}}\n}\n',
+  );
+
+  it("preserves quoted literal keys while expanding a field union", () => {
     const out = findOcPaths(
-      jsonc,
-      parseOcPath("oc://openclaw.json/mcp/servers/*/env/GITHUB_TOKEN"),
+      quoted,
+      parseOcPath('oc://config/models/"vendor/model"/{alias,contextWindow}'),
     );
-    expect(out).toHaveLength(2);
-    const values = out.map((m) => (m.match.kind === "leaf" ? m.match.valueText : ""));
-    expect(values.toSorted()).toEqual(["gh-token", "gl-token"]);
+    expect(out.map(({ path }) => path.field)).toEqual(["alias", "contextWindow"]);
+    expect(leafValues(out)).toEqual(["one", "1000000"]);
+  });
+});
+
+describe("quoted union targets", () => {
+  it.each([
+    { key: "a,b", pattern: '{"a,b",plain}' },
+    { key: 'a,,"b', pattern: '{"a,,\\"b",plain}' },
+    { key: 'a,,"b', pattern: '{{"a,,\\"b",missing},plain}' },
+    { key: "{a,,b}", pattern: '{"{a,,b}",plain}' },
+  ])("keeps commas inside the quoted union key $key", ({ key, pattern }) => {
+    const ast = parseJsonc(JSON.stringify({ [key]: "selected", plain: "sibling" }));
+    const out = findOcPaths(ast, parseOcPath("oc://f.json/" + pattern));
+    expect(leafValues(out)).toEqual(["selected", "sibling"]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(ast, parseOcPath(formatOcPath(path)))).toEqual(match);
+    }
   });
 
-  it("expands * in a slash-deep JSON array path", () => {
-    const out = findOcPaths(jsonc, parseOcPath("oc://openclaw.json/agents/*/tools/exec/security"));
-    expect(out).toHaveLength(2);
-    const values = out.map((m) => (m.match.kind === "leaf" ? m.match.valueText : ""));
-    expect(values.toSorted()).toEqual(["allowlist", "deny"]);
+  it.each([
+    { file: "f.json", parse: parseJsonc, raw: '{"a.b":1}' },
+    { file: "f.yaml", parse: parseYaml, raw: "a.b: 1\n" },
+  ])("resolves either ordering of literal key aliases in $file", ({ file, parse, raw }) => {
+    const ast = parse(raw);
+    const prefix = "oc://" + file;
+    for (const union of ['{a.b,"a.b"}', '{"a.b",a.b}']) {
+      const out = findOcPaths(ast, parseOcPath(prefix + "/" + union));
+      expect(out.map(({ path }) => formatOcPath(path))).toEqual([prefix + '/"a.b"']);
+      expect(leafValues(out)).toEqual(["1"]);
+      for (const { path, match } of out) {
+        expect(resolveOcPath(ast, parseOcPath(formatOcPath(path)))).toEqual(match);
+      }
+    }
   });
-
-  it("expands predicates in slash-deep JSON array paths", () => {
-    const out = findOcPaths(
-      jsonc,
-      parseOcPath("oc://openclaw.json/agents/[id=reviewer]/tools/exec/security"),
-    );
-    expect(out).toHaveLength(1);
-    const result = requireFirstResult(out);
-    expect(result.match.kind === "leaf" && result.match.valueText).toBe("allowlist");
-  });
-
-  it("expands ** in slash-deep JSON paths", () => {
-    const out = findOcPaths(jsonc, parseOcPath("oc://openclaw.json/mcp/**/GITHUB_TOKEN"));
-    expect(out).toHaveLength(2);
-    const values = out.map((m) => (m.match.kind === "leaf" ? m.match.valueText : ""));
-    expect(values.toSorted()).toEqual(["gh-token", "gl-token"]);
-  });
-
-  it("returns slash-deep JSON matches as concrete paths that resolve", () => {
-    const out = findOcPaths(jsonc, parseOcPath("oc://openclaw.json/agents/*/tools/exec/security"));
-    for (const m of out) {
-      expect(resolveOcPath(jsonc, m.path)?.kind).toBe("leaf");
-      expect(formatOcPath(m.path)).not.toContain("*");
+  it.each([
+    { file: "f.json", parse: parseJsonc, raw: '{"*":1,"**":2,"a":3}' },
+    { file: "f.yaml", parse: parseYaml, raw: '"*": 1\n"**": 2\na: 3\n' },
+  ])("preserves explicit quotes in literal unions in $file", ({ file, parse, raw }) => {
+    const ast = parse(raw);
+    const prefix = "oc://" + file;
+    const out = findOcPaths(ast, parseOcPath(prefix + '/{"*","**","a"}'));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual([
+      prefix + '/"*"',
+      prefix + '/"**"',
+      prefix + '/"a"',
+    ]);
+    expect(leafValues(out)).toEqual(["1", "2", "3"]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(ast, parseOcPath(formatOcPath(path)))).toEqual(match);
     }
   });
 });
 
-describe("findOcPaths — JSONL kind", () => {
-  const jsonl = parseJsonl(
-    '{"event":"start","userId":"u1"}\n' +
-      '{"event":"action","userId":"u1"}\n' +
-      '{"event":"end","userId":"u1"}\n',
-  ).ast;
-
-  it("* in section slot enumerates each value line", () => {
-    const out = findOcPaths(jsonl, parseOcPath("oc://session/*/event"));
-    expect(out).toHaveLength(3);
-    const events = out.map((m) => (m.match.kind === "leaf" ? m.match.valueText : ""));
-    expect(events).toEqual(["start", "action", "end"]);
-  });
-
-  it("preserves Lnnn line addresses in concrete paths", () => {
-    const out = findOcPaths(jsonl, parseOcPath("oc://session/*/event"));
-    for (const m of out) {
-      expect(m.path.section).toMatch(/^L\d+$/);
+describe("recursive wildcard targets", () => {
+  it.each([
+    { file: "f.json", parse: parseJsonc, raw: '{"a":{"b":1},"a.b":2}' },
+    { file: "f.yaml", parse: parseYaml, raw: "a:\n  b: 1\na.b: 2\n" },
+  ])("returns each target once across recursive slots in $file", ({ file, parse, raw }) => {
+    const ast = parse(raw);
+    const prefix = "oc://" + file;
+    const out = findOcPaths(ast, parseOcPath(prefix + "/**/**/**"));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual([
+      prefix,
+      prefix + "/a",
+      prefix + "/a.b",
+      prefix + '/"a.b"',
+    ]);
+    expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1", "2"]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(ast, parseOcPath(formatOcPath(path)))).toEqual(match);
     }
   });
 
-  it("union {L1,L2} at line slot enumerates each alternative", () => {
-    const out = findOcPaths(jsonl, parseOcPath("oc://session/{L1,L3}/event"));
-    expect(out).toHaveLength(2);
-    const events = out.map((m) => (m.match.kind === "leaf" ? m.match.valueText : ""));
-    expect(events).toEqual(["start", "end"]);
+  describe.each([
+    { file: "f.json", parse: parseJsonc },
+    { file: "f.yaml", parse: parseYaml },
+  ])("deep recursive targets in $file", ({ file, parse }) => {
+    it.each([64, 65, 129, 192])("round-trips every result at depth %i", (depth) => {
+      const keys = Array.from({ length: depth }, (_, index) => (index === 63 ? "a.b" : "k"));
+      const value = keys.reduceRight<unknown>((child, key) => ({ [key]: child }), 1);
+      const ast = parse(JSON.stringify(value));
+      const out = findOcPaths(ast, parseOcPath("oc://" + file + "/**/**/**?session=deep"));
+      expect(out).toHaveLength(depth + 1);
+      expect(new Set(out.map(({ path }) => formatOcPath(path))).size).toBe(out.length);
+      expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1"]);
+      for (const { path, match } of out) {
+        expect(path.session).toBe("deep");
+        expect(resolveOcPath(ast, parseOcPath(formatOcPath(path)))).toEqual(match);
+      }
+    });
+
+    it("preserves an already valid three-slot partition", () => {
+      const middle = Array(64).fill("k").join(".");
+      let value: unknown = { end: 1 };
+      for (let level = 0; level < 64; level++) {
+        value = { k: value };
+      }
+      const ast = parse(JSON.stringify({ start: value }));
+      const out = findOcPaths(ast, parseOcPath("oc://" + file + "/start/**/end"));
+      expect(out.map(({ path }) => formatOcPath(path))).toEqual([
+        "oc://" + file + "/start/" + middle + "/end",
+      ]);
+      expect(leafValues(out)).toEqual(["1"]);
+      for (const { path, match } of out) {
+        expect(resolveOcPath(ast, parseOcPath(formatOcPath(path)))).toEqual(match);
+      }
+    });
   });
 
-  it("union of positional + literal line addresses works", () => {
-    const out = findOcPaths(jsonl, parseOcPath("oc://session/{L1,$last}/event"));
-    expect(out).toHaveLength(2);
-    const events = out.map((m) => (m.match.kind === "leaf" ? m.match.valueText : ""));
-    expect(events).toEqual(["start", "end"]);
-  });
-
-  it("predicate [event=action] at line slot filters by top-level field", () => {
-    const out = findOcPaths(jsonl, parseOcPath("oc://session/[event=action]/userId"));
-    expect(out).toHaveLength(1);
-    const result = requireFirstResult(out);
-    if (result.match.kind === "leaf") {
-      expect(result.match.valueText).toBe("u1");
+  it("bounds AST expansion for repeated recursive wildcards", () => {
+    const depth = 10;
+    let value: unknown = 1;
+    for (let level = depth - 1; level >= 0; level--) {
+      value = { ["k" + level]: value };
     }
-  });
+    const ast = parseJsonc(JSON.stringify(value));
+    const pattern = parseOcPath("oc://f.json/" + Array(depth).fill("**").join("."));
+    const maxEntryReads = 100 * (depth + 1) * depth;
+    let entryReads = 0;
+    for (let node = ast.root; node?.kind === "object";) {
+      const entries = node.entries;
+      Object.defineProperty(node, "entries", {
+        get() {
+          if (++entryReads > maxEntryReads) {
+            throw new Error("Recursive wildcard exceeded the AST expansion budget");
+          }
+          return entries;
+        },
+      });
+      node = entries[0]?.value ?? null;
+    }
 
-  it("predicate [event=missing] at line slot matches zero lines (silent zero is correct)", () => {
-    const out = findOcPaths(jsonl, parseOcPath("oc://session/[event=missing]/userId"));
-    expect(out).toHaveLength(0);
+    const out = findOcPaths(ast, pattern);
+    expect(out).toHaveLength(depth + 1);
+    expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1"]);
   });
 });
 
-describe("positional primitives — $first / $last", () => {
-  it("$first picks first array element", () => {
-    const jsonc = parseJsonc('{"items":[10,20,30]}').ast;
-    const m = resolveOcPath(jsonc, parseOcPath("oc://config/items/$first"));
-    expect(m?.kind === "leaf" && m.valueText).toBe("10");
-  });
+describe("findOcPaths — JSONL", () => {
+  const ast = parseJsonl(
+    '{"event":"start","userId":"u1"}\n{"event":"action","userId":"u1"}\n{"event":"end","userId":"u1"}\n',
+  );
 
-  it("$last picks last array element", () => {
-    const jsonc = parseJsonc('{"items":[10,20,30]}').ast;
-    const m = resolveOcPath(jsonc, parseOcPath("oc://config/items/$last"));
-    expect(m?.kind === "leaf" && m.valueText).toBe("30");
-  });
-
-  it("$first picks first value line on jsonl", () => {
-    const jsonl = parseJsonl('{"event":"start"}\n{"event":"step"}\n{"event":"end"}\n').ast;
-    const m = resolveOcPath(jsonl, parseOcPath("oc://session/$first/event"));
-    expect(m?.kind === "leaf" && m.valueText).toBe("start");
-  });
-
-  it("$last picks last value line on jsonl", () => {
-    const jsonl = parseJsonl('{"event":"start"}\n{"event":"step"}\n{"event":"end"}\n').ast;
-    const m = resolveOcPath(jsonl, parseOcPath("oc://session/$last/event"));
-    expect(m?.kind === "leaf" && m.valueText).toBe("end");
-  });
-
-  it("isPattern returns false for positional tokens", () => {
-    expect(isPattern(parseOcPath("oc://X/$first/id"))).toBe(false);
-    expect(isPattern(parseOcPath("oc://X/$last/id"))).toBe(false);
-  });
-});
-
-describe("quoted segments (v1.0)", () => {
-  const jsonc = parseJsonc(
-    '{"agents":{"defaults":{"models":{' +
-      '"anthropic/claude-opus-4-7":{"alias":"opus47","contextWindow":1000000},' +
-      '"github-copilot/claude-opus-4.7-1m-internal":{"alias":"copilot-opus-1m","contextWindow":1000000},' +
-      '"plain":{"alias":"p","contextWindow":200000}' +
-      "}}}}",
-  ).ast;
-
-  it("resolveOcPath — quoted segment with literal slash", () => {
-    const m = resolveOcPath(
-      jsonc,
-      parseOcPath('oc://config/agents.defaults.models/"anthropic/claude-opus-4-7"/alias'),
-    );
-    expect(m?.kind).toBe("leaf");
-    if (m?.kind === "leaf") {
-      expect(m.valueText).toBe("opus47");
+  it.each([64, 65, 128])("round-trips JSONL value paths at depth %i", (depth) => {
+    const keys = Array.from({ length: depth }, (_, index) => (index === 63 ? "a.b" : "k"));
+    const value = keys.reduceRight<unknown>((child, key) => ({ [key]: child }), 1);
+    const lineAst = parseJsonl(JSON.stringify(value) + "\n");
+    const out = findOcPaths(lineAst, parseOcPath("oc://events.jsonl/L1/**/**?session=deep"));
+    expect(out).toHaveLength(depth + 1);
+    expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1"]);
+    for (const { path, match } of out) {
+      expect(path.section).toBe("L1");
+      expect(path.session).toBe("deep");
+      expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
     }
   });
 
-  it("resolveOcPath — quoted segment with literal slash AND dot", () => {
-    const m = resolveOcPath(
-      jsonc,
-      parseOcPath(
-        'oc://config/agents.defaults.models/"github-copilot/claude-opus-4.7-1m-internal"/alias',
-      ),
-    );
-    expect(m?.kind).toBe("leaf");
-    if (m?.kind === "leaf") {
-      expect(m.valueText).toBe("copilot-opus-1m");
+  it("preserves an already valid JSONL value partition", () => {
+    let value: unknown = { end: 1 };
+    for (let level = 0; level < 63; level++) {
+      value = { k: value };
+    }
+    const lineAst = parseJsonl(JSON.stringify({ start: value }) + "\n");
+    const out = findOcPaths(lineAst, parseOcPath("oc://events.jsonl/L1/start/**.end"));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual([
+      "oc://events.jsonl/L1/start/" + Array(63).fill("k").join(".") + ".end",
+    ]);
+    expect(leafValues(out)).toEqual(["1"]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
     }
   });
 
-  it("quoted segment with whitespace", () => {
-    const ast = parseJsonc('{"prompts":{"hello world":"value"}}').ast;
-    const m = resolveOcPath(ast, parseOcPath('oc://X/prompts/"hello world"'));
-    expect(m?.kind).toBe("leaf");
-    if (m?.kind === "leaf") {
-      expect(m.valueText).toBe("value");
+  it.each([
+    { pattern: "*/**/**", prefix: ["oc://session/L1"], nextLine: ["oc://session/L3"] },
+    {
+      pattern: "**/**/**",
+      prefix: ["oc://session", "oc://session/L1", "oc://session/L3"],
+      nextLine: [],
+    },
+    {
+      pattern: "{L1,$first,$last}/**/**",
+      prefix: ["oc://session/L1"],
+      nextLine: ["oc://session/L3"],
+    },
+  ])("retains distinct physical-line targets for $pattern", ({ pattern, prefix, nextLine }) => {
+    const lineAst = parseJsonl('{"a":{"b":1},"a.b":2}\n\n{"a":{"b":1},"a.b":2}\n');
+    const out = findOcPaths(lineAst, parseOcPath("oc://session/" + pattern));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual([
+      ...prefix,
+      "oc://session/L1/a",
+      "oc://session/L1/a.b",
+      'oc://session/L1/"a.b"',
+      ...nextLine,
+      "oc://session/L3/a",
+      "oc://session/L3/a.b",
+      'oc://session/L3/"a.b"',
+    ]);
+    expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual([
+      "1",
+      "2",
+      "1",
+      "2",
+    ]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
     }
   });
 
-  it('rejects quoted segments containing `"` or `\\` (no escape support)', () => {
-    expect(() => parseOcPath('oc://X/keys/"a\\\\b"')).toThrow(/Quoted segment cannot contain/);
-  });
-
-  it("findOcPaths — wildcard returns paths with quoted keys when needed", () => {
-    const out = findOcPaths(jsonc, parseOcPath("oc://config/agents.defaults.models/*/alias"));
-    expect(out).toHaveLength(3);
-    const items = out.map((m) => m.path.item);
-    expect(items.some((s) => s === "plain")).toBe(true);
-    expect(items.some((s) => s === '"anthropic/claude-opus-4-7"')).toBe(true);
-    expect(items.some((s) => s === '"github-copilot/claude-opus-4.7-1m-internal"')).toBe(true);
-  });
-
-  it("findOcPaths — emitted paths round-trip through resolveOcPath", () => {
-    const out = findOcPaths(jsonc, parseOcPath("oc://config/agents.defaults.models/*/alias"));
-    for (const m of out) {
-      const r = resolveOcPath(jsonc, m.path);
-      expect(r?.kind).toBe("leaf");
-    }
-  });
-
-  it("rejects unbalanced quotes at parse time", () => {
-    expect(() => parseOcPath('oc://X/"unterminated')).toThrow(/Unbalanced/);
-  });
-
-  it("control characters still rejected inside quotes", () => {
-    expect(() => parseOcPath('oc://X/"\x00"')).toThrow(/Control character/);
-  });
-});
-
-describe("value predicates — numeric operators (v1.1)", () => {
-  const jsonc = parseJsonc(
-    '{"models":{"providers":{"anthropic":{"models":[' +
-      '{"id":"claude-sonnet-4-6","contextWindow":1000000,"maxTokens":128000},' +
-      '{"id":"claude-opus-4-7","contextWindow":1000000,"maxTokens":240000},' +
-      '{"id":"claude-sonnet-4-7","contextWindow":200000,"maxTokens":64000}' +
-      "]}}}}",
-  ).ast;
-
-  const PREFIX = "oc://config/models.providers.anthropic.models";
-
-  it("> finds models exceeding the per-request output cap", () => {
-    const out = findOcPaths(jsonc, parseOcPath(`${PREFIX}/[maxTokens>128000]/id`));
-    expect(out).toHaveLength(1);
-    const result = requireFirstResult(out);
-    if (result.match.kind === "leaf") {
-      expect(result.match.valueText).toBe("claude-opus-4-7");
-    }
-  });
-
-  it(">= matches the boundary", () => {
-    const out = findOcPaths(jsonc, parseOcPath(`${PREFIX}/[maxTokens>=128000]/id`));
-    const ids = out.map((m) => (m.match.kind === "leaf" ? m.match.valueText : ""));
-    expect(ids.toSorted()).toEqual(["claude-opus-4-7", "claude-sonnet-4-6"]);
-  });
-
-  it("< filters small context windows", () => {
-    const out = findOcPaths(jsonc, parseOcPath(`${PREFIX}/[contextWindow<500000]/id`));
-    expect(out).toHaveLength(1);
-    const result = requireFirstResult(out);
-    if (result.match.kind === "leaf") {
-      expect(result.match.valueText).toBe("claude-sonnet-4-7");
-    }
-  });
-
-  it("<= matches the boundary", () => {
-    const out = findOcPaths(jsonc, parseOcPath(`${PREFIX}/[contextWindow<=200000]/id`));
-    const ids = out.map((m) => (m.match.kind === "leaf" ? m.match.valueText : ""));
-    expect(ids).toEqual(["claude-sonnet-4-7"]);
-  });
-
-  it("numeric operator rejects non-numeric leaves silently", () => {
-    const out = findOcPaths(jsonc, parseOcPath(`${PREFIX}/[id>5]/id`));
-    expect(out).toHaveLength(0);
-  });
-
-  it("rejects numeric predicate value that is not a number", () => {
-    const out = findOcPaths(jsonc, parseOcPath(`${PREFIX}/[maxTokens>foo]/id`));
-    expect(out).toHaveLength(0);
-  });
-});
-
-describe("value predicates — jsonc", () => {
-  const jsonc = parseJsonc(
-    '{"plugins":{"github":{"enabled":true,"role":"vcs"},"slack":{"enabled":false,"role":"chat"},"jira":{"enabled":true,"role":"tracker"}}}',
-  ).ast;
-
-  it("[enabled=true] filters by sibling boolean", () => {
-    const out = findOcPaths(jsonc, parseOcPath("oc://config/plugins/[enabled=true]/role"));
-    expect(out).toHaveLength(2);
-    const roles = out.map((m) => (m.match.kind === "leaf" ? m.match.valueText : ""));
-    expect(roles.toSorted()).toEqual(["tracker", "vcs"]);
-  });
-});
-
-describe("ordinal addressing — md", () => {
-  // Two items share slug `foo` after slugify.
-  const md = parseMd("## Tools\n\n- foo: a\n- foo: b\n- bar: c\n").ast;
-
-  it("#0 picks the first item by document order", () => {
-    const m = resolveOcPath(md, parseOcPath("oc://AGENTS.md/tools/#0/foo"));
-    expect(m?.kind).toBe("leaf");
-    if (m?.kind === "leaf") {
-      expect(m.valueText).toBe("a");
-    }
-  });
-
-  it("#1 picks the second item — distinct from #0 even though slug collides", () => {
-    const m = resolveOcPath(md, parseOcPath("oc://AGENTS.md/tools/#1/foo"));
-    expect(m?.kind).toBe("leaf");
-    if (m?.kind === "leaf") {
-      expect(m.valueText).toBe("b");
-    }
-  });
-
-  it("out-of-range #N returns null", () => {
-    expect(resolveOcPath(md, parseOcPath("oc://AGENTS.md/tools/#99/foo"))).toBeNull();
-  });
-
-  it("findOcPaths disambiguates duplicate-slug items via #N", () => {
-    const out = findOcPaths(md, parseOcPath("oc://AGENTS.md/tools/*/foo"));
-    expect(out).toHaveLength(2);
-    const items = out.map((m) => m.path.item);
-    expect(items).toEqual(["#0", "#1"]);
-    const values = out.map((m) => (m.match.kind === "leaf" ? m.match.valueText : ""));
-    expect(values.toSorted()).toEqual(["a", "b"]);
-  });
-
-  it("non-duplicate slug keeps slug form (back-compat)", () => {
-    const md2 = parseMd("## Tools\n\n- foo: a\n- bar: b\n").ast;
-    const out = findOcPaths(md2, parseOcPath("oc://AGENTS.md/tools/*"));
-    const items = out.map((m) => m.path.item);
-    expect(items.toSorted((a, b) => (a ?? "").localeCompare(b ?? ""))).toEqual(["bar", "foo"]);
-  });
-});
-
-describe("findOcPaths — Markdown kind", () => {
-  const md = parseMd(
-    "---\nname: drafter\nrole: writer\n---\n\n" +
-      "## Tools\n\n" +
-      "- send_email: enabled\n" +
-      "- search: enabled\n" +
-      "- read_email: disabled\n",
-  ).ast;
-
-  it("* in field slot enumerates frontmatter keys", () => {
-    const out = findOcPaths(md, parseOcPath("oc://SOUL.md/[frontmatter]/*"));
-    expect(out).toHaveLength(2);
-    const keys = out.map((m) => m.path.item ?? m.path.field);
-    expect(keys.toSorted((a, b) => (a ?? "").localeCompare(b ?? ""))).toEqual(["name", "role"]);
-  });
-
-  it("* in field slot enumerates each item kv key", () => {
-    const out = findOcPaths(md, parseOcPath("oc://SKILL.md/Tools/send-email/*"));
-    expect(out).toHaveLength(1);
-    const result = requireFirstResult(out);
-    expect(result.match.kind).toBe("leaf");
-    if (result.match.kind === "leaf") {
-      expect(result.match.valueText).toBe("enabled");
-    }
-  });
-
-  it("* in item slot + matching field returns each item whose kv key matches", () => {
-    const out = findOcPaths(md, parseOcPath("oc://SKILL.md/Tools/*/send_email"));
-    expect(out).toHaveLength(1);
-    expect(requireFirstResult(out).path.item).toBe("send-email");
-  });
-
-  it("** at section slot matches items at every depth (cross-kind symmetry)", () => {
-    // The retain-i branch on `**` keeps the wildcard active across
-    // descent — without it, multi-block md files match only the
-    // immediate-block layer.
-    const multiBlock = parseMd(
-      "## Boundaries\n\n" +
-        "- never: rm -rf\n\n" +
-        "## Tools\n\n" +
-        "- send_email: enabled\n" +
-        "- search: enabled\n",
-    ).ast;
-    const out = findOcPaths(multiBlock, parseOcPath("oc://SOUL.md/**/send-email"));
-    expect(out.length).toBeGreaterThanOrEqual(1);
-    const items = out.map((m) => m.path.item).filter((v): v is string => v !== undefined);
-    expect(items).toContain("send-email");
-  });
-});
-
-describe("findOcPaths — quoted segments survive expansion", () => {
-  it("finds keys with slashes when the path quotes them and a sibling wildcards", () => {
-    const raw = `{
-  "agents": {
-    "defaults": {
-      "models": {
-        "github-copilot/claude-opus-4-7": {
-          "alias": "opus-internal",
-          "contextWindow": 200000
+  it("deduplicates quoted aliases within a line", () => {
+    const lineAst = parseJsonl('{"a":{"b":1}}\n');
+    for (const { union, paths } of [
+      { union: '{a,"a"}', paths: ["oc://session/L1/a", "oc://session/L1/a/b"] },
+      { union: '{"a",a}', paths: ['oc://session/L1/"a"', 'oc://session/L1/"a"/b'] },
+    ]) {
+      for (const suffix of ["", "/**"]) {
+        const out = findOcPaths(lineAst, parseOcPath("oc://session/L1/" + union + suffix));
+        expect(out.map(({ path }) => formatOcPath(path))).toEqual(
+          suffix ? paths : paths.slice(0, 1),
+        );
+        if (suffix) {
+          expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1"]);
+        }
+        for (const { path, match } of out) {
+          expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
         }
       }
     }
-  }
-}
-`;
-    const { ast } = parseJsonc(raw);
-    const out = findOcPaths(
-      ast,
-      parseOcPath(
-        'oc://config.jsonc/agents.defaults.models/"github-copilot/claude-opus-4-7"/{alias,contextWindow}',
-      ),
-    );
-    expect(out.length).toBe(2);
-    const fields = out
-      .map((m) => m.path.field)
-      .toSorted((a, b) => (a ?? "").localeCompare(b ?? ""));
-    expect(fields).toEqual(["alias", "contextWindow"]);
-  });
-});
-
-describe("union segments — md", () => {
-  const RAW = `## Boundaries
-
-- enabled: true
-- timeout: 5
-
-## Limits
-
-- max-tokens: 4096
-- alias: claude-3
-`;
-
-  it("expands {a,b} at the section slot", () => {
-    const ast = parseMd(RAW).ast;
-    const out = findOcPaths(ast, parseOcPath("oc://X.md/{boundaries,limits}/*/*"));
-    expect(out.length).toBe(4);
-    const sections = out
-      .map((m) => m.path.section)
-      .toSorted((a, b) => (a ?? "").localeCompare(b ?? ""));
-    expect(sections).toEqual(["boundaries", "boundaries", "limits", "limits"]);
   });
 
-  it("expands {a,b} at the item slot", () => {
-    const ast = parseMd(RAW).ast;
-    const out = findOcPaths(ast, parseOcPath("oc://X.md/limits/{max-tokens,alias}/*"));
-    expect(out.length).toBe(2);
-    const items = out.map((m) => m.path.item).toSorted((a, b) => (a ?? "").localeCompare(b ?? ""));
-    expect(items).toEqual(["alias", "max-tokens"]);
-  });
-
-  it("expands {a,b} at the field slot — md items have one kv, so at most one alt", () => {
-    const ast = parseMd(RAW).ast;
-    const out = findOcPaths(ast, parseOcPath("oc://X.md/limits/alias/{alias,nope}"));
-    expect(out.length).toBe(1);
-    expect(requireFirstResult(out)?.path.field).toBe("alias");
-  });
-});
-
-describe("predicate segments — md", () => {
-  const RAW = `## Boundaries
-
-- enabled: true
-- timeout: 5
-
-## Limits
-
-- enabled: false
-- max-tokens: 4096
-`;
-
-  it("matches sections that contain an item satisfying the predicate", () => {
-    const ast = parseMd(RAW).ast;
-    const out = findOcPaths(ast, parseOcPath("oc://X.md/[enabled=true]/*/*"));
-    expect(out.length).toBeGreaterThan(0);
-    for (const m of out) {
-      expect(m.path.section).toBe("boundaries");
+  it("keeps valid line addresses after recursive zero-width routes", () => {
+    const lineAst = parseJsonl('{"nest":{"event":"x"}}\n');
+    const out = findOcPaths(lineAst, parseOcPath("oc://session/**/**/event"));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual(["oc://session/L1/nest/event"]);
+    expect(leafValues(out)).toEqual(["x"]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
     }
   });
 
-  it("matches items whose kv pair satisfies the predicate", () => {
-    const ast = parseMd(RAW).ast;
-    const out = findOcPaths(ast, parseOcPath("oc://X.md/limits/[enabled=false]/*"));
-    expect(out.length).toBe(1);
-    expect(requireFirstResult(out)?.path.item).toBe("enabled");
+  it("bounds JSONL expansion across recursive slot partitions", () => {
+    const depth = 32;
+    const wildcardsPerSlot = 8;
+    let value: unknown = 1;
+    for (let level = depth - 1; level >= 0; level--) {
+      value = { ["k" + level]: value };
+    }
+    const lineAst = parseJsonl(JSON.stringify(value) + "\n");
+    const line = lineAst.lines[0];
+    if (line?.kind !== "value") {
+      throw new Error("Expected a parsed JSONL value line");
+    }
+    const maxEntryReads = 3 * (depth + 1) ** 2 * wildcardsPerSlot;
+    let entryReads = 0;
+    for (let node = line.value; node.kind === "object";) {
+      const entries = node.entries;
+      Object.defineProperty(node, "entries", {
+        get() {
+          if (++entryReads > maxEntryReads) {
+            throw new Error("JSONL recursive wildcard exceeded the AST expansion budget");
+          }
+          return entries;
+        },
+      });
+      const child = entries[0]?.value;
+      if (!child) {
+        break;
+      }
+      node = child;
+    }
+    const slot = Array(wildcardsPerSlot).fill("**").join(".");
+    const out = findOcPaths(lineAst, parseOcPath("oc://session/" + [slot, slot, slot].join("/")));
+    expect(out).toHaveLength(depth + 2);
+    expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1"]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
+    }
   });
 
-  it("matches the kv pair at the field slot", () => {
-    const ast = parseMd(RAW).ast;
-    const out = findOcPaths(ast, parseOcPath("oc://X.md/limits/max-tokens/[max-tokens=4096]"));
-    expect(out.length).toBe(1);
-    expect(requireFirstResult(out)?.path.field).toBe("max-tokens");
+  it("expands a union of literal and positional line addresses", () => {
+    const out = findOcPaths(ast, parseOcPath("oc://session/{L2,$first,$last}/event"));
+    expect(leafValues(out)).toEqual(["action", "start", "end"]);
+    expect(out.map(({ path }) => path.section)).toEqual(["L2", "L1", "L3"]);
   });
 
-  it("returns empty when no section's item matches", () => {
-    const ast = parseMd(RAW).ast;
-    const out = findOcPaths(ast, parseOcPath("oc://X.md/[enabled=maybe]/*/*"));
-    expect(out).toEqual([]);
+  it("filters value lines by a top-level field", () => {
+    const out = findOcPaths(ast, parseOcPath("oc://session/[event=action]/userId"));
+    expect(leafValues(out)).toEqual(["u1"]);
+  });
+});
+
+describe("quoted segment validation", () => {
+  it.each([
+    [String.raw`oc://X/keys/"a\q"`, /Quoted segment must escape/],
+    ['oc://X/"unterminated', /Unbalanced/],
+  ])("rejects %s", (uri, error) => {
+    expect(() => parseOcPath(uri)).toThrow(error);
+  });
+});
+
+describe("numeric predicates", () => {
+  const ast = parseJsonc(
+    '{"models":[{"id":"medium","contextWindow":1000000,"maxTokens":128000},{"id":"large","contextWindow":1000000,"maxTokens":240000},{"id":"small","contextWindow":200000,"maxTokens":64000},{"id":"unknown","contextWindow":"unknown","maxTokens":"unknown"}]}',
+  );
+
+  it.each([
+    ["maxTokens>128000", ["large"]],
+    ["maxTokens>=128000", ["medium", "large"]],
+    ["contextWindow<500000", ["small"]],
+    ["contextWindow<=200000", ["small"]],
+  ])("filters numeric leaves with %s", (predicate, expected) => {
+    expect(
+      leafValues(findOcPaths(ast, parseOcPath("oc://config/models/[" + predicate + "]/id"))),
+    ).toEqual(expected);
+  });
+});
+
+describe("findOcPaths — Markdown", () => {
+  const md = parseMd("## Tools\n\n- foo: a\n- foo: b\n- bar: c\n");
+
+  it("quotes empty Markdown slugs in reusable expanded paths", () => {
+    const raw = "## 日本語\n- !!!: old\n- plain: keep\n";
+    const ast = parseMd(raw);
+    const address = 'oc://notes.md/""/""/!!!';
+    for (const pattern of [
+      'oc://notes.md/""/""/*',
+      'oc://notes.md/""/*/!!!',
+      'oc://notes.md/*/""/!!!',
+      "oc://notes.md/*/*/!!!",
+    ]) {
+      const out = findOcPaths(ast, parseOcPath(pattern));
+      expect(out.map(({ path }) => formatOcPath(path))).toEqual([address]);
+      expect(leafValues(out)).toEqual(["old"]);
+      for (const { path, match } of out) {
+        const concrete = parseOcPath(formatOcPath(path));
+        expect(resolveOcPath(ast, concrete)).toEqual(match);
+        expect(setOcPath(ast, concrete, "changed").raw).toBe(
+          raw.replace("!!!: old", "!!!: changed"),
+        );
+      }
+      expect(ast.raw).toBe(raw);
+    }
   });
 
-  it("returns empty when no item matches the predicate", () => {
-    const ast = parseMd(RAW).ast;
-    const out = findOcPaths(ast, parseOcPath("oc://X.md/limits/[enabled=true]/*"));
-    expect(out).toEqual([]);
+  it("keeps quoted Markdown field paths usable after expansion and formatting", () => {
+    for (const key of ["model name", "model.id", "a/b", 'say "hi"', "a\\b", "*", "$last", "+"]) {
+      const raw = `## Settings\n- ${key}: old\n- plain: keep\n`;
+      const ast = parseMd(raw);
+      const address = `oc://notes.md/settings/#0/${JSON.stringify(key)}`;
+      for (const field of ["*", JSON.stringify(key), `{${JSON.stringify(key)},absent}`]) {
+        const out = findOcPaths(ast, parseOcPath(`oc://notes.md/settings/#0/${field}`));
+        expect(out.map(({ path }) => formatOcPath(path))).toEqual([address]);
+        expect(leafValues(out)).toEqual(["old"]);
+      }
+      const concrete = parseOcPath(address);
+      expect(resolveOcPath(ast, concrete)).toMatchObject({ kind: "leaf", valueText: "old" });
+      expect(setOcPath(ast, concrete, "changed").raw).toBe(
+        `## Settings\n- ${key}: changed\n- plain: keep\n`,
+      );
+      expect(ast.raw).toBe(raw);
+    }
+  });
+
+  it("decodes quoted Markdown containers without treating quoted selectors as syntax", () => {
+    const raw = "---\nname: sample\n---\n## Settings\n- first: old\n- plain: keep\n";
+    const ast = parseMd(raw);
+    for (const address of [
+      'oc://notes.md/"settings"/"plain"/plain',
+      'oc://notes.md/"settings"/*/plain',
+      'oc://notes.md/settings/"plain"/*',
+      'oc://notes.md/{settings,"settings"}/plain/plain',
+      'oc://notes.md/settings/{plain,"plain"}/plain',
+      'oc://notes.md/settings/plain/{plain,"plain"}',
+    ]) {
+      expect(leafValues(findOcPaths(ast, parseOcPath(address)))).toEqual(["keep"]);
+    }
+    expect(
+      setOcPath(ast, parseOcPath('oc://notes.md/"settings"/"plain"/plain'), "changed").raw,
+    ).toBe(raw.replace("plain: keep", "plain: changed"));
+    const frontmatter = parseOcPath('oc://notes.md/[frontmatter]/"name"');
+    expect(resolveOcPath(ast, frontmatter)).toMatchObject({ kind: "leaf", valueText: "sample" });
+    expect(setOcPath(ast, frontmatter, "changed").raw).toBe(
+      raw.replace("name: sample", "name: changed"),
+    );
+    const insertion = parseOcPath('oc://notes.md/"settings"/+');
+    expect(resolveOcPath(ast, insertion)).toMatchObject({ kind: "insertion-point" });
+    expect(setOcPath(ast, insertion, "extra: added").raw).toBe(raw + "- extra: added\n");
+    expect(setOcPath(ast, parseOcPath("oc://notes.md/settings/$last/plain"), "changed").raw).toBe(
+      raw.replace("plain: keep", "plain: changed"),
+    );
+    for (const selector of ["#0", "$first", "$last"]) {
+      const address = parseOcPath(`oc://notes.md/settings/"${selector}"`);
+      expect(resolveOcPath(ast, address)).toBeNull();
+      expect(findOcPaths(ast, address)).toEqual([]);
+    }
+    expect(resolveOcPath(ast, parseOcPath('oc://notes.md/"[frontmatter]"/name'))).toBeNull();
+    expect(ast.raw).toBe(raw);
+  });
+
+  it("uses ordinals to distinguish duplicate slugs", () => {
+    const out = findOcPaths(md, parseOcPath('oc://AGENTS.md/{tools,"tools"}/*/foo'));
+    expect(out.map(({ path }) => path.item)).toEqual(["#0", "#1"]);
+    expect(leafValues(out)).toEqual(["a", "b"]);
+  });
+
+  it("keeps item nodes when a recursive wildcard consumes the item slot", () => {
+    const out = findOcPaths(md, parseOcPath("oc://AGENTS.md/tools/**"));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual([
+      "oc://AGENTS.md/tools",
+      "oc://AGENTS.md/tools/#0",
+      "oc://AGENTS.md/tools/#1",
+      "oc://AGENTS.md/tools/bar",
+    ]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(md, parseOcPath(formatOcPath(path)))).toEqual(match);
+    }
+  });
+
+  it("bounds Markdown expansion across repeated recursive wildcards", () => {
+    const blockCount = 4;
+    const itemsPerBlock = 8;
+    const wildcardsPerSlot = 32;
+    const raw = Array.from({ length: blockCount }, (_, block) => {
+      const items = Array.from(
+        { length: itemsPerBlock },
+        (_item, item) => `- key-${item}: ${block * itemsPerBlock + item}`,
+      );
+      return `## Block ${block}\n\n${items.join("\n")}\n`;
+    }).join("\n");
+    const document = parseMd(raw);
+    const maxItemReads = 20 * blockCount * wildcardsPerSlot * 3;
+    let itemReads = 0;
+    for (const block of document.blocks) {
+      const items = block.items;
+      Object.defineProperty(block, "items", {
+        get() {
+          if (++itemReads > maxItemReads) {
+            throw new Error("Markdown recursive wildcard exceeded the AST expansion budget");
+          }
+          return items;
+        },
+      });
+    }
+    const slot = Array(wildcardsPerSlot).fill("**").join(".");
+    const out = findOcPaths(document, parseOcPath("oc://tools.md/" + [slot, slot, slot].join("/")));
+    expect(out).toHaveLength(1 + blockCount + 2 * blockCount * itemsPerBlock);
+    expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(
+      Array.from({ length: blockCount * itemsPerBlock }, (_, index) => String(index)),
+    );
+    for (const { path, match } of out) {
+      expect(resolveOcPath(document, parseOcPath(formatOcPath(path)))).toEqual(match);
+    }
+  });
+
+  it("rejects out-of-range ordinals", () => {
+    expect(resolveOcPath(md, parseOcPath("oc://AGENTS.md/tools/#99/foo"))).toBeNull();
+  });
+
+  it("wraps a concrete item match without expansion", () => {
+    const out = findOcPaths(md, parseOcPath("oc://AGENTS.md/tools/bar"));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual(["oc://AGENTS.md/tools/bar"]);
+    expect(out.map(({ match }) => match)).toEqual([
+      { kind: "node", descriptor: "md-item", line: 5 },
+    ]);
+  });
+
+  it("enumerates frontmatter keys", () => {
+    const ast = parseMd("---\nname: drafter\nrole: writer\n---\n");
+    const out = findOcPaths(ast, parseOcPath("oc://SOUL.md/[frontmatter]/*"));
+    expect(out.map(({ path }) => path.item)).toEqual(["name", "role"]);
+    expect(leafValues(out)).toEqual(["drafter", "writer"]);
+  });
+
+  const union = parseMd(
+    "## Boundaries\n\n- enabled: true\n- timeout: 5\n\n## Limits\n\n- max-tokens: 4096\n- alias: example\n",
+  );
+
+  it("expands field unions and excludes absent alternatives", () => {
+    const out = findOcPaths(union, parseOcPath("oc://X.md/limits/alias/{alias,nope}"));
+    expect(out.map(({ path }) => path.field)).toEqual(["alias"]);
+    expect(leafValues(out)).toEqual(["example"]);
+  });
+
+  const predicates = parseMd(
+    "## Boundaries\n\n- enabled: true\n- timeout: 5\n\n## Limits\n\n- enabled: false\n- max-tokens: 4096\n",
+  );
+
+  it.each([
+    ["[enabled=true]/*/*", ["boundaries", "boundaries"], ["true", "5"]],
+    ["limits/[enabled=false]/*", ["limits"], ["false"]],
+    ["limits/max-tokens/[max-tokens=4096]", ["limits"], ["4096"]],
+  ])("filters Markdown at %s", (suffix, sections, values) => {
+    const out = findOcPaths(predicates, parseOcPath("oc://X.md/" + suffix));
+    expect(out.map(({ path }) => path.section)).toEqual(sections);
+    expect(leafValues(out)).toEqual(values);
   });
 });

@@ -12,7 +12,7 @@ import { listHostDirectories } from "../../infra/host-directory-listing.js";
 import { NODE_FS_LIST_DIR_COMMAND } from "../../infra/node-commands.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, hasGatewayAdminScope } from "../operator-scopes.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
@@ -67,10 +67,17 @@ export const fsHandlers: GatewayRequestHandlers = {
           params: params.path ? { path: params.path } : {},
         });
         if (!result.ok) {
+          // Keep node request errors (missing or non-directory paths) as request errors so the
+          // picker can fall back to the device home; transport failures stay unavailable.
           respond(
             false,
             undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, result.error?.message ?? "node browse failed"),
+            errorShape(
+              result.error?.code === "INVALID_REQUEST"
+                ? ErrorCodes.INVALID_REQUEST
+                : ErrorCodes.UNAVAILABLE,
+              result.error?.message ?? "node browse failed",
+            ),
           );
           return;
         }
@@ -86,8 +93,7 @@ export const fsHandlers: GatewayRequestHandlers = {
         respond(true, payload, undefined);
         return;
       }
-      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-      if (scopes.includes(ADMIN_SCOPE)) {
+      if (hasGatewayAdminScope(client)) {
         respond(true, await listHostDirectories(params.path), undefined);
         return;
       }

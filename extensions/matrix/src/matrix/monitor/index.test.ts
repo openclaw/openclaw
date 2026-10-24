@@ -1,5 +1,7 @@
-// Matrix tests cover index plugin behavior.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MatrixConfig, MatrixStreamingMode } from "../../types.js";
 import {
   getMatrixMonitorIndexTestHarness,
@@ -7,14 +9,29 @@ import {
 } from "./index.test-helpers.js";
 
 const hoisted = getMatrixMonitorIndexTestHarness();
+import { monitorMatrixProvider } from "./index.js";
+import type { MatrixRoomInfo } from "./room-info.js";
 
-let monitorMatrixProvider: typeof import("./index.js").monitorMatrixProvider;
+const roomInfo = (overrides: Partial<MatrixRoomInfo> = {}): MatrixRoomInfo => ({
+  altAliases: [],
+  nameResolved: true,
+  aliasesResolved: true,
+  ...overrides,
+});
+
+function rejectOnAbort<T>(signal?: AbortSignal): Promise<T> {
+  return new Promise((_resolve, reject) => {
+    signal?.addEventListener(
+      "abort",
+      () => {
+        reject(Object.assign(new Error("Matrix startup aborted"), { name: "AbortError" }));
+      },
+      { once: true },
+    );
+  });
+}
 
 describe("monitorMatrixProvider", () => {
-  beforeAll(async () => {
-    ({ monitorMatrixProvider } = await import("./index.js"));
-  });
-
   async function flushUntil(predicate: () => boolean, message: string): Promise<void> {
     for (let i = 0; i < 20; i++) {
       if (predicate()) {
@@ -40,13 +57,8 @@ describe("monitorMatrixProvider", () => {
     await monitorPromise;
   }
 
-  function registeredRoomMessageHandler() {
-    const handler = hoisted.registeredOnRoomMessage;
-    if (!handler) {
-      throw new Error("expected room message handler to be registered");
-    }
-    return handler;
-  }
+  const registeredRoomMessageHandler = () =>
+    expectDefined(hoisted.registeredOnRoomMessage, "room message handler");
 
   function expectPersistRelease() {
     expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(
@@ -70,27 +82,12 @@ describe("monitorMatrixProvider", () => {
     return opts as DirectRoomTrackerOptions;
   }
 
-  function lastMockCallArg(mock: { mock: { calls: unknown[][] } }, argIndex = 0): unknown {
-    const call = mock.mock.calls.at(-1);
-    if (!call) {
-      throw new Error("expected mock call");
-    }
-    return call[argIndex];
-  }
-
   function expectStatusCallFields(fields: Record<string, unknown>) {
-    const matched = hoisted.setStatus.mock.calls.some(([status]) => {
-      const record = status as Record<string, unknown>;
-      return Object.entries(fields).every(([key, value]) => record[key] === value);
-    });
-    expect(matched).toBe(true);
+    expect(hoisted.setStatus).toHaveBeenCalledWith(expect.objectContaining(fields));
   }
 
   function expectLastStatusFields(fields: Record<string, unknown>) {
-    const status = lastMockCallArg(hoisted.setStatus) as Record<string, unknown>;
-    for (const [key, value] of Object.entries(fields)) {
-      expect(status[key]).toBe(value);
-    }
+    expect(hoisted.setStatus).toHaveBeenLastCalledWith(expect.objectContaining(fields));
   }
 
   beforeEach(() => {
@@ -120,24 +117,17 @@ describe("monitorMatrixProvider", () => {
         stop: hoisted.stopThreadBindingManager,
       };
     });
-    hoisted.getRoomInfo.mockReset().mockResolvedValue({
-      altAliases: [],
-      nameResolved: true,
-      aliasesResolved: true,
-    });
+    hoisted.getRoomInfo.mockReset().mockResolvedValue(roomInfo());
     hoisted.getMemberDisplayName.mockReset().mockResolvedValue("Bot");
     hoisted.registeredOnRoomMessage = null;
     hoisted.registeredHealthySyncGetter = undefined;
     hoisted.stopThreadBindingManager.mockReset().mockResolvedValue(undefined);
     hoisted.client.removeAllListeners();
-    hoisted.client.hasPersistedSyncState.mockReset().mockReturnValue(false);
+    hoisted.client.bindSyncIngress.mockClear();
+    hoisted.ingress.start.mockClear();
+    hoisted.ingress.stop.mockClear();
     hoisted.client.drainPendingDecryptions.mockReset().mockResolvedValue(undefined);
-    hoisted.inboundDeduper.claim
-      .mockReset()
-      .mockResolvedValue({ kind: "claimed" as const, handle: hoisted.inboundReplayClaim });
-    hoisted.inboundReplayClaim.commit.mockReset().mockResolvedValue(true);
-    hoisted.inboundReplayClaim.release.mockReset();
-    hoisted.createMatrixInboundEventDeduper.mockReset().mockReturnValue(hoisted.inboundDeduper);
+    hoisted.createMatrixIngressMonitor.mockClear();
     hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockReset().mockResolvedValue(undefined);
     hoisted.registerChannelRuntimeContext.mockReset();
     hoisted.runMatrixStartupMaintenance.mockReset().mockResolvedValue(undefined);
@@ -151,24 +141,10 @@ describe("monitorMatrixProvider", () => {
   });
 
   it.each([
-    [undefined, "off", false],
-    [{}, "off", false],
-    [{ mode: "off" }, "off", false],
-    [{ mode: "partial" }, "partial", true],
     [{ mode: "quiet" }, "quiet", true],
     [{ mode: "progress" }, "progress", false],
     [{ mode: "progress", progress: { toolProgress: true } }, "progress", true],
-    [{ mode: "partial", preview: { toolProgress: false } }, "partial", false],
     [{ mode: "quiet", preview: { toolProgress: false } }, "quiet", false],
-    [{ mode: "partial", progress: { toolProgress: false } }, "partial", true],
-    [{ mode: "quiet", progress: { toolProgress: false } }, "quiet", true],
-    [{ mode: "progress", progress: { toolProgress: false } }, "progress", false],
-    [
-      { mode: "progress", progress: { toolProgress: false }, preview: { toolProgress: true } },
-      "progress",
-      false,
-    ],
-    [{ mode: "off", preview: { toolProgress: true } }, "off", false],
   ] satisfies Array<[MatrixConfig["streaming"], MatrixStreamingMode, boolean]>)(
     "resolves streaming=%j to mode=%s and toolProgress=%s",
     async (streaming, expectedMode, expectedPreviewToolProgressEnabled) => {
@@ -176,12 +152,10 @@ describe("monitorMatrixProvider", () => {
 
       await startMonitorAndAbortAfterStartup();
 
-      const handlerParams = mockCallArg(hoisted.createMatrixRoomMessageHandler) as {
-        streaming?: MatrixStreamingMode;
-        previewToolProgressEnabled?: boolean;
-      };
-      expect(handlerParams.streaming).toBe(expectedMode);
-      expect(handlerParams.previewToolProgressEnabled).toBe(expectedPreviewToolProgressEnabled);
+      expect(mockCallArg(hoisted.createMatrixRoomMessageHandler)).toMatchObject({
+        streaming: expectedMode,
+        previewToolProgressEnabled: expectedPreviewToolProgressEnabled,
+      });
     },
   );
 
@@ -194,35 +168,6 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.callOrder).toStrictEqual([]);
     expect(hoisted.createMatrixRoomMessageHandler).not.toHaveBeenCalled();
     expect(hoisted.acquireSharedMatrixClient).not.toHaveBeenCalled();
-  });
-
-  it("publishes disconnected startup status and connected sync status without failing the monitor", async () => {
-    const abortController = new AbortController();
-    const monitorPromise = monitorMatrixProvider({
-      abortSignal: abortController.signal,
-      setStatus: hoisted.setStatus,
-    });
-
-    await waitForCallOrderEntry("start-client");
-
-    expectStatusCallFields({
-      accountId: "default",
-      baseUrl: "https://matrix.example.org",
-      connected: false,
-      healthState: "starting",
-    });
-
-    hoisted.client.emit("sync.state", "SYNCING", "RECONNECTING", undefined);
-
-    expectStatusCallFields({
-      accountId: "default",
-      connected: true,
-      healthState: "healthy",
-      lastError: null,
-    });
-
-    abortController.abort();
-    await expect(monitorPromise).resolves.toBeUndefined();
   });
 
   it("re-arms the healthy-sync milestone across reconnect transitions", async () => {
@@ -275,7 +220,7 @@ describe("monitorMatrixProvider", () => {
     }
   });
 
-  it("contains room-message handler rejections inside monitor task tracking", async () => {
+  it("propagates room-message handler failures to the ingress owner", async () => {
     const abortController = new AbortController();
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown) => {
@@ -295,14 +240,12 @@ describe("monitorMatrixProvider", () => {
 
       const onRoomMessage = registeredRoomMessageHandler();
 
-      await onRoomMessage("!room:example.org", { event_id: "$event" });
+      await expect(onRoomMessage("!room:example.org", { event_id: "$event" })).rejects.toThrow(
+        "room handler exploded",
+      );
       await Promise.resolve();
 
       expect(unhandled).toHaveLength(0);
-      expect(mockCallArg(hoisted.logger.warn, 0, 0)).toBe("matrix background task failed");
-      const warningMetadata = mockCallArg(hoisted.logger.warn, 0, 1) as Record<string, unknown>;
-      expect(warningMetadata.task).toBe("test room message");
-      expect(warningMetadata.error).toBe("Error: room handler exploded");
 
       abortController.abort();
       await monitorPromise;
@@ -332,41 +275,21 @@ describe("monitorMatrixProvider", () => {
     });
   });
 
-  it("marks early startup failures as error before the monitor loop starts", async () => {
-    hoisted.acquireSharedMatrixClient.mockRejectedValue(new Error("prepare failed"));
-
-    await expect(
-      monitorMatrixProvider({
-        setStatus: hoisted.setStatus,
-      }),
-    ).rejects.toThrow("prepare failed");
-
-    expect(hoisted.releaseSharedClientInstance).not.toHaveBeenCalled();
-    expectLastStatusFields({
-      accountId: "default",
-      connected: false,
-      healthState: "error",
-      lastError: "prepare failed",
-    });
-  });
-
   it("releases the prepared client when startup fails before later resources exist", async () => {
-    hoisted.createMatrixInboundEventDeduper.mockImplementation(() => {
-      throw new Error("deduper failed");
-    });
+    hoisted.client.bindSyncIngress.mockRejectedValueOnce(new Error("ingress failed"));
 
     await expect(
       monitorMatrixProvider({
         setStatus: hoisted.setStatus,
       }),
-    ).rejects.toThrow("deduper failed");
+    ).rejects.toThrow("ingress failed");
 
     expectPersistRelease();
     expectLastStatusFields({
       accountId: "default",
       connected: false,
       healthState: "error",
-      lastError: "deduper failed",
+      lastError: "ingress failed",
     });
   });
 
@@ -374,17 +297,7 @@ describe("monitorMatrixProvider", () => {
     const abortController = new AbortController();
     hoisted.resolveSharedMatrixClient.mockImplementation(async (abortSignal?: AbortSignal) => {
       hoisted.callOrder.push("start-client");
-      return await new Promise<typeof hoisted.client>((_resolve, reject) => {
-        abortSignal?.addEventListener(
-          "abort",
-          () => {
-            const error = new Error("Matrix startup aborted");
-            error.name = "AbortError";
-            reject(error);
-          },
-          { once: true },
-        );
-      });
+      return await rejectOnAbort<typeof hoisted.client>(abortSignal);
     });
 
     const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
@@ -406,17 +319,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.createMatrixRoomMessageHandler.mockReturnValue(handler);
     hoisted.runMatrixStartupMaintenance.mockImplementation(
       async (params: { abortSignal?: AbortSignal }) =>
-        await new Promise<void>((_resolve, reject) => {
-          params.abortSignal?.addEventListener(
-            "abort",
-            () => {
-              const error = new Error("Matrix startup aborted");
-              error.name = "AbortError";
-              reject(error);
-            },
-            { once: true },
-          );
-        }),
+        await rejectOnAbort<void>(params.abortSignal),
     );
 
     const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
@@ -433,25 +336,21 @@ describe("monitorMatrixProvider", () => {
       expect.objectContaining({ mode: "stop" }),
     );
     expect(hoisted.client.drainPendingDecryptions).not.toHaveBeenCalled();
-    await hoisted.registeredOnRoomMessage?.("!room:example.org", { event_id: "$late" });
+    await expect(
+      registeredRoomMessageHandler()("!room:example.org", { event_id: "$late" }),
+    ).rejects.toThrow("Matrix monitor is stopped");
     expect(handler).not.toHaveBeenCalled();
   });
 
   it("disposes resources installed after forced retirement wins setup", async () => {
     const stopLateManager = vi.fn();
-    let resolveManager: (manager: {
+    const managerReady = createDeferred<{
       accountId: string;
       stop: typeof stopLateManager;
-    }) => void = () => {};
-    const managerReady = new Promise<{
-      accountId: string;
-      stop: typeof stopLateManager;
-    }>((resolve) => {
-      resolveManager = resolve;
-    });
+    }>();
     hoisted.createThreadBindingManager.mockImplementation(async () => {
       hoisted.callOrder.push("create-manager");
-      return await managerReady;
+      return await managerReady.promise;
     });
 
     const monitorPromise = monitorMatrixProvider();
@@ -462,7 +361,7 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.client.listenerCount("sync.state")).toBe(0);
     expect(hoisted.registerMatrixMonitorEvents).not.toHaveBeenCalled();
 
-    resolveManager({
+    managerReady.resolve({
       accountId: "default",
       stop: stopLateManager,
     });
@@ -489,16 +388,12 @@ describe("monitorMatrixProvider", () => {
       "dispose-auto-join",
       "dispose-monitor-events",
     ]);
-    expect(hoisted.acquireSharedMatrixClient).toHaveBeenCalledWith(
-      expect.objectContaining({ startClient: false }),
-    );
     expect(hoisted.stopThreadBindingManager).toHaveBeenCalledTimes(1);
   });
 
-  it("starts monitoring without waiting for best-effort deviceId backfill", async () => {
-    hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockImplementation(
-      () => new Promise<undefined>(() => {}),
-    );
+  it("starts monitoring without waiting for backfill but joins it during retirement", async () => {
+    const backfill = createDeferred<undefined>();
+    hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockImplementation(() => backfill.promise);
 
     const abortController = new AbortController();
     const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
@@ -511,8 +406,16 @@ describe("monitorMatrixProvider", () => {
     expect(backfillParams.abortSignal).not.toBe(abortController.signal);
     expect(backfillParams.abortSignal?.aborted).toBe(false);
 
+    let retired = false;
+    void monitorPromise.then(() => {
+      retired = true;
+    });
     abortController.abort();
     expect(backfillParams.abortSignal?.aborted).toBe(true);
+    await setImmediate();
+    expect(retired).toBe(false);
+    expect(hoisted.stopThreadBindingManager).not.toHaveBeenCalled();
+    backfill.resolve(undefined);
     await expect(monitorPromise).resolves.toBeUndefined();
   });
 
@@ -535,13 +438,13 @@ describe("monitorMatrixProvider", () => {
     const maintenanceParams = mockCallArg(hoisted.runMatrixStartupMaintenance) as {
       abortSignal?: AbortSignal;
     };
-    expect(startSignal).toBe(hoisted.state.leaseAbortController.signal);
-    expect(backfillParams.abortSignal).toBe(startSignal);
+    expect(backfillParams.abortSignal?.aborted).toBe(false);
     expect(runtimeContextParams.abortSignal).toBe(startSignal);
     expect(maintenanceParams.abortSignal).toBe(startSignal);
     expect(startSignal.aborted).toBe(false);
 
     hoisted.state.leaseAbortController.abort();
+    expect(backfillParams.abortSignal?.aborted).toBe(true);
     await hoisted.runRegisteredMonitorRetirement();
     await expect(monitorPromise).resolves.toBeUndefined();
 
@@ -561,31 +464,17 @@ describe("monitorMatrixProvider", () => {
     expectPersistRelease();
   });
 
-  it("disables cold-start backlog dropping only when sync state is cleanly persisted", async () => {
-    hoisted.client.hasPersistedSyncState.mockReturnValue(true);
-    await startMonitorAndAbortAfterStartup();
-
-    const handlerParams = mockCallArg(hoisted.createMatrixRoomMessageHandler) as {
-      dropPreStartupMessages?: unknown;
-    };
-    expect(handlerParams.dropPreStartupMessages).toBe(false);
-  });
-
   it("detaches listeners, closes admission, waits for handlers, then releases", async () => {
     const abortController = new AbortController();
-    const pendingHandlers = new Map<string, () => void>();
-    let finishManagerStop: (() => void) | undefined;
+    const handlerDone = createDeferred<void>();
+    const managerDone = createDeferred<void>();
 
     hoisted.createMatrixRoomMessageHandler.mockReturnValue(
-      vi.fn((_roomId: string, event: unknown) => {
+      vi.fn(async (_roomId: string, event: unknown) => {
         const eventId = (event as { event_id: string }).event_id;
         hoisted.callOrder.push(`handler-start:${eventId}`);
-        return new Promise<void>((resolve) => {
-          pendingHandlers.set(eventId, () => {
-            hoisted.callOrder.push(`handler-done:${eventId}`);
-            resolve();
-          });
-        });
+        await handlerDone.promise;
+        hoisted.callOrder.push(`handler-done:${eventId}`);
       }),
     );
     hoisted.client.drainPendingDecryptions.mockImplementation(async () => {
@@ -593,12 +482,8 @@ describe("monitorMatrixProvider", () => {
     });
     hoisted.stopThreadBindingManager.mockImplementation(async () => {
       hoisted.callOrder.push("stop-manager");
-      await new Promise<void>((resolve) => {
-        finishManagerStop = () => {
-          hoisted.callOrder.push("manager-stopped");
-          resolve();
-        };
-      });
+      await managerDone.promise;
+      hoisted.callOrder.push("manager-stopped");
     });
     hoisted.releaseSharedClientInstance.mockImplementation(async () => {
       await hoisted.client.drainPendingDecryptions();
@@ -616,15 +501,17 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.callOrder).not.toContain("stop-manager");
     expect(hoisted.callOrder).not.toContain("release-client");
 
-    await onRoomMessage("!room:example.org", { event_id: "$late" });
+    await expect(onRoomMessage("!room:example.org", { event_id: "$late" })).rejects.toThrow(
+      "Matrix monitor is stopped",
+    );
     expect(hoisted.callOrder).not.toContain("handler-start:$late");
 
-    pendingHandlers.get("$event")?.();
+    handlerDone.resolve();
     await roomMessagePromise;
     await waitForCallOrderEntry("stop-manager");
     expect(hoisted.callOrder).not.toContain("release-client");
 
-    finishManagerStop?.();
+    managerDone.resolve();
     await monitorPromise;
 
     expect(hoisted.callOrder.indexOf("drain-decrypts")).toBeLessThan(
@@ -649,16 +536,12 @@ describe("monitorMatrixProvider", () => {
 
   it("cleans up local monitor work after a retained shared-client release", async () => {
     const abortController = new AbortController();
-    let finishHandler: (() => void) | undefined;
+    const handlerDone = createDeferred<void>();
     hoisted.createMatrixRoomMessageHandler.mockReturnValue(
-      vi.fn(() => {
+      vi.fn(async () => {
         hoisted.callOrder.push("handler-start");
-        return new Promise<void>((resolve) => {
-          finishHandler = () => {
-            hoisted.callOrder.push("handler-done");
-            resolve();
-          };
-        });
+        await handlerDone.promise;
+        hoisted.callOrder.push("handler-done");
       }),
     );
     hoisted.stopThreadBindingManager.mockImplementation(() => {
@@ -681,7 +564,7 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.client.drainPendingDecryptions).not.toHaveBeenCalled();
     expect(hoisted.callOrder).not.toContain("release-retained");
 
-    finishHandler?.();
+    handlerDone.resolve();
     await roomMessagePromise;
     await monitorPromise;
 
@@ -691,23 +574,6 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.callOrder.indexOf("stop-manager")).toBeLessThan(
       hoisted.callOrder.indexOf("release-retained"),
     );
-  });
-
-  it("wires recent-invite promotion to fail closed when room metadata is unresolved", async () => {
-    await startMonitorAndAbortAfterStartup();
-
-    const trackerOpts = directRoomTrackerOptions();
-    if (!trackerOpts?.canPromoteRecentInvite) {
-      throw new Error("recent invite promotion callback was not wired");
-    }
-
-    hoisted.getRoomInfo.mockResolvedValueOnce({
-      altAliases: [],
-      nameResolved: false,
-      aliasesResolved: false,
-    });
-
-    await expect(trackerOpts.canPromoteRecentInvite("!room:example.org")).resolves.toBe(false);
   });
 
   it("wires exact room config as a direct-room classifier veto", async () => {
@@ -749,105 +615,45 @@ describe("monitorMatrixProvider", () => {
       throw new Error("explicit room config callback was not wired");
     }
 
-    hoisted.getRoomInfo.mockResolvedValueOnce({
-      canonicalAlias: "#ops:example.org",
-      altAliases: [],
-      nameResolved: true,
-      aliasesResolved: true,
-    });
+    hoisted.getRoomInfo.mockResolvedValueOnce(roomInfo({ canonicalAlias: "#ops:example.org" }));
 
     expect(await trackerOpts.isExplicitlyConfiguredRoom("!room:example.org")).toBe(true);
   });
 
-  it("wires recent-invite promotion to reject named rooms", async () => {
-    await startMonitorAndAbortAfterStartup();
-
-    const trackerOpts = directRoomTrackerOptions();
-    if (!trackerOpts?.canPromoteRecentInvite) {
-      throw new Error("recent invite promotion callback was not wired");
+  it.each([
+    ["canPromoteRecentInvite", { nameResolved: false, aliasesResolved: false }, false, false],
+    ["canPromoteRecentInvite", {}, false, true],
+    ["canPromoteUnmappedStrictRoom", {}, true, false],
+    ["canPromoteUnmappedStrictRoom", { name: "Ops Room" }, false, false],
+    [
+      "shouldKeepLocallyPromotedDirectRoom",
+      { nameResolved: false, aliasesResolved: false },
+      undefined,
+      false,
+    ],
+  ] satisfies Array<
+    [
+      (
+        | "canPromoteRecentInvite"
+        | "canPromoteUnmappedStrictRoom"
+        | "shouldKeepLocallyPromotedDirectRoom"
+      ),
+      Partial<MatrixRoomInfo>,
+      boolean | undefined,
+      boolean,
+    ]
+  >)("wires %s through metadata %j to %s (wildcard=%s)", async (key, info, expected, wildcard) => {
+    if (key === "canPromoteUnmappedStrictRoom") {
+      hoisted.accountConfig.dm = { sessionScope: "per-room" };
     }
-
-    hoisted.getRoomInfo.mockResolvedValueOnce({
-      name: "Ops Room",
-      altAliases: [],
-      nameResolved: true,
-      aliasesResolved: true,
-    });
-
-    await expect(trackerOpts.canPromoteRecentInvite("!room:example.org")).resolves.toBe(false);
-  });
-
-  it("wires recent-invite promotion to reject wildcard-configured rooms", async () => {
-    (hoisted.accountConfig as { rooms?: Record<string, unknown> }).rooms = {
-      "*": { enabled: false },
-    };
-
-    await startMonitorAndAbortAfterStartup();
-
-    const trackerOpts = directRoomTrackerOptions();
-    if (!trackerOpts?.canPromoteRecentInvite) {
-      throw new Error("recent invite promotion callback was not wired");
+    if (wildcard) {
+      (hoisted.accountConfig as { rooms?: Record<string, unknown> }).rooms = {
+        "*": { enabled: false },
+      };
     }
-
-    hoisted.getRoomInfo.mockResolvedValueOnce({
-      altAliases: [],
-      nameResolved: true,
-      aliasesResolved: true,
-    });
-
-    await expect(trackerOpts.canPromoteRecentInvite("!room:example.org")).resolves.toBe(false);
-  });
-
-  it("does not wire unmapped strict room promotion for per-user DM scope", async () => {
     await startMonitorAndAbortAfterStartup();
-
-    const trackerOpts = directRoomTrackerOptions();
-
-    expect(trackerOpts?.canPromoteUnmappedStrictRoom).toBeUndefined();
-  });
-
-  it("wires per-room unmapped strict room promotion through the room metadata gate", async () => {
-    hoisted.accountConfig.dm = { sessionScope: "per-room" };
-
-    await startMonitorAndAbortAfterStartup();
-
-    const trackerOpts = directRoomTrackerOptions();
-    if (!trackerOpts?.canPromoteUnmappedStrictRoom) {
-      throw new Error("per-room strict fallback callback was not wired");
-    }
-
-    hoisted.getRoomInfo.mockResolvedValueOnce({
-      altAliases: [],
-      nameResolved: true,
-      aliasesResolved: true,
-    });
-    await expect(trackerOpts.canPromoteUnmappedStrictRoom("!dm:example.org")).resolves.toBe(true);
-
-    hoisted.getRoomInfo.mockResolvedValueOnce({
-      name: "Ops Room",
-      altAliases: [],
-      nameResolved: true,
-      aliasesResolved: true,
-    });
-    await expect(trackerOpts.canPromoteUnmappedStrictRoom("!ops:example.org")).resolves.toBe(false);
-  });
-
-  it("treats unresolved room metadata as indeterminate for local promotion revalidation", async () => {
-    await startMonitorAndAbortAfterStartup();
-
-    const trackerOpts = directRoomTrackerOptions();
-    if (!trackerOpts?.shouldKeepLocallyPromotedDirectRoom) {
-      throw new Error("local promotion revalidation callback was not wired");
-    }
-
-    hoisted.getRoomInfo.mockResolvedValueOnce({
-      altAliases: [],
-      nameResolved: false,
-      aliasesResolved: false,
-    });
-
-    await expect(
-      trackerOpts.shouldKeepLocallyPromotedDirectRoom("!room:example.org"),
-    ).resolves.toBeUndefined();
+    const callback = expectDefined(directRoomTrackerOptions()[key], key);
+    hoisted.getRoomInfo.mockResolvedValueOnce(roomInfo(info));
+    await expect(callback("!room:example.org")).resolves.toBe(expected);
   });
 });

@@ -1,0 +1,98 @@
+/* Each palette owns a light/dark artwork pair. Vite resolves local URLs for
+   root/subpath installs; separate assets keep inactive artwork out of startup
+   CSS. Imported palettes use quiet neutral artwork. */
+:root {
+  --app-background-image: url("../assets/themes/claw-dark.webp?no-inline");
+}
+
+:root[data-theme-mode="light"] {
+  --app-background-image: url("../assets/themes/claw-light.webp?no-inline");
+}
+
+:root[data-theme="openknot"] {
+  --app-background-image: url("../assets/themes/knot-dark.webp?no-inline");
+}
+
+:root[data-theme="openknot-light"] {
+  --app-background-image: url("../assets/themes/knot-light.webp?no-inline");
+}
+
+:root[data-theme="dash"] {
+  --app-background-image: url("../assets/themes/dash-dark.webp?no-inline");
+}
+
+:root[data-theme="dash-light"] {
+  --app-background-image: url("../assets/themes/dash-light.webp?no-inline");
+}
+
+:root[data-theme="absolutely"] {
+  --app-background-image: url("../assets/themes/absolutely-dark.webp?no-inline");
+}
+
+:root[data-theme="absolutely-light"] {
+  --app-background-image: url("../assets/themes/absolutely-light.webp?no-inline");
+}
+
+:root[data-theme="tide"] {
+  --app-background-image: url("../assets/themes/tide-dark.webp?no-inline");
+}
+
+:root[data-theme="tide-light"] {
+  --app-background-image: url("../assets/themes/tide-light.webp?no-inline");
+}
+
+:root[data-theme="beacon"] {
+  --app-background-image: url("../assets/themes/beacon-dark.webp?no-inline");
+}
+
+:root[data-theme="beacon-light"] {
+  --app-background-image: url("../assets/themes/beacon-light.webp?no-inline");
+}
+
+:root[data-theme="phosphor"] {
+  --app-background-image: url("../assets/themes/phosphor-dark.webp?no-inline");
+}
+
+:root[data-theme="phosphor-light"] {
+  --app-background-image: url("../assets/themes/phosphor-light.webp?no-inline");
+}
+
+:root[data-theme="crt"] {
+  --app-background-image: url("../assets/themes/crt-dark.webp?no-inline");
+}
+
+:root[data-theme="crt-light"] {
+  --app-background-image: url("../assets/themes/crt-light.webp?no-inline");
+}
+
+:root[data-theme="manuscript"] {
+  --app-background-image: url("../assets/themes/manuscript-dark.webp?no-inline");
+}
+
+:root[data-theme="manuscript-light"] {
+  --app-background-image: url("../assets/themes/manuscript-light.webp?no-inline");
+}
+
+:root[data-theme="rose"] {
+  --app-background-image: url("../assets/themes/rose-dark.webp?no-inline");
+}
+
+:root[data-theme="rose-light"] {
+  --app-background-image: url("../assets/themes/rose-light.webp?no-inline");
+}
+
+:root[data-theme="miami"] {
+  --app-background-image: url("../assets/themes/miami-dark.webp?no-inline");
+}
+
+:root[data-theme="miami-light"] {
+  --app-background-image: url("../assets/themes/miami-light.webp?no-inline");
+}
+
+:root[data-theme="custom"] {
+  --app-background-image: url("../assets/themes/custom-dark.webp?no-inline");
+}
+
+:root[data-theme="custom-light"] {
+  --app-background-image: url("../assets/themes/custom-light.webp?no-inline");
+}

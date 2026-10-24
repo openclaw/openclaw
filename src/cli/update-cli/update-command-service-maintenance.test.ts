@@ -1,230 +1,421 @@
+// Install the native service fixtures before loading the maintenance owner.
+import "./update-command-service-maintenance.test-support.js";
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import * as doctorAdmission from "../../commands/doctor-maintenance-admission.js";
 import { beginDoctorMaintenance } from "../../commands/doctor-maintenance.js";
 import * as doctorServicePolicy from "../../commands/doctor-service-repair-policy.js";
-import * as schtasksExec from "../../daemon/schtasks-exec.js";
 import { readScheduledTaskRuntime } from "../../daemon/schtasks-runtime.js";
-import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
-import { readGatewayServiceState, type GatewayService } from "../../daemon/service.js";
 import {
-  createMockGatewayService,
-  mockSystemAccountHome,
-} from "../../daemon/service.test-helpers.js";
-import { sha256Hex } from "../../infra/crypto-digest.js";
-import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+  GatewayServiceStopUnsafeError,
+  ServiceInspectionError,
+  formatServiceInspectionReason,
+} from "../../daemon/service-inspection-error.js";
+import { readGatewayServiceState, type GatewayService } from "../../daemon/service.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
-import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
-import { makeTempWorkspace } from "../../test-helpers/workspace.js";
-import { withEnvAsync } from "../../test-utils/env.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { createUpdateCommandFailureResult } from "./update-command-result.js";
+import {
+  gatewayCommand,
+  maintenanceDefaults,
+} from "./update-command-service-fixtures.test-support.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   revalidateManagedGatewayServiceAfterUpdate,
-  type PreManagedServiceStop,
 } from "./update-command-service-maintenance.js";
+import {
+  collectServiceInspectionFailureFacts,
+  assertGatewayServiceAdmissionUnchanged,
+  GatewayServiceUpdateOwnershipError,
+  inspectManagedGatewayServiceBeforeUpdate,
+} from "./update-command-service-plan.js";
 
-const mocks = vi.hoisted(() => ({
-  service: vi.fn<() => GatewayService>(),
-  taskState: 3 as number | string,
-}));
+const {
+  mocks,
+  nativeOfflineCases,
+  withServiceHome,
+  mockRegisteredWindowsLauncher,
+  fixtureGatewayPid,
+  mockMaintenanceService,
+  expectNoServiceCalls,
+} = await import("./update-command-service-maintenance.test-support.js");
 
-vi.mock("../../daemon/service.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/service.js")>()),
-  resolveGatewayService: mocks.service,
-}));
-
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawnSync: vi.fn(() => ({
-    pid: 0,
-    output: [null, JSON.stringify({ state: mocks.taskState, lastRunResult: 0 }), ""],
-    stdout: JSON.stringify({ state: mocks.taskState, lastRunResult: 0 }),
-    stderr: "",
-    status: 0,
-    signal: null,
-  })),
-}));
-
-beforeEach(() => mockSystemAccountHome());
-afterEach(() => vi.restoreAllMocks());
-
-async function withServiceHome(run: (home: string) => Promise<void>): Promise<void> {
-  const home = await makeTempWorkspace("openclaw-update-service-");
-  vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
-  try {
-    await withEnvAsync(
-      {
-        HOME: home,
-        USERPROFILE: home,
-        APPDATA: path.join(home, "AppData"),
-        OPENCLAW_GATEWAY_PORT: undefined,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_STATE_DIR: undefined,
-        OPENCLAW_CONFIG_PATH: undefined,
-        OPENCLAW_PROFILE: undefined,
-        OPENCLAW_SUPERVISOR_MODE: undefined,
-        OPENCLAW_SERVICE_MARKER: undefined,
-        OPENCLAW_SERVICE_KIND: undefined,
+it("preserves the shared service inspection deadline phase in recovery guidance", () =>
+  withServiceHome(async (home) => {
+    mockProcessPlatform("linux");
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    mockMaintenanceService(home, {
+      isLoaded: async () => false,
+      readRuntime: async () => ({ status: "stopped" }),
+      readCommand: async () => {
+        now = 101;
+        return {
+          programArguments: [process.execPath, "openclaw.mjs", "gateway"],
+          environment: { HOME: home },
+        };
       },
-      () => run(home),
-    );
-  } finally {
-    await fs.rm(home, { recursive: true, force: true });
-  }
-}
+    });
+    const result = await maybeStopManagedServiceBeforeMutableUpdate({
+      ...maintenanceDefaults,
+      timeoutMs: 100,
+      phase: "inspect",
+    });
+    expect(result.serviceMutationSkipMessage).toContain("Service inspection deadline expired.");
+    expect(result.serviceMutationSkipMessage).toContain("Stalled check: service load state.");
+  }));
 
-it.each(["systemd-user-bus-unavailable", "service-manager-access-denied"] as const)(
-  "retains the native inspection reason for failed preflight: %s",
-  (reason) =>
+it("reports observed service facts without inferring a manual launch when inspection times out", () =>
+  withServiceHome(async (home) => {
+    mockProcessPlatform("linux");
+    const verdict = await inspectManagedGatewayServiceBeforeUpdate({
+      root: process.cwd(),
+      state: {
+        env: { HOME: home },
+        installed: true,
+        running: false,
+        command: {
+          programArguments: [process.execPath, "openclaw.mjs", "gateway"],
+          sourcePath: path.join(home, ".config/systemd/user/openclaw-gateway.service"),
+        },
+        loadState: { status: "unknown", detail: "manager timeout" },
+        inspectionReason: "systemd-inspection-deadline-exceeded",
+        runtime: {
+          status: "unknown",
+          pid: 4242,
+          inspectionFailure: {
+            code: "service-runtime-inspection-failed",
+            detail: "Stalled check: effective command LoadUnit.",
+          },
+        },
+      },
+    });
+    expect(verdict.kind).toBe("unavailable");
+    if (verdict.kind !== "unavailable") {
+      throw new Error("Expected unavailable inspection");
+    }
+    expect(verdict.message).toContain("service definition is present");
+    expect(verdict.message).toContain("Stalled check: effective command LoadUnit.");
+    expect(verdict.message).toContain("openclaw gateway stop");
+    expect(verdict.message).toContain("openclaw update repair");
+    expect(verdict.message).not.toContain("manually");
+  }));
+
+it.each(["authority-lost", "ordinary"] as const)(
+  "preserves Doctor stop guidance through native preparation failure: %s",
+  (scenario) =>
     withServiceHome(async (home) => {
       mockProcessPlatform("linux");
-      const service = createMockGatewayService({
-        readCommand: async () => ({
-          programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
-          environment: { HOME: home },
-        }),
-        readRuntime: async () => ({ status: "unknown", inspectionReason: reason }),
-        isLoaded: async () => {
-          throw new ServiceInspectionError(reason);
+      vi.spyOn(doctorServicePolicy, "shouldManageGatewayService").mockResolvedValue(true);
+      let current = true;
+      const lost = new Error("Doctor update admission changed during drain cleanup");
+      const assertAdmission = () => assert.ok(current, lost);
+      vi.spyOn(doctorAdmission, "resolveDoctorUpdateAdmission").mockReturnValue({
+        assertCurrent: assertAdmission,
+        readContinuation: () => {
+          assertAdmission();
+          return undefined;
         },
+        recordContinuation: assertAdmission,
       });
-      mocks.service.mockReturnValue(service);
-      await expect(
-        maybeStopManagedServiceBeforeMutableUpdate({
-          root: process.cwd(),
-          updateInstallKind: "package",
-          shouldRestart: true,
-          phase: "inspect",
-          jsonMode: true,
-        }),
-      ).resolves.toMatchObject({
-        serviceUpdateVerdict: { kind: "unavailable", inspectionReason: reason },
+      const service = mockMaintenanceService(home, { stop: vi.fn() });
+      const refusal =
+        scenario === "ordinary"
+          ? new Error("native preparation failed")
+          : new GatewayServiceStopUnsafeError(
+              "Gateway stop refused: migration still holds write custody.",
+            );
+      mocks.drain.mockImplementationOnce(async () => {
+        // The drain awaits resume before its refusal escapes; admission may change there.
+        current = scenario !== "authority-lost";
+        throw refusal;
       });
-      expect(service.stop).not.toHaveBeenCalled();
+      const error = await beginDoctorMaintenance({
+        root: process.cwd(),
+        options: { repair: true },
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      }).catch((reason: unknown) => reason);
+      expect(collectNestedErrorCandidates(error)).toContain(refusal);
+      if (scenario === "authority-lost") {
+        expect(collectNestedErrorCandidates(error)).toContain(lost);
+        expect(
+          collectNestedErrorCandidates(error).some(
+            (cause) => cause instanceof AggregateError && cause.errors.includes(refusal),
+          ),
+        ).toBe(true);
+      }
+      expect(String(error).includes("Stop the Gateway service and other OpenClaw processes")).toBe(
+        scenario === "ordinary",
+      );
+      expectNoServiceCalls(service.stop, service.restart);
     }),
 );
 
-it.each([
-  { state: "failed", tasksCurrent: 2, residual: true },
-  { state: "inactive", tasksCurrent: 1, residual: true },
-  { state: "failed", tasksCurrent: undefined, residual: false },
-  { state: "activating", tasksCurrent: 2, residual: false },
-])("explains a blocked systemd inspection for $state with $tasksCurrent tasks", (scenario) =>
-  withServiceHome(async (home) => {
-    mockProcessPlatform("linux");
-    const service = createMockGatewayService({
-      readCommand: async () => ({
-        programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
-        environment: { HOME: home },
-      }),
-      readRuntime: async () => ({
-        status: "unknown",
-        state: scenario.state,
-        systemd: { managerUid: 2001, tasksCurrent: scenario.tasksCurrent },
-      }),
-    });
-    mocks.service.mockReturnValue(service);
-    const result = await maybeStopManagedServiceBeforeMutableUpdate({
-      root: process.cwd(),
-      updateInstallKind: "package",
-      shouldRestart: true,
-      phase: "inspect",
-      jsonMode: true,
-    });
-    expect(result.serviceUpdateVerdict?.kind).toBe("unavailable");
-    expect(result.blockMessage).toContain(
-      scenario.residual
-        ? "processes remain in its systemd service cgroup"
-        : "Gateway service inspection is unavailable",
-    );
-    expect(service.stop).not.toHaveBeenCalled();
-  }),
+const maintenanceOperations = [
+  "doctor",
+  "warning",
+  "refresh",
+  "no-restart",
+  "no-restart-text",
+  "changed-during-refresh",
+];
+it.each(maintenanceOperations)(
+  "refreshes maintenance policy while retaining the admitted service: %s",
+  (operation) =>
+    withServiceHome(async (home) => {
+      mockProcessPlatform("linux");
+      let timeout = 30;
+      const command = {
+        ...gatewayCommand(home),
+        environment: { HOME: home, OPENCLAW_SERVICE_VERSION: "2026.7.1-2" },
+      };
+      const service = mockMaintenanceService(home, {
+        readCommand: async () => structuredClone(command),
+        readRuntime: async () => ({
+          status: operation === "offline" ? "stopped" : "running",
+          pid: operation === "offline" ? undefined : fixtureGatewayPid,
+          systemd: { managerUid: 2001 },
+        }),
+        stop: vi.fn(async () => {
+          expect(timeout).toBe(330);
+        }),
+      });
+      mocks.prepareStop.mockImplementation(async () => {
+        timeout = 330;
+        if (operation === "changed-during-refresh") {
+          command.environment.OPENCLAW_SERVICE_VERSION = "2026.9.6";
+        }
+        return { kind: "refreshed" };
+      });
+      const runId =
+        operation === "warning" || operation.startsWith("no-restart")
+          ? createUpdateRun({ trigger: "cli" }).runId
+          : undefined;
+      const warning =
+        "Resident budget 25000ms: admitted turn interrupted; next Gateway starts with 330s.";
+      mocks.drain.mockImplementationOnce(async ({ warn }, stop) => {
+        if (operation === "refused") {
+          throw new Error(
+            "Gateway maintenance stop refused: data at risk in owner phase session-mutation",
+          );
+        }
+        if (runId) {
+          warn(warning);
+        }
+        await stop();
+      });
+      const updateRun = runId ? { runId, env: process.env } : undefined;
+      const { recordPhase } = createUpdateCommandExecutionGuards({ run: updateRun }, process.cwd());
+      const params = {
+        ...maintenanceDefaults,
+        shouldRestart: !operation.startsWith("no-restart"),
+        jsonMode: operation !== "no-restart-text",
+        warn: vi.fn(),
+        updateRun,
+        recordPhase,
+      };
+      const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
+        ...params,
+        phase: "inspect",
+      });
+      expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
+      if (operation === "doctor" && inspected.serviceUpdateVerdict?.kind === "owned") {
+        inspected.serviceUpdateVerdict.refreshDefinition = false;
+      }
+      try {
+        const stop = maybeStopManagedServiceBeforeMutableUpdate({
+          ...params,
+          expectedService: inspected,
+          ...(operation === "refresh" ? { phase: "refresh" as const } : {}),
+        });
+        if (operation === "refused" || operation === "changed-during-refresh") {
+          await expect(stop).rejects.toThrow(
+            operation === "refused" ? "owner phase session-mutation" : "definition changed",
+          );
+          expect(service.stop).not.toHaveBeenCalled();
+          return;
+        }
+        const stopped = await stop;
+        if (operation.startsWith("no-restart")) {
+          assert(runId);
+          expect(params.warn).toHaveBeenCalledExactlyOnceWith(
+            "--no-restart skips only the updater's managed restart; the running Gateway will restart itself when it detects the replaced package installation.",
+          );
+          expect(getUpdateRun(runId)?.steps).toContainEqual(
+            expect.objectContaining({
+              step: expect.stringMatching(/^warning:gateway-maintenance:/),
+              detail:
+                "--no-restart skips only the updater's managed restart; the running Gateway will restart itself when it detects the replaced package installation.",
+            }),
+          );
+        }
+        if (["offline", "refresh", "no-restart", "no-restart-text"].includes(operation)) {
+          expect(timeout).toBe(330);
+          expect(stopped.stopped).toBe(false);
+          expectNoServiceCalls(service.stop, service.start, service.restart);
+          return;
+        }
+        expect(service.stop).toHaveBeenCalledOnce();
+        expect(mocks.drain).toHaveBeenCalledOnce();
+        if (runId) {
+          expect(getUpdateRun(runId)?.steps).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                step: expect.stringMatching(/^warning:gateway-maintenance:/),
+                detail: warning,
+              }),
+            ]),
+          );
+        }
+        expect(stopped.serviceDefinitionEnv?.OPENCLAW_SERVICE_VERSION).toBe("2026.7.1-2");
+        const restored = await revalidateManagedGatewayServiceAfterUpdate({
+          root: params.root,
+          state: await readGatewayServiceState(service, { env: stopped.serviceEnv }),
+          preManagedServiceStop: stopped,
+        });
+        expect(restored).toMatchObject({
+          kind: "owned",
+          refreshDefinition: operation !== "doctor",
+        });
+      } finally {
+        await closeStateDatabaseForTest();
+      }
+    }),
 );
 
-type NativeOfflineCase = {
-  platform: NodeJS.Platform;
-  label: string;
-  runtime: "running" | "stopped" | "unknown";
-  loaded: boolean;
-  offline: boolean;
-  enabled?: boolean;
-  phase?: "inspect" | "prepare";
-  state?: number | string;
-};
+it("explains a blocked systemd inspection for a failed unit with residual tasks", () =>
+  withServiceHome(async (home) => {
+    mockProcessPlatform("linux");
+    const service = mockMaintenanceService(home, {
+      isLoaded: async () => false,
+      readRuntime: async () => ({
+        status: "unknown",
+        state: "failed",
+        systemd: { managerUid: 2001, tasksCurrent: 2 },
+      }),
+    });
+    const result = await maybeStopManagedServiceBeforeMutableUpdate({
+      ...maintenanceDefaults,
+      phase: "inspect",
+    });
+    expect(result.serviceUpdateVerdict?.kind).toBe("unavailable");
+    expect(result.serviceMutationSkipMessage).toContain(
+      "Processes remain in the systemd service cgroup",
+    );
+    expect(service.stop).not.toHaveBeenCalled();
+  }));
 
-const nativeOfflineCases: NativeOfflineCase[] = [
-  {
-    platform: "linux",
-    label: "terminal inactive",
-    runtime: "stopped",
-    loaded: true,
-    offline: true,
-  },
-  {
-    platform: "linux",
-    label: "restart transition",
-    runtime: "unknown",
-    loaded: true,
-    offline: false,
-  },
-  { platform: "linux", label: "running", runtime: "running", loaded: true, offline: false },
-  { platform: "darwin", label: "unloaded", runtime: "stopped", loaded: false, offline: true },
-  {
-    platform: "darwin",
-    label: "loaded enabled",
-    runtime: "stopped",
-    loaded: true,
-    enabled: true,
-    offline: false,
-  },
-  {
-    platform: "darwin",
-    label: "loaded disabled",
-    runtime: "stopped",
-    loaded: true,
-    enabled: false,
-    offline: true,
-  },
-  {
-    platform: "darwin",
-    label: "loaded disabled preparation",
-    runtime: "stopped",
-    loaded: true,
-    enabled: false,
-    offline: true,
-    phase: "prepare",
-  },
-  {
-    platform: "darwin",
-    label: "enabled unknown",
-    runtime: "stopped",
-    loaded: true,
-    offline: false,
-  },
-  ...[
-    { label: "disabled", state: 1, offline: true },
-    { label: "ready", state: 3, offline: true },
-    { label: "queued", state: 2, offline: false },
-    { label: "running", state: 4, offline: false },
-    { label: "unknown", state: 0, offline: false },
-    { label: "malformed", state: "3 trailing output", offline: false },
-  ].map<NativeOfflineCase>((task) => ({
-    platform: "win32",
-    runtime:
-      task.state === 1 || task.state === 3 ? "stopped" : task.state === 4 ? "running" : "unknown",
-    loaded: true,
-    label: task.label,
-    state: task.state,
-    offline: task.offline,
-  })),
-];
+it.each(["systemd-user-bus-unavailable", "native-exception", undefined] as const)(
+  "explains lost inspection after admission without claiming identity drift: %s",
+  (reason) =>
+    withServiceHome(async (home) => {
+      mockProcessPlatform("linux");
+      let available = true;
+      const service = mockMaintenanceService(home, {
+        readCommand: async () => {
+          if (!available && reason === "native-exception") {
+            throw new ServiceInspectionError("systemd-user-bus-unavailable");
+          }
+          return gatewayCommand(home);
+        },
+        readRuntime: async () => {
+          if (!available) {
+            throw reason
+              ? new ServiceInspectionError(
+                  reason === "native-exception" ? "systemd-user-bus-unavailable" : reason,
+                )
+              : new Error("private-runtime-detail");
+          }
+          return { status: "running", pid: fixtureGatewayPid, systemd: { managerUid: 2001 } };
+        },
+      });
+      const params = maintenanceDefaults;
+      const before = await maybeStopManagedServiceBeforeMutableUpdate({
+        ...params,
+        phase: "inspect",
+      });
+      expect(before.serviceUpdateVerdict?.kind).toBe("owned");
+      available = false;
+      const failure = await maybeStopManagedServiceBeforeMutableUpdate({
+        ...params,
+        phase: "prepare",
+        expectedService: before,
+      }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(GatewayServiceUpdateOwnershipError);
+      if (!(failure instanceof GatewayServiceUpdateOwnershipError)) {
+        throw new Error("Expected service inspection refusal");
+      }
+      if (reason === "native-exception") {
+        expect(failure.message).toContain("systemd");
+        expectNoServiceCalls(service.stop, service.start, service.install);
+        return;
+      }
+      const detail = reason
+        ? (formatServiceInspectionReason(reason).split(".", 1)[0] ?? "")
+        : "Gateway service inspection is unavailable";
+      for (const message of [
+        detail,
+        `Failing check managed-service-runtime (${reason ?? "service-ownership-unverified"})`,
+        `Update install root: ${process.cwd()}`,
+        `Gateway install root: ${process.cwd()}`,
+        `Update binary: ${path.join(process.cwd(), "openclaw.mjs")}`,
+        "Required: admitted service ownership owned; manager UID 2001; detected: unavailable; runtime unknown; manager UID unavailable",
+        "openclaw gateway status --deep",
+      ]) {
+        expect(failure.message).toContain(message);
+      }
+      for (const message of ["identity changed", "private-runtime-detail"]) {
+        expect(failure.message).not.toContain(message);
+      }
+      expect(failure.failureFacts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            check: "managed-service-runtime",
+            code: reason ?? "service-ownership-unverified",
+            message:
+              "Required: admitted service ownership owned; manager UID 2001; detected: unavailable; runtime unknown; manager UID unavailable",
+          }),
+        ]),
+      );
+      expect(failure.failureFacts.length).toBeLessThanOrEqual(5);
+      expect(failure.failureFacts.every((fact) => (fact.message?.length ?? 0) <= 200)).toBe(true);
+      const result = createUpdateCommandFailureResult({
+        mode: "npm",
+        durationMs: 0,
+        admission: true,
+        failure: { cause: failure },
+      });
+      expect(result.reason).toBe("managed-service-preflight");
+      expect(result.failedStep.stderrTail).toContain(
+        "installation and Gateway were left unchanged",
+      );
+      expect(result.failedStep.failureFacts).toEqual(failure.failureFacts);
+
+      const verdict = await inspectManagedGatewayServiceBeforeUpdate({
+        root: params.root,
+        state: await readGatewayServiceState(service),
+      });
+      expect(() => assertGatewayServiceAdmissionUnchanged(before, verdict)).toThrow(
+        reason ? detail : "Gateway service inspection is unavailable",
+      );
+      if (reason) {
+        expect(collectServiceInspectionFailureFacts(verdict)?.[0]).toMatchObject({
+          code: reason,
+          message: expect.stringContaining(detail.slice(0, 80)),
+        });
+      }
+      expectNoServiceCalls(service.stop, service.start, service.restart, service.install);
+    }),
+);
 
 it.each(nativeOfflineCases)(
   "requires affirmative native offline proof for owned $platform service ($label)",
@@ -238,11 +429,9 @@ it.each(nativeOfflineCases)(
         }
         return scenario.enabled;
       });
-      const service = createMockGatewayService({
-        readCommand: async () => ({
-          programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
-          environment: { HOME: home },
-        }),
+      const command = mockRegisteredWindowsLauncher(home, scenario.state === 4);
+      const service = mockMaintenanceService(home, {
+        readCommand: async () => command,
         readRuntime:
           scenario.platform === "win32"
             ? readScheduledTaskRuntime
@@ -253,41 +442,35 @@ it.each(nativeOfflineCases)(
         isLoaded: async () => scenario.loaded,
         isEnabled,
       });
-      mocks.service.mockReturnValue(service);
       const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
-        root: process.cwd(),
-        updateInstallKind: "package",
-        shouldRestart: true,
+        ...maintenanceDefaults,
         phase: scenario.phase ?? "inspect",
-        jsonMode: true,
         timeoutMs: 200,
       });
       expect(inspected.serviceUpdateVerdict?.kind).toBe(
         scenario.runtime === "unknown" ? "unavailable" : "owned",
       );
-      expect(inspected.offline).toBe(scenario.offline);
+      expect(inspected.offline).toBe(scenario.runtime === "unknown" ? undefined : scenario.offline);
       for (const [args] of isEnabled.mock.calls) {
         expect(args.timeoutMs).toBe(200);
       }
-      expect(service.stop).not.toHaveBeenCalled();
-      expect(service.start).not.toHaveBeenCalled();
-      expect(service.restart).not.toHaveBeenCalled();
-      expect(service.stage).not.toHaveBeenCalled();
-      expect(service.install).not.toHaveBeenCalled();
+      expectNoServiceCalls(
+        service.stop,
+        service.start,
+        service.restart,
+        service.stage,
+        service.install,
+      );
     }),
 );
 
-it.each([
-  { code: "ETIMEDOUT", failures: 1, proceeds: true },
-  { code: "ETIMEDOUT", failures: 2, proceeds: false },
-  { code: "ETIMEDOUT", failures: 2, proceeds: false, admitted: true },
-  { code: "ENOENT", failures: 1, proceeds: false },
-])("handles Scheduled Task probe failures before update: %j", (scenario) =>
+it("refuses an admitted Scheduled Task after repeated probe timeouts", () =>
   withServiceHome(async (home) => {
     mockProcessPlatform("win32");
+    vi.spyOn(performance, "now").mockReturnValue(1_000); // Native mocks consume no time.
     mocks.taskState = 4;
     vi.mocked(spawnSync).mockReset();
-    for (let attempt = 0; attempt < scenario.failures; attempt++) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       vi.mocked(spawnSync).mockReturnValueOnce({
         pid: 0,
         output: [null, "", ""],
@@ -295,69 +478,41 @@ it.each([
         stderr: "",
         status: null,
         signal: null,
-        error: Object.assign(new Error(`spawnSync powershell.exe ${scenario.code}`), {
-          code: scenario.code,
+        error: Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), {
+          code: "ETIMEDOUT",
         }),
       });
     }
-    const service = createMockGatewayService({
-      readCommand: vi.fn(async () => ({
-        programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
-        environment: { HOME: home },
-      })),
+    const command = mockRegisteredWindowsLauncher(home, true);
+    const service = mockMaintenanceService(home, {
+      readCommand: vi.fn(async () => command),
       readRuntime: readScheduledTaskRuntime,
-      isLoaded: async () => true,
     });
-    mocks.service.mockReturnValue(service);
 
     const inspection = maybeStopManagedServiceBeforeMutableUpdate({
-      root: process.cwd(),
-      updateInstallKind: "package",
-      shouldRestart: true,
+      ...maintenanceDefaults,
       phase: "inspect",
-      jsonMode: true,
       timeoutMs: 30_000,
-      expectedService: scenario.admitted
-        ? {
-            serviceUpdateVerdict: {
-              kind: "owned",
-              root: process.cwd(),
-              fingerprint: "admitted-definition",
-              refreshDefinition: true,
-            },
-          }
-        : undefined,
+      expectedService: {
+        serviceUpdateVerdict: {
+          kind: "owned",
+          root: process.cwd(),
+          fingerprint: "admitted-definition",
+          refreshDefinition: true,
+        },
+      },
     });
 
-    if (scenario.admitted) {
-      await expect(inspection).rejects.toThrow("Scheduled Task probe timed out after 30000 ms");
-    } else {
-      const inspected = await inspection;
-      if (scenario.proceeds) {
-        expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
-        expect(inspected.blockMessage).toBeUndefined();
-        expect(inspected.running).toBe(true);
-      } else {
-        expect(inspected.serviceUpdateVerdict?.kind).toBe("unavailable");
-        expect(inspected.blockMessage).toContain("Refusing to mutate code");
-        if (scenario.code === "ETIMEDOUT") {
-          expect(inspected.blockMessage).toContain("Scheduled Task probe timed out after 30000 ms");
-          expect(inspected.blockMessage).toContain("ETIMEDOUT");
-        }
-      }
-    }
-    const attempts = scenario.code === "ETIMEDOUT" ? 2 : 1;
-    expect(spawnSync).toHaveBeenCalledTimes(attempts);
-    expect(service.readCommand).toHaveBeenCalledTimes(attempts);
+    await expect(inspection).rejects.toThrow("Scheduled Task check timed out after 30000 ms");
     for (const call of vi.mocked(spawnSync).mock.calls) {
-      expect(call[2]?.timeout).toBe(30_000);
+      expect(call[2]?.timeout).toBe(
+        call[1]?.some((arg) => arg.includes("Get-CimInstance Win32_Process")) ? 5_000 : 30_000,
+      );
     }
-    expect(service.stop).not.toHaveBeenCalled();
-    expect(service.install).not.toHaveBeenCalled();
-  }),
-);
+    expectNoServiceCalls(service.stop, service.install);
+  }));
 
-it("preserves a silent Scheduled Task probe failure through update and Doctor refusal", () =>
+it("preserves a silent Scheduled Task probe failure through update and Doctor warnings", () =>
   withServiceHome(async (home) => {
     mockProcessPlatform("win32");
     vi.spyOn(doctorServicePolicy, "shouldManageGatewayService").mockResolvedValue(true);
@@ -369,425 +524,47 @@ it("preserves a silent Scheduled Task probe failure through update and Doctor re
       status: 2,
       signal: null,
     });
-    const service = createMockGatewayService({
-      readCommand: async () => ({
-        programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
-        environment: { HOME: home },
-      }),
+    const service = mockMaintenanceService(home, {
       readRuntime: readScheduledTaskRuntime,
-      isLoaded: async () => true,
     });
-    mocks.service.mockReturnValue(service);
     const inspection = await maybeStopManagedServiceBeforeMutableUpdate({
-      root: process.cwd(),
-      updateInstallKind: "package",
-      shouldRestart: true,
+      ...maintenanceDefaults,
       phase: "inspect",
-      jsonMode: true,
     });
     expect(inspection).toMatchObject({
-      offline: false,
       stopped: false,
       serviceMutationAllowed: false,
       serviceUpdateVerdict: { kind: "unavailable" },
     });
-    const detail = "Scheduled Task probe failed (exit 2): no output from PowerShell.";
-    expect.soft(inspection.blockMessage).toContain(detail);
-    await expect(
-      beginDoctorMaintenance({
-        root: process.cwd(),
-        options: { repair: true },
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      }),
-    ).rejects.toThrow(detail);
-    expect(service.stop).not.toHaveBeenCalled();
-    expect(service.install).not.toHaveBeenCalled();
-  }));
-
-const servingAncestorMaintenanceCases = [
-  { platform: "linux", identity: "current updater", phase: "inspect", authorized: true },
-  { platform: "linux", identity: "current updater", phase: "prepare", authorized: true },
-  { platform: "darwin", identity: "current updater", phase: "inspect", authorized: true },
-  { platform: "darwin", identity: "current updater", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "missing marker", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "missing metadata", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "missing lease", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "replaced owner", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "different root", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "different run", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "stale start identity", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "parent lease", phase: "prepare", authorized: false },
-] as const;
-
-it.runIf(process.platform === "linux" || process.platform === "darwin").each(
-  servingAncestorMaintenanceCases.filter(
-    // Binding a foreign PID reads native process identity, so only exercise that
-    // fixture where the simulated Linux policy matches the actual host.
-    ({ identity }) => identity !== "parent lease" || process.platform === "linux",
-  ),
-)(
-  "keeps $platform serving-ancestor maintenance bound to the current updater: $identity $phase",
-  ({ platform, identity, phase, authorized }) =>
-    withServiceHome(async (home) => {
-      mockProcessPlatform(platform);
-      const root = await fs.realpath(process.cwd());
-      const metaPath = path.join(home, "handoff-meta.json");
-      const runId = randomUUID();
-      vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
-      createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
-      await fs.writeFile(
-        metaPath,
-        JSON.stringify({
-          version: 1,
-          meta: {
-            root: identity === "different root" ? home : root,
-            runId: identity === "different run" ? randomUUID() : runId,
-            handoffId: "owned-handoff",
-          },
-        }),
-      );
-      const store = createManagedHandoffLeaseStore();
-      if (identity !== "missing lease") {
-        const claim = store.acquire(
-          root,
-          identity === "replaced owner" ? "replacement-handoff" : "owned-handoff",
-          { kind: "update" },
-        );
-        if (claim.kind !== "acquired") {
-          throw new Error("fixture could not acquire its installation lease");
-        }
-        if (identity === "parent lease") {
-          expect(store.bind(claim.lease, process.ppid)).not.toBeNull();
-        } else if (identity === "stale start identity") {
-          const db = openNodeSqliteDatabase(path.join(home, "managed-update-handoffs.sqlite"));
-          try {
-            db.prepare(
-              "UPDATE managed_update_handoffs SET payload_json = json_set(payload_json, '$.executor.startIdentity', 'stale') WHERE install_root = ?",
-            ).run(root);
-          } finally {
-            db.close();
-          }
-        }
-      }
-      await withEnvAsync(
-        {
-          OPENCLAW_UPDATE_RUN_HANDOFF: identity === "missing marker" ? undefined : "1",
-          [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]:
-            identity === "missing metadata" ? undefined : metaPath,
-        },
-        async () => {
-          const service = createMockGatewayService({
-            readCommand: async () => ({
-              programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-              environment: { HOME: home },
-            }),
-            readRuntime: async () => ({
-              status: "running",
-              pid: process.ppid,
-              systemd: { managerUid: 2001 },
-            }),
-            isLoaded: async () => true,
-          });
-          mocks.service.mockReturnValue(service);
-          const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
-            root,
-            updateInstallKind: "package",
-            shouldRestart: true,
-            jsonMode: true,
-            phase,
-            updateRun: { runId, env: process.env },
-            handoffFromGateway: async () => false,
-          });
-          expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
-          if (authorized) {
-            expect(inspected.blockMessage).toBeUndefined();
-          } else {
-            expect(inspected.blockMessage).toContain("inside the gateway process tree");
-          }
-          expect(service.stop).toHaveBeenCalledTimes(authorized && phase === "prepare" ? 1 : 0);
-          expect(service.start).not.toHaveBeenCalled();
-          expect(service.restart).not.toHaveBeenCalled();
-          expect(service.stage).not.toHaveBeenCalled();
-          expect(service.install).not.toHaveBeenCalled();
-        },
-      );
-    }),
-);
-
-it.runIf(process.platform === "linux")(
-  "rechecks the managed handoff identity immediately before stopping the Gateway",
-  () =>
-    withServiceHome(async (home) => {
-      const root = await fs.realpath(process.cwd());
-      const metaPath = path.join(home, "handoff-meta.json");
-      const runId = randomUUID();
-      createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
-      await fs.writeFile(
-        metaPath,
-        JSON.stringify({
-          version: 1,
-          meta: { root, runId, handoffId: "owned-handoff" },
-        }),
-      );
-      const store = createManagedHandoffLeaseStore();
-      const claim = store.acquire(root, "owned-handoff", { kind: "update" });
-      if (claim.kind !== "acquired") {
-        throw new Error("fixture could not acquire its installation lease");
-      }
-      let runtimeReads = 0;
-      const stop = vi.fn(async () => undefined);
-      mocks.service.mockReturnValue(
-        createMockGatewayService({
-          readCommand: async () => ({
-            programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-            environment: { HOME: home },
-          }),
-          readRuntime: async () => {
-            runtimeReads += 1;
-            if (runtimeReads === 2) {
-              const db = openNodeSqliteDatabase(path.join(home, "managed-update-handoffs.sqlite"));
-              try {
-                db.prepare(
-                  "UPDATE managed_update_handoffs SET payload_json = json_set(payload_json, '$.executor.startIdentity', 'replaced') WHERE install_root = ?",
-                ).run(root);
-              } finally {
-                db.close();
-              }
-            }
-            return {
-              status: "running",
-              pid: process.ppid,
-              systemd: { managerUid: 2001 },
-            };
-          },
-          isLoaded: async () => true,
-          stop,
-        }),
-      );
-      await withEnvAsync(
-        {
-          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
-          [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
-        },
-        async () => {
-          await expect(
-            maybeStopManagedServiceBeforeMutableUpdate({
-              root,
-              updateInstallKind: "package",
-              shouldRestart: true,
-              jsonMode: true,
-              phase: "prepare",
-              updateRun: { runId, env: process.env },
-            }),
-          ).rejects.toThrow(/inside the gateway process tree/);
-        },
-      );
-      expect(runtimeReads).toBe(2);
-      expect(stop).not.toHaveBeenCalled();
-    }),
-);
-
-it.each([
-  { label: "changed account", uid: 3002 },
-  { label: "missing account", uid: undefined },
-  { label: "same account", uid: 2001 },
-])("revalidates native manager identity before preparation: $label", (scenario) =>
-  withServiceHome(async (home) => {
-    mockProcessPlatform("linux");
-    let managerUid: number | undefined = 2001;
-    const stop = vi.fn(async () => undefined);
-    mocks.service.mockReturnValue(
-      createMockGatewayService({
-        readCommand: async () => ({
-          programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
-          environment: { HOME: home },
-        }),
-        readRuntime: async () => ({ status: "running", systemd: { managerUid } }),
-        isLoaded: async () => true,
-        stop,
-      }),
-    );
-    const params = {
-      updateInstallKind: "package" as const,
+    const detail = "Scheduled Task check failed (exit 2): no output from PowerShell.";
+    expect(inspection.blockMessage).toBeUndefined();
+    expect(inspection.serviceMutationSkipMessage).toContain(detail);
+    const maintenance = await beginDoctorMaintenance({
       root: process.cwd(),
-      shouldRestart: true,
-      jsonMode: true,
-      phase: "inspect" as const,
-    };
-    const before = await maybeStopManagedServiceBeforeMutableUpdate(params);
-    expect(before.serviceUpdateVerdict?.kind).toBe("owned");
-    expect(before).toMatchObject({ serviceManagerUid: 2001 });
-    managerUid = scenario.uid;
-    const next = maybeStopManagedServiceBeforeMutableUpdate({
-      ...params,
-      phase: "prepare",
-      expectedService: before,
+      options: { repair: true },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     });
-    if (scenario.uid === 2001) {
-      await expect(next).resolves.toMatchObject({
-        stopped: true,
-        serviceManagerUid: 2001,
-        serviceUpdateVerdict: { kind: "owned" },
-      });
-    } else {
-      await expect(next).rejects.toThrow(/ownership|manager identity/);
+    try {
+      expect(maintenance?.warnings).toEqual([expect.stringContaining(detail)]);
+      expect(maintenance?.warnings?.[0]).toContain("openclaw gateway stop");
+      await maintenance?.finish({});
+    } finally {
+      await maintenance?.release();
     }
-    expect(stop).toHaveBeenCalledTimes(scenario.uid === 2001 ? 1 : 0);
-  }),
-);
-
-it("retains the inspected systemd manager route during preparation", () =>
-  withServiceHome(async (home) => {
-    mockProcessPlatform("linux");
-    const seenRoutes: Array<string | undefined> = [];
-    mocks.service.mockReturnValue(
-      createMockGatewayService({
-        readCommand: async (env) => {
-          seenRoutes.push(env.DBUS_SESSION_BUS_ADDRESS);
-          return {
-            programArguments: [
-              process.execPath,
-              path.join(process.cwd(), "openclaw.mjs"),
-              "gateway",
-            ],
-            environment: { HOME: home },
-          };
-        },
-        readRuntime: async () => ({ status: "running", systemd: { managerUid: 2001 } }),
-        isLoaded: async () => true,
-        stop: async () => undefined,
-      }),
-    );
-    const params = {
-      updateInstallKind: "package" as const,
-      root: process.cwd(),
-      shouldRestart: true,
-      jsonMode: true,
-      phase: "inspect" as const,
-    };
-    const before = await maybeStopManagedServiceBeforeMutableUpdate(params);
-    const admittedRoute = "unix:path=/run/user/2001/bus";
-    before.serviceEnv = {
-      ...before.serviceEnv,
-      DBUS_SESSION_BUS_ADDRESS: admittedRoute,
-    };
-    const readsBeforePreparation = seenRoutes.length;
-
-    await expect(
-      maybeStopManagedServiceBeforeMutableUpdate({
-        ...params,
-        phase: "prepare",
-        expectedService: before,
-      }),
-    ).resolves.toMatchObject({ stopped: true });
-
-    expect(seenRoutes.slice(readsBeforePreparation)).toEqual([admittedRoute, admittedRoute]);
+    expectNoServiceCalls(service.stop, service.install, service.restart);
   }));
-
-it.each([
-  "shipped handoff",
-  "matching UID",
-  "mismatching UID",
-  "unavailable manager",
-  "different unit",
-  "different profile",
-  "foreign executable",
-  "changed protected command",
-])("revalidates the shipped managed-service stop record: %s", (scenario) =>
-  withServiceHome(async (home) => {
-    mockProcessPlatform("linux");
-    const root = process.cwd();
-    const command = {
-      programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-      environment: { HOME: home },
-    };
-    // v2026.9.2/v2026.9.3 forward this stop record to the fresh migration finalizer.
-    const before: PreManagedServiceStop = {
-      stoppedAtMs: 1,
-      stopped: true,
-      inspected: true,
-      runtimeInspected: true,
-      running: true,
-      offline: false,
-      serviceEnv: { HOME: home },
-      serviceDefinitionEnv: command.environment,
-      serviceNodeRunner: process.execPath,
-      serviceUpdateVerdict: {
-        kind: "owned",
-        root,
-        fingerprint: sha256Hex(stableStringify(command)),
-        refreshDefinition: scenario !== "changed protected command",
-      },
-    };
-    if (scenario === "matching UID" || scenario === "mismatching UID") {
-      before.serviceManagerUid = scenario === "matching UID" ? 2001 : 3002;
-    }
-    const service = createMockGatewayService({
-      readCommand: async () => ({
-        ...command,
-        programArguments:
-          scenario === "foreign executable"
-            ? [process.execPath, path.join(home, "other", "openclaw.mjs"), "gateway"]
-            : scenario === "changed protected command"
-              ? [...command.programArguments, "--verbose"]
-              : command.programArguments,
-        environment: {
-          ...command.environment,
-          ...(scenario === "different unit" ? { OPENCLAW_SYSTEMD_UNIT: "other-gateway" } : {}),
-          ...(scenario === "different profile"
-            ? {
-                OPENCLAW_PROFILE: "other",
-                OPENCLAW_STATE_DIR: path.join(home, ".openclaw-other"),
-                OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw-other", "openclaw.json"),
-              }
-            : {}),
-        },
-      }),
-      readRuntime: async () => ({
-        status: "stopped",
-        systemd: { managerUid: scenario === "unavailable manager" ? undefined : 2001 },
-      }),
-      isLoaded: async () => true,
-    });
-    const state = await readGatewayServiceState(service, {
-      env: before.serviceEnv,
-      requireEffective: true,
-      requireLoadedCommand: true,
-    });
-    const revalidated = revalidateManagedGatewayServiceAfterUpdate({
-      state,
-      root,
-      preManagedServiceStop: before,
-    });
-    if (scenario === "shipped handoff" || scenario === "matching UID") {
-      await expect(revalidated).resolves.toMatchObject({ kind: "owned", refreshDefinition: true });
-    } else {
-      await expect(revalidated).rejects.toThrow(/ownership or manager identity changed/);
-    }
-  }),
-);
 
 it("refuses owned Linux admission without a native manager UID", () =>
   withServiceHome(async (home) => {
     mockProcessPlatform("linux");
     const stop = vi.fn(async () => undefined);
-    mocks.service.mockReturnValue(
-      createMockGatewayService({
-        readCommand: async () => ({
-          programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
-          environment: { HOME: home },
-        }),
-        readRuntime: async () => ({ status: "running" }),
-        isLoaded: async () => true,
-        stop,
-      }),
-    );
+    mockMaintenanceService(home, {
+      readRuntime: async () => ({ status: "running" }),
+      stop,
+    });
     await expect(
       maybeStopManagedServiceBeforeMutableUpdate({
-        updateInstallKind: "package",
-        root: process.cwd(),
-        shouldRestart: true,
-        jsonMode: true,
+        ...maintenanceDefaults,
         phase: "inspect",
       }),
     ).resolves.toMatchObject({
@@ -821,140 +598,48 @@ it.each(["before stop", "after stop"] as const)(
           revoke();
         }
       });
-      mocks.service.mockReturnValue(
-        createMockGatewayService({
-          readCommand: async () => ({
-            programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-            environment: { HOME: home },
-          }),
-          readRuntime: async () => {
-            reads += 1;
-            await Promise.resolve();
-            if (reads === 2 && when === "before stop") {
-              revoke();
-            }
-            return { status: "running", systemd: { managerUid: process.getuid?.() ?? 2001 } };
-          },
-          isLoaded: async () => true,
-          isEnabled: async () => true,
-          stop,
-        }),
-      );
-      let nativeFailure: unknown;
-      await expect(
-        withUpdateCommandExecutor(runId, async (executor) => {
-          const executorFence = await executor.enter(root);
-          try {
-            await maybeStopManagedServiceBeforeMutableUpdate({
-              updateRun: { runId, env: { ...process.env }, executorFence },
-              updateInstallKind: "package",
-              root,
-              shouldRestart: true,
-              jsonMode: true,
-              phase: "prepare",
-            });
-          } catch (error) {
-            nativeFailure = error;
-          }
-        }),
-      ).rejects.toThrow(/executor/);
-      expect(String(nativeFailure)).toMatch(/executor/);
-      expect(stop).toHaveBeenCalledTimes(when === "before stop" ? 0 : 1);
-      expect(store.read(root).kind).toBe("current");
-    }),
-);
-
-it.each(["disable", "restore", "compensation", "never"] as const)(
-  "retains caller authority when Windows task recovery loses its owner before %s",
-  (lostBefore) =>
-    withServiceHome(async (home) => {
-      mockProcessPlatform("win32");
-      let current = true;
-      let revokeDuringInspection = false;
-      let enabled = true;
-      const mutations: string[] = [];
-      vi.spyOn(schtasksExec, "execSchtasks").mockImplementation(async (args) => {
-        if (args[0] === "/Query") {
-          if (lostBefore === "disable") {
-            current = false;
+      mockMaintenanceService(home, {
+        readCommand: async () => gatewayCommand(home, root),
+        readRuntime: async () => {
+          reads += 1;
+          await Promise.resolve();
+          if (reads === 2 && when === "before stop") {
+            revoke();
           }
           return {
-            code: 0,
-            stdout: `<Task><Settings><Enabled>${enabled}</Enabled></Settings></Task>`,
-            stderr: "",
+            status: "running",
+            pid: fixtureGatewayPid,
+            systemd: { managerUid: process.getuid?.() ?? 2001 },
           };
-        }
-        expect(args[0]).toBe("/Change");
-        const action = args.at(-1);
-        if (action !== "/ENABLE" && action !== "/DISABLE") {
-          throw new Error("Unexpected Scheduled Task mutation");
-        }
-        mutations.push(action);
-        enabled = action === "/ENABLE";
-        return { code: 0, stdout: "", stderr: "" };
+        },
+        isEnabled: async () => true,
+        stop,
       });
-      mocks.service.mockReturnValue(
-        createMockGatewayService({
-          readCommand: async () => ({
-            programArguments: [
-              process.execPath,
-              path.join(process.cwd(), "openclaw.mjs"),
-              "gateway",
-            ],
-            environment: { HOME: home },
-          }),
-          readRuntime: async () => {
-            if (revokeDuringInspection) {
-              current = false;
-            }
-            return { status: "running" };
-          },
-          isLoaded: async () => true,
-        }),
-      );
-      let stopped: PreManagedServiceStop | undefined;
-      let failure: unknown;
+      let nativeFailure: unknown;
       try {
-        try {
-          stopped = await maybeStopManagedServiceBeforeMutableUpdate({
-            root: process.cwd(),
-            updateInstallKind: "package",
-            shouldRestart: lostBefore !== "disable",
-            jsonMode: true,
-            assertCurrent: () => {
-              if (!current) {
-                throw new Error("Repair continuation no longer owns this task");
-              }
-            },
-          });
-          const recovery = stopped.windowsTaskAutoStartRecovery;
-          if (!recovery) {
-            throw new Error("Missing Windows task recovery");
-          }
-          revokeDuringInspection = lostBefore === "restore";
-          await recovery.restore();
-          revokeDuringInspection = lostBefore === "compensation";
-          await recovery.complete(false);
-        } catch (error) {
-          failure = error;
-        }
-        expect(mutations).toEqual(
-          lostBefore === "disable"
-            ? []
-            : lostBefore === "restore"
-              ? ["/DISABLE"]
-              : lostBefore === "compensation"
-                ? ["/DISABLE", "/ENABLE"]
-                : ["/DISABLE", "/ENABLE", "/DISABLE"],
-        );
-        expect(enabled).toBe(lostBefore === "disable" || lostBefore === "compensation");
-        if (lostBefore === "never") {
-          expect(failure).toBeUndefined();
-        } else {
-          expect(String(failure)).toContain("Repair continuation no longer owns this task");
-        }
+        await expect(
+          withUpdateCommandExecutor(runId, async (executor) => {
+            const executorFence = await executor.enter(root);
+            const updateRun = { runId, env: { ...process.env }, executorFence };
+            const { recordPhase } = createUpdateCommandExecutionGuards({ run: updateRun }, root);
+            try {
+              await maybeStopManagedServiceBeforeMutableUpdate({
+                updateRun,
+                recordPhase,
+                ...maintenanceDefaults,
+                root,
+                phase: "prepare",
+              });
+            } catch (error) {
+              nativeFailure = error;
+            }
+          }),
+        ).rejects.toThrow(/executor/);
+        expect(String(nativeFailure)).toMatch(/executor/);
+        expect(stop).toHaveBeenCalledTimes(when === "before stop" ? 0 : 1);
+        expect(store.read(root).kind).toBe("current");
       } finally {
-        await stopped?.windowsTaskAutoStartRecovery?.complete();
+        await closeStateDatabaseForTest();
       }
     }),
 );

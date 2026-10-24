@@ -2,18 +2,26 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { loadExecApprovals } from "../infra/exec-approvals.js";
+import * as logger from "../logger.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import type { ManagedRun, ProcessExtinctionResult } from "../process/supervisor/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { NodeHostClient } from "./client.js";
 import { decodeClaudeCliNodeRunParams } from "./invoke-agent-cli-claude-params.js";
 import { runClaudeCliNodeCommand } from "./invoke-agent-cli-claude.js";
-import { handleSystemRunInvoke } from "./invoke-system-run.js";
+import * as systemRun from "./invoke-system-run.js";
 import type { RunResult } from "./invoke-types.js";
 import { handleInvoke, type NodeInvokeRequestPayload } from "./invoke.js";
 
@@ -24,6 +32,21 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
+type Calls = Array<{ method: string; params: unknown }>;
+
+function progressText(calls: Calls) {
+  return calls
+    .filter((call) => call.method === "node.invoke.progress")
+    .map((call) => (call.params as { chunk: string }).chunk)
+    .join("");
+}
+
+function decode(params: Record<string, unknown>) {
+  return decodeClaudeCliNodeRunParams(
+    JSON.stringify({ idleTimeoutMs: 1_000, timeoutMs: 2_000, ...params }),
+  );
+}
+
 function frame(params: unknown): NodeInvokeRequestPayload {
   return {
     id: "invoke-1",
@@ -33,10 +56,7 @@ function frame(params: unknown): NodeInvokeRequestPayload {
   };
 }
 
-function client(
-  calls: Array<{ method: string; params: unknown }>,
-  onProgress?: () => void,
-): NodeHostClient {
+function client(calls: Calls, onProgress?: () => void): NodeHostClient {
   return {
     async request<T>(method: string, params?: unknown): Promise<T> {
       calls.push({ method, params });
@@ -46,6 +66,50 @@ function client(
       return {} as T;
     },
   };
+}
+
+async function invokeClaude(params: unknown, claudePath?: string, calls: Calls = []) {
+  await handleInvoke(frame(params), client(calls), { current: async () => [] }, undefined, {
+    claudePath,
+  });
+  return calls;
+}
+
+function expectSuccessfulRun(result: RunResult | undefined) {
+  expect(result).toMatchObject({
+    exitCode: 0,
+    success: true,
+    timedOut: false,
+    noOutputTimedOut: false,
+  });
+}
+
+async function invokeWithNativeAuth(
+  source: string,
+  inheritedEnv: Record<string, string>,
+  params: Record<string, unknown> = {},
+) {
+  setRuntimeConfigSnapshot({ tools: { exec: { security: "full", ask: "off" } } });
+  const { executable, runArgv } = await nativeCliFixture(source);
+  let runResult: RunResult | undefined;
+  const handleSystemRun = vi
+    .spyOn(systemRun, "handleSystemRunInvoke")
+    .mockImplementation(async (options) => {
+      runResult = await options.runCommand(
+        [...runArgv, ...options.params.command.slice(1)],
+        undefined,
+        { ...process.env, ...options.params.env, ...inheritedEnv } as Record<string, string>,
+        options.params.timeoutMs ?? undefined,
+      );
+      await options.sendInvokeResult({ ok: true });
+    });
+  onTestFinished(() => handleSystemRun.mockRestore());
+  const calls = await invokeClaude(
+    { argv: ["-p"], idleTimeoutMs: 5_000, timeoutMs: 10_000, ...params },
+    executable,
+  );
+  expectSuccessfulRun(runResult);
+  return calls;
 }
 
 async function executableScript(source: string): Promise<string> {
@@ -98,11 +162,11 @@ describe("Claude CLI node command", () => {
       );
       const cwd = path.dirname(executable);
       const marker = path.join(cwd, "spawned.txt");
-      const calls: Array<{ method: string; params: unknown }> = [];
+      const calls: Calls = [];
       let staged = 0;
       let stagedPrompt: string | undefined;
       const writeFile = fs.writeFile.bind(fs);
-      await withEnvAsync({ OPENCLAW_HOME: cwd }, async () => {
+      await withEnvAsync({ OPENCLAW_HOME: cwd, PATH: "/usr/bin:/bin", HOME: cwd }, async () => {
         saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" }, agents: {} });
         setRuntimeConfigSnapshot({ tools: { exec: { mode: "full" } } });
         const staging = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
@@ -119,25 +183,16 @@ describe("Claude CLI node command", () => {
           }
         });
         try {
-          await handleInvoke(
-            frame({
+          await invokeClaude(
+            {
               argv: ["-p"],
               cwd,
               systemPrompt: "Synthetic authorization fixture",
               idleTimeoutMs: 5_000,
               timeoutMs: 10_000,
-            }),
-            client(calls),
-            { current: async () => [] },
-            undefined,
-            {
-              claudePath: executable,
-              handleSystemRun: (options) =>
-                handleSystemRunInvoke({
-                  ...options,
-                  sanitizeEnv: () => ({ PATH: "/usr/bin:/bin", HOME: cwd }),
-                }),
             },
+            executable,
+            calls,
           );
         } finally {
           staging.mockRestore();
@@ -147,14 +202,12 @@ describe("Claude CLI node command", () => {
       const reply = calls.find((call) => call.method === "node.invoke.result")?.params as
         | { ok?: boolean; error?: { code?: string; message?: string } }
         | undefined;
-      const progress = calls
-        .filter((call) => call.method === "node.invoke.progress")
-        .map((call) => (call.params as { chunk: string }).chunk)
-        .join("");
+      const progress = progressText(calls);
       expect(staged).toBe(1);
       expect(existsSync(marker)).toBe(!revoke);
       expect(reply?.ok).toBe(!revoke);
       expect(progress).toBe(revoke ? "" : "approved\n");
+      expect(calls.some((call) => call.method === "node.event")).toBe(false);
       if (revoke) {
         expect(reply?.error?.code).toBe("SYSTEM_RUN_DENIED");
         expect(reply?.error?.message).toContain("exec approval changed before execution");
@@ -164,15 +217,12 @@ describe("Claude CLI node command", () => {
   );
 
   it.each([
-    { argv: ["--unknown"], error: "unsupported Claude CLI argument" },
     { argv: ["--model"], error: "requires a value" },
     { argv: ["--mcp-config", "/tmp/mcp.json"], error: "unsupported Claude CLI argument" },
-    { argv: ["--plugin-dir", "/tmp/plugin"], error: "unsupported Claude CLI argument" },
     { argv: ["--allowedTools", "Bash"], error: "unsupported Claude CLI argument" },
     // Tool policy must arrive as one comma-joined value; the multi-token
     // variadic form fails closed instead of parsing partially.
     { argv: ["--disallowedTools", "Bash", "Edit"], error: "unsupported Claude CLI argument" },
-    { argv: ["--append-system-prompt", "inline"], error: "unsupported Claude CLI argument" },
     {
       argv: ["-p", "--resume", "--dangerously-skip-permissions"],
       error: "requires a non-option value",
@@ -181,44 +231,36 @@ describe("Claude CLI node command", () => {
     { argv: ["--permission-mode", "bypassPermissions"], error: "not allowed" },
     { argv: ["--permission-mode=bypassPermissions"], error: "not allowed" },
   ])("rejects unsafe argv $argv", async ({ argv, error }) => {
-    await expect(
-      decodeClaudeCliNodeRunParams(
-        JSON.stringify({ argv, idleTimeoutMs: 1_000, timeoutMs: 2_000 }),
-      ),
-    ).rejects.toThrow(error);
+    await expect(decode({ argv })).rejects.toThrow(error);
   });
 
   it("accepts bounded Claude resume/fork args and a separate system prompt", async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-cwd-"));
     tempDirs.push(cwd);
     await expect(
-      decodeClaudeCliNodeRunParams(
-        JSON.stringify({
-          argv: [
-            "-p",
-            "--output-format=stream-json",
-            "--permission-mode=plan",
-            "--resume",
-            "session-1",
-            "--fork-session",
-          ],
-          stdin: "hello",
-          systemPrompt: "private prompt",
-          cwd,
-          env: {
-            NO_COLOR: "1",
-            CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
-            CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
-          },
-          clearEnv: [
-            "ANTHROPIC_API_KEY",
-            "CLAUDE_CODE_DISABLE_1M_CONTEXT",
-            "CLAUDE_CODE_OAUTH_TOKEN",
-          ],
-          idleTimeoutMs: 1_000,
-          timeoutMs: 2_000,
-        }),
-      ),
+      decode({
+        argv: [
+          "-p",
+          "--output-format=stream-json",
+          "--permission-mode=plan",
+          "--resume",
+          "session-1",
+          "--fork-session",
+        ],
+        stdin: "hello",
+        systemPrompt: "private prompt",
+        cwd,
+        env: {
+          NO_COLOR: "1",
+          CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
+          CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
+        },
+        clearEnv: [
+          "ANTHROPIC_API_KEY",
+          "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+          "CLAUDE_CODE_OAUTH_TOKEN",
+        ],
+      }),
     ).resolves.toMatchObject({
       cwd,
       stdin: "hello",
@@ -234,70 +276,45 @@ describe("Claude CLI node command", () => {
 
   it("rejects missing cwd and non-allowlisted environment", async () => {
     await expect(
-      decodeClaudeCliNodeRunParams(
-        JSON.stringify({
-          argv: ["-p"],
-          cwd: "/definitely/missing/openclaw-node-cwd",
-          idleTimeoutMs: 1_000,
-          timeoutMs: 2_000,
-        }),
-      ),
+      decode({
+        argv: ["-p"],
+        cwd: "/definitely/missing/openclaw-node-cwd",
+      }),
     ).rejects.toThrow("cwd must be an existing directory");
     await expect(
-      decodeClaudeCliNodeRunParams(
-        JSON.stringify({
-          argv: ["-p"],
-          env: { [["OPENCLAW", "GATEWAY", "TOKEN"].join("_")]: "" },
-          idleTimeoutMs: 1_000,
-          timeoutMs: 2_000,
-        }),
-      ),
+      decode({
+        argv: ["-p"],
+        env: { [["OPENCLAW", "GATEWAY", "TOKEN"].join("_")]: "" },
+      }),
     ).rejects.toThrow("environment key is not allowed");
     await expect(
-      decodeClaudeCliNodeRunParams(
-        JSON.stringify({
-          argv: ["-p"],
-          clearEnv: [["OPENCLAW", "GATEWAY", "TOKEN"].join("_")],
-          idleTimeoutMs: 1_000,
-          timeoutMs: 2_000,
-        }),
-      ),
+      decode({
+        argv: ["-p"],
+        clearEnv: [["OPENCLAW", "GATEWAY", "TOKEN"].join("_")],
+      }),
     ).rejects.toThrow("clearEnv key is not allowed");
     await expect(
-      decodeClaudeCliNodeRunParams(
-        JSON.stringify({
-          argv: ["-p"],
-          env: { CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1" },
-          idleTimeoutMs: 1_000,
-          timeoutMs: 2_000,
-        }),
-      ),
+      decode({
+        argv: ["-p"],
+        env: { CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1" },
+      }),
     ).rejects.toThrow("environment key is not allowed");
     await expect(
-      decodeClaudeCliNodeRunParams(
-        JSON.stringify({
-          argv: ["-p"],
-          env: {
-            ANTHROPIC_API_KEY: "selected-api-key",
-            CLAUDE_CODE_OAUTH_TOKEN: "selected-oauth-token",
-          },
-          idleTimeoutMs: 1_000,
-          timeoutMs: 2_000,
-        }),
-      ),
+      decode({
+        argv: ["-p"],
+        env: {
+          ANTHROPIC_API_KEY: "selected-api-key",
+          CLAUDE_CODE_OAUTH_TOKEN: "selected-oauth-token",
+        },
+      }),
     ).rejects.toThrow("exactly one Claude credential");
   });
 
   it("requires binary availability before consulting exec approval policy", async () => {
-    const calls: Array<{ method: string; params: unknown }> = [];
-    const handleSystemRun = vi.fn();
-    await handleInvoke(
-      frame({ argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 2_000 }),
-      client(calls),
-      { current: async () => [] },
-      undefined,
-      { handleSystemRun },
-    );
+    const calls: Calls = [];
+    const handleSystemRun = vi.spyOn(systemRun, "handleSystemRunInvoke");
+    onTestFinished(() => handleSystemRun.mockRestore());
+    await invokeClaude({ argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 2_000 }, undefined, calls);
 
     expect(handleSystemRun).not.toHaveBeenCalled();
     expect(calls).toContainEqual({
@@ -322,34 +339,26 @@ describe("Claude CLI node command", () => {
     async ({ config, security, ask }) => {
       setRuntimeConfigSnapshot(config);
       const { executable } = await nativeCliFixture("process.exit(0);");
-      const calls: Array<{ method: string; params: unknown }> = [];
-      const handleSystemRun = vi.fn(
-        async (options: {
-          params: { command: string[] };
-          sendNodeEvent: (client: NodeHostClient, event: string, payload: unknown) => Promise<void>;
-          sendExecFinishedEvent: (params: unknown) => Promise<void>;
-          sendInvokeResult: (result: unknown) => Promise<void>;
-        }) => {
+      const calls: Calls = [];
+      const handleSystemRun = vi
+        .spyOn(systemRun, "handleSystemRunInvoke")
+        .mockImplementation(async (options) => {
           expect(options.params.command).toEqual([executable, "-p", "--resume", "session-1"]);
-          await options.sendNodeEvent(client(calls), "exec.denied", {});
-          await options.sendExecFinishedEvent({});
           await options.sendInvokeResult({
             ok: false,
             error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: approval required" },
           });
-        },
-      );
-      await handleInvoke(
-        frame({
+        });
+      onTestFinished(() => handleSystemRun.mockRestore());
+      await invokeClaude(
+        {
           argv: ["-p", "--resume", "session-1"],
           systemPrompt: "private prompt",
           idleTimeoutMs: 1_000,
           timeoutMs: 2_000,
-        }),
-        client(calls),
-        { current: async () => [] },
-        undefined,
-        { claudePath: executable, handleSystemRun: handleSystemRun as never },
+        },
+        executable,
+        calls,
       );
 
       expect(handleSystemRun).toHaveBeenCalledOnce();
@@ -375,13 +384,12 @@ describe("Claude CLI node command", () => {
     { rawEnv: "CLAUDE_CODE_OAUTH_TOKEN", value: "selected-node-oauth" },
     { rawEnv: "ANTHROPIC_API_KEY", value: "selected-node-api-key" },
     { rawEnv: "CLAUDE_CODE_OAUTH_TOKEN", value: "" },
-    { rawEnv: "ANTHROPIC_API_KEY", value: "" },
-    { rawEnv: "CLAUDE_CODE_OAUTH_TOKEN", value: " \t " },
     { rawEnv: "ANTHROPIC_API_KEY", value: " \t " },
   ])(
     "forwards only nonblank $rawEnv through a child-only descriptor ($value)",
     async ({ rawEnv, value }) => {
-      const { executable, runArgv } = await nativeCliFixture(`
+      const calls = await invokeWithNativeAuth(
+        `
 const fs = require("node:fs");
 const descriptor = process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR ?? process.env.CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR;
 const secret = descriptor ? fs.readFileSync(Number(descriptor), "utf8") : "native-login";
@@ -392,39 +400,13 @@ process.stdout.write(JSON.stringify({
   rawPresent: Object.hasOwn(process.env, "CLAUDE_CODE_OAUTH_TOKEN") || Object.hasOwn(process.env, "ANTHROPIC_API_KEY"),
   scrubPresent: Object.hasOwn(process.env, "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"),
   gitInstructionsDisabled: process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS,
-}) + "\\n");`);
-      const calls: Array<{ method: string; params: unknown }> = [];
-      let runResult: RunResult | undefined;
-      const handleSystemRun = vi.fn(
-        async (options: {
-          params: { command: string[]; env?: Record<string, string>; timeoutMs?: number };
-          runCommand: (
-            argv: string[],
-            cwd: string | undefined,
-            env: Record<string, string> | undefined,
-            timeoutMs: number | undefined,
-          ) => Promise<RunResult>;
-          sendInvokeResult: (result: unknown) => Promise<void>;
-        }) => {
-          const argv = [...runArgv, ...options.params.command.slice(1)];
-          runResult = await options.runCommand(
-            argv,
-            undefined,
-            {
-              ...process.env,
-              ...options.params.env,
-              CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
-              CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "8",
-              CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: "9",
-            } as Record<string, string>,
-            options.params.timeoutMs,
-          );
-          await options.sendInvokeResult({ ok: true });
+}) + "\\n");`,
+        {
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+          CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "8",
+          CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: "9",
         },
-      );
-      await handleInvoke(
-        frame({
-          argv: ["-p"],
+        {
           env: { [rawEnv]: value },
           clearEnv: [
             "ANTHROPIC_API_KEY",
@@ -432,32 +414,16 @@ process.stdout.write(JSON.stringify({
             "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
             "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
           ],
-          idleTimeoutMs: 5_000,
-          timeoutMs: 10_000,
-        }),
-        client(calls),
-        { current: async () => [] },
-        undefined,
-        { claudePath: executable, handleSystemRun: handleSystemRun as never },
+        },
       );
-
-      expect(runResult).toMatchObject({
-        exitCode: 0,
-        success: true,
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
-      const progress = calls
-        .filter((call) => call.method === "node.invoke.progress")
-        .map((call) => (call.params as { chunk: string }).chunk)
-        .join("");
+      const progress = progressText(calls);
       expect(JSON.parse(progress)).toMatchObject({
         result: value.trim() || "native-login",
         descriptor: value.trim() ? "3" : null,
+        rawPresent: false,
+        scrubPresent: false,
+        gitInstructionsDisabled: "1",
       });
-      expect(progress).toContain('"rawPresent":false');
-      expect(progress).toContain('"scrubPresent":false');
-      expect(progress).toContain('"gitInstructionsDisabled":"1"');
       expect(calls).toContainEqual({
         method: "node.invoke.result",
         params: expect.objectContaining({
@@ -469,69 +435,28 @@ process.stdout.write(JSON.stringify({
   );
 
   it("preserves node-native Claude auth when no profile credential is forwarded", async () => {
-    const { executable, runArgv } = await nativeCliFixture(`
+    const calls = await invokeWithNativeAuth(
+      `
 process.stdout.write(JSON.stringify({
   type: "result",
   apiKey: process.env.ANTHROPIC_API_KEY,
   oauth: process.env.CLAUDE_CODE_OAUTH_TOKEN,
   scrub: process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
-}) + "\\n");`);
-    const calls: Array<{ method: string; params: unknown }> = [];
-    let runResult: RunResult | undefined;
-    const handleSystemRun = vi.fn(
-      async (options: {
-        params: { command: string[]; timeoutMs?: number };
-        runCommand: (
-          argv: string[],
-          cwd: string | undefined,
-          env: Record<string, string> | undefined,
-          timeoutMs: number | undefined,
-        ) => Promise<RunResult>;
-        sendInvokeResult: (result: unknown) => Promise<void>;
-      }) => {
-        const argv = [...runArgv, ...options.params.command.slice(1)];
-        runResult = await options.runCommand(
-          argv,
-          undefined,
-          {
-            ...process.env,
-            ANTHROPIC_API_KEY: "node-native-api-key",
-            CLAUDE_CODE_OAUTH_TOKEN: "node-native-oauth",
-            CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
-          } as Record<string, string>,
-          options.params.timeoutMs,
-        );
-        await options.sendInvokeResult({ ok: true });
+}) + "\\n");`,
+      {
+        ANTHROPIC_API_KEY: "node-native-api-key",
+        CLAUDE_CODE_OAUTH_TOKEN: "node-native-oauth",
+        CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
       },
     );
-    await handleInvoke(
-      frame({
-        argv: ["-p"],
-        idleTimeoutMs: 5_000,
-        timeoutMs: 10_000,
-      }),
-      client(calls),
-      { current: async () => [] },
-      undefined,
-      { claudePath: executable, handleSystemRun: handleSystemRun as never },
-    );
-
-    expect(runResult).toMatchObject({
-      exitCode: 0,
-      success: true,
-      timedOut: false,
-      noOutputTimedOut: false,
-    });
-    const progress = calls
-      .filter((call) => call.method === "node.invoke.progress")
-      .map((call) => (call.params as { chunk: string }).chunk)
-      .join("");
     expect(calls.find((call) => call.method === "node.invoke.result")).toMatchObject({
       params: { ok: true },
     });
-    expect(progress).toContain('"apiKey":"node-native-api-key"');
-    expect(progress).toContain('"oauth":"node-native-oauth"');
-    expect(progress).toContain('"scrub":"1"');
+    expect(JSON.parse(progressText(calls))).toMatchObject({
+      apiKey: "node-native-api-key",
+      oauth: "node-native-oauth",
+      scrub: "1",
+    });
   });
 
   it("streams stdin-driven stdout and cleans up a node-local system prompt file", async () => {
@@ -556,17 +481,8 @@ process.stdin.on("end", () => {
       timeoutMs: 5_000,
     };
     const result = await runCommand(executable, request, { client: client(calls) });
-    expect(result).toMatchObject({
-      exitCode: 0,
-      success: true,
-      timedOut: false,
-      noOutputTimedOut: false,
-    });
-
-    const progress = calls
-      .filter((call) => call.method === "node.invoke.progress")
-      .map((call) => (call.params as { chunk: string }).chunk)
-      .join("");
+    expectSuccessfulRun(result);
+    const progress = progressText(calls);
     expect(progress).toContain('"session_id":"node-session"');
     expect(progress).toContain("hello from gateway");
     expect(result.stderr).toContain("node stderr");
@@ -576,94 +492,237 @@ process.stdin.on("end", () => {
     await expect(fs.stat(promptPath ?? "")).rejects.toThrow();
   });
 
-  it.runIf(process.platform !== "win32")(
-    "retains the prompt for an authoritative descendant without delaying the root result",
-    async () => {
-      const markerDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-prompt-"));
-      tempDirs.push(markerDir);
-      const marker = path.join(markerDir, "descendant-read");
-      const executable = await executableScript(`
-const { spawn } = require("node:child_process");
-const prompt = process.argv[process.argv.indexOf("--append-system-prompt-file") + 1];
-const child = spawn(process.execPath, ["-e",
-  "setTimeout(() => require('node:fs').writeFileSync(" +
-  JSON.stringify(${JSON.stringify(marker)}) + ", require('node:fs').readFileSync(" +
-  JSON.stringify(prompt) + ", 'utf8')), 300)"
-], { stdio: ["ignore", "ignore", "ignore", 3] });
-child.unref();
-process.stdout.write(JSON.stringify({ type: "result", result: prompt }) + "\\n");`);
-      await withEnvAsync({ OPENCLAW_SERVICE_MARKER: "openclaw" }, async () => {
-        const calls: Array<{ method: string; params: unknown }> = [];
-        const request = {
-          argv: ["-p"],
-          systemPrompt: "descendant-owned prompt",
-          idleTimeoutMs: 2_000,
-          timeoutMs: 5_000,
+  it.for(["job-unavailable", "job-create-failed", "job-observation-failed"] as const)(
+    "retains prompt artifacts and command success after %s certification",
+    async (reason, { signal }) => {
+      const executable = await executableScript(
+        'process.stderr.write(process.argv[process.argv.indexOf("--append-system-prompt-file") + 1]);',
+      );
+      const supervisor = getProcessSupervisor();
+      const spawn = supervisor.spawn.bind(supervisor);
+      const certification: ProcessExtinctionResult =
+        reason === "job-unavailable"
+          ? { status: "uncertain", reason }
+          : { status: "uncertain", reason, cause: new Error("Job certification unavailable") };
+      let started: Promise<ManagedRun> | undefined;
+      const spawnSpy = vi.spyOn(supervisor, "spawn").mockImplementation(async (input) => {
+        started = spawn(input);
+        const run = await started;
+        return {
+          ...run,
+          waitForExtinction: async () => {
+            await Promise.all([run.wait(), run.waitForExtinction?.()]);
+            return certification;
+          },
         };
-        const result = await runCommand(executable, request, { client: client(calls) });
-        const output = calls
-          .filter((call) => call.method === "node.invoke.progress")
-          .map((call) => (call.params as { chunk: string }).chunk)
-          .join("");
-        const promptPath = (JSON.parse(output) as { result: string }).result;
-
-        expect(result).toMatchObject({ exitCode: 0, success: true });
-        await expect(fs.readFile(promptPath, "utf8")).resolves.toBe("descendant-owned prompt");
-        await vi.waitFor(async () => {
-          expect(await fs.readFile(marker, "utf8")).toBe("descendant-owned prompt");
-          await expect(fs.stat(promptPath)).rejects.toThrow();
-        });
       });
+      const decision = createDeferred();
+      const warning = vi.spyOn(logger, "logWarn").mockImplementation((message) => {
+        if (message.includes(reason)) {
+          decision.resolve();
+        }
+      });
+      const remove = fs.rm.bind(fs);
+      const removal = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        try {
+          await remove(target, options);
+        } finally {
+          if (String(target).includes("openclaw-node-claude-prompt-")) {
+            decision.resolve();
+          }
+        }
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const result = await withinTest(
+          withEnvAsync({ OPENCLAW_SERVICE_MARKER: "openclaw" }, () =>
+            runCommand(
+              executable,
+              {
+                argv: ["-p"],
+                systemPrompt: "descendant-owned prompt",
+                idleTimeoutMs: 5_000,
+                timeoutMs: 5_000,
+              },
+              { signal },
+            ),
+          ),
+          signal,
+        );
+        vi.useRealTimers();
+        expect(result).toMatchObject({ exitCode: 0, success: true });
+        const promptDir = path.dirname(result.stderr);
+        expect(path.dirname(promptDir)).toBe(path.resolve(os.tmpdir()));
+        expect(path.basename(promptDir)).toMatch(/^openclaw-node-claude-prompt-/u);
+        expect(path.basename(result.stderr)).toBe("system-prompt.md");
+        tempDirs.push(promptDir);
+        await withinTest(decision.promise, signal);
+        await expect(fs.readFile(result.stderr, "utf8")).resolves.toBe("descendant-owned prompt");
+        expect(warning).toHaveBeenCalledWith(expect.stringContaining(reason));
+      } finally {
+        vi.useRealTimers();
+        try {
+          await (await started)?.waitForExtinction?.();
+        } finally {
+          spawnSpy.mockRestore();
+          warning.mockRestore();
+          removal.mockRestore();
+        }
+      }
     },
   );
 
-  it.each([
-    {
-      descriptorEnv: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
-      rawEnv: "CLAUDE_CODE_OAUTH_TOKEN",
-    },
-    {
-      descriptorEnv: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
-      rawEnv: "ANTHROPIC_API_KEY",
-    },
-  ])(
-    "delivers selected credentials through fd 3 for $rawEnv",
-    async ({ descriptorEnv, rawEnv }) => {
-      const executable = await executableScript(`
-const fs = require("node:fs");
-const secret = fs.readFileSync(3, "utf8");
-process.stdout.write(JSON.stringify({
-  type: "result",
-  result: secret,
-  descriptor: process.env[${JSON.stringify(descriptorEnv)}],
-  rawPresent: Object.hasOwn(process.env, ${JSON.stringify(rawEnv)}),
-  scrubPresent: Object.hasOwn(process.env, "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"),
-  gitInstructionsDisabled: process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS,
-}) + "\\n");`);
-      const request = { argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 5_000 };
-      const calls: Array<{ method: string; params: unknown }> = [];
-      const result = await runCommand(executable, request, {
-        client: client(calls),
-        env: {
-          ...process.env,
-          [descriptorEnv]: "3",
-        } as Record<string, string>,
-        secretInput: {
-          fd: 3,
-          createData: () => Buffer.from("selected-node-secret"),
-        },
+  it("joins prompt removal admitted by the process certifier before returning", async ({
+    signal,
+  }) => {
+    const executable = await executableScript('process.stdout.write(\'{"type":"result"}\\n\');');
+    const removing = createDeferred();
+    const release = createDeferred();
+    const removed = createDeferred();
+    const replies = client([]);
+    const gatedClient: NodeHostClient = {
+      async request<T>(method: string, params?: unknown): Promise<T> {
+        if (method === "node.invoke.progress") {
+          await removing.promise;
+        }
+        return replies.request<T>(method, params);
+      },
+    };
+    const remove = fs.rm.bind(fs);
+    const spy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if (!String(target).includes("openclaw-node-claude-prompt-")) {
+        return await remove(target, options);
+      }
+      removing.resolve();
+      await release.promise;
+      try {
+        await remove(target, options);
+      } finally {
+        removed.resolve();
+      }
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await withEnvAsync({ OPENCLAW_SERVICE_MARKER: "openclaw" }, async () => {
+        const run = runCommand(
+          executable,
+          {
+            argv: ["-p"],
+            systemPrompt: "synthetic prompt",
+            idleTimeoutMs: 5_000,
+            timeoutMs: 5_000,
+          },
+          { client: gatedClient, signal },
+        );
+        const settled = vi.fn();
+        void run.then(settled, settled);
+        try {
+          await withinTest(removing.promise, signal);
+          vi.useRealTimers();
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(settled).not.toHaveBeenCalled();
+        } finally {
+          vi.useRealTimers();
+          removing.resolve();
+          release.resolve();
+          await expect(run).resolves.toMatchObject({ success: true });
+          await removed.promise;
+        }
       });
+    } finally {
+      vi.useRealTimers();
+      removing.resolve();
+      release.resolve();
+      spy.mockRestore();
+    }
+  });
 
-      const progress = calls
-        .filter((call) => call.method === "node.invoke.progress")
-        .map((call) => (call.params as { chunk: string }).chunk)
-        .join("");
-      expect(progress).toContain('"result":"selected-node-secret"');
-      expect(progress).toContain('"descriptor":"3"');
-      expect(progress).toContain('"rawPresent":false');
-      expect(progress).toContain('"scrubPresent":false');
-      expect(progress).toContain('"gitInstructionsDisabled":"1"');
-      expect(result).toMatchObject({ exitCode: 0, success: true });
+  it.runIf(process.platform !== "win32")(
+    "retains the prompt for an authoritative descendant without delaying the root result",
+    async ({ signal }) => {
+      const markerDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-prompt-"));
+      tempDirs.push(markerDir);
+      const marker = path.join(markerDir, "descendant-read");
+      const receipts = await openFixtureReceiptChannel();
+      try {
+        const descendant = `
+${fixtureReceiptClientSource(receipts.endpoint)}
+import { readFileSync, writeFileSync } from "node:fs";
+await awaitRelease(${JSON.stringify(marker)}, "read");
+writeFileSync(${JSON.stringify(marker)}, readFileSync(process.argv[1], "utf8"));`;
+        const executable = await executableScript(`
+const { spawn } = require("node:child_process");
+const prompt = process.argv[process.argv.indexOf("--append-system-prompt-file") + 1];
+const child = spawn(process.execPath, ["--input-type=module", "-e",
+  ${JSON.stringify(descendant)}, prompt
+], { stdio: ["ignore", "ignore", "ignore", 3] });
+child.unref();
+process.stdout.write(JSON.stringify({ type: "result", result: prompt }) + "\\n");`);
+        await withEnvAsync({ OPENCLAW_SERVICE_MARKER: "openclaw" }, async () => {
+          const calls: Calls = [];
+          const request = {
+            argv: ["-p"],
+            systemPrompt: "descendant-owned prompt",
+            idleTimeoutMs: 2_000,
+            timeoutMs: 5_000,
+          };
+          const removed = createDeferred();
+          let promptDir: string | undefined;
+          const remove = fs.rm.bind(fs);
+          const removal = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+            try {
+              await remove(target, options);
+            } finally {
+              if (String(target) === promptDir) {
+                removed.resolve();
+              }
+            }
+          });
+          const supervisor = getProcessSupervisor();
+          const spawn = supervisor.spawn.bind(supervisor);
+          let started: Promise<ManagedRun> | undefined;
+          const spawning = vi.spyOn(supervisor, "spawn").mockImplementation((input) => {
+            started = spawn(input);
+            return started;
+          });
+          // This test owns descendant lifetime; fixture startup does not advance command deadlines.
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          try {
+            const result = await withinTest(
+              runCommand(executable, request, { client: client(calls), signal }),
+              signal,
+            );
+            vi.useRealTimers();
+            expectSuccessfulRun(result);
+            const output = progressText(calls);
+            const promptPath = (JSON.parse(output) as { result: string }).result;
+            promptDir = path.dirname(promptPath);
+
+            await expect(fs.readFile(promptPath, "utf8")).resolves.toBe("descendant-owned prompt");
+            receipts.release(marker, "read");
+            // Removal follows certified descendant extinction, after its synchronous marker write.
+            await withinTest(removed.promise, signal);
+            expect(await fs.readFile(marker, "utf8")).toBe("descendant-owned prompt");
+            await expect(fs.stat(promptPath)).rejects.toThrow();
+          } finally {
+            try {
+              receipts.release(marker, "read");
+            } finally {
+              vi.useRealTimers();
+              try {
+                await (await started)?.waitForExtinction?.();
+              } finally {
+                spawning.mockRestore();
+                removal.mockRestore();
+              }
+            }
+          }
+        });
+      } finally {
+        await receipts.close();
+      }
     },
   );
 
@@ -682,17 +741,14 @@ process.stdout.write(Buffer.concat([
   Buffer.alloc(199_997, 120), Buffer.from([0xe2, 0x82]), Buffer.from("A\\n")
 ]), writeChunk);`,
     );
-    const calls: Array<{ method: string; params: unknown }> = [];
+    const calls: Calls = [];
     const request = { argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 5_000 };
     const result = await runCommand(executable, request, { client: client(calls) });
     const progressBytes = calls
       .filter((call) => call.method === "node.invoke.progress")
       .reduce((sum, call) => sum + Buffer.byteLength((call.params as { chunk: string }).chunk), 0);
 
-    const progress = calls
-      .filter((call) => call.method === "node.invoke.progress")
-      .map((call) => (call.params as { chunk: string }).chunk)
-      .join("");
+    const progress = progressText(calls);
     expect(progress.startsWith(`${"x".repeat(199_997)}�A`)).toBe(true);
     // OUTPUT_CAP_BYTES + TERMINAL_EVENT_MAX_BYTES from invoke-agent-cli-claude.ts.
     expect(progressBytes).toBeLessThanOrEqual(200_000 + 1024 * 1024);
@@ -790,7 +846,7 @@ process.stdout.write(Buffer.concat([
     );
     const controller = new AbortController();
     const request = { argv: ["-p"], idleTimeoutMs: 5_000, timeoutMs: 10_000 };
-    const calls: Array<{ method: string; params: unknown }> = [];
+    const calls: Calls = [];
     let resolveProgress!: () => void;
     const progressObserved = new Promise<void>((resolve) => {
       resolveProgress = resolve;

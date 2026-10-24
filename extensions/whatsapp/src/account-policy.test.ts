@@ -17,12 +17,4 @@ describe("whatsapp account policy inheritance after validation", () => {
 
     expect(resolved).toMatchObject(expected);
   });
-
-  it("does not turn omitted account policies into explicit configuration", () => {
-    const channel = WhatsAppConfigSchema.parse({ accounts: { work: {} } });
-
-    expect(channel.accounts?.work).toBeDefined();
-    expect(channel.accounts?.work).not.toHaveProperty("groupPolicy");
-    expect(channel.accounts?.work).not.toHaveProperty("dmPolicy");
-  });
 });

@@ -1,15 +1,16 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { vitestWorkerDeclarationEntries } from "./vitest-worker-declarations.mts";
 
-export type VitestWorkerDescriptor = { directory: string };
 export type VitestWorkerManifest = {
   identity: string;
   inputs: Record<string, string>;
   outputs: Record<string, string>;
   durationMs: number;
+  cacheSignature?: string;
 };
 const root = fileURLToPath(new URL("../../", import.meta.url));
 export const hashVitestWorkerArtifact = (bytes: string | Buffer) =>
@@ -25,9 +26,24 @@ const declarations = new Map(
 export const VITEST_WORKER_PREPARE_REQUEST = "openclaw:prepare-test-subprocesses";
 export const VITEST_WORKER_PREPARE_REPLY = "openclaw:test-subprocesses-prepared";
 
+function readArtifact(filename: string): Promise<Buffer> {
+  // Callback reads reduce overhead across the generation's many small files.
+  return new Promise((resolve, reject) => {
+    fs.readFile(filename, (error, bytes) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(bytes);
+      }
+    });
+  });
+}
+
 export async function verifyVitestWorkerArtifacts(
   directory: string,
   manifest?: VitestWorkerManifest,
+  // Keep the PR wrapper's call shape; byte-identical timestamp changes are best effort.
+  _options: { inputsChangedAfter?: number } = {},
 ) {
   const completed: VitestWorkerManifest =
     manifest ??
@@ -44,24 +60,44 @@ export async function verifyVitestWorkerArtifacts(
       changed: "Compiled subprocess artifact changed",
     },
   ];
-  const batchSize = 32;
+  const concurrency = 32;
   for (const { files, root: baseDir, changed } of groups) {
     const entries = Object.entries(files);
-    for (let offset = 0; offset < entries.length; offset += batchSize) {
-      // Native batches keep pre-install planning dependency-free and signals responsive.
-      // Drain every started read before rejection: the owner may delete files next.
-      const settled = await Promise.allSettled(
-        entries.slice(offset, offset + batchSize).map(async ([name, expected]) => {
-          const filename = baseDir ? path.join(baseDir, name) : name;
-          if (hashVitestWorkerArtifact(await fs.promises.readFile(filename)) !== expected) {
-            throw new Error(`${changed}: ${name}`);
+    let next = 0;
+    let stopped = false;
+    // Refill each reader independently: a large or slow file must not stall its peers.
+    // Drain every started read before rejection: the owner may delete files next.
+    const settled = await Promise.allSettled(
+      Array.from({ length: Math.min(concurrency, entries.length) }, async () => {
+        try {
+          for (;;) {
+            if (stopped) {
+              return;
+            }
+            const index = next++;
+            const entry = entries[index];
+            if (!entry) {
+              return;
+            }
+            const [name, expected] = entry;
+            const filename = baseDir ? path.join(baseDir, name) : name;
+            if (hashVitestWorkerArtifact(await readArtifact(filename)) !== expected) {
+              throw new Error(`${changed}: ${name}`);
+            }
+            // Ready reads can drain as microtasks without giving signals a turn.
+            if ((index + 1) % concurrency === 0) {
+              await nextTurn();
+            }
           }
-        }),
-      );
-      const failed = settled.find((result) => result.status === "rejected");
-      if (failed?.status === "rejected") {
-        throw failed.reason;
-      }
+        } catch (error) {
+          stopped = true;
+          throw error;
+        }
+      }),
+    );
+    const failed = settled.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") {
+      throw failed.reason;
     }
   }
 }

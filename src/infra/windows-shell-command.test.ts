@@ -1,20 +1,7 @@
-// Tests for Windows shell command analysis and platform detection.
 import { describe, expect, it } from "vitest";
 import { analyzeWindowsShellCommand, isWindowsPlatform } from "./windows-shell-command.js";
 
 describe("isWindowsPlatform", () => {
-  it("defaults to process.platform when called without arguments", () => {
-    expect(isWindowsPlatform()).toBe(process.platform.startsWith("win"));
-  });
-
-  it("defaults to process.platform when passed undefined", () => {
-    expect(isWindowsPlatform(undefined)).toBe(process.platform.startsWith("win"));
-  });
-
-  it("defaults to process.platform when passed null", () => {
-    expect(isWindowsPlatform(null)).toBe(process.platform.startsWith("win"));
-  });
-
   it("respects explicit platform overrides", () => {
     expect(isWindowsPlatform("win32")).toBe(true);
     expect(isWindowsPlatform("linux")).toBe(false);
@@ -22,25 +9,14 @@ describe("isWindowsPlatform", () => {
     expect(isWindowsPlatform("freebsd")).toBe(false);
   });
 
-  it("returns true on Windows hosts when no override is provided", () => {
+  it.each(["win32", "linux"])("defaults to the %s host for absent overrides", (platform) => {
     const originalPlatform = process.platform;
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
     try {
-      expect(isWindowsPlatform()).toBe(true);
-      expect(isWindowsPlatform(undefined)).toBe(true);
-      expect(isWindowsPlatform(null)).toBe(true);
-    } finally {
-      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
-    }
-  });
-
-  it("returns false on non-Windows hosts when no override is provided", () => {
-    const originalPlatform = process.platform;
-    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-    try {
-      expect(isWindowsPlatform()).toBe(false);
-      expect(isWindowsPlatform(undefined)).toBe(false);
-      expect(isWindowsPlatform(null)).toBe(false);
+      const expected = platform === "win32";
+      expect(isWindowsPlatform()).toBe(expected);
+      expect(isWindowsPlatform(undefined)).toBe(expected);
+      expect(isWindowsPlatform(null)).toBe(expected);
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
     }

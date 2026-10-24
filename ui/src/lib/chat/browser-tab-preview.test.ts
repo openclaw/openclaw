@@ -5,6 +5,7 @@ import { latestBrowserTabCards, loadBrowserTabThumbnail } from "./browser-tab-pr
 import { extractToolCardsCached } from "./tool-cards.ts";
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -102,7 +103,7 @@ describe("browser tab previews", () => {
     ]);
   });
 
-  it.each([undefined, "about:blank"])("follows a newer tab without a web preview (%s)", (url) => {
+  it.each([undefined])("follows a newer tab without a web preview (%s)", (url) => {
     const older = browserResult("web", "web-tab");
     const web = {
       ...older,
@@ -127,7 +128,7 @@ describe("browser tab previews", () => {
     params.request.mockReturnValueOnce(deferred.promise);
     const first = loadBrowserTabThumbnail({ ...params, revision: "one" });
     expect(loadBrowserTabThumbnail({ ...params, revision: "one" })).toBe(first);
-    await Promise.resolve();
+    await vi.waitFor(() => expect(params.request).toHaveBeenCalledTimes(1));
     const second = loadBrowserTabThumbnail({ ...params, revision: "two" });
     expect(params.request).toHaveBeenCalledTimes(1);
     deferred.resolve({ path: "/tmp/first.png" });

@@ -2,6 +2,7 @@
  * Shared body-stream cleanup for guarded fetch consumers (`fetchWithSsrFGuard`
  * callers that re-wrap streaming responses).
  */
+import { runBestEffortCleanup } from "../non-fatal-cleanup.js";
 
 // Catches wrapper bodies abandoned without cancel/consume so guarded dispatchers
 // (and caller resources hooked into `cleanup`) do not leak with the stream.
@@ -11,11 +12,30 @@ const guardedBodyCleanupRegistry = new FinalizationRegistry<{ finalize: () => Pr
   },
 );
 
-type BodyAbortOwner = { abort: () => void };
-
-// A live body owns its abort callback. The signal listener keeps only a weak
-// reference so a partially read, abandoned body can still reach finalization.
-const guardedBodyAbortOwners = new WeakMap<ReadableStream<Uint8Array>, BodyAbortOwner>();
+// Keep the listener and its detach callback outside the stream's closure scope.
+// The finalizer retains detach, which must never retain the stream or controller.
+function attachBodyAbort(
+  signal: AbortSignal,
+  controllerRef: WeakRef<ReadableStreamDefaultController<Uint8Array>>,
+  cancel: (reason: unknown) => Promise<void>,
+) {
+  const abort = () => {
+    const controller = controllerRef.deref();
+    if (!controller) {
+      return;
+    }
+    const reason = signal.reason ?? new DOMException("This operation was aborted", "AbortError");
+    const cleanup = cancel(reason);
+    controller.error(reason);
+    void cleanup.catch(() => undefined);
+  };
+  if (signal.aborted) {
+    abort();
+  } else {
+    signal.addEventListener("abort", abort, { once: true });
+  }
+  return () => signal.removeEventListener("abort", abort);
+}
 
 type BodyStreamOptions = {
   body: ReadableStream<Uint8Array>;
@@ -28,14 +48,14 @@ function wrapBodyStream(
   params: BodyStreamOptions,
   errorSource: "cancellation" | "release",
 ): ReadableStream<Uint8Array> {
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const reader = params.body.getReader();
   let finalized = false;
   let abortAttached = false;
   let detachAbort = () => {};
   const cleanupRegistrationToken = {};
   const finalize = async (
     cancelReader: () => Promise<void> = async () => {
-      await reader?.cancel().catch(() => undefined);
+      await reader.cancel().catch(() => undefined);
     },
   ) => {
     if (finalized) {
@@ -48,7 +68,7 @@ function wrapBodyStream(
     // let request cleanup abort a retained capture tee before awaiting settlement.
     const [cancellation, readerRelease, cleanup] = await Promise.allSettled([
       cancelReader(),
-      (async () => reader?.releaseLock())(),
+      (async () => reader.releaseLock())(),
       (async () => await params.cleanup())(),
     ]);
     if (cleanup.status === "rejected" && errorSource === "release") {
@@ -61,43 +81,21 @@ function wrapBodyStream(
       throw cancellation.reason;
     }
   };
+  const cancel = async (reason: unknown) => await finalize(async () => await reader.cancel(reason));
   const wrappedBody = new ReadableStream<Uint8Array>(
     {
-      start() {
-        reader = params.body.getReader();
-      },
       async pull(controller) {
         const signal = params.signal;
         if (signal && !abortAttached) {
           abortAttached = true;
-          const owner: BodyAbortOwner = {
-            abort: () => {
-              if (finalized) {
-                return;
-              }
-              const reason =
-                signal.reason ?? new DOMException("This operation was aborted", "AbortError");
-              const cleanup = finalize(async () => await reader?.cancel(reason));
-              controller.error(reason);
-              void cleanup.catch(() => undefined);
-            },
-          };
-          guardedBodyAbortOwners.set(wrappedBody, owner);
-          const ownerRef = new WeakRef(owner);
-          const abort = () => ownerRef.deref()?.abort();
-          if (signal.aborted) {
-            abort();
-          } else {
-            signal.addEventListener("abort", abort, { once: true });
-            detachAbort = () => signal.removeEventListener("abort", abort);
-          }
+          detachAbort = attachBodyAbort(signal, new WeakRef(controller), cancel);
         }
         if (finalized) {
           return;
         }
         try {
-          const chunk = await reader?.read();
-          if (!chunk || chunk.done) {
+          const chunk = await reader.read();
+          if (chunk.done) {
             controller.close();
             await finalize();
             return;
@@ -117,9 +115,7 @@ function wrapBodyStream(
           await finalize();
         }
       },
-      async cancel(reason) {
-        await finalize(async () => await reader?.cancel(reason));
-      },
+      cancel,
     },
     params.signal ? { highWaterMark: 0 } : undefined,
   );
@@ -167,7 +163,13 @@ const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
 /** Keeps request ownership through body completion, failure, or cancellation. */
 export function responseWithRelease(response: Response, release: () => Promise<void>): Response {
   if (!response.body || NULL_BODY_STATUSES.has(response.status)) {
-    void (async () => await release())();
+    // There is no body stream to carry a release failure back to the caller.
+    void runBestEffortCleanup({
+      cleanup: release,
+      onError(error) {
+        process.emitWarning(error instanceof Error ? error : String(error));
+      },
+    });
     return response;
   }
   return new Response(wrapBodyStream({ body: response.body, cleanup: release }, "release"), {

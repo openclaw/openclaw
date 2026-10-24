@@ -1,21 +1,14 @@
-import fs from "node:fs";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { describe, expect, it } from "vitest";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
   updateAmbientTranscriptWatermark,
 } from "./ambient-transcript-watermark.js";
 import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
-
-const tempDirs: string[] = [];
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 
 describe("ambient transcript watermark", () => {
-  let tempDir: string;
-  let storePath: string;
   const sessionKey = "agent:main:telegram:group:-100123";
   const key = resolveAmbientTranscriptWatermarkKey({
     channel: "telegram",
@@ -23,108 +16,67 @@ describe("ambient transcript watermark", () => {
     conversationId: "-100123",
   });
 
-  beforeEach(() => {
-    tempDir = makeTempDir(tempDirs, "openclaw-ambient-watermark-");
-    storePath = path.join(tempDir, "sessions.json");
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    cleanupTempDirs(tempDirs);
-  });
-
   it("stamps and resolves the watermark for the current session id only", async () => {
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      { sessionId: "before-reset", updatedAt: 1_700_000_000_000 },
-    );
+    await withOpenClawTestState({ label: "ambient-watermark" }, async (state) => {
+      const storePath = state.statePath("sessions.json");
+      const scope = { sessionKey, storePath };
+      const stamp = (messageId: string, timestampMs: number, expectedSessionId?: string) =>
+        updateAmbientTranscriptWatermark({
+          ...scope,
+          key,
+          messageId,
+          timestampMs,
+          expectedSessionId,
+        });
+      const read = () => readAmbientTranscriptWatermarkFromEntry(loadSessionEntry(scope), key);
+      await replaceSessionEntry(scope, { sessionId: "before-reset", updatedAt: 1_700_000_000_000 });
 
-    await updateAmbientTranscriptWatermark({
-      storePath,
-      sessionKey,
-      key,
-      messageId: "11",
-      timestampMs: 1_700_000_001_000,
-    });
+      await stamp("11", 1_700_000_001_000);
 
-    const persistedEntry = loadSessionEntry({ sessionKey, storePath });
-    if (!persistedEntry) {
-      throw new Error("Expected persisted session entry");
-    }
-    expect(persistedEntry?.ambientTranscriptWatermarks?.[key]).toMatchObject({
-      sessionId: "before-reset",
-      messageId: "11",
-      timestampMs: 1_700_000_001_000,
-    });
-    expect(readAmbientTranscriptWatermarkFromEntry(persistedEntry, key)).toMatchObject({
-      sessionId: "before-reset",
-      messageId: "11",
-    });
+      const persistedEntry = loadSessionEntry(scope);
+      if (!persistedEntry) {
+        throw new Error("Expected persisted session entry");
+      }
+      const expected = {
+        sessionId: "before-reset",
+        messageId: "11",
+        timestampMs: 1_700_000_001_000,
+      };
+      expect(persistedEntry.ambientTranscriptWatermarks?.[key]).toMatchObject(expected);
+      expect(read()).toMatchObject(expected);
 
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      {
+      await replaceSessionEntry(scope, {
         ...persistedEntry,
         sessionId: "after-reset",
         updatedAt: 1_700_000_002_000,
-      },
-    );
+      });
 
-    const resetEntry = loadSessionEntry({ sessionKey, storePath });
-    expect(readAmbientTranscriptWatermarkFromEntry(resetEntry, key)).toBeUndefined();
-
-    await updateAmbientTranscriptWatermark({
-      storePath,
-      sessionKey,
-      key,
-      messageId: "12",
-      timestampMs: 1_700_000_002_000,
-      expectedSessionId: "before-reset",
-    });
-
-    expect(
-      readAmbientTranscriptWatermarkFromEntry(loadSessionEntry({ sessionKey, storePath }), key),
-    ).toBeUndefined();
-
-    await updateAmbientTranscriptWatermark({
-      storePath,
-      sessionKey,
-      key,
-      messageId: "12",
-      timestampMs: 1_700_000_002_000,
-      expectedSessionId: "after-reset",
-    });
-
-    expect(
-      readAmbientTranscriptWatermarkFromEntry(loadSessionEntry({ sessionKey, storePath }), key),
-    ).toMatchObject({
-      sessionId: "after-reset",
-      messageId: "12",
+      expect(read()).toBeUndefined();
+      await stamp("12", 1_700_000_002_000, "before-reset");
+      expect(read()).toBeUndefined();
+      await stamp("12", 1_700_000_002_000, "after-reset");
+      expect(read()).toMatchObject({
+        sessionId: "after-reset",
+        messageId: "12",
+      });
     });
   });
 
   it("ignores legacy watermarks without a session id", () => {
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "current-session",
-          updatedAt: 1_700_000_000_000,
-          ambientTranscriptWatermarks: {
-            [key]: {
-              messageId: "11",
-              timestampMs: 1_700_000_001_000,
-              updatedAt: 1_700_000_002_000,
-            },
+    const entry = parseSessionEntryJson({
+      entry_json: JSON.stringify({
+        sessionId: "current-session",
+        updatedAt: 1_700_000_000_000,
+        ambientTranscriptWatermarks: {
+          [key]: {
+            messageId: "11",
+            timestampMs: 1_700_000_001_000,
+            updatedAt: 1_700_000_002_000,
           },
         },
       }),
-      "utf-8",
-    );
-
-    expect(
-      readAmbientTranscriptWatermarkFromEntry(loadSessionEntry({ sessionKey, storePath }), key),
-    ).toBeUndefined();
+    });
+    expect(entry?.ambientTranscriptWatermarks?.[key]).toMatchObject({ messageId: "11" });
+    expect(readAmbientTranscriptWatermarkFromEntry(entry ?? undefined, key)).toBeUndefined();
   });
 });

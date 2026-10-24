@@ -2,7 +2,9 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { MAX_WORKSPACE_MANIFEST_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
 import type { WorkerWorkspaceManifestEntry } from "../gateway/worker-environments/workspace-manifest.js";
+import { WorkerWorkspaceGitHistorySchema } from "../gateway/worker-environments/workspace-result-inventory.js";
 import { runExec } from "../process/exec.js";
+import { NODE_WORKSPACE_GIT_HISTORY_SCRIPT } from "../worker/node-workspace-transfer-protocol.js";
 import {
   runWorkspaceCommand,
   TRANSFER_TIMEOUT_MS,
@@ -18,23 +20,25 @@ export async function initializeNodeWorkerGitWorkspace(params: {
   signal?: AbortSignal;
 }): Promise<void> {
   const objectFormat = params.baseCommit.length === 40 ? "sha1" : "sha256";
-  if (params.baseCommit.length !== 40 && params.baseCommit.length !== 64) {
-    throw new Error("workspace transfer Git base object id is invalid");
-  }
-  const git = async (args: string[], options: { input?: string; maxOutputBytes?: number } = {}) =>
-    await runWorkspaceCommand({
+  const gitPrefix = process.platform === "win32" ? ["-c", "core.longpaths=true"] : [];
+  const git = (args: string[], options: { input?: string; maxOutputBytes?: number } = {}) =>
+    runWorkspaceCommand({
       workspaceDir: params.workspaceDir,
       homeDir: params.manifestHome,
-      argv: ["git", "-C", params.workspaceDir, ...args],
-      ...(options.input === undefined ? {} : { input: options.input }),
+      argv: ["git", ...gitPrefix, "-C", params.workspaceDir, ...args],
+      input: options.input,
       signal: params.signal,
-      ...(options.maxOutputBytes === undefined ? {} : { maxOutputBytes: options.maxOutputBytes }),
+      maxOutputBytes: options.maxOutputBytes,
     });
   await git(["init", "--quiet", `--object-format=${objectFormat}`, "."]);
+  if (process.platform === "win32") {
+    // Manifest capture and later worker Git commands reuse this private repository.
+    await git(["config", "--local", "core.longpaths", "true"]);
+  }
   if (params.packPath) {
     const pack = await fsp.open(params.packPath, "r");
     try {
-      await runExec("git", ["-C", params.workspaceDir, "index-pack", "--stdin"], {
+      await runExec("git", [...gitPrefix, "-C", params.workspaceDir, "index-pack", "--stdin"], {
         cwd: params.workspaceDir,
         baseEnv: workspaceCommandEnv(params.manifestHome),
         stdinFileDescriptor: pack.fd,
@@ -86,4 +90,60 @@ export async function initializeNodeWorkerGitWorkspace(params: {
       input: `${checkoutPaths.join("\0")}\0`,
     });
   }
+}
+
+/** Capture immutable worker commits and stream their versioned upload trailer. */
+export async function prepareNodeWorkerGitResult(params: {
+  resultVersion?: 2;
+  workspaceDir: string;
+  manifestHome: string;
+  baseCommit: string | null;
+  packPath: string;
+  signal?: AbortSignal;
+}) {
+  if (params.resultVersion !== 2) {
+    return undefined;
+  }
+  const history = params.baseCommit
+    ? WorkerWorkspaceGitHistorySchema.parse(
+        JSON.parse(
+          await runWorkspaceCommand({
+            workspaceDir: params.workspaceDir,
+            homeDir: params.manifestHome,
+            argv: [
+              "node",
+              "-e",
+              NODE_WORKSPACE_GIT_HISTORY_SCRIPT,
+              params.workspaceDir,
+              params.baseCommit,
+              params.packPath,
+            ],
+            signal: params.signal,
+          }),
+        ),
+      )
+    : undefined;
+  const packBytes =
+    history?.descendsFromBase && history.headCommit !== history.baseCommit
+      ? (await fsp.stat(params.packPath)).size
+      : 0;
+  const metadata = Buffer.from(JSON.stringify(history ?? null));
+  return {
+    byteLength: 4 + metadata.byteLength + 8 + packBytes,
+    async write(write: (bytes: Buffer) => Promise<void>, signal?: AbortSignal) {
+      const header = Buffer.allocUnsafe(4);
+      header.writeUInt32BE(metadata.byteLength);
+      await write(header);
+      await write(metadata);
+      const size = Buffer.allocUnsafe(8);
+      size.writeBigUInt64BE(BigInt(packBytes));
+      await write(size);
+      if (packBytes) {
+        await using handle = await fsp.open(params.packPath, "r");
+        for await (const value of handle.createReadStream({ autoClose: false, signal })) {
+          await write(Buffer.isBuffer(value) ? value : Buffer.from(value));
+        }
+      }
+    },
+  };
 }
