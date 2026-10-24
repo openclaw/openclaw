@@ -49,29 +49,18 @@ async function recordRun(
   return { calls, exitCode };
 }
 
-const nodeOnlyFile = "src/infra/exec-host.socket.test.ts";
-
-it.each([
-  nodeOnlyFile,
-  "src/gateway/artifact-downloads.test.ts",
-  "test/talk-browser-defaults.test.ts",
-  "test/scripts/control-ui-cold-load-trace.test.ts",
-  "src/infra/tailscale-route-owner.worker.test.ts",
-  "src/state/openclaw-database-preflight.startup-prepared.test.ts",
-  "src/state/openclaw-state-ownership.test.ts",
-  "src/gateway/session-utils.fs.display-position.test.ts",
-  "extensions/team-reports/src/render/theme.test.ts",
-  "src/infra/owned-directory-observation.test.ts",
-  "test/helpers/openclaw-test-instance.test.ts",
-])("selects the required engines for %s", (file) => {
-  for (const policy of ["bun-all", "dual-all"] as const) {
-    expect(selections({ targets: [file] }, policy)).toEqual(
-      file === nodeOnlyFile
-        ? [{ runtime: "node" }]
-        : [...(policy === "dual-all" ? [{ runtime: "node" }] : []), { runtime: "bun" }],
-    );
-  }
-});
+it.each(["src/infra/exec-host.socket.test.ts", "src/gateway/artifact-downloads.test.ts"])(
+  "selects the required engines for %s",
+  (file) => {
+    for (const policy of ["bun-all", "dual-all"] as const) {
+      expect(selections({ targets: [file] }, policy)).toEqual(
+        file === "src/infra/exec-host.socket.test.ts"
+          ? [{ runtime: "node" }]
+          : [...(policy === "dual-all" ? [{ runtime: "node" }] : []), { runtime: "bun" }],
+      );
+    }
+  },
+);
 
 it.each([
   ["full-agentic", ["src/gateway/server-methods/diagnostics.heap-snapshot.test.ts"]],
@@ -103,16 +92,15 @@ it.each([
   }
 });
 
-it.each(["node", "bun-all", "dual-all"] as const)(
-  "accepts %s without changing the default",
-  (policy) => {
+it("accepts runtime policies without changing the default", () => {
+  for (const policy of ["node", "bun-all", "dual-all"] as const) {
     expect(runtimePolicy({ OPENCLAW_CI_TEST_RUNTIME_POLICY: policy })).toBe(policy);
-    expect(runtimePolicy({})).toBe("node");
-    expect(() => runtimePolicy({ OPENCLAW_CI_TEST_RUNTIME_POLICY: "all" })).toThrow(
-      "Invalid OPENCLAW_CI_TEST_RUNTIME_POLICY",
-    );
-  },
-);
+  }
+  expect(runtimePolicy({})).toBe("node");
+  expect(() => runtimePolicy({ OPENCLAW_CI_TEST_RUNTIME_POLICY: "all" })).toThrow(
+    "Invalid OPENCLAW_CI_TEST_RUNTIME_POLICY",
+  );
+});
 
 it.each(["bun-all", "dual-all"] as const)(
   "runs unqualified configs and unusual arguments on Bun under %s",

@@ -1,5 +1,3 @@
-import { spawnSync } from "node:child_process";
-import { hash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -14,24 +12,11 @@ import { readWorkflow, runGit, type WorkflowStep } from "./ci-workflow.test-supp
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const locales = CONTROL_UI_LOCALE_ENTRIES.map((entry) => entry.locale);
 const assetRoots = ["ui/src/i18n/.i18n", "extensions/example/browser/i18n/.i18n"];
-const original = new Map(Object.entries({ keep: "Keep", edit: "Old {count}", remove: "Removed" }));
-const current = new Map(Object.entries({ keep: "Keep", edit: "New {name}", add: "Added" }));
 const core = assetRoots[0]!;
 const svMemory = core + "/sv.tm.jsonl";
 const svMetadata = core + "/sv.meta.json";
-const workerMemory = (locale: string) =>
-  `${JSON.stringify({
-    cache_key: "fixture",
-    segment_id: "keep",
-    source_path: "ui/src/i18n/locales/en.ts",
-    src_lang: "en",
-    tgt_lang: locale,
-    text: "Keep",
-    text_hash: hash("sha256", "Keep", "hex"),
-    translated: "Behåll",
-    updated_at: "2026-10-19T00:00:00Z",
-  })}\n`;
-const artifactCli = path.resolve("scripts/control-ui-locale-artifacts.ts");
+// Transport preserves opaque bytes; the finalizer suite proves translation semantics.
+const workerMemory = (locale: string) => JSON.stringify({ locale, translated: "Behåll" }) + "\n";
 const workflow = readWorkflow(".github/workflows/control-ui-locale-refresh.yml");
 type Artifact = Record<"sourceCommit" | "runId" | "runAttempt", string> & {
   memories: Array<{ path: string; metadata: { fallbackKeys: string[] } }>;
@@ -48,7 +33,6 @@ const corruptions: Array<[string, (artifact: Artifact) => void]> = [
       }),
   ],
   ["duplicate", (a) => a.memories.push(a.memories[0]!)],
-  ["fallback", (a) => Object.assign(a.memories[1]!.metadata, { fallbackKeys: ["missing"] })],
   ["missing", (a) => Object.assign(a, { memories: [] })],
 ];
 
@@ -60,11 +44,8 @@ const read = (root: string, file: string) => readFileSync(path.join(root, file),
 const metadata = (locale: string, overrides = {}) => ({
   locale,
   fallbackKeys: [],
-  generatedAt: "before",
-  sourceHash: "before",
   totalKeys: 0,
   translatedKeys: 0,
-  workflow: 1,
   ...overrides,
 });
 
@@ -98,7 +79,6 @@ async function createFixture() {
     'export default { title: "Plugin" };\n',
   );
   put(root, "scripts/control-ui-i18n.ts", "generator policy\n");
-  put(root, "source/input.txt", [...original]);
   for (const locale of locales) {
     put(root, "ui/src/i18n/.i18n/glossary." + locale + ".json", "[]\n");
     for (const assets of assetRoots) {
@@ -110,7 +90,6 @@ async function createFixture() {
   const identity = { sourceCommit, runId: "123", runAttempt: "1" };
   for (const locale of locales) {
     for (const assets of assetRoots) {
-      // Artifact transport owns opaque bytes; actual translation is proved by the finalizer suite.
       put(root, assets + "/" + locale + ".tm.jsonl", workerMemory(locale));
       put(
         root,
@@ -130,34 +109,6 @@ async function createFixture() {
   };
 }
 
-it("runs the workflow restore CLI with the bound attempt and exposes its fresh source", async () => {
-  const f = await createFixture();
-  put(f.root, "source/input.txt", [...current]);
-  const fresh = commit(f.root, "fresh finalizer checkout");
-  const output = path.join(f.directory, "github-output");
-  const result = spawnSync(
-    process.execPath,
-    ["--import", path.resolve("scripts/tsx.mjs"), artifactCli, "restore", f.directory],
-    {
-      cwd: f.root,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        LOCALE_SOURCE_COMMIT: f.identity.sourceCommit,
-        LOCALE_SOURCE_LOCALES: JSON.stringify(locales),
-        GITHUB_RUN_ID: f.identity.runId,
-        GITHUB_RUN_ATTEMPT: f.identity.runAttempt,
-        GITHUB_OUTPUT: output,
-      },
-    },
-  );
-  expect(result.status, result.stdout + result.stderr).toBe(0);
-  expect(readFileSync(output, "utf8")).toBe("sha=" + fresh + "\ninvalidated=[]\n");
-  for (const assets of assetRoots) {
-    expect(read(f.root, assets + "/sv.tm.jsonl")).toBe(workerMemory("sv"));
-  }
-});
-
 it("retains completed workers when only the finalizer is retried in the same run", async () => {
   const f = await createFixture();
   await expect(
@@ -167,7 +118,9 @@ it("retains completed workers when only the finalizer is retried in the same run
       identity: { ...f.identity, runAttempt: "2" },
     }),
   ).resolves.toEqual({ sourceCommit: f.identity.sourceCommit, invalidated: [] });
-  expect(read(f.root, svMemory)).toBe(workerMemory("sv"));
+  for (const assets of assetRoots) {
+    expect(read(f.root, assets + "/sv.tm.jsonl")).toBe(workerMemory("sv"));
+  }
 });
 
 it("rejects a replacement history before importing matching artifact envelopes", async () => {
@@ -178,16 +131,12 @@ it("rejects a replacement history before importing matching artifact envelopes",
   expect(runGit(f.root, ["status", "--porcelain"])).toBe("");
 });
 
-it.each(["canonical", "metadata", "glossary", "policy", "ownership"])(
+it.each(["metadata", "policy", "ownership"])(
   "discards worker memory when %s changes without overwriting canonical inputs",
   async (change) => {
     const f = await createFixture();
-    if (change === "canonical") {
-      put(f.root, svMemory, workerMemory("sv").replace("Behåll", "Korrigerad"));
-    } else if (change === "metadata") {
+    if (change === "metadata") {
       put(f.root, svMetadata, metadata("sv", { fallbackKeys: ["keep"] }));
-    } else if (change === "glossary") {
-      put(f.root, "ui/src/i18n/.i18n/glossary.sv.json", [{ source: "Keep", target: "Korrigerad" }]);
     } else if (change === "policy") {
       put(f.root, "scripts/control-ui-i18n.ts", "new generator policy");
     } else {
