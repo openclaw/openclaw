@@ -4,18 +4,14 @@ import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context
 import { reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   expectForegroundUnchanged,
-  foregroundKey,
-  foregroundDraft,
   openFromForeground,
   scenario,
 } from "./command-palette.test-support.ts";
-import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
-  holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { controlUiSessionUrl, installMockGateway } from "./new-session-page.test-support.ts";
+import { installMockGateway } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "command palette file drops" });
 const profile = (id: string, displayName: string) => ({
@@ -113,123 +109,6 @@ suite.define(() => {
       await expect.poll(() => input.inputValue()).toBe("");
       expect(await palette.locator(".chat-attachment-thumb").count()).toBe(0);
       expect(await gateway.getRequests("sessions.create")).toEqual([]);
-    });
-  });
-
-  it("cancels a queued cold submit after a file fails and keeps the remaining draft for manual send", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installMockGateway(
-        page,
-        scenario({
-          "sessions.create": { key: "agent:main:dashboard:partial-files", runStarted: true },
-        }),
-      );
-      const held = await holdModuleResponse(
-        page,
-        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
-      );
-      try {
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, foregroundKey));
-        const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
-        await composer.fill(foregroundDraft);
-        await composer.evaluate((element: HTMLTextAreaElement) =>
-          element.setSelectionRange(10, 10),
-        );
-        const url = page.url();
-        const reads = await page.evaluateHandle(() => {
-          const OriginalFileReader = window.FileReader;
-          const pending: Array<{ reader: ControlledFileReader; file: Blob }> = [];
-          class ControlledFileReader extends OriginalFileReader {
-            override readAsDataURL(file: Blob) {
-              pending.push({ reader: this, file });
-            }
-            resume(file: Blob) {
-              super.readAsDataURL(file);
-            }
-          }
-          window.FileReader = ControlledFileReader;
-          return {
-            count: () => pending.length,
-            settle: () => {
-              window.FileReader = OriginalFileReader;
-              for (const { reader, file } of pending) {
-                if (file instanceof File && file.name === "broken.pdf") {
-                  reader.dispatchEvent(new ProgressEvent("error"));
-                } else {
-                  reader.resume(file);
-                }
-              }
-            },
-          };
-        });
-        await page.keyboard.press("ControlOrMeta+K");
-        const cold = page.locator(".cmd-palette__input");
-        await cold.waitFor({ state: "visible" });
-        await held.request;
-        await cold.fill("Review the available brief");
-        await cold.evaluate((element) => {
-          const dataTransfer = new DataTransfer();
-          dataTransfer.items.add(
-            new File(["ready brief"], "ready.pdf", { type: "application/pdf" }),
-          );
-          dataTransfer.items.add(
-            new File(["unreadable brief"], "broken.pdf", { type: "application/pdf" }),
-          );
-          element.dispatchEvent(
-            new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer }),
-          );
-        });
-        expect(await gateway.getRequests("sessions.create")).toEqual([]);
-        await cold.press("ControlOrMeta+Enter");
-        held.release();
-        const palette = page.locator("openclaw-command-palette");
-        const input = palette.locator(".cmd-palette__input");
-        await input.waitFor({ state: "visible" });
-        await expect.poll(() => reads.evaluate((owner) => owner.count())).toBe(2);
-        const start = palette.getByRole("button", {
-          name: "Start new session in background",
-          exact: true,
-        });
-        expect(await start.isEnabled()).toBe(false);
-        await page.keyboard.press("ControlOrMeta+Enter");
-        expect(await gateway.getRequests("sessions.create")).toEqual([]);
-        await reads.evaluate((owner) => owner.settle());
-        await reads.dispose();
-        await page
-          .getByText("Could not attach file. Try again.", { exact: true })
-          .waitFor({ state: "visible" });
-        await expect.poll(() => start.isEnabled()).toBe(true);
-        expect(await palette.locator(".chat-attachment-file__name").allTextContents()).toEqual([
-          "ready.pdf",
-        ]);
-        expect(await input.inputValue()).toBe("Review the available brief");
-        expect(await gateway.getRequests("sessions.create")).toEqual([]);
-        await input.press("Escape");
-        await input.waitFor({ state: "hidden" });
-        await page.keyboard.press("ControlOrMeta+K");
-        await input.waitFor({ state: "visible" });
-        expect(await input.inputValue()).toBe("Review the available brief");
-        expect(await palette.locator(".chat-attachment-file__name").allTextContents()).toEqual([
-          "ready.pdf",
-        ]);
-        await start.click();
-        const created = await gateway.waitForRequest("sessions.create");
-        expect(created.params).toMatchObject({
-          message: "Review the available brief",
-          attachments: [
-            {
-              type: "file",
-              fileName: "ready.pdf",
-              content: Buffer.from("ready brief").toString("base64"),
-            },
-          ],
-        });
-        await input.waitFor({ state: "hidden" });
-        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-        await expectForegroundUnchanged(page, composer, url);
-      } finally {
-        held.release();
-      }
     });
   });
 

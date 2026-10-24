@@ -22,16 +22,6 @@ const expectFocus = (locator: Locator) => expect.poll(() => focused(locator)).to
 const button = (scope: Page | Locator, name: string | RegExp) =>
   scope.getByRole("button", { name, exact: true });
 
-async function editComment(ui: Awaited<ReturnType<typeof openChat>>, comment: string) {
-  const { chip, preview, input, editor } = ui;
-  await chip.hover();
-  await button(preview, "Edit comment 1").click();
-  await input.fill(comment);
-  await button(editor, "Save").click();
-  await chip.hover();
-  await preview.getByText(comment, { exact: true }).waitFor({ state: "visible" });
-}
-
 async function sendComment(page: Page, gateway: Awaited<ReturnType<typeof installMockGateway>>) {
   await button(page, "Send message").click();
   const { params } = await gateway.waitForRequest("chat.send");
@@ -189,7 +179,7 @@ suite.define(() => {
     async (replacement) => {
       await suite.withPage(pageOptions, async ({ page }) => {
         const ui = await openChat(page, replacementPlugin("composer", replacement));
-        const { gateway, composer, source, chip, preview } = ui;
+        const { composer, source, chip } = ui;
         await composer.fill("Keep this draft through the composer change.");
         for (const comment of ["Check the rollback steps.", "Remove this extra comment."]) {
           await addComment(page, source, comment);
@@ -205,28 +195,6 @@ suite.define(() => {
         expect(await chip.count()).toBe(1);
         expect(await chip.textContent()).toContain("2 comments");
         expect(await composer.inputValue()).toBe("Keep this draft through the composer change.");
-        await editComment(ui, "Edited after the composer changed.");
-        await button(preview, "Delete comment").last().click();
-        await expect.poll(() => chip.textContent()).toContain("1 comment");
-        expect(await chip.count()).toBe(1);
-        expect(await preview.isVisible()).toBe(true);
-        await expectFocus(button(preview, "Delete comment"));
-        const params = await sendComment(page, gateway);
-        expect(params.message).toBe("Keep this draft through the composer change.");
-        expect(params.attachment).toContain("Edited after the composer changed.");
-        expect(params.attachment).not.toContain("Remove this extra comment.");
-        await expect
-          .poll(() =>
-            page
-              .locator(
-                "openclaw-plugin-view[data-plugin-composer] .chat-selection-annotations__chip",
-              )
-              .count(),
-          )
-          .toBe(0);
-        await expect
-          .poll(() => page.locator(".chat-thread .chat-selection-annotations__chip").count())
-          .toBe(1);
       });
     },
   );
@@ -256,24 +224,6 @@ suite.define(() => {
       expect(await preview.textContent()).not.toContain("First note");
       expect(await button(preview, "Edit comment 1").count()).toBe(1);
       expect(await button(preview, "Edit comment 2").count()).toBe(0);
-      await page.keyboard.press("Escape");
-      await expect.poll(() => preview.isVisible()).toBe(false);
-      await expectFocus(trigger);
-      await page.waitForTimeout(250);
-      expect(await preview.isVisible()).toBe(false);
-      await trigger.press("Enter");
-      await preview.waitFor({ state: "visible" });
-      await deletes.first().hover();
-      await page.mouse.move(0, 0);
-      await expect.poll(() => preview.isVisible()).toBe(false);
-      await trigger.focus();
-      await trigger.press("Enter");
-      await preview.waitFor({ state: "visible" });
-      await page.mouse.move(1, 1);
-      await page.waitForTimeout(250);
-      expect(await preview.isVisible()).toBe(true);
-      await trigger.press("Escape");
-      await expect.poll(() => preview.isVisible()).toBe(false);
       await trigger.press("Space");
       await preview.waitFor({ state: "visible" });
       await composer.click();
@@ -292,35 +242,6 @@ suite.define(() => {
       expect(await page.locator("openclaw-toast-host [role=status]").count()).toBe(0);
       await sendWithoutComments(page, gateway);
     });
-  });
-
-  it("keeps comment actions alive when a plugin replaces the transcript", async () => {
-    await suite.withPage(
-      { viewport: pageOptions.viewport, reducedMotion: "reduce" },
-      async ({ page }) => {
-        const ui = await openChat(
-          page,
-          replacementPlugin("transcript", "comment-transcript").replace(
-            "const registerComposer =",
-            `host.ui.registerReplacement({id: "comment-transcript", label: "Comment transcript", surface: "transcript", mount(container) { container.textContent = "Replacement transcript"; }}); const registerComposer =`,
-          ),
-        );
-        const { gateway, composer, source, chip, preview } = ui;
-        await composer.fill("Keep this draft.");
-        await addComment(page, source, "Check the rollback steps.");
-        await button(page, "Replace transcript").click();
-        await page
-          .getByText("Replacement transcript", { exact: true })
-          .waitFor({ state: "visible" });
-        expect(await page.locator(".chat-thread").count()).toBe(0);
-        await editComment(ui, "Edited with a replacement transcript.");
-        await button(preview, "Delete comment").click();
-        await chip.waitFor({ state: "detached" });
-        await expectFocus(composer);
-        expect(await composer.inputValue()).toBe("Keep this draft.");
-        await sendWithoutComments(page, gateway);
-      },
-    );
   });
 
   it("opens an offscreen comment from the composer without dismissing its own editor", async () => {

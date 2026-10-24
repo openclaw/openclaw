@@ -14,7 +14,6 @@ const suite = createControlUiE2eSuite({
 });
 
 const documentId = "widget-autosize-proof";
-const documentPath = `/__openclaw__/canvas/documents/${documentId}/index.html`;
 const tallContentHeight = 2520; // Exceeds every viewport, forcing reported-height sizing.
 const scrollTop = (target: Locator) => target.evaluate((element) => element.scrollTop);
 const widgetFrame = (page: Page) => page.locator(".chat-tool-card__preview-frame");
@@ -271,34 +270,7 @@ suite.define(() => {
             ),
           ),
         },
-        historyMessages: [
-          assistant(
-            [
-              {
-                type: "toolCall",
-                id: "autosize-widget",
-                name: "canvas_render",
-                arguments: { title: "Autosize proof" },
-              },
-              {
-                type: "tool_result",
-                id: "autosize-widget",
-                name: "canvas_render",
-                text: JSON.stringify({
-                  kind: "canvas",
-                  view: {
-                    backend: "canvas",
-                    id: documentId,
-                    url: documentPath,
-                    title: "Autosize proof",
-                  },
-                  presentation: { target: "assistant_message", sandbox: "scripts" },
-                }),
-              },
-            ],
-            100,
-          ),
-        ],
+        historyMessages: [assistant(embed("Autosize proof"), 100)],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       const frame = widgetFrame(page);
