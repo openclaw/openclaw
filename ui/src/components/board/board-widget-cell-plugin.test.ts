@@ -4,6 +4,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
@@ -290,7 +291,20 @@ describe("plugin board widget cells", () => {
     ] as const;
 
     for (const [index, scenario] of responses.entries()) {
-      const request = vi.fn(async () => scenario.response);
+      const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        if (method === "sessions.describe") {
+          return {
+            session:
+              result.sessions.find(
+                (row) => row.key === params?.key && row.agentId === params?.agentId,
+              ) ?? null,
+          };
+        }
+        if (method === "progressCard.get") {
+          return scenario.response;
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
       const result = {
         sessions: [
           { key: "global", agentId: "main", status: "failed", startedAt: 0, endedAt: 2 },
@@ -309,24 +323,14 @@ describe("plugin board widget cells", () => {
             startedAt: 0,
             endedAt: 2,
           },
-        ],
+        ].map((row) =>
+          Object.assign(row, { sessionId: `${row.agentId}:${row.key}`, updatedAt: 2 }),
+        ),
       };
       const context = {
         agentSelection: {
           state: { scopeId: null },
           subscribe: () => () => undefined,
-        },
-        sessions: {
-          state: { result },
-          subscribe: () => () => undefined,
-          subscribeList: () => () => undefined,
-          listSnapshot: () => ({
-            result,
-            agentId: null,
-            loading: false,
-            error: null,
-          }),
-          refreshList: async () => undefined,
         },
         gateway: {
           snapshot: {
@@ -358,7 +362,8 @@ describe("plugin board widget cells", () => {
         grantState: "none",
         revision: 1,
       };
-      const provider = createApplicationContextProvider(context);
+      const sessions = createTestSessionCapability(context.gateway);
+      const provider = createApplicationContextProvider({ ...context, sessions });
       const cell = document.createElement("openclaw-board-widget-cell");
       cell.widget = widget;
       cell.rect = { name: widget.name, x: 0, y: index * 4, w: 6, h: 4 };
@@ -408,7 +413,7 @@ describe("plugin board widget cells", () => {
             status: t(
               scenario.requestedAgentId === "main"
                 ? "sessionProgressCard.status.failed"
-                : "sessionProgressCard.status.completed",
+                : "sessionProgressCard.status.paused",
             ),
             step: "Owned work",
           }),
@@ -593,47 +598,34 @@ describe("plugin board widget cells", () => {
     const now = Date.now();
     const targetRow = {
       key: boardlessTargetKey,
+      sessionId: "boardless-session",
       agentId: "main",
+      updatedAt: now,
       status: "running",
       hasActiveRun: true,
       startedAt: now - 60_000,
     };
-    const rosterQueries: Array<{ hasBoard?: boolean }> = [];
-    const request = vi.fn(async () => ({
-      card: {
-        sessionKey: boardlessTargetKey,
-        revision: 1,
-        updatedAt: now,
-        markdown: `Progress for ${boardlessTargetKey}`,
-        steps: [{ step: "Owned work", status: "in_progress" }],
-      },
-    }));
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.describe") {
+        return { session: targetRow };
+      }
+      if (method === "progressCard.get") {
+        return {
+          card: {
+            sessionKey: boardlessTargetKey,
+            revision: 1,
+            updatedAt: now,
+            markdown: `Progress for ${boardlessTargetKey}`,
+            steps: [{ step: "Owned work", status: "in_progress" }],
+          },
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
     const context = {
       agentSelection: {
         state: { scopeId: null },
         subscribe: () => () => undefined,
-      },
-      sessions: {
-        state: { result: null },
-        subscribe: () => () => undefined,
-        subscribeList: (query: { hasBoard?: boolean }) => {
-          rosterQueries.push(query);
-          return () => undefined;
-        },
-        listSnapshot: (query: { hasBoard?: boolean }) => ({
-          // The Gateway filters hasBoard against each session's own board
-          // inventory, so the board-less target only exists in the shared roster.
-          result: {
-            sessions: [
-              { key: boardOwnerKey, agentId: "main", status: "done", startedAt: 0, endedAt: 2 },
-              ...(query.hasBoard ? [] : [targetRow]),
-            ],
-          },
-          agentId: null,
-          loading: false,
-          error: null,
-        }),
-        refreshList: async () => undefined,
       },
       gateway: {
         snapshot: {
@@ -663,7 +655,9 @@ describe("plugin board widget cells", () => {
       grantState: "none",
       revision: 1,
     };
-    const provider = createApplicationContextProvider(context);
+    const sessions = createTestSessionCapability(context.gateway);
+    const observeRow = vi.spyOn(sessions, "observeRow");
+    const provider = createApplicationContextProvider({ ...context, sessions });
     const cell = document.createElement("openclaw-board-widget-cell");
     cell.widget = widget;
     cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
@@ -688,7 +682,15 @@ describe("plugin board widget cells", () => {
     );
     expect(element?.querySelector(".session-progress-card__step--paused")).toBeNull();
     // Liveness must not depend on dashboard gallery membership.
-    expect(rosterQueries.length).toBeGreaterThan(0);
-    expect(rosterQueries.every((query) => query.hasBoard === undefined)).toBe(true);
+    expect(observeRow).toHaveBeenCalledWith(
+      { key: boardlessTargetKey, agentId: "main" },
+      expect.any(Function),
+      expect.objectContaining({ onInvalidate: expect.any(Function) }),
+    );
+    expect(request).toHaveBeenCalledWith("sessions.describe", {
+      key: boardlessTargetKey,
+      agentId: "main",
+    });
+    expect(request.mock.calls.some(([method]) => method === "sessions.list")).toBe(false);
   });
 });

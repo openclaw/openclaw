@@ -47,21 +47,6 @@ export function dashboardSessionListQuery(agentId?: string | null): SessionListO
   };
 }
 
-/** Progress cards resolve an explicit cross-session target independently of
- *  dashboard gallery membership: the Gateway filters hasBoard against each
- *  session's own board inventory, so a running target without its own board
- *  would disappear from a gallery-filtered roster and render as paused. */
-export function sessionProgressTargetQuery(agentId?: string | null): SessionListOptions {
-  const normalizedAgentId = agentId?.trim();
-  return {
-    ...DEFAULT_SESSION_LIST_QUERY,
-    source: "dashboard",
-    excludeDock: false,
-    archivedFilter: "all",
-    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
-  };
-}
-
 /** Starting page size for the Sessions page's explicit, user-editable limit
  *  field, kept separate from the roster page so tuning one never moves the other. */
 export const SESSIONS_PAGE_DEFAULT_LIMIT = 50;

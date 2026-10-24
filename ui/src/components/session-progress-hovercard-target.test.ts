@@ -108,14 +108,16 @@ describe("session progress hovercard ownership", () => {
       expect(portal?.textContent).toContain("research progress");
       harness.emitPullRequestStatus("ready");
       flush();
-      expect(portal?.querySelector('[role="status"]')).toBeNull();
+      expect(portal?.querySelector('.session-hovercard__more[role="status"]')).toBeNull();
 
       harness.emitPullRequestStatus(status);
       flush();
-      expect(portal?.querySelector('[role="status"]')?.textContent?.trim()).toBe(warning);
+      expect(
+        portal?.querySelector('.session-hovercard__more[role="status"]')?.textContent?.trim(),
+      ).toBe(warning);
       harness.emitPullRequestStatus("ready");
       flush();
-      expect(portal?.querySelector('[role="status"]')).toBeNull();
+      expect(portal?.querySelector('.session-hovercard__more[role="status"]')).toBeNull();
       expect(getPortal()).toBe(portal);
     },
   );

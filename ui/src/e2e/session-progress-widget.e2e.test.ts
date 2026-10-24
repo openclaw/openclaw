@@ -26,6 +26,7 @@ const dashboardFeatureMethods = [
   "chat.startup",
   "progressCard.get",
   "sessions.list",
+  "sessions.describe",
   "sessions.patch",
 ];
 const widgetKinds = [{ pluginId: "session", kind: "session:progress", label: "Session progress" }];
@@ -86,6 +87,17 @@ suite.define(() => {
                 { step: "Archive the earlier checklist", status: "in_progress" },
                 { step: "Start unrelated work", status: "pending" },
               ],
+            },
+          },
+          "sessions.describe": {
+            session: {
+              hasActiveRun: true,
+              key: sessionKey,
+              kind: "direct",
+              label: "Later active run",
+              startedAt: now - 60_000,
+              status: "running",
+              updatedAt: now,
             },
           },
           "sessions.list": chatSessionListResponse([
