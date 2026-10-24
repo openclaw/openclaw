@@ -91,6 +91,7 @@ export function createPromptAssemblyResult(
     },
     effectivePrompt: input.attempt.prompt,
     effectiveTranscriptPrompt: input.attempt.prompt,
+    routePromptBuildContextThroughRuntimeCarrier: false,
     promptBuildPrependContext: undefined,
     promptBuildAppendContext: undefined,
     originContext: undefined,

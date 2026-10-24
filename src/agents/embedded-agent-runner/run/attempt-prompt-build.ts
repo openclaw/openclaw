@@ -9,6 +9,7 @@ import {
   type DiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { redactToolPayloadTextWithConfig } from "../../../logging/redact.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { buildInterSessionPromptContext } from "../../../sessions/input-provenance.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
@@ -90,6 +91,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   systemPromptText: string;
   runAbortSignal?: AbortSignal;
   hasBaselineTools: () => boolean;
+  appendOnlyRuntimeContext?: boolean;
   applyPromptBuildToolsAllow: (
     toolsAllow: string[] | undefined,
     pruneForDecision?: boolean,
@@ -257,12 +259,27 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     hookResult?.appendContext,
     authorizedHookResult?.appendContext,
   );
+  // Append-only runtime-context models replay their history byte-identically, so
+  // one-run prompt rewrites break every later cache hit and drop replayed thinking.
+  // Route hook context through the stored runtime-context carrier instead; runs
+  // without a prompt keep the legacy fold so a context-only turn still reaches the model.
+  const routePromptBuildContextThroughRuntimeCarrier =
+    input.appendOnlyRuntimeContext === true && Boolean(effectivePrompt.trim());
 
-  if (promptBuildPrependContext) {
+  if (!routePromptBuildContextThroughRuntimeCarrier && promptBuildPrependContext) {
     effectivePrompt = `${promptBuildPrependContext}\n\n${effectivePrompt}`;
   }
-  if (promptBuildAppendContext) {
+  if (!routePromptBuildContextThroughRuntimeCarrier && promptBuildAppendContext) {
     effectivePrompt = `${effectivePrompt}\n\n${promptBuildAppendContext}`;
+  }
+  if (
+    routePromptBuildContextThroughRuntimeCarrier &&
+    (promptBuildPrependContext || promptBuildAppendContext)
+  ) {
+    log.debug(
+      `hooks: routing prompt-build context through the runtime-context carrier ` +
+        `(${(promptBuildPrependContext?.length ?? 0) + (promptBuildAppendContext?.length ?? 0)} chars)`,
+    );
   }
   const legacySystemPrompt = normalizeOptionalString(hookResult?.systemPrompt) ?? "";
   if (legacySystemPrompt) {
@@ -330,6 +347,9 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     assertHostActive,
     hookCtx,
     effectivePrompt,
+    // Published once so carrier construction, submission, and budgeting all
+    // agree instead of re-deriving the predicate from different prompt fields.
+    routePromptBuildContextThroughRuntimeCarrier,
     promptBuildPrependContext,
     promptBuildAppendContext,
     effectiveTranscriptPrompt,
@@ -362,6 +382,9 @@ type PromptContextAttempt = Pick<
 type PromptAssemblyContext = {
   effectivePrompt: string;
   effectiveTranscriptPrompt: string;
+  routePromptBuildContextThroughRuntimeCarrier: boolean;
+  promptBuildPrependContext?: string;
+  promptBuildAppendContext?: string;
   originContext?: ReturnType<typeof buildInterSessionPromptContext>;
 };
 
@@ -434,6 +457,22 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   }
 
   const escapedProjection = !input.isRawModelRun && usesEscapedRuntimeContext(input.sessionVersion);
+  // Hook prompt context rides the stored carrier on append-only models, so the
+  // next replay includes it byte-identically instead of rewriting earlier history.
+  // The published assembly decision applies even when the transcript prompt is
+  // empty: the runtime-only submission path delivers the carrier to the model.
+  // The carrier reaches both the provider dispatch and the durable custom-message
+  // append, bypassing the canonical prompt-projection redaction, so hook context
+  // carries the transcript redaction policy here; dispatch and replay must see
+  // identical sanitized bytes.
+  const promptBuildContext = input.prompt.routePromptBuildContextThroughRuntimeCarrier
+    ? redactToolPayloadTextWithConfig(
+        [input.prompt.promptBuildPrependContext, input.prompt.promptBuildAppendContext]
+          .filter((value): value is string => Boolean(value?.trim()))
+          .join("\n\n"),
+        attempt.config?.logging,
+      ) || undefined
+    : undefined;
   const eventFragments: RuntimeContextFragment[] = [
     ...buildTurnDeliveryContextFragments({
       config: attempt.config,
@@ -444,6 +483,9 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       requireExplicitMessageTarget: attempt.requireExplicitMessageTarget,
       messageToolFinalByDefault: attempt.messageToolFinalByDefault,
     }),
+    ...(promptBuildContext
+      ? [{ kind: "conversation-data" as const, text: promptBuildContext }]
+      : []),
     ...buildAgentInternalEventContext(attempt.internalEvents),
     ...(attempt.runtimeContextFragments ?? []),
     ...(input.prompt.originContext

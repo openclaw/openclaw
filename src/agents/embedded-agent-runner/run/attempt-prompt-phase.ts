@@ -187,6 +187,7 @@ export async function runEmbeddedAttemptPromptPhase(
       hookAgentId: sessionAgentId,
       diagnosticTrace,
       isRawModelRun,
+      appendOnlyRuntimeContext,
       ...(orphanRepair ? { orphanRepair } : {}),
       sessionAgentId,
       runtimeModel: runtimeInfo.model,
@@ -213,6 +214,10 @@ export async function runEmbeddedAttemptPromptPhase(
       log.warn(`[tools] ${prepared.toolCatalog.emptyExplicitToolAllowlistError.message}`);
     }
     const { hookCtx, promptBuildPrependContext, promptBuildAppendContext } = promptAssembly;
+    // Assembly routes hook prompt context into the stored runtime-context carrier
+    // on these models, so the per-run rewrite must stay out of submission and budgeting.
+    const promptBuildContextInRuntimeCarrier =
+      promptAssembly.routePromptBuildContextThroughRuntimeCarrier;
     transcriptLeafId = promptAssembly.transcriptLeafId;
 
     const promptContext = await prepareEmbeddedAttemptPromptContext({
@@ -392,9 +397,13 @@ export async function runEmbeddedAttemptPromptPhase(
               }).pendingContextMessages,
             }
           : { pendingContextMessages }),
-        pendingAdditivePrompt: [promptBuildPrependContext, promptBuildAppendContext]
-          .filter(Boolean)
-          .join("\n\n"),
+        ...(promptBuildContextInRuntimeCarrier
+          ? {}
+          : {
+              pendingAdditivePrompt: [promptBuildPrependContext, promptBuildAppendContext]
+                .filter(Boolean)
+                .join("\n\n"),
+            }),
         pendingUserIdempotencyKey,
       });
       attempt.onCompactionRequestBudget?.(compactionRequestBudget);
@@ -439,7 +448,9 @@ export async function runEmbeddedAttemptPromptPhase(
 
     if (!state.skipPromptSubmission) {
       await submitEmbeddedAttemptPrompt({
-        ...(promptBuildAppendContext ? { appendContext: promptBuildAppendContext } : {}),
+        ...(!promptBuildContextInRuntimeCarrier && promptBuildAppendContext
+          ? { appendContext: promptBuildAppendContext }
+          : {}),
         attempt,
         registration: preparedStreamRuntime.stream.registration,
         activeSession,
@@ -530,7 +541,9 @@ export async function runEmbeddedAttemptPromptPhase(
             });
           }
         },
-        ...(promptBuildPrependContext ? { prependContext: promptBuildPrependContext } : {}),
+        ...(!promptBuildContextInRuntimeCarrier && promptBuildPrependContext
+          ? { prependContext: promptBuildPrependContext }
+          : {}),
         ...(promptContext.runtimeContextMessageForCurrentTurn
           ? { runtimeContextMessage: promptContext.runtimeContextMessageForCurrentTurn }
           : {}),
