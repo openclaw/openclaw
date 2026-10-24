@@ -20,6 +20,53 @@ import { stageSystemdService } from "./systemd-install.js";
 import { restartSystemdService } from "./systemd-lifecycle.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 
+type Fixture = Awaited<ReturnType<typeof fixture>>;
+const readFiles = (f: Fixture) => Promise.all(f.files.map((file) => fs.readFile(file)));
+const retainedReceipt = (f: Fixture) => readRetainedReceipt(f.capture.backupPaths);
+const taskCalls = (...verbs: string[]) =>
+  native.task.mock.calls.filter(([args]) => verbs.includes(args[0]));
+async function restore(f: Fixture, receipt?: GatewayServiceDefinitionBackupReceipt) {
+  await restoreGatewayServiceDefinitionBackup({
+    ...f,
+    receipt: receipt ?? (await retainedReceipt(f)),
+  });
+}
+function denyRename(target: string) {
+  const rename = fs.rename.bind(fs);
+  vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+    if (destination === target) {
+      throw Object.assign(new Error("launcher is open: EPERM"), { code: "EPERM" });
+    }
+    return rename(source, destination);
+  });
+}
+function afterRename(effect: (destination: Parameters<typeof fs.rename>[1]) => Promise<void>) {
+  const rename = fs.rename.bind(fs);
+  vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+    await rename(source, destination);
+    await effect(destination);
+  });
+  return rename;
+}
+function afterTask(effect: (args: string[]) => void) {
+  const execute = native.task.getMockImplementation()!;
+  native.task.mockImplementation(async (args: string[]) => {
+    const result = await execute(args);
+    effect(args);
+    return result;
+  });
+}
+const disableTask = (xml: string) =>
+  xml.replace(/(<Settings>[\s\S]*?)<Enabled>true<\/Enabled>/u, "$1<Enabled>false</Enabled>");
+const normalizePrincipal = (xml: string) =>
+  xml
+    .replaceAll("<UserId>operator</UserId>", "<UserId>S-1-5-21-1-2-3-1001</UserId>")
+    .replace("<RunLevel>LeastPrivilege</RunLevel>", "");
+function editTaskElement(f: Fixture, element: string, value: string) {
+  const pattern = new RegExp(`<${element}>[^<]*</${element}>`, "u");
+  f.setTask(f.task().replace(pattern, `<${element}>${value}</${element}>`));
+}
+
 describe("service definition backup receipts", () => {
   it.each(["linux", "win32"] as const)(
     "accepts acknowledged original bytes without repeating the %s publication",
