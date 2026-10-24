@@ -269,7 +269,7 @@ describe("SwarmRosterHydrator", () => {
         row(index, { swarmGroupId: `group-${index}`, status: state }),
       );
       const groups = children.map((child, index) => ({
-        groupId: child.swarmGroupId,
+        groupId: `group-${index}`,
         createdAt: index < shown + omitted ? shown - index : index + 1,
         queued: Number(state === "queued"),
         running: Number(state === "running"),

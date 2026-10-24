@@ -28,6 +28,7 @@ import {
 import { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
 
 const realtimeVoiceHarnessTestHooks = vi.hoisted(() => ({
+  onCreate: undefined as ((harness: RealtimeVoiceSessionHarness) => void) | undefined,
   sessions: new Map<string, RealtimeVoiceSessionHarness>(),
 }));
 
@@ -40,6 +41,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
     ) => {
       const harness = actual.createRealtimeVoiceSessionHarness(params);
       realtimeVoiceHarnessTestHooks.sessions.set(params.talk.sessionId, harness);
+      realtimeVoiceHarnessTestHooks.onCreate?.(harness);
       return harness;
     },
   };
@@ -47,6 +49,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
+  realtimeVoiceHarnessTestHooks.onCreate = undefined;
   realtimeVoiceHarnessTestHooks.sessions.clear();
   vi.useRealTimers();
   for (const close of cleanup.splice(0).toReversed()) {
@@ -208,26 +211,6 @@ async function openConsult(
   return { ...fixture, ...(await fixture.start()), submitToolResult, consult };
 }
 
-function replacementHarness(
-  bridges: RealtimeVoiceBridge[],
-  config?: Partial<VoiceCallRealtimeConfig>,
-) {
-  return makeCallHarness((_request, index) => expectDefined(bridges[index], "replacement bridge"), {
-    config,
-  });
-}
-
-function registerPendingConsult(handler: RealtimeCallHandler) {
-  const oldResult = createDeferred<{ text: string }>();
-  const replacementResult = createDeferred<{ text: string }>();
-  const consult = vi
-    .fn<Parameters<RealtimeCallHandler["registerToolHandler"]>[1]>()
-    .mockImplementationOnce(() => oldResult.promise)
-    .mockImplementationOnce(() => replacementResult.promise);
-  handler.registerToolHandler("openclaw_agent_consult", consult);
-  return { oldResult, replacementResult, consult };
-}
-
 function callTool(
   callbacks: RealtimeBridgeRequest | undefined,
   callId: string,
@@ -325,15 +308,11 @@ async function bargeInHarness(params: {
   return { ...fixture, ws, callbacks, sendAudio, handleBargeIn, outboundMessages };
 }
 
-function sessionFor(call: CallRecord) {
+function recentTalkEvents(call: CallRecord): RecentTalkEvent[] {
   return expectDefined(
     realtimeVoiceHarnessTestHooks.sessions.get(`voice-call:${call.callId}:realtime`),
     "voice-call realtime session harness",
-  );
-}
-
-function recentTalkEvents(call: CallRecord): RecentTalkEvent[] {
-  return sessionFor(call).talk.recentEvents.slice(-12);
+  ).talk.recentEvents.slice(-12);
 }
 
 function talkEvents(call: CallRecord, type: string) {
@@ -371,6 +350,21 @@ function requireCancelledTurn(call: CallRecord): RecentTalkEvent & { turnId: str
 }
 
 describe("RealtimeCallHandler path routing", () => {
+  it("finishes a failed telephony turn without closing the call", async () => {
+    const { callbacks, call, ws } = await bargeInHarness({ providerCallId: "CA-response-failed" });
+    callbacks.onTranscript?.("user", "first turn", true);
+    callbacks.onAudio(Buffer.from([1]));
+    callbacks.onResponseDone?.({
+      status: "failed",
+      responseId: "response-1",
+      message: "provider failed",
+    });
+    expect(talkEvents(call, "turn.ended")).toHaveLength(1);
+    expect(talkEvents(call, "output.audio.done")).toHaveLength(1);
+    expect(talkEvents(call, "session.error")).toHaveLength(1);
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+  });
+
   it("persists a final transcript before consulting without blocking carrier audio", async () => {
     const { callbacks, processEvent, handler, sendAudio, ws } = await bargeInHarness({
       providerCallId: "CA-pending-transcript",
@@ -380,7 +374,12 @@ describe("RealtimeCallHandler path routing", () => {
     const persistence = createDeferred<Awaited<ReturnType<CallManager["processEvent"]>>>();
     processEvent.mockReturnValueOnce(persistence.promise);
     callbacks.onTranscript?.("user", "Check the deployment.", true);
-    requestConsult(callbacks, "consult-pending-store", "Check the deployment.");
+    callbacks.onToolCall?.({
+      itemId: "item-pending-store",
+      callId: "consult-pending-store",
+      name: "openclaw_agent_consult",
+      args: { question: "Check the deployment." },
+    });
     const audio = Buffer.from([0xff, 0xfe]);
     sendMedia(ws, audio);
     try {
@@ -499,141 +498,238 @@ describe("RealtimeCallHandler path routing", () => {
     },
   );
 
-  it("drains the stream before finalizing disconnect grace", async () => {
-    const expired = vi.fn();
-    const streamDisconnectLifecycle = new StreamDisconnectGrace(expired);
-    const disconnected = createDeferred<void>();
-    const disconnect = streamDisconnectLifecycle.disconnect.bind(streamDisconnectLifecycle);
-    vi.spyOn(streamDisconnectLifecycle, "disconnect").mockImplementation((call, stream) => {
-      disconnect(call, stream);
-      disconnected.resolve();
-    });
+  it("cleans up realtime streams immediately and finalizes after disconnect grace", async () => {
     let callbacks: RealtimeBridgeRequest | undefined;
+    const processEvent = vi.fn<CallManager["processEvent"]>(async () => ({ kind: "processed" }));
+    const endCall = vi.fn(async () => ({ success: true }));
     const close = vi.fn(() => {
       callbacks?.onTranscript?.("user", "last words", true);
       callbacks?.onClose?.("completed");
       throw new Error("provider close failed");
     });
-    const { start, processEvent, endCall } = makeCallHarness(
+    let finalization: ReturnType<CallManager["processEvent"]> | undefined;
+    onTestFinished(async () => {
+      await finalization;
+    });
+    const streamDisconnectLifecycle = new StreamDisconnectGrace(({ providerCallId }) => {
+      finalization = processEvent({
+        id: "disconnect-grace-expired",
+        type: "call.ended",
+        callId: "call-1",
+        providerCallId,
+        timestamp: Date.now(),
+        reason: "completed",
+      });
+      void finalization.catch(() => {});
+    });
+    const disconnected = createDeferred<void>();
+    const originalDisconnect = streamDisconnectLifecycle.disconnect.bind(streamDisconnectLifecycle);
+    const disconnect = vi
+      .spyOn(streamDisconnectLifecycle, "disconnect")
+      .mockImplementation((providerCallId, streamId) => {
+        originalDisconnect(providerCallId, streamId);
+        disconnected.resolve();
+      });
+    const { start } = makeCallHarness(
       (request) => {
         callbacks = request;
         return makeBridge({ close });
       },
-      { deps: { streamDisconnectLifecycle } },
+      {
+        call: makeCallRecord("CA-complete"),
+        deps: { manager: { processEvent, endCall }, streamDisconnectLifecycle },
+      },
     );
-    const { ws } = await start();
+    const { ws } = await start("MZ-complete");
+
     vi.useFakeTimers();
     ws.send(JSON.stringify({ event: "stop" }));
+
     await disconnected.promise;
-    expect(close).toHaveBeenCalledOnce();
-    expect(transcripts(processEvent)).toEqual(["last words"]);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(disconnect).toHaveBeenCalledExactlyOnceWith("CA-complete", "MZ-complete");
     expect(endCall).not.toHaveBeenCalled();
+    expect(transcripts(processEvent)).toEqual(["last words"]);
+    expect(callEvents(processEvent, "call.ended")).toHaveLength(0);
+
     await vi.advanceTimersByTimeAsync(1_999);
-    expect(expired).not.toHaveBeenCalled();
+    expect(processEvent.mock.calls.some(([event]) => event.type === "call.ended")).toBe(false);
+
     await vi.advanceTimersByTimeAsync(1);
-    expect(expired).toHaveBeenCalledExactlyOnceWith({
-      providerCallId: "CA-test",
-      streamId: "MZ-test",
-    });
+    const endedEvents = callEvents(processEvent, "call.ended");
+    expect(endedEvents).toEqual([
+      expect.objectContaining({
+        callId: "call-1",
+        providerCallId: "CA-complete",
+        reason: "completed",
+      }),
+    ]);
+
     vi.useRealTimers();
-    const closed = waitForClose(ws);
+    const wsClosed = waitForClose(ws);
     ws.close();
-    await closed;
-    expect(close).toHaveBeenCalledOnce();
-    expect(expired).toHaveBeenCalledOnce();
+    await wsClosed;
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(callEvents(processEvent, "call.ended")).toHaveLength(1);
     expect(endCall).not.toHaveBeenCalled();
   });
 
-  it.each(["played", "retired"] as const)(
-    "tracks item-relative playout for %s carrier marks",
-    async (state) => {
-      const { callbacks, call, outboundMessages, ws } = await bargeInHarness({
-        providerCallId: "CA-playback-state",
-        handlesProviderBargeIn: true,
-      });
-      expect(callbacks.getPlaybackState).toBeTypeOf("function");
-      expect(callbacks.getPlaybackState?.()).toEqual([]);
-      callbacks.onAudio(Buffer.alloc(8 * 160, 0xff), { itemId: "item-1" });
-      await expectFrame(outboundMessages, "media");
-      const playback = callbacks.getPlaybackState?.();
-      expect(playback).toHaveLength(1);
-      expect(playback?.[0]?.itemId).toBe("item-1");
-      expect(playback?.[0]?.audioEndMs ?? 160).toBeLessThan(40);
-      let acknowledged = false;
-      callbacks.onMark?.("mark-1", () => {
-        acknowledged = true;
-      });
-      if (state === "retired") {
-        expect(talkEvents(call, "turn.cancelled")).toHaveLength(0);
-        callbacks.onClearAudio("barge-in");
-        expect(
-          recentTalkEvents(call).findLast((event) => event.type === "output.audio.done")?.turnId,
-        ).toBe(requireCancelledTurn(call).turnId);
-        await expectFrame(outboundMessages, "clear");
-      } else {
-        await expectFrame(outboundMessages, "mark");
-      }
-      ws.send(JSON.stringify({ event: "mark", mark: { name: "mark-1" } }));
-      if (state === "retired") {
-        await delay(60);
-        expect(acknowledged).toBe(false);
-      } else {
-        await waitFor(() => expect(acknowledged).toBe(true));
-        expect(callbacks.getPlaybackState?.()).toEqual([]);
-        callbacks.onClearAudio("barge-in");
-        await expectFrame(outboundMessages, "clear");
-      }
-      expect(callbacks.getPlaybackState?.()).toEqual([]);
-    },
-  );
+  it("starts fresh transcript and Talk state after provider continuity resets", async () => {
+    const { callbacks, call, outboundMessages, processEvent } = await bargeInHarness({
+      providerCallId: "CA-continuity-reset",
+    });
+    callbacks.onTranscript?.("user", "Old caller ", false);
+    callbacks.onTranscript?.("assistant", "Old assistant ", false);
+    callbacks.onAudio?.(Buffer.alloc(320, 0xff));
+    const oldTurnId = recentTalkEvents(call).findLast(
+      (event) => event.type === "turn.started",
+    )?.turnId;
+    expect(oldTurnId).toBeTruthy();
 
-  it.each(["disabled", "override", "provider", "local"] as const)(
-    "applies %s interruption policy without cancelling an ended turn",
-    async (mode) => {
-      const done = mode === "provider" || mode === "local";
-      const { callbacks, call, createBridge, handleBargeIn, outboundMessages, sendAudio, ws } =
-        await bargeInHarness({
-          providerCallId: "CA-barge-in",
-          handlesProviderBargeIn: mode !== "local",
-          bridgeHandlesInputAudioBargeIn: mode === "override" ? false : undefined,
-          interruptResponseOnInputAudio: mode === "disabled" ? false : undefined,
-        });
-      callbacks.onAudio(mode === "provider" ? Buffer.alloc(320, 0xff) : Buffer.from([1, 2, 3]));
+    resetContinuity(callbacks);
+    resetContinuity(callbacks);
+
+    await expectFrame(outboundMessages, "clear");
+    expect(requireCancelledTurn(call).turnId).toBe(oldTurnId);
+    const resetEvents = recentTalkEvents(call);
+    expect(resetEvents.filter((event) => event.type === "turn.cancelled")).toHaveLength(1);
+    expect(resetEvents.findIndex((event) => event.type === "output.audio.done")).toBeLessThan(
+      resetEvents.findIndex((event) => event.type === "turn.cancelled"),
+    );
+
+    callbacks.onTranscript?.("user", "Fresh caller", true);
+    callbacks.onTranscript?.("assistant", "Fresh assistant", true);
+    callbacks.onEvent?.({ direction: "server", type: "response.done" });
+
+    expect(transcripts(processEvent)).toEqual(["Fresh caller"]);
+    expect(transcripts(processEvent, "call.assistant-speech")).toEqual(["Fresh assistant"]);
+    const startedTurns = talkEvents(call, "turn.started");
+    expect(startedTurns).toHaveLength(2);
+    expect(startedTurns[1]?.turnId).not.toBe(oldTurnId);
+  });
+
+  it("passes the disabled input-interruption policy without cancelling speech-start", async () => {
+    const { callbacks, call, createBridge, outboundMessages } = await bargeInHarness({
+      providerCallId: "CA-disabled-barge-in",
+      handlesProviderBargeIn: true,
+      interruptResponseOnInputAudio: false,
+    });
+    expect(createBridge.mock.calls[0]?.[0].interruptResponseOnInputAudio).toBe(false);
+
+    callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
+    await expectFrame(outboundMessages, "media");
+
+    callbacks?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+
+    await Promise.resolve();
+    expect(outboundMessages.some((message) => message.event === "clear")).toBe(false);
+    expect(recentTalkEvents(call).some((event) => event.type === "turn.cancelled")).toBe(false);
+  });
+
+  it("supplies item-relative telephony playout state to the provider bridge", async () => {
+    const { callbacks, outboundMessages, ws } = await bargeInHarness({
+      providerCallId: "CA-playback-state",
+      handlesProviderBargeIn: true,
+    });
+    expect(callbacks.getPlaybackState).toBeTypeOf("function");
+    expect(callbacks.getPlaybackState?.()).toEqual([]);
+
+    callbacks?.onAudio?.(Buffer.alloc(8 * 160, 0xff), { itemId: "item-1" });
+    await expectFrame(outboundMessages, "media");
+    // Carrier playout remains unconfirmed until its mark receipt arrives.
+    const drainedPlayback = callbacks.getPlaybackState?.();
+    expect(drainedPlayback).toHaveLength(1);
+    expect(drainedPlayback?.[0]?.itemId).toBe("item-1");
+    expect(drainedPlayback?.[0]?.audioEndMs ?? 160).toBeLessThan(40);
+
+    let markAcknowledged = false;
+    callbacks?.onMark?.("mark-1", () => {
+      markAcknowledged = true;
+    });
+    await expectFrame(outboundMessages, "mark");
+
+    ws.send(JSON.stringify({ event: "mark", mark: { name: "mark-1" } }));
+    await waitFor(() => expect(markAcknowledged).toBe(true));
+    expect(callbacks.getPlaybackState?.()).toEqual([]);
+
+    callbacks?.onClearAudio("barge-in");
+    await expectFrame(outboundMessages, "clear");
+    expect(callbacks.getPlaybackState?.()).toEqual([]);
+  });
+
+  it("discards provider mark acknowledgements after barge-in", async () => {
+    const { callbacks, call, outboundMessages, ws } = await bargeInHarness({
+      providerCallId: "CA-mark-clear",
+      handlesProviderBargeIn: true,
+    });
+    callbacks?.onAudio?.(Buffer.alloc(8 * 160, 0xff), { itemId: "item-1" });
+    await expectFrame(outboundMessages, "media");
+
+    // Late receipts must not acknowledge marks retired by the playback reset.
+    let markAcknowledged = false;
+    callbacks?.onMark?.("mark-1", () => {
+      markAcknowledged = true;
+    });
+
+    expect(recentTalkEvents(call).some((event) => event.type === "turn.cancelled")).toBe(false);
+    callbacks?.onClearAudio("barge-in");
+    expect(
+      recentTalkEvents(call).findLast((event) => event.type === "output.audio.done")?.turnId,
+    ).toBe(requireCancelledTurn(call).turnId);
+    await expectFrame(outboundMessages, "clear");
+
+    ws.send(JSON.stringify({ event: "mark", mark: { name: "mark-1" } }));
+    await delay(60);
+    expect(markAcknowledged).toBe(false);
+  });
+
+  it("lets a session bridge override provider-level barge-in capabilities", async () => {
+    const { callbacks, call, handleBargeIn, outboundMessages, sendAudio, ws } =
+      await bargeInHarness({
+        bridgeHandlesInputAudioBargeIn: false,
+        handlesProviderBargeIn: true,
+        providerCallId: "CA-bridge-local-barge-in",
+      });
+    callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
+    for (let i = 0; i < 4; i += 1) {
+      sendMedia(ws, Buffer.alloc(160, 0x00));
+    }
+
+    await waitFor(() => {
+      expect(sendAudio).toHaveBeenCalledTimes(4);
+      expect(requireCancelledTurn(call).turnId).toMatch(/^turn-\d+$/);
+      expect(outboundMessages.some((message) => message.event === "clear")).toBe(true);
+    });
+    expect(handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true });
+  });
+
+  it.each(["provider", "local"] as const)(
+    "clears remote playback after response.done with %s barge-in",
+    async (source) => {
+      const { callbacks, call, handleBargeIn, outboundMessages, ws } = await bargeInHarness({
+        providerCallId: source === "provider" ? "CA-late-barge-in" : "CA-late-local-barge-in",
+        handlesProviderBargeIn: source === "provider",
+      });
+      callbacks.onAudio(source === "provider" ? Buffer.alloc(320, 0xff) : Buffer.from([1, 2, 3]));
       await expectFrame(outboundMessages, "media");
-      if (mode === "disabled") {
-        expect(createBridge.mock.calls[0]?.[0].interruptResponseOnInputAudio).toBe(false);
-        callbacks.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
-        await Promise.resolve();
-        expect(outboundMessages.some((message) => message.event === "clear")).toBe(false);
-        expect(talkEvents(call, "turn.cancelled")).toHaveLength(0);
-        return;
-      }
-      if (done) {
-        callbacks.onEvent?.({ direction: "server", type: "response.done" });
-      }
-      const clears = outboundMessages.filter((message) => message.event === "clear").length;
-      if (mode === "provider") {
+      callbacks.onEvent?.({ direction: "server", type: "response.done" });
+      const clearCount = outboundMessages.filter((message) => message.event === "clear").length;
+      if (source === "provider") {
         callbacks.onClearAudio("barge-in");
       } else {
-        for (let i = 0; i < 4; i++) {
+        for (let i = 0; i < 4; i += 1) {
           sendMedia(ws, Buffer.alloc(160, 0x00));
         }
-        await waitForCalls(sendAudio, 4);
       }
-      await waitFor(() =>
-        expect(outboundMessages.filter((message) => message.event === "clear")).toHaveLength(
-          clears + 1,
-        ),
-      );
-      if (done) {
-        expect(talkEvents(call, "turn.cancelled")).toHaveLength(0);
-        if (mode === "local") {
+      await waitFor(() => {
+        if (source === "local") {
           expect(handleBargeIn).not.toHaveBeenCalled();
         }
-      } else {
-        expect(requireCancelledTurn(call).turnId).toMatch(/^turn-\d+$/);
-        expect(handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true });
-      }
+        expect(outboundMessages.filter((message) => message.event === "clear")).toHaveLength(
+          clearCount + 1,
+        );
+      });
+      expect(talkEvents(call, "turn.cancelled")).toHaveLength(0);
     },
   );
 
@@ -817,6 +913,7 @@ describe("RealtimeCallHandler path routing", () => {
         if (path === "forced") {
           provider.onTranscript?.("user", question, true);
           await vi.advanceTimersByTimeAsync(200);
+          expect(hostTool).toHaveBeenCalledOnce();
         }
         const callIds = path === "general" ? ["a"] : ["a", "b"];
         for (const callId of callIds) {
@@ -824,6 +921,9 @@ describe("RealtimeCallHandler path routing", () => {
         }
         await vi.advanceTimersByTimeAsync(0);
         expect(hostTool).toHaveBeenCalledOnce();
+        expect(hostTool.mock.calls[0]?.[2].abortSignal?.aborted).toBe(
+          path === "general" ? undefined : false,
+        );
 
         if ("error" in outcome && !synchronous) {
           pending.reject(outcome.error);
@@ -840,6 +940,17 @@ describe("RealtimeCallHandler path routing", () => {
           expect([...log.mock.calls, ...warn.mock.calls].flat().join("\n")).not.toContain(
             outcome.result.error,
           );
+          if (path === "general") {
+            expect(warn).toHaveBeenCalledWith(
+              expect.stringMatching(
+                /^\[voice-call\] realtime tool call failed callId=call-1 tool=custom_lookup elapsedMs=\d+$/,
+              ),
+            );
+          } else {
+            expect(warn).toHaveBeenCalledWith(
+              "[voice-call] realtime forced agent consult failed callId=call-1 providerCallId=CA-test",
+            );
+          }
         }
         const terminalEvents = recentTalkEvents(call).filter((event) =>
           ["tool.result", "tool.error"].includes(event.type),
@@ -850,6 +961,9 @@ describe("RealtimeCallHandler path routing", () => {
         expect(sendUserMessage).not.toHaveBeenCalled();
         expect(closeBridge).not.toHaveBeenCalled();
         expect(ws.readyState).toBe(WebSocket.OPEN);
+        expect(hostTool.mock.calls[0]?.[2].abortSignal?.aborted).toBe(
+          path === "general" ? undefined : false,
+        );
       } finally {
         log.mockRestore();
         warn.mockRestore();
@@ -913,174 +1027,248 @@ describe("RealtimeCallHandler path routing", () => {
     );
   });
 
-  it("resets transcript, playback, Talk turns and cancelled consult dedupe together", async () => {
-    const { call, processEvent, ws, submitToolResult, consult, callbacks } = await openConsult(
-      async () => ({ text: "fresh answer" }),
+  it("clears cancelled consult dedupe for a fresh provider session", async () => {
+    let sessionHarness: RealtimeVoiceSessionHarness | undefined;
+    realtimeVoiceHarnessTestHooks.onCreate = (harness) => {
+      sessionHarness = harness;
+    };
+    const { submitToolResult, consult, callbacks } = await openConsult(async () => ({
+      text: "fresh consult answer",
+    }));
+
+    const coordinator = expectDefined(
+      sessionHarness,
+      "voice-call realtime session harness",
+    ).forcedConsults;
+    const cancelled = expectDefined(
+      coordinator.prepare("same question"),
+      "cancelled forced consult",
     );
-    const messages: Array<Record<string, unknown>> = [];
-    ws.on("message", (data) => messages.push(parseWebSocketMessage(data)));
-    callbacks.onTranscript?.("user", "Old caller ", false);
-    callbacks.onTranscript?.("assistant", "Old assistant ", false);
-    callbacks.onAudio(Buffer.alloc(320, 0xff));
-    const turn = sessionFor(call).talk.activeTurnId;
-    expect(turn).toBeDefined();
-    const coordinator = sessionFor(call).forcedConsults;
-    const cancelled = expectDefined(coordinator.prepare("same question"), "cancelled consult");
     coordinator.markStarted(cancelled);
     coordinator.markCancelled(cancelled);
-    requestConsult(callbacks, "cancelled", "same question");
-    await expectToolResult(submitToolResult, "cancelled", {
+
+    requestConsult(callbacks, "native-cancelled", "same question");
+    await expectToolResult(submitToolResult, "native-cancelled", {
       status: "cancelled",
       message: "OpenClaw cancelled this consult before completion. Do not restart it.",
     });
     expect(consult).not.toHaveBeenCalled();
+
     resetContinuity(callbacks);
     resetContinuity(callbacks);
-    await expectFrame(messages, "clear");
     expect(coordinator.handles()).toEqual([]);
-    expect(requireCancelledTurn(call).turnId).toBe(turn);
-    const events = recentTalkEvents(call);
-    expect(talkEvents(call, "turn.cancelled")).toHaveLength(1);
-    expect(events.findIndex((event) => event.type === "output.audio.done")).toBeLessThan(
-      events.findIndex((event) => event.type === "turn.cancelled"),
-    );
-    callbacks.onTranscript?.("user", "Fresh caller", true);
-    callbacks.onTranscript?.("assistant", "Fresh assistant", true);
-    expect(transcripts(processEvent)).toEqual(["Fresh caller"]);
-    expect(transcripts(processEvent, "call.assistant-speech")).toEqual(["Fresh assistant"]);
-    expect(talkEvents(call, "turn.started")).toHaveLength(2);
-    expect(sessionFor(call).talk.activeTurnId).not.toBe(turn);
-    requestConsult(callbacks, "fresh", "same question");
-    await expectToolResult(submitToolResult, "fresh", { text: "fresh answer" });
-    expect(consult).toHaveBeenCalledOnce();
+
+    requestConsult(callbacks, "native-fresh", "same question");
+
+    await waitFor(() => {
+      expect(consult).toHaveBeenCalledTimes(1);
+      expect(submitToolResult).toHaveBeenCalledWith(
+        "native-fresh",
+        { text: "fresh consult answer" },
+        undefined,
+      );
+    });
   });
 
-  it.each(["forced", "native"] as const)(
-    "isolates replacement sessions from late %s consults",
-    async (path) => {
-      const forced = path === "forced";
-      const oldSubmit = vi.fn(),
-        nextSubmit = vi.fn();
-      const oldSpeech = vi.fn(),
-        nextSpeech = vi.fn(),
-        oldClose = vi.fn();
-      const nextClose = vi.fn();
-      const { call, handler, callbacks, start, endCall, processEvent } = replacementHarness(
-        [
-          makeBridge({
-            close: oldClose,
-            sendUserMessage: oldSpeech,
-            submitToolResult: oldSubmit,
-            supportsToolResultContinuation: true,
-          }),
-          makeBridge({
-            sendUserMessage: nextSpeech,
-            submitToolResult: nextSubmit,
-            close: nextClose,
-            supportsToolResultContinuation: true,
-          }),
-        ],
-        { consultPolicy: forced ? "always" : "auto" },
-      );
-      const { oldResult, replacementResult, consult } = registerPendingConsult(handler);
-      const clearAudio = vi.spyOn(RealtimeAudioPacer.prototype, "clearAudio");
-      onTestFinished(() => {
-        clearAudio.mockRestore();
-      });
-      const oldQuestion = "Check the old deployment.",
-        nextQuestion = "Check the new deployment.";
-      const { ws } = await start("MZ-old", "CA-old");
-      if (forced) {
-        callbacks[0]?.onTranscript?.("user", oldQuestion, true);
-      } else {
-        requestConsult(callbacks[0], "old", oldQuestion);
-      }
+  it("keeps a replacement session's forced consult when the old result resolves late", async () => {
+    const sessionHarnesses: RealtimeVoiceSessionHarness[] = [];
+    realtimeVoiceHarnessTestHooks.onCreate = (harness) => {
+      sessionHarnesses.push(harness);
+    };
+    const oldSendUserMessage = vi.fn();
+    const replacementSendUserMessage = vi.fn();
+    const oldSubmitToolResult = vi.fn();
+    const oldCloseBridge = vi.fn();
+    const bridges = [
+      makeBridge({
+        close: oldCloseBridge,
+        sendUserMessage: oldSendUserMessage,
+        submitToolResult: oldSubmitToolResult,
+      }),
+      makeBridge({ sendUserMessage: replacementSendUserMessage }),
+    ];
+    const { handler, callbacks, start } = makeCallHarness(
+      (_request, index) => expectDefined(bridges[index], "replacement bridge"),
+      { config: { consultPolicy: "always" } },
+    );
+    const oldResult = createDeferred<{ text: string }>();
+    const replacementResult = createDeferred<{ text: string }>();
+    const consult = vi
+      .fn<
+        (_args: unknown, _callId: string, context: ToolHandlerContext) => Promise<{ text: string }>
+      >()
+      .mockImplementationOnce(() => oldResult.promise)
+      .mockImplementationOnce(() => replacementResult.promise);
+    handler.registerToolHandler("openclaw_agent_consult", consult);
+    const clearAudio = vi.spyOn(RealtimeAudioPacer.prototype, "clearAudio");
+
+    try {
+      const { ws: oldWs } = await start("MZ-forced-old", "CA-forced-old");
+      callbacks[0]?.onTranscript?.("user", "Check the old deployment.", true);
       await waitForCalls(consult);
-      const coordinator = sessionFor(call).forcedConsults;
-      const active = forced
-        ? expectDefined(
-            coordinator.handles().find((handle) => handle.question === oldQuestion),
-            "active forced consult",
-          )
-        : undefined;
-      const pending = forced
-        ? expectDefined(coordinator.prepare("Pending old work"), "pending forced consult")
-        : undefined;
-      const pendingRun = vi.fn();
-      if (pending) {
-        coordinator.schedule(pending, 60_000, pendingRun);
-      }
-      if (forced) {
-        requestConsult(callbacks[0], "old-join", oldQuestion);
-      } else {
-        await waitForCalls(oldSubmit);
-      }
-      const { ws: nextWs } = await start("MZ-next", "CA-next");
-      const messages: Array<Record<string, unknown>> = [];
-      nextWs.on("message", (data) => messages.push(parseWebSocketMessage(data)));
+      const oldCoordinator = expectDefined(
+        sessionHarnesses[0],
+        "old voice-call realtime session harness",
+      ).forcedConsults;
+      const oldForcedHandle = expectDefined(
+        oldCoordinator.handles().find((handle) => handle.question === "Check the old deployment."),
+        "old forced consult handle",
+      );
+      const stalePendingHandle = expectDefined(
+        oldCoordinator.prepare("Pending work from the old session."),
+        "stale pending forced consult handle",
+      );
+      const stalePendingRun = vi.fn();
+      oldCoordinator.schedule(stalePendingHandle, 60_000, stalePendingRun);
+      requestConsult(callbacks[0], "old-native-consult", "Check the old deployment.");
+      expect(consult).toHaveBeenCalledTimes(1);
+
+      await start("MZ-forced-replacement", "CA-forced-replacement");
       expect(consult.mock.calls[0]?.[2].abortSignal?.aborted).toBe(true);
-      if (forced) {
-        expect(coordinator.handles()).not.toContainEqual(pending);
-        expect(pendingRun).not.toHaveBeenCalled();
-        callbacks[1]?.onTranscript?.("user", nextQuestion, true);
-      } else {
-        requestConsult(callbacks[1], "next", nextQuestion);
-      }
+      expect(oldCoordinator.handles()).not.toContainEqual(stalePendingHandle);
+      expect(stalePendingRun).not.toHaveBeenCalled();
+      callbacks[1]?.onTranscript?.("user", "Check the new deployment.", true);
       await waitForCalls(consult, 2);
-      callbacks[1]?.onTranscript?.("user", "Fresh ", false);
-      requestConsult(callbacks[0], "stale", oldQuestion);
-      callTool(callbacks[0], "stale-end", "openclaw_end_call");
-      const clearCount = clearAudio.mock.calls.length;
-      oldResult.resolve({ text: "Old answer" });
+      expect(clearAudio).toHaveBeenCalledTimes(2);
+
+      requestConsult(callbacks[0], "stale-native-consult", "Check the old deployment.");
       await delay();
-      expect(oldSpeech).not.toHaveBeenCalled();
-      expect(oldSubmit).toHaveBeenCalledTimes(forced ? 0 : 1);
+      expect(oldSubmitToolResult).not.toHaveBeenCalled();
       expect(consult).toHaveBeenCalledTimes(2);
-      if (forced) {
-        expect(coordinator.handles()).not.toContainEqual(active);
-      }
-      callbacks[0]?.onAudio(Buffer.from([1]));
-      callbacks[0]?.onTranscript?.("user", "stale partial", false);
-      callbacks[0]?.onTranscript?.("user", "stale final", true);
-      callbacks[0]?.onTranscript?.("assistant", "stale assistant", true);
-      resetContinuity(callbacks[0]);
-      resetContinuity(callbacks[0]);
+
+      oldResult.resolve({ text: "The old deployment is healthy." });
       await delay();
-      expect(clearAudio).toHaveBeenCalledTimes(clearCount);
-      expect(messages.filter((message) => message.event === "media")).toEqual([]);
-      callbacks[1]?.onAudio(Buffer.from([2]));
-      await waitFor(() =>
-        expect(messages).toContainEqual(
-          expect.objectContaining({
-            event: "media",
-            media: { payload: Buffer.from([2]).toString("base64") },
-          }),
-        ),
+      expect(clearAudio).toHaveBeenCalledTimes(2);
+      expect(oldSendUserMessage).not.toHaveBeenCalled();
+      expect(oldCoordinator.handles()).not.toContainEqual(oldForcedHandle);
+
+      const oldClosed = waitForClose(oldWs);
+      oldWs.close();
+      await oldClosed;
+      await waitForCalls(oldCloseBridge);
+
+      replacementResult.resolve({ text: "The new deployment is healthy." });
+      await waitForCalls(replacementSendUserMessage);
+      expect(replacementSendUserMessage).toHaveBeenCalledWith(
+        "Internal OpenClaw consult result is ready.\nDo not call tools for this internal result.\nSpeak the following answer to the caller now, briefly and naturally:\nThe new deployment is healthy.",
       );
-      const closed = waitForClose(ws);
-      callbacks[0]?.onClose?.("error");
-      await closed;
-      await waitForCalls(oldClose);
-      expect(nextClose).not.toHaveBeenCalled();
-      expect(endCall).not.toHaveBeenCalled();
-      expect(nextWs.readyState).toBe(WebSocket.OPEN);
-      expect(callEvents(processEvent, "call.ended")).toHaveLength(0);
-      callbacks[1]?.onTranscript?.("user", "caller", true);
-      expect(transcripts(processEvent)).toEqual(
-        forced ? [oldQuestion, nextQuestion, "Fresh caller"] : ["Fresh caller"],
-      );
-      expect(transcripts(processEvent, "call.assistant-speech")).toEqual([]);
-      replacementResult.resolve({ text: "New answer" });
-      if (forced) {
-        await waitForCalls(nextSpeech);
-        expect(nextSpeech).toHaveBeenCalledWith(
-          "Internal OpenClaw consult result is ready.\nDo not call tools for this internal result.\nSpeak the following answer to the caller now, briefly and naturally:\nNew answer",
-        );
-      } else {
-        await expectToolResult(nextSubmit, "next", { text: "New answer" }, true);
-      }
-    },
-  );
+      expect(consult.mock.calls[1]).toEqual([
+        { question: "Check the new deployment." },
+        "call-1",
+        { abortSignal: expect.any(AbortSignal) },
+      ]);
+      expect(clearAudio).toHaveBeenCalledTimes(3);
+    } finally {
+      clearAudio.mockRestore();
+    }
+  });
+
+  it("retires predecessor audio and isolates late bridge events from its replacement", async () => {
+    const oldCloseBridge = vi.fn();
+    const replacementCloseBridge = vi.fn();
+    const bridges = [
+      makeBridge({ close: oldCloseBridge }),
+      makeBridge({ close: replacementCloseBridge }),
+    ];
+    const { callbacks, start, processEvent, endCall } = makeCallHarness((_request, index) =>
+      expectDefined(bridges[index], "replacement bridge"),
+    );
+    const { ws: oldWs } = await start("MZ-continuity-old");
+    callbacks[0]?.onTranscript?.("user", "Old ", false);
+
+    const { ws: replacementWs } = await start("MZ-continuity-replacement");
+    callbacks[1]?.onTranscript?.("user", "Fresh ", false);
+    const replacementOutboundMessages: Array<Record<string, unknown>> = [];
+    replacementWs.on("message", (data) =>
+      replacementOutboundMessages.push(parseWebSocketMessage(data)),
+    );
+    await waitForCalls(oldCloseBridge);
+    callTool(callbacks[0], "stale-end-call", "openclaw_end_call");
+    await Promise.resolve();
+    expect(endCall).not.toHaveBeenCalled();
+    expect(replacementWs.readyState).toBe(WebSocket.OPEN);
+
+    callbacks[0]?.onAudio(Buffer.from([0x01]));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(replacementOutboundMessages).toHaveLength(0);
+
+    callbacks[1]?.onAudio(Buffer.from([0x02]));
+    await waitFor(() =>
+      expect(replacementOutboundMessages).toEqual([
+        expect.objectContaining({
+          event: "media",
+          media: { payload: Buffer.from([0x02]).toString("base64") },
+        }),
+      ]),
+    );
+
+    callbacks[0]?.onTranscript?.("user", "stale partial", false);
+    callbacks[0]?.onTranscript?.("user", "stale final", true);
+    callbacks[0]?.onTranscript?.("assistant", "stale assistant", true);
+    resetContinuity(callbacks[0]);
+    resetContinuity(callbacks[0]);
+    const oldClosed = waitForClose(oldWs);
+    callbacks[0]?.onClose?.("error");
+    await oldClosed;
+    await waitForCalls(oldCloseBridge);
+    expect(replacementCloseBridge).not.toHaveBeenCalled();
+    expect(endCall).not.toHaveBeenCalled();
+    expect(callEvents(processEvent, "call.ended")).toHaveLength(0);
+    callbacks[1]?.onTranscript?.("user", "caller", true);
+
+    await waitFor(() => expect(transcripts(processEvent, "call.speech")).toEqual(["Fresh caller"]));
+    expect(callEvents(processEvent, "call.assistant-speech")).toHaveLength(0);
+  });
+
+  it("does not share a native consult with a replacement realtime session", async () => {
+    const oldSubmitToolResult = vi.fn();
+    const replacementSubmitToolResult = vi.fn();
+    const bridges = [
+      makeBridge({
+        supportsToolResultContinuation: true,
+        submitToolResult: oldSubmitToolResult,
+      }),
+      makeBridge({
+        supportsToolResultContinuation: true,
+        submitToolResult: replacementSubmitToolResult,
+      }),
+    ];
+    const { handler, callbacks, start } = makeCallHarness((_request, index) =>
+      expectDefined(bridges[index], "replacement bridge"),
+    );
+    const oldResult = createDeferred<{ text: string }>();
+    const replacementResult = createDeferred<{ text: string }>();
+    const consult = vi
+      .fn()
+      .mockImplementationOnce(() => oldResult.promise)
+      .mockImplementationOnce(() => replacementResult.promise);
+    handler.registerToolHandler("openclaw_agent_consult", consult);
+
+    await start("MZ-native-old", "CA-native-old");
+    requestConsult(callbacks[0], "native-old", "Check the old deployment.");
+    await waitFor(() => {
+      expect(consult).toHaveBeenCalledTimes(1);
+      expect(oldSubmitToolResult).toHaveBeenCalledTimes(1);
+    });
+
+    await start("MZ-native-replacement", "CA-native-replacement");
+    requestConsult(callbacks[1], "native-replacement", "Check the new deployment.");
+    await waitForCalls(consult, 2);
+
+    oldResult.resolve({ text: "The old deployment is healthy." });
+    await delay();
+    expect(oldSubmitToolResult).toHaveBeenCalledTimes(1);
+
+    replacementResult.resolve({ text: "The new deployment is healthy." });
+    await expectToolResult(
+      replacementSubmitToolResult,
+      "native-replacement",
+      { text: "The new deployment is healthy." },
+      true,
+    );
+  });
 
   it("does not carry a final transcript into the next direct voice turn", async () => {
     const { processEvent, start } = makeCallHarness();
@@ -1108,27 +1296,69 @@ describe("RealtimeCallHandler path routing", () => {
     ]);
   });
 
-  it.each([false, true])(
-    "dedupes native-first consults and gates interim results with fast context=%s",
-    async (fastContext) => {
-      const result = { text: "Native answer." };
-      const { submitToolResult, consult, callbacks } = await openConsult(
-        async () => result,
-        {
-          consultPolicy: "always",
-          fastContext: { ...createRealtimeConfig().fastContext, enabled: fastContext },
-        },
-        { supportsToolResultContinuation: true },
-      );
-      vi.useFakeTimers();
-      callbacks.onTranscript?.("user", "What do you remember?", true);
-      requestConsult(callbacks, "native", "What do you remember?");
-      await expectToolResult(submitToolResult, "native", result, true);
-      expect(submitToolResult).toHaveBeenCalledTimes(fastContext ? 1 : 2);
-      await vi.advanceTimersByTimeAsync(250);
-      expect(consult).toHaveBeenCalledOnce();
-    },
-  );
+  it("waits for partial transcript fragments to settle before consulting", async () => {
+    const { submitToolResult, consult, callbacks } = await openConsult(
+      async () => ({ text: "I sent it." }),
+      undefined,
+      { supportsToolResultContinuation: true },
+    );
+
+    vi.useFakeTimers();
+    callbacks?.onTranscript?.("user", "Send a Discord", false);
+    requestConsult(callbacks, "consult-call", "message");
+    await vi.advanceTimersByTimeAsync(50);
+    callbacks?.onTranscript?.("user", "message.", false);
+    await vi.advanceTimersByTimeAsync(350);
+
+    await waitFor(() => expect(consult).toHaveBeenCalledTimes(1), { timeout: 2_000 });
+    const [args, callId, context] = expectDefined(consult.mock.calls.at(0), "consult");
+    expect(args).toMatchObject({
+      question: "Send a Discord message.",
+      context: "Realtime provider supplied a shorter consult question: message",
+    });
+    expect(callId).toBe("call-1");
+    expect(context).toEqual({
+      partialUserTranscript: "Send a Discord message.",
+      abortSignal: expect.any(AbortSignal),
+    });
+    await expectToolResult(submitToolResult, "consult-call", { text: "I sent it." }, true);
+  });
+
+  it("does not force a duplicate consult when the realtime provider calls the consult tool", async () => {
+    const { submitToolResult, consult, callbacks } = await openConsult(
+      async () => ({ text: "Native consult result." }),
+      { consultPolicy: "always" },
+      { supportsToolResultContinuation: true },
+    );
+
+    vi.useFakeTimers();
+    callbacks?.onTranscript?.("user", "Send me a Discord message.", true);
+    requestConsult(callbacks, "consult-call", "Send me a Discord message.");
+
+    await expectToolResult(
+      submitToolResult,
+      "consult-call",
+      { text: "Native consult result." },
+      true,
+    );
+    await vi.advanceTimersByTimeAsync(250);
+    expect(consult).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not submit an interim checking result when fast context is enabled", async () => {
+    const { submitToolResult, callbacks } = await openConsult(
+      async () => ({ text: "Fast context." }),
+      {
+        fastContext: { ...createRealtimeConfig().fastContext, enabled: true },
+      },
+      { supportsToolResultContinuation: true },
+    );
+
+    requestConsult(callbacks, "consult-call", "What do you remember?");
+
+    await expectToolResult(submitToolResult, "consult-call", { text: "Fast context." });
+    expect(submitToolResult).toHaveBeenCalledTimes(1);
+  });
 
   it("closes realtime streams when paced outbound audio exceeds the internal queue cap", async () => {
     const { start } = makeCallHarness();

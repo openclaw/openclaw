@@ -157,7 +157,11 @@ describe("agentLoop steering", () => {
         }
       });
 
-      await agent.prompt(mode === "initial" ? target : "Input A");
+      if (mode === "initial") {
+        await agent.prompt(target);
+      } else {
+        await agent.prompt("Input A");
+      }
 
       expect(publishedMessage).toBe(true);
       expect(beforeCommit).toBeDefined();
@@ -536,16 +540,15 @@ describe("agentLoop steering", () => {
         steer,
       ]);
       const ends = events.filter((event) => event.type === "tool_execution_end");
-      expect(ends).toMatchObject([
-        {
-          toolCallId: "invalid",
-          errorKind: "argument-validation",
-          executionStarted: false,
-          result: { details: { observed: "pre-execution" } },
-        },
-        { toolCallId: "prepared", errorKind: undefined },
-        { toolCallId: "tail", errorKind: undefined },
+      expect(ends.map(({ toolCallId, errorKind }) => [toolCallId, errorKind])).toEqual([
+        ["invalid", "argument-validation"],
+        ["prepared", undefined],
+        ["tail", undefined],
       ]);
+      expect(ends[0]).toMatchObject({
+        executionStarted: false,
+        result: { details: { observed: "pre-execution" } },
+      });
       expectHook(afterToolOutcome, {
         args: {},
         executionStarted: false,

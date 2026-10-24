@@ -1,4 +1,4 @@
-import { AbortController as TelegramAbortController } from "abort-controller";
+import { createRequire } from "node:module";
 import { Api } from "grammy";
 import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -12,6 +12,15 @@ import { resetTelegramAccountThrottlersForTest } from "./runtime.test-support.js
 
 type TelegramTransform = ReturnType<typeof getOrCreateAccountThrottler>["transformer"];
 type TelegramPreviousCall = Parameters<TelegramTransform>[0];
+
+const {
+  AbortController: TelegramAbortController,
+}: {
+  AbortController: new () => {
+    signal: NonNullable<Parameters<Api["sendChatAction"]>[3]>;
+    abort: () => void;
+  };
+} = createRequire(import.meta.resolve("grammy"))("abort-controller");
 
 function callLooseSendMessage(
   throttler: TelegramTransform,

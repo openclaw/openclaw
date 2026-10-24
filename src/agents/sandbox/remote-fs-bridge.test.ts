@@ -180,6 +180,21 @@ describe("remote pinned read sources", () => {
 });
 
 describe("remote sandbox fs bridge", () => {
+  it.runIf(process.platform === "linux")(
+    "streams file copies with the pinned mutation helper",
+    async () => {
+      const fixture = await createFixture();
+      await fixture.put("source.txt", "streamed");
+      expect(fixture.bridge.copyFile).toBeTypeOf("function");
+      await fixture.bridge.copyFile!({
+        sourcePath: "source.txt",
+        destinationPath: "nested/copy.txt",
+      });
+      await fixture.contents("nested/copy.txt", "streamed");
+      expect(fixture.calls.some((call) => call.args?.[0] === "copy")).toBe(true);
+    },
+  );
+
   it.each([false, true])("resolves equal-root ownership (protected=%s)", (protectedRoot) => {
     const workspaceDir = path.resolve("mapping-workspace");
     const agentWorkspaceDir = path.resolve("mapping-agent");
