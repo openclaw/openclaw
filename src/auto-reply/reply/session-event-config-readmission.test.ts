@@ -39,6 +39,7 @@ import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { captureCronInferenceBinding } from "../../cron/inference-binding.runtime.js";
 import { TEST_SCHEDULED_TURN } from "../../cron/scheduled-occurrence.test-support.js";
 import { runCronSessionTurn } from "../../cron/session-run.js";
+import type { CronJob } from "../../cron/types.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -258,27 +259,22 @@ it.for([
           scenario.startsWith("scheduled-model-") ||
           scheduledAccount;
         const scheduledSubagent = scenario.startsWith("scheduled-subagent-");
-        if (explicitScheduledModel || scheduledSubagent || scenario === "scheduled-gmail-default") {
-          config.agents = {
-            ...config.agents,
-            defaults: {
-              ...config.agents?.defaults,
-              modelPolicy: {
-                allow: [
-                  "mock-openai/*",
-                  ...(scheduledProvider === "mock-other" ? ["mock-other/*"] : []),
-                ],
-              },
-              ...(scheduledSubagent ? { subagents: { model: "mock-openai/gpt-5.6-luna" } } : {}),
-              models: {
-                ...config.agents?.defaults?.models,
-                "mock-openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
-                ...(scheduledProvider === "mock-other"
-                  ? { [`${scheduledProvider}/gpt-5.6-sol`]: { agentRuntime: { id: "openclaw" } } }
-                  : {}),
-              },
-            },
+        const defaults = expectDefined(config.agents?.defaults, "fixture defaults");
+        const gmail = scenario === "scheduled-gmail-default";
+        const locked = scenario === "scheduled-subagent-locked";
+        if (explicitScheduledModel || scheduledSubagent || gmail) {
+          defaults.modelPolicy = { allow: ["mock-openai/*"] };
+          defaults.models = {
+            ...defaults.models,
+            "mock-openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
           };
+          if (scheduledProvider === "mock-other") {
+            defaults.modelPolicy.allow.push("mock-other/*");
+            defaults.models["mock-other/gpt-5.6-sol"] = { agentRuntime: { id: "openclaw" } };
+          }
+          if (scheduledSubagent) {
+            defaults.subagents = { model: "mock-openai/gpt-5.6-luna" };
+          }
         }
         if (scenario === "scheduled-gmail-default") {
           config.hooks = { gmail: { model: "mock-openai/gpt-5.6-luna", thinking: "off" } };
@@ -314,30 +310,31 @@ it.for([
         const missingDestinationProfileId = boundAccount
           ? `personal:${ensureProfileForEmail("destination@example.test").id}:${randomUUID()}`
           : undefined;
-        const scope = await createSession("config-readmission", {
-          ...(scheduledAccount
-            ? {
-                authProfileOverride: "mock-openai:conversation",
-                authProfileOverrideSource: "user" as const,
-                authProfileOverrideCompactionCount: 2,
-              }
-            : {}),
-          ...(scenario === "scheduled-subagent-locked" || boundAccount
-            ? { modelSelectionLocked: true }
-            : {}),
-          ...(scenario === "scheduled-gmail-default"
-            ? {
-                providerOverride: "mock-openai",
-                modelOverride: "gpt-5.6-luna",
-                thinkingLevel: "off",
-              }
-            : {}),
+        const session: Partial<SessionEntry> = {
           // A channel route arms durable restart-recovery source claims.
           delivery: normalizeSessionDeliveryState({
             context: { channel: "telegram", to: "-100001", accountId: "readmission" },
           }),
           sessionStartedAt: Date.now(),
-        });
+        };
+        if (scheduledAccount) {
+          Object.assign(session, {
+            authProfileOverride: "mock-openai:conversation",
+            authProfileOverrideSource: "user",
+            authProfileOverrideCompactionCount: 2,
+          });
+        }
+        if (locked || boundAccount) {
+          session.modelSelectionLocked = true;
+        }
+        if (gmail) {
+          Object.assign(session, {
+            providerOverride: "mock-openai",
+            modelOverride: "gpt-5.6-luna",
+            thinkingLevel: "off",
+          });
+        }
+        const scope = await createSession("config-readmission", session);
         let sourceReferences = 1;
         const operatorAuthority =
           scenario === "allow-control" || scenario.startsWith("scheduled-")
@@ -428,6 +425,46 @@ it.for([
               missingDestinationProfileId,
             );
           }
+          const payload: Extract<CronJob["payload"], { kind: "agentTurn" }> = {
+            kind: "agentTurn",
+            message: "Background exec completed",
+          };
+          if (gmail) {
+            payload.externalContentSource = "gmail";
+          }
+          if (locked) {
+            payload.fallbacks = ["mock-openai/gpt-5.6-sol"];
+          }
+          if (explicitScheduledModel) {
+            payload.model =
+              scenario === "scheduled-model-malformed"
+                ? "openai/"
+                : `${scheduledProvider}/gpt-5.6-sol`;
+          }
+          const scheduledAutomation = scenario.startsWith("scheduled-")
+            ? {
+                ...TEST_SCHEDULED_TURN,
+                job: {
+                  ...makeCronJob({
+                    id: "scheduled-readmission",
+                    name: "Scheduled readmission",
+                    createdAtMs: 1,
+                    updatedAtMs: 1,
+                    wakeMode: "now",
+                    sessionTarget: `session:${scope.sessionKey}`,
+                    payload,
+                  }),
+                  inferenceBinding,
+                },
+                onLaneWait: ({ waiting }: { waiting: boolean }) => laneStates.push(waiting),
+                operatorAuthority,
+                assertCurrent: () => {
+                  if (revoked) {
+                    throw new Error("Scheduled source retired");
+                  }
+                },
+              }
+            : undefined;
           completion = enqueueSessionEventForHost("Background exec completed", {
             ...scope,
             source: "exec",
@@ -437,49 +474,7 @@ it.for([
             expectedTarget:
               scenario === "retained-ceiling" ? { ...target, toolsAllow: ["read"] } : target,
             abortSignal: signal,
-            ...(scenario.startsWith("scheduled-")
-              ? {
-                  scheduledAutomation: {
-                    ...TEST_SCHEDULED_TURN,
-                    job: {
-                      ...makeCronJob({
-                        id: "scheduled-readmission",
-                        name: "Scheduled readmission",
-                        createdAtMs: 1,
-                        updatedAtMs: 1,
-                        sessionTarget: `session:${scope.sessionKey}` as const,
-                        wakeMode: "now" as const,
-                        payload: {
-                          kind: "agentTurn" as const,
-                          message: "Background exec completed",
-                          ...(scenario === "scheduled-gmail-default"
-                            ? { externalContentSource: "gmail" as const }
-                            : {}),
-                          ...(scenario === "scheduled-subagent-locked"
-                            ? { fallbacks: ["mock-openai/gpt-5.6-sol"] }
-                            : {}),
-                          ...(explicitScheduledModel
-                            ? {
-                                model:
-                                  scenario === "scheduled-model-malformed"
-                                    ? "openai/"
-                                    : `${scheduledProvider}/gpt-5.6-sol`,
-                              }
-                            : {}),
-                        },
-                      }),
-                      inferenceBinding,
-                    },
-                    onLaneWait: ({ waiting }) => laneStates.push(waiting),
-                    operatorAuthority,
-                    assertCurrent: () => {
-                      if (revoked) {
-                        throw new Error("Scheduled source retired");
-                      }
-                    },
-                  },
-                }
-              : {}),
+            scheduledAutomation,
             assertCurrent: () => {
               if (revoked && !scenario.startsWith("scheduled-")) {
                 throw new Error("Background producer retired");
@@ -503,36 +498,26 @@ it.for([
           if (scenario === "scheduled-control") {
             expect(laneStates.at(-1)).toBe(true);
           }
-          setRuntimeConfigSnapshot({
-            ...config,
-            ...(scenario === "scheduled-gmail-default"
-              ? {
-                  hooks: { gmail: { model: "mock-openai/gpt-5.6-sol", thinking: "high" as const } },
-                }
-              : {}),
-            ...(scenario === "scheduled-model-revoked" || scheduledSubagent
-              ? {
-                  agents: {
-                    ...config.agents,
-                    defaults: {
-                      ...config.agents?.defaults,
-                      ...(scenario === "scheduled-model-revoked"
-                        ? { modelPolicy: { allow: ["mock-openai/gpt-5.6-luna"] } }
-                        : {
-                            subagents: {
-                              model: {
-                                primary: "mock-openai/gpt-5.6-sol",
-                                fallbacks: ["mock-openai/gpt-5.6-luna"],
-                              },
-                            },
-                          }),
-                    },
-                  },
-                }
-              : {}),
-            // Ceiling and control publish a change that still permits write.
-            tools: { deny: scenario === "published-deny" ? ["write"] : ["exec"] },
-          });
+          const published = structuredClone(config);
+          const publishedDefaults = expectDefined(published.agents?.defaults, "published defaults");
+          if (gmail) {
+            published.hooks = {
+              gmail: { model: "mock-openai/gpt-5.6-sol", thinking: "high" },
+            };
+          }
+          if (scenario === "scheduled-model-revoked") {
+            publishedDefaults.modelPolicy = { allow: ["mock-openai/gpt-5.6-luna"] };
+          } else if (scheduledSubagent) {
+            publishedDefaults.subagents = {
+              model: {
+                primary: "mock-openai/gpt-5.6-sol",
+                fallbacks: ["mock-openai/gpt-5.6-luna"],
+              },
+            };
+          }
+          // Ceiling and control publish a change that still permits write.
+          published.tools = { deny: scenario === "published-deny" ? ["write"] : ["exec"] };
+          setRuntimeConfigSnapshot(published);
           storming = scenario === "publication-storm";
           revoked = scenario === "revoked-producer" || scenario === "scheduled-revoked";
           releaseFirst.resolve();
@@ -565,28 +550,28 @@ it.for([
           if (executes) {
             expect(prompts[1]).toContain("Background exec completed");
           }
-          if (scenario === "scheduled-control" || scenario === "scheduled-subagent-default") {
-            expect(runEmbeddedAgentMock.mock.calls[1]?.[0]).toMatchObject({
+          const saved = await readSessionEntryInWorker(scope);
+          const expectModel = (
+            index: number,
+            model: string,
+            extra: Partial<RunEmbeddedAgentParams> = {},
+          ) =>
+            expect(runEmbeddedAgentMock.mock.calls[index]?.[0]).toMatchObject({
               provider: "mock-openai",
-              model: "gpt-5.6-sol",
+              model,
+              ...extra,
             });
+          if (scenario === "scheduled-control" || scenario === "scheduled-subagent-default") {
+            expectModel(1, "gpt-5.6-sol");
           }
           if (scenario === "scheduled-subagent-default") {
-            expect(runEmbeddedAgentMock.mock.calls[2]?.[0]).toMatchObject({
-              provider: "mock-openai",
-              model: "gpt-5.6-luna",
-            });
-            const saved = await readSessionEntryInWorker(scope);
+            expectModel(2, "gpt-5.6-luna");
             expect(saved?.providerOverride).toBeUndefined();
             expect(saved?.modelOverride).toBeUndefined();
           }
           if (scenario === "scheduled-gmail-default") {
-            expect(runEmbeddedAgentMock.mock.calls[1]?.[0]).toMatchObject({
-              provider: "mock-openai",
-              model: "gpt-5.6-sol",
-              thinkLevel: "high",
-            });
-            expect(await readSessionEntryInWorker(scope)).toMatchObject({
+            expectModel(1, "gpt-5.6-sol", { thinkLevel: "high" });
+            expect(saved).toMatchObject({
               providerOverride: "mock-openai",
               modelOverride: "gpt-5.6-luna",
               thinkingLevel: "off",
@@ -596,11 +581,8 @@ it.for([
             expect(completedOutcome.error).toBe(
               "⚠️ This model was not found. Choose another model in the Control UI or run `openclaw configure`.",
             );
-            expect(runEmbeddedAgentMock.mock.calls[1]?.[0]).toMatchObject({
-              provider: "mock-openai",
-              model: "gpt-5.6-luna",
-            });
-            expect(await readSessionEntryInWorker(scope)).toMatchObject({
+            expectModel(1, "gpt-5.6-luna");
+            expect(saved).toMatchObject({
               modelSelectionLocked: true,
             });
           }
@@ -613,7 +595,7 @@ it.for([
                   ? "mock-openai:conversation"
                   : "mock-other:automation",
             });
-            expect(await readSessionEntryInWorker(scope)).toMatchObject({
+            expect(saved).toMatchObject({
               authProfileOverride: missingDestinationProfileId ?? "mock-openai:conversation",
               authProfileOverrideSource: "user",
               authProfileOverrideCompactionCount: 2,

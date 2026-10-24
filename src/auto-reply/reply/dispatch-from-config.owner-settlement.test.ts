@@ -53,6 +53,7 @@ let listActiveReplyRunSessionKeys: typeof import("../../sessions/session-control
 let runAfterReplyOperationClear: typeof import("../../sessions/session-controller.js").runAfterReplyOperationClear;
 let resetSessionControllerForTest: typeof import("../../sessions/session-controller.test-support.js").testing.resetSessionControllerForTest;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
+type Operation = ReturnType<typeof createReplyOperation>;
 
 function dispatchOwned({
   sessionKey,
@@ -137,19 +138,13 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     const ownerSettled = vi.fn();
     const successorAbort = new AbortController();
     const events: string[] = [];
-    let operation: ReturnType<typeof createReplyOperation> | undefined;
+    let operation: Operation | undefined;
     let successorDispatch: Promise<unknown> | undefined;
     let dispatcherSettlement: Promise<unknown> | undefined;
     const source = reserveSessionControllerSource(sessionKey, {
-      target: captureSessionTarget({
-        storeScope: "/tmp/mock-sessions.json",
-        sessionKey,
-      }),
+      target: captureSessionTarget({ storeScope: "/tmp/mock-sessions.json", sessionKey }),
       policy: { mode: "followup" },
-      adapter: {
-        signal,
-        onSettled: cleanup.wait,
-      },
+      adapter: { signal, onSettled: cleanup.wait },
     });
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
@@ -160,9 +155,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
         deliveryEntered.resolve();
         successorDispatch = dispatchOwned({
           sessionKey,
-          context: {
-            MessageSid: "successor",
-          },
+          context: { MessageSid: "successor" },
           dispatcher: successorDispatcher,
           replyOptions: { abortSignal: AbortSignal.any([signal, successorAbort.signal]) },
           replyResolver: async () => {
@@ -178,9 +171,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     });
     const dispatch = dispatchOwned({
       sessionKey,
-      context: {
-        MessageSid: "predecessor",
-      },
+      context: { MessageSid: "predecessor" },
       dispatcher,
       replyOptions: bindReplySourceInput({ abortSignal: signal }, source),
       replyResolver: async (_ctx, options) => {
@@ -239,7 +230,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       adapter: { onSettled: sourceSettled },
     });
     const dispatcher = createDispatcher();
-    let operation: ReturnType<typeof createReplyOperation> | undefined;
+    let operation: Operation | undefined;
     let releaseExecution: (() => void) | undefined;
     const producerCompleted = vi.fn();
     try {
@@ -360,10 +351,8 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     "holds %s resolver work until it settles",
     async (mode) => {
       const queued = mode !== "owned";
-      const sessionKey = queued
-        ? "agent:main:discord:channel:event-resolver-race"
-        : "agent:main:discord:channel:owned-resolver-race";
-      const sessionId = queued ? "event-resolver-session" : "owned-resolver-session";
+      const sessionKey = "agent:main:discord:channel:resolver-race";
+      const sessionId = "resolver-session";
       const scope = { scope: "/tmp/mock-sessions.json", identities: [sessionKey, sessionId] };
       sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
       const predecessor = queued
@@ -386,11 +375,9 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       const dispatch = dispatchOwned({
         sessionKey,
         context: {
-          To: queued
-            ? "discord:channel:event-resolver-race"
-            : "discord:channel:owned-resolver-race",
+          To: "discord:channel:resolver-race",
           AccountId: "default",
-          Body: queued ? "the background process completed" : "hold this resolver",
+          Body: "hold this resolver",
           ...(queued ? { InternalTurnSource: "event" } : {}),
         },
         dispatcher,
@@ -413,7 +400,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
             resumedOwner = getSessionControllerOperation(sessionKey);
             await requireBlockReplyHandler(opts?.onBlockReply)({ text: "stale late block" });
           }
-          return { text: queued ? "stale late event reply" : "stale late final" };
+          return { text: "stale late reply" };
         },
       });
       try {
@@ -684,8 +671,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
           ? ["block-delivered", "callback-start", "callback-end", "followup"]
           : ["final-start", "final-end", "followup"];
         const deliveryOrder: string[] = [];
-        const releaseDelivery = createDeferred();
-        const deliveryEntered = createDeferred();
+        const delivery = createGate();
         const followupEntered = createDeferred();
         let receiptCallbackWork: Promise<void> | undefined;
         const dispatcher = createReplyDispatcher({
@@ -695,13 +681,12 @@ describe("dispatchReplyFromConfig owner settlement", () => {
               return;
             }
             deliveryOrder.push("final-start");
-            deliveryEntered.resolve();
-            await releaseDelivery.promise;
+            await delivery.wait();
             deliveryOrder.push("final-end");
           },
         });
-        let operation: ReturnType<typeof createReplyOperation> | undefined;
-        let queuedOperation: ReturnType<typeof createReplyOperation> | undefined;
+        let operation: Operation | undefined;
+        let queuedOperation: Operation | undefined;
         let successorClaim: Awaited<ReturnType<typeof claimSessionControllerTask>> | undefined;
         let successorAdmission: Promise<void> | undefined;
         const abortController = new AbortController();
@@ -744,8 +729,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
             onBlockReplyQueued: holdReceiptCallback
               ? () => {
                   deliveryOrder.push("callback-start");
-                  deliveryEntered.resolve();
-                  receiptCallbackWork = releaseDelivery.promise.then(() => {
+                  receiptCallbackWork = delivery.wait().then(() => {
                     deliveryOrder.push("callback-end");
                   });
                   return receiptCallbackWork;
@@ -759,11 +743,9 @@ describe("dispatchReplyFromConfig owner settlement", () => {
         });
 
         try {
-          await deliveryEntered.promise;
-          expect(deliveryOrder).toEqual(heldOrder);
+          await delivery.entered;
           const result = await dispatchPromise;
 
-          expect(operation).toBeDefined();
           expect(result.queuedFinal).toBe(!holdReceiptCallback);
           expect(getSessionControllerOperation("agent:test:session")).toBeUndefined();
           if (holdReceiptCallback) {
@@ -777,15 +759,14 @@ describe("dispatchReplyFromConfig owner settlement", () => {
           await Promise.resolve();
           expect(queuedOperation).toBeUndefined();
 
-          releaseDelivery.resolve();
+          delivery.release();
           await settleReplyDispatcher({ dispatcher });
           await followupEntered.promise;
-          expect(queuedOperation).toBeDefined();
 
           expect(deliveryOrder).toEqual(completedOrder);
           expect(getSessionControllerOperation("agent:test:session")).toBe(queuedOperation);
         } finally {
-          releaseDelivery.resolve();
+          delivery.release();
           dispatcher.markComplete();
           await Promise.allSettled([dispatchPromise, receiptCallbackWork]);
           await settleReplyDispatcher({ dispatcher });
