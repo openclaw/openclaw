@@ -91,15 +91,12 @@ it("persists include-pattern timing metadata", () => {
   });
   f.write(sample);
   expect(f.read()).toEqual(new Map([[selectedConfig, 1234]]));
-  const persisted = f.persisted()[selectedConfig];
-  expect(typeof persisted.updatedAt).toBe("string");
-  expect(persisted.updatedAt.length).toBeGreaterThan(0);
-  expect({ ...persisted, updatedAt: "<dynamic>" }).toStrictEqual({
+  expect(f.persisted()[selectedConfig]).toStrictEqual({
     averageMs: 1234,
     baseConfig: config,
     includePatternCount: 1,
     lastMs: 1234,
     sampleCount: 1,
-    updatedAt: "<dynamic>",
+    updatedAt: expect.stringMatching(/./u),
   });
 });

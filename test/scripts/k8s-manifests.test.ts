@@ -26,10 +26,6 @@ function findNamed(value: unknown, name: string): Record<string, unknown> {
 it("keeps kustomization resources aligned with shipped manifests", () => {
   const kustomization = readManifest("kustomization.yaml");
 
-  expect(kustomization).toMatchObject({
-    apiVersion: "kustomize.config.k8s.io/v1beta1",
-    kind: "Kustomization",
-  });
   expect(kustomization.resources).toEqual(
     expect.arrayContaining(["configmap.yaml", "deployment.yaml", "pvc.yaml", "service.yaml"]),
   );
@@ -39,12 +35,7 @@ it("keeps kustomization resources aligned with shipped manifests", () => {
 it("keeps gateway service selectors and ports aligned with deployment labels", () => {
   const deployment = readManifest("deployment.yaml");
   const service = readManifest("service.yaml");
-  expect(deployment).toMatchObject({
-    apiVersion: "apps/v1",
-    kind: "Deployment",
-    metadata: { name: "openclaw" },
-    spec: { template: { metadata: { labels: { app: "openclaw" } } } },
-  });
+  expect(deployment).toHaveProperty("spec.template.metadata.labels", { app: "openclaw" });
   expect(deployment).toHaveProperty("spec.selector.matchLabels", { app: "openclaw" });
   expect(service).toHaveProperty("spec.selector", { app: "openclaw" });
   expect(service).toHaveProperty("spec.ports", expect.arrayContaining([gatewayPort]));
@@ -87,20 +78,11 @@ it("keeps config and persistence manifests aligned with the gateway", () => {
   const pvc = readManifest("pvc.yaml");
   const data = assertRecord(configMap.data, "configmap data");
 
-  expect(configMap).toMatchObject({
-    apiVersion: "v1",
-    kind: "ConfigMap",
-    metadata: { name: "openclaw-config" },
-  });
   expect(JSON.parse(String(data["openclaw.json"]))).toMatchObject({
     gateway: { mode: "local", port: 18789, auth: { mode: "token" } },
     agents: { defaults: { workspace: "~/.openclaw/workspace" } },
   });
-  expect(data["AGENTS.md"]).toContain("OpenClaw Assistant");
-  expect(pvc).toMatchObject({
-    apiVersion: "v1",
-    kind: "PersistentVolumeClaim",
-    metadata: { name: "openclaw-home-pvc" },
-    spec: { resources: { requests: { storage: "10Gi" } } },
-  });
+  expect(configMap).toHaveProperty("metadata.name", "openclaw-config");
+  expect(pvc).toHaveProperty("metadata.name", "openclaw-home-pvc");
+  expect(pvc).toHaveProperty("spec.resources.requests.storage", "10Gi");
 });

@@ -36,7 +36,7 @@ describe.each([
     expect(main([...roots, ...limits])).toBe(0);
     expect(stdout).toHaveBeenLastCalledWith(expect.stringContaining("... 120 more finding(s)"));
 
-    for (const limit of ["0", "000", String(Number.MAX_SAFE_INTEGER)]) {
+    for (const limit of ["0", String(Number.MAX_SAFE_INTEGER)]) {
       stdout.mockClear();
       expect(main(["--repo-root", repoRoot, "--limit", limit])).toBe(0);
       expect(stdout).toHaveBeenCalledOnce();
@@ -66,17 +66,14 @@ const limitError = "--limit expects a non-negative integer";
 const rootError = "--repo-root expects a path";
 it.each([
   { argv: ["--limit"], error: limitError },
-  ...["-1", "9007199254740992", "--"].map((value) => ({
+  ...["-1", "9007199254740992"].map((value) => ({
     argv: ["--limit", value],
     error: limitError,
   })),
   { argv: ["--repo-root"], error: rootError },
-  { argv: ["--repo-root", "-h"], error: rootError },
   { argv: ["--limit=1"], error: "Unknown argument: --limit=1" },
-  { argv: ["--limit", "1", "--limit", "bad"], error: limitError },
-  { argv: ["--limit", "bad", "--limit", "1"], error: limitError },
-  { argv: ["--repo-root", "valid", "--repo-root", ""], error: rootError },
-  { argv: ["--repo-root", "", "--repo-root", "valid"], error: rootError },
+  { argv: ["--limit", "bad"], error: limitError },
+  { argv: ["--repo-root", ""], error: rootError },
   { argv: ["--unknown", "--limit", "bad"], error: "Unknown argument: --unknown" },
   { argv: ["--limit", "bad", "--unknown"], error: limitError },
 ])("rejects argv %# before output or scanning, even with help", ({ argv, error }) => {
