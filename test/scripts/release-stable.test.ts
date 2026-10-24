@@ -14,6 +14,7 @@ import {
   actionRun,
   dispatchWorkflow,
   fetchMain,
+  fields,
   gateApproval,
   gitShow,
   jsonStep,
@@ -244,7 +245,17 @@ describe("release:stable CLI", () => {
     });
     expect(retained.publish.publishRunId).toBeUndefined();
     const preflight = result.calls.find((call) => call.args[2] === "openclaw-macos-publish.yml");
-    expect(preflight?.args).toContain("preflight_only=true");
+    expect(preflight?.args).toEqual([
+      ...dispatchWorkflow("openclaw-macos-publish.yml", "openclaw/releases").match,
+      ...fields(
+        `tag=v${RELEASE}`,
+        `source_ref=release/${RELEASE}`,
+        `public_release_branch=release/${RELEASE}`,
+        "preflight_only=true",
+        "smoke_test_only=false",
+        "allow_late_calver_recovery=false",
+      ),
+    ]);
   });
 
   it.each([false, true])("requires a signed local final tag (resigned=%s)", (resigned) => {

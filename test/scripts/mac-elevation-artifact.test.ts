@@ -6,6 +6,7 @@ import {
   addon,
   artifactFixture,
   buildInfo,
+  library,
   peekabooCommit,
   sourceCommit,
   runtimeDist,

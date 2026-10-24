@@ -999,8 +999,10 @@ describe("verify-pr-hosted-gates", () => {
     {
       name: "an older failed artifact run",
       runs: [
-        ...queuedBuildArtifactFallbackRuns(),
-        makeRun(BUILD_ARTIFACTS_WORKFLOW, 0, "2026-06-16T10:54:59Z", { conclusion: "failure" }),
+        ...queuedBuildArtifactFallbackRuns().map((run) =>
+          Object.assign({}, run, { id: run.id + 1, run_number: run.run_number + 1 }),
+        ),
+        makeRun(BUILD_ARTIFACTS_WORKFLOW, 1, "2026-06-16T10:54:59Z", { conclusion: "failure" }),
       ],
     },
     {

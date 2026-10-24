@@ -43,13 +43,28 @@ const ACCESS_B = "access-b";
 const REFRESH_A = "refresh-a";
 const REFRESH_A_ROTATED = "refresh-a-rotated";
 const REFRESH_B = "refresh-b";
+const SAME_OWNER_MARKER = "AUTHORITY-SAME-OWNER";
+const SAME_PEER_MARKER = "AUTHORITY-SAME-PEER";
+const SAME_RESTART_MARKER = "AUTHORITY-SAME-RESTART";
 const MISMATCH_OWNER_MARKER = "AUTHORITY-MISMATCH-OWNER";
 const MISMATCH_PEER_MARKER = "AUTHORITY-MISMATCH-PEER";
-const REQUEST_MARKERS = [MISMATCH_OWNER_MARKER, MISMATCH_PEER_MARKER] as const;
+const LOGOUT_OWNER_MARKER = "AUTHORITY-LOGOUT-OWNER";
+const LOGOUT_FOLLOWUP_MARKER = "AUTHORITY-LOGOUT-FOLLOWUP";
+const REQUEST_MARKERS = [
+  SAME_OWNER_MARKER,
+  SAME_PEER_MARKER,
+  SAME_RESTART_MARKER,
+  MISMATCH_OWNER_MARKER,
+  MISMATCH_PEER_MARKER,
+  LOGOUT_OWNER_MARKER,
+  LOGOUT_FOLLOWUP_MARKER,
+] as const;
 
+type TokenClass = "A" | "B" | "other";
+type ModelAuthClass = "A" | "A-stale" | "B" | "missing" | "other";
 type ProviderRequest = {
   marker: string;
-  auth: string | undefined;
+  auth: ModelAuthClass;
   model: string | undefined;
 };
 type AgentResult = {
@@ -57,10 +72,23 @@ type AgentResult = {
   status?: string;
   error?: string;
 };
+type TurnHandle = {
+  runId: string;
+  sessionKey: string;
+  terminal: Promise<AgentResult>;
+};
+type ControlledProvider = {
+  baseUrl: string;
+  modelRequests: ProviderRequest[];
+  refreshStarted: Promise<void>;
+  releaseRefresh: () => void;
+  stop: () => Promise<void>;
+  tokenRequests: TokenClass[];
+};
 type Scenario = {
   instance: OpenClawTestInstance;
   pluginRoot: string;
-  provider: Awaited<ReturnType<typeof startControlledProvider>>;
+  provider: ControlledProvider;
 };
 
 const activeScenarios: Scenario[] = [];
@@ -99,6 +127,32 @@ function authStore(credential?: OAuthCredential): AuthProfileStore {
   };
 }
 
+function classifyRefresh(value: unknown): TokenClass {
+  if (value === REFRESH_A) {
+    return "A";
+  }
+  if (value === REFRESH_B) {
+    return "B";
+  }
+  return "other";
+}
+
+function classifyAuthorization(value: string | undefined): ModelAuthClass {
+  if (value === `Bearer ${ACCESS_A_ROTATED}`) {
+    return "A";
+  }
+  if (value === `Bearer ${ACCESS_A_OLD}`) {
+    return "A-stale";
+  }
+  if (value === `Bearer ${ACCESS_B}`) {
+    return "B";
+  }
+  if (!value) {
+    return "missing";
+  }
+  return "other";
+}
+
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
@@ -107,15 +161,20 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
 }
 
+function requestMarker(body: Record<string, unknown>): string {
+  const serialized = JSON.stringify(body);
+  return REQUEST_MARKERS.find((marker) => serialized.includes(marker)) ?? "unknown";
+}
+
 function sendJson(response: ServerResponse, body: unknown, status = 200) {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(body));
 }
 
-async function startControlledProvider() {
+async function startControlledProvider(): Promise<ControlledProvider> {
   const refreshGate = createDeferredCore();
   const refreshStarted = createDeferredCore();
-  const tokenRequests: unknown[] = [];
+  const tokenRequests: TokenClass[] = [];
   const modelRequests: ProviderRequest[] = [];
   let modelResponseIndex = 0;
 
@@ -123,7 +182,7 @@ async function startControlledProvider() {
     void (async () => {
       if (request.method === "POST" && request.url === "/oauth/token") {
         const body = await readJsonBody(request);
-        tokenRequests.push(body.refresh);
+        tokenRequests.push(classifyRefresh(body.refresh));
         refreshStarted.resolve();
         await refreshGate.promise;
         if (body.refresh !== REFRESH_A) {
@@ -139,16 +198,18 @@ async function startControlledProvider() {
       }
       if (request.method === "GET" && request.url === "/v1/models") {
         sendJson(response, {
-          data: [OWNER_MODEL_ID, PEER_MODEL_ID].map((id) => ({ id, object: "model" })),
+          data: [
+            { id: OWNER_MODEL_ID, object: "model" },
+            { id: PEER_MODEL_ID, object: "model" },
+          ],
         });
         return;
       }
       if (request.method === "POST" && request.url === "/v1/responses") {
         const body = await readJsonBody(request);
-        const serialized = JSON.stringify(body);
         modelRequests.push({
-          marker: REQUEST_MARKERS.find((marker) => serialized.includes(marker)) ?? "unknown",
-          auth: request.headers.authorization,
+          marker: requestMarker(body),
+          auth: classifyAuthorization(request.headers.authorization),
           model: typeof body.model === "string" ? body.model : undefined,
         });
         modelResponseIndex += 1;
@@ -197,43 +258,49 @@ async function writeProviderPlugin(pluginDir: string, tokenUrl: string): Promise
   await fs.mkdir(pluginDir, { recursive: true });
   await fs.writeFile(
     path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: PROVIDER_ID,
-      activation: { onStartup: true, onProviders: [PROVIDER_ID] },
-      providers: [PROVIDER_ID],
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
+    `${JSON.stringify(
+      {
+        id: PROVIDER_ID,
+        activation: { onStartup: true, onProviders: [PROVIDER_ID] },
+        providers: [PROVIDER_ID],
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      },
+      null,
+      2,
+    )}\n`,
   );
   await fs.writeFile(
     path.join(pluginDir, "index.mjs"),
-    `export default {
-  id: ${JSON.stringify(PROVIDER_ID)},
-  register(api) {
-    api.registerProvider({
-      id: ${JSON.stringify(PROVIDER_ID)},
-      label: "OAuth authority proof",
-      auth: [],
-      async refreshOAuth(credential) {
-        const response = await fetch(${JSON.stringify(tokenUrl)}, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ refresh: credential.refresh }),
-        });
-        if (!response.ok) throw new Error("authority proof refresh rejected");
-        const refreshed = await response.json();
-        return {
-          ...credential,
-          type: "oauth",
-          provider: ${JSON.stringify(PROVIDER_ID)},
-          access: refreshed.access,
-          refresh: refreshed.refresh,
-          expires: refreshed.expires,
-        };
-      },
-    });
-  },
-};
-`,
+    [
+      "export default {",
+      `  id: ${JSON.stringify(PROVIDER_ID)},`,
+      "  register(api) {",
+      "    api.registerProvider({",
+      `      id: ${JSON.stringify(PROVIDER_ID)},`,
+      '      label: "OAuth authority proof",',
+      "      auth: [],",
+      "      async refreshOAuth(credential) {",
+      `        const response = await fetch(${JSON.stringify(tokenUrl)}, {`,
+      '          method: "POST",',
+      '          headers: { "content-type": "application/json" },',
+      "          body: JSON.stringify({ refresh: credential.refresh }),",
+      "        });",
+      '        if (!response.ok) throw new Error("authority proof refresh rejected");',
+      "        const refreshed = await response.json();",
+      "        return {",
+      "          ...credential,",
+      '          type: "oauth",',
+      `          provider: ${JSON.stringify(PROVIDER_ID)},`,
+      "          access: refreshed.access,",
+      "          refresh: refreshed.refresh,",
+      "          expires: refreshed.expires,",
+      "        };",
+      "      },",
+      "    });",
+      "  },",
+      "};",
+      "",
+    ].join("\n"),
   );
 }
 
@@ -291,7 +358,7 @@ function createConfig(pluginDir: string, providerBaseUrl: string) {
   };
 }
 
-async function startScenario(name: string, shared: OAuthCredential) {
+async function createScenario(name: string): Promise<Scenario> {
   const provider = await startControlledProvider();
   const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-authority-plugin-"));
   const pluginDir = path.join(pluginRoot, "plugin");
@@ -308,32 +375,34 @@ async function startScenario(name: string, shared: OAuthCredential) {
     });
     const scenario = { instance, pluginRoot, provider };
     activeScenarios.push(scenario);
-    const expiredA: OAuthCredential = {
-      type: "oauth",
-      provider: PROVIDER_ID,
-      accountId: ACCOUNT_A,
-      access: ACCESS_A_OLD,
-      refresh: REFRESH_A,
-      expires: Date.now() - 60_000,
-    };
-    runAuthProfileWriteTransaction(
-      undefined,
-      (database) => writePersistedAuthProfileStoreRaw(authStore(shared), undefined, database),
-      { env: instance.env },
-    );
-    for (const agent of ["owner", "peer"]) {
-      await instance.state.writeAuthProfiles(authStore(expiredA), agent);
-    }
-    closeOpenClawAgentDatabasesForTest(instance.stateDir);
-    closeOpenClawStateDatabaseForTest();
-    await instance.startGateway();
-    return { ...scenario, client: await connect(instance) };
+    return scenario;
   } catch (error) {
     provider.releaseRefresh();
     await provider.stop();
     await fs.rm(pluginRoot, { recursive: true, force: true });
     throw error;
   }
+}
+
+function writeSharedStore(instance: OpenClawTestInstance, store: AuthProfileStore): void {
+  runAuthProfileWriteTransaction(
+    undefined,
+    (database) => writePersistedAuthProfileStoreRaw(store, undefined, database),
+    { env: instance.env },
+  );
+}
+
+async function startScenario(name: string, shared?: OAuthCredential | "same-account") {
+  const scenario = await createScenario(name);
+  const { instance } = scenario;
+  const expiredA = expiredAccountA();
+  writeSharedStore(instance, authStore(shared === "same-account" ? expiredA : shared));
+  await instance.state.writeAuthProfiles(authStore(expiredA), "owner");
+  await instance.state.writeAuthProfiles(authStore(expiredA), "peer");
+  closeOpenClawAgentDatabasesForTest(instance.stateDir);
+  closeOpenClawStateDatabaseForTest();
+  await instance.startGateway();
+  return { ...scenario, client: await connect(instance) };
 }
 
 function readLocalCredential(
@@ -354,6 +423,15 @@ function readSharedCredential(instance: OpenClawTestInstance): OAuthCredential |
 function expectTerminalFence(credential: OAuthCredential | undefined): void {
   expect(credential && isOAuthRefreshFence(credential)).toBe(true);
   expect(credential && isPendingOAuthRefreshFence(credential)).toBe(false);
+}
+
+function expiredAccountA(): OAuthCredential {
+  return oauthCredential({
+    accountId: ACCOUNT_A,
+    access: ACCESS_A_OLD,
+    refresh: REFRESH_A,
+    expires: Date.now() - 60_000,
+  });
 }
 
 function expectAuthError(result: AgentResult, message: string | RegExp): void {
@@ -382,7 +460,7 @@ async function startTurn(
   client: Awaited<ReturnType<typeof connectGatewayClient>>,
   agentId: "owner" | "peer",
   marker: string,
-) {
+): Promise<TurnHandle> {
   const requestedRunId = marker.toLowerCase();
   const sessionKey = `agent:${agentId}:authority-proof:${requestedRunId}`;
   const started = await client.request<AgentResult>("agent", {
@@ -393,7 +471,7 @@ async function startTurn(
   });
   const runId = started.runId ?? requestedRunId;
   if (started.status === "ok") {
-    return { runId, terminal: Promise.resolve(started) };
+    return { runId, sessionKey, terminal: Promise.resolve(started) };
   }
   expect(started).toMatchObject({ status: "accepted", runId });
   const terminal = client.request<AgentResult>(
@@ -402,7 +480,7 @@ async function startTurn(
     { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
   );
   void terminal.catch(() => undefined);
-  return { runId, terminal };
+  return { runId, sessionKey, terminal };
 }
 
 async function startPendingPeer(
@@ -439,12 +517,65 @@ async function startPendingPeer(
     { timeoutMs: REQUEST_TIMEOUT_MS },
   );
   expect(result).toEqual({ runId: peer.runId, status: "timeout" });
-  expect(scenario.provider.tokenRequests).toEqual([REFRESH_A]);
+  expect(scenario.provider.tokenRequests).toEqual(["A"]);
   expect(scenario.provider.modelRequests).toHaveLength(0);
   return peer;
 }
 
 describe("OAuth refresh authority chain", () => {
+  it(
+    "makes a pending peer wait and inherit only the same-account shared rotation",
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      const scenario = await startScenario("oauth-authority-same-account", "same-account");
+      let { client } = scenario;
+      const owner = await startTurn(client, "owner", SAME_OWNER_MARKER);
+      const peer = await startPendingPeer(scenario, client, SAME_PEER_MARKER);
+
+      scenario.provider.releaseRefresh();
+      await expect(owner.terminal).resolves.toMatchObject({ status: "ok" });
+      await expect(peer.terminal).resolves.toMatchObject({ status: "ok" });
+      await vi.waitFor(() => expect(scenario.provider.modelRequests).toHaveLength(2), {
+        interval: 20,
+        timeout: REQUEST_TIMEOUT_MS,
+      });
+      expect(
+        scenario.provider.modelRequests.toSorted((left, right) =>
+          left.marker.localeCompare(right.marker),
+        ),
+      ).toEqual([
+        { marker: SAME_OWNER_MARKER, auth: "A", model: OWNER_MODEL_ID },
+        { marker: SAME_PEER_MARKER, auth: "A", model: PEER_MODEL_ID },
+      ]);
+      expect(readLocalCredential(scenario.instance, "peer")).toBeUndefined();
+      expect(readSharedCredential(scenario.instance)).toMatchObject({
+        accountId: ACCOUNT_A,
+        access: ACCESS_A_ROTATED,
+        refresh: REFRESH_A_ROTATED,
+      });
+
+      await disconnectGatewayClient(client);
+      const clientIndex = activeClients.indexOf(client);
+      if (clientIndex >= 0) {
+        activeClients.splice(clientIndex, 1);
+      }
+      await scenario.instance.stopGateway();
+      await scenario.instance.startGateway();
+      client = await connect(scenario.instance);
+      const restartRequestOffset = scenario.provider.modelRequests.length;
+      const restarted = await startTurn(client, "peer", SAME_RESTART_MARKER);
+      await expect(restarted.terminal).resolves.toMatchObject({ status: "ok" });
+      expect(scenario.provider.modelRequests.slice(restartRequestOffset)).toEqual([
+        {
+          marker: SAME_RESTART_MARKER,
+          auth: "A",
+          model: PEER_MODEL_ID,
+        },
+      ]);
+      expect(scenario.provider.tokenRequests).toEqual(["A"]);
+    },
+  );
+
   it(
     "terminally fences a peer when the authoritative shared account differs",
     { timeout: TEST_TIMEOUT_MS },
@@ -469,11 +600,7 @@ describe("OAuth refresh authority chain", () => {
         timeout: REQUEST_TIMEOUT_MS,
       });
       expect(scenario.provider.modelRequests).toEqual([
-        {
-          marker: MISMATCH_OWNER_MARKER,
-          auth: `Bearer ${ACCESS_A_ROTATED}`,
-          model: OWNER_MODEL_ID,
-        },
+        { marker: MISMATCH_OWNER_MARKER, auth: "A", model: OWNER_MODEL_ID },
       ]);
       expect(readLocalCredential(scenario.instance, "owner")).toMatchObject({
         accountId: ACCOUNT_A,
@@ -488,6 +615,55 @@ describe("OAuth refresh authority chain", () => {
         access: ACCESS_B,
         refresh: REFRESH_B,
       });
+    },
+  );
+
+  it(
+    "lets real logout revoke a held generation before stale refresh settlement",
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      const scenario = await startScenario("oauth-authority-logout");
+      const { client } = scenario;
+      const owner = await startTurn(client, "owner", LOGOUT_OWNER_MARKER);
+      await scenario.provider.refreshStarted;
+
+      const logout = await scenario.instance.cli(
+        ["models", "auth", "logout", PROFILE_ID, "--agent", "owner", "--yes"],
+        { timeoutMs: REQUEST_TIMEOUT_MS },
+      );
+      expect(logout.code, logout.stderr).toBe(0);
+      expect(logout.stdout).toContain(`Removed auth profile: ${PROFILE_ID}`);
+      expect(readLocalCredential(scenario.instance, "owner")).toBeUndefined();
+      expect(readLocalCredential(scenario.instance, "peer")).toBeUndefined();
+
+      scenario.provider.releaseRefresh();
+      const staleTerminal = await owner.terminal;
+      expectAuthError(
+        staleTerminal,
+        `OAuth token refresh failed for ${PROVIDER_ID}: Failed to persist refreshed OAuth credential.`,
+      );
+      expect(scenario.provider.modelRequests).toHaveLength(0);
+      expect(readLocalCredential(scenario.instance, "owner")).toBeUndefined();
+      expect(readLocalCredential(scenario.instance, "peer")).toBeUndefined();
+      expect(readSharedCredential(scenario.instance)).toBeUndefined();
+
+      // CLI logout may finish with a refresh warning; the follow-up needs published auth state.
+      await expect(
+        client.request("models.authRefresh", { agentId: "owner", operation: "logout" }),
+      ).resolves.toEqual({ refreshed: true });
+
+      const followup = await startTurn(client, "owner", LOGOUT_FOLLOWUP_MARKER);
+      const followupTerminal = await followup.terminal;
+      expectAuthError(
+        followupTerminal,
+        new RegExp(
+          `^(?:No API key found for provider "${PROVIDER_ID}"|No credentials found for profile "${PROFILE_ID}")\\.`,
+        ),
+      );
+      expect(scenario.provider.modelRequests).toHaveLength(0);
+      expect(scenario.provider.tokenRequests).toEqual(["A"]);
+      expect(readLocalCredential(scenario.instance, "owner")).toBeUndefined();
+      expect(readLocalCredential(scenario.instance, "peer")).toBeUndefined();
     },
   );
 });

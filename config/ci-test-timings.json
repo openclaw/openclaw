@@ -3720,6 +3720,7 @@
       "ui/src/e2e/session-ownership.e2e.test.ts": 26,
       "ui/src/e2e/session-person-grouping-presence.e2e.test.ts": 3,
       "ui/src/e2e/session-placement.move.e2e.test.ts": 18,
+      "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts": 30,
       "ui/src/e2e/session-prefetch.e2e.test.ts": 3,
       "ui/src/e2e/session-progress-disclosure.e2e.test.ts": 36,
       "ui/src/e2e/session-progress-hovercard-catalog.e2e.test.ts": 3,

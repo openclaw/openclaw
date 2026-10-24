@@ -681,6 +681,7 @@ describe("ci workflow guards", () => {
         "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
       });
       expect(step(job, "Checkout trusted workflow source").with).toMatchObject({
+        repository: "${{ needs.validate_selected_ref.outputs.workflow_repository }}",
         ref: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
         "persist-credentials": false,
       });

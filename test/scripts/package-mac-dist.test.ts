@@ -458,12 +458,18 @@ echo 2026060200
   `);
 }
 
+it("reads the exact required plist keys into their release fields", () => {
+  expect(packageBlock("VERSION=", 'ZIP="$ROOT_DIR/dist/OpenClaw-$VERSION.zip"').trim()).toBe(
+    [
+      'VERSION="$(plist_print_required "$APP/Contents/Info.plist" CFBundleShortVersionString)"',
+      'BUNDLE_VERSION="$(plist_print_required "$APP/Contents/Info.plist" CFBundleVersion)"',
+      'ACTUAL_BUNDLE_ID="$(plist_print_required "$APP/Contents/Info.plist" CFBundleIdentifier)"',
+      'ACTUAL_FEED_URL="$(plist_print_required "$APP/Contents/Info.plist" SUFeedURL)"',
+    ].join("\n"),
+  );
+});
+
 it.each([
-  [
-    "required plist reads",
-    () => packageBlock("VERSION=", 'ZIP="$ROOT_DIR/dist/OpenClaw-$VERSION.zip"'),
-    /^(?:\w+="\$\(plist_print_required "\$APP\/Contents\/Info\.plist" \w+\)"\n?)+$/,
-  ],
   [
     "release bundle identity",
     () => packageBlock('if [[ "$BUILD_CONFIG" == "release" ]]', 'if [[ "$NOTARIZE" == "1" ]]'),
@@ -733,7 +739,7 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
       );
     }
 
-    const result = f.run({ notarize: !missingArm64 });
+    const result = f.run({ notarize: !missingArm64, dmg: !missingArm64 });
 
     expectFailure(
       result,
@@ -746,6 +752,7 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
       false,
       "dist/OpenClaw-2026.8.2.zip",
       "dist/OpenClaw-2026.8.2.dSYM.zip",
+      "dist/OpenClaw-2026.8.2.dmg",
       "dist/macos-notarization-recovery",
     );
   });
