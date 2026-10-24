@@ -9,6 +9,16 @@ import { fixtureGit, expectGate } from "./release-publish.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const moduleUrl = (name: string) => new URL(`../../scripts/lib/${name}.mts`, import.meta.url).href;
 const loader = new URL("../../scripts/tsx.mjs", import.meta.url).href;
+const releaseFixture = (sha: string, body: string | null) => ({
+  id: 7,
+  draft: true,
+  prerelease: false,
+  tag_name: "v2026.9.5",
+  html_url: "https://github.com/openclaw/openclaw/releases/tag/v2026.9.5",
+  target_commitish: sha,
+  body,
+  assets: [],
+});
 
 function evaluate({ dir, sha }: { dir: string; sha: string }, expression: string, bin?: string) {
   const source = `
@@ -85,9 +95,7 @@ if (args[0] === 'api') {
     if (${JSON.stringify(state)} === 'forbidden') fail('HTTP 403: Forbidden');
     if (${JSON.stringify(state)} === 'unavailable') fail('HTTP 404: repository not found');
     const page = Number(new URL('https://api.github.com/' + endpoint).searchParams.get('page'));
-    const release = {id: 7, draft: true, prerelease: false,
-      tag_name: 'v2026.9.5', html_url: 'https://github.com/openclaw/openclaw/releases/tag/v2026.9.5',
-      target_commitish: ${JSON.stringify(sha)}, body: ${JSON.stringify(body)}, assets: []};
+    const release = ${JSON.stringify(releaseFixture(sha, body))};
     console.log(JSON.stringify(${JSON.stringify(state)} !== 'draft' ? [] : page === 1
       ? Array.from({length: 100}, (_, index) => ({tag_name: 'other-' + index})) : [release]));
   }
@@ -111,16 +119,7 @@ closeout: inspectStableCloseoutPreflight(closeoutInput)})`,
   expect(result.admission.admitted).toBe(admitted);
   expectGate(result.observation.gates, { id: "github.release", status });
   if (state === "draft") {
-    expect(result.observation.release).toEqual({
-      id: 7,
-      draft: true,
-      prerelease: false,
-      tag_name: "v2026.9.5",
-      html_url: "https://github.com/openclaw/openclaw/releases/tag/v2026.9.5",
-      target_commitish: sha,
-      body,
-      assets: [],
-    });
+    expect(result.observation.release).toEqual(releaseFixture(sha, body));
     expectGate(result.closeout, {
       id: "stable-closeout.release-assets",
       status: "WARN",

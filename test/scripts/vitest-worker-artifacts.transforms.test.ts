@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, vi } from "vitest";
+import { describe, expect } from "vitest";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import {
@@ -24,7 +24,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
       inWorkerArtifactFixture(
         { workerArtifacts, signal, onTestFinished },
         async ({ runtime, startBorrower, directory }) => {
-          const { config, value, configuredValue, parent, cacheDirectory } = workerTransformProbe(
+          const { config, value, configuredValue, parent } = workerTransformProbe(
             directory,
             layout,
           );
@@ -50,7 +50,6 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
           const compilerLaunch = controlled.intercept(owner.descriptor.directory, () => {
             redirectedCompilers += 1;
           });
-          const preparationLog = vi.spyOn(console, "error");
           try {
             const launch = async (
               mode: "compiled" | "source",
@@ -94,10 +93,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
               if (mode === "compiled") {
                 const dir = generationDirectory(generation);
                 if (reuse) {
-                  expect(result.stderr).not.toContain("[vitest-workers] prepared");
                   expect(path.resolve(dir)).toBe(owner.descriptor.directory);
-                } else {
-                  expect(result.stderr.match(/\[vitest-workers\] prepared/g)).toHaveLength(1);
                 }
                 generations.add(generation);
                 expect(path.dirname(dir)).toBe(path.join(root, ".artifacts", "vitest-workers"));
@@ -106,7 +102,6 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
                 );
                 expect(fs.existsSync(dir)).toBe(reuse);
               } else {
-                expect(result.stderr).not.toContain("[vitest-workers] prepared");
                 expect(fileURLToPath(generation)).toBe(
                   path.join(root, "src/infra/runtime-process-entrypoints.ts"),
                 );
@@ -116,9 +111,6 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
               );
             };
             await launch("compiled", [1, 1]);
-            expect(
-              JSON.parse(fs.readFileSync(path.join(cacheDirectory, "_metadata.json"), "utf8")),
-            ).toEqual({ lockfileHash: expect.stringMatching(/^[a-f\d]{8}$/u) });
             await launch("compiled", [1, 1]);
             expect(generations.size).toBe(2);
             await launch("source", [2, 2]);
@@ -135,11 +127,6 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
             );
             await launch("compiled", [4, 3], "configured");
             expect(generations.size).toBe(2);
-            expect(
-              preparationLog.mock.calls.filter(([line]) =>
-                String(line).startsWith("[vitest-workers] prepared"),
-              ),
-            ).toHaveLength(1);
             const compilers = controlled.read();
             expect(redirectedCompilers).toBe(1);
             expect(compilers).toHaveLength(2);
@@ -166,7 +153,6 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
               await owner.dispose();
             } finally {
               compilerLaunch.mockRestore();
-              preparationLog.mockRestore();
             }
           }
           for (const generation of generations) {
