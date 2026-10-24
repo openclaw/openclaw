@@ -71,13 +71,26 @@ async function listAgents(
       } as GatewayRequestContext,
     },
   );
-  // Routing metadata describes Gateway ownership, independently of the reader's roster.
+  // Routing metadata describes Gateway ownership, independently of the reader's roster,
+  // except that the advertised default must be an agent the role actually allows.
+  const filtered = roster.agents.filter((agent) => expected.includes(agent.id));
+  const scopedDefaultId = filtered.some((agent) => agent.id === roster.defaultId)
+    ? undefined
+    : filtered[0]?.id;
   expect(respond).toHaveBeenCalledExactlyOnceWith(
     true,
-    { ...roster, agents: roster.agents.filter((agent) => expected.includes(agent.id)) },
+    {
+      ...roster,
+      ...(scopedDefaultId ? { defaultId: scopedDefaultId } : {}),
+      agents: filtered,
+    },
     undefined,
   );
 }
+
+test("agents.list scopes defaultId to the agents the role allows", async () => {
+  await listAgents(() => roleConfig(["research"]), ["research"]);
+});
 
 test.each([
   { agents: ["research"], system: false, expected: ["research"] },

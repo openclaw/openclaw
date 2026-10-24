@@ -206,10 +206,16 @@ export const agentsHandlers: GatewayRequestHandlers = {
                 : {},
             }
           : result;
+      // A role that hides the Gateway default agent must not keep advertising it: clients
+      // fall back to `defaultId`, so project the first agent the caller may actually use.
+      const scopedDefaultId = agents.some((agent) => agent.id === result.defaultId)
+        ? undefined
+        : agents[0]?.id;
       respond(
         true,
         {
           ...projected,
+          ...(scopedDefaultId ? { defaultId: scopedDefaultId } : {}),
           agents: policy
             ? agents.map((agent) =>
                 policy
