@@ -310,61 +310,103 @@ function workflowEnv(sha: string, event = "schedule") {
 }
 
 describe("mobile release CLI", () => {
-  it("recovers Android internal distribution from the saved plan without rebuilding or changing source", () => {
-    const destination = "internal";
-    const f = fixture("android");
-    const pinned = [
-      "apps/android/version.json",
-      "apps/android/Config/Version.properties",
-      "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
-    ];
-    const original = pinned.map((file) => read(f.root, file));
-    const ci = workflowEnv(f.base);
-    const rejected = f.invoke("run", ["--destination", destination], {
-      ...ci,
-      FIXTURE_FIREBASE_PREFLIGHT_FAIL: "1",
-    });
-    expectResult(rejected, 1);
-    expect(fs.existsSync(f.uploadAudit)).toBe(false);
-    expect(exists(f.recovery, "source")).toBe(false);
-    const result = f.invoke("run", ["--destination", destination], {
-      ...ci,
-      FIXTURE_FIREBASE_FAIL: "1",
-    });
-    expectResult(result, 1, "Play upload confirmed; Firebase incomplete");
-    const recovered = f.invoke("firebase", [], { OPENAI_API_KEY: "" });
-    expectResult(recovered, 0);
-    const calls = readLines(f.firebaseAudit);
-    expect(
-      calls.filter((call) => call.pathname.endsWith("releases:upload")).map((call) => call.body),
-    ).toEqual(["synthetic signed wear bundle", "synthetic signed play bundle"]);
-    expect(
-      calls
-        .filter((call) => call.pathname.endsWith(":distribute"))
-        .map((call) => call.pathname.split("/").at(-1)),
-    ).toEqual(["wear:distribute", "phone:distribute", "phone:distribute"]);
-    expect(f.audit()).toHaveLength(1);
-    expect(recovered.stdout).not.toContain("Android versionName:");
-    expect(json(f.recovery, "android-plan.json")).toMatchObject({
-      destination,
-      sourceSha: f.base,
-    });
-    expect(f.audit()[0]).toMatchObject({
-      version: "2026.9.20",
-      versionCode: 2026090250,
-      wearVersionCode: 2026090251,
-      uploadMetadata: false,
-      gradleVersion: "2026.9.20",
-      gradleCode: "2026090250",
-      gradleWearCode: "2026090251",
-    });
-    expect(
-      f.ref("refs/openclaw/mobile-releases/android/v2/2026.9.2/0/1/2026090250-2026090251"),
-    ).toBe(f.base);
-    expect(f.ref("main")).toBe(f.base);
-    expect(pinned.map((file) => read(f.root, file))).toEqual(original);
-    expect(git(f.root, "status", "--porcelain")).toBe("");
-  });
+  it.each([
+    { destination: "play-store", event: "local" },
+    { destination: "play-store", event: "schedule" },
+    { destination: "internal", event: "schedule" },
+  ])(
+    "builds Android $destination on $event from the saved plan without changing Git or pinned metadata",
+    ({ destination, event }) => {
+      const f = fixture("android");
+      const pinned = [
+        "apps/android/version.json",
+        "apps/android/Config/Version.properties",
+        "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+      ];
+      const original = pinned.map((file) => read(f.root, file));
+      const ci = workflowEnv(f.base);
+      if (destination === "internal") {
+        const rejected = f.invoke("run", ["--destination", destination], {
+          ...ci,
+          FIXTURE_FIREBASE_PREFLIGHT_FAIL: "1",
+        });
+        expectResult(rejected, 1);
+        expect(fs.existsSync(f.uploadAudit)).toBe(false);
+        expect(exists(f.recovery, "source")).toBe(false);
+      }
+      const result = f.invoke(
+        "run",
+        destination === "internal" ? ["--destination", destination] : [],
+        destination === "internal"
+          ? { ...ci, FIXTURE_FIREBASE_FAIL: "1" }
+          : event === "schedule"
+            ? ci
+            : {},
+      );
+      if (destination === "internal") {
+        expectResult(result, 1, "Play upload confirmed; Firebase incomplete");
+        const recovered = f.invoke("firebase", [], { OPENAI_API_KEY: "" });
+        expectResult(recovered, 0);
+        const calls = readLines(f.firebaseAudit);
+        expect(
+          calls
+            .filter((call) => call.pathname.endsWith("releases:upload"))
+            .map((call) => call.body),
+        ).toEqual(["synthetic signed wear bundle", "synthetic signed play bundle"]);
+        expect(
+          calls
+            .filter((call) => call.pathname.endsWith(":distribute"))
+            .map((call) => call.pathname.split("/").at(-1)),
+        ).toEqual(["wear:distribute", "phone:distribute", "phone:distribute"]);
+        expect(f.audit()).toHaveLength(1);
+        expect(recovered.stdout).not.toContain("Android versionName:");
+      } else {
+        expectResult(result, 0);
+        expect(fs.existsSync(f.firebaseAudit)).toBe(false);
+      }
+      expect(json(f.recovery, "android-plan.json")).toMatchObject({
+        destination,
+        sourceSha: f.base,
+      });
+      for (const line of [
+        "Android versionName: 2026.9.20",
+        "Android versionCode: 2026090250",
+        "Android Wear versionCode: 2026090251",
+      ]) {
+        expect(result.stdout).toContain(line);
+      }
+      expect(f.audit()[0]).toMatchObject({
+        version: "2026.9.20",
+        versionCode: 2026090250,
+        wearVersionCode: 2026090251,
+        uploadMetadata: destination === "play-store",
+        gradleVersion: "2026.9.20",
+        gradleCode: "2026090250",
+        gradleWearCode: "2026090251",
+      });
+      expect(
+        f.ref("refs/openclaw/mobile-releases/android/v2/2026.9.2/0/1/2026090250-2026090251"),
+      ).toBe(f.base);
+      expect(f.ref("main")).toBe(f.base);
+      expect(pinned.map((file) => read(f.root, file))).toEqual(original);
+      const rebuilt = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run"],
+        {
+          cwd: f.root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_ANDROID_RELEASE_PLAN: path.join(f.recovery, "android-plan.json"),
+            OPENCLAW_MOBILE_RELEASE_NOTES: path.join(f.recovery, "release-notes.json"),
+          },
+        },
+      );
+      expectResult(rebuilt, 0);
+      expect(rebuilt.stdout).toContain("Android versionCode: 2026090250");
+      expect(git(f.root, "status", "--porcelain")).toBe("");
+    },
+  );
 
   it.each(["workflow_dispatch", "schedule"])(
     "uploads detached %s source without advancing main",
@@ -412,6 +454,10 @@ describe("mobile release CLI", () => {
       expect(fs.readdirSync(path.join(f.recovery, "screenshot-diagnostics"))).toEqual([
         "screenshot-diagnostics.json",
       ]);
+      expect(json(f.recovery, "screenshot-diagnostics/screenshot-diagnostics.json")).toEqual({
+        schemaVersion: 1,
+        diagnostics: [{ phase: "build", durationSeconds: 1.25, outcome: "succeeded" }],
+      });
       expect(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/heads")).toBe(
         "refs/heads/main",
       );
@@ -420,6 +466,14 @@ describe("mobile release CLI", () => {
       expect(f.audit()).toHaveLength(1);
     },
   );
+
+  it("admits scheduled TestFlight on attached exact main", () => {
+    const f = fixture("ios", testflightPlan());
+    expectResult(f.invoke("run", ["--destination", "testflight"], workflowEnv(f.base)), 0);
+    expect(f.audit()).toEqual([
+      expect.objectContaining({ destination: "testflight", sha: f.base, stageOnly: false }),
+    ]);
+  });
 
   it("retains safe screenshot diagnostics before archive and refuses staging without an upload", () => {
     const f = fixture();
@@ -434,16 +488,24 @@ describe("mobile release CLI", () => {
       "screenshot-diagnostics.json",
       "screenshots",
     ]);
-    for (const [copy, source] of [
-      ["screenshot-diagnostics.json", "build/screenshot-diagnostics.json"],
-      ["capture-attempts.json", "build/SnapshotTestResults/capture-attempts.json"],
-      [
-        "screenshots/iPhone-01-control-connected.png",
-        "fastlane/screenshots/en-US/iPhone-01-control-connected.png",
+    expect(json(diagnostics, "screenshot-diagnostics.json")).toEqual({
+      schemaVersion: 1,
+      diagnostics: [{ phase: "build", durationSeconds: 1.25, outcome: "succeeded" }],
+    });
+    expect(json(diagnostics, "capture-attempts.json")).toEqual({
+      schemaVersion: 1,
+      attempts: [
+        {
+          deviceName: "iPhone",
+          screenshotName: "02-chat-connected",
+          attempt: 1,
+          captureOutcome: "failed",
+        },
       ],
-    ]) {
-      expect(read(diagnostics, copy)).toBe(read(f.recovery, `source/apps/ios/${source}`));
-    }
+    });
+    expect(read(diagnostics, "screenshots/iPhone-01-control-connected.png")).toBe(
+      "Synthetic fixture screenshot",
+    );
     expectResult(f.invoke("stage"), 1, "No matching upload record");
     expect(f.audit()).toHaveLength(1);
     expect(f.ref("main")).toBe(f.base);
@@ -525,16 +587,17 @@ describe("mobile release CLI", () => {
     expect(exists(f.recovery, "source")).toBe(false);
   });
 
-  it.each([
-    ["unchanged", "IN_BETA_TESTING", true],
-    ["deferred-review", "WAITING_FOR_BETA_REVIEW", true],
-    ["recovery-required", "READY_FOR_BETA_SUBMISSION", false],
-  ] as const)(
+  it.each(["unchanged", "deferred-review", "recovery-required"])(
     "does not upload or regenerate notes for TestFlight %s",
-    (outcome, externalState, configured) => {
+    (outcome) => {
       const candidate = build({
-        externalState,
-        configured,
+        externalState:
+          outcome === "deferred-review"
+            ? "WAITING_FOR_BETA_REVIEW"
+            : outcome === "recovery-required"
+              ? "READY_FOR_BETA_SUBMISSION"
+              : "IN_BETA_TESTING",
+        configured: outcome !== "recovery-required",
         selectedForAppStore: outcome === "recovery-required",
         hasBetaNotes: true,
       });

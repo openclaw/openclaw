@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { chmodSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { releaseChildSpec } from "../../scripts/full-release-validation-policy.mjs";
 import { canonicalizeJsonValue } from "../../scripts/lib/canonical-json.mjs";
+import { releaseChildDispatchInputs } from "../../scripts/lib/full-release-child-request.mjs";
 import {
   discoverReusableReleaseChild,
   validateReusableReleaseChild,
@@ -16,10 +17,6 @@ const TOOLING = "a".repeat(40);
 const TARGET = "b".repeat(40);
 const PUBLISHER = "Seal full release child evidence / Seal child receipt";
 const NOW = Date.parse("2026-09-23T12:00:00Z");
-const FAILED = "failure";
-const OTHER_SHA = "c".repeat(40);
-const WRONG_WORKFLOW = ".github/workflows/unrelated.yml";
-const EXPIRED = "2026-09-22T00:00:00Z";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
 
@@ -209,18 +206,6 @@ async function fixture(
     attempts,
   };
 }
-type ReuseFixture = Awaited<ReturnType<typeof fixture>>;
-type Selection = NonNullable<Awaited<ReturnType<typeof discoverReusableReleaseChild>>>;
-type Mutation = (data: ReuseFixture, selection: Selection) => void | Promise<void>;
-async function select(data: ReuseFixture) {
-  const selection = await discoverReusableReleaseChild(data.request, data.deps);
-  expect(selection).not.toBeNull();
-  return selection!;
-}
-const attemptError = "current successful attempt";
-const artifactError = "artifact identity, digest, or expiry";
-const publisherError = "publisher step did not succeed";
-const originError = "source parent origin";
 
 describe("independent release child reuse", () => {
   it("accepts candidate-owned evidence outside main ancestry", async () => {
@@ -228,19 +213,30 @@ describe("independent release child reuse", () => {
     const workflowRef = `release-ci/${TARGET.slice(0, 12)}-123`;
     data.lineage.status = "diverged";
 
-    const selection = await select(data);
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    expect(selection).not.toBeNull();
     await expect(
       validateReusableReleaseChild(selection!, data.request, data.deps),
     ).resolves.toMatchObject({ receipt: { workflowSha: TARGET, workflowRef } });
     expect(data.reads).not.toContain(`compare/${TARGET}...main?per_page=1`);
   });
 
-  it("matches GitHub's omitted empty defaults in either receipt or request", async () => {
-    const data = await fixture();
-    const inputs = { ...data.request.inputs, optional: "" };
+  it("matches GitHub's omitted empty defaults for productPerformance", async () => {
+    const inputs = releaseChildDispatchInputs(
+      readFileSync(".github/workflows/openclaw-performance.yml", "utf8"),
+      ["target_ref=" + TARGET, "profile=release", "repeat=3", "publish_reports=false"].flatMap(
+        (field) => ["-f", field],
+      ),
+    );
+    const data = await fixture(
+      "productPerformance",
+      Object.fromEntries(Object.entries(inputs).filter(([, value]) => value !== "")),
+    );
     data.request.inputs = inputs;
-    const selection = await select(data);
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    expect(selection).not.toBeNull();
     expect(selection!.inputs).toEqual(data.receipt.inputs);
+    expect(selection!.inputs.mode).toBe("kova");
     await expect(
       validateReusableReleaseChild({ ...selection, inputs }, data.request, data.deps),
     ).resolves.toMatchObject({ receipt: { inputs: data.receipt.inputs } });
@@ -255,7 +251,7 @@ describe("independent release child reuse", () => {
     { workflowSha: "c".repeat(40), reason: "same tooling is required" },
   ])("rejects invalid current-parent tooling: $reason", async ({ workflowSha, reason }) => {
     const data = await fixture();
-    const selection = await select(data);
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
     data.request.workflowSha = workflowSha;
     await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
       reason,
@@ -265,36 +261,43 @@ describe("independent release child reuse", () => {
       return;
     }
     expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
-    expect(data.deps.report).toHaveBeenCalledWith(expect.stringContaining('"other tooling":1'));
+    expect(data.deps.report).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `run 101 ${data.run.display_title}: rejected: tooling ${TOOLING} differs from current parent ${"c".repeat(40)}`,
+      ),
+    );
+    expect(data.deps.report).toHaveBeenCalledWith(
+      expect.stringContaining('evaluated 0; dispatching fresh work; skipped {"other tooling":1}'),
+    );
   });
 
-  it.each<(data: ReuseFixture) => void>([
-    (data) => {
-      Object.assign(data.parent, { status: "in_progress", conclusion: null });
-    },
-    (data) => {
-      data.jobs[2]!.conclusion = "failure";
-      data.jobs[2]!.steps.push({
-        name: "Post cleanup",
-        status: "completed",
-        conclusion: "failure",
+  it.each(["active parent", "publisher cleanup failure"])(
+    "reuses sealed green work despite %s",
+    async (state) => {
+      const data = await fixture();
+      if (state === "active parent") {
+        Object.assign(data.parent, { status: "in_progress", conclusion: null });
+      } else {
+        data.jobs[2]!.conclusion = "failure";
+        data.jobs[2]!.steps.push({
+          name: "Post cleanup",
+          status: "completed",
+          conclusion: "failure",
+        });
+      }
+      const selection = await discoverReusableReleaseChild(data.request, data.deps);
+      expect(selection).toMatchObject({
+        role: "normalCi",
+        runId: "101",
+        runAttempt: 1,
+        sourceParentRunId: "77",
+        sourceParentAttempt: 1,
+        receiptSha256: data.receipt.sha256,
       });
+      const verified = await validateReusableReleaseChild(selection, data.request, data.deps);
+      expect(verified.receipt.jobs).toEqual(data.receipt.jobs);
     },
-  ])("reuses sealed green work despite unrelated failures (%#)", async (mutate) => {
-    const data = await fixture();
-    mutate(data);
-    const selection = await select(data);
-    expect(selection).toMatchObject({
-      role: "normalCi",
-      runId: "101",
-      runAttempt: 1,
-      sourceParentRunId: "77",
-      sourceParentAttempt: 1,
-      receiptSha256: data.receipt.sha256,
-    });
-    const verified = await validateReusableReleaseChild(selection, data.request, data.deps);
-    expect(verified.receipt.jobs).toEqual(data.receipt.jobs);
-  });
+  );
 
   it("carries green workload jobs through publisher-only failed-job retries", async () => {
     const data = await fixture("pluginPrereleaseIndependent", {
@@ -328,7 +331,8 @@ describe("independent release child reuse", () => {
       jobs: data.receipt.jobs,
     });
     await data.seal();
-    const selection = await select(data);
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    expect(selection).not.toBeNull();
     expect(selection?.runAttempt).toBe(2);
     expect(selection?.inputs).not.toHaveProperty("candidate_artifact_json");
     expect(
@@ -336,19 +340,78 @@ describe("independent release child reuse", () => {
     ).toEqual(data.receipt.jobs);
   });
 
-  it.each<[string, Mutation, string]>([
-    ["ancestry", (d) => void (d.lineage.status = "diverged"), "not a main ancestor"],
-    ["failed child", (d) => void (d.run.conclusion = FAILED), attemptError],
-    ["workflow", (d) => void (d.run.path = WRONG_WORKFLOW), "provenance changed"],
-    ["repository", (d) => void (d.run.head_repository.full_name = "other/repo"), attemptError],
-    ["expiry", (d) => void (d.artifact.expires_at = EXPIRED), artifactError],
-    ["counterfeit artifact owner", (d) => void (d.artifact.workflow_run.id = 999), artifactError],
-    ["failed upload", (d) => void (d.jobs[2]!.steps[2]!.conclusion = FAILED), publisherError],
-    ["workload", (d) => void (d.jobs[0]!.conclusion = FAILED), "complete live composite"],
-    ["omitted job", (d) => void d.jobs.splice(0, 1), "complete live composite"],
-    ["parent workflow", (d) => void (d.parent.path = WRONG_WORKFLOW), originError],
-    ["parent SHA", (d) => void (d.parent.head_sha = OTHER_SHA), originError],
-    ["parent ref", (d) => void (d.parent.head_branch = "other-transport"), originError],
+  it.each<
+    [
+      string,
+      (
+        data: Awaited<ReturnType<typeof fixture>>,
+        selection: NonNullable<Awaited<ReturnType<typeof discoverReusableReleaseChild>>>,
+      ) => void | Promise<void>,
+      string,
+    ]
+  >([
+    [
+      "non-main-ancestor tooling",
+      (data) => void (data.lineage.status = "diverged"),
+      "not a main ancestor",
+    ],
+    ["new child attempt", (data) => void (data.run.run_attempt = 2), "current successful attempt"],
+    [
+      "failed child",
+      (data) => void (data.run.conclusion = "failure"),
+      "current successful attempt",
+    ],
+    [
+      "different workflow",
+      (data) => void (data.run.path = ".github/workflows/counterfeit.yml"),
+      "provenance changed",
+    ],
+    [
+      "foreign repository",
+      (data) => void (data.run.head_repository.full_name = "other/repo"),
+      "current successful attempt",
+    ],
+    [
+      "expired artifact",
+      (data) => void (data.artifact.expires_at = "2026-09-22T00:00:00Z"),
+      "artifact identity, digest, or expiry",
+    ],
+    [
+      "counterfeit artifact owner",
+      (data) => void (data.artifact.workflow_run.id = 999),
+      "artifact identity, digest, or expiry",
+    ],
+    [
+      "failed upload hidden by job COE",
+      (data) => void (data.jobs[2]!.steps[2]!.conclusion = "failure"),
+      "publisher step did not succeed",
+    ],
+    [
+      "failed seal",
+      (data) => void (data.jobs[2]!.steps[1]!.conclusion = "failure"),
+      "publisher step did not succeed",
+    ],
+    [
+      "changed workload",
+      (data) => void (data.jobs[0]!.conclusion = "failure"),
+      "complete live composite",
+    ],
+    ["omitted job", (data) => void data.jobs.splice(0, 1), "complete live composite"],
+    [
+      "counterfeit parent origin",
+      (data) => void (data.parent.path = ".github/workflows/unrelated.yml"),
+      "source parent origin",
+    ],
+    [
+      "different parent workflow SHA",
+      (data) => void (data.parent.head_sha = "c".repeat(40)),
+      "source parent origin",
+    ],
+    [
+      "different parent workflow ref",
+      (data) => void (data.parent.head_branch = "other-transport"),
+      "source parent origin",
+    ],
     [
       "canonical receipt mutation with updated artifact digest",
       async (data, selection) => {
@@ -382,11 +445,12 @@ describe("independent release child reuse", () => {
           return github(endpoint);
         };
       },
-      attemptError,
+      "current successful attempt",
     ],
   ])("rejects %s at revalidation and discovery", async (_name, mutate, error) => {
     const data = await fixture();
-    const selection = await select(data);
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    expect(selection).not.toBeNull();
     await mutate(data, selection!);
     await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
       error,
@@ -396,7 +460,9 @@ describe("independent release child reuse", () => {
 
   it.each<{ role: string; inputs: Record<string, string> }>([
     { role: "normalCi", inputs: { target_ref: "c".repeat(40) } },
+    { role: "normalCi", inputs: { release_scope: "" } },
     { role: "pluginPrereleaseCandidate", inputs: { candidate_artifact_json: '{ "id": "801" }' } },
+    { role: "pluginPrereleaseCandidate", inputs: { candidate_artifact_json: "" } },
   ])("requires exact dispatch input bytes for $role: $inputs", async ({ role, inputs }) => {
     const data = await fixture(role);
     expect(await discoverReusableReleaseChild(data.request, data.deps)).not.toBeNull();
@@ -410,7 +476,7 @@ describe("independent release child reuse", () => {
 
   it("reads binary archives through configured gh auth and rejects failed transfers", async () => {
     const data = await fixture();
-    const selection = await select(data);
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
     const root = tempDirs.make("frv-child-gh-archive-");
     const archivePath = join(root, "receipt.zip");
     writeFileSync(archivePath, (await data.deps.downloadArchive()).archiveBytes);
@@ -438,11 +504,20 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(archivePath)}));
   });
 
   it.each([
-    { limit: "current parent", probes: 0 },
-    { limit: "candidates", probes: 5 },
-    { limit: "absent receipts", probes: 40 },
-    { limit: "deadline", probes: 0 },
-  ])("bounds discovery by $limit", async ({ limit, probes }) => {
+    { limit: "current parent", probes: 0, summary: '"current parent":1' },
+    {
+      limit: "candidates",
+      probes: 5,
+      summary:
+        'scanned 41 runs, evaluated 5; dispatching fresh work; skipped {"budget exhausted":36}',
+    },
+    {
+      limit: "absent receipts",
+      probes: 40,
+      summary: `no reusable normalCi child for ${TARGET}: scanned 100 runs, evaluated 0; dispatching fresh work; skipped {"not-green":1,"other role/suffix":2,"target receipt absent":40,"budget exhausted":57}`,
+    },
+    { limit: "deadline", probes: 0, summary: '"budget exhausted":1' },
+  ])("bounds discovery by $limit", async ({ limit, probes, summary }) => {
     const data = await fixture();
     const deadlineMs = Date.now() + 120_000;
     const clock = limit === "deadline" ? vi.spyOn(Date, "now") : undefined;
@@ -478,9 +553,7 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(archivePath)}));
         expect(data.reads).toHaveLength(1);
       }
       expect(data.deps.report).toHaveBeenCalledWith(
-        expect.stringContaining(
-          limit === "current parent" ? '"current parent":1' : '"budget exhausted":',
-        ),
+        limit === "absent receipts" ? summary : expect.stringContaining(summary),
       );
     } finally {
       clock?.mockRestore();

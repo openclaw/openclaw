@@ -162,6 +162,22 @@ it("checks internal sink helpers instead of exempting the owner file", () => {
   );
 });
 
+it("rejects a new caller of the profile-merge participant", () => {
+  expectDenied(
+    {
+      "src/state/user-profiles-merge.ts": `
+      import { mergeUserModelAccounts } from './user-model-accounts.js';
+      export function mergeUserProfiles() { mergeUserModelAccounts(); }
+    `,
+      "src/consumer.ts": `
+      import { mergeUserProfiles } from './state/user-profiles-merge.js';
+      mergeUserProfiles();
+    `,
+    },
+    "user-profiles-merge.ts:mergeUserProfiles",
+  );
+});
+
 it("ignores type references and same-named unrelated functions", () => {
   expectAllowed({
     "src/consumer.ts": `
@@ -211,6 +227,16 @@ it.each([
   expect(inspect({ "src/new-writer.ts": `function write() { ${write} }` })).toHaveLength(1);
 });
 
+it("permits audited nonpersonal cleanup without granting a whole-file exemption", () => {
+  const file = "src/secrets/store/secret-store-expiry.kernel.ts";
+  const remove = "db.deleteFrom('secret_store_entries').where('deleted_at_ms', '<', cutoff);";
+  expectAllowed({ [file]: `function purgeExpiredSecretStoreEntriesInDatabase() { ${remove} }` });
+  expectDenied(
+    { [file]: `function newCleanup() { ${remove} }` },
+    "unreviewed secret_store_entries writer",
+  );
+});
+
 it.each([
   "db.insertInto('auth_profile_store').values({ store_key: 'primary' });",
   "const table = 'auth_profile_store'; db.deleteFrom(table);",
@@ -241,6 +267,37 @@ it("permits bounded noncredential machine-state writes", () => {
       db.deleteFrom('config_machine_state').where('state_key', '=', unrelated);
     `,
   });
+});
+
+it("counts canonical auth sinks and transitional generic sinks without file exemptions", () => {
+  const authCells = "src/agents/auth-profiles/sqlite-json-write.ts";
+  const machineState = "src/state/config-machine-state-write.ts";
+  const write = `db.insertInto('auth_profile_store');
+    db.insertInto('config_machine_state').values({ state_key: 'authProfiles.store' });`;
+  const reject = allowedGraph({
+    [authCells]: `function writeAuthProfileJsonCell() { ${write} }`,
+    [machineState]: `function upsertConfigMachineState(key: string) {
+      db.insertInto('config_machine_state').values({ state_key: key });
+    }`,
+  });
+
+  reject(
+    authCells,
+    (original) => `${original} function bypass() { db.deleteFrom('auth_profile_store'); }`,
+    "unreviewed auth_profile_store writer",
+  );
+  reject(
+    authCells,
+    `function writeAuthProfileJsonCell() { ${write} db.deleteFrom('auth_profile_store'); }`,
+    "unreviewed auth_profile_store writer",
+  );
+  reject(
+    machineState,
+    (original) => `${original} function bypass() {
+      db.deleteFrom('config_machine_state').where('state_key', '=', 'authProfiles.store');
+    }`,
+    "unreviewed config_machine_state writer",
+  );
 });
 
 it("limits offline raw machine-state migration exceptions to their reviewed statements", () => {
@@ -275,6 +332,7 @@ it.each([
   ).toContainEqual(expect.stringContaining("raw authority-table write"));
 });
 
+const lifecycle = "src/state/github-publication-session-lifecycles.worker.ts";
 const sharedPublication = "src/gateway/github-publication-store.worker.ts";
 const publicationWorker = "src/state/github-publication.worker.ts";
 
@@ -324,6 +382,42 @@ it("bounds the offline startup publication fixture to one reviewed insert and au
   expectDenied(
     sources(`${insert} db.prepare(${JSON.stringify(statement)} + ' OR 1=1').run();`),
     "raw authority-table write",
+  );
+});
+
+it("permits publication inserts only through the reviewed request and lifecycle owners", () => {
+  const reject = allowedGraph({
+    [lifecycle]: `export function insertGitHubPublicationSessionLifecycle() {
+      db.insertInto('github_publication_session_lifecycles');
+    }`,
+    [sharedPublication]: `
+      import { insertGitHubPublicationSessionLifecycle } from '../state/github-publication-session-lifecycles.worker.js';
+      export function insertGitHubPublicationRequest() {
+        db.insertInto('github_publication_requests');
+        insertGitHubPublicationSessionLifecycle();
+      }
+    `,
+    "src/state/github-publication-request.worker.ts": `
+      import { insertGitHubPublicationRequest } from '../gateway/github-publication-store.worker.js';
+      export const operations = { 'githubPublications.insert': () => {
+        const write = () => insertGitHubPublicationRequest();
+        write();
+      } };
+    `,
+  });
+
+  reject(
+    "src/state/github-publication-request.worker.ts",
+    (original) => original.replace("githubPublications.insert", "githubPublications.bypass"),
+    "unreviewed GitHub publication writer reference",
+  );
+  reject(
+    "src/new-writer.worker.ts",
+    `
+        import { insertGitHubPublicationSessionLifecycle as write } from './state/github-publication-session-lifecycles.worker.js';
+        write();
+      `,
+    "unreviewed GitHub publication writer reference",
   );
 });
 
@@ -406,6 +500,33 @@ it("counts the receipt deletion loop and lifecycle deletion as two reviewed sink
   );
 });
 
+it("guards generic credential publication and custody helpers against new caller entries", () => {
+  const authority = "src/state/user-model-account-authority.ts";
+  const custody = "src/agents/auth-profiles/credential-write-custody.ts";
+  const machine = "src/state/config-machine-state-write.ts";
+  const reject = allowedGraph({
+    [custody]: `export function withAuthProfileCredentialWriteCustody() {}`,
+    [authority]: `
+      import { withAuthProfileCredentialWriteCustody } from '../agents/auth-profiles/credential-write-custody.js';
+      export function withAuthProfileCredentialWrite() { withAuthProfileCredentialWriteCustody(); }
+    `,
+    [machine]: `
+      import { withAuthProfileCredentialWrite } from './user-model-account-authority.js';
+      function publishMachineStateWrite() { withAuthProfileCredentialWrite(); }
+      function upsertConfigMachineState() { publishMachineStateWrite(); }
+    `,
+  });
+
+  reject(
+    "src/new-writer.worker.ts",
+    `
+      import { withAuthProfileCredentialWriteCustody as write } from './agents/auth-profiles/credential-write-custody.js';
+      write();
+    `,
+  );
+  reject(machine, (original) => original + `function bypass() { publishMachineStateWrite(); }`);
+});
+
 it("requires the host publication adapter for direct and aliased machine-state commands", () => {
   const source = `export function writeConfigMachineStateAsync() {
     const command = 'machineState.write' as const;
@@ -432,6 +553,7 @@ it("requires the host publication adapter for direct and aliased machine-state c
 
 const authRuntime = "src/agents/auth-profiles/store-runtime.ts";
 const authStore = "src/agents/auth-profiles/store.ts";
+const authCells = "src/agents/auth-profiles/sqlite-json-write.ts";
 
 it("tracks nested native writer declarations and permits only the reviewed factory return", () => {
   const source = `export function createAuthProfileStoreRuntime() {
@@ -552,6 +674,28 @@ it("bounds reviewed lazy imports by loader, declaration scope and selected expor
   }
 });
 
+it("closes raw-store and worker-kernel entries while preserving the named update dispatchers", () => {
+  const reject = allowedGraph({
+    [authCells]: `export function writeAuthProfileJsonCell() {}`,
+    "src/agents/auth-profiles/store-update.worker.ts": `
+      import { writeAuthProfileJsonCell } from './sqlite-json-write.js';
+      export function updateAuthProfileStoreInDatabase() { writeAuthProfileJsonCell(); }
+    `,
+    "src/agents/auth-profiles/store.worker.ts": `
+      import { updateAuthProfileStoreInDatabase } from './store-update.worker.js';
+      export const operations = { 'authProfiles.update': () => updateAuthProfileStoreInDatabase() };
+    `,
+  });
+
+  reject(
+    "src/new-writer.worker.ts",
+    `
+        import { updateAuthProfileStoreInDatabase } from './agents/auth-profiles/store-update.worker.js';
+        updateAuthProfileStoreInDatabase();
+      `,
+  );
+});
+
 function machineStateConsumer(consumer: string) {
   return {
     "src/state/config-machine-state-write.ts": `export function writeConfigMachineState() {}`,
@@ -602,6 +746,73 @@ it.each([
   );
 });
 
+it("restricts authorization enrollment to admitted workers and its offline Doctor owner", () => {
+  const reject = allowedGraph({
+    "src/agents/auth-profiles/sqlite-json-write.ts": `export function writeAuthProfileJsonCell() {}`,
+    "src/agents/auth-profiles/authorization-enrollment.ts": `
+      import { writeAuthProfileJsonCell } from './sqlite-json-write.js';
+      export function enrollAuthProfileAuthorizationInDatabase() { writeAuthProfileJsonCell(); }
+    `,
+    "src/agents/auth-profiles/store.worker.ts": `
+      import { enrollAuthProfileAuthorizationInDatabase } from './authorization-enrollment.js';
+      export const operations = {
+        'authProfiles.enrollAuthorization': () => enrollAuthProfileAuthorizationInDatabase(),
+      };
+    `,
+    "src/agents/auth-profiles/inline-usage.worker.ts": `
+      import { enrollAuthProfileAuthorizationInDatabase } from './authorization-enrollment.js';
+      export function bindSqliteWorkerBackend() {
+        return { execute() { enrollAuthProfileAuthorizationInDatabase(); } };
+      }
+    `,
+    "src/agents/auth-profiles/authorization-enrollment-runtime.ts": `
+      import { enrollAuthProfileAuthorizationInDatabase } from './authorization-enrollment.js';
+      export function enrollOwnedAuthProfileAuthorization(context) {
+        if (context.maintenanceScope?.ownsSchemaMaintenance) {
+          enrollAuthProfileAuthorizationInDatabase();
+        }
+      }
+    `,
+  });
+
+  const runtime = "src/agents/auth-profiles/authorization-enrollment-runtime.ts";
+  reject(
+    runtime,
+    (original) =>
+      original +
+      `
+        export function unownedSibling() { enrollAuthProfileAuthorizationInDatabase(); }
+      `,
+  );
+  reject(
+    "src/new-writer.worker.ts",
+    `
+        import { enrollAuthProfileAuthorizationInDatabase } from './agents/auth-profiles/authorization-enrollment.js';
+        enrollAuthProfileAuthorizationInDatabase();
+      `,
+  );
+});
+
+it("keeps catalog capture and worker write custody behind the reviewed batch entry", () => {
+  const reject = allowedGraph({
+    "src/agents/auth-profiles/runtime-scope.ts": `export function withWorkerAuthProfileWrites() {}`,
+    "src/state/user-model-account-authority.ts": `export function captureAuthProfileCredentialCommits() {}`,
+    "src/agents/prepared-model-catalog.worker.ts": `
+      import { withWorkerAuthProfileWrites } from './auth-profiles/runtime-scope.js';
+      import { captureAuthProfileCredentialCommits } from '../state/user-model-account-authority.js';
+      captureAuthProfileCredentialCommits(() => withWorkerAuthProfileWrites());
+    `,
+  });
+
+  reject(
+    "src/new-writer.worker.ts",
+    `
+        import { withWorkerAuthProfileWrites } from './agents/auth-profiles/runtime-scope.js';
+        withWorkerAuthProfileWrites();
+      `,
+  );
+});
+
 it("does not expose the onboarding mutation callback outside its bounded-key adapter", () => {
   const file = "src/state/onboarding-recommendations.kernel.ts";
   const source = `
@@ -615,6 +826,29 @@ it("does not expose the onboarding mutation callback outside its bounded-key ada
   expectDenied({
     [file]: source + `export function bypass() { writeOnboardingRecommendationsOffer(); }`,
   });
+});
+
+it("permits supplied-database SDK save custody without granting sibling factory access", () => {
+  const source = `
+    import { withAuthProfileCredentialWriteCustody } from './credential-write-custody.js';
+    export function createAuthProfileStoreRuntime() {
+      function saveAuthProfileStore() { withAuthProfileCredentialWriteCustody(); }
+      return { saveAuthProfileStore };
+    }
+  `;
+  const reject = allowedGraph({
+    "src/agents/auth-profiles/credential-write-custody.ts": `export function withAuthProfileCredentialWriteCustody() {}`,
+    [authStore]: source,
+  });
+
+  reject(
+    authStore,
+    source.replace(
+      "return { saveAuthProfileStore };",
+      "function bypass() { withAuthProfileCredentialWriteCustody(); } return { saveAuthProfileStore };",
+    ),
+    "createAuthProfileStoreRuntime/bypass",
+  );
 });
 
 const authStorageSources = {

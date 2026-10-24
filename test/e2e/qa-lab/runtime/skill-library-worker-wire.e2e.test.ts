@@ -297,6 +297,51 @@ it("pins skill bundles through worker authoring and lifecycle changes", async (c
       const sessionLibrary = (client: SkillLibraryWireClient) =>
         client.request<SkillsLibraryListResult>("skills.library.list", { sessionKey: remoteKey });
       const beforeAuthoring = await sessionLibrary(alice);
+      expect(beforeAuthoring.session).toMatchObject({
+        sessionKey: remoteKey,
+        selections: [
+          {
+            skillId: saved.entry.skillId,
+            revision: saved.entry.revision,
+            name: saved.entry.name,
+            ownerProfileId: saved.entry.ownerProfileId,
+            ownerLabel: saved.entry.ownerLabel,
+          },
+        ],
+      });
+      const bobSessionLibrary = await sessionLibrary(bob);
+      expect(bobSessionLibrary.session?.selections).toEqual(beforeAuthoring.session!.selections);
+      expect(bobSessionLibrary.entries.map((entry) => entry.skillId)).not.toContain(
+        saved.entry.skillId,
+      );
+      expect(bobSessionLibrary.session?.attachable.map((entry) => entry.skillId)).toEqual([
+        bobSaved.entry.skillId,
+      ]);
+      const readPin = (revision: string) =>
+        bob.request<SkillsLibraryReadResult>("skills.library.read", {
+          sessionKey: remoteKey,
+          skillId: saved.entry.skillId,
+          revision,
+        });
+      // Session membership grants the exact pin's bytes, not access to Alice's private history.
+      const pinnedRead = await readPin(saved.entry.revision);
+      expect(pinnedRead.entry).toMatchObject({ revision: saved.entry.revision, canEdit: false });
+      expectBundle(pinnedRead, original);
+      expect(pinnedRead.revisions.map((entry) => entry.revision)).toEqual([saved.entry.revision]);
+      await expect(
+        bob.request("skills.library.read", {
+          skillId: saved.entry.skillId,
+          revision: saved.entry.revision,
+        }),
+      ).rejects.toMatchObject({ error: { details: { code: "SKILL_LIBRARY_NOT_FOUND" } } });
+      await expect(
+        bob.request("skills.library.mutate", {
+          skillId: saved.entry.skillId,
+          expectedRevision: saved.entry.revision,
+          action: "remove",
+        }),
+      ).rejects.toMatchObject({ error: { details: { code: "SKILL_LIBRARY_NOT_FOUND" } } });
+      await bob.request("chat.history", { sessionKey: remoteKey, limit: 20 });
       const workerFirst = await turn(bob, remoteKey, "bob-worker-first");
       expect({ ...workerFirst, directory: undefined }).toEqual({
         ...localFirst,
@@ -406,6 +451,12 @@ it("pins skill bundles through worker authoring and lifecycle changes", async (c
         expectedRevision: saved.entry.revision,
       });
       expect(updated.entry.revision).not.toBe(saved.entry.revision);
+      expect(
+        (await readPin(saved.entry.revision)).revisions.map((entry) => entry.revision),
+      ).toEqual([saved.entry.revision]);
+      await expect(readPin(updated.entry.revision)).rejects.toMatchObject({
+        error: { details: { code: "SKILL_LIBRARY_FORBIDDEN" } },
+      });
       expect((await turn(alice, localKey, "local-still-pinned")).reference).toBe(
         "ALICE-RESOURCE-1\n",
       );

@@ -903,11 +903,18 @@ describe("release child attempt composition", () => {
   });
 
   it("ignores terminal skipped jobs before duplicate identity checks", () => {
+    const matrixPlaceholder = job("matrix.check_name", "skipped");
     const skippedJob = job("disabled-check", "skipped");
     const result = composeReleaseAttemptJobs(
       [
         {
-          jobs: [skippedJob, skippedJob, job("test", "success")],
+          jobs: [
+            matrixPlaceholder,
+            matrixPlaceholder,
+            skippedJob,
+            skippedJob,
+            job("test", "success"),
+          ],
           runAttempt: 1,
         },
       ],
@@ -992,46 +999,102 @@ describe("release child attempt composition", () => {
       ]);
     });
 
-    it.each([
+    it.each<{
+      label: string;
+      attempts: Parameters<typeof composeReleaseAttemptJobs>[0];
+      effectiveRunAttempt: number;
+      effectiveRunStatus?: string;
+      plannedRunAttempt: number;
+    }>([
       {
         label: "without a completed sibling",
-        jobs: [ghost, ghost],
-        attempt: 1,
+        attempts: [
+          { jobs: [ghost, ghost], runAttempt: 1 },
+          { jobs: [job("test", "success")], runAttempt: 2 },
+        ],
+        effectiveRunAttempt: 2,
+        plannedRunAttempt: 1,
       },
       {
-        label: "assigned completed copy",
-        jobs: [{ ...ghost, runner_name: "runner" }, completed],
-        attempt: 1,
+        label: "once the copy has a runner",
+        attempts: [
+          { jobs: [{ ...ghost, runner_name: "GitHub Actions 2" }, completed], runAttempt: 1 },
+          { jobs: [job("test", "success")], runAttempt: 2 },
+        ],
+        effectiveRunAttempt: 2,
+        plannedRunAttempt: 1,
       },
-      { label: "two running jobs", jobs: [ghost, running, running] },
-      { label: "assigned queued copy", jobs: [{ ...ghost, runner_name: "runner" }, running] },
-      { label: "only queued copies", jobs: [ghost, ghost] },
+      ...[
+        { label: "beside two running jobs", jobs: [ghost, running, running] },
+        {
+          label: "beside an assigned queued copy",
+          jobs: [{ ...ghost, runner_name: "GitHub Actions 2" }, running],
+        },
+        { label: "with only queued copies", jobs: [ghost, ghost] },
+        {
+          label: "beside a runnerless running job",
+          jobs: [ghost, { ...running, runner_id: null, runner_name: null }],
+        },
+      ].flatMap(({ label, jobs }) =>
+        ["queued", "in_progress"].map((effectiveRunStatus) => ({
+          label: `${label} in a ${effectiveRunStatus} run`,
+          attempts: [
+            { jobs: [job("test", "success")], runAttempt: 1 },
+            { jobs, runAttempt: 2 },
+          ],
+          effectiveRunAttempt: 2,
+          effectiveRunStatus,
+          plannedRunAttempt: 1,
+        })),
+      ),
       {
-        label: "runnerless running job",
-        jobs: [ghost, { ...running, runner_id: null, runner_name: null }],
+        label: "beside a running job in a completed run",
+        attempts: [
+          { jobs: [job("test", "success")], runAttempt: 1 },
+          { jobs: [ghost, running], runAttempt: 2 },
+        ],
+        effectiveRunAttempt: 2,
+        effectiveRunStatus: "completed",
+        plannedRunAttempt: 1,
       },
-      { label: "completed run", jobs: [ghost, running], status: "completed" },
-      { label: "older attempt", jobs: [ghost, running], attempt: 1 },
-      { label: "without a rerun", jobs: [ghost, running], effective: 1 },
+      {
+        label: "beside a running job in an older attempt",
+        attempts: [
+          { jobs: [ghost, running], runAttempt: 1 },
+          { jobs: [job("test", "success")], runAttempt: 2 },
+        ],
+        effectiveRunAttempt: 2,
+        effectiveRunStatus: "in_progress",
+        plannedRunAttempt: 1,
+      },
+      {
+        label: "beside a running job without a rerun",
+        attempts: [{ jobs: [ghost, running], runAttempt: 1 }],
+        effectiveRunAttempt: 1,
+        effectiveRunStatus: "in_progress",
+        plannedRunAttempt: 1,
+      },
     ])(
-      "still rejects duplicates: $label",
-      ({ jobs, attempt = 2, effective = 2, status = "in_progress" }) => {
-        const attempts = Array.from({ length: effective }, (_, index) => ({
-          jobs: index + 1 === Math.min(attempt, effective) ? jobs : [job("test", "success")],
-          runAttempt: index + 1,
-        }));
+      "still rejects duplicates $label",
+      ({ attempts, effectiveRunAttempt, effectiveRunStatus, plannedRunAttempt }) => {
         expect(() =>
           composeReleaseAttemptJobs(attempts, {
-            effectiveRunAttempt: effective,
-            effectiveRunStatus: status,
-            plannedRunAttempt: 1,
+            effectiveRunAttempt,
+            effectiveRunStatus,
+            plannedRunAttempt,
           }),
         ).toThrow("duplicate job identity");
       },
     );
   });
 
-  it("rejects gapped attempts", () => {
+  it("rejects duplicate logical jobs and gapped attempts", () => {
+    expect(() =>
+      composeReleaseAttemptJobs(
+        [{ jobs: [job("test", "failure"), job("test", "success")], runAttempt: 1 }],
+        { effectiveRunAttempt: 1, plannedRunAttempt: 1 },
+      ),
+    ).toThrow("duplicate job identity");
     expect(() =>
       composeReleaseAttemptJobs(
         [
@@ -1053,7 +1116,12 @@ describe("release decision policy", () => {
   };
   const ciGate = { name: "openclaw/ci-gate", conclusion: "success", status: "completed" };
 
-  // readChild uses ambient repository identity; keep fork CI aligned with these fixtures.
+  // In-process readChild calls compose child provenance expectations from the ambient
+  // process.env.GITHUB_REPOSITORY, while every GitHub run fixture in this suite describes
+  // the canonical openclaw/openclaw repository. Fork checkouts run these tests with their
+  // own GITHUB_REPOSITORY and would fail provenance validation, so pin the ambient
+  // repository to the fixture identity for this suite and restore it afterwards. The
+  // collector subprocess tests already pin the same identity via collectorEnv().
   let ambientRepository: string | undefined;
   beforeEach(() => {
     ambientRepository = process.env.GITHUB_REPOSITORY;
@@ -1333,85 +1401,77 @@ describe("release decision policy", () => {
   );
 
   it.each([
-    { stage: "run", message: "HTTP 403: secondary rate limit" },
-    { stage: "run", message: "stream error: stream ID 47; CANCEL; received from peer" },
-    { stage: "jobs", message: "HTTP 503: Server Error" },
-  ])(
-    "preserves accepted evidence through a transient $stage read failure ($message) and recovers",
-    async ({ stage, message }) => {
-      const planned = child("normalCi");
-      const previous = {
-        ...planned,
+    "HTTP 403: secondary rate limit",
+    "stream error: stream ID 47; CANCEL; received from peer",
+  ])("preserves the last valid snapshot through %s and then recovers", async (message) => {
+    const planned = child("normalCi");
+    const previous = {
+      ...planned,
+      conclusion: "success",
+      jobs: [{ conclusion: "success", name: "test", status: "completed" }],
+      status: "completed",
+    };
+    let fail = true;
+    const readRun = async () => {
+      if (fail) {
+        fail = false;
+        throw Object.assign(new Error(message), {
+          stderr: message,
+        });
+      }
+      return githubRun(planned, {
         conclusion: "success",
-        jobs: [{ conclusion: "success", name: "test", status: "completed" }],
-        status: "completed",
-        ...(stage === "jobs"
-          ? {
-              compositeJobsSha256: "f".repeat(64),
-              observedRunAttempts: [1],
-              plannedRunAttempt: 1,
-              transportFailure: { errorClass: "transient" },
-            }
-          : {}),
-      };
-      let failing = true;
-      const unavailable = () => {
-        return Object.assign(new Error(message), { stderr: message });
-      };
-      const readers = {
-        readRun: async () => {
-          if (failing && stage === "run") {
-            throw unavailable();
-          }
-          return githubRun(planned, {
-            conclusion: failing && stage === "jobs" ? "" : "success",
-            run_attempt: stage === "jobs" ? 2 : 1,
-            status: failing && stage === "jobs" ? "in_progress" : "completed",
-            created_at: "2026-08-21T00:00:00Z",
-            html_url: planned.url,
-            updated_at: "2026-08-21T00:01:00Z",
-          });
-        },
-        readAttemptJobs: async (_runId: string, attempt: number) => {
-          if (failing && stage === "jobs" && attempt === 2) {
-            throw unavailable();
-          }
-          return previous.jobs;
-        },
-      };
-      const degraded = await readChild(planned, previous, undefined, readers);
-      expect(degraded).toMatchObject({
-        conclusion: "success",
-        errors: [],
-        jobs: previous.jobs,
-        runAttempt: 1,
-        status: "transport_uncertain",
-        ...(stage === "jobs"
-          ? {
-              compositeJobsSha256: previous.compositeJobsSha256,
-              transportFailure: { errorClass: "transient" },
-            }
-          : {}),
+        created_at: "2026-08-21T00:00:00Z",
+        html_url: planned.url,
+        updated_at: "2026-08-21T00:01:00Z",
       });
-      expect(
-        classifyReleaseSnapshot({
-          children: [degraded],
-          releaseProfile: "stable",
-          workflowRef: "main",
-        }),
-      ).toMatchObject({ errors: [], state: "qualifying" });
-      failing = false;
-      const recovered = await readChild(planned, degraded, undefined, readers);
-      expect(recovered).toMatchObject({ conclusion: "success", errors: [], status: "completed" });
-      expect(
-        classifyReleaseSnapshot({
-          children: [recovered],
-          releaseProfile: "stable",
-          workflowRef: "main",
-        }),
-      ).toMatchObject({ errors: [], state: "passed" });
-    },
-  );
+    };
+    const readAttemptJobs = async () => [
+      {
+        completed_at: "2026-08-21T00:01:00Z",
+        conclusion: "success",
+        html_url: "https://example.invalid/jobs/test",
+        name: "test",
+        started_at: "2026-08-21T00:00:00Z",
+        status: "completed",
+      },
+    ];
+
+    const degraded = await readChild(planned, previous, undefined, {
+      readAttemptJobs,
+      readRun,
+    });
+    expect(degraded).toMatchObject({
+      conclusion: "success",
+      errors: [],
+      jobs: previous.jobs,
+      status: "transport_uncertain",
+    });
+    expect(
+      classifyReleaseSnapshot({
+        children: [degraded],
+        releaseProfile: "stable",
+        workflowRef: "main",
+      }),
+    ).toMatchObject({ errors: [], state: "qualifying" });
+
+    const recovered = await readChild(planned, degraded, undefined, {
+      readAttemptJobs,
+      readRun,
+    });
+    expect(recovered).toMatchObject({
+      conclusion: "success",
+      errors: [],
+      status: "completed",
+    });
+    expect(
+      classifyReleaseSnapshot({
+        children: [recovered],
+        releaseProfile: "stable",
+        workflowRef: "main",
+      }),
+    ).toMatchObject({ errors: [], state: "passed" });
+  });
 
   it("fails child provenance mismatches without consuming preserved success", async () => {
     const planned = child("normalCi");
@@ -1438,8 +1498,41 @@ describe("release decision policy", () => {
     ).toMatchObject({ state: "orchestration_error" });
   });
 
-  it("retains transport uncertainty until an empty active-job snapshot is complete", async () => {
+  it("preserves complete composite evidence when the run read succeeds but jobs fail", async () => {
     const planned = child("normalCi");
+    const previous = {
+      ...planned,
+      compositeJobsSha256: "f".repeat(64),
+      conclusion: "success",
+      jobs: [{ conclusion: "success", name: "test", status: "completed" }],
+      observedRunAttempts: [1],
+      plannedRunAttempt: 1,
+      status: "completed",
+      transportFailure: { errorClass: "transient" },
+    };
+    const observed = await readChild(planned, previous, undefined, {
+      readAttemptJobs: async (_runId, attempt) => {
+        if (attempt === 2) {
+          throw Object.assign(new Error("HTTP 503: Server Error"), {
+            stderr: "HTTP 503: Server Error",
+          });
+        }
+        return previous.jobs;
+      },
+      readRun: async () =>
+        githubRun(planned, {
+          conclusion: "",
+          run_attempt: 2,
+          status: "in_progress",
+        }),
+    });
+    expect(observed).toMatchObject({
+      compositeJobsSha256: previous.compositeJobsSha256,
+      jobs: previous.jobs,
+      runAttempt: 1,
+      status: "transport_uncertain",
+      transportFailure: { errorClass: "transient" },
+    });
     expect(
       await readChild(
         planned,
@@ -1804,9 +1897,17 @@ describe("release state artifacts", () => {
     const drain = structuredClone(collectorArtifact("drain", 2, sealedPlan));
     const snapshot = drain.children.normalCi!;
     snapshot.runAttempt = 2;
-    expect(() => verifyReleaseStateArtifacts(sealedPlan, decision, drain, stateExpected())).toThrow(
-      "release decision and diagnostic drain child evidence differ",
-    );
+    expect(() =>
+      verifyReleaseStateArtifacts(sealedPlan, decision, drain, {
+        maxParentRunAttempt: 2,
+        parentRunId: "77",
+        releaseProfile: "stable",
+        rerunGroup: "ci",
+        targetSha: TARGET_SHA,
+        workflowRef: "release-ci/tooling",
+        workflowSha: SHA,
+      }),
+    ).toThrow("release decision and diagnostic drain child evidence differ");
   });
 
   it.each([
@@ -1858,12 +1959,37 @@ describe("release state artifacts", () => {
         ],
         stateExpected(3),
       );
+    expect(select).toThrow("release decision and diagnostic drain transition is invalid");
     expect(select).toThrow(
       "release decision and diagnostic drain transition is invalid: " +
         "decision(parentRunAttempt=2, state=passed), " +
         "drain(parentRunAttempt=1, state=blocked_complete); " +
         `executionPlan(originalParentRunAttempt=1, sha256=${sealedPlan.sha256}); ` +
         "compatible collector evidence for the same execution plan is required",
+    );
+  });
+
+  it("retains a failed logical job when a later attempt replaces its job URL", () => {
+    const sealedPlan = executionPlan(
+      { rerunGroup: "ci" },
+      { attemptEvidenceVersion: 2, candidateRequest: candidateBinding().request },
+    );
+    const retriedJob = { ...FAILED_JOB, url: "https://example.invalid/jobs/retried" };
+    const attempts = [
+      { runAttempt: 1, jobs: [FAILED_JOB] },
+      { runAttempt: 2, jobs: [retriedJob] },
+    ];
+    const decision = attemptedBlockedArtifact("decision", sealedPlan, attempts.slice(0, 1));
+    const drain = attemptedBlockedArtifact("drain", sealedPlan, attempts);
+    expect(selectPair(sealedPlan, decision, drain)).toMatchObject({
+      decision: { state: "blocked_diagnostics_running" },
+      drain: {
+        state: "blocked_complete",
+        blockers: [{ job: "upgrade-survivor", url: retriedJob.url }],
+      },
+    });
+    expect(() => verifyReleaseStateArtifacts(sealedPlan, decision, drain, stateExpected())).toThrow(
+      "Full Release Validation state: blocked_complete\n- Blocker: upgrade-survivor (failure)",
     );
   });
 
@@ -1958,15 +2084,6 @@ describe("release state artifacts", () => {
         expect(() => selectPair(sealedPlan, decision, drain)).toThrow("changed or removed");
       } else {
         expect(selectPair(sealedPlan, decision, drain).drain.state).toBe("blocked_complete");
-        if (scenario === "retried") {
-          expect(drain.children.normalCi.timing.jobs).toContainEqual(
-            expect.objectContaining({
-              name: "retained-25",
-              url: "https://example.invalid/jobs/retried",
-              acceptedRunAttempt: 2,
-            }),
-          );
-        }
         expect(() =>
           verifyReleaseStateArtifacts(sealedPlan, decision, drain, stateExpected()),
         ).toThrow("Full Release Validation state: blocked_complete");
@@ -2150,13 +2267,21 @@ describe("release state artifacts", () => {
     },
   );
 
-  it("rejects a failed child hidden behind a passed drain", () => {
+  it.each([
+    {
+      mutate: (drain: Record<string, any>) => {
+        drain.children.normalCi.conclusion = "failure";
+      },
+      name: "failed child hidden behind passed state",
+      reason: "omits baseline blockers",
+    },
+  ])("rejects a malformed passed drain with $name", ({ mutate, reason }) => {
     const sealedPlan = executionPlan({ rerunGroup: "ci" });
     const decision = collectorArtifact("decision", 2, sealedPlan);
     const drain = structuredClone(collectorArtifact("drain", 2, sealedPlan));
-    drain.children.normalCi.conclusion = "failure";
+    mutate(drain);
     expect(() => verifyReleaseStateArtifacts(sealedPlan, decision, drain, stateExpected())).toThrow(
-      "omits baseline blockers",
+      reason,
     );
   });
 });

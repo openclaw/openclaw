@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
 const RELEASE_CHECKS_PATH = ".github/workflows/openclaw-release-checks.yml";
 const WORKFLOW_PATH = ".github/workflows/openclaw-release-telegram-qa.yml";
@@ -66,6 +67,12 @@ function requireRun(jobName: string, name: string): string {
 function sutScript(delimiter?: string) {
   const script = requireRun("run_telegram", "Create isolated Telegram SUT identity and launcher");
   return delimiter ? extractHereDocument(script, delimiter) : script;
+}
+
+function containsAll(source: string, fragments: string[]) {
+  for (const fragment of fragments) {
+    expect(source).toContain(fragment);
+  }
 }
 
 const PROVENANCE_BLOCKS = [
@@ -417,12 +424,44 @@ function provenanceScenario(defaults: ProvenanceCase, block?: ProvenanceBlock) {
 }
 
 describe("release Telegram QA workflow", () => {
-  it("keeps credential and attestation boundaries in the workflow wiring", () => {
-    expect(job("trusted_identity").permissions).toEqual({ contents: "read", "id-token": "write" });
-    expect(job("run_telegram").environment).toBe("qa-live-shared");
-    const caller = job("qa_live_telegram_release_checks", RELEASE_CHECKS_PATH);
-    expect(caller.environment).toBeUndefined();
-    expect(caller.permissions).toEqual({ actions: "write", contents: "read" });
+  it("keeps the workflow wiring explicit and secret-scoped", () => {
+    const release = workflow(RELEASE_CHECKS_PATH);
+    const caller = release.jobs?.qa_live_telegram_release_checks;
+    expect(caller).toMatchObject({
+      needs: ["resolve_target"],
+      permissions: { actions: "write", contents: "read" },
+      "timeout-minutes": 210,
+    });
+    expect(evaluateWorkflowRunner(caller?.["runs-on"])).toBe("ubuntu-24.04");
+    expect(caller?.environment).toBeUndefined();
+    expect(caller?.outputs?.conclusion).toBe(
+      "${{ steps.dispatch.outputs.conclusion || steps.dispatch.outcome }}",
+    );
+    expect(caller?.["continue-on-error"]).toBeUndefined();
+
+    const trusted = job("trusted_identity");
+    expect(trusted).toMatchObject({
+      permissions: { contents: "read", "id-token": "write" },
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 5,
+    });
+    expect(step("trusted_identity", "Verify dispatched workflow identity").id).toBe("identity");
+
+    const candidateBuild = requireRun(
+      "build_candidate",
+      "Build candidate runtime without runner credentials",
+    );
+    expect(candidateBuild).toContain("pnpm build qaRuntime");
+    expect(candidateBuild).not.toContain("scripts/build-all.mts");
+    expect(requireRun("build_candidate", "Archive bounded candidate tree")).toContain(
+      '--arg buildCommand "pnpm build qaRuntime"',
+    );
+    expect(requireRun("attest_candidate", "Bounded extract and validate candidate")).toContain(
+      '.buildCommand == "pnpm build qaRuntime"',
+    );
+    expect(requireRun("run_telegram", "Build trusted QA harness").trim()).toBe(
+      "pnpm build qaRuntime",
+    );
     const extractCandidate = step("run_telegram", "Verify attestation and bounded extract");
     expect(extractCandidate.env?.CALLED_WORKFLOW_REF).toBe(
       "${{ needs.trusted_identity.outputs.workflow_ref }}",
@@ -430,6 +469,24 @@ describe("release Telegram QA workflow", () => {
     expect(extractCandidate.run).toContain(
       '--cert-identity "https://github.com/${CALLED_WORKFLOW_REF}"',
     );
+    expect(extractCandidate.run).not.toContain("openclaw-release-telegram-qa.yml@refs/heads/main");
+
+    const runJob = job("run_telegram");
+    expect(runJob.environment).toBe("qa-live-shared");
+    expect(runJob["timeout-minutes"]).toBe(90);
+    const advisoryStatusStep = step("advisory_status", "Record advisory status");
+    expect(advisoryStatusStep.env?.CANDIDATE_RUN_ATTEMPT).toBe(
+      "${{ needs.build_candidate.outputs.run_attempt }}",
+    );
+    expect(requireRun("advisory_status", "Record advisory status").trim()).toBe(
+      "set -euo pipefail\nnode scripts/release-telegram-qa.mjs advisory-status",
+    );
+    expect(
+      PROVENANCE_BLOCKS.map(({ jobName, stepName }) => requireRun(jobName, stepName).trim()),
+    ).toEqual([
+      'bash "${GITHUB_WORKSPACE}/scripts/release-telegram-provenance.sh"',
+      'bash "${GITHUB_WORKSPACE}/scripts/release-telegram-provenance.sh"',
+    ]);
     for (const [jobName, value] of Object.entries(workflow().jobs ?? {})) {
       for (const checkout of value.steps?.filter((candidate) =>
         candidate.uses?.startsWith("actions/checkout@"),
@@ -700,20 +757,36 @@ describe("release Telegram QA workflow", () => {
 
   it("shares only the isolated workspace with the trusted scenario host", () => {
     const createSut = sutScript();
-    expect(createSut).toContain('chmod -R u=rwX,g=rwX,o= "$workspace"');
-    expect(createSut).toContain('find "$workspace" -type d -exec chmod g+s {} +');
+    containsAll(createSut, [
+      'workspace="${temp_root}/workspace"',
+      'chown -R "$RUNNER_UID:$SUT_GID" "$workspace"',
+      'chmod -R u=rwX,g=rwX,o= "$workspace"',
+      'find "$workspace" -type d -exec chmod g+s {} +',
+    ]);
+    expect(createSut).not.toContain(
+      'for path in \\\n            "$temp_root/workspace" \\\n            "${OPENCLAW_HOME:?}"',
+    );
   });
 
   it("lets the SUT create suite locks without exposing the runner-owned config", () => {
     const createSut = sutScript();
-    for (const mode of [
+    containsAll(createSut, [
+      'chown "$RUNNER_UID:$SUT_GID" "$temp_root"',
       'chmod 1770 "$temp_root"',
+      '"$(stat -c \'%F:%a:%u:%g\' "$temp_root")" == "directory:1770:${RUNNER_UID}:${SUT_GID}"',
+      'chown "$RUNNER_UID:$SUT_GID" "$config_path"',
       'chmod 0640 "$config_path"',
+      '"$(stat -c \'%F:%a:%u:%g\' "$config_path")" == "regular file:640:${RUNNER_UID}:${SUT_GID}"',
+      '"${temp_root}/state/qa-auth-bootstrap/openclaw.json")',
+      '"$(stat -c \'%F:%a:%u:%g\' "$requested_config_path")" == "regular file:600:${SUT_UID}:${SUT_GID}"',
+      'generation_dir="${RUNTIME_ROOT}/config-generations"',
       'install -d -o root -g root -m 0700 "$generation_dir"',
+      '"regular file:600:0:0"',
       '/usr/bin/setpriv --reuid="$SUT_UID" --regid="$SUT_GID"',
-    ]) {
-      expect(createSut).toContain(mode);
-    }
+      'export OPENCLAW_CONFIG_PATH="$projection_dir/openclaw.json"',
+    ]);
+    expect(createSut).not.toContain('chmod 0711 "$temp_root"');
+    expect(createSut).not.toContain('chmod 1777 "$temp_root"');
   });
 
   it.runIf(process.platform === "linux").each(["directory", "symlink"])(
@@ -865,11 +938,21 @@ printf '%s\\n' "\${OPENCLAW_GATEWAY_HOST_LIFELINE-}" "\${launcher_pid-unset}" "\
       expect(result.stdout).toBe("synthetic-stdin\n");
       expect(result.stderr).toBe("");
     }
+
+    expect(launcher).not.toContain("export PS1=");
+    expect(launcher).not.toContain("export -n BASHOPTS SHELLOPTS");
+    expect(launcher).not.toContain("unset BASH_ENV ENV");
   });
 
   it("mounts an isolated SUT-owned tmp without exposing the host tmp tree", () => {
     const launcher = sutScript("LAUNCHER");
-    expect(launcher).toContain('for masked_path in "$RUNNER_HOME" /var/tmp /dev/shm; do');
-    expect(launcher).toContain('-o "mode=0700,uid=${SUT_UID},gid=${SUT_GID},nosuid,nodev,noexec"');
+    containsAll(launcher, [
+      'for masked_path in "$RUNNER_HOME" /var/tmp /dev/shm; do',
+      "set_launcher_stage mount-private-tmp",
+      '-o "mode=0700,uid=${SUT_UID},gid=${SUT_GID},nosuid,nodev,noexec"',
+      "openclaw-telegram-sut-tmp",
+      '"$(stat -c \'%F:%a:%u:%g\' /tmp)" == "directory:700:${SUT_UID}:${SUT_GID}"',
+    ]);
+    expect(launcher).not.toContain('for masked_path in "$RUNNER_HOME" /tmp');
   });
 });

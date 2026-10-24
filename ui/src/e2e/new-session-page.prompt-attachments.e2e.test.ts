@@ -15,12 +15,19 @@ import {
   createdSessionListResult,
   expectDecodedThumbnail,
   installMockGateway,
+  navigateInApp,
   pastePng,
   pollCount,
+  pollEnabled,
+  pollDisabled,
   pollAttribute,
   pollLocatorText,
+  pollValue,
+  waitForCommittedChatRoute,
+  waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
 import { sessionList } from "./new-session-shard.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 const pngAttachment = { fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 };
@@ -37,6 +44,15 @@ function initialPromptResponses(sessionKey: string, runId: string, sessionId: st
   };
 }
 
+async function startPrompt(page: Page, message: string, sessionKey: string) {
+  await page.goto(`${suite.server.baseUrl}new`);
+  await page.locator(".new-session-page__message").fill(message);
+  await page.getByRole("button", { name: "Start session" }).click();
+  await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
+    timeout: 30_000,
+  });
+}
+
 async function expectRejectedTurn(page: Page, message: string, error: string) {
   const group = page.locator(".chat-group.user", { hasText: message });
   const status = group.locator(".chat-send-status");
@@ -50,6 +66,68 @@ async function withNewSessionPage(run: (page: Page) => Promise<void>): Promise<v
 }
 
 suite.define(() => {
+  it("restores a prompt and image in a fresh page, then clears them after creation", async () => {
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
+    try {
+      const firstPage = await context.newPage();
+      await installMockGateway(firstPage);
+      await firstPage.goto(`${suite.server.baseUrl}new`);
+      const firstMessage = firstPage.locator(".new-session-page__message");
+      await firstMessage.fill("restore this prompt after restart");
+      await pastePng(firstMessage);
+      await firstPage.locator('.chat-attachment-thumb img[alt="pixel.png"]').waitFor();
+      const incognito = firstPage.getByRole("switch", { name: "Incognito" });
+      await incognito.click();
+      await pollAttribute(incognito, "aria-checked").toBe("true");
+      await waitForCommittedNewSessionDraft(firstPage, null, 0);
+      await incognito.click();
+      await pollAttribute(incognito, "aria-checked").toBe("false");
+      await firstMessage.fill("restore this prompt after restart and incognito");
+      await pollCount(firstPage.locator(".chat-attachment-thumb")).toBe(1);
+      await waitForCommittedNewSessionDraft(
+        firstPage,
+        "restore this prompt after restart and incognito",
+        1,
+      );
+      await firstPage.reload();
+      await pollValue(firstMessage).toBe("restore this prompt after restart and incognito");
+      await pollCount(firstPage.locator(".chat-attachment-thumb")).toBe(1);
+      await firstPage.close();
+
+      const restoredPage = await context.newPage();
+      const restoredGateway = await installMockGateway(restoredPage, {
+        methodResponses: {
+          "sessions.create": { key: "agent:main:restart-draft", runStarted: true },
+        },
+      });
+      await restoredPage.goto(`${suite.server.baseUrl}new`);
+      const restoredMessage = restoredPage.locator(".new-session-page__message");
+      await pollValue(restoredMessage).toBe("restore this prompt after restart and incognito");
+      await pollCount(restoredPage.locator(".chat-attachment-thumb")).toBe(1);
+      await restoredPage.getByRole("button", { name: "Start session" }).click();
+
+      const create = await restoredGateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        message: "restore this prompt after restart and incognito",
+        attachments: [{ ...pngAttachment, type: "image", mimeType: "image/png" }],
+      });
+      await restoredPage.waitForURL(
+        (url) => url.pathname === controlUiSessionPath("agent:main:restart-draft"),
+      );
+      // Chat admission precedes durable cleanup; keep its document alive until retirement commits.
+      await waitForCommittedComposerDraft(restoredPage, JSON.stringify(["", "", ""]), null, 0);
+      await restoredPage.close();
+
+      const clearedPage = await context.newPage();
+      await installMockGateway(clearedPage);
+      await clearedPage.goto(`${suite.server.baseUrl}new`);
+      await pollValue(clearedPage.locator(".new-session-page__message")).toBe("");
+      await pollCount(clearedPage.locator(".chat-attachment-thumb")).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("grows the first prompt downward without moving the identity, then caps at ten lines", async () => {
     await withNewSessionPage(async (page) => {
       const gateway = await installMockGateway(page);
@@ -135,6 +213,39 @@ suite.define(() => {
     });
   });
 
+  it("enlarges and removes a picked image without object URL support", async () => {
+    await withNewSessionPage(async (page) => {
+      await page.addInitScript(() => {
+        Object.defineProperty(URL, "createObjectURL", { configurable: true, value: undefined });
+      });
+      await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}new`);
+
+      await page
+        .locator(".agent-chat__photo-input")
+        .setInputFiles(path.join(process.cwd(), "ui/public/favicon-32.png"));
+
+      const attachment = page.locator(".chat-attachment-thumb");
+      const preview = attachment.getByRole("img", { name: "favicon-32.png" });
+      const previewButton = page.getByRole("button", { name: "Open image favicon-32.png" });
+      await preview.waitFor({ state: "visible" });
+      await pollAttribute(preview, "src").toMatch(/^data:image\/png;base64,/u);
+      await previewButton.click();
+      const lightbox = page.locator("openclaw-image-lightbox");
+      const dialog = page.getByRole("dialog", { name: "Image preview: favicon-32.png" });
+      await dialog.waitFor({ state: "visible" });
+      await expect(lightbox.getAttribute("title")).resolves.toBeNull();
+      await page.getByAltText("favicon-32.png").last().waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+      await lightbox.waitFor({ state: "detached" });
+      await previewButton.press("Enter");
+      await dialog.waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: "Remove favicon-32.png" }).click();
+      await pollCount(attachment).toBe(0);
+    });
+  });
+
   it("keeps blob-backed SVG previews out of original-document navigation", async () => {
     await withNewSessionPage(async (page) => {
       await installMockGateway(page);
@@ -153,6 +264,90 @@ suite.define(() => {
       await previewButton.click();
       await page.getByRole("dialog", { name: "Image preview: untrusted.svg" }).waitFor();
       await expect(page.getByRole("link", { name: "Open in new tab" }).count()).resolves.toBe(0);
+    });
+  });
+
+  it("shows the initial prompt while the newly created session is still running", async () => {
+    await withNewSessionPage(async (page) => {
+      const sessionKey = "agent:main:visible-initial-prompt";
+      const message = "keep this prompt visible while the agent works";
+      const activeOutputTimestamp = Date.now() + 60_000;
+      const responses = initialPromptResponses(
+        sessionKey,
+        "visible-initial-run",
+        "visible-initial-prompt",
+      );
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          ...responses,
+          "chat.startup": {
+            ...responses["chat.startup"],
+            messages: [
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: "active-tool-call",
+                    name: "read",
+                    arguments: { path: "SKILL.md" },
+                  },
+                ],
+                timestamp: activeOutputTimestamp,
+                __openclaw: { id: "active-assistant", seq: 2 },
+              },
+              {
+                role: "toolResult",
+                toolCallId: "active-tool-call",
+                toolName: "read",
+                content: [{ type: "text", text: "working" }],
+                timestamp: activeOutputTimestamp + 1,
+                __openclaw: { id: "active-tool-result", seq: 3 },
+              },
+            ],
+          },
+        },
+      });
+      await startPrompt(page, message, sessionKey);
+      await gateway.waitForRequest("chat.startup");
+      await page.getByText("SKILL.md", { exact: true }).waitFor();
+
+      await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
+      const userRow = await page.locator(".chat-group.user").boundingBox();
+      const toolRow = await page.getByText("SKILL.md", { exact: true }).boundingBox();
+      if (!userRow || !toolRow) {
+        throw new Error("expected visible prompt and tool rows");
+      }
+      expect(userRow.y).toBeLessThan(toolRow.y);
+    });
+  });
+
+  it("keeps the initial prompt visible across a Gateway reconnect", async () => {
+    await withNewSessionPage(async (page) => {
+      const sessionKey = "agent:main:reconnected-initial-prompt";
+      const message = "keep this first prompt through reconnect";
+      const gateway = await installMockGateway(page, {
+        methodResponses: initialPromptResponses(
+          sessionKey,
+          "reconnected-initial-run",
+          "reconnected-initial-prompt",
+        ),
+      });
+      await startPrompt(page, message, sessionKey);
+      await gateway.waitForRequest("chat.startup");
+      await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
+
+      const socketsBeforeReconnect = await gateway.getSocketCount();
+      await gateway.setOnline(false);
+      await expect
+        .poll(() => gateway.getSocketCount(), { timeout: 10_000 })
+        .toBeGreaterThan(socketsBeforeReconnect);
+      await gateway.setOnline(true);
+      await expect
+        .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
+        .toBe("connected");
+      await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
+      await pollCount(page.locator(".chat-group.user")).toBe(1);
     });
   });
 
@@ -338,6 +533,140 @@ suite.define(() => {
       } finally {
         releaseMedia();
       }
+    });
+  });
+
+  it("waits for pasted image reads before enabling session creation", async () => {
+    await withNewSessionPage(async (page) => {
+      await page.addInitScript(() => {
+        const readAsDataUrl = Object.getOwnPropertyDescriptor(FileReader.prototype, "readAsDataURL")
+          ?.value as FileReader["readAsDataURL"];
+        FileReader.prototype.readAsDataURL = function (blob: Blob) {
+          (globalThis as unknown as { finishPastedImageRead?: () => void }).finishPastedImageRead =
+            () => readAsDataUrl.call(this, blob);
+        };
+      });
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.create": { key: "agent:main:delayed-image-draft", runStarted: true },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      const composer = page.locator(".new-session-page__message");
+      const submit = page.getByRole("button", { name: "Start session" });
+      await composer.fill("include the image that is still loading");
+      await pastePng(composer);
+
+      await pollDisabled(submit).toBe(true);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await page.evaluate(() => {
+        const finish = (globalThis as unknown as { finishPastedImageRead?: () => void })
+          .finishPastedImageRead;
+        if (!finish) {
+          throw new Error("Pasted image read was not started");
+        }
+        finish();
+      });
+
+      await page.getByRole("img", { name: "pixel.png" }).waitFor();
+      await pollEnabled(submit).toBe(true);
+      await submit.click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        message: "include the image that is still loading",
+        attachments: [pngAttachment],
+      });
+    });
+  });
+
+  it("retains a completed file when the rest of its pasted batch is aborted", async () => {
+    type PasteProof = {
+      reads: number;
+      loaded: number;
+      aborts: number;
+      created: number;
+      revoked: number;
+    };
+    await withNewSessionPage(async (page) => {
+      await page.addInitScript(() => {
+        const readAsDataUrl = Reflect.get(
+          FileReader.prototype,
+          "readAsDataURL",
+        ) as FileReader["readAsDataURL"];
+        const abort = Reflect.get(FileReader.prototype, "abort") as FileReader["abort"];
+        const createObjectURL = URL.createObjectURL.bind(URL);
+        const revokeObjectURL = URL.revokeObjectURL.bind(URL);
+        const proof: PasteProof = { reads: 0, loaded: 0, aborts: 0, created: 0, revoked: 0 };
+        (globalThis as unknown as { partialPasteProof: PasteProof }).partialPasteProof = proof;
+        FileReader.prototype.readAsDataURL = function (blob: Blob) {
+          proof.reads += 1;
+          if (proof.reads === 1) {
+            this.addEventListener(
+              "load",
+              () => {
+                proof.loaded += 1;
+              },
+              { once: true },
+            );
+            readAsDataUrl.call(this, blob);
+          } else {
+            // Hold only the second pasted file; draft restoration keeps native reads.
+            FileReader.prototype.readAsDataURL = readAsDataUrl;
+          }
+        };
+        FileReader.prototype.abort = function () {
+          proof.aborts += 1;
+          abort.call(this);
+        };
+        URL.createObjectURL = (blob: Blob) => {
+          proof.created += 1;
+          return createObjectURL(blob);
+        };
+        URL.revokeObjectURL = (url: string) => {
+          proof.revoked += 1;
+          revokeObjectURL(url);
+        };
+      });
+      const gateway = await installMockGateway(page);
+      const readProof = () =>
+        page.evaluate(
+          () => (globalThis as unknown as { partialPasteProof: PasteProof }).partialPasteProof,
+        );
+      await page.goto(`${suite.server.baseUrl}new`);
+      const composer = page.locator(".new-session-page__message");
+      await pastePng(composer, 2);
+      await expect
+        .poll(readProof)
+        .toEqual({ reads: 2, loaded: 1, aborts: 0, created: 1, revoked: 0 });
+      expect(await page.locator(".chat-attachment-thumb").count()).toBe(2);
+      expect(await page.locator('.chat-attachment-thumb[aria-busy="true"]').count()).toBe(1);
+      await page.getByRole("img", { name: "pixel-1.png", exact: true }).waitFor();
+      await waitForCommittedNewSessionDraft(page, "", ["pixel-1.png"]);
+
+      await navigateInApp(page, "chat");
+      await waitForCommittedChatRoute(page);
+      await expect
+        .poll(readProof)
+        .toEqual({ reads: 2, loaded: 1, aborts: 1, created: 1, revoked: 0 });
+      await navigateInApp(page, "new-session");
+      await composer.waitFor();
+      await page.getByRole("img", { name: "pixel-1.png", exact: true }).waitFor();
+      expect(await page.locator(".chat-attachment-thumb").count()).toBe(1);
+      expect(await page.locator('.chat-attachment-thumb[aria-busy="true"]').count()).toBe(0);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await page.getByRole("button", { name: "Remove pixel-1.png", exact: true }).click();
+      await waitForCommittedNewSessionDraft(page, "", []);
+      await expect
+        .poll(async () => {
+          const proof = await readProof();
+          return {
+            reads: proof.reads,
+            aborts: proof.aborts,
+            previews: proof.created - proof.revoked,
+          };
+        })
+        .toEqual({ reads: 2, aborts: 1, previews: 0 });
+      expect(await page.locator(".chat-attachment-thumb").count()).toBe(0);
     });
   });
 

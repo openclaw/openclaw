@@ -42,20 +42,14 @@ function writeFiles(root: string, files: Record<string, string | Uint8Array>) {
   }
 }
 
+function expectContains(text: string, fragments: string[]) {
+  for (const fragment of fragments) {
+    expect(text).toContain(fragment);
+  }
+}
+
 function read(...parts: string[]) {
   return readFileSync(path.join(...parts), "utf8");
-}
-
-function readLines(...parts: string[]) {
-  return read(...parts)
-    .trim()
-    .split("\n");
-}
-
-function writeTools(root: string, tools: Record<string, string>) {
-  for (const [name, body] of Object.entries(tools)) {
-    writeFixtureExecutable(path.join(root, name), body);
-  }
 }
 
 function shellVars(values: Record<string, string>) {
@@ -304,7 +298,7 @@ touch "$ROOT_DIR/assembled"
         expect(existsSync(path.join(root, "assembled"))).toBe(mode === "success");
         expect(existsSync(stage)).toBe(mode === "cleanup-failure");
         expect(readdirSync(mountParent)).toHaveLength(mode === "cleanup-failure" ? 1 : 0);
-        const events = readLines(root, "events");
+        const events = read(root, "events").trim().split("\n");
         expect(events.filter((event) => event.startsWith("cleanup:")).toSorted()).toEqual([
           "cleanup:arm64",
           "cleanup:x86_64",
@@ -329,9 +323,11 @@ touch "$ROOT_DIR/assembled"
 describe("packaged worker freshness", () => {
   it.skipIf(process.platform === "win32").each([
     { label: "unset", input: undefined, expected: "1" },
+    { label: "empty", input: "", expected: "1" },
     { label: "typed opt-in", input: "0", expected: "0" },
+    { label: "runtime-only", input: "1", expected: "1" },
   ])("passes $label DTS selection to the real packager's build command", ({ input, expected }) => {
-    const { result, events } = runPackageEntrypointHarness({ dts: input, skipTsc: true });
+    const { result, events } = runPackageEntrypointHarness({ dts: input });
 
     expect(result.status, result.stderr).toBe(77);
     expect(result.stderr).toBe("");
@@ -340,11 +336,24 @@ describe("packaged worker freshness", () => {
   });
 
   it.skipIf(process.platform === "win32")(
+    "runs the real build entrypoint when the legacy SKIP_TSC shortcut is requested",
+    () => {
+      const { result, events } = runPackageEntrypointHarness({ skipTsc: true });
+      expect(result.status, result.stderr).toBe(77);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("BUILD_SELECTION=1\n");
+      expect(events).toEqual(["xcode-version", "swift-version", "pnpm:build"]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "keeps private app staging out of package contents and removes it after use",
     async () => {
       const root = tempDirs.make("openclaw-package-stage-");
       const dist = path.join(root, "dist");
       const output = tempDirs.make("openclaw-package-stage-output-");
+      const previousApp = path.join(dist, "OpenClaw.app/Contents/MacOS/OpenClaw");
+      const arbitraryApp = path.join(dist, "OpenClaw-proof.app/Contents/MacOS/OpenClaw");
       const { files, packageManager, version } = JSON.parse(
         readFileSync("package.json", "utf8"),
       ) as {
@@ -409,119 +418,166 @@ ${scriptBlock("cleanup_package_build() {", "PNPM_CMD=()")}
         );
         expect(cleaned.status, cleaned.stderr).toBe(0);
         expect(existsSync(stage)).toBe(false);
-        expect(read(dist, "OpenClaw.app/Contents/MacOS/OpenClaw")).toBe("previous signed app\n");
-        expect(read(dist, "OpenClaw-proof.app/Contents/MacOS/OpenClaw")).toBe(
-          "unrelated signed app\n",
-        );
+        expect(readFileSync(previousApp, "utf8")).toBe("previous signed app\n");
+        expect(readFileSync(arbitraryApp, "utf8")).toBe("unrelated signed app\n");
       }
     },
   );
 
   it
     .skipIf(process.platform === "win32")
-    .each(["reuse", "dirty", "missing-runtime", "wrong-identity"])(
-    "admits an existing source generation through the package script: %s",
-    (mode) => {
-      const root = tempDirs.make("openclaw-package-source-reuse-");
-      const builtAt = "2026-10-18T10:20:30.000Z";
-      writeFiles(root, {
-        ".gitignore": "dist/\n.artifacts/\n",
-        "package.json": JSON.stringify({ version: "1.2.3" }),
-        "src/entry.ts": "export {};\n",
-        "ui/src/fixture.ts": "export {};\n",
-        "apps/macos/Package.resolved": JSON.stringify({
-          pins: [{ identity: "peekaboo", state: { revision: "b".repeat(40) } }],
-        }),
-        "scripts/package-mac-app.sh": readFileSync(scriptPath),
-        "scripts/apple-release-source-check.sh": readFileSync(
-          "scripts/apple-release-source-check.sh",
-        ),
-        "scripts/lib/plistbuddy.sh": readFileSync("scripts/lib/plistbuddy.sh"),
-        "scripts/lib/build-metadata.sh": readFileSync("scripts/lib/build-metadata.sh"),
-        "scripts/lib/mac-app-bundle.sh": readFileSync("scripts/lib/mac-app-bundle.sh"),
-        "scripts/lib/mac-swift-build.sh": "",
-        "scripts/lib/swift-toolchain.sh": "require_swift_toolchain() { :; }\n",
-        "scripts/build-mac-swift.mts": `console.log("SWIFT_IDENTITY=" + process.env.OPENCLAW_BUILD_TIMESTAMP); process.exit(86);\n`,
-        "scripts/prepare-apple-mermaid.mjs": "",
-      });
-      for (const script of ["tsx.mjs", "verify-mac-source-build.mts"]) {
-        symlinkSync(path.resolve("scripts", script), path.join(root, "scripts", script));
-      }
-      const bin = path.join(root, "bin");
-      mkdirSync(bin);
-      const node = resolveNodeRuntimeExecutable();
-      if (!node) {
-        throw new Error("Mac packaging fixture requires Node");
-      }
-      symlinkSync(node, path.join(bin, "node"));
-      writeExecutable(
-        path.join(bin, "pnpm"),
-        "#!/bin/bash\necho UNEXPECTED_SOURCE_WRITE >&2\nexit 87\n",
-      );
-      writeExecutable(path.join(bin, "corepack"), "#!/bin/bash\nexit 1\n");
-      const head = initializeRepository(root);
-      // Supply the canonical owner's required generated files as fixture inputs;
-      // this test proves packaging admission, not the postbuild inventory itself.
-      for (const output of listCoreRuntimePostBuildOutputs({ rootDir: root })) {
-        writeFiles(root, { [output]: "fixture output\n" });
-      }
-      const info = JSON.stringify({
-        version: "1.2.3",
-        commit: head,
-        builtAt,
-        buildId: "fixture-runtime-build",
-      });
-      writeFiles(root, {
-        "dist/entry.js": "export {};\n",
-        "dist/install.runtime.js": "export {};\n",
-        "dist/build-info.json": info,
-        "dist/.buildstamp": JSON.stringify({ head, inputsClean: true }),
-        "dist/.runtime-postbuildstamp": JSON.stringify({
-          head,
-          inputsClean: true,
-          staticAssets: true,
-        }),
-      });
-      if (mode === "dirty") {
-        writeFiles(root, { "src/entry.ts": "export const changed = true;\n" });
-      }
-      if (mode === "missing-runtime") {
-        rmSync(path.join(root, "dist/.runtime-postbuildstamp"));
-      }
-      if (mode === "wrong-identity") {
-        writeFiles(root, { "dist/build-info.json": info.replace(head, "a".repeat(40)) });
-      }
-      const before = read(root, "dist/build-info.json");
-      const result = spawnSync("/bin/bash", [path.join(root, scriptPath)], {
+    .each([
+      "reuse",
+      "dirty",
+      "dirty-ui",
+      "untracked-ui",
+      "missing-runtime",
+      "wrong-identity",
+      "legacy-skip",
+    ])("admits an existing source generation through the package script: %s", (mode) => {
+    const root = tempDirs.make("openclaw-package-source-reuse-");
+    const builtAt = "2026-10-18T10:20:30.000Z";
+    writeFiles(root, {
+      ".gitignore": "dist/\n.artifacts/\n",
+      "package.json": JSON.stringify({ version: "1.2.3" }),
+      "src/entry.ts": "export {};\n",
+      "ui/src/fixture.ts": "export {};\n",
+      "apps/macos/Package.resolved": JSON.stringify({
+        pins: [{ identity: "peekaboo", state: { revision: "b".repeat(40) } }],
+      }),
+      "scripts/package-mac-app.sh": readFileSync(scriptPath),
+      "scripts/apple-release-source-check.sh": readFileSync(
+        "scripts/apple-release-source-check.sh",
+      ),
+      "scripts/lib/plistbuddy.sh": readFileSync("scripts/lib/plistbuddy.sh"),
+      "scripts/lib/build-metadata.sh": readFileSync("scripts/lib/build-metadata.sh"),
+      "scripts/lib/mac-app-bundle.sh": readFileSync("scripts/lib/mac-app-bundle.sh"),
+      "scripts/lib/mac-swift-build.sh": "",
+      "scripts/lib/swift-toolchain.sh": "require_swift_toolchain() { :; }\n",
+      "scripts/build-mac-swift.mts": `console.log("SWIFT_IDENTITY=" + process.env.OPENCLAW_BUILD_TIMESTAMP); process.exit(86);\n`,
+      "scripts/prepare-apple-mermaid.mjs": "",
+    });
+    for (const script of ["tsx.mjs", "verify-mac-source-build.mts"]) {
+      symlinkSync(path.resolve("scripts", script), path.join(root, "scripts", script));
+    }
+    const bin = path.join(root, "bin");
+    mkdirSync(bin);
+    const node = resolveNodeRuntimeExecutable();
+    if (!node) {
+      throw new Error("Mac packaging fixture requires Node");
+    }
+    symlinkSync(node, path.join(bin, "node"));
+    writeExecutable(
+      path.join(bin, "pnpm"),
+      "#!/bin/bash\necho UNEXPECTED_SOURCE_WRITE >&2\nexit 87\n",
+    );
+    writeExecutable(path.join(bin, "corepack"), "#!/bin/bash\nexit 1\n");
+    const git = (...args: string[]) =>
+      spawnSync("git", args, {
         cwd: root,
         encoding: "utf8",
-        env: {
-          HOME: root,
-          PATH: `${bin}${path.delimiter}${path.dirname(process.execPath)}:/usr/bin:/bin`,
-          APP_BUILD: "1",
-          OPENCLAW_MAC_REUSE_BUILD: "1",
-        },
+        env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" },
       });
-      if (mode === "reuse") {
-        expect(result.status, result.stderr).toBe(86);
-        expect(result.stdout).toContain(`SWIFT_IDENTITY=${builtAt}`);
-        expect(result.stdout).toContain("Reusing verified source runtime");
-      } else {
-        expect(result.status, result.stderr).toBe(1);
-        expect(result.stderr).toContain(
-          mode === "wrong-identity"
-            ? "provenance does not match"
-            : mode === "missing-runtime"
-              ? "stale or incomplete"
-              : "require a clean Git checkout",
-        );
-        expect(result.stdout).not.toContain("SWIFT_IDENTITY=");
-      }
-      expect(read(root, "dist/build-info.json")).toBe(before);
-      expect(result.stdout).not.toContain("Ensuring deps");
-    },
-  );
+    expect(git("init", "--quiet").status).toBe(0);
+    expect(git("add", ".").status).toBe(0);
+    expect(
+      git(
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        "fixture",
+      ).status,
+    ).toBe(0);
+    const head = git("rev-parse", "HEAD").stdout.trim();
+    // Supply the canonical owner's required generated files as fixture inputs;
+    // this test proves packaging admission, not the postbuild inventory itself.
+    for (const output of listCoreRuntimePostBuildOutputs({ rootDir: root })) {
+      writeFiles(root, { [output]: "fixture output\n" });
+    }
+    const info = JSON.stringify({
+      version: "1.2.3",
+      commit: head,
+      builtAt,
+      buildId: "fixture-runtime-build",
+    });
+    writeFiles(root, {
+      "dist/entry.js": "export {};\n",
+      "dist/install.runtime.js": "export {};\n",
+      "dist/build-info.json": info,
+      "dist/.buildstamp": JSON.stringify({ head, inputsClean: true }),
+      "dist/.runtime-postbuildstamp": JSON.stringify({
+        head,
+        inputsClean: true,
+        staticAssets: true,
+      }),
+    });
+    if (mode === "dirty") {
+      writeFiles(root, { "src/entry.ts": "export const changed = true;\n" });
+    }
+    if (mode === "dirty-ui") {
+      writeFiles(root, { "ui/src/fixture.ts": "export const changed = true;\n" });
+    }
+    if (mode === "untracked-ui") {
+      writeFiles(root, { "ui/src/new.ts": "export const added = true;\n" });
+    }
+    if (mode === "missing-runtime") {
+      rmSync(path.join(root, "dist/.runtime-postbuildstamp"));
+    }
+    if (mode === "wrong-identity") {
+      writeFiles(root, { "dist/build-info.json": info.replace(head, "a".repeat(40)) });
+    }
+    const before = readFileSync(path.join(root, "dist/build-info.json"), "utf8");
+    const result = spawnSync("/bin/bash", [path.join(root, scriptPath)], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        HOME: root,
+        PATH: `${bin}${path.delimiter}${path.dirname(process.execPath)}:/usr/bin:/bin`,
+        APP_BUILD: "1",
+        ...(mode === "legacy-skip"
+          ? { SKIP_TSC: "1", SKIP_PNPM_INSTALL: "1" }
+          : { OPENCLAW_MAC_REUSE_BUILD: "1" }),
+      },
+    });
+    if (mode === "reuse") {
+      expect(result.status, result.stderr).toBe(86);
+      expect(result.stdout).toContain(`SWIFT_IDENTITY=${builtAt}`);
+      expect(result.stdout).toContain("Reusing verified source runtime");
+    } else if (mode === "legacy-skip") {
+      expect(result.status, result.stderr).toBe(87);
+      expect(result.stderr).toContain("UNEXPECTED_SOURCE_WRITE");
+    } else {
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(
+        mode === "wrong-identity"
+          ? "provenance does not match"
+          : mode === "missing-runtime"
+            ? "stale or incomplete"
+            : "require a clean Git checkout",
+      );
+      expect(result.stdout).not.toContain("SWIFT_IDENTITY=");
+    }
+    expect(readFileSync(path.join(root, "dist/build-info.json"), "utf8")).toBe(before);
+    expect(result.stdout).not.toContain("Ensuring deps");
+  });
 });
+
+function makePlist(): string {
+  const dir = tempDirs.make("openclaw-plistbuddy-");
+  const plist = path.join(dir, "Info.plist");
+  writeFileSync(
+    plist,
+    plistDocument("<dict><key>CFBundleIdentifier</key><string>old.bundle</string></dict>"),
+    "utf8",
+  );
+  return plist;
+}
 
 function plistDocument(value: string) {
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -532,7 +588,7 @@ function plistDocument(value: string) {
 function runHelper(script: string, shell = process.platform === "win32" ? "bash" : "/bin/bash") {
   // Login/logout hooks can replace the helper's exit status on headless hosts.
   const home = tempDirs.make("openclaw-package-helper-");
-  return spawnSync(shell, ["-c", `set -euo pipefail\n${script}`], {
+  return spawnSync(shell, ["-c", script], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: { ...process.env, HOME: home, TMPDIR: home, GIT_CONFIG_NOSYSTEM: "1" },
@@ -552,7 +608,6 @@ function runPackageEntrypointHarness(
     buildConfig?: "debug" | "release";
     rejectSource?: boolean;
     oldSwift?: boolean;
-    xcodeFailure?: string;
     signingVariant?: string;
   } = {},
 ) {
@@ -562,6 +617,8 @@ function runPackageEntrypointHarness(
   mkdirSync(tools);
   mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
   mkdirSync(path.join(root, "apps/macos"), { recursive: true });
+  // Copy the actual entrypoint and its source-only libraries. External tools stop
+  // at the pnpm boundary, so neither a compiler nor an installer can run.
   for (const file of [
     scriptPath,
     "scripts/lib/plistbuddy.sh",
@@ -573,25 +630,31 @@ function runPackageEntrypointHarness(
   ]) {
     writeFileSync(path.join(root, file), readFileSync(file));
   }
-  writeFiles(root, {
-    "package.json": '{"version":"1.0.0"}\n',
-    "apps/macos/Package.resolved": readFileSync("apps/macos/Package.resolved"),
-  });
+  writeFileSync(path.join(root, "package.json"), '{"version":"1.0.0"}\n');
+  writeFileSync(
+    path.join(root, "apps/macos/Package.resolved"),
+    readFileSync("apps/macos/Package.resolved"),
+  );
   symlinkSync(process.execPath, path.join(tools, "node"));
-  writeTools(tools, {
-    git: '[[ "$*" == "rev-list --count HEAD" ]]\necho 1',
-    corepack: "exit 1",
-    xcrun: `[[ "$*" == "xcodebuild -version" ]]
-echo xcode-version >> "$FIXTURE_EVENTS"
-${options.xcodeFailure ? `printf '%s\\n' ${JSON.stringify(options.xcodeFailure)} >&2; exit 1` : 'echo "Xcode 26.4"'}`,
-    swift: `[[ "$*" == --version ]]\necho swift-version >> "$FIXTURE_EVENTS"\necho 'Apple Swift version ${options.oldSwift ? "6.0" : "6.3"}'`,
-    pnpm: `printf 'pnpm:%s\\n' "$*" >> "$FIXTURE_EVENTS"
+  writeFixtureExecutable(path.join(tools, "git"), '[[ "$*" == "rev-list --count HEAD" ]]\necho 1');
+  writeFixtureExecutable(path.join(tools, "corepack"), "exit 1");
+  writeFixtureExecutable(
+    path.join(tools, "xcrun"),
+    '[[ "$*" == "xcodebuild -version" ]]\necho xcode-version >> "$FIXTURE_EVENTS"\necho "Xcode 26.4"',
+  );
+  writeFixtureExecutable(
+    path.join(tools, "swift"),
+    `[[ "$*" == --version ]]\necho swift-version >> "$FIXTURE_EVENTS"\necho 'Apple Swift version ${options.oldSwift ? "6.0" : "6.3"}'`,
+  );
+  writeFixtureExecutable(
+    path.join(tools, "pnpm"),
+    `printf 'pnpm:%s\\n' "$*" >> "$FIXTURE_EVENTS"
 case "$1" in
   install) exit 0 ;;
   build) printf 'BUILD_SELECTION=%s\\n' "\${OPENCLAW_RUN_NODE_SKIP_DTS_BUILD-<unset>}"; exit 77 ;;
   *) exit 79 ;;
 esac`,
-  });
+  );
   writeFixtureExecutable(
     path.join(root, "scripts/apple-release-source-check.sh"),
     `printf 'source:%s\\n' "$*" >> "$FIXTURE_EVENTS"\nexit ${options.rejectSource ? 78 : 0}`,
@@ -620,7 +683,7 @@ esac`,
   return {
     root,
     result,
-    events: existsSync(eventsPath) ? readLines(eventsPath) : [],
+    events: existsSync(eventsPath) ? readFileSync(eventsPath, "utf8").trim().split("\n") : [],
   };
 }
 
@@ -637,6 +700,59 @@ function runBlock(start: string, end: string, before: string, after = "", file =
   return runHelper(`set -euo pipefail\n${before}\n${scriptBlock(start, end, file)}\n${after}`);
 }
 
+function runSwiftToolchainHarness(options: {
+  swiftVersion: string;
+  selectedDeveloperDir: "command-line-tools" | "xcode";
+  xcodebuildFailure?: string;
+}) {
+  const root = tempDirs.make("openclaw-package-swift-root-");
+  const toolsDir = path.join(root, "tools");
+  const commandLineToolsDir = path.join(root, "Library", "Developer", "CommandLineTools");
+  const xcodeDeveloperDir = path.join(root, "Applications", "Xcode.app", "Contents", "Developer");
+  const selectedDeveloperDir =
+    options.selectedDeveloperDir === "xcode" ? xcodeDeveloperDir : commandLineToolsDir;
+
+  mkdirSync(commandLineToolsDir, { recursive: true });
+  const xcodebuild = path.join(xcodeDeveloperDir, "usr", "bin", "xcodebuild");
+  writeExecutable(
+    xcodebuild,
+    `#!/bin/bash
+[[ "$*" == "-version" ]] || exit 2
+${
+  options.xcodebuildFailure
+    ? `printf '%s\\n' ${JSON.stringify(options.xcodebuildFailure)} >&2; exit 1`
+    : "echo 'Xcode 26.4'"
+}
+`,
+  );
+  writeExecutable(
+    path.join(toolsDir, "xcrun"),
+    `#!/bin/bash
+[[ "\${1:-}" == "xcodebuild" && "\${2:-}" == "-version" ]] || exit 2
+developer_dir="\${DEVELOPER_DIR:-$MOCK_SELECTED_DEVELOPER_DIR}"
+xcodebuild="$developer_dir/usr/bin/xcodebuild"
+if [[ ! -x "$xcodebuild" ]]; then
+  echo "xcrun: error: unable to find utility xcodebuild" >&2
+  exit 1
+fi
+exec "$xcodebuild" "\${@:2}"
+`,
+  );
+  writeExecutable(
+    path.join(toolsDir, "swift"),
+    `#!/bin/bash\necho 'swift-driver version: 1.120.0 Apple Swift version ${options.swiftVersion} (swiftlang-${options.swiftVersion} clang-1700.0.13.5)'\n`,
+  );
+
+  return runHelper(`
+    set -euo pipefail
+    PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+    export MOCK_SELECTED_DEVELOPER_DIR=${JSON.stringify(selectedDeveloperDir)}
+    unset DEVELOPER_DIR
+    ${readFileSync("scripts/lib/swift-toolchain.sh", "utf8")}
+    require_swift_toolchain
+  `);
+}
+
 function runPeekabooSourceCommitHarness(packageResolved: string, expectedRevision?: string) {
   const root = tempDirs.make("openclaw-package-peekaboo-source-");
   writeFiles(root, { "apps/macos/Package.resolved": packageResolved });
@@ -649,55 +765,58 @@ function runPeekabooSourceCommitHarness(packageResolved: string, expectedRevisio
   );
 }
 
-function runSourceProvenanceStampHarness(corruptKey?: string, failKey?: string) {
+function runSourceProvenanceStampHarness(corruptKey?: string) {
   const root = tempDirs.make("openclaw-package-provenance-");
   const openClawCommit = "a".repeat(40);
   const peekabooCommit = "b".repeat(40);
   const corruptCommit = "c".repeat(40);
   const result = runHelper(`
     set -euo pipefail
+    stamped_openclaw=
+    stamped_peekaboo=
     plist_set_string_required() {
-      if [[ "$2" == ${JSON.stringify(failKey ?? "")} ]]; then
-        printf 'stamp refused: %s\\n' "$2" >&2
-        return 17
-      fi
-      printf '%s' "$3" > "$ROOT_DIR/$2"
+      case "$2" in
+        OpenClawGitCommit) stamped_openclaw="$3" ;;
+        PeekabooSourceCommit) stamped_peekaboo="$3" ;;
+      esac
     }
     plist_print_required() {
+      local value
+      case "$2" in
+        OpenClawGitCommit) value="$stamped_openclaw" ;;
+        PeekabooSourceCommit) value="$stamped_peekaboo" ;;
+        *) return 1 ;;
+      esac
       if [[ "$2" == ${JSON.stringify(corruptKey ?? "")} ]]; then
-        printf '%s' ${JSON.stringify(corruptCommit)}
-      else
-        cat "$ROOT_DIR/$2"
+        value=${JSON.stringify(corruptCommit)}
       fi
+      printf '%s' "$value"
     }
     ROOT_DIR=${JSON.stringify(root)}
     APP_ROOT="$ROOT_DIR/OpenClaw.app"
-    BUNDLE_ID=ai.openclaw.mac.debug
-    CLOUD_WORKER_HOST=${failKey === "CFBundleName" ? 1 : 0}
-    APP_VERSION=1.0.0
-    APP_BUILD=1
     node() { echo fixture-build-id; }
     plist_set_or_add_string() { :; }
-    plist_set_or_add_bool() { :; }
-    SPARKLE_FEED_URL=
-    SPARKLE_PUBLIC_ED_KEY=
-    AUTO_CHECKS=false
     BUILD_TS=2026-08-13T00:00:00.000Z
     BUILD_GIT_COMMIT=${JSON.stringify(openClawCommit)}
     PEEKABOO_SOURCE_COMMIT=${JSON.stringify(peekabooCommit)}
     BUILD_CONFIG=release
-    ${scriptBlock('plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleIdentifier', 'echo "🚚 Copying binary"')}
-    printf '%s\n%s\n' "$(cat "$ROOT_DIR/OpenClawGitCommit")" "$(cat "$ROOT_DIR/PeekabooSourceCommit")"
+    ${scriptBlock('plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawBuildTimestamp', 'plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" SUFeedURL')}
+    printf '%s\n%s\n' "$stamped_openclaw" "$stamped_peekaboo"
   `);
 
   return { result, openClawCommit, peekabooCommit };
 }
 
 function getSwiftPackageResolutionBlock(): string {
-  return `source ${JSON.stringify(path.resolve(swiftScriptPath))}
-BUILD_PATH="$ROOT_DIR/build"
-SWIFT_WORK_ROOT="$ROOT_DIR/work"
-mkdir -p "$SWIFT_WORK_ROOT"`;
+  const block = scriptBlock(
+    "run_with_locked_swift_packages()",
+    "build_swift_architecture() {",
+    swiftScriptPath,
+  );
+  // The inlined block skips the worker's own source of the shared disk image helpers.
+  const diskImage = `source ${JSON.stringify(path.resolve("scripts/lib/mac-disk-image.sh"))}`;
+  // Give the extracted worker functions their own fixture work root.
+  return `${diskImage}\n${block}\nBUILD_PATH="$ROOT_DIR/build"\nSWIFT_WORK_ROOT="$ROOT_DIR/work"\nmkdir -p "$SWIFT_WORK_ROOT"\n`;
 }
 
 function runSnapshotCreation(
@@ -733,15 +852,17 @@ function runSnapshotCreation(
 }
 
 function snapshotImageInfoPlist(imagePath?: string): string {
-  const escaped = imagePath
-    ?.replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-  const devices = ["/dev/disk8", "/dev/disk8s1", "/dev/disk11", "/dev/disk11s1"]
-    .map((device) => `<dict><key>dev-entry</key><string>${device}</string></dict>`)
-    .join("");
-  const image = escaped
-    ? `<dict><key>image-path</key><string>${escaped}</string><key>system-entities</key><array>${devices}</array></dict>`
+  const image = imagePath
+    ? `<dict>
+  <key>image-path</key>
+  <string>${imagePath.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</string>
+  <key>system-entities</key>
+  <array>
+    ${["/dev/disk8", "/dev/disk8s1", "/dev/disk11", "/dev/disk11s1"]
+      .map((device) => `<dict><key>dev-entry</key><string>${device}</string></dict>`)
+      .join("\n    ")}
+  </array>
+</dict>`
     : "";
   return plistDocument(`<dict><key>images</key><array>${image}</array></dict>`);
 }
@@ -761,7 +882,6 @@ function initializeRepository(cwd: string) {
     ["init", "-q"],
     ["config", "user.name", "Fixture"],
     ["config", "user.email", "fixture@example.invalid"],
-    ["config", "commit.gpgsign", "false"],
     ["add", "."],
     ["commit", "-qm", "fixture"],
   ]) {
@@ -866,7 +986,15 @@ const swiftPMResourceBundles = [
   "SwiftMath_SwiftMath.bundle",
 ] as const;
 
-const mlxShader = "mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib";
+const mlxTTSResourceFiles = [
+  "mlx-swift_Cmlx.bundle/Contents/Info.plist",
+  "mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib",
+  "swift-crypto_Crypto.bundle/Contents/Info.plist",
+  "swift-crypto_Crypto.bundle/Contents/Resources/PrivacyInfo.xcprivacy",
+  "swift-transformers_Hub.bundle/Contents/Info.plist",
+  "swift-transformers_Hub.bundle/Contents/Resources/gpt2_tokenizer_config.json",
+  "swift-transformers_Hub.bundle/Contents/Resources/t5_tokenizer_config.json",
+] as const;
 
 function runSwiftPMResourceBundleHarness(options: { missingBundle?: string } = {}) {
   const root = tempDirs.make("openclaw-package-resources-root-");
@@ -883,7 +1011,9 @@ function runSwiftPMResourceBundleHarness(options: { missingBundle?: string } = {
     }
     writeFiles(buildProducts, { [`${bundle}/marker`]: bundle });
   }
-  writeFiles(helperBuildProducts, { [mlxShader]: mlxShader });
+  for (const file of mlxTTSResourceFiles) {
+    writeFiles(helperBuildProducts, { [file]: file });
+  }
 
   const result = runHelper(`
     set -euo pipefail
@@ -911,9 +1041,22 @@ function runSwiftPMResourcePatchHarness(failRestore = false) {
   const backupRoot = path.join(workRoot, "resource-backups");
   const buildPath = path.join(root, "build");
   const checkoutRoot = path.join(buildPath, "checkouts");
-  const fontLookup = 'Bundle.module.url(forResource: "mathFonts", withExtension: "bundle")';
-  const sources = {
-    "KeyboardShortcuts/Sources/KeyboardShortcuts/Utilities.swift": `import Foundation
+  const keyboardShortcuts = path.join(
+    checkoutRoot,
+    "KeyboardShortcuts/Sources/KeyboardShortcuts/Utilities.swift",
+  );
+  const swiftMathFont = path.join(
+    checkoutRoot,
+    "SwiftMath/Sources/SwiftMath/MathBundle/MathFont.swift",
+  );
+  const swiftMathLegacyFont = path.join(
+    checkoutRoot,
+    "SwiftMath/Sources/SwiftMath/MathRender/MTFont.swift",
+  );
+  const fixtures = new Map([
+    [
+      keyboardShortcuts,
+      `import Foundation
 extension String {
   var localized: String {
     NSLocalizedString(self, bundle: .module, comment: self)
@@ -923,22 +1066,31 @@ extension String {
 extension Data {
 }
 `,
-    "SwiftMath/Sources/SwiftMath/MathBundle/MathFont.swift": `import Foundation
+    ],
+    [
+      swiftMathFont,
+      `import Foundation
 #if os(macOS)
 import AppKit
 #endif
 
 /// Now available for everyone to use
-let first = ${fontLookup}
-let second = ${fontLookup}
+let first = Bundle.module.url(forResource: "mathFonts", withExtension: "bundle")
+let second = Bundle.module.url(forResource: "mathFonts", withExtension: "bundle")
 `,
-    "SwiftMath/Sources/SwiftMath/MathRender/MTFont.swift": `let font = ${fontLookup}\n`,
-  };
-  writeFiles(checkoutRoot, sources);
-  const fixtures = new Map(
-    Object.entries(sources).map(([file, contents]) => [path.join(checkoutRoot, file), contents]),
+    ],
+    [
+      swiftMathLegacyFont,
+      'let font = Bundle.module.url(forResource: "mathFonts", withExtension: "bundle")\n',
+    ],
+  ]);
+
+  writeFiles(
+    root,
+    Object.fromEntries(
+      [...fixtures].map(([file, contents]) => [path.relative(root, file), contents]),
+    ),
   );
-  const [keyboardShortcuts, swiftMathFont, swiftMathLegacyFont] = fixtures.keys();
 
   const result = runHelper(`
     set -euo pipefail
@@ -960,19 +1112,24 @@ let second = ${fontLookup}
 
 function runStopPackagedAppHarness(exitsAfterSignal: boolean) {
   const root = tempDirs.make("openclaw-package-stop-root-");
+  const toolsDir = tempDirs.make("openclaw-package-stop-tools-");
+
   const appRoot = path.join(root, "dist", "OpenClaw.app");
+  const appBinary = path.join(appRoot, "Contents", "MacOS", "OpenClaw");
+  const lsofPath = path.join(toolsDir, "lsof");
+  const pgrepPath = path.join(toolsDir, "pgrep");
+  const sleepPath = path.join(toolsDir, "sleep");
   const signalsPath = path.join(root, "signals");
-  writeTools(root, {
-    lsof: `printf 'n%s\\n' ${JSON.stringify(path.join(appRoot, "Contents/MacOS/OpenClaw"))}`,
-    pgrep: "printf '123\\n'",
-    sleep: "exit 0",
-  });
+
+  writeExecutable(lsofPath, `#!/bin/bash\nprintf 'n%s\\n' ${JSON.stringify(appBinary)}`);
+  writeExecutable(pgrepPath, "#!/bin/bash\nprintf '123\\n'\n");
+  writeExecutable(sleepPath, "#!/bin/bash\nexit 0\n");
 
   const result = runHelper(`
     set -euo pipefail
     APP_DESTINATION=${JSON.stringify(appRoot)}
     PRODUCT=OpenClaw
-    PATH=${JSON.stringify(`${root}:/usr/bin:/bin`)}
+    PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
     app_alive=1
     kill() {
       if [[ "\${1:-}" == "-0" ]]; then
@@ -990,8 +1147,24 @@ function runStopPackagedAppHarness(exitsAfterSignal: boolean) {
   `);
   return {
     ...result,
-    signals: existsSync(signalsPath) ? readLines(signalsPath) : [],
+    signals: existsSync(signalsPath) ? readFileSync(signalsPath, "utf8").trim().split("\n") : [],
   };
+}
+
+function runSwiftCompatibilityHarness() {
+  const root = tempDirs.make("openclaw-package-swift-root-");
+  const toolsDir = tempDirs.make("openclaw-package-swift-tools-");
+  const developerDir = path.join(root, "Xcode.app", "Contents", "Developer");
+  const appRoot = path.join(root, "OpenClaw.app");
+  const xcodeSelectPath = path.join(toolsDir, "xcode-select");
+
+  writeExecutable(xcodeSelectPath, `#!/bin/bash\nprintf '%s\\n' ${JSON.stringify(developerDir)}`);
+
+  return runBlock(
+    'echo "📦 Copying Swift 6.2 compatibility libraries"',
+    'echo "🖼  Compiling app icon"',
+    `${shellVars({ APP_ROOT: appRoot, BUILD_CONFIG: "release", PATH: `${toolsDir}:/usr/bin:/bin` })}\nmkdir -p "$APP_ROOT/Contents/Frameworks"`,
+  );
 }
 
 function runSwiftPackageResolutionHarness() {
@@ -1050,11 +1223,14 @@ describe("package-mac-app plist stamping", () => {
 
   it("requires the locked Peekaboo pin to match the requested elevation release source", () => {
     const requestedRevision = "b".repeat(40);
-    const pinnedRevision = "a".repeat(40);
-    const packageResolved = JSON.stringify({
-      pins: [{ identity: "peekaboo", state: { revision: pinnedRevision } }],
-    });
-    const matching = runPeekabooSourceCommitHarness(packageResolved, pinnedRevision);
+    const packageResolved = readFileSync("apps/macos/Package.resolved", "utf8");
+    const parsed = JSON.parse(packageResolved) as {
+      pins: Array<{ identity: string; state: { revision?: string } }>;
+    };
+    const pinnedRevision = parsed.pins.find((pin) => pin.identity === "peekaboo")?.state.revision;
+    expect(pinnedRevision).toMatch(/^[0-9a-f]{40}$/);
+
+    const matching = runPeekabooSourceCommitHarness(packageResolved, pinnedRevision!);
     expect(matching.status, matching.stderr).toBe(0);
     expect(matching.stdout).toBe(pinnedRevision);
 
@@ -1224,6 +1400,66 @@ describe("package-mac-app plist stamping", () => {
     },
   );
 
+  it("builds and locates the MLX helper with SwiftBuild without a legacy output alias", () => {
+    const arch = "arm64";
+    const tempRoot = tempDirs.make("openclaw-package-mlx-metal-");
+    const invocationPath = path.join(tempRoot, "swift-args");
+    const helperBuildRoot = path.join(tempRoot, "build");
+    const helperBuildProducts = path.join(helperBuildRoot, arch, "out", "Products", "Release");
+    writeFiles(helperBuildProducts, { "openclaw-mlx-tts": arch });
+
+    const result = runHelper(`
+      set -euo pipefail
+      PATH=/usr/bin:/bin
+      swift() {
+        printf '%s\\n' "$@" >> ${JSON.stringify(invocationPath)}
+        printf '\\n' >> ${JSON.stringify(invocationPath)}
+        for argument in "$@"; do
+          if [[ "$argument" == "--show-bin-path" ]]; then
+            printf '%s\\n' ${JSON.stringify(helperBuildProducts)}
+          fi
+        done
+      }
+      MLX_TTS_HELPER_ROOT=${JSON.stringify(path.join(tempRoot, "helper"))}
+      MLX_TTS_HELPER_BUILD_ROOT=${JSON.stringify(helperBuildRoot)}
+      MLX_TTS_HELPER_PRODUCT=openclaw-mlx-tts
+      BUILD_CONFIG=release
+      SWIFT_BUILD_JOBS=2
+      SWIFT_BUILD_RESULTS=${JSON.stringify(tempRoot)}
+      mkdir -p "$SWIFT_BUILD_RESULTS/${arch}"
+      ${scriptBlock("helper_build_path_for_arch() {", "sparkle_framework_for_arch()", swiftScriptPath)}
+      build_mlx_tts_helper ${arch}
+      build_mlx_tts_helper ${arch} --show-bin-path > "$SWIFT_BUILD_RESULTS/${arch}/helper-products"
+      swift() { echo unexpected-build >&2; return 99; }
+      cat "$(helper_bin_for_arch ${arch})"
+    `);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(arch);
+    const buildArgs = [
+      "build",
+      "--build-system",
+      "swiftbuild",
+      "--package-path",
+      path.join(tempRoot, "helper"),
+      "-c",
+      "release",
+      "--product",
+      "openclaw-mlx-tts",
+      "--build-path",
+      path.join(helperBuildRoot, arch),
+      "--arch",
+      arch,
+      "--jobs",
+      "2",
+    ];
+    const invocations = readFileSync(invocationPath, "utf8")
+      .trim()
+      .split("\n\n")
+      .map((call) => call.split("\n"));
+    expect(invocations).toEqual([buildArgs, [...buildArgs, "--show-bin-path"]]);
+  });
+
   it("refuses OPENCLAW_SKIP_MLX_TTS for release builds but allows it for dev builds", () => {
     const guard = scriptBlock('SKIP_MLX_TTS="${OPENCLAW_SKIP_MLX_TTS:-0}"', "BUILD_TS=");
 
@@ -1305,19 +1541,33 @@ fi
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "rejects unusable Xcode before dependency installation",
-    () => {
-      const xcodeFailure = "xcodebuild: error: SDK metadata is unavailable";
-      const { result, events } = runPackageEntrypointHarness({ install: true, xcodeFailure });
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("requires a full Xcode developer directory");
-      const diagnosticIndex = result.stderr.indexOf(xcodeFailure);
-      expect(diagnosticIndex).toBeGreaterThanOrEqual(0);
-      expect(result.stderr.indexOf("ERROR: OpenClaw")).toBeGreaterThan(diagnosticIndex);
-      expect(events).toEqual(["xcode-version"]);
+  it.each([
+    { selectedDeveloperDir: "command-line-tools", xcodebuildFailure: undefined },
+    {
+      selectedDeveloperDir: "xcode",
+      xcodebuildFailure: "xcodebuild: error: SDK metadata is unavailable",
     },
-  );
+  ] as const)("rejects unusable Xcode: $selectedDeveloperDir", (options) => {
+    const result = runSwiftToolchainHarness({
+      swiftVersion: "6.3.1",
+      ...options,
+    });
+    expect(result.status).toBe(1);
+    expectContains(result.stderr, [
+      "requires a full Xcode developer directory",
+      "Command Line Tools do not include the required SwiftUI macro plugins",
+      "sudo xcode-select -s /Applications/Xcode.app/Contents/Developer",
+      "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer",
+    ]);
+    if (options.xcodebuildFailure) {
+      const diagnosticIndex = result.stderr.indexOf(options.xcodebuildFailure);
+      const guidanceIndex = result.stderr.indexOf(
+        "ERROR: OpenClaw macOS app packaging requires a full Xcode developer directory",
+      );
+      expect(diagnosticIndex).toBeGreaterThanOrEqual(0);
+      expect(guidanceIndex).toBeGreaterThan(diagnosticIndex);
+    }
+  });
 
   it("runs Sparkle build metadata derivation from the repository root", () => {
     const helperBlock = scriptBlock(
@@ -1400,6 +1650,7 @@ echo 2026060290
       const signingBlock = script.slice(start);
       const tempRoot = tempDirs.make("openclaw-package-signing-identity-");
       const scriptsDir = path.join(tempRoot, "scripts");
+      const signerPath = path.join(scriptsDir, "codesign-mac-app.sh");
       const appStage = path.join(tempRoot, "stage");
       const appRoot = path.join(appStage, "OpenClaw.app");
       const callerHome = path.join(tempRoot, "caller-home");
@@ -1416,17 +1667,31 @@ echo 2026060290
         mkdirSync(path.join(tempRoot, "build", arch, "debug", bundle), { recursive: true });
       }
       writeFileSync(path.join(appRoot, "candidate"), "verified replacement");
-      writeTools(scriptsDir, {
-        "codesign-mac-app.sh":
-          '[[ -f "$1/Contents/Resources/cua-driver" && -f "$1/Contents/Resources/localizations-ready" ]]\nprintf "identity=%s\\n" "${SIGN_IDENTITY-<unset>}"\nprintf "sign\\n" >> "${0%/*}/../events"',
-        "stage-cua-driver-macos.sh": `printf 'stage-cua\\n' >> ${JSON.stringify(eventsPath)}\nprintf '%s\\n' ${arch} > "$1"`,
-        "stage-cloudflared-macos.sh": 'echo browser > "$2"',
-        "stage-mac-runtime.sh": "exit 0",
-      });
-      writeTools(tools, { pgrep: `printf 'stop\\n' >> ${JSON.stringify(eventsPath)}\nexit 1` });
-      writeTools(appRoot, {
-        "Contents/Resources/runtime/bin/bun": `exec '${process.execPath.replaceAll("'", "'\\''")}' "$@"`,
-      });
+      writeFileSync(
+        signerPath,
+        '#!/bin/bash\nset -euo pipefail\n[[ -f "$1/Contents/Resources/cua-driver" && -f "$1/Contents/Resources/localizations-ready" ]]\nprintf "identity=%s\\n" "${SIGN_IDENTITY-<unset>}"\nprintf "sign\\n" >> "${0%/*}/../events"\n',
+      );
+      chmodSync(signerPath, 0o755);
+      writeFixtureExecutable(
+        path.join(scriptsDir, "stage-cua-driver-macos.sh"),
+        `printf 'stage-cua\\n' >> ${JSON.stringify(eventsPath)}\nprintf '%s\\n' ${arch} > "$1"`,
+      );
+      writeFixtureExecutable(
+        path.join(scriptsDir, "stage-cloudflared-macos.sh"),
+        'echo browser > "$2"',
+      );
+      writeFixtureExecutable(path.join(scriptsDir, "stage-mac-runtime.sh"), "exit 0");
+      writeFixtureExecutable(
+        path.join(tools, "pgrep"),
+        `printf 'stop\\n' >> ${JSON.stringify(eventsPath)}\nexit 1`,
+      );
+      {
+        const node = path.join(appRoot, "Contents/Resources/runtime/bin/bun");
+        writeExecutable(
+          node,
+          `#!/bin/bash\nexec '${process.execPath.replaceAll("'", "'\\''")}' "$@"\n`,
+        );
+      }
       writeFileSync(
         path.join(scriptsDir, "verify-mac-runtime.mjs"),
         `import fs from 'node:fs';
@@ -1504,7 +1769,7 @@ try {
       expect(result.stdout).toContain("Signing bundle with explicit SIGN_IDENTITY");
       expect(result.stdout).toContain(`identity=${identity}`);
       expect(result.stderr).toBe("");
-      expect(readLines(eventsPath)).toEqual([
+      expect(readFileSync(eventsPath, "utf8").trim().split("\n")).toEqual([
         "stage-cua",
         "sign",
         "verify",
@@ -1530,21 +1795,24 @@ try {
     },
   );
 
-  it.each([false, true])("requires the packaged app to exit after shutdown (%s)", (exits) => {
-    const result = runStopPackagedAppHarness(exits);
-    expect(result.status).toBe(exits ? 0 : 1);
-    expect(result.stderr).toBe(exits ? "" : "ERROR: Packaged OpenClaw bundle did not exit: 123\n");
-    expect(result.signals).toEqual(exits ? ["123"] : ["123", "-KILL 123"]);
+  it("fails when the packaged app survives forced shutdown", () => {
+    const result = runStopPackagedAppHarness(false);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("ERROR: Packaged OpenClaw bundle did not exit: 123");
+    expect(result.signals).toEqual(["123", "-KILL 123"]);
+  });
+
+  it("passes when the packaged app exits after shutdown", () => {
+    const result = runStopPackagedAppHarness(true);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.signals).toEqual(["123"]);
   });
 
   it("fails release packaging when the Swift compatibility library is missing", () => {
-    const root = tempDirs.make("openclaw-package-swift-root-");
-    writeTools(root, { "xcode-select": `printf '%s\\n' ${JSON.stringify(root)}` });
-    const result = runBlock(
-      'echo "📦 Copying Swift 6.2 compatibility libraries"',
-      'echo "🖼  Compiling app icon"',
-      shellVars({ APP_ROOT: root, BUILD_CONFIG: "release", PATH: `${root}:/usr/bin:/bin` }),
-    );
+    const result = runSwiftCompatibilityHarness();
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("ERROR: Swift compatibility library not found");
@@ -1567,8 +1835,10 @@ try {
         expect(read(appRoot, "Contents", "Resources", bundle, "marker")).toBe(bundle);
         expect(existsSync(path.join(appRoot, bundle))).toBe(false);
       }
-      expect(read(appRoot, "Contents/Resources", mlxShader)).toBe(mlxShader);
-      expect(existsSync(path.join(appRoot, mlxShader))).toBe(false);
+      for (const file of mlxTTSResourceFiles) {
+        expect(read(appRoot, "Contents", "Resources", file)).toBe(file);
+        expect(existsSync(path.join(appRoot, file))).toBe(false);
+      }
     },
   );
 
@@ -1590,6 +1860,28 @@ try {
       }
     },
   );
+
+  it("passes the app resources directory to the localization compiler", () => {
+    const root = tempDirs.make("openclaw-package-localizations-");
+    const args = path.join(root, "args");
+    const app = path.join(root, "OpenClaw.app");
+    const result = runHelper(`
+      set -euo pipefail
+      ROOT_DIR=${JSON.stringify(root)}
+      APP_ROOT=${JSON.stringify(app)}
+      node() { printf '%s\\0' "$@" > ${JSON.stringify(args)}; }
+      ${scriptBlock('echo "🌐 Copying app localizations"', 'echo "📦 Copying SwiftPM resource bundles"')}
+    `);
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(args, "utf8").split("\0").slice(0, -1)).toEqual([
+      "--import",
+      "tsx",
+      path.join(root, "scripts/apple-app-i18n.ts"),
+      "compile-macos",
+      "--output",
+      path.join(app, "Contents/Resources"),
+    ]);
+  });
 
   it.runIf(process.platform === "darwin").each([
     { mutation: "none", skipMlx: true },
@@ -1655,10 +1947,10 @@ try {
             'package --scratch-path '*' unedit --force Peekaboo') operation=unedit ;;
             'build '*"--product OpenClaw "*) operation=app-build ;;
             'build '*"--product openclaw-mac "*) operation=cli-build ;;
-            'build --build-system swiftbuild '*"--product openclaw-mlx-tts "*' --show-bin-path')
+            'build '*"--product openclaw-mlx-tts "*' --show-bin-path')
               operation=helper-products
               printf '%s\\n' "$ROOT_DIR/helper-products" ;;
-            'build --build-system swiftbuild '*"--product openclaw-mlx-tts "*) operation=helper-build ;;
+            'build '*"--product openclaw-mlx-tts "*) operation=helper-build ;;
             *) printf 'unexpected swift: %s\\n' "$*" >&2; return 79 ;;
           esac
           event "$operation"
@@ -1673,10 +1965,6 @@ try {
         compiled_peekaboo_commit() { event compiled; printf '%s' "$2"; }
         restore_swiftpm_resource_sources() { event restore; }
         build_swift_architecture arm64
-        if [[ "$SKIP_MLX_TTS" != 1 ]]; then
-          SWIFT_BUILD_RESULTS="$ROOT_DIR"
-          helper_bin_for_arch work > "$ROOT_DIR/helper-bin"
-        fi
       `);
       const allEvents = [
         "locked-resolve",
@@ -1703,10 +1991,6 @@ try {
       } else {
         expect(result.stderr).toBe("");
         expect(readFileSync(path.join(root, "work/peekaboo-commit"), "utf8")).toBe(`${commit}\n`);
-        if (!skipMlx) {
-          expect(read(root, "work/helper-products")).toBe(`${root}/helper-products\n`);
-          expect(read(root, "helper-bin")).toBe(`${root}/helper-products/openclaw-mlx-tts\n`);
-        }
       }
       const baseline = path.join(root, "work/package/Package.resolved.committed");
       expect(readFileSync(baseline, "utf8")).toBe(committed);
@@ -1721,6 +2005,34 @@ try {
       ).toBe(committed);
     },
   );
+
+  it("runs no SwiftPM operation before the locked lock-file resolve", () => {
+    // Any earlier resolve on a reused scratch path can float pins before the lock guard snapshots.
+    const root = tempDirs.make("openclaw-swift-first-resolve-");
+    for (const app of ["macos", "macos-mlx-tts"]) {
+      writeFiles(path.join(root, "apps", app), {
+        "Package.swift": "// fixture\n",
+        "Package.resolved": "locked\n",
+      });
+    }
+    const invocations = path.join(root, "swift-invocations");
+    const result = runHelper(`
+      set -euo pipefail
+      source ${JSON.stringify(swiftScriptPath)}
+      ROOT_DIR=${JSON.stringify(root)}
+      BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
+      SWIFT_WORK_ROOT="$ROOT_DIR/work"
+      PEEKABOO_LOCKED_SOURCE_COMMIT=${JSON.stringify("b".repeat(40))}
+      swift() { printf '%s\\n' "$*" >> ${JSON.stringify(invocations)}; }
+      create_verified_peekaboo_snapshot() { exit 0; }
+      build_swift_architecture arm64
+    `);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(invocations, "utf8")).toBe(
+      `package --scratch-path ${root}/apps/macos/.build/arm64 resolve --force-resolved-versions\n`,
+    );
+  });
 
   it("names every pin the edited Peekaboo resolution moved away from the committed lock", () => {
     const root = tempDirs.make("openclaw-snapshot-swift-lock-");
@@ -1853,7 +2165,7 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
         );
       }
       expect(result.status).toBe(retained ? 1 : exitCode);
-      expect(readLines(operationsPath)).toEqual(expectedOperations);
+      expect(readFileSync(operationsPath, "utf8").trim().split("\n")).toEqual(expectedOperations);
       expect(existsSync(snapshotRoot)).toBe(retained);
       expect(existsSync(mount)).toBe(retained);
       expect(read(checkout, "source")).toBe("source preserved\n");
@@ -1948,7 +2260,7 @@ esac
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("hdiutil: attach failed - Resource temporarily unavailable\n");
-    expect(readLines(operations)).toEqual([
+    expect(readFileSync(operations, "utf8").trim().split("\n")).toEqual([
       `verify:${checkout}:${expectedCommit}`,
       "create",
       "attach",
@@ -2227,25 +2539,52 @@ printf '/dev/disk99 on /unrelated (apfs, read-only)\\n'
     },
   );
 
-  it.each(["CFBundleIdentifier", "CFBundleName"])(
-    "stops assembly when a required %s stamp fails",
-    (key) => {
-      const { result } = runSourceProvenanceStampHarness(undefined, key);
-      expect(result.status).toBe(17);
-      expect(result.stderr).toBe(`stamp refused: ${key}\n`);
-      expect(result.stdout).toBe("");
-    },
-  );
+  it.each([
+    "CFBundleIdentifier",
+    "CFBundleName",
+    "CFBundleShortVersionString",
+    "CFBundleVersion",
+    "OpenClawBuildTimestamp",
+    "OpenClawGitCommit",
+    "PeekabooSourceCommit",
+  ])("stops assembly when the required %s stamp fails", (key) => {
+    const root = tempDirs.make("openclaw-package-stamp-failure-");
+    const result = runHelper(`
+      set -euo pipefail
+      ROOT_DIR=${JSON.stringify(root)}
+      APP_ROOT="$ROOT_DIR/OpenClaw.app"
+      BUNDLE_ID=ai.openclaw.mac.debug
+      CLOUD_WORKER_HOST=${key === "CFBundleName" ? 1 : 0}
+      APP_VERSION=1.0.0
+      APP_BUILD=1
+      BUILD_TS=2026-08-13T00:00:00.000Z
+      BUILD_GIT_COMMIT=${JSON.stringify("a".repeat(40))}
+      PEEKABOO_SOURCE_COMMIT=${JSON.stringify("b".repeat(40))}
+      BUILD_CONFIG=debug
+      SPARKLE_FEED_URL=
+      SPARKLE_PUBLIC_ED_KEY=
+      AUTO_CHECKS=false
+      plist_set_string_required() {
+        if [[ "$2" == ${JSON.stringify(key)} ]]; then
+          printf 'stamp refused: %s\\n' "$2" >&2
+          return 17
+        fi
+      }
+      plist_set_or_add_string() { :; }
+      plist_set_or_add_bool() { :; }
+      node() { echo fixture-build-id; }
+      ${scriptBlock('plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleIdentifier', 'echo "🚚 Copying binary"')}
+      echo reached-copy
+    `);
+    expect(result.status).toBe(17);
+    expect(result.stderr).toBe(`stamp refused: ${key}\n`);
+    expect(result.stdout).not.toContain("reached-copy");
+  });
 
   it.runIf(process.platform === "darwin")(
     "sets required strings and fails when the plist cannot be stamped",
     () => {
-      const root = tempDirs.make("openclaw-plistbuddy-");
-      const plist = path.join(root, "Info.plist");
-      writeFileSync(
-        plist,
-        plistDocument("<dict><key>CFBundleIdentifier</key><string>old.bundle</string></dict>"),
-      );
+      const plist = makePlist();
       const result = runHelper(`
         set -euo pipefail
         source scripts/lib/plistbuddy.sh
