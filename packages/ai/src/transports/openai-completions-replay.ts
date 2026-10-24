@@ -9,23 +9,32 @@ import {
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
 
+function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
+  const endpointClass = detectOpenAICompletionsCompat(model as Model<"openai-completions">)
+    .capabilities.endpointClass;
+  return (
+    model.provider === "google" ||
+    endpointClass === "google-generative-ai" ||
+    endpointClass === "google-vertex"
+  );
+}
+
 const GOOGLE_COMPAT_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;
 const GOOGLE_COMPAT_THOUGHT_SIGNATURE_BASE64_RE = /^[A-Za-z0-9+/=]+$/;
+
+function hasGoogleCompatThoughtSignatureTruncationFootprint(value: string): boolean {
+  return (
+    GOOGLE_COMPAT_THOUGHT_SIGNATURE_ELLIPSIS_RE.test(value) ||
+    (GOOGLE_COMPAT_THOUGHT_SIGNATURE_BASE64_RE.test(value) && value.length % 4 !== 0)
+  );
+}
 
 function injectToolCallThoughtSignatures(
   outgoingMessages: ChatCompletionMessageParam[],
   context: ProviderContext,
   model: OpenAIModeModel,
 ): void {
-  const endpointClass = detectOpenAICompletionsCompat(model as Model<"openai-completions">)
-    .capabilities.endpointClass;
-  if (
-    !(
-      model.provider === "google" ||
-      endpointClass === "google-generative-ai" ||
-      endpointClass === "google-vertex"
-    )
-  ) {
+  if (!isGoogleOpenAICompatModel(model)) {
     return;
   }
   const sigById = new Map<string, string>();
@@ -67,10 +76,7 @@ function injectToolCallThoughtSignatures(
       let sig = sigById.get(toolCall.id) ?? fallbackSig;
       if (sig) {
         const trimmed = sig.trim();
-        if (
-          GOOGLE_COMPAT_THOUGHT_SIGNATURE_ELLIPSIS_RE.test(trimmed) ||
-          (GOOGLE_COMPAT_THOUGHT_SIGNATURE_BASE64_RE.test(trimmed) && trimmed.length % 4 !== 0)
-        ) {
+        if (hasGoogleCompatThoughtSignatureTruncationFootprint(trimmed)) {
           sig = fallbackSig;
         }
       }

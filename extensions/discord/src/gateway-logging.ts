@@ -2,6 +2,8 @@ import type { EventEmitter } from "node:events";
 import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
+type GatewayEmitter = Pick<EventEmitter, "on" | "removeListener">;
+
 const INFO_DEBUG_MARKERS = [
   "Gateway websocket closed",
   "Gateway reconnect scheduled in",
@@ -9,7 +11,7 @@ const INFO_DEBUG_MARKERS = [
 ];
 
 export function attachDiscordGatewayLogging(params: {
-  emitter?: Pick<EventEmitter, "on" | "removeListener">;
+  emitter?: GatewayEmitter;
   runtime: RuntimeEnv;
 }) {
   const { emitter, runtime } = params;

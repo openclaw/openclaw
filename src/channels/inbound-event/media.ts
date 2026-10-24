@@ -105,6 +105,12 @@ export function toInboundMediaFacts(
   return normalizeMediaFacts(media, defaults);
 }
 
+function resolveProbeKind(media: InboundMediaFacts): MediaProbeKind | undefined {
+  const kind =
+    media.kind ?? kindFromMime(media.contentType) ?? kindFromMime(mimeTypeFromFilePath(media.path));
+  return kind === "audio" || kind === "video" ? kind : undefined;
+}
+
 /** Adds best-effort audio/video metadata without probing URL-only media. */
 export async function toInboundMediaFactsWithMetadata(
   media: readonly ChannelInboundMediaInput[] | null | undefined,
@@ -118,9 +124,7 @@ export async function toInboundMediaFactsWithMetadata(
     localPath: string;
   }[] = [];
   for (const [index, fact] of facts.entries()) {
-    const mediaKind =
-      fact.kind ?? kindFromMime(fact.contentType) ?? kindFromMime(mimeTypeFromFilePath(fact.path));
-    const kind = mediaKind === "audio" || mediaKind === "video" ? mediaKind : undefined;
+    const kind = resolveProbeKind(fact);
     const localPath = fact.path ? resolveLocalMediaPath(fact.path) : undefined;
     if (kind && localPath) {
       candidates.push({ fact, index, kind, localPath });

@@ -1,10 +1,8 @@
 import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { createPluginInstallLogger } from "../cli/plugins-command-helpers.js";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
-import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
 import { installManagedPlugin } from "../plugins/management-mutations.js";
 import { uninstallPluginWithPolicy } from "../plugins/management-uninstall.js";
@@ -18,8 +16,9 @@ import {
   acquireClawPackageLifecycleLease,
   type ClawPackageLifecycleLease,
 } from "../state/claw-package-lifecycle-lease.js";
-import { readClawPackageRefsForAdd, type ClawAddStateOptions } from "./add-state-write.js";
-import { packageFromAction, type PlannedClawPackage } from "./package-plan-action.js";
+import { readClawPackageRefsForAdd } from "./add-state-write.js";
+import type { InstallClawPackagesOptions } from "./package-install-options.js";
+import { packageFromAction } from "./package-plan-action.js";
 import { matchesPlannedPluginProbe } from "./package-plugin-probe-match.js";
 import { createStatelessClawPackageReceipt } from "./package-stateless-receipt.js";
 import {
@@ -27,31 +26,15 @@ import {
   probeClawPluginArtifact,
   sourceHostPluginConflict,
 } from "./plugin-capability-probe.js";
-import { runClawPluginBatch, type ClawPluginRuntimeOptions } from "./plugin-runtime.js";
+import { runClawPluginBatch } from "./plugin-runtime.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
 import type { ClawAddPlan } from "./types.js";
 
 export { preflightClawPackage } from "./package-preflight.js";
-
-export type ClawPluginInstallConsent = {
-  onCapabilityConsent: PluginCapabilityConsentHandler;
-  confirmInstall?: (pluginId: string, warning?: string) => Promise<boolean>;
-};
-
-export type ClawSkillInstallConsent = {
-  assertApproved: (
-    pkg: Pick<PlannedClawPackage, "ref" | "version" | "integrity"> & { riskWarning: string },
-  ) => void;
-};
-
-type InstallClawPackagesOptions = ClawPluginRuntimeOptions &
-  ClawAddStateOptions & {
-    config?: OpenClawConfig;
-    clawHubBaseUrl?: string;
-    pluginConsent?: ClawPluginInstallConsent;
-    skillConsent?: ClawSkillInstallConsent;
-    nowMs?: number;
-  };
+export type {
+  ClawPluginInstallConsent,
+  ClawSkillInstallConsent,
+} from "./package-install-options.js";
 
 export class ClawPackageInstallError extends Error {
   constructor(

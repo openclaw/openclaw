@@ -67,7 +67,11 @@ function normalizeGeneratedThreadTitle(raw: string): string {
     .replace(/\r/g, "")
     .split("\n")
     .find((line) => line.trim() && !line.trim().startsWith("```"));
-  let current = (firstLine ?? "").trim();
+  return stripThreadTitleWrappers(firstLine ?? "");
+}
+
+function stripThreadTitleWrappers(raw: string): string {
+  let current = raw.trim();
   let previous = "";
   while (current && current !== previous) {
     previous = current;

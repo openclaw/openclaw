@@ -6,6 +6,12 @@ import {
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import type { SpeechProviderId } from "./provider-types.js";
 
+/** Resolver contract for configured speech provider discovery and lookup. */
+export type SpeechProviderRegistryResolver = {
+  getProvider: (providerId: string, cfg?: OpenClawConfig) => SpeechProviderPlugin | undefined;
+  listProviders: (cfg?: OpenClawConfig) => SpeechProviderPlugin[];
+};
+
 export { normalizeSpeechProviderId };
 
 /** Order speech providers by priority and provider ID for deterministic equal-priority fallback. */
@@ -22,10 +28,7 @@ export function compareSpeechProviderOrder(
 }
 
 /** Create a registry facade with canonical listing, alias lookup, and ID canonicalization. */
-export function createSpeechProviderRegistry(resolver: {
-  getProvider: (providerId: string, cfg?: OpenClawConfig) => SpeechProviderPlugin | undefined;
-  listProviders: (cfg?: OpenClawConfig) => SpeechProviderPlugin[];
-}) {
+export function createSpeechProviderRegistry(resolver: SpeechProviderRegistryResolver) {
   const getProvider = (
     providerId: string | undefined,
     cfg?: OpenClawConfig,

@@ -54,6 +54,16 @@ export function listExplicitlyDisabledChannelIdsForConfig(cfg: OpenClawConfig): 
     .filter((channelId): channelId is string => Boolean(channelId));
 }
 
+function listChannelEnvPrefixes(
+  channelIds: readonly string[],
+): Array<[prefix: string, channelId: string]> {
+  // Match channel-owned env namespaces such as MATRIX_* without hardcoding bundled ids here.
+  return channelIds.map((channelId) => [
+    `${channelId.replace(/[^a-z0-9]+/gi, "_").toUpperCase()}_`,
+    channelId,
+  ]);
+}
+
 /** Lists channel ids detected from config, env vars, or persisted auth state. */
 export function listPotentialConfiguredChannelIds(
   cfg: OpenClawConfig,
@@ -91,13 +101,9 @@ export function listPotentialConfiguredChannelPresenceSignals(
           .filter((channelId): channelId is string => Boolean(channelId)),
       )
     : undefined;
-  // Match channel-owned env namespaces such as MATRIX_* without hardcoding bundled ids here.
-  const channelEnvPrefixes = (
-    options.channelIds ?? listBundledChannelIds(env, options.discovery)
-  ).map((channelId): [prefix: string, channelId: string] => [
-    `${channelId.replace(/[^a-z0-9]+/gi, "_").toUpperCase()}_`,
-    channelId,
-  ]);
+  const channelEnvPrefixes = listChannelEnvPrefixes(
+    options.channelIds ?? listBundledChannelIds(env, options.discovery),
+  );
   const officialExternalChannelEnvVars = listOfficialExternalChannelEnvVars().filter(
     ({ channelId }) => !scopedChannelIds || scopedChannelIds.has(channelId),
   );

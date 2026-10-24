@@ -39,17 +39,19 @@ export interface WebSocketLike {
   removeEventListener(type: WebSocketEventType, listener: WebSocketListener): void;
 }
 
+interface CachedWebSocketContinuationState {
+  lastRequestBody: RequestBody;
+  lastResponseId: string;
+  lastResponseItems: ResponseInput;
+}
+
 export interface CachedWebSocketConnection {
   socket: WebSocketLike;
   authority: CodexWebSocketAuthority;
   busy: boolean;
   createdAt: number;
   idleTimer?: ReturnType<typeof setTimeout>;
-  continuation?: {
-    lastRequestBody: RequestBody;
-    lastResponseId: string;
-    lastResponseItems: ResponseInput;
-  };
+  continuation?: CachedWebSocketContinuationState;
 }
 
 export interface OpenAICodexWebSocketRuntimeState {

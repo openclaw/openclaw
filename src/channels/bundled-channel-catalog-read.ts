@@ -21,6 +21,17 @@ type ChannelCatalogEntryLike = {
 
 const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = path.join("dist", "channel-catalog.json");
 
+function listPackageRoots(): string[] {
+  // Source checkouts and packaged installs can resolve OpenClaw from different roots; scan both
+  // once so channel metadata works in dev, linked packages, and published CLI layouts.
+  return uniqueStrings(
+    [
+      resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
+      resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
+    ].filter((entry): entry is string => Boolean(entry)),
+  );
+}
+
 function readBundledExtensionCatalogEntriesSync(
   pluginsDir: string | undefined,
 ): ChannelCatalogEntryLike[] {
@@ -44,14 +55,7 @@ function readOfficialCatalogFileSync(): ChannelCatalogEntryLike[] {
   const bundledExternalEntries = BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES.filter(
     (entry): entry is ChannelCatalogEntryLike => typeof entry === "object" && entry !== null,
   );
-  // Source checkouts and packaged installs can resolve OpenClaw from different roots; scan both
-  // once so channel metadata works in dev, linked packages, and published CLI layouts.
-  for (const packageRoot of uniqueStrings(
-    [
-      resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
-      resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
-    ].filter((entry): entry is string => Boolean(entry)),
-  )) {
+  for (const packageRoot of listPackageRoots()) {
     const candidate = path.join(packageRoot, OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH);
     const payload = readPluginCacheJsonFile(candidate);
     if (payload.ok && isRecord(payload.value)) {

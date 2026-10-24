@@ -23,6 +23,15 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
 // Access tiers do not change the upstream reasoning_content replay contract (#87575).
 const REASONING_CONTENT_REPLAY_TIER_SUFFIXES = ["-free", "-paid", "-trial"] as const;
 
+function stripReasoningContentReplayTierSuffix(modelId: string): string {
+  for (const suffix of REASONING_CONTENT_REPLAY_TIER_SUFFIXES) {
+    if (modelId.length > suffix.length && modelId.endsWith(suffix)) {
+      return modelId.slice(0, -suffix.length);
+    }
+  }
+  return modelId;
+}
+
 /** Shared by history sanitization and wire replay, including stale model metadata. */
 export function requiresReasoningContentReplay(modelId: unknown): boolean {
   if (typeof modelId !== "string") {
@@ -39,15 +48,9 @@ export function requiresReasoningContentReplay(modelId: unknown): boolean {
   if (colonParts.length > 1) {
     candidates.push(colonParts[0] ?? "", colonParts[colonParts.length - 1] ?? "");
   }
-  return candidates.some((candidate) => {
-    if (REASONING_CONTENT_REPLAY_MODEL_IDS.has(candidate)) {
-      return true;
-    }
-    for (const suffix of REASONING_CONTENT_REPLAY_TIER_SUFFIXES) {
-      if (candidate.length > suffix.length && candidate.endsWith(suffix)) {
-        return REASONING_CONTENT_REPLAY_MODEL_IDS.has(candidate.slice(0, -suffix.length));
-      }
-    }
-    return REASONING_CONTENT_REPLAY_MODEL_IDS.has(candidate);
-  });
+  return candidates.some(
+    (candidate) =>
+      REASONING_CONTENT_REPLAY_MODEL_IDS.has(candidate) ||
+      REASONING_CONTENT_REPLAY_MODEL_IDS.has(stripReasoningContentReplayTierSuffix(candidate)),
+  );
 }

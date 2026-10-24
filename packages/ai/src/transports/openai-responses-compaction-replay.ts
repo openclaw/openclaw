@@ -286,6 +286,13 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
 
 export type OpenAIResponsesReplayMode = "checkpoint" | "full-history";
 
+type OpenAIResponsesCompactionReplayPlan = {
+  messages: Context["messages"];
+  compactedWindow?: OpenAIResponsesCompactionOutput;
+  compaction?: ResponseCompactionItemParam;
+  preserveUnframedToolResults: boolean;
+};
+
 export class CompactionReplayRefreshRequiredError extends Error {
   constructor() {
     super(
@@ -301,12 +308,7 @@ export function buildOpenAIResponsesCompactionReplayPlan(
   options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId"> & {
     mode?: OpenAIResponsesReplayMode;
   },
-): {
-  messages: Context["messages"];
-  compactedWindow?: OpenAIResponsesCompactionOutput;
-  compaction?: ResponseCompactionItemParam;
-  preserveUnframedToolResults: boolean;
-} {
+): OpenAIResponsesCompactionReplayPlan {
   if (options?.mode === "full-history") {
     // Checkpoint rejection must rebuild from the untouched transcript; consulting
     // providerReplay here would recreate the same rejected compaction window.

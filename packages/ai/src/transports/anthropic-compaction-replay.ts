@@ -35,6 +35,11 @@ type PendingCompaction = {
   encryptedContent?: string | null;
 };
 
+type AnthropicCompactionReplayPlan = {
+  messages: Context["messages"];
+  compaction?: AnthropicCompactionBlock;
+};
+
 type ReplayOpts = NonNullable<Parameters<typeof buildProviderReplayContext>[1]>;
 type ReplayOut = Pick<AssistantMessage, "providerReplay">;
 
@@ -213,10 +218,7 @@ export function buildAnthropicReplayPlan(
   messages: Context["messages"],
   model: Model,
   options?: ReplayOpts & { enabled?: boolean },
-): {
-  messages: Context["messages"];
-  compaction?: AnthropicCompactionBlock;
-} {
+): AnthropicCompactionReplayPlan {
   if (options?.enabled !== true) {
     return { messages };
   }

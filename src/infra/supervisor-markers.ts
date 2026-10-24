@@ -43,6 +43,16 @@ function hasOpenClawGatewayServiceMarker(env: NodeJS.ProcessEnv): boolean {
   );
 }
 
+function isCurrentGatewayLaunchdJob(env: NodeJS.ProcessEnv): boolean {
+  const expectedLabel = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+  if (
+    [env.LAUNCH_JOB_LABEL, env.LAUNCH_JOB_NAME].some((value) => value?.trim() === expectedLabel)
+  ) {
+    return true;
+  }
+  return env.XPC_SERVICE_NAME?.trim() === GATEWAY_LAUNCH_AGENT_LABEL;
+}
+
 /** Detects the current platform supervisor from process environment hints. */
 export function detectRespawnSupervisor(
   env: NodeJS.ProcessEnv = process.env,
@@ -50,13 +60,7 @@ export function detectRespawnSupervisor(
   options: DetectRespawnSupervisorOptions = {},
 ): RespawnSupervisor | null {
   if (platform === "darwin") {
-    if (hasAnyHint(env, SUPERVISOR_HINTS.launchd)) {
-      return "launchd";
-    }
-    const expectedLabel = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
-    return [env.LAUNCH_JOB_LABEL, env.LAUNCH_JOB_NAME].some(
-      (value) => value?.trim() === expectedLabel,
-    ) || env.XPC_SERVICE_NAME?.trim() === GATEWAY_LAUNCH_AGENT_LABEL
+    return hasAnyHint(env, SUPERVISOR_HINTS.launchd) || isCurrentGatewayLaunchdJob(env)
       ? "launchd"
       : null;
   }
