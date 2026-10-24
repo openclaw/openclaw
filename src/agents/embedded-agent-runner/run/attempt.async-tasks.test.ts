@@ -80,7 +80,8 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
     await vi.advanceTimersByTimeAsync(499);
     expect(settled).not.toHaveBeenCalled();
     completeTask(task.taskId, Date.now());
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toHaveBeenCalledOnce();
     expect(await result).toEqual(emptyResult);
     expect(findMediaGenerationOperation(task.taskId)?.status).toBe("succeeded");
   });
@@ -89,8 +90,11 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
     const task = startTask(kind);
     const toolMetas = [{ asyncStarted: true, asyncTaskRunId: task.runId }];
     const result = wait({ getToolMetas: () => toolMetas });
+    const settled = vi.fn();
+    void result.then(settled);
     updateMediaGenerationOperation(task.taskId, { completionDelivery: "queued" });
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toHaveBeenCalledOnce();
     expect(await result).toEqual(emptyResult);
     expect(findMediaGenerationOperation(task.taskId)?.status).toBe("running");
     expect(requiresCompletionRequiredAsyncTaskWait({ sessionKey, toolMetas })).toBe(false);
@@ -103,6 +107,18 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
     startTask("image", "agent:main:parent");
     expect(requiresCompletionRequiredAsyncTaskWait({ sessionKey, toolMetas: [] })).toBe(false);
     expect(await wait({ getDeadlineAtMs: () => 0 })).toEqual(emptyResult);
+  });
+
+  it("does not repeatedly read an unchanged task's deadline", async () => {
+    const task = startTask();
+    const getDeadlineAtMs = vi.fn(() => undefined);
+    const result = wait({ getDeadlineAtMs });
+    await vi.advanceTimersByTimeAsync(1_250);
+    expect(getDeadlineAtMs).toHaveBeenCalledOnce();
+    completeTask(task.taskId, Date.now());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await result).toEqual(emptyResult);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("waits for async task ids discovered after an earlier async completion", async () => {
