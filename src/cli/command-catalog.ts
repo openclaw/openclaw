@@ -234,7 +234,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { networkProxy: "bypass" },
   })),
-  ...["stability", "stop", "restart", "uninstall", "usage-cost"].map(
+  ...["stability", "lanes", "stop", "restart", "uninstall", "usage-cost"].map(
     (subcommand): CliCommandCatalogEntry => ({
       commandPath: ["gateway", subcommand],
       exact: true,

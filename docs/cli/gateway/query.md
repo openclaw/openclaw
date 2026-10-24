@@ -1,5 +1,5 @@
 ---
-summary: "Query a running Gateway: health, usage-cost, stability, diagnostics export, status, connectivity checks, call, suspend, and resume"
+summary: "Query a running Gateway: health, usage-cost, stability, lanes, diagnostics export, status, connectivity checks, call, suspend, and resume"
 read_when:
   - Checking whether a Gateway is healthy, ready, or reachable
   - Exporting Gateway diagnostics or a support bundle
@@ -149,6 +149,19 @@ openclaw gateway stability --json
 
   </Accordion>
 </AccordionGroup>
+
+### `gateway lanes`
+
+Fetch command-lane busyness diagnostics from a running Gateway (`diagnostics.lanes`).
+
+```bash
+openclaw gateway lanes
+openclaw gateway lanes --json
+```
+
+Returns the live `lanes` snapshot (active / queued / maxConcurrent / draining / blockedBy and optional group fields), plus dynamic-lane and worker-pool summaries when the Gateway includes them. Same auth/error class as other Gateway RPC CLI verbs; use `openclaw gateway call diagnostics.lanes --json` for the raw escape hatch.
+
+See [Queue](/concepts/queue) for lane semantics and the Control UI System busyness overlay.
 
 ### `gateway diagnostics export`
 

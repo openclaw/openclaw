@@ -187,6 +187,38 @@ describe("gateway-cli coverage", () => {
     });
   });
 
+  it("registers gateway lanes and routes to diagnostics.lanes RPC", async () => {
+    callGateway.mockResolvedValueOnce({
+      ts: 1_700_000_000_000,
+      lanes: [
+        {
+          lane: "main",
+          queuedCount: 0,
+          activeCount: 1,
+          maxConcurrent: 16,
+          draining: false,
+          generation: 1,
+        },
+      ],
+      dynamic: { laneCount: 0, activeCount: 0, queuedCount: 0, queuedLaneCount: 0 },
+      workerCount: 0,
+      workerPoolCount: 0,
+    });
+    await runGatewayCommand(["lanes", "--json"]);
+
+    expectGatewayCall({
+      method: "diagnostics.lanes",
+      localPortOverride: undefined,
+      params: {},
+    });
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ts: 1_700_000_000_000,
+        lanes: [expect.objectContaining({ lane: "main", activeCount: 1 })],
+      }),
+    );
+  });
+
   it("scopes usage-cost to a specific agent via --agent", async () => {
     await runGatewayCommand(["usage-cost", "--agent", "alpha", "--days", "7", "--json"]);
 

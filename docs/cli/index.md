@@ -326,6 +326,7 @@ openclaw [--dev] [--profile <name>] <command>
     usage-cost
     health
     stability
+    lanes
     diagnostics export
     status
     probe
