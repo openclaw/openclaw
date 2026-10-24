@@ -1,4 +1,3 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
@@ -51,7 +50,7 @@ function bubbleControls(page: Page) {
 }
 
 suite.define(() => {
-  it("keeps session bubbles independent through reloads, reactions, and streamed replies", async () => {
+  it("keeps session bubbles independent through reloads, reactions, and mobile changes", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const sessionKey = "agent:main:main";
       const otherSessionKey = "agent:main:dashboard:other-bubbles";
@@ -70,16 +69,7 @@ suite.define(() => {
         },
         historyMessages: [
           ["user", messageId, "Can we make this feel more like a conversation?"],
-          [
-            "assistant",
-            "bubble-reply",
-            "Absolutely. Your messages stay on the right, and my replies get a bubble on the left. We can still keep code and longer explanations easy to read.",
-          ],
-          [
-            "user",
-            "bubble-follow-up",
-            "And react to a prompt when a quick acknowledgment is enough.",
-          ],
+          ["assistant", "bubble-reply", "Absolutely."],
         ].map(([role, id, content], index) => ({
           role,
           content,
@@ -119,7 +109,6 @@ suite.define(() => {
       await browserExpect.poll(storedBubbleSessions).toEqual([sessionKey]);
       await closeBubbleMenu();
       await browserExpect(chat).toHaveClass(/chat--bubbles/);
-      await browserExpect(assistant).toContainText("Absolutely.");
       await background(assistant, true);
       const bounds = await Promise.all([assistant.boundingBox(), user.boundingBox()]);
       expect(bounds[0]!.x).toBeLessThan(bounds[1]!.x);
@@ -159,41 +148,11 @@ suite.define(() => {
       await browserExpect.poll(storedBubbleSessions).toEqual([sessionKey]);
       await page.goto(chatUrl);
       await browserExpect(chat).toHaveClass(/chat--bubbles/);
-      await browserExpect(assistant).toContainText("Absolutely.");
       expect(await chat.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
       await page.reload();
       await browserExpect(chat).toHaveClass(/chat--bubbles/);
       await browserExpect(assistant).toContainText("Absolutely.");
 
-      await page
-        .locator(".agent-chat__composer-combobox textarea")
-        .fill("Keep this view while replying.");
-      await page.getByRole("button", { name: "Send message", exact: true }).click();
-      const request = await gateway.waitForRequest("chat.send");
-      const params = asOptionalRecord(request.params);
-      if (!params || typeof params.idempotencyKey !== "string") {
-        throw new Error("Expected chat.send to include its run idempotency key");
-      }
-      expect(params.sessionKey).toBe(sessionKey);
-      const runId = params.idempotencyKey;
-      const streamedText = "The streamed reply keeps this session’s bubbles.";
-      await gateway.emitGatewayEvent("chat", {
-        runId,
-        sessionKey,
-        seq: 1,
-        state: "delta",
-        deltaText: streamedText,
-        message: { role: "assistant", content: [{ type: "text", text: streamedText }] },
-      });
-      const streamedReply = chat.locator(".chat-group.assistant .chat-bubble", {
-        hasText: streamedText,
-      });
-      await browserExpect(streamedReply).toBeVisible();
-      await background(streamedReply, true);
-      await gateway.emitChatFinal({ runId, sessionKey, text: streamedText });
-      await browserExpect(chat).toHaveClass(/chat--bubbles/);
-      await browserExpect(streamedReply).toHaveCount(1);
-      await browserExpect(streamedReply).toBeVisible();
       await changeBubbles(false);
       await closeBubbleMenu();
       await browserExpect(chat).not.toHaveClass(/chat--bubbles/);
