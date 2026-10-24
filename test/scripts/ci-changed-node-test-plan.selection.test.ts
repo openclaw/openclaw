@@ -147,3 +147,22 @@ it.each([30, 31])(
     expect(select(cwd, [source, unrelated[0]!])).toContain(unrelated[0]);
   },
 );
+
+it.each(["aggressive", "full"] as const)(
+  "keeps opt-in tests outside PR test roots out of %s selection",
+  (selectionMode) => {
+    // #182101: the retention census imports this helper but has its own opt-in config.
+    const helper = "ui/src/test-helpers/control-ui-e2e.ts";
+    const optIn = "scripts/control-ui-retention/dependency-retention.test.ts";
+    const consumer = "ui/src/test-helpers/control-ui-e2e.test.ts";
+    const cwd = fixture({
+      [helper]: "export const helper = 1;\n",
+      [optIn]: 'import "../../ui/src/test-helpers/control-ui-e2e.ts";\n',
+      [consumer]: 'import "./control-ui-e2e.ts";\n',
+    });
+    const selected = select(cwd, [helper], selectionMode);
+    expect(selected).toContain(consumer);
+    expect(selected).not.toContain(optIn);
+    expect(select(cwd, [optIn], selectionMode)).not.toContain(optIn);
+  },
+);
