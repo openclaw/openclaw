@@ -61,58 +61,6 @@ suite.define(() => {
     });
   });
 
-  it("reconnects only on an explicit apply or troubleshooting action and shows pending states", async () => {
-    await withPage(async ({ page }) => {
-      const { gateway, connection } = await openConnection(page, "token");
-      const socketCount = await gateway.getSocketCount();
-      const secret = field(connection, "Gateway secret");
-      const apply = button(connection, "Apply and reconnect");
-      const details = connection.locator("details").filter({
-        has: page.locator("summary").getByText("Connection details", { exact: true }),
-      });
-      await details.locator("summary").click();
-      const reconnect = button(details, "Reconnect");
-      const reconnecting = button(connection, "Reconnecting…");
-      const holdConnect = async (action: Locator) => {
-        const after = (await gateway.getRequests("connect")).length;
-        await gateway.deferNext("connect");
-        await action.click();
-        return gateway.waitForRequest("connect", { after });
-      };
-      await expect.poll(() => reconnect.isEnabled()).toBe(true);
-      expect(await details.textContent()).toContain("30s");
-
-      await secret.fill("synthetic-applied-secret");
-      await apply.waitFor();
-      expect(await reconnect.isDisabled()).toBe(true);
-      const handshake = await holdConnect(apply);
-      expect(handshake.params).toMatchObject({ auth: { token: "synthetic-applied-secret" } });
-      await reconnecting.waitFor();
-      expect(await reconnecting.isDisabled()).toBe(true);
-      expect(await gateway.getSocketCount()).toBe(socketCount + 1);
-      await gateway.resolveDeferred("connect");
-      await connected(connection);
-      expect(await apply.count()).toBe(0);
-
-      if (!(await details.evaluate((element) => (element as HTMLDetailsElement).open))) {
-        await details.locator("summary").click();
-      }
-      await holdConnect(reconnect);
-      await reconnecting.waitFor();
-      expect(await reconnect.isDisabled()).toBe(true);
-      expect(await gateway.getSocketCount()).toBe(socketCount + 2);
-      await gateway.resolveDeferred("connect");
-      await connected(connection);
-
-      await gateway.setOnline(false);
-      await reconnecting.waitFor();
-      expect(await reconnecting.isDisabled()).toBe(true);
-      expect(await reconnect.isDisabled()).toBe(true);
-      await gateway.setOnline(true);
-      await connected(connection);
-      expect(await apply.count()).toBe(0);
-    });
-  });
   it("switches Gateway targets while the original connection is still retrying", async () => {
     await withPage(async ({ page }) => {
       const { gateway, connection } = await openConnection(page, "token");

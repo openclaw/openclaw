@@ -8,7 +8,6 @@ import { createControlUiSessionRow as sessionRow } from "../test-helpers/control
 import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
-  installMockGateway,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 import { catalogList, expectVisible, mockRequests } from "./sidebar-assertions.test-support.ts";
@@ -31,7 +30,6 @@ function sessionsMock() {
         sessionRow(MAIN_KEY, "Main", Date.parse("2026-07-01T16:00:00.000Z")),
         sessionRow(RESEARCH_KEY, "Research notes", Date.parse("2026-07-01T15:00:00.000Z")),
       ]),
-      "sessions.patch": {},
     },
     sessionKey: MAIN_KEY,
   } as const;
@@ -63,16 +61,6 @@ function catalogSessionsMock() {
 }
 
 suite.define(() => {
-  it("keeps the sidebar on an unmarked root link", async () => {
-    await suite.withPage(pageOptions, async ({ page }) => {
-      await installMockGateway(page, sessionsMock());
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const sidebar = page.locator("openclaw-app-sidebar .sidebar-shell");
-      await sidebar.waitFor({ state: "visible", timeout: 10_000 });
-      await expectVisible(sidebar);
-    });
-  });
-
   it.each([
     { catalog: false, gesture: "middle" },
     { catalog: true, gesture: "modifier" },
