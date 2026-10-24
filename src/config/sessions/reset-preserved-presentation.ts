@@ -6,6 +6,7 @@ export function preserveResetSessionPresentation(entry: SessionEntry | undefined
     label: entry?.label,
     autoLabel: entry?.autoLabel,
     icon: entry?.icon,
+    color: entry?.color,
     category: entry?.category,
     boardFace: entry?.boardFace,
     boardPresentation: entry?.boardPresentation,

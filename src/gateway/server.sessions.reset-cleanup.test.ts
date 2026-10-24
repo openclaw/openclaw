@@ -250,6 +250,7 @@ test("sessions.reset preempts the controller run and clears queues", async () =>
     label: "Operator session",
     category: "Operator group",
     icon: "🦞",
+    color: "blue",
     boardFace: "dashboard",
     boardPresentation: "expanded",
     visibility: "draft",
