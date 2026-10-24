@@ -3037,6 +3037,36 @@ submission counts include work before the diagnostics exporter starts; queue
 metrics do not. Record the kind breakdown and verify memory catch-up actually
 ran before attributing an improvement to it. Use a fresh fixture for each revision.
 
+## Publication transport spawn attribution
+
+`publication-spawn-measure.ts` measures the real `runPublicationCommand` transport
+against a tiny synthetic Git repository, with 200 synthetic environment entries.
+It warms 100 commands, then runs a fixed mix of `rev-parse`, `config`, `ls-files`,
+and `show` reads, checking every result. This isolates transport costs; it does
+not replace a Gateway publication-flow measurement.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/publication-spawn-measure.ts \
+  --state-dir /path/to/new-synthetic-state --operations 2000 --output timing.json
+```
+
+Use `--transport-owner` with a baseline sibling of
+`src/gateway/github-publication-git-transport.ts` to compare the same source tree.
+Supply a sibling for each side so both register the same resolver hook.
+Both sides must use identical fixed work counts (at least 1,000 operations), fresh
+state directories, and a shared `--start-at` epoch in milliseconds. Hold the quiet
+slot lock and guard, then swap interleaved CPU placements for the second pair.
+Untraced output includes main-thread and process CPU per operation, operation
+latency, synchronous native-spawn time, event-loop sample counts/tails, and
+per-kind GC counts, total time, percentiles, and maxima. `--allocation` is a
+separate sampled-allocation pass including collected objects; compare it only
+against the same mode. No forced GC or pause trimming occurs. Apply the campaign's
+absolute-delta and sample-count rules, and collect matched identical-source
+controls before interpreting adverse GC results.
+Use `--cpu-profile` separately from `--allocation` to capture the measured operation
+window in `publication-spawn.cpuprofile` under the state directory; its profiled
+timings are attribution evidence, not untraced comparison gates.
+
 ## Checkout diff command fan-out
 
 `checkout-diff-measure.ts` exercises the production Git worker or its read-cache
