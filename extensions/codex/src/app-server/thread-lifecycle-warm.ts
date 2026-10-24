@@ -1,4 +1,7 @@
-import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  AgentHarnessPreflightError,
+  embeddedAgentLog,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
@@ -11,6 +14,7 @@ import {
   consumeCodexAppServerLiveThread,
   isCodexAppServerClientRuntimeLive,
   isCodexAppServerLiveThreadClaimed,
+  isCodexAppServerLiveThreadBackgroundOnly,
   isCodexAppServerLiveThreadProtected,
   releaseCodexAppServerLiveThread,
   readCodexLiveThreadEphemeralPolicy,
@@ -208,10 +212,16 @@ export async function releaseCodexBoundLiveThread(
     }
   }
   try {
-    if (
-      isCodexAppServerLiveThreadClaimed(client, options.threadId) ||
-      isCodexAppServerLiveThreadProtected(client, options.threadId)
-    ) {
+    const claimed = isCodexAppServerLiveThreadClaimed(client, options.threadId);
+    const protectedWork = isCodexAppServerLiveThreadProtected(client, options.threadId);
+    if (claimed || protectedWork) {
+      embeddedAgentLog.debug("codex app-server retained thread release blocked", {
+        threadId: options.threadId,
+        changedClient: Boolean(changedClient),
+        claimed,
+        protected: protectedWork,
+        backgroundOnly: isCodexAppServerLiveThreadBackgroundOnly(client, options.threadId),
+      });
       throw new AgentHarnessPreflightError(
         `Codex thread ${options.threadId} is claimed by active work; stop it first.`,
       );
