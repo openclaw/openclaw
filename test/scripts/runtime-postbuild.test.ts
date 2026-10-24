@@ -36,6 +36,7 @@ import {
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { readBuildIdFromBuildInfoForModuleUrl } from "../../src/version.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const parser = createNativeTypeScriptParser();
@@ -76,6 +77,19 @@ function postbuild(rootDir: string, options: Parameters<typeof runRuntimePostBui
   runRuntimePostBuild({ rootDir, timings: false, ...options });
 }
 
+function buildFixture(files: Record<string, string> = {}) {
+  const fixture = fixtureFiles(createTempDir("runtime-postbuild-"));
+  writeUpdateCompatibilityBuildFixture(fixture.root);
+  for (const [file, source] of Object.entries(files)) {
+    fixture.write(file, source);
+  }
+  return {
+    ...fixture,
+    rootDir: fixture.root,
+    build: (options: Parameters<typeof postbuild>[1] = {}) => postbuild(fixture.root, options),
+  };
+}
+
 function assetPackage(
   source: string,
   output = source,
@@ -99,10 +113,22 @@ async function runtimeFixture(files: Record<string, string>) {
   const distDir = path.join(rootDir, "dist");
   await fs.mkdir(distDir, { recursive: true });
   await writeFiles(distDir, files);
-  return { rootDir, distDir };
+  return {
+    rootDir,
+    distDir,
+    ...fixtureFiles(distDir),
+    aliases: () => writeStableRootRuntimeAliases({ rootDir }),
+    rewrite: () => rewriteRootRuntimeImportsToStableAliases({ rootDir }),
+    legacy: () => writeLegacyRootRuntimeCompatAliases({ rootDir }),
+  };
 }
 
 const sourceLines = (...lines: string[]) => `${lines.join("\n")}\n`;
+const aliasSource = (target: string, hasDefault = false) =>
+  sourceLines(
+    `export * from "./${target}";`,
+    ...(hasDefault ? [`export { default } from "./${target}";`] : []),
+  );
 
 async function writeExportHtmlBuildFixture(rootDir: string): Promise<void> {
   await writeFiles(rootDir, {
@@ -183,17 +209,13 @@ describe("runtime postbuild static assets", () => {
   });
 
   it("copies bundled hook metadata without replacing compiled handlers", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-hooks-");
-    writeUpdateCompatibilityBuildFixture(rootDir);
-    const sourceHookDir = path.join(rootDir, "src/hooks/bundled/session-memory");
-    const distHookDir = path.join(rootDir, "dist/bundled/session-memory");
-    await writeText(sourceHookDir, "HOOK.md", "---\nname: session-memory\n---\n");
-    await writeText(distHookDir, "handler.js", "export default () => {};\n");
-
-    postbuild(rootDir, { env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" } });
-
-    await expect(readText(distHookDir, "HOOK.md")).resolves.toContain("name: session-memory");
-    await expect(readText(distHookDir, "handler.js")).resolves.toBe("export default () => {};\n");
+    const f = buildFixture({
+      "src/hooks/bundled/session-memory/HOOK.md": "---\nname: session-memory\n---\n",
+      "dist/bundled/session-memory/handler.js": "export default () => {};\n",
+    });
+    f.build({ env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" } });
+    expect(f.read("dist/bundled/session-memory/HOOK.md")).toContain("name: session-memory");
+    expect(f.read("dist/bundled/session-memory/handler.js")).toBe("export default () => {};\n");
   });
 
   it("discovers repo static asset metadata without scanning extension directories", () => {
@@ -336,49 +358,40 @@ describe("runtime postbuild static assets", () => {
   ] as const)(
     "stages %s during the same postbuild run",
     async (_name, dependency, local, missing) => {
-      const rootDir = createTempDir("openclaw-runtime-postbuild-");
       const output = "assets/viewer-runtime.js";
       const source = dependency ? `node_modules/${dependency}/private/runtime.js` : output;
-      const packageDir = path.join(rootDir, "extensions/diffs");
-      const distAsset = "dist/extensions/diffs/assets/viewer-runtime.js";
-      const runtimeAsset = "dist-runtime/extensions/diffs/assets/viewer-runtime.js";
       const contents = "export const viewer = true;\n";
       const warn = vi.fn();
-
-      await writeFiles(rootDir, {
+      const f = buildFixture({
         "extensions/diffs/package.json": assetPackage(`./${source}`, output, {
           dependency,
         }),
         "extensions/diffs/openclaw.plugin.json": '{"id":"diffs"}\n',
       });
       if (dependency) {
-        for (const base of local ? [rootDir, packageDir] : [rootDir]) {
-          const dependencyDir = path.join(base, "node_modules", dependency);
-          await writeText(
-            dependencyDir,
-            "package.json",
-            JSON.stringify({ name: dependency, exports: { "./runtime": "./private/runtime.js" } }),
-          );
-          if (!(missing && base === packageDir)) {
-            await writeText(
-              dependencyDir,
-              "private/runtime.js",
-              local && base === rootDir ? "wrong ancestor version\n" : contents,
+        for (const base of local ? ["", "extensions/diffs/"] : [""]) {
+          const dir = `${base}node_modules/${dependency}`;
+          f.json(`${dir}/package.json`, {
+            name: dependency,
+            exports: { "./runtime": "./private/runtime.js" },
+          });
+          if (!(missing && base)) {
+            f.write(
+              `${dir}/private/runtime.js`,
+              local && !base ? "wrong ancestor version\n" : contents,
             );
           }
         }
       } else {
-        await writeText(packageDir, source, contents);
+        f.write(`extensions/diffs/${source}`, contents);
       }
-
-      writeUpdateCompatibilityBuildFixture(rootDir);
-      postbuild(rootDir, { warn });
-
-      for (const asset of [distAsset, runtimeAsset]) {
+      f.build({ warn });
+      for (const outputRoot of ["dist", "dist-runtime"]) {
+        const asset = `${outputRoot}/extensions/diffs/${output}`;
         if (missing) {
-          await expectPathMissing(path.join(rootDir, asset));
+          await expectPathMissing(f.file(asset));
         } else {
-          await expect(readText(rootDir, asset)).resolves.toBe(contents);
+          expect(f.read(asset)).toBe(contents);
         }
       }
       if (missing) {
@@ -451,35 +464,28 @@ describe("runtime postbuild static assets", () => {
   });
 
   it("preserves restored dist static assets when plugin sources are absent", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const output = "assets/viewer-runtime.js";
-    const distPluginDir = path.join(rootDir, "dist/extensions/diffs");
-    const runtimeAsset = path.join(rootDir, "dist-runtime/extensions/diffs", output);
-    await writeFiles(distPluginDir, {
-      "index.js": "export default {};\n",
-      "openclaw.plugin.json": '{"id":"diffs"}\n',
-      "package.json": assetPackage(`./${output}`, output, { entry: "./index.js" }),
-      [output]: "console.log('viewer');\n",
+    const f = buildFixture({
+      "dist/extensions/diffs/index.js": "export default {};\n",
+      "dist/extensions/diffs/openclaw.plugin.json": '{"id":"diffs"}\n',
+      "dist/extensions/diffs/package.json": assetPackage(`./${output}`, output, {
+        entry: "./index.js",
+      }),
+      [`dist/extensions/diffs/${output}`]: "console.log('viewer');\n",
     });
-
-    writeUpdateCompatibilityBuildFixture(rootDir);
-    postbuild(rootDir);
-
-    await expect(fs.readFile(runtimeAsset, "utf8")).resolves.toBe("console.log('viewer');\n");
+    f.build();
+    expect(f.read(`dist-runtime/extensions/diffs/${output}`)).toBe("console.log('viewer');\n");
   });
 
   it("can skip static asset copies for minimal runtime builds", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    writeUpdateCompatibilityBuildFixture(rootDir);
     const warn = vi.fn();
     const output = "assets/viewer-runtime.js";
-
-    await writeText(rootDir, "extensions/diffs/package.json", assetPackage(`./${output}`, output));
-
-    postbuild(rootDir, { env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" }, warn });
-
+    const f = buildFixture({
+      "extensions/diffs/package.json": assetPackage(`./${output}`, output),
+    });
+    f.build({ env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" }, warn });
     expect(warn).not.toHaveBeenCalled();
-    await expectPathMissing(path.join(rootDir, "dist", "extensions", "diffs", output));
+    await expectPathMissing(f.file(`dist/extensions/diffs/${output}`));
   });
 
   it.each([
@@ -544,9 +550,7 @@ describe("runtime postbuild static assets", () => {
   });
 
   it("forwards default exports through stable and legacy aliases", async () => {
-    const { rootDir, distDir } = await runtimeFixture({});
-    await writeText(rootDir, "package.json", '{"type":"module"}\n');
-    await writeFiles(distDir, {
+    const f = await runtimeFixture({
       "text-transforms.runtime-Hash111.mjs":
         "function reconcile(value) { return value; }\nexport { reconcile as default };\n",
       "mixed.contract-Hash222.mjs":
@@ -555,15 +559,13 @@ describe("runtime postbuild static assets", () => {
         'const marker = "export { marker as default }";\nexport { marker };\n',
       "library-Other123.mjs": "export const x = true;\n",
     });
-
-    writeStableRootRuntimeAliases({ rootDir });
-    writeLegacyRootRuntimeCompatAliases({ rootDir });
-
-    const stable = await load(distDir, "text-transforms.runtime.js");
-    const legacy = await load(distDir, "text-transforms.runtime-sEqsN4pN.js");
-    const mixed = await load(distDir, "mixed.contract.js");
-    const namedOnly = await load(distDir, "named-only.runtime.js");
-
+    await writeText(f.rootDir, "package.json", '{"type":"module"}\n');
+    f.aliases();
+    f.legacy();
+    const stable = await f.load("text-transforms.runtime.js");
+    const legacy = await f.load("text-transforms.runtime-sEqsN4pN.js");
+    const mixed = await f.load("mixed.contract.js");
+    const namedOnly = await f.load("named-only.runtime.js");
     expect(stable.default("stable")).toBe("stable");
     expect(legacy.default("legacy")).toBe("legacy");
     expect(mixed.default).toBeTypeOf("function");
@@ -571,43 +573,36 @@ describe("runtime postbuild static assets", () => {
     expect(namedOnly.marker).toBe("export { marker as default }");
     expect(namedOnly).not.toHaveProperty("default");
     for (const file of ["library.js", "text-transforms.runtime.mjs", "mixed.contract.mjs"]) {
-      await expectPathMissing(path.join(distDir, file));
+      await expectPathMissing(f.file(file));
     }
-
-    rewriteRootRuntimeImportsToStableAliases({ rootDir });
-    expect(await readText(distDir, "mixed.contract.js")).toBe(
-      'export * from "./mixed.contract-Hash222.mjs";\n' +
-        'export { default } from "./mixed.contract-Hash222.mjs";\n',
+    f.rewrite();
+    expect(f.read("mixed.contract.js")).toBe(aliasSource("mixed.contract-Hash222.mjs", true));
+    f.aliases();
+    f.legacy();
+    expect(f.read("text-transforms.runtime.js")).toBe(
+      aliasSource("text-transforms.runtime-Hash111.mjs", true),
     );
-    writeStableRootRuntimeAliases({ rootDir });
-    writeLegacyRootRuntimeCompatAliases({ rootDir });
-    expect(await readText(distDir, "text-transforms.runtime.js")).toBe(
-      'export * from "./text-transforms.runtime-Hash111.mjs";\n' +
-        'export { default } from "./text-transforms.runtime-Hash111.mjs";\n',
-    );
-
     const stableAfterRerun = await import(
-      `${pathToFileURL(path.join(distDir, "text-transforms.runtime.js")).href}?rerun=1`
+      `${pathToFileURL(f.file("text-transforms.runtime.js")).href}?rerun=1`
     );
     expect(stableAfterRerun.default("rerun")).toBe("rerun");
   });
 
   it("keeps stable aliases when one colliding root runtime chunk re-exports the implementation", async () => {
-    const { rootDir, distDir } = await runtimeFixture({
+    const f = await runtimeFixture({
       "runtime-model-auth.runtime-Impl123.js": "export const auth = true;\n",
       "runtime-model-auth.runtime-Wrap456.mjs":
         'import { auth } from "./runtime-model-auth.runtime-Impl123.js";\nexport { auth };\n',
     });
 
-    writeStableRootRuntimeAliases({ rootDir });
-
-    expect(await readText(distDir, "runtime-model-auth.runtime.js")).toBe(
-      'export * from "./runtime-model-auth.runtime-Wrap456.mjs";\n',
+    f.aliases();
+    expect(f.read("runtime-model-auth.runtime.js")).toBe(
+      aliasSource("runtime-model-auth.runtime-Wrap456.mjs"),
     );
   });
 
   it("ignores legacy wrappers to the stable runtime alias when choosing the implementation", async () => {
-    const { rootDir, distDir } = await runtimeFixture({
+    const f = await runtimeFixture({
       "runtime-plugins.runtime-NewHash.mjs": "export const ready = true;\n",
       "runtime-plugins.runtime-OldHash.js": 'export * from "./runtime-plugins.runtime.js";\n',
       "dispatch-OldHash.js": sourceLines(
@@ -615,26 +610,25 @@ describe("runtime postbuild static assets", () => {
       ),
     });
 
-    rewriteRootRuntimeImportsToStableAliases({ rootDir });
-    writeStableRootRuntimeAliases({ rootDir });
-
-    expect(await readText(distDir, "dispatch-OldHash.js")).toBe(
+    f.rewrite();
+    f.aliases();
+    expect(f.read("dispatch-OldHash.js")).toBe(
       sourceLines('const lazy = () => import("./runtime-plugins.runtime.js");'),
     );
-    expect(await readText(distDir, "runtime-plugins.runtime.js")).toBe(
-      'export * from "./runtime-plugins.runtime-NewHash.mjs";\n',
+    expect(f.read("runtime-plugins.runtime.js")).toBe(
+      aliasSource("runtime-plugins.runtime-NewHash.mjs"),
     );
   });
 
   it.each(["js", "mjs"])("rewrites mixed runtime imports in a %s importer", async (extension) => {
-    const { rootDir, distDir } = await runtimeFixture({
+    const f = await runtimeFixture({
       "runtime-plugins.runtime-AbCd1234.mjs": "export const ready = true;\n",
       "server-close.runtime-AbCd1234.js": "export const close = true;\n",
       "dispatch.contract-AbCd1234.js": "export const dispatch = true;\n",
     });
-    const importerPath = path.join(distDir, `dispatch-OldHash.${extension}`);
-    await fs.writeFile(
-      importerPath,
+    const importer = `dispatch-OldHash.${extension}`;
+    f.write(
+      importer,
       sourceLines(
         'const lazy = () => import("./runtime-plugins.runtime-AbCd1234.mjs");',
         'const closeModule = () => import("./server-close.runtime-AbCd1234.js");',
@@ -643,12 +637,9 @@ describe("runtime postbuild static assets", () => {
         'import "./missing.contract-Nope.mjs";',
         'const ordinaryChunk = () => import("./server-close-OldHash.js");',
       ),
-      "utf8",
     );
-
-    rewriteRootRuntimeImportsToStableAliases({ rootDir });
-
-    expect(await fs.readFile(importerPath, "utf8")).toBe(
+    f.rewrite();
+    expect(f.read(importer)).toBe(
       sourceLines(
         'const lazy = () => import("./runtime-plugins.runtime.js");',
         'const closeModule = () => import("./server-close.runtime.js");',
@@ -661,7 +652,7 @@ describe("runtime postbuild static assets", () => {
   });
 
   it("keeps text-transform runtime imports hashed after the stable alias export surface grew", async () => {
-    const { rootDir, distDir } = await runtimeFixture({
+    const f = await runtimeFixture({
       "text-transforms.runtime-NewHash.mjs": "export const n = true;\nexport const t = true;\n",
       "provider-runtime-NewHash.mjs": sourceLines(
         'import { n as applyPluginTextReplacements } from "./text-transforms.runtime-NewHash.mjs";',
@@ -669,22 +660,21 @@ describe("runtime postbuild static assets", () => {
       ),
     });
 
-    rewriteRootRuntimeImportsToStableAliases({ rootDir });
-    writeStableRootRuntimeAliases({ rootDir });
-
-    expect(await readText(distDir, "provider-runtime-NewHash.mjs")).toBe(
+    f.rewrite();
+    f.aliases();
+    expect(f.read("provider-runtime-NewHash.mjs")).toBe(
       sourceLines(
         'import { n as applyPluginTextReplacements } from "./text-transforms.runtime-NewHash.mjs";',
         "export { applyPluginTextReplacements };",
       ),
     );
-    expect(await readText(distDir, "text-transforms.runtime.js")).toBe(
-      'export * from "./text-transforms.runtime-NewHash.mjs";\n',
+    expect(f.read("text-transforms.runtime.js")).toBe(
+      aliasSource("text-transforms.runtime-NewHash.mjs"),
     );
   });
 
   it("keeps hashed imports when a stable runtime alias would collide", async () => {
-    const { rootDir, distDir } = await runtimeFixture({
+    const f = await runtimeFixture({
       "install.runtime-Aaa111.mjs": "export const pluginInstall = true;\n",
       "install.runtime-Bbb222.js": "export const daemonInstall = true;\n",
       "install.runtime.js": 'export * from "./install.runtime-Stale.js";\n',
@@ -694,20 +684,19 @@ describe("runtime postbuild static assets", () => {
       ),
     });
 
-    rewriteRootRuntimeImportsToStableAliases({ rootDir });
-
-    expect(await readText(distDir, "install-OldHash.js")).toBe(
+    f.rewrite();
+    expect(f.read("install-OldHash.js")).toBe(
       sourceLines(
         'const pluginRuntime = () => import("./install.runtime-Aaa111.mjs");',
         'const daemonRuntime = () => import("./install.runtime-Bbb222.js");',
       ),
     );
-    writeStableRootRuntimeAliases({ rootDir });
-    await expectPathMissing(path.join(distDir, "install.runtime.js"));
+    f.aliases();
+    await expectPathMissing(f.file("install.runtime.js"));
   });
 
   it("rewrites plugin install runtime imports to stable aliases when install runtimes collide", async () => {
-    const { rootDir, distDir } = await runtimeFixture({
+    const f = await runtimeFixture({
       "install.runtime-Aaa111.mjs": sourceLines(
         "export const scanPackageInstallSource = true;",
         "export const scanInstalledPackageDependencyTree = true;",
@@ -720,18 +709,15 @@ describe("runtime postbuild static assets", () => {
       ),
     });
 
-    rewriteRootRuntimeImportsToStableAliases({ rootDir });
-
-    expect(await readText(distDir, "install-OldHash.js")).toBe(
+    f.rewrite();
+    expect(f.read("install-OldHash.js")).toBe(
       sourceLines(
         'const pluginRuntime = () => import("./install.runtime.js");',
         'const daemonRuntime = () => import("./install.runtime-Bbb222.js");',
       ),
     );
-    writeStableRootRuntimeAliases({ rootDir });
-    expect(await readText(distDir, "install.runtime.js")).toBe(
-      'export * from "./install.runtime-Aaa111.mjs";\n',
-    );
+    f.aliases();
+    expect(f.read("install.runtime.js")).toBe(aliasSource("install.runtime-Aaa111.mjs"));
   });
 
   it("keeps every recorded previous-release lazy import loadable after replacement", async () => {
@@ -868,6 +854,17 @@ describe("previous release update compatibility", () => {
         "export { resolveRunner as x, resolveMode as y };",
       ].join("\n"),
     });
+  }
+
+  function candidateFixture(inventory = recordFixture()) {
+    const files = fixtureFiles(createTempDir("update-compat-candidate-"));
+    candidate(files.root);
+    return {
+      ...files,
+      inventory,
+      emit: () => writeUpdateCompatibilityChunks(bridgeOptions(files.root, inventory)),
+      bridge: () => files.load("dist/service-abcdefgh.js"),
+    };
   }
 
   function recordImportedFixture(
@@ -1590,10 +1587,9 @@ describe("previous release update compatibility", () => {
     const conflict =
       /Release inventories disagree about service-abcdefgh.js:mode: 2026.9.1 uses .*; 2026.9.2 uses/;
     expect(() => parseUpdateCompatibilityInventory(inventory)).toThrow(conflict);
-    const root = createTempDir("update-compat-conflict-");
-    candidate(root);
-    expect(() => writeUpdateCompatibilityChunks(bridgeOptions(root, inventory))).toThrow(conflict);
-    expect(fsSync.existsSync(path.join(root, "dist/service-abcdefgh.js"))).toBe(false);
+    const f = candidateFixture(inventory);
+    expect(f.emit).toThrow(conflict);
+    expect(fsSync.existsSync(f.file("dist/service-abcdefgh.js"))).toBe(false);
   });
 
   it("keeps compatibility facades out of current runtime alias selection on rebuild", async () => {
@@ -1602,18 +1598,13 @@ describe("previous release update compatibility", () => {
       ...chunk,
       path: "worker.runtime-12345678.js",
     }));
-    const root = createTempDir("update-compat-rebuild-");
-    candidate(root);
-    fsSync.renameSync(
-      path.join(root, "dist/current.mjs"),
-      path.join(root, "dist/worker.runtime-abcdefgh.mjs"),
-    );
-    writeStableRootRuntimeAliases({ rootDir: root });
-    writeUpdateCompatibilityChunks(bridgeOptions(root, inventory));
-    writeStableRootRuntimeAliases({ rootDir: root });
-    const current = await import(pathToFileURL(path.join(root, "dist/worker.runtime.js")).href);
-    expect(current.x()).toBe("node");
-    expect(current.y()).toBe("npm");
+    const f = candidateFixture(inventory);
+    fsSync.renameSync(f.file("dist/current.mjs"), f.file("dist/worker.runtime-abcdefgh.mjs"));
+    writeStableRootRuntimeAliases({ rootDir: f.root });
+    f.emit();
+    writeStableRootRuntimeAliases({ rootDir: f.root });
+    const current = await f.load("dist/worker.runtime.js");
+    expect([current.x(), current.y()]).toEqual(["node", "npm"]);
   });
 
   it("retains only terminal cleanup-scope imports after package replacement", () => {
@@ -1661,25 +1652,17 @@ describe("previous release update compatibility", () => {
     'export { y as forwarded } from "../current.mjs";',
     'export * from "../current.mjs";',
   ])("bridges shared declaration bindings through %s", async (forwarding) => {
-    const inventory = recordFixture(true);
-    expect(inventory.releases[0].chunks).toHaveLength(1);
-    const root = createTempDir("update-compat-shared-binding-");
-    candidate(root);
-    fsSync.appendFileSync(path.join(root, "dist/current.mjs"), "\nexport { resolveMode as z };\n");
-    write(
-      root,
-      "dist/a-facade/forward.mjs",
-      `//#region src/cli/update-cli/mode.ts\n${forwarding}\n`,
-    );
-    const options = { distDir: path.join(root, "dist"), sourceDir: root, inventory };
-    writeUpdateCompatibilityChunks(options);
-    const bridge = path.join(root, "dist/service-abcdefgh.js");
-    const contents = fsSync.readFileSync(bridge, "utf8");
+    const f = candidateFixture(recordFixture(true));
+    expect(f.inventory.releases[0].chunks).toHaveLength(1);
+    fsSync.appendFileSync(f.file("dist/current.mjs"), "\nexport { resolveMode as z };\n");
+    f.write("dist/a-facade/forward.mjs", `//#region src/cli/update-cli/mode.ts\n${forwarding}\n`);
+    f.emit();
+    const contents = f.read("dist/service-abcdefgh.js");
     expect(contents).toContain('export { y as mode } from "./current.mjs";');
-    writeUpdateCompatibilityChunks(options);
-    expect(fsSync.readFileSync(bridge, "utf8")).toBe(contents);
-    const loaded = await import(pathToFileURL(bridge).href);
-    const current = await import(pathToFileURL(path.join(root, "dist/current.mjs")).href);
+    f.emit();
+    expect(f.read("dist/service-abcdefgh.js")).toBe(contents);
+    const loaded = await f.bridge();
+    const current = await f.load("dist/current.mjs");
     expect(loaded.mode).toBe(current.y);
     expect(loaded.mode()).toBe("npm");
     expect(loaded.runner).toBe(current.x);
@@ -1692,36 +1675,24 @@ describe("previous release update compatibility", () => {
     "control-ui.build-123-fixture",
     "control-ui.build-123-fixture.retired",
   ])("never borrows a missing runtime binding from %s", (directory) => {
-    const inventory = recordFixture();
-    const root = createTempDir("update-compat-isolated-graph-");
-    candidate(root);
-    const current = path.join(root, "dist/current.mjs");
-    write(root, `dist/${directory}/inspect.mjs`, fsSync.readFileSync(current, "utf8"));
-    fsSync.unlinkSync(current);
-    expect(() => writeUpdateCompatibilityChunks(bridgeOptions(root, inventory))).toThrow(
-      /no equivalent current export/,
-    );
-    expect(fsSync.existsSync(path.join(root, "dist/service-abcdefgh.js"))).toBe(false);
+    const f = candidateFixture();
+    f.write(`dist/${directory}/inspect.mjs`, f.read("dist/current.mjs"));
+    fsSync.unlinkSync(f.file("dist/current.mjs"));
+    expect(f.emit).toThrow(/no equivalent current export/);
+    expect(fsSync.existsSync(f.file("dist/service-abcdefgh.js"))).toBe(false);
   });
 
   it.each(["missing", "ambiguous"])(
     "refuses %s required implementations before writing bridges",
     (failure) => {
-      const inventory = recordFixture();
-      const root = createTempDir("update-compat-refusal-");
-      candidate(root);
+      const f = candidateFixture();
       if (failure === "missing") {
-        write(root, "dist/current.mjs", "export {};\n");
+        f.write("dist/current.mjs", "export {};\n");
       } else {
-        fsSync.copyFileSync(
-          path.join(root, "dist/current.mjs"),
-          path.join(root, "dist/duplicate.mjs"),
-        );
+        f.write("dist/duplicate.mjs", f.read("dist/current.mjs"));
       }
-      expect(() => writeUpdateCompatibilityChunks(bridgeOptions(root, inventory))).toThrow(
-        /Cannot bridge service-abcdefgh\.js export mode/,
-      );
-      expect(fsSync.existsSync(path.join(root, "dist/service-abcdefgh.js"))).toBe(false);
+      expect(f.emit).toThrow(/Cannot bridge service-abcdefgh\.js export mode/);
+      expect(fsSync.existsSync(f.file("dist/service-abcdefgh.js"))).toBe(false);
     },
   );
 
@@ -1731,13 +1702,10 @@ describe("previous release update compatibility", () => {
       ...chunk,
       path: "service.js",
     }));
-    const root = createTempDir("update-compat-public-");
-    candidate(root);
+    const f = candidateFixture(inventory);
     const original = "export const other = true;\n";
-    write(root, "dist/service.js", original);
-    expect(() => writeUpdateCompatibilityChunks(bridgeOptions(root, inventory))).toThrow(
-      /service\.js lacks mode/,
-    );
-    expect(fsSync.readFileSync(path.join(root, "dist/service.js"), "utf8")).toBe(original);
+    f.write("dist/service.js", original);
+    expect(f.emit).toThrow(/service\.js lacks mode/);
+    expect(f.read("dist/service.js")).toBe(original);
   });
 });
