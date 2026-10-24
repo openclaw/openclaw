@@ -456,19 +456,24 @@ history containing quotes, controls, Unicode, and lone surrogates. It verifies
 the exact pre-provider JSON character counts independently of the cache.
 
 ```sh
-node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
-  scripts/perf/model-prompt-stats-measure.ts --messages 500 --calls 1000
+node --expose-gc --import ./scripts/tsx.mjs \
+  scripts/perf/model-prompt-stats-measure.ts --messages 1000 --calls 1000 --ownership message
 ```
 
 Run at least five serial interleaved baseline/candidate samples on the approved
-benchmark host. The driver counts new large-text size records outside profiling,
+benchmark host. Use `--ownership content` for mutable envelopes with owned content,
+`message` for sealed message roots, or `mutable` for the unowned control. `--owner`
+accepts an alternate observation module beside the original for baseline comparisons.
+The driver counts payload visits and new large-text size records outside profiling,
 warms 50 calls, then samples allocations including objects collected by both GCs.
 A second pass reports sampled surviving allocations after GC, amortized per call;
-this is retained churn, not total resident memory or whole-turn retention. GC trace
-lines between `PROFILE_START allocation` and `PROFILE_END` belong to the allocation
-window; exclude setup and forced profiler-stop collections. Report promotion,
-collection counts, and maximum pauses with allocation. Profiled timing is context,
-not a Gateway latency measurement. Do not infer tail percentiles from five runs.
+this is retained churn, not total resident memory or whole-turn retention. Run
+`--mode timing` separately for unprofiled CPU and elapsed time, then repeat that
+mode with `--trace-gc-nvp` for promotion. Trace lines between `TIMING_START` and
+`TIMING_END` cover the fixed work count without forced collections; report
+collection counts and both maximum pauses. Trace and profile timing are context,
+not latency gates. These are owner measurements, not Gateway latency measurements.
+Do not infer tail percentiles from five runs.
 
 ## Session tool surface
 
