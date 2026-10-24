@@ -47,6 +47,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
     client,
     pending,
     read: readStatus,
+    scopeKey,
     requestKey,
     result,
     refresh: refreshStatus,
@@ -409,57 +410,67 @@ export function MeetingCaptureSettings(props: SettingsProps) {
       </>
     );
   }
-  const sourceRows = () =>
-    sources().map((raw, index) => {
-      const source = asNullableRecord(raw);
-      const provider = status()?.providers.find((item) => item.providerId === source?.providerId);
-      return (
-        <SettingsRow
-          title={
-            typeof source?.title === "string"
-              ? source.title
-              : (normalizeOptionalString(source?.providerId) ?? t("transcripts.unknown"))
-          }
-          description={[
-            provider?.name,
-            ...TRANSCRIPT_SOURCE_LOCATOR_FIELDS.map((key) => source?.[key]),
-          ]
-            .filter((value) => typeof value === "string" && value)
-            .join(" · ")}
-          control={
-            <>
-              <button
-                class="btn"
-                disabled={disabled()}
-                aria-label={t("meetingCapture.editSourceNumber", { number: String(index + 1) })}
-                onClick={() => editSource(index)}
-              >
-                <Icon name="edit" />
-                {t("meetingCapture.edit")}
-              </button>
-              <button
-                class="btn"
-                disabled={disabled()}
-                aria-label={t("meetingCapture.removeSourceNumber", { number: String(index + 1) })}
-                onClick={() => {
-                  if (disabled()) {
-                    return;
-                  }
-                  context.runtimeConfig.patchForm(
-                    ["transcripts", "autoStart"],
-                    sources().filter((_, position) => position !== index),
-                  );
-                  editSource(null);
-                }}
-              >
-                <Icon name="trash" />
-                {t("common.remove")}
-              </button>
-            </>
-          }
-        />
-      );
-    });
+  function SourceRows() {
+    return (
+      <For each={sources()} keyed={false}>
+        {(raw, index) => {
+          const source = () => asNullableRecord(raw());
+          const provider = () =>
+            status()?.providers.find((item) => item.providerId === source()?.providerId);
+          const title = () => {
+            const current = source();
+            return typeof current?.title === "string"
+              ? current.title
+              : (normalizeOptionalString(current?.providerId) ?? t("transcripts.unknown"));
+          };
+          return (
+            <SettingsRow
+              title={title()}
+              description={[
+                provider()?.name,
+                ...TRANSCRIPT_SOURCE_LOCATOR_FIELDS.map((key) => source()?.[key]),
+              ]
+                .filter((value) => typeof value === "string" && value)
+                .join(" · ")}
+              control={
+                <>
+                  <button
+                    class="btn"
+                    disabled={disabled()}
+                    aria-label={t("meetingCapture.editSourceNumber", { number: String(index + 1) })}
+                    onClick={() => editSource(index)}
+                  >
+                    <Icon name="edit" />
+                    {t("meetingCapture.edit")}
+                  </button>
+                  <button
+                    class="btn"
+                    disabled={disabled()}
+                    aria-label={t("meetingCapture.removeSourceNumber", {
+                      number: String(index + 1),
+                    })}
+                    onClick={() => {
+                      if (disabled()) {
+                        return;
+                      }
+                      context.runtimeConfig.patchForm(
+                        ["transcripts", "autoStart"],
+                        sources().filter((_, position) => position !== index),
+                      );
+                      editSource(null);
+                    }}
+                  >
+                    <Icon name="trash" />
+                    {t("common.remove")}
+                  </button>
+                </>
+              }
+            />
+          );
+        }}
+      </For>
+    );
+  }
   return (
     <openclaw-meeting-capture-settings>
       <SettingsPage>
@@ -486,13 +497,9 @@ export function MeetingCaptureSettings(props: SettingsProps) {
                 onClick={() => context.navigate("meetings")}
               />
               <Errored fallback={(_error) => <CaptureSummary status={null} />}>
-                <Loading on={requestKey()} fallback={<CaptureSummary status={null} />}>
-                  <Show
-                    when={client() && readStatus()}
-                    keyed
-                    fallback={<CaptureSummary status={null} />}
-                  >
-                    {(current) => <CaptureSummary status={current.status} />}
+                <Loading on={scopeKey()} fallback={<CaptureSummary status={null} />}>
+                  <Show when={client() && readStatus()} fallback={<CaptureSummary status={null} />}>
+                    {(current) => <CaptureSummary status={current().status} />}
                   </Show>
                 </Loading>
               </Errored>
@@ -556,7 +563,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
             }
           >
             {sources().length ? (
-              sourceRows()
+              <SourceRows />
             ) : (
               <SettingsEmpty message={t("meetingCapture.noSources")} />
             )}
@@ -564,25 +571,25 @@ export function MeetingCaptureSettings(props: SettingsProps) {
           <Show when={editing() !== null ? { index: editing() } : undefined} keyed>
             {(selection) => <SourceEditor index={selection.index!} />}
           </Show>
-          <Show when={status()} keyed>
+          <Show when={knownCaptureStatus()}>
             {(currentStatus) => (
               <>
-                {!currentStatus.providers.some(supportsAutoStartSetup) ? (
+                {!currentStatus().providers.some(supportsAutoStartSetup) ? (
                   <SettingsEmpty message={t("meetingCapture.noAutoStartProviders")} />
                 ) : undefined}
-                {currentStatus.configuredSources.length ? (
+                {currentStatus().configuredSources.length ? (
                   <SettingsSection
                     title={t("meetingCapture.sourceHealth")}
                     description={t("meetingCapture.armedHint")}
                   >
-                    <For each={currentStatus.configuredSources}>
+                    <For each={currentStatus().configuredSources} keyed={false}>
                       {(item) => (
                         <SettingsRow
-                          title={item.title ?? item.source.providerId}
+                          title={item().title ?? item().source.providerId}
                           description={[
-                            ...TRANSCRIPT_SOURCE_LOCATOR_FIELDS.map((key) => item.source[key]),
-                            item.startDiagnostic
-                              ? t(`meetingCapture.startDiagnostics.${item.startDiagnostic}`)
+                            ...TRANSCRIPT_SOURCE_LOCATOR_FIELDS.map((key) => item().source[key]),
+                            item().startDiagnostic
+                              ? t(`meetingCapture.startDiagnostics.${item().startDiagnostic}`)
                               : undefined,
                           ]
                             .filter(Boolean)
@@ -590,7 +597,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
                           control={
                             <SettingsStatus
                               kind={"muted"}
-                              label={t(`meetingCapture.states.${item.state}`)}
+                              label={t(`meetingCapture.states.${item().state}`)}
                             />
                           }
                         />
@@ -598,11 +605,14 @@ export function MeetingCaptureSettings(props: SettingsProps) {
                     </For>
                   </SettingsSection>
                 ) : undefined}
-                {Object.values(currentStatus.omitted).some((count) => count > 0) ? (
+                {Object.values(currentStatus().omitted).some((count) => count > 0) ? (
                   <p class="settings-page__intro">
                     {t("meetingCapture.omitted", {
                       count: String(
-                        Object.values(currentStatus.omitted).reduce((sum, count) => sum + count, 0),
+                        Object.values(currentStatus().omitted).reduce(
+                          (sum, count) => sum + count,
+                          0,
+                        ),
                       ),
                     })}
                   </p>

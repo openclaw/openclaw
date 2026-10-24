@@ -99,6 +99,7 @@ type Result = {
   requests?: Record<string, number>;
   domBefore?: { nodes: number; menuItems: number };
   domAfter?: { nodes: number; menuItems: number };
+  rowIdentity?: { initial: number; created: number; retained: number; final: number };
   trace?: ReturnType<typeof summarizeInteractionTrace>;
   error?: string;
   artifactPrefix: string;
@@ -246,6 +247,34 @@ try {
                 menuItems: document.querySelectorAll('[role^="menuitem"]').length,
               }));
             result.domBefore = await countDom();
+            const rowProbe = scenario.rowSelector
+              ? await page.evaluateHandle((selector) => {
+                  const original = [...document.querySelectorAll(selector)];
+                  const seen = new WeakSet(original);
+                  const state = { original, created: 0 };
+                  const observer = new MutationObserver((records) => {
+                    for (const record of records) {
+                      for (const node of record.addedNodes) {
+                        if (!(node instanceof Element)) {
+                          continue;
+                        }
+                        const rows = [...node.querySelectorAll(selector)];
+                        if (node.matches(selector)) {
+                          rows.push(node);
+                        }
+                        for (const row of rows) {
+                          if (!seen.has(row)) {
+                            seen.add(row);
+                            state.created++;
+                          }
+                        }
+                      }
+                    }
+                  });
+                  observer.observe(document.body, { childList: true, subtree: true });
+                  return { state, observer };
+                }, scenario.rowSelector)
+              : undefined;
             const before = await metrics(cdp);
             await page.evaluate(() => performance.mark("interaction:start"));
             const start = performance.now();
@@ -255,6 +284,19 @@ try {
             await page.evaluate(() => performance.mark("interaction:end"));
             const after = await metrics(cdp);
             result.domAfter = await countDom();
+            if (rowProbe && scenario.rowSelector) {
+              result.rowIdentity = await rowProbe.evaluate(({ state, observer }, selector) => {
+                observer.disconnect();
+                const current = new Set(document.querySelectorAll(selector));
+                return {
+                  initial: state.original.length,
+                  created: state.created,
+                  retained: state.original.filter((row) => current.has(row)).length,
+                  final: current.size,
+                };
+              }, scenario.rowSelector);
+              await rowProbe.dispose();
+            }
             for (const [key, name] of [
               ["scriptMs", "ScriptDuration"],
               ["taskMs", "TaskDuration"],

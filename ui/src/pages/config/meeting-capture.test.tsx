@@ -135,6 +135,36 @@ afterEach(() => {
 });
 
 describe("curated meeting capture", () => {
+  it("retains source controls and health rows through refresh snapshots", async () => {
+    const { page, request } = await mount();
+    const sourceEdit = page.querySelector<HTMLButtonElement>('button[aria-label="Edit source 1"]')!;
+    const sourceRow = sourceEdit.closest(".settings-row");
+    const healthRow = [...page.querySelectorAll(".settings-row")].find((row) =>
+      row.querySelector(".settings-status")?.textContent?.includes("Not active"),
+    )!;
+    expect(healthRow).toBeDefined();
+    const pending = createDeferred<TranscriptsStatusResult>();
+    request.mockImplementationOnce(() => pending.promise);
+    const refresh = click(page, "Refresh");
+    await waitForSolid(() => expect(refresh.disabled).toBe(true));
+    expect(page.contains(sourceRow)).toBe(true);
+    expect(page.contains(healthRow)).toBe(true);
+    expect(page.querySelector('button[aria-label="Edit source 1"]')).toBe(sourceEdit);
+
+    pending.resolve(structuredClone(meetingStatus));
+    await waitForSolid(() => expect(refresh.disabled).toBe(false));
+    expect(page.contains(healthRow)).toBe(true);
+    expect(page.querySelector('button[aria-label="Edit source 1"]')).toBe(sourceEdit);
+
+    const updated = structuredClone<TranscriptsStatusResult>(meetingStatus);
+    updated.configuredSources[0]!.state = "armed";
+    request.mockResolvedValueOnce(updated);
+    click(page, "Refresh");
+    await waitForSolid(() => expect(healthRow.textContent).toContain("Armed"));
+    expect(page.contains(healthRow)).toBe(true);
+    expect(page.querySelector('button[aria-label="Edit source 1"]')).toBe(sourceEdit);
+  });
+
   it.each([false, true])(
     "shows unknown health after disconnect (failed read=%s)",
     async (failStatus) => {
