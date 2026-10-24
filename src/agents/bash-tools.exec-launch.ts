@@ -1,6 +1,36 @@
+import { captureCronJobContinuationLifetime } from "../cron/active-jobs.js";
+import { execRequestAbortSignal, type ExecRequestOwner } from "../infra/exec-request-context.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+
+/** Compose startup cancellation without detaching physical work from its cron occurrence. */
+export function prepareExecSignals(
+  opts: { sessionKey?: string; requestOwners?: readonly ExecRequestOwner[] },
+  initialStartupSignal?: AbortSignal,
+) {
+  const caller = getGatewayToolCallerIdentity();
+  const cronJobId = isCronRunSessionKey(opts.sessionKey)
+    ? parseAgentSessionKey(opts.sessionKey)?.rest.split(":")[1]
+    : undefined;
+  const cronLifetime = cronJobId
+    ? captureCronJobContinuationLifetime(cronJobId, [
+        ...(caller?.operationalRunInstance ? [caller.operationalRunInstance.runId] : []),
+        ...(opts.requestOwners ?? []).flatMap((request) => Array.from(request.turnRunIds)),
+      ])
+    : undefined;
+  // Physical background work belongs to the occurrence even when exit notifications
+  // are disabled and the original model turn has already released its request scope.
+  const requestSignal = execRequestAbortSignal(opts.requestOwners, cronLifetime?.signal);
+  const startupSignal =
+    requestSignal && initialStartupSignal
+      ? AbortSignal.any([requestSignal, initialStartupSignal])
+      : (requestSignal ?? initialStartupSignal);
+  return { requestSignal, startupSignal };
+}
 
 export class ExecProcessPreflightError extends Error {
   constructor(readonly result: AgentToolResult<ExecToolDetails>) {

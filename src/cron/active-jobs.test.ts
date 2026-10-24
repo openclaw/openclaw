@@ -13,6 +13,7 @@ import {
   advanceCronActiveJobGeneration,
   bindCronJobAdmittedRun,
   bindCronSelfRemovalCommitGuard,
+  captureCronJobContinuationLifetime,
   captureCronJobMessageActionAuthority,
   clearCronJobActive,
   getActiveCronJobCount,
@@ -63,6 +64,23 @@ afterEach(() => {
     admission.close();
   }
   resetCronActiveJobs();
+});
+
+it("does not revive a superseded continuation when the old occurrence settles", async () => {
+  const jobId = "superseded-continuation";
+  const marker = markCronJobActive(jobId);
+  const admission = prepareAdmission("old-occurrence");
+  bindCronJobAdmittedRun(marker, await admission.admit("embedded"), new AbortController().signal);
+  const lifetime = expectDefined(
+    captureCronJobContinuationLifetime(jobId, ["old-occurrence"]),
+    "continuation lifetime",
+  );
+  const replacement = markCronJobActive(jobId);
+  expect(lifetime.assertCurrent).toThrow();
+  clearCronJobActive(jobId, marker);
+  expect(lifetime.assertCurrent).toThrow();
+  expect(lifetime.signal.aborted).toBe(true);
+  expect(isCronActiveJobMarkerCurrent(replacement)).toBe(true);
 });
 
 describe("cron message action authority", () => {

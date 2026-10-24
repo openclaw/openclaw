@@ -475,12 +475,15 @@ async function executeDetachedCronJob(
         res.failureNotificationDetail.mode === "wall-clock"
       )
     ) {
-      return interrupted();
+      // A command may report its own no-output timeout while the outer deadline
+      // is joining cleanup. Keep its native admission fact when the abort wins.
+      return { ...interrupted(), executionStarted: res.executionStarted };
     }
     return {
       status: res.status,
       error: res.error,
       errorClassification: res.errorClassification,
+      executionStarted: res.executionStarted,
       deliveryError: res.deliveryError,
       deliverySuppressionReason: res.deliverySuppressionReason,
       deliveryState: res.deliveryState,

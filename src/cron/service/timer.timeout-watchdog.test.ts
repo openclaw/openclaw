@@ -152,6 +152,47 @@ it("does not spend a main-session execution deadline waiting for event adoption"
   }
 });
 
+it.each([
+  { label: "pre-execution setup", executionStarted: false, settlesOnAbort: false },
+  { label: "abort-ignoring execution", executionStarted: true, settlesOnAbort: false },
+  { label: "cooperative execution", executionStarted: true, settlesOnAbort: true },
+])(
+  "retries pre-execution timeout but preserves daily cadence after execution starts ($label)",
+  async ({ executionStarted, settlesOnAbort }) => {
+    const job = dueJob(`daily-timeout-${executionStarted}`, {
+      schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC", staggerMs: 0 },
+      payload: { kind: "agentTurn", message: "perform maintenance once", timeoutSeconds: 1 },
+    });
+    const runner = pendingRunner(({ onExecutionStarted, abortSignal }) => {
+      if (executionStarted) {
+        onExecutionStarted?.(attribution(job.id));
+      }
+      if (settlesOnAbort) {
+        abortSignal?.addEventListener("abort", () => runner.result.resolve(done), { once: true });
+      }
+    });
+    const { state, advance } = await fixture(job, {
+      nowMs: Date.now,
+      cleanupTimedOutAgentRun: vi.fn(async () => {}),
+      runIsolatedAgentJob: runner.run,
+    });
+    const timer = onTimer(state);
+    try {
+      await runner.started.promise;
+      await advance(executionStarted ? 1_010 : 60_010);
+      await timer;
+      expect(requireJob(state, job.id).state.lastError).toContain("timed out");
+      expect(requireJob(state, job.id).state.nextRunAtMs).toBe(
+        executionStarted ? Date.parse("2026-05-11T09:00:00.000Z") : SCHEDULED_AT + 60_000 + 30_000,
+      );
+      expect(runner.run).toHaveBeenCalledOnce();
+    } finally {
+      stop(state);
+      runner.result.resolve(done);
+      await drain(timer, runner.result.promise);
+    }
+  },
+);
 it("keeps timed-out cron runs from being overwritten by late cancellation", async () => {
   resetActiveCronTaskRunsForTests();
   const job = agentJob("late-cancel-after-timeout", 1);
@@ -194,11 +235,14 @@ it("keeps timed-out cron runs from being overwritten by late cancellation", asyn
     });
     expect(record?.error).toContain("timed out");
     expect(requireJob(state, job.id)).toMatchObject({
-      enabled: true,
+      enabled: false,
       state: { lastErrorReason: "timeout" },
     });
-    expect(requireJob(state, job.id).state.autoDisabled).toBeUndefined();
-    expect(requireJob(state, job.id).state.nextRunAtMs).toBeGreaterThan(SCHEDULED_AT);
+    expect(requireJob(state, job.id).state.autoDisabled).toMatchObject({
+      reason: "consecutive-failures",
+      consecutiveErrors: 1,
+    });
+    expect(requireJob(state, job.id).state.nextRunAtMs).toBeUndefined();
   } finally {
     stop(state);
     runner.result.resolve(done);

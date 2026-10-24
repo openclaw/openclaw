@@ -195,6 +195,7 @@ export async function runCronCommandJob(params: {
             : undefined;
     return {
       status,
+      executionStarted: typeof result.pid === "number",
       ...(prepared ? { replyDisposition: prepared.terminalReply.disposition } : {}),
       ...(error ? { error } : {}),
       ...(failureNotificationDetail

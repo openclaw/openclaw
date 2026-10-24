@@ -239,7 +239,9 @@ To block this execution path, start the Gateway with `OPENCLAW_DISABLE_CRON_HOST
   <Accordion title="Retry behavior">
     **One-shot retry**: transient errors (rate limit, overload, network, timeout, server error) use a built-in retry schedule. Permanent errors disable the job immediately.
 
-    **Recurring retry**: consecutive execution errors back off on an extended schedule (30s, 60s, 5m, 15m, 60m). Backoff resets after the next successful run.
+    **Recurring retry**: consecutive retryable execution errors back off on an extended schedule (30s, 60s, 5m, 15m, 60m). Backoff resets after the next successful run.
+
+    For scheduled runs, the scheduler execution deadline and native-command wall-clock or no-output deadlines do not automatically replay a run after execution starts. Recurring jobs wait for their next scheduled occurrence; one-shot jobs are disabled. Failures before execution starts and provider transport failures retain their normal retry policy. Inspect run history and reconcile partial effects before manually rerunning a timed-out job.
 
   </Accordion>
   <Accordion title="Maintenance">

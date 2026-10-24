@@ -1,4 +1,5 @@
 import type { FailoverReason } from "../agents/failover/signal.js";
+import { CRON_JOB_EXECUTION_TIMEOUT_ERROR } from "./execution-error-constants.js";
 
 /** Classifies cron run failures for retry policy decisions. */
 export type CronRetryOn = "rate_limit" | "overloaded" | "network" | "timeout" | "server_error";
@@ -51,6 +52,17 @@ const TRANSIENT_PATTERNS: Record<CronRetryOn, RegExp> = {
 export function resolveCronExecutionRetryHint(input: CronRetryHintInput): CronRetryHint {
   const { error, retryOn, classifiedReason, executionStarted } = input;
   if (!error || typeof error !== "string") {
+    return { retryable: false };
+  }
+  // The scheduler deadline ends this occurrence. Replaying it after the runner
+  // started can repeat tool effects; provider transport and setup retries stay separate.
+  if (
+    executionStarted === true &&
+    (error === CRON_JOB_EXECUTION_TIMEOUT_ERROR ||
+      error.startsWith(`${CRON_JOB_EXECUTION_TIMEOUT_ERROR} `) ||
+      error === "command timed out" ||
+      error === "command produced no output before noOutputTimeoutSeconds")
+  ) {
     return { retryable: false };
   }
   if (SESSION_LIFECYCLE_CLAIM_ERROR_PATTERN.test(error)) {

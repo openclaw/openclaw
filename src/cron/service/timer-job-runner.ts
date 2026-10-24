@@ -236,6 +236,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
 ): Promise<CronCoreRunOutcome> {
   const runAbortController = new AbortController();
   const progress: CronRunProgress = {};
+  let executionStarted = false;
   let commandSettlement: Promise<CronCoreRunOutcome> | undefined;
   const assertRunCurrent = async () => {
     runAbortController.signal.throwIfAborted();
@@ -305,6 +306,8 @@ async function executeJobCoreWithTimeoutUnfinalized(
       // A timeout raised by this service-owned watchdog is authoritative even
       // when the interrupted main-session turn has no model attribution.
       errorClassification,
+      // An unsettled dispatched command has an unknown effect outcome; do not replay it.
+      ...(executionStarted || commandSettlement ? { executionStarted: true } : {}),
       // The abort race must retain attribution already reported by the runner.
       ...(execution && {
         provider: execution.provider,
@@ -379,6 +382,10 @@ async function executeJobCoreWithTimeoutUnfinalized(
       watchdog?.noteLaneWait();
     };
     const noteRunnerStarted = (info?: CronAgentExecutionStarted) => {
+      // Command adapter entry starts the watchdog; native results own spawn admission.
+      if (job.payload.kind !== "command") {
+        executionStarted = true;
+      }
       if (watchdog) {
         watchdog.noteRunnerStarted(info);
       } else {
@@ -412,7 +419,10 @@ async function executeJobCoreWithTimeoutUnfinalized(
     commandSettlement = job.payload.kind === "command" ? corePromise : undefined;
     // Cancellation returns early, but the launch still owns the core's cleanup and delivery tail.
     const runPromise = trackAsyncWork(async () => {
-      const result = await corePromise;
+      const coreResult = await corePromise;
+      // The abort path can finish without returning the runner's attribution.
+      // Preserve the observed start even when that core result wins settlement.
+      const result = executionStarted ? { ...coreResult, executionStarted: true } : coreResult;
       progress.completedCoreResult = result;
       return await deliverPrimaryWebhook(
         state,

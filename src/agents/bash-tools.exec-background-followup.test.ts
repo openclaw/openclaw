@@ -16,6 +16,12 @@ import {
 } from "../config/sessions/session-accessor.js";
 import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  bindCronJobAdmittedRun,
+  clearCronJobActive,
+  markCronJobActive,
+  resetCronActiveJobs,
+} from "../cron/active-jobs.js";
 import { removeCronRunContinuationSessionIfIdle } from "../cron/run-continuation-cleanup.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
@@ -33,6 +39,8 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
   createAdmittedRunOperatorAuthority,
   readAdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
@@ -254,130 +262,182 @@ test("does not advertise detached continuation when process is unavailable", asy
   expect(result.details).not.toHaveProperty("followUp");
 });
 
-test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended during admission"])(
-  "keeps exec completion bound to its origin: %s",
-  async (scenario, { signal }) => {
-    const cron = scenario !== "ordinary";
-    const sessionKey = cron
-      ? `agent:main:cron:nightly:run:${scenario.replaceAll(" ", "-")}`
-      : "agent:main:main";
-    const sessionId = sessionKey.replaceAll(":", "-");
-    const exact = { agentId: "main", sessionKey };
-    const base = { agentId: "main", sessionKey: "agent:main:cron:nightly" };
-    const removed = createDeferredCore();
-    let unsubscribe = () => {};
-    if (scenario === "queued cron") {
-      // Cron persists the base before the exact run claims the shared transcript window.
-      await replaceSessionEntry(base, { sessionId, updatedAt: Date.now() });
-      unsubscribe = sessionChanges.subscribeFacts((change) => {
-        if (
-          "sessionKey" in change &&
-          change.sessionKey === sessionKey &&
-          change.facts?.kind === "removed"
-        ) {
-          removed.resolve();
-        }
-      });
-    }
-    await seedOrigin(sessionKey);
-    const claim = claimAgentRunContext(
-      "cron-run-followup",
-      { sessionKey, sessionId, agentId: "main" },
-      { trackOwner: true },
-    );
-    const release = () => releaseAgentRunContext("cron-run-followup", claim);
-    vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((text, options) => {
-      expect(options.sessionKey).toBe(sessionKey);
-      if (scenario === "ended cron") {
-        release();
+test.for([
+  "ordinary",
+  "live cron",
+  "queued cron",
+  "queued cron timeout",
+  "queued cron cancellation",
+  "queued cron restart",
+  "ended cron",
+  "cron ended during admission",
+])("keeps exec completion bound to its origin: %s", async (scenario, { signal }) => {
+  const cron = scenario !== "ordinary";
+  const queued = scenario.startsWith("queued cron");
+  const revoked = queued && scenario !== "queued cron";
+  const sessionKey = cron
+    ? `agent:main:cron:nightly:run:${scenario.replaceAll(" ", "-")}`
+    : "agent:main:main";
+  const sessionId = sessionKey.replaceAll(":", "-");
+  const exact = { agentId: "main", sessionKey };
+  const base = { agentId: "main", sessionKey: "agent:main:cron:nightly" };
+  const removed = createDeferredCore();
+  let unsubscribe = () => {};
+  if (queued) {
+    // Cron persists the base before the exact run claims the shared transcript window.
+    await replaceSessionEntry(base, { sessionId, updatedAt: Date.now() });
+    unsubscribe = sessionChanges.subscribeFacts((change) => {
+      if (
+        "sessionKey" in change &&
+        change.sessionKey === sessionKey &&
+        change.facts?.kind === "removed"
+      ) {
+        removed.resolve();
       }
-      const receipt = enqueue(text, options);
-      receipts.push(receipt);
-      if (scenario === "cron ended during admission") {
-        release();
-      }
-      return receipt;
     });
-    const exec = backgroundExec(sessionKey, { agentId: "main" });
-    try {
-      const start = async () => {
-        const started = await exec("cron-followup", 'process.stdout.write("CRON_EXEC_DONE")');
-        const { sessionId: processSessionId } = runningSession(started.details);
-        await withinTest(waitForExecScope(sessionKey), signal);
-        if (scenario === "queued cron") {
-          const receipt = expectDefined(receipts[0], "queued cron completion receipt");
-          expect(await withinTest(receipt.accepted, signal)).toEqual({ ok: true });
-          expect(model).not.toHaveBeenCalled();
-          expect(
-            readSessionTranscriptMessageEvents({ agentId: "main", sessionKey, sessionId }),
-          ).toEqual([]);
-          // Successful cron teardown seals the alias after persisting its stable base.
-          await upsertSessionEntryCore(exact, {
-            cronRunContinuation: {
-              lifecycleRevision: "original",
-              phase: "ready",
-              basePersisted: true,
-            },
-          });
-          await removeCronRunContinuationSessionIfIdle(sessionKey);
-          expect(loadSessionEntry(exact)?.sessionId).toBe(sessionId);
-          release();
-        }
-        return processSessionId;
-      };
-      // Cron preparation and embedded execution share this controller admission.
-      const processSessionId =
-        scenario === "queued cron"
-          ? await withSessionTurn(
-              {
-                sessionKey,
-                sessionId,
-                agentId: "main",
-                storePath: resolveSessionStorePathCore(config.session?.store, { agentId: "main" }),
-              },
-              start,
-            )
-          : await start();
-      if (scenario.includes("ended")) {
-        if (scenario === "cron ended during admission") {
-          expect(receipts).toHaveLength(1);
-          const receipt = expectDefined(receipts[0], "cron completion receipt");
-          expect(await withinTest(receipt.settled, signal)).toMatchObject({
-            status: "failed",
-            executionStarted: false,
-            error: expect.stringContaining("Originating cron run ended"),
-          });
-        } else {
-          expect(receipts).toHaveLength(0);
-        }
-        expect(model).not.toHaveBeenCalled();
-      } else {
-        await completion(signal);
-        expect(receipts).toHaveLength(1);
-        expect(model).toHaveBeenCalledOnce();
-        const [params] = expectDefined(model.mock.calls[0], "completion turn");
-        expect(params.sessionKey).toBe(sessionKey);
-        if (scenario === "queued cron") {
-          await withinTest(removed.promise, signal);
-          expect(loadSessionEntry(exact)).toBeUndefined();
-          expect(loadSessionEntry(base)?.sessionId).toBe(sessionId);
-          expect(readSessionTranscriptMessageEvents({ ...base, sessionId })).toMatchObject([
-            { event: { type: "message", message: { role: "user" } } },
-          ]);
-          expect(params.prompt).toContain("CRON_EXEC_DONE");
-        }
-      }
-      const result = await createProcessTool({ scopeKey: sessionKey }).execute("collect", {
-        action: "log",
-        sessionId: processSessionId,
-      });
-      expect(result.content).toContainEqual({ type: "text", text: "CRON_EXEC_DONE" });
-    } finally {
-      unsubscribe();
+  }
+  await seedOrigin(sessionKey);
+  const claim = claimAgentRunContext(
+    "cron-run-followup",
+    { sessionKey, sessionId, agentId: "main" },
+    { trackOwner: true },
+  );
+  const release = () => {
+    releaseAgentRunContext("cron-run-followup", claim);
+    admission.close();
+  };
+  const controller = new AbortController();
+  const admission = prepareAgentRunAdmission({
+    cfg: config,
+    operationalRunInstance: createOperationalRunInstanceRef("cron-run-followup"),
+    facts: {
+      runId: "cron-run-followup",
+      agentId: "main",
+      ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
+    },
+  });
+  const admitted = await admission.admit("embedded");
+  const marker = cron ? markCronJobActive("nightly", { agentId: "main" }) : undefined;
+  if (marker) {
+    bindCronJobAdmittedRun(marker, admitted, controller.signal);
+  }
+  vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((text, options) => {
+    expect(options.sessionKey).toBe(sessionKey);
+    if (scenario === "ended cron") {
       release();
     }
-  },
-);
+    const receipt = enqueue(text, options);
+    receipts.push(receipt);
+    if (scenario === "cron ended during admission") {
+      release();
+    }
+    return receipt;
+  });
+  const exec = backgroundExec(sessionKey, { agentId: "main" });
+  try {
+    const start = async () => {
+      const started = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey,
+          operationalRunInstance: admitted.operationalRunInstance,
+          receiptAuthority: () => !controller.signal.aborted,
+        },
+        () => exec("cron-followup", 'process.stdout.write("CRON_EXEC_DONE")'),
+      );
+      const { sessionId: processSessionId } = runningSession(started.details);
+      await withinTest(waitForExecScope(sessionKey), signal);
+      if (queued) {
+        const receipt = expectDefined(receipts[0], "queued cron completion receipt");
+        expect(await withinTest(receipt.accepted, signal)).toEqual({ ok: true });
+        expect(model).not.toHaveBeenCalled();
+        expect(
+          readSessionTranscriptMessageEvents({ agentId: "main", sessionKey, sessionId }),
+        ).toEqual([]);
+        // Successful cron teardown seals the alias after persisting its stable base.
+        await upsertSessionEntryCore(exact, {
+          cronRunContinuation: {
+            lifecycleRevision: "original",
+            phase: "ready",
+            basePersisted: true,
+          },
+        });
+        await removeCronRunContinuationSessionIfIdle(sessionKey);
+        expect(loadSessionEntry(exact)?.sessionId).toBe(sessionId);
+        if (scenario === "queued cron timeout") {
+          const error = new Error("cron: job execution timed out");
+          error.name = "TimeoutError";
+          controller.abort(error);
+        } else if (scenario === "queued cron cancellation") {
+          controller.abort(new Error("Cancelled by operator."));
+        } else if (scenario === "queued cron restart") {
+          resetCronActiveJobs();
+        }
+        clearCronJobActive("nightly", marker);
+        release();
+      }
+      return processSessionId;
+    };
+    // Cron preparation and embedded execution share this controller admission.
+    const processSessionId = queued
+      ? await withSessionTurn(
+          {
+            sessionKey,
+            sessionId,
+            agentId: "main",
+            storePath: resolveSessionStorePathCore(config.session?.store, { agentId: "main" }),
+          },
+          start,
+        )
+      : await start();
+    if (revoked) {
+      const receipt = expectDefined(receipts[0], "revoked cron completion receipt");
+      expect(await withinTest(receipt.settled, signal)).toMatchObject({ executionStarted: false });
+      expect(model).not.toHaveBeenCalled();
+    } else if (scenario.includes("ended")) {
+      if (scenario === "cron ended during admission") {
+        expect(receipts).toHaveLength(1);
+        const receipt = expectDefined(receipts[0], "cron completion receipt");
+        expect(await withinTest(receipt.settled, signal)).toMatchObject({
+          status: "failed",
+          executionStarted: false,
+          error: expect.stringContaining("Originating cron run ended"),
+        });
+      } else {
+        expect(receipts).toHaveLength(0);
+      }
+      expect(model).not.toHaveBeenCalled();
+    } else {
+      await completion(signal);
+      expect(receipts).toHaveLength(1);
+      expect(model).toHaveBeenCalledOnce();
+      const [params] = expectDefined(model.mock.calls[0], "completion turn");
+      expect(params.sessionKey).toBe(sessionKey);
+      if (queued) {
+        await withinTest(removed.promise, signal);
+        expect(loadSessionEntry(exact)).toBeUndefined();
+        expect(loadSessionEntry(base)?.sessionId).toBe(sessionId);
+        expect(readSessionTranscriptMessageEvents({ ...base, sessionId })).toMatchObject([
+          { event: { type: "message", message: { role: "user" } } },
+        ]);
+        expect(params.prompt).toContain("CRON_EXEC_DONE");
+      }
+    }
+    const result = await createProcessTool({ scopeKey: sessionKey }).execute("collect", {
+      action: "log",
+      sessionId: processSessionId,
+    });
+    expect(result.content).toContainEqual({ type: "text", text: "CRON_EXEC_DONE" });
+  } finally {
+    unsubscribe();
+    controller.abort();
+    if (marker) {
+      clearCronJobActive("nightly", marker);
+    }
+    admission.close();
+    release();
+  }
+});
 
 test.for([
   { label: "starting run", runId: "origin-run", expected: { runId: "origin-run" } },
