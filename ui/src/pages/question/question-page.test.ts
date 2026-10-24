@@ -28,7 +28,7 @@ const question = (id = "q1") => ({
 });
 
 async function mount(request: GatewayRequestHandler) {
-  const { gateway, publish } = createApplicationGateway();
+  const { gateway, publish, publishEvent } = createApplicationGateway();
   const update = (patch: Partial<ApplicationGatewaySnapshot>) =>
     publish({ ...gateway.snapshot, ...patch });
   update({ client: createTestGatewayClient(request), phase: "connected" });
@@ -38,7 +38,7 @@ async function mount(request: GatewayRequestHandler) {
   provider.append(page);
   document.body.append(provider);
   await settle(page);
-  return { page, update };
+  return { page, update, publishEvent };
 }
 
 async function settle(page: QuestionPage) {
@@ -104,7 +104,18 @@ it("recovers a failed reconnect lookup without losing the typed answer", async (
     .mockResolvedValueOnce({ question: question() })
     .mockRejectedValueOnce(new Error("temporary transport failure"))
     .mockResolvedValueOnce({ question: question() })
-    .mockResolvedValueOnce({ status: "answered", answers });
+    .mockResolvedValueOnce({ status: "answered", answers })
+    .mockResolvedValueOnce({
+      questions: [],
+      continuations: [
+        {
+          questionId: "q1",
+          status: "blocked",
+          reason: "Original caller is unavailable.",
+          nextAction: "Start a new user turn.",
+        },
+      ],
+    });
   const { page, update } = await mount(request);
   await questionPanelIn(page);
   const input = page.querySelector("textarea")!;
@@ -123,9 +134,12 @@ it("recovers a failed reconnect lookup without losing the typed answer", async (
   page.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
   await settle(page);
   const resolution = { id: "q1", answers };
-  expect(request).toHaveBeenLastCalledWith("question.resolve", resolution, expect.any(Object));
+  expect(request).toHaveBeenCalledWith("question.resolve", resolution, expect.any(Object));
   await waitForSolid(() => expect(page.textContent).toContain("Answered"));
   expect(page.querySelector(".chat-question-summary")?.textContent).toContain("The design team");
+  await waitForSolid(() =>
+    expect(page.textContent).toContain("Original caller is unavailable. Start a new user turn."),
+  );
 });
 
 it.each(["id", "client"] as const)("ignores stale retry rejection (%s)", async (change) => {
@@ -182,7 +196,10 @@ it("loads only the final question when native IDs change in one turn", async () 
   await waitForSolid(() => expect(page.textContent).toContain("q3"));
   await questionPanelIn(page);
 
-  expect(request.mock.calls.map(([, params]) => params)).toEqual([{ id: "q1" }, { id: "q3" }]);
+  expect(request.mock.calls.map(([, params]) => params)).toEqual([
+    { id: "q1", includeContinuation: true },
+    { id: "q3", includeContinuation: true },
+  ]);
   expect(page.textContent).toContain("q3");
 });
 
@@ -210,4 +227,105 @@ it("releases a held lookup when the native question ID changes", async () => {
   await settle(page);
   expect(page.querySelector("textarea")).not.toBeNull();
   expect(retry(page)).toBeNull();
+});
+
+it("restores an authoritative answer when the retained prompt expires during reconnect", async () => {
+  vi.useFakeTimers();
+  const retained = { ...question(), expiresAtMs: Date.now() + 5_000 };
+  const response = createDeferred<unknown>();
+  let reads = 0;
+  const request = vi.fn((method: string) =>
+    method === "question.get"
+      ? ++reads === 1
+        ? Promise.resolve({ question: retained })
+        : response.promise
+      : Promise.resolve({ questions: [] }),
+  );
+  try {
+    const { page, update } = await mount(request);
+    await settle(page);
+    update({ phase: "reconnecting" });
+    update({ phase: "connected" });
+    await settle(page);
+    vi.advanceTimersByTime(5_000);
+    response.resolve({
+      question: {
+        ...retained,
+        status: "answered",
+        answers: { answers: { audience: ["The design team"] } },
+      },
+      continuation: {
+        questionId: retained.id,
+        status: "blocked",
+        reason: "Original caller is unavailable.",
+        nextAction: "Start a new user turn.",
+      },
+    });
+    await settle(page);
+    await waitForSolid(() => {
+      expect(page.textContent).toContain("Answered");
+      expect(page.textContent).toContain("The design team");
+      expect(page.textContent).toContain("Start a new user turn.");
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("keeps newer continuation guidance when an older reconnect read completes", async () => {
+  const retained = {
+    ...question(),
+    status: "answered",
+    answers: { answers: { audience: ["The design team"] } },
+  };
+  const reconnect = createDeferred<unknown>();
+  let reads = 0;
+  let receipts = 0;
+  const request = vi.fn((method: string) => {
+    if (method === "question.get") {
+      return ++reads === 1 ? Promise.resolve({ question: retained }) : reconnect.promise;
+    }
+    if (++receipts === 1) {
+      return Promise.resolve({ questions: [] });
+    }
+    if (receipts === 2) {
+      return Promise.resolve({
+        questions: [],
+        continuations: [
+          {
+            questionId: retained.id,
+            status: "blocked",
+            reason: "Original caller is unavailable.",
+            nextAction: "Start a new user turn.",
+          },
+        ],
+      });
+    }
+    return Promise.reject(new Error("receipt refresh unavailable"));
+  });
+  const { page, update, publishEvent } = await mount(request);
+  await waitForSolid(() => expect(page.textContent).toContain("Answered"));
+  await settle(page);
+  update({ phase: "reconnecting" });
+  update({ phase: "connected" });
+  await settle(page);
+  expect(reads).toBe(2);
+  const resolution = {
+    type: "event" as const,
+    event: "question.resolved",
+    payload: { id: retained.id, status: "answered", answers: retained.answers },
+  };
+  publishEvent(resolution);
+  await waitForSolid(() => expect(receipts).toBe(2));
+  await settle(page);
+  reconnect.resolve({ question: retained });
+  await settle(page);
+  publishEvent(resolution);
+  await waitForSolid(() => expect(receipts).toBeGreaterThanOrEqual(3));
+  await settle(page);
+  await waitForSolid(() => {
+    expect(page.textContent).toContain("Answered");
+    expect(page.textContent).toContain("The design team");
+    expect(page.textContent).toContain("Original caller is unavailable. Start a new user turn.");
+  });
 });

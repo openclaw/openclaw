@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Question, QuestionResolveResult } from "@openclaw/gateway-protocol";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
@@ -5,6 +7,8 @@ import type { SessionsListResult } from "../api/types.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -241,6 +245,71 @@ suite.define(() => {
     await context?.close().catch(() => {});
     context = undefined;
   });
+
+  it.each(["blocked", "interrupted"] as const)(
+    "shows a retained %s continuation in the normal chat after reconnect",
+    async (status) => {
+      const { gateway, page } = await openQuestionPage();
+      const original = questionRecord(`durable-${status}`, [
+        {
+          questionId: "environment",
+          header: "Environment",
+          question: "Which environment should I deploy to?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+      ]);
+      const answered = {
+        ...original,
+        status: "answered",
+        answers: { answers: { environment: ["Staging"] } },
+      };
+      await gateway.setMethodResponse("question.list", { questions: [answered] });
+      await page.reload();
+      const summary = page
+        .locator(".chat-question-summary")
+        .filter({ hasText: "Which environment should I deploy to?" });
+      await expect.poll(async () => summary.textContent()).toContain("Staging");
+      const proofDir =
+        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+          ? createControlUiE2eArtifactDir(`question-chat-${status}`)
+          : undefined;
+      const capture = async (stage: "before" | "after") => {
+        if (proofDir) {
+          const frame = await takeControlUiScreenshotFrame(page, summary, [summary], {
+            animations: "disabled",
+          });
+          await writeFile(path.join(proofDir, `${stage}.png`), frame.png);
+        }
+      };
+      await capture("before");
+      const nextAction = "Start a new user turn; this continuation was not automatically repeated.";
+      await gateway.setMethodResponse("question.list", {
+        questions: [answered],
+        continuations: [
+          {
+            questionId: original.id,
+            status,
+            reason:
+              status === "blocked"
+                ? "The original caller no longer has access."
+                : "The Gateway restarted after admitting this turn.",
+            nextAction,
+          },
+        ],
+      });
+      await gateway.emitGatewayEvent("question.resolved", {
+        id: original.id,
+        status: "answered",
+        answers: answered.answers,
+      });
+      await expect.poll(async () => summary.textContent()).toContain(nextAction);
+      await page.reload();
+      await expect.poll(async () => summary.textContent()).toContain(nextAction);
+      await capture("after");
+      const listRequest = await gateway.waitForRequest("question.list");
+      expect(listRequest.params).toEqual({ includeContinuation: true });
+    },
+  );
 
   it("reveals sidebar attention on touch without navigating or closing the drawer", async () => {
     const { gateway, page } = await openQuestionPage({ width: 390, height: 844 }, true);
@@ -575,7 +644,7 @@ suite.define(() => {
     );
     await page.goto(documentUrl.toString());
     const getRequest = await gateway.waitForRequest("question.get");
-    expect(getRequest.params).toEqual({ id: request.id });
+    expect(getRequest.params).toEqual({ id: request.id, includeContinuation: true });
 
     const document = page.locator("openclaw-question-page");
     await document.waitFor();

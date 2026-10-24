@@ -19,6 +19,10 @@ import {
   type QuestionClient,
   type QuestionClientResolutionOwner,
 } from "./question-prompt-client.ts";
+import {
+  attachQuestionContinuationReceipts,
+  refreshQuestionContinuationReceipt,
+} from "./question-prompt-continuation.ts";
 import { parseQuestion } from "./question-prompt-parse.ts";
 import {
   clearSecretQuestionDrafts,
@@ -41,6 +45,7 @@ export type QuestionPrompt = Pick<
   status: QuestionRecord["status"] | "unavailable";
   answers?: QuestionAnswers;
   submittedAnswers?: QuestionAnswers;
+  continuationMessage?: string;
   answeredElsewhere: boolean;
   localResolutionConfirmed: boolean;
   locallyExpired: boolean;
@@ -234,6 +239,10 @@ function applyQuestionResolution(
   prompt: QuestionPrompt,
   resolved: QuestionResolvedEvent,
 ): void {
+  const outcomeChanged =
+    prompt.locallyExpired ||
+    prompt.status !== resolved.status ||
+    (resolved.status === "answered" && !questionAnswersEqual(prompt.answers, resolved.answers));
   prompt.status = resolved.status;
   clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
   prompt.answers = resolved.status === "answered" ? resolved.answers : undefined;
@@ -250,7 +259,11 @@ function applyQuestionResolution(
     prompt.submitting = false;
   }
   prompt.error = null;
-  prompt.revision = ++state.revision;
+  const revision = ++state.revision;
+  // Matching confirmations update presentation without invalidating reads of the same outcome.
+  if (outcomeChanged) {
+    prompt.revision = revision;
+  }
 }
 
 function recordQuestionResolution(
@@ -272,6 +285,27 @@ function recordQuestionResolution(
     state.revision += 1;
   }
   state.onChange();
+  const client = state.client;
+  const currentPrompt = state.prompts.get(resolved.id);
+  if (client && currentPrompt) {
+    const generation = state.clientGeneration;
+    const revision = currentPrompt.revision;
+    // Receipt invalidation must not reinstall stale question records or start
+    // recovery for an unmatched outcome; reconnect hydration owns those reads.
+    void refreshQuestionContinuationReceipt(
+      client,
+      currentPrompt,
+      () =>
+        state.client === client &&
+        state.clientGeneration === generation &&
+        state.prompts.get(resolved.id) === currentPrompt &&
+        currentPrompt.revision === revision,
+      state.onChange,
+      (changedPrompt) => {
+        changedPrompt.revision = ++state.revision;
+      },
+    ).catch(() => {});
+  }
 }
 
 export function handleQuestionPromptEvent(
@@ -333,7 +367,9 @@ async function refreshPendingQuestions(
   isCurrentClient: () => boolean,
 ): Promise<boolean> {
   const startedAtRevision = state.revision;
-  const listResult = await requestQuestionGateway(client, "question.list", {});
+  const listResult = await requestQuestionGateway(client, "question.list", {
+    includeContinuation: true,
+  });
   const records = listResult.questions.map(parseQuestionRecord);
   if (!records.every((record) => record !== null)) {
     invalidateQuestionList(client);
@@ -349,6 +385,13 @@ async function refreshPendingQuestions(
       storeQuestionRecord(state, record.id, record, previous);
     }
   }
+  attachQuestionContinuationReceipts(
+    listResult,
+    (id) => state.prompts.get(id),
+    (prompt) => {
+      prompt.revision = ++state.revision;
+    },
+  );
   scheduleExpiry(state);
   state.onChange();
   const missing: Array<{

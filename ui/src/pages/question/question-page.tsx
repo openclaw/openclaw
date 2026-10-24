@@ -165,12 +165,30 @@ function createQuestionPage(
       return;
     }
     const generation = ++operationGeneration;
+    const initialPrompt = listQuestionPrompts(questionState).find(
+      (candidate) => candidate.id === id,
+    );
+    const initialRevision = initialPrompt?.revision;
     const complete = beginRead();
     let requestError: QuestionPageRequestError = null;
     rememberPanelFocus();
     try {
-      const result = await requestQuestionGateway(client, "question.get", { id });
+      const result = await requestQuestionGateway(client, "question.get", {
+        id,
+        includeContinuation: true,
+      });
       if (clientOwner !== client || operationGeneration !== generation || questionId() !== id) {
+        return;
+      }
+      const currentPrompt = listQuestionPrompts(questionState).find(
+        (candidate) => candidate.id === id,
+      );
+      // Live outcomes and receipts own newer state; local expiry still needs the authoritative read.
+      if (
+        currentPrompt &&
+        !currentPrompt.locallyExpired &&
+        (currentPrompt !== initialPrompt || currentPrompt.revision !== initialRevision)
+      ) {
         return;
       }
       if (result.question.id !== id) {
@@ -186,6 +204,16 @@ function createQuestionPage(
       ) {
         requestError = "unavailable";
         return;
+      }
+      const receipt = result.continuation;
+      const updatedPrompt = listQuestionPrompts(questionState).find(
+        (candidate) => candidate.id === id,
+      );
+      if (updatedPrompt) {
+        updatedPrompt.continuationMessage =
+          receipt && (receipt.status === "blocked" || receipt.status === "interrupted")
+            ? [receipt.reason, receipt.nextAction].filter(Boolean).join(" ")
+            : undefined;
       }
       if (record.status === "answered") {
         const accepted = handleQuestionPromptEvent(questionState, {
@@ -265,30 +293,33 @@ function createQuestionPage(
   };
 }
 
-function QuestionSummary(props: { prompt: QuestionPrompt }) {
-  return (
-    <div class="chat-question-summary" aria-label={t("chat.questions.summaryLabel")}>
-      <For each={props.prompt.questions} keyed={(question) => question.questionId}>
-        {(question) => (
-          <div class="chat-question-summary__item">
-            <div class="chat-question-summary__prompt">{question().question}</div>
-            <div class="chat-question-summary__line">
-              <strong>{question().header}:</strong>
-              <span>{terminalAnswer(props.prompt, question())}</span>
-            </div>
-          </div>
-        )}
-      </For>
-    </div>
-  );
-}
-
 function QuestionPageContent(
   props: QuestionPageProps,
   host: SolidBridgeElement<QuestionPageProps>,
 ) {
   const context = useApplication();
   const page = createQuestionPage(context, props, host);
+
+  function QuestionSummary() {
+    return (
+      <div class="chat-question-summary" aria-label={t("chat.questions.summaryLabel")}>
+        <For each={page.prompt()?.questions ?? []} keyed={(question) => question.questionId}>
+          {(question) => (
+            <div class="chat-question-summary__item">
+              <div class="chat-question-summary__prompt">{question().question}</div>
+              <div class="chat-question-summary__line">
+                <strong>{question().header}:</strong>
+                <span>{terminalAnswer(page.prompt()!, question())}</span>
+              </div>
+            </div>
+          )}
+        </For>
+        <Show when={page.prompt()?.continuationMessage}>
+          {(message) => <p role="status">{message()}</p>}
+        </Show>
+      </div>
+    );
+  }
   const panelProps = () => {
     const prompt = page.prompt();
     return prompt
@@ -346,31 +377,29 @@ function QuestionPageContent(
               }
             >
               <Show when={page.prompt()}>
-                {(prompt) => (
-                  <Show
-                    when={page.prompt()?.status === "pending"}
-                    fallback={
-                      <div
-                        class="approval-page__state"
-                        data-question-status={prompt().status}
-                        role="status"
+                <Show
+                  when={page.prompt()?.status === "pending"}
+                  fallback={
+                    <div
+                      class="approval-page__state"
+                      data-question-status={page.prompt()?.status}
+                      role="status"
+                    >
+                      <h1
+                        ref={(element) => {
+                          heading = element;
+                        }}
+                        id="question-page-title"
+                        tabindex="-1"
                       >
-                        <h1
-                          ref={(element) => {
-                            heading = element;
-                          }}
-                          id="question-page-title"
-                          tabindex="-1"
-                        >
-                          {page.questionStatusLabel(prompt())}
-                        </h1>
-                        <QuestionSummary prompt={prompt()} />
-                      </div>
-                    }
-                  >
-                    <ChatQuestionCard ref={page.setPanel} props={panelProps()} />
-                  </Show>
-                )}
+                        {page.questionStatusLabel(page.prompt()!)}
+                      </h1>
+                      <QuestionSummary />
+                    </div>
+                  }
+                >
+                  <ChatQuestionCard ref={page.setPanel} props={panelProps()} />
+                </Show>
               </Show>
             </Show>
           </div>

@@ -127,7 +127,14 @@ function NonstreamPart(props: {
     <Show
       when={indicator()}
       fallback={
-        <Show when={question()}>{(prompt) => <ChatQuestionSummary prompt={prompt()} />}</Show>
+        <Show when={question()}>
+          {(prompt) => (
+            <ChatQuestionSummary
+              prompt={prompt()}
+              continuationMessage={question()?.continuationMessage}
+            />
+          )}
+        </Show>
       }
     >
       {(part) => (
