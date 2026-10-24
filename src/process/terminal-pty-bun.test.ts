@@ -271,28 +271,20 @@ function spawnControlledBunPty() {
     resume: vi.fn(),
   };
   const done = createDeferredCore<number>();
-  let callbacks: TerminalCallbacks | undefined;
-  vi.spyOn(runtime, "spawn").mockImplementation(
-    (_argv: string[], options: { terminal: TerminalCallbacks }) => {
-      callbacks = options.terminal;
-      return {
-        pid: 1234,
-        terminal,
-        exited: done.promise,
-        exitCode: 7,
-        signalCode: null,
-        kill: vi.fn(),
-      };
-    },
-  );
+  const spawn = vi.spyOn(runtime, "spawn").mockReturnValue({
+    pid: 1234,
+    terminal,
+    exited: done.promise,
+    exitCode: 7,
+    signalCode: null,
+    kill: vi.fn(),
+  });
   const handle = bunAdapter.spawnBunTerminalPty({
     ...ptyDefaults,
     env: {},
     name: "xterm-256color",
   });
-  if (!callbacks) {
-    throw new Error("Bun.spawn did not receive terminal callbacks");
-  }
+  const callbacks = spawn.mock.calls[0][1].terminal;
   return { handle, callbacks, terminal, done };
 }
 
