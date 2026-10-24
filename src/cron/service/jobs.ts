@@ -189,6 +189,7 @@ export function createJob(
   state: { deps: { nowMs: () => number; cronConfig?: CronConfig; defaultAgentId?: string } },
   input: CronJobCreate,
   opts?: DeliveryValidationOptions & {
+    createdAtMs?: number;
     scheduledToolPolicy?: CronScheduledToolPolicy;
     toolsAllowProvenance?: CronToolsAllowProvenance;
     toolsAllowExecTarget?: CronToolsAllowExecTarget;
@@ -238,7 +239,7 @@ export function createJob(
     description: normalizeOptionalString(input.description),
     enabled,
     deleteAfterRun,
-    createdAtMs: now,
+    createdAtMs: opts?.createdAtMs ?? now,
     updatedAtMs: now,
     schedule,
     ...(input.pacing !== undefined ? { pacing: structuredClone(input.pacing) } : {}),
