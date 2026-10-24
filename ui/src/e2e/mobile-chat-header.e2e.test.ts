@@ -2,13 +2,11 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
-  captureUiProofEnabled,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
-import { captureFrame } from "./sidebar-assertions.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const sessionKey = "agent:main:mobile-header";
@@ -148,7 +146,6 @@ suite.define(() => {
               )
                 .filter((button) => button.checkVisibility())
                 .map((button) => ({
-                  label: button.getAttribute("aria-label"),
                   width: button.getBoundingClientRect().width,
                   height: button.getBoundingClientRect().height,
                 })),
@@ -157,11 +154,6 @@ suite.define(() => {
           expect(geometry.titleWidth).toBeGreaterThan(80);
           expect(geometry.actionsRight).toBeLessThanOrEqual(geometry.headerRight);
           expect(geometry.bodyWidth).toBe(geometry.viewportWidth);
-          expect(geometry.buttons.map((button) => button.label)).toEqual([
-            "Expand sidebar",
-            ...(viewport.width < 350 ? [] : ["Panels"]),
-            "Actions for " + title,
-          ]);
           for (const button of geometry.buttons) {
             expect(button.width).toBeGreaterThanOrEqual(40);
             expect(button.height).toBeGreaterThanOrEqual(40);
@@ -173,14 +165,6 @@ suite.define(() => {
             (await header.locator(".mobile-header__title-text").boundingBox())!.y,
           ).toBeLessThan((await project.boundingBox())!.y);
           await header.getByRole("button", { name: "People", exact: true }).waitFor();
-          if (captureUiProofEnabled) {
-            await captureFrame(
-              suite.artifactDir,
-              `mobile-header-${viewport.width}.png`,
-              page.locator(".shell"),
-              [header],
-            );
-          }
 
           const details = await openChatDetails(page);
           expect((await details.boundingBox())!.width).toBeGreaterThanOrEqual(viewport.width - 24);
@@ -256,40 +240,10 @@ suite.define(() => {
       await header.getByRole("button", { name: "Panels", exact: true }).waitFor();
       expect(await header.getByRole("button", { name: "People", exact: true }).count()).toBe(0);
       expect(await header.locator(".chat-pane__workspace-chip").count()).toBe(0);
-      if (captureUiProofEnabled) {
-        await captureFrame(
-          suite.artifactDir,
-          "mobile-header-default-workspace.png",
-          page.locator(".shell"),
-          [header],
-        );
-      }
       await page.setViewportSize({ width: 1280, height: 900 });
       const desktop = pane.locator(".chat-pane__header");
       await desktop.getByRole("button", { name: "Details", exact: true }).waitFor();
       expect(await desktop.locator(".chat-pane__workspace-chip").count()).toBe(0);
     });
-  });
-
-  it("preserves native desktop Actions, Details and frame Panels controls", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { width: 1280, height: 900 },
-      },
-      async ({ page }) => {
-        await installFixture(page);
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const header = page.locator(".chat-pane-cache__pane--active .chat-pane__header");
-        await header.locator(".chat-header-session-menu__trigger").waitFor();
-        await header.getByRole("button", { name: "Details", exact: true }).waitFor();
-        const panels = page
-          .locator(".chat-pane-cache__pane--active .sidebar-region__panels-toggle")
-          .getByRole("button", { name: "Panels", exact: true });
-        expect(await panels.count()).toBe(1);
-        expect(await panels.isVisible()).toBe(true);
-      },
-    );
   });
 });

@@ -3,9 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { buildControlUiCspHeader } from "../../../src/gateway/control-ui-csp.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
-  captureUiProofEnabled,
   createChatFlowE2eSuite,
   expectDefined,
   installMockGateway,
@@ -17,9 +15,6 @@ const controlUiBasePath = "/rosita";
 
 suite.define(() => {
   it.each([0, 2])("reuses full image bytes after %i failed download attempts", async (failures) => {
-    const proofDir = captureUiProofEnabled
-      ? createControlUiE2eArtifactDir("managed-image-actions")
-      : undefined;
     const filenamePrefix = "a".repeat(119);
     const imageTitle = `${filenamePrefix}📊`;
     const context = await suite.newBrowserContext({
@@ -29,15 +24,6 @@ suite.define(() => {
       isMobile: failures === 0,
     });
     const page = await context.newPage();
-    const screenshot = async (filename: string, fullPage = false) => {
-      if (proofDir) {
-        await page.screenshot({
-          path: path.join(proofDir, filename),
-          ...(fullPage ? {} : { animations: "disabled" }),
-          fullPage,
-        });
-      }
-    };
     await page.clock.install();
     await page.route(`**${controlUiBasePath}/chat`, async (route) => {
       const response = await route.fetch();
@@ -120,7 +106,6 @@ suite.define(() => {
         )
         .toBe(1280);
       expect(requestedVariants).toEqual(["thumbnail"]);
-      await screenshot("ticketed-generated-image-subpath.png", true);
 
       const imageFrame = page.locator(".chat-image-frame--managed").filter({ has: image });
       const imageActions = imageFrame.locator(".chat-image-actions");
@@ -128,7 +113,6 @@ suite.define(() => {
       let downloadButton;
       if (failures === 0) {
         expect(await imageActions.isVisible()).toBe(false);
-        await screenshot("image-actions-overlay.png");
         await openImage.tap();
         const lightbox = page.getByRole("dialog", { name: `Image preview: ${imageTitle}` });
         await lightbox.waitFor({ state: "visible" });
@@ -153,7 +137,6 @@ suite.define(() => {
         expect(actionsBox!.y + actionsBox!.height).toBeLessThanOrEqual(
           imageBox!.y + imageBox!.height,
         );
-        await screenshot("image-actions-overlay.png");
         await page.mouse.move(0, 0);
         await downloadButton.focus();
         expect(await imageActions.evaluate((element) => getComputedStyle(element).opacity)).toBe(
@@ -194,7 +177,6 @@ suite.define(() => {
       await page
         .getByRole("dialog", { name: `Image preview: ${imageTitle}` })
         .waitFor({ state: "visible" });
-      await screenshot("image-fullscreen.png");
       await page
         .locator("openclaw-image-lightbox openclaw-modal-dialog > dialog")
         .evaluate(finishElementAnimations);

@@ -775,9 +775,18 @@ async function normalizeOpenClawTarballModes(
           await fs.chmod(entryPath, 0o755);
           await normalizeStagedModes(entryPath);
         } else if (entry.isFile()) {
+          const stats = await fs.stat(entryPath);
+          // npm preserves hardlinked dependency assets; tar must repack each as a regular file.
+          if (stats.nlink > 1) {
+            const copyDir = await fs.mkdtemp(path.join(stageDir, ".regular-file-"));
+            const copyPath = path.join(copyDir, "file");
+            await fs.copyFile(entryPath, copyPath);
+            await fs.rename(copyPath, entryPath);
+            await fs.rm(copyDir, { recursive: true });
+          }
           // Umask masking on extraction only clears group/other bits, so the
           // owner exec bit still says whether the packed entry was executable.
-          const executable = ((await fs.stat(entryPath)).mode & 0o100) !== 0;
+          const executable = (stats.mode & 0o100) !== 0;
           await fs.chmod(entryPath, executable ? 0o755 : 0o644);
           stagedFileCount += 1;
         }

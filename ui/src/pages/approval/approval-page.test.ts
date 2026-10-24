@@ -13,6 +13,7 @@ import type {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import {
   createTestGatewayClient,
@@ -110,7 +111,7 @@ async function createPage(
     id?: string;
   } = {},
 ) {
-  let snapshot: ApplicationGatewaySnapshot = {
+  const { gateway, publish } = createApplicationGateway({
     client: params.client ?? ({ request } as GatewayBrowserClient),
     phase: "connected",
     offlineStable: false,
@@ -123,23 +124,10 @@ async function createPage(
     sessionKey: "main",
     lastError: null,
     lastErrorCode: null,
-  };
-  const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
-  const gateway = {
-    get snapshot() {
-      return snapshot;
-    },
-    subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  } as unknown as ApplicationContext["gateway"];
+  });
   const source = {
     update(patch: Partial<ApplicationGatewaySnapshot>) {
-      snapshot = { ...snapshot, ...patch };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      publish({ ...gateway.snapshot, ...patch });
     },
   };
 

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +16,13 @@ import {
   listExpiredSkillUploadsInDatabase,
 } from "./upload-store.kernel.js";
 import * as uploadSqlite from "./upload-store.sqlite.js";
+import {
+  chunkCount,
+  installLeaseCount,
+  sha256,
+  stateDatabase,
+  uploadExists,
+} from "./upload-store.test-support.js";
 
 vi.mock("./upload-store.sqlite.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./upload-store.sqlite.js")>();
@@ -83,40 +89,6 @@ async function makeStore() {
 }
 
 type BeginParams = Parameters<typeof beginSkillUploadInDatabase>[0];
-
-function stateDatabase(databasePath: string) {
-  return openOpenClawStateDatabase({ path: databasePath }).db;
-}
-
-function uploadExists(databasePath: string, uploadId: string): boolean {
-  return Boolean(
-    stateDatabase(databasePath)
-      .prepare("SELECT 1 AS found FROM skill_uploads WHERE upload_id = ?")
-      .get(uploadId),
-  );
-}
-
-function countRows(databasePath: string, tableAndWhere: string, uploadId: string): number {
-  return (
-    stateDatabase(databasePath)
-      .prepare(`SELECT count(*) AS count FROM ${tableAndWhere}`)
-      .get(uploadId) as { count: number }
-  ).count;
-}
-function chunkCount(databasePath: string, uploadId: string) {
-  return countRows(databasePath, "skill_upload_chunks WHERE upload_id = ?", uploadId);
-}
-function installLeaseCount(databasePath: string, uploadId: string) {
-  return countRows(
-    databasePath,
-    "state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
-    uploadId,
-  );
-}
-
-function sha256(bytes: Buffer): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
 
 function advanceClockAtAdmission(
   database: ReturnType<typeof openOpenClawStateDatabase>,

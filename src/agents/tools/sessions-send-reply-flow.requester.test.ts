@@ -19,6 +19,7 @@ import { createReplyTurnParticipants } from "../../sessions/session-controller.t
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
+import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import { captureRequesterOrigin } from "../requester-origin.js";
 import {
   getGatewayToolCallerIdentity,
@@ -120,6 +121,7 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
         boundary === "selected Bob"
           ? { ...bobOrigin, delegatedCreatorProfileId: source.authority.profileId }
           : origin;
+      const fullReply = "Synthetic peer result ".repeat(400) + "PEER_END";
       const peerWaiting = createDeferredCore();
       const releasePeer = createDeferredCore();
       const returned = createDeferredCore();
@@ -141,11 +143,23 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
           await releasePeer.promise;
           return {
             status: "ok",
-            terminalReply: { disposition: "visible", text: "Synthetic peer result" },
+            terminalReply: sanitizeAgentRunTerminalReply(fullReply),
           } as T;
         }
         request.sessionMutationCommitGuard?.();
         request.assertDispatchCurrent?.();
+        if (request.method === "chat.history") {
+          getGatewayToolCallerIdentity()?.operatorAuthority?.assertCurrent();
+          return {
+            messages: [
+              {
+                role: "assistant",
+                content: fullReply,
+                __openclaw: { runId: "synthetic-peer-run" },
+              },
+            ],
+          } as T;
+        }
         if (
           request.method === "agent" &&
           isRecord(request.params) &&
@@ -305,6 +319,9 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
           return;
         }
         expect(effects).toHaveLength(1);
+        expect(effects[0]?.request.params).toMatchObject({
+          message: expect.stringContaining(fullReply),
+        });
         expect(effects[0]).toMatchObject({
           origin: expectedOrigin,
           profileId:

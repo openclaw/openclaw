@@ -28,6 +28,10 @@ import {
   copyAgentToolMetadata,
 } from "./agent-tool-metadata.js";
 import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
+import {
+  captureLocalBrowserLoopbackConfig,
+  createLocalBrowserLoopbackPreparation,
+} from "./agent-tools.execution-policy.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { captureChildToolAllowlist } from "./agent-tools.inheritance.js";
 import {
@@ -42,6 +46,11 @@ import type {
   InternalCodingToolsOptions,
   PluginCodingToolsOptions,
 } from "./agent-tools.options.js";
+import {
+  prepareCodingToolAssembly,
+  prepareCodingToolAssemblyAsync,
+  type CodingToolAssembly,
+} from "./agent-tools.preparation.js";
 import {
   getActiveAgentRingZeroTools,
   mergeAgentRingZeroTools,
@@ -65,19 +74,10 @@ import { buildHarnessHostRequester } from "./harness/host-requester.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 import { resolveLocalModelLeanPreserveToolNames } from "./local-model-lean.js";
 import { createMemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
-import {
-  resolveOpenClawPluginToolsForOptions,
-  resolveOpenClawPluginToolsForOptionsAsync,
-} from "./openclaw-plugin-tools.js";
 import { resolveSessionToolListingClientCaps } from "./openclaw-tools.client-caps.js";
-import {
-  createOpenClawTools,
-  createOpenClawToolsWithPreparation,
-  filterToolsByClientCaps,
-} from "./openclaw-tools.js";
+import { filterToolsByClientCaps } from "./openclaw-tools.js";
 import { filterRequesterYieldTools } from "./openclaw-tools.requester-yield.js";
 import { applySwarmCollectorToolContract } from "./openclaw-tools.swarm.js";
-import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
 import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invocation.js";
@@ -113,12 +113,8 @@ function* assembleOpenClawCodingTools(
   skillReadResources?: SkillSnapshot["resolvedSkills"],
   onPolicyFilter?: (event: ToolPolicyFilterEvent) => void,
   preparedSurface?: { tools: AnyAgentTool[]; policy: ReturnType<typeof prepareCoreToolPolicy> },
-): Generator<
-  | OpenClawToolsOptions
-  | { pluginTools: Parameters<typeof resolveOpenClawPluginToolsForOptions>[0] },
-  AnyAgentTool[],
-  AnyAgentTool[]
-> {
+  assertLoopbackConfigCurrent = captureLocalBrowserLoopbackConfig(options?.config),
+): CodingToolAssembly {
   const preparedTools = preparedSurface?.tools;
   const listingClientCaps =
     options?.listingClientCaps ?? resolveSessionToolListingClientCaps(options ?? {});
@@ -245,6 +241,17 @@ function* assembleOpenClawCodingTools(
     permissionPolicy: sessionPermissionPolicy,
     scheduledExecTarget,
   });
+  const browserLoopback = createLocalBrowserLoopbackPreparation({
+    options,
+    capabilityProfile,
+    effectiveExecPolicy,
+    sandboxed: Boolean(sandbox),
+    workspaceOnly: coreToolPolicy.workspaceOnly,
+    assertConfigCurrent: assertLoopbackConfigCurrent,
+  });
+  if (browserLoopback) {
+    yield { prepareBrowserLoopback: browserLoopback };
+  }
   const coreTools =
     preparedTools === undefined
       ? createCoreCodingTools({
@@ -365,6 +372,8 @@ function* assembleOpenClawCodingTools(
     memoryFlush,
     sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
     allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
+    allowLocalBrowserLoopback: browserLoopback?.assertCurrent !== undefined,
+    assertLocalBrowserLoopbackCurrent: browserLoopback?.assertCurrent,
     sandboxed: Boolean(sandbox),
     pluginToolAllowlist,
     pluginToolDenylist,
@@ -666,18 +675,9 @@ function* assembleOpenClawCodingTools(
 export function createOpenClawCodingToolsInternal(
   ...args: Parameters<typeof assembleOpenClawCodingTools>
 ): AnyAgentTool[] {
-  return withLegacySessionCapabilityRead(() => {
-    const assembly = assembleOpenClawCodingTools(...args);
-    let step = assembly.next();
-    while (!step.done) {
-      step = assembly.next(
-        "pluginTools" in step.value
-          ? resolveOpenClawPluginToolsForOptions(step.value.pluginTools)
-          : createOpenClawTools(step.value),
-      );
-    }
-    return step.value;
-  });
+  return withLegacySessionCapabilityRead(() =>
+    prepareCodingToolAssembly(assembleOpenClawCodingTools(...args)),
+  );
 }
 
 /** Internal preparation data stays outside the public harness factory options. */
@@ -688,6 +688,7 @@ export async function createOpenClawCodingToolsInternalAsync(
   preparedSurface?: { tools: AnyAgentTool[]; policy: ReturnType<typeof prepareCoreToolPolicy> },
   preparation: ToolConstructionPreparationOptions = {},
 ): Promise<AnyAgentTool[]> {
+  const assertLoopbackConfigCurrent = captureLocalBrowserLoopbackConfig(options?.config);
   return withPreparedToolConstruction(
     options?.config,
     {
@@ -717,17 +718,9 @@ export async function createOpenClawCodingToolsInternalAsync(
         skillReadResources,
         onPolicyFilter,
         preparedSurface,
+        assertLoopbackConfigCurrent,
       );
-      let step = assembly.next();
-      while (!step.done) {
-        const tools =
-          "pluginTools" in step.value
-            ? await resolveOpenClawPluginToolsForOptionsAsync(step.value.pluginTools)
-            : await createOpenClawToolsWithPreparation(step.value, shared);
-        shared.assertCurrent();
-        step = assembly.next(tools);
-      }
-      return step.value;
+      return prepareCodingToolAssemblyAsync(assembly, shared);
     },
   );
 }

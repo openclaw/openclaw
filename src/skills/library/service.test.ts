@@ -31,7 +31,7 @@ import { buildWorkspaceSkillCommandSpecs as buildCommandSpecs } from "../discove
 import { buildSkillSnapshot as buildSnapshot } from "../loading/workspace-skill-prompt.js";
 import { prepareSkillResourceDelivery as deliver } from "../runtime/resources.js";
 import { SkillLibraryError } from "../skill-library-error.js";
-import { skillLibraryRevisionDir as revisionDir } from "./bundle.js";
+import { decodeSkillLibraryFile, skillLibraryRevisionDir as revisionDir } from "./bundle.js";
 import { loadSkillLibrarySelection as loadSelection } from "./selection.js";
 import { readSkillLibrary } from "./service.js";
 import {
@@ -508,7 +508,7 @@ it("delivers the pinned hidden revision on explicit selection after the library 
     });
     expect(explicit?.skills[0]?.files).toEqual(ordinary?.skills[0]?.files);
     const markdown = explicit!.skills[0]!.files.find((file) => file.path === "SKILL.md")!;
-    expect(Buffer.from(markdown.content, "base64").toString("utf8")).toBe(hiddenContent);
+    expect(decodeSkillLibraryFile(markdown).toString("utf8")).toBe(hiddenContent);
     expect(snapshot.librarySelections).toEqual(pins);
   });
 });
@@ -580,8 +580,8 @@ it("binds ZIP uploads to the owner and ignores archive order and timestamps for 
       { path: resourcePath, content: "AP+A", encoding: "base64", executable: false },
       {
         path: "scripts/task.sh",
-        content: Buffer.from(script).toString("base64"),
-        encoding: "base64",
+        content: script,
+        encoding: "utf8",
         executable: true,
       },
     ]);

@@ -14,7 +14,6 @@ import * as registryState from "../../sessions/session-controller.state.js";
 import { createCommandTurnContext } from "../command-turn-context.js";
 import { bindReplyFallbackSteeringRoute } from "./agent-runner-fallback-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
-import { createReplyParams } from "./agent-runner-steer-adoption.test-support.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import * as followupRunner from "./followup-runner.js";
 import { createPersonalToolScreenDispatcher } from "./personal-tool-turn.test-support.js";
@@ -30,7 +29,7 @@ import * as toolAuthority from "./reply-tool-authority.js";
 import { prepareReplyRunToolAuthority, prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { createQueueTestRun } from "./reply-tool-authority.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createMockTypingController, createReplyParams } from "./test-helpers.js";
 
 afterEach(() => vi.restoreAllMocks());
 

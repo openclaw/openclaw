@@ -49,6 +49,7 @@ import {
 } from "./short-term-promotion.js";
 import {
   configureMemoryCoreDreamingStateForTests,
+  createPromotionCandidateForTest as promotionCandidateFixture,
   resetMemoryCoreDreamingStateForTests,
   shortTermTestState as testing,
 } from "./test-helpers.js";
@@ -67,11 +68,6 @@ type ApplyAllOptions = Omit<
   "workspaceDir" | "candidates" | "minScore" | "minRecallCount" | "minUniqueQueries"
 >;
 type PromotionCandidate = Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>[number];
-type PromotionCandidateFixture = Pick<
-  PromotionCandidate,
-  "key" | "path" | "startLine" | "endLine" | "source" | "snippet"
-> &
-  Partial<PromotionCandidate>;
 
 const allPromotionThresholds = {
   minScore: 0,
@@ -114,31 +110,6 @@ function applyAllCandidates(
     candidates,
     ...allPromotionThresholds,
   });
-}
-
-function promotionCandidateFixture(params: PromotionCandidateFixture): PromotionCandidate {
-  return {
-    recallCount: 3,
-    signalCount: 3,
-    avgScore: 0.95,
-    maxScore: 0.95,
-    uniqueQueries: 2,
-    firstRecalledAt: "2026-04-01T00:00:00.000Z",
-    lastRecalledAt: "2026-04-02T00:00:00.000Z",
-    ageDays: 0,
-    score: 0.95,
-    recallDays: ["2026-04-01", "2026-04-02"],
-    conceptTags: [],
-    components: {
-      frequency: 1,
-      relevance: 1,
-      diversity: 1,
-      recency: 1,
-      consolidation: 1,
-      conceptual: 1,
-    },
-    ...params,
-  };
 }
 
 function recallStoreEntryFixture(

@@ -10,24 +10,11 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { whatsappApprovalCapability } from "./approval-native.js";
 import { cacheInboundMessageMeta } from "./quoted-message.js";
 
-const reactionStores = vi.hoisted(() => new Set<{ clearForTest(): void }>());
-
-vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/approval-reaction-runtime")>();
-  return {
-    ...actual,
-    createApprovalReactionTargetStore: <TTarget>(
-      params: Parameters<typeof actual.createApprovalReactionTargetStore<TTarget>>[0],
-    ) => {
-      const store = actual.createApprovalReactionTargetStore<TTarget>(params);
-      if (params.namespace === "whatsapp.approval-reactions") {
-        reactionStores.add(store);
-      }
-      return store;
-    },
-  };
-});
+const reactionStores = await vi.hoisted(async () =>
+  (await import("./approval-reactions.test-support.js")).createWhatsAppReactionStores(),
+);
+// mock-isolation: Preserve real exports while collecting only this suite's reaction stores.
+vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", reactionStores.mockRuntime);
 
 const hoisted = vi.hoisted(() => ({
   sendMessageWhatsApp: vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" })),

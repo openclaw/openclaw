@@ -200,6 +200,10 @@ openclaw doctor
 openclaw gateway status --json
 ```
 
+Local `read`, `write`, and `edit` tools accept Git Bash (`/f/...`), Cygwin
+(`/cygdrive/f/...`), and WSL-style (`/mnt/f/...`) drive paths when the Gateway runs
+natively on Windows. These paths resolve to the corresponding Windows drive.
+
 **New workspace** also works with a native Windows Gateway. Install Git for
 Windows and make it available on `PATH`. Each empty workspace starts from a
 separate Git repository initialized without your global Git configuration.

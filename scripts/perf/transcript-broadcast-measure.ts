@@ -93,6 +93,8 @@ const { values } = parseArgs({
     "operator-access-policy": { type: "boolean", default: false },
     "session-event-wake": { type: "boolean", default: false },
     "authority-counts": { type: "boolean", default: false },
+    "config-capture-counts": { type: "boolean", default: false },
+    "config-capture-source": { type: "string" },
     "authority-source-preload": { type: "string" },
     "stress-subagents": { type: "boolean", default: false },
     "mixed-rpc": { type: "boolean", default: false },
@@ -296,6 +298,7 @@ if (
   !values["stream-start-allocations"] &&
   !values["workload-cpu-profile"] &&
   !values["operator-access-policy"] &&
+  !values["config-capture-counts"] &&
   !values.diagnostics &&
   !(["sessions.list", "sessions.patch"].includes(scenario) && values["capture-responses"]) &&
   scenario !== "transcript-broadcast" &&
@@ -305,7 +308,7 @@ if (
   !soakScenario
 ) {
   throw new Error(
-    "--scenario requires --allocations, --workload-cpu-profile, --diagnostics, or --capture-responses for sessions.list/sessions.patch",
+    "--scenario requires --allocations, --workload-cpu-profile, --diagnostics, --config-capture-counts for chat.send, or --capture-responses for sessions.list/sessions.patch",
   );
 }
 const operations = integer(
@@ -498,6 +501,38 @@ if (
 }
 if (values["session-event-wake"] && !values["operator-access-policy"]) {
   throw new Error("--session-event-wake requires --operator-access-policy");
+}
+if (
+  values["config-capture-source"] &&
+  path.resolve(values.entry) !== path.resolve("src/entry.ts")
+) {
+  throw new Error("--config-capture-source requires --entry src/entry.ts");
+}
+const configCaptureSource = values["config-capture-source"]
+  ? Object.fromEntries(
+      ["src/config/runtime-snapshot.ts", "src/acp/runtime/session-meta-read-context.ts"].map(
+        (file) => {
+          const source = readFileSync(path.resolve(values["config-capture-source"]!, file), "utf8");
+          return [file, { source, sha256: createHash("sha256").update(source).digest("hex") }];
+        },
+      ),
+    )
+  : undefined;
+if (
+  values["config-capture-counts"] &&
+  (scenario !== "chat.send" ||
+    path.resolve(values.entry) !== path.resolve("src/entry.ts") ||
+    values.allocations ||
+    values.diagnostics ||
+    values["trace-gc"] ||
+    values["cpu-profile"] ||
+    values["workload-cpu-profile"] ||
+    values["stream-start-allocations"] ||
+    values["stream-start-diagnostics"])
+) {
+  throw new Error(
+    "--config-capture-counts requires --scenario chat.send --entry src/entry.ts in a separate counting pass without profiling or diagnostics",
+  );
 }
 if (
   values["authority-counts"] &&
@@ -873,7 +908,7 @@ if (scenario !== "plugins.reload") {
   cfg.plugins = {
     ...cfg.plugins,
     entries: {
-      ...(soakScenario ? cfg.plugins?.entries : {}),
+      ...cfg.plugins?.entries,
       "memory-core": { config: { dreaming: { enabled: false } } },
     },
   };
@@ -1082,6 +1117,91 @@ if (values["attempt-setup-image"]) {
       },
     },
   };
+}
+const configCapturePreload = path.join(output, "config-capture-counts-preload.mjs");
+const configCaptureCountsPath = path.join(output, "config-capture-counts.json");
+const configCaptureSourcePreload = path.join(output, "config-capture-source-preload.mjs");
+if (configCaptureSource) {
+  writeFileSync(
+    configCaptureSourcePreload,
+    `import { registerHooks } from "node:module";
+const sources = ${JSON.stringify(configCaptureSource)};
+registerHooks({ load(url, context, nextLoad) {
+  const loaded = nextLoad(url, context);
+  const owner = Object.keys(sources).find(file => url.endsWith("/" + file));
+  return owner ? { ...loaded, format: "module-typescript", source: sources[owner].source } : loaded;
+} });\n`,
+  );
+}
+if (values["config-capture-counts"]) {
+  writeFileSync(
+    configCapturePreload,
+    String.raw`
+import fs from "node:fs";
+import { registerHooks } from "node:module";
+import { isMainThread } from "node:worker_threads";
+if (isMainThread) {
+  const fresh = () => ({ calls: {}, callers: {}, clonedPayloads: 0, serializedBytes: 0, graphObjects: 0 });
+  let active = true, counts = fresh(), beforeFirstWindow;
+  const installed = {};
+  const observer = {
+    count(name) {
+      if (!active) return;
+      counts.calls[name] = (counts.calls[name] ?? 0) + 1;
+      const caller = name + " <- " + new Error().stack.split("\n").slice(3, 6).join(" <- ").trim();
+      counts.callers[caller] = (counts.callers[caller] ?? 0) + 1;
+    },
+    clone(value) {
+      if (!active) return;
+      counts.clonedPayloads++;
+      counts.serializedBytes += Buffer.byteLength(JSON.stringify(value));
+      const seen = new Set(), pending = [value];
+      while (pending.length) {
+        const current = pending.pop();
+        if (!current || typeof current !== "object" || seen.has(current)) continue;
+        seen.add(current);
+        for (const member of Object.values(current)) pending.push(member);
+      }
+      counts.graphObjects += seen.size;
+    }
+  };
+  globalThis[Symbol.for("openclaw.benchmark.configCaptureCounts")] = observer;
+  registerHooks({ load(url, context, nextLoad) {
+    const loaded = nextLoad(url, context);
+    const owner = url.match(/\/(runtime-config-capture-state|runtime-source-projection)\.ts$/)?.[1];
+    if (!owner) return loaded;
+    const raw = loaded.format === "module-typescript" ? loaded.source : fs.readFileSync(new URL(url));
+    let source = typeof raw === "string" ? raw : new TextDecoder().decode(raw);
+    const name = owner === "runtime-config-capture-state" ? "captureRuntimeConfigWithSource" : "captureRuntimeConfig";
+    const signature = new RegExp("export function " + name + "\\([^{}]*\\): OpenClawConfig \\{");
+    if (!signature.test(source)) throw new Error("Config capture observation signature changed: " + owner);
+    source = source.replace(signature, match => match + "__configCaptureCounts.count(" + JSON.stringify(name) + ");");
+    if (owner === "runtime-config-capture-state") {
+      const clone = "freezeJsonSnapshot(cloneConfigWithResolutionFacts(value))";
+      if (source.split(clone).length !== 2) throw new Error("Config capture clone observation source changed");
+      source = source.replace(clone, "(__configCaptureCounts.clone(value), " + clone + ")");
+    }
+    installed[owner] = true;
+    return { ...loaded, format: "module-typescript",
+      source: 'const __configCaptureCounts = globalThis[Symbol.for("openclaw.benchmark.configCaptureCounts")];\n' + source };
+  } });
+  process.prependListener("message", message => {
+    if (message?.channel !== "openclaw-gateway-bench-profile" || message.kind !== "diagnostics") return;
+    if (message.action === "start") {
+      beforeFirstWindow ??= counts;
+      active = false;
+      counts = fresh();
+      queueMicrotask(() => { active = true; });
+    } else {
+      active = false;
+      if (Object.keys(installed).length !== 2) throw new Error("Config capture observers were not both installed");
+      fs.writeFileSync(${JSON.stringify(configCaptureCountsPath)}, JSON.stringify({ ...counts, installed, beforeFirstWindow,
+        scope: "main-isolate capture calls and clone payloads; serialized UTF-8 bytes and graph objects, not heap allocation" }));
+    }
+  });
+}
+`,
+  );
 }
 const authorityPreload = path.join(output, "authority-counts-preload.mjs");
 if (values["authority-counts"]) {
@@ -4046,8 +4166,10 @@ try {
         : []),
       "--import",
       "./scripts/tsx.mjs",
+      ...(configCaptureSource ? ["--import", configCaptureSourcePreload] : []),
       ...(authoritySourcePreload ? ["--import", authoritySourcePreload.path] : []),
       ...(values["authority-counts"] ? ["--import", authorityPreload] : []),
+      ...(values["config-capture-counts"] ? ["--import", configCapturePreload] : []),
       "--import",
       "./scripts/lib/gateway-bench-profile-preload.ts",
       ...(values["transport-counts"]
@@ -4870,7 +4992,10 @@ try {
     recapPhase = undefined;
     activeWorkCounts = undefined;
     const finishGatewayDiagnostics =
-      values.diagnostics || values["transport-counts"] || values["session-projection-counts"]
+      values.diagnostics ||
+      values["transport-counts"] ||
+      values["session-projection-counts"] ||
+      values["config-capture-counts"]
         ? await startGatewayDiagnostics(gateway, `round-${round}`)
         : undefined;
     const finishControllerDiagnostics = values.diagnostics
@@ -5283,6 +5408,14 @@ try {
       round,
       scenario,
       allocation,
+      ...(values["config-capture-counts"]
+        ? {
+            configCaptureCounts: {
+              ...JSON.parse(readFileSync(configCaptureCountsPath, "utf8")),
+              primaryTurns: sessionCount,
+            },
+          }
+        : {}),
       ...(authorityCounts
         ? {
             operatorAccessPolicy: {
@@ -5893,6 +6026,17 @@ try {
     operatorAccessPolicy: values["operator-access-policy"],
     sessionEventWake: values["session-event-wake"],
     authorityCounts: values["authority-counts"],
+    configCaptureCounts: values["config-capture-counts"],
+    configCaptureSource: configCaptureSource
+      ? Object.fromEntries(
+          Object.entries(configCaptureSource).map(([file, value]) => [file, value.sha256]),
+        )
+      : undefined,
+    configShape: {
+      serializedBytes: Buffer.byteLength(JSON.stringify(cfg)),
+      agents: Object.keys(cfg.agents?.entries ?? {}).length,
+      pluginEntries: Object.keys(cfg.plugins?.entries ?? {}).length,
+    },
     authoritySourcePreload,
     node: process.version,
     stressSubagents: values["stress-subagents"],
