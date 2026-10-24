@@ -80,14 +80,14 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
   const extensions = () =>
     String(get("SELECT search_extensions FROM openclaw_schema_meta")?.search_extensions);
   const opened: PostgresSqlConnection[] = [];
-  const open = (selectedAnchor = anchor) =>
+  const open = (selectedAnchor = anchor, existingOnly = false) =>
     withDatabaseEngineSelection(
       {
         effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
         postgres: { connection: connection!, schemaPrefix: "memory_admission_test" },
       },
       () => {
-        const result = openAgentEngineStore(selectedAnchor, "main", databasePath);
+        const result = openAgentEngineStore(selectedAnchor, "main", databasePath, existingOnly);
         if (!isPostgresSqlConnection(result)) {
           throw new Error("Expected PostgreSQL agent store");
         }
@@ -195,6 +195,23 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
       } finally {
         next.close();
       }
+    });
+  });
+
+  it("reuses an idle backend across existing-only reads but not owner opens", () => {
+    withEngineStoreAdmission(() => {
+      const backend = (existingOnly: boolean) => {
+        using nextAnchor = openNodeSqliteDatabase(databasePath);
+        const next = open(nextAnchor, existingOnly);
+        try {
+          return next.prepare("SELECT pg_backend_pid() AS pid").get()?.pid;
+        } finally {
+          next.close();
+        }
+      };
+      const reader = backend(true);
+      expect(backend(true)).toBe(reader);
+      expect(backend(false)).not.toBe(reader);
     });
   });
 });

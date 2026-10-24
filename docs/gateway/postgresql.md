@@ -132,8 +132,9 @@ When present, the local credential store is captured as a fixed-local resource,
 outside the engine families. User backups apply its credential sanitization;
 updater recovery captures it exactly.
 
-Existing-state reads and one-shot writes reuse a small per-worker cache of idle
-PostgreSQL connections. Each caller has exclusive use until close; an open
+Existing-state reads, one-shot writes, and existing agent database reads such
+as session loads reuse a small per-worker cache of idle PostgreSQL connections.
+Long-lived agent database owners keep their own connection. Each caller has exclusive use until close; an open
 transaction is never returned to the cache. Connection settings and the store
 namespace separate cache entries. Session setup runs when a backend connects,
 and an idle connection lost by the server is replaced at the next open. Workers

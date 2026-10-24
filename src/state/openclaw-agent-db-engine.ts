@@ -228,6 +228,8 @@ export function openAgentEngineStore(
     schema: agentEngineSchema,
     input: agentEngineInput(),
     existingOnly,
+    // Existing-only opens are short leases; owner and creation opens keep their own backend.
+    reusePostgresConnection: existingOnly,
     closeOnFailure,
     assertMigrationCurrent: assertAgentDatabaseMaintenanceAuthority,
     prepareAnchor: () => {},
