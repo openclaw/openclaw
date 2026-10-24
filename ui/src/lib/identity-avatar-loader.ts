@@ -70,6 +70,14 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> | null
   };
   entry.promise = (async () => {
     try {
+      // Cold images must not start all authenticated fetches inside the row
+      // construction task. Cached images still resolve synchronously above.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      if (identityAvatarCache.get(url) !== entry) {
+        return null;
+      }
       const response = await fetchGatewayContextResource(url, IDENTITY_AVATAR_FETCH_TIMEOUT_MS);
       if (!response.ok) {
         return null;
