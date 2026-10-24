@@ -465,7 +465,7 @@ function ScalarInput(props: {
       !state().isStructuredSecretRef &&
       (state().sensitiveState?.isSensitiveField || state().sensitiveState?.isSensitive) &&
       (props.params.onToggleSensitivePath ||
-        props.params.maskSensitive ||
+        replacingStoredSecret() ||
         state().sensitiveState?.sentinelRedacted) ? (
         <span class="settings-secret">
           {control}
