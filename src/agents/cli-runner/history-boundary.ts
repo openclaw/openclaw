@@ -28,6 +28,7 @@ import { sha256Hex } from "../../infra/crypto-digest.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
+import { sleep } from "../../utils/sleep.js";
 import {
   getAdmittedRunDelegatedAuthority,
   resolveAdmittedRunActiveAssertion,
@@ -48,9 +49,16 @@ import type { PreparedCliRunContext } from "./types.js";
  * failure: model fallback must stop instead of replaying the turn on another candidate.
  */
 export class CliHistoryOwnerChangedError extends Error {
-  constructor() {
+  /**
+   * `live-writer`: a different run that is still live holds the row (normally the previous
+   * turn settling its reply); it can clear once that run finishes. `replaced`: the session,
+   * lifecycle or writer changed under this run; that never clears and stays terminal.
+   */
+  readonly kind: "live-writer" | "replaced";
+  constructor(kind: "live-writer" | "replaced" = "replaced") {
     super("CLI history owner changed before preparation");
     this.name = "CliHistoryOwnerChangedError";
+    this.kind = kind;
   }
 }
 
@@ -100,20 +108,45 @@ export async function prepareCliHistoryBoundary(
     preparedBackend?: Parameters<typeof resolveCliChildEnv>[0];
   },
 ): Promise<CliExecutionHistoryWriter | undefined> {
-  try {
-    return await prepareCliHistoryBoundaryOnce(params, identity);
-  } catch (error) {
-    if (
-      params.abortSignal?.aborted ||
-      !(error instanceof Error) ||
-      error.message !== CLI_HISTORY_CHANGED_BEFORE_PREPARATION
-    ) {
-      throw error;
+  const deadline = Date.now() + OWNER_SETTLE_TIMEOUT_MS;
+  let rereadAfterSettlement = false;
+  for (
+    let delayMs = OWNER_SETTLE_INITIAL_DELAY_MS;
+    ;
+    delayMs = Math.min(delayMs * 2, OWNER_SETTLE_MAX_DELAY_MS)
+  ) {
+    try {
+      return await prepareCliHistoryBoundaryOnce(params, identity);
+    } catch (error) {
+      if (params.abortSignal?.aborted || !(error instanceof Error)) {
+        throw error;
+      }
+      if (error.message === CLI_HISTORY_CHANGED_BEFORE_PREPARATION && !rereadAfterSettlement) {
+        // Settlement can move the tip after planning. Nothing committed; reread once.
+        rereadAfterSettlement = true;
+        continue;
+      }
+      // Only a live predecessor can clear by waiting. Lifecycle, session or writer
+      // replacement is terminal and propagates at once.
+      if (
+        !(error instanceof CliHistoryOwnerChangedError) ||
+        error.kind !== "live-writer" ||
+        Date.now() >= deadline
+      ) {
+        throw error;
+      }
+      // Nothing committed and no history was read; wait for the predecessor to settle.
+      await sleep(Math.min(delayMs, Math.max(0, deadline - Date.now())), params.abortSignal);
+      // The wait can outlive this run's authority. A revoked, replaced or aborted run must
+      // fail here rather than replan (the replan itself also refences at commit).
+      createCliRunCurrentAssertion(params)();
     }
   }
-  // Settlement can move the tip after planning. Nothing committed; reread once.
-  return prepareCliHistoryBoundaryOnce(params, identity);
 }
+
+const OWNER_SETTLE_TIMEOUT_MS = 15_000;
+const OWNER_SETTLE_INITIAL_DELAY_MS = 100;
+const OWNER_SETTLE_MAX_DELAY_MS = 1_000;
 
 /** Compaction may rewrite a covered transcript, but cannot establish account provenance. */
 export async function prepareCliHistoryCompactionBoundary(
@@ -283,7 +316,7 @@ async function prepareCliHistoryBoundaryOnce(
           snapshot.activeWriterRunId !== writerRunId &&
           hasLiveAgentRunContext(snapshot.activeWriterRunId)
         ) {
-          throw new CliHistoryOwnerChangedError();
+          throw new CliHistoryOwnerChangedError("live-writer");
         }
         assertSource();
       }),

@@ -44,27 +44,30 @@ export async function createHistoryBoundaryFixture(
   let runNumber = 0;
   const withRun = async <T>(
     runId: string,
-    action: (params: PreparedCliRunContext["params"]) => Promise<T>,
+    action: (params: PreparedCliRunContext["params"], revoke: () => void) => Promise<T>,
     overrides: Partial<PreparedCliRunContext["params"]> = {},
   ) => {
     const admission = prepareSystemAgentRunAdmission({}, runId, "main", "history-test");
     try {
-      return await action({
-        admittedRunContext: await admission.admit("embedded"),
-        runId,
-        agentId: target.agentId,
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionFile: target.sessionKey,
-        sessionTarget: target,
-        storePath: target.storePath,
-        provider: "test-cli",
-        model: "test-model",
-        prompt: "current ask",
-        workspaceDir: dir,
-        timeoutMs: 1000,
-        ...overrides,
-      });
+      return await action(
+        {
+          admittedRunContext: await admission.admit("embedded"),
+          runId,
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          sessionFile: target.sessionKey,
+          sessionTarget: target,
+          storePath: target.storePath,
+          provider: "test-cli",
+          model: "test-model",
+          prompt: "current ask",
+          workspaceDir: dir,
+          timeoutMs: 1000,
+          ...overrides,
+        },
+        () => admission.close(),
+      );
     } finally {
       admission.close();
     }

@@ -45,6 +45,30 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+function useOwnerSettleFakeTimers() {
+  // Only the settle wait is virtual; SQLite workers and setImmediate stay real.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+}
+
+/** Advances the settle wait until `pending` settles, yielding real turns to session I/O. */
+async function driveOwnerSettleTimers(pending: Promise<unknown>, until = () => false) {
+  const state = { settled: false };
+  void pending.then(
+    () => (state.settled = true),
+    () => (state.settled = true),
+  );
+  for (let elapsed = 0; !state.settled && !until() && elapsed <= 20_000; elapsed += 50) {
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    await vi.advanceTimersByTimeAsync(50);
+  }
+}
+
 const fixture = (withHeader?: boolean) => createHistoryBoundaryFixture(sessionDirs, withHeader);
 
 async function settleNativeBinding(
@@ -425,6 +449,9 @@ describe("CLI transcript account boundary", () => {
             : (await prepareCliHistoryBoundary(direct, identity), "prepared"),
         );
         // The refusal is local session ownership; replaying on another model cannot repair it.
+        // A predecessor that never settles is still refused, after the bounded wait.
+        useOwnerSettleFakeTimers();
+        const startedAt = Date.now();
         const refusal = runWithModelFallback({
           cfg: undefined,
           provider: "test-cli",
@@ -433,7 +460,11 @@ describe("CLI transcript account boundary", () => {
           fallbacksOverride: ["fixture-next/fixture-model"],
           run,
         });
+        await driveOwnerSettleTimers(refusal);
+        expect(Date.now() - startedAt).toBeGreaterThanOrEqual(15_000);
+        vi.useRealTimers();
         await expect(refusal).rejects.toBeInstanceOf(CliHistoryOwnerChangedError);
+        await expect(refusal).rejects.toMatchObject({ kind: "live-writer" });
         await expect(refusal).rejects.toThrow("CLI history owner changed before preparation");
         expect(run).toHaveBeenCalledOnce();
         expect(direct.sessionEntry).toEqual(before);
@@ -482,6 +513,161 @@ describe("CLI transcript account boundary", () => {
     });
     expect(JSON.stringify(f.manager().getEntries())).toContain("recovered CLI answer");
   });
+
+  it("waits for a settling predecessor, then prepares once and persists the follow-up", async () => {
+    const f = await fixture();
+    await f.seed();
+    const claimed = createDeferred<void>();
+    const settle = createDeferred<void>();
+    const prior = f.withRun("orchestrator-prior", async (params) => {
+      await claimAgentSessionWriter(params);
+      claimed.resolve();
+      await settle.promise;
+    });
+    await claimed.promise;
+    const attempts = vi.spyOn(sessionAccessor, "patchSessionEntryCore");
+    useOwnerSettleFakeTimers();
+    await f.withRun("direct-cli-followup", async (params) => {
+      params.sessionEntry = loadSessionEntryReadOnly(f.target);
+      const pending = prepareCliHistoryBoundary(params, {
+        credential: { type: "token", provider: "test-cli", token: "epoch-a" },
+      });
+      // Refused, waited and replanned against the still-live predecessor at least once.
+      await driveOwnerSettleTimers(pending, () => attempts.mock.calls.length >= 2);
+      expect(attempts.mock.calls.length).toBeGreaterThanOrEqual(2);
+      // Still waiting: nothing adopted while the predecessor is live.
+      expect(loadSessionEntryReadOnly(f.target)?.activeWriterRunId).toBe("orchestrator-prior");
+      settle.resolve();
+      await prior;
+      await driveOwnerSettleTimers(pending);
+      vi.useRealTimers();
+      const writer = await pending;
+      expect(writer).toBeDefined();
+      if (!writer) {
+        throw new Error("Missing admitted history writer");
+      }
+      expect(loadSessionEntryReadOnly(f.target)?.activeWriterRunId).toBe(params.runId);
+      const committed = attempts.mock.calls.length;
+      await runWithCliHistoryWriter(writer, async () => {
+        expect(await history(true, params)).toContain("A private canary");
+        const result = await persistCliAssistantTranscript({
+          runParams: { ...params, persistAssistantTranscript: true },
+          text: "settled follow-up answer",
+          modelId: "test-model",
+          stopReason: "stop",
+        });
+        expect(result.terminalAnchor).toBeDefined();
+      });
+      expect(attempts.mock.calls.length).toBe(committed);
+    });
+    const persisted = JSON.stringify(f.manager().getEntries());
+    expect(persisted.split("settled follow-up answer")).toHaveLength(2);
+  });
+
+  it("refuses a lifecycle revision mismatch at once without waiting", async () => {
+    const f = await fixture();
+    await f.seed();
+    const before = loadSessionEntryReadOnly(f.target);
+    const spy = vi.spyOn(sessionAccessor, "patchSessionEntryCore");
+    useOwnerSettleFakeTimers();
+    const startedAt = Date.now();
+    await f.withRun(
+      "direct-cli-stale-lifecycle",
+      async (params) => {
+        const refusal = prepareCliHistoryBoundary(params, {
+          credential: { type: "token", provider: "test-cli", token: "epoch-a" },
+        });
+        // Real turns only: a terminal conflict must settle without any virtual time passing.
+        const state = { settled: false };
+        void refusal.then(
+          () => (state.settled = true),
+          () => (state.settled = true),
+        );
+        for (let turn = 0; !state.settled && turn < 2_000; turn += 1) {
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+        }
+        expect(state.settled).toBe(true);
+        await expect(refusal).rejects.toBeInstanceOf(CliHistoryOwnerChangedError);
+        await expect(refusal).rejects.toMatchObject({ kind: "replaced" });
+      },
+      { expectedLifecycleRevision: "stale-lifecycle" },
+    );
+    // The settle wait only advances under virtual time, which never moved here.
+    expect(Date.now()).toBe(startedAt);
+    expect(spy).toHaveBeenCalledOnce();
+    expect(loadSessionEntryReadOnly(f.target)).toEqual(before);
+  });
+
+  it.each(["revoked", "aborted"] as const)(
+    "fails a follow-up %s during the settle wait without reading history or appending",
+    async (change) => {
+      const f = await fixture();
+      await f.seed();
+      const claimed = createDeferred<void>();
+      const settle = createDeferred<void>();
+      const prior = f.withRun("orchestrator-prior", async (params) => {
+        await claimAgentSessionWriter(params);
+        claimed.resolve();
+        await settle.promise;
+      });
+      await claimed.promise;
+      const beforeEntry = loadSessionEntryReadOnly(f.target);
+      const beforeTranscript = f.manager().getEntries();
+      const abort = new AbortController();
+      const reads = vi.spyOn(sessionAccessor, "patchSessionEntryCore");
+      useOwnerSettleFakeTimers();
+      try {
+        await f.withRun(
+          "direct-cli-followup",
+          async (params, revoke) => {
+            const pending = prepareCliHistoryBoundary(params, {
+              credential: { type: "token", provider: "test-cli", token: "epoch-a" },
+            });
+            // Refused at least once and parked in the settle wait.
+            await driveOwnerSettleTimers(pending, () => reads.mock.calls.length >= 2);
+            const attempts = reads.mock.calls.length;
+            expect(attempts).toBeGreaterThanOrEqual(2);
+            if (change === "revoked") {
+              revoke();
+            } else {
+              abort.abort();
+            }
+            // The predecessor settles too, so only the recheck can stop the replan.
+            settle.resolve();
+            await prior;
+            await driveOwnerSettleTimers(pending);
+            vi.useRealTimers();
+            await expect(pending).rejects.toThrow();
+            expect(reads.mock.calls.length).toBe(attempts);
+            const result = await persistCliAssistantTranscript({
+              runParams: {
+                ...params,
+                // The writer fence this run would have carried had it adopted the row.
+                expectedWriterRunId: params.runId,
+                persistAssistantTranscript: true,
+              },
+              text: "late follow-up answer",
+              modelId: "test-model",
+              stopReason: "stop",
+            }).catch(() => undefined);
+            // The row was never adopted, so a late answer fenced to this run is refused.
+            expect(result?.terminalAnchor).toBeUndefined();
+          },
+          { abortSignal: abort.signal },
+        );
+      } finally {
+        settle.resolve();
+        await prior;
+      }
+      expect(loadSessionEntryReadOnly(f.target)?.activeWriterRunId).not.toBe("direct-cli-followup");
+      expect(loadSessionEntryReadOnly(f.target)?.cliHistoryBoundary).toEqual(
+        beforeEntry?.cliHistoryBoundary,
+      );
+      expect(f.manager().getEntries()).toEqual(beforeTranscript);
+    },
+  );
 
   it("rejects CLI assistant persistence after its terminal writer claim is revoked", async () => {
     const f = await fixture();
@@ -538,12 +724,14 @@ describe("CLI transcript account boundary", () => {
         ),
     );
     try {
+      useOwnerSettleFakeTimers();
       await f.withRun("direct-cli-recovery", async (params) => {
-        await expect(
-          prepareCliHistoryBoundary(params, {
-            credential: { type: "token", provider: "test-cli", token: "epoch-a" },
-          }),
-        ).rejects.toThrow("CLI history owner changed before preparation");
+        const refusal = prepareCliHistoryBoundary(params, {
+          credential: { type: "token", provider: "test-cli", token: "epoch-a" },
+        });
+        // The revived writer stays live, so the bounded wait expires and refuses.
+        await driveOwnerSettleTimers(refusal);
+        await expect(refusal).rejects.toThrow("CLI history owner changed before preparation");
       });
       expect(loadSessionEntryReadOnly(f.target)).toEqual(before);
     } finally {
