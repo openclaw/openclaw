@@ -11,7 +11,7 @@ import {
 import { PersonAvatarLink, PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import type { MenuControls, MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
+import type { MenuControls, MenuEntry } from "../../../components/solid/menu.tsx";
 import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -21,7 +21,7 @@ import {
   VISIBILITY_LABEL_KEYS,
   ChatSessionSharingModeIcon,
   projectChatSessionSharingRoster,
-  chatSessionPermissionLabel,
+  createChatSessionPermissionMenuItem,
   ChatSessionSharingError,
   createChatSessionSharingPresentation,
 } from "./chat-session-sharing-shared.tsx";
@@ -253,39 +253,7 @@ export function useChatSessionSharingMenu(
         () => (!showPermissions() ? [] : matches()),
         (row): MenuEntry => {
           const identity = () => row().identity;
-          const branch: MenuEntry = {
-            id: `permission:${identity().id}`,
-            class: "chat-pane__sharing-permission",
-            get label() {
-              return `${identity().label ?? identity().id}, ${row().controlLabel}`;
-            },
-            get trigger() {
-              return row().controlLabel;
-            },
-            get disabled() {
-              return !busy() && Boolean(row().disabledReason);
-            },
-            get attributes(): MenuItem["attributes"] {
-              return {
-                title: row().disabledReason,
-                "aria-disabled": busy() ? "true" : undefined,
-              };
-            },
-            onBeforeShow(event) {
-              if (busy()) {
-                event.preventDefault();
-              }
-            },
-            get children() {
-              return row().options.map((level) => ({
-                id: `permission:${level}:${identity().id}`,
-                label: chatSessionPermissionLabel(level),
-                type: "radio" as const,
-                checked: row().level === level,
-                closeOnSelect: false,
-              }));
-            },
-          };
+          const branch = createChatSessionPermissionMenuItem(row, busy);
           return {
             kind: "group",
             id: `member:${identity().id}`,

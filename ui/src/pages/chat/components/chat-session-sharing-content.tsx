@@ -14,12 +14,7 @@ import type { SessionVisibility } from "../../../api/types.ts";
 import { PersonAvatarLink, PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import type {
-  MenuControls,
-  MenuEntry,
-  MenuHandle,
-  MenuItem,
-} from "../../../components/solid/menu.tsx";
+import type { MenuControls, MenuEntry, MenuHandle } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.tsx";
@@ -34,7 +29,7 @@ import {
   ChatSessionSharingModeIcon,
   ChatSessionSharingError,
   projectChatSessionSharingRoster,
-  chatSessionPermissionLabel,
+  createChatSessionPermissionMenuItem,
 } from "./chat-session-sharing-shared.tsx";
 import type { ChatSessionSharingContentProps } from "./chat-session-sharing.solid.tsx";
 
@@ -199,7 +194,6 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
         (row) => {
           const person = () => row().identity;
           const isCreator = () => row().owner;
-          const reason = () => row().disabledReason;
           const activity = () =>
             personActivityLink(
               creator()?.identity?.type === "profile" ? creator()?.identity?.id : undefined,
@@ -242,39 +236,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
               </Show>
             </>
           );
-          const branch: MenuEntry = {
-            id: `permission:${person().id}`,
-            get label() {
-              return `${person().label ?? person().id}, ${row().controlLabel}`;
-            },
-            class: "chat-pane__sharing-permission",
-            get disabled() {
-              return !busy() && Boolean(reason());
-            },
-            get attributes(): MenuItem["attributes"] {
-              return {
-                title: reason(),
-                "aria-disabled": busy() ? "true" : undefined,
-              };
-            },
-            get trigger() {
-              return row().controlLabel;
-            },
-            onBeforeShow(event) {
-              if (busy()) {
-                event.preventDefault();
-              }
-            },
-            get children() {
-              return row().options.map((level) => ({
-                id: `permission:${level}:${person().id}`,
-                label: chatSessionPermissionLabel(level),
-                type: "radio" as const,
-                checked: row().level === level,
-                closeOnSelect: false,
-              }));
-            },
-          };
+          const branch = createChatSessionPermissionMenuItem(row, busy);
           return {
             kind: "group",
             id: `member:${person().id}`,

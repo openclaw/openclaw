@@ -101,6 +101,28 @@ function buildStatusDegradationRows(
   return rows;
 }
 
+function buildStatusStorageRows(surface: StatusOverviewSurface, includeConfigured = true) {
+  return [
+    ...(includeConfigured && surface.databaseEngines?.source !== "unavailable"
+      ? [
+          {
+            Item: "Database engines (configured)",
+            Value: formatDatabaseEngineSelection(surface.cfg, surface.databaseEngines?.stores),
+          },
+        ]
+      : []),
+    ...buildStatusDatabaseStoreRows(surface.databaseEngines),
+    ...(surface.recoveryCopies
+      ? [
+          {
+            Item: "Recovery copies (local)",
+            Value: formatRecoveryDiskUsage(surface.recoveryCopies),
+          },
+        ]
+      : []),
+  ];
+}
+
 export function buildStatusCommandOverviewRows(params: {
   env: NodeJS.ProcessEnv;
   backupFreshness: BackupRunFreshness;
@@ -266,27 +288,10 @@ export function buildStatusCommandOverviewRows(params: {
     agentsValue,
     suffixRows: [
       ...(params.updateRows ?? []),
-      ...((params.surface.cfg.database || params.surface.databaseEngines?.stores.length) &&
-      params.surface.databaseEngines?.source !== "unavailable"
-        ? [
-            {
-              Item: "Database engines (configured)",
-              Value: formatDatabaseEngineSelection(
-                params.surface.cfg,
-                params.surface.databaseEngines?.stores,
-              ),
-            },
-          ]
-        : []),
-      ...buildStatusDatabaseStoreRows(params.surface.databaseEngines),
-      ...(params.surface.recoveryCopies
-        ? [
-            {
-              Item: "Recovery copies (local)",
-              Value: formatRecoveryDiskUsage(params.surface.recoveryCopies),
-            },
-          ]
-        : []),
+      ...buildStatusStorageRows(
+        params.surface,
+        Boolean(params.surface.cfg.database || params.surface.databaseEngines?.stores.length),
+      ),
       { Item: "Telemetry", Value: telemetryValue },
       { Item: "Memory", Value: memoryValue },
       {
@@ -366,26 +371,7 @@ export function buildStatusAllOverviewRows(params: {
     ],
     agentsValue: `${params.agentStatus.agents.length} total · ${params.agentStatus.bootstrapPendingCount} bootstrapping · ${countActiveStatusAgents({ agentStatus: params.agentStatus })} active · ${params.agentStatus.totalSessions} sessions`,
     suffixRows: [
-      ...(params.surface.databaseEngines?.source !== "unavailable"
-        ? [
-            {
-              Item: "Database engines (configured)",
-              Value: formatDatabaseEngineSelection(
-                params.surface.cfg,
-                params.surface.databaseEngines?.stores,
-              ),
-            },
-          ]
-        : []),
-      ...buildStatusDatabaseStoreRows(params.surface.databaseEngines),
-      ...(params.surface.recoveryCopies
-        ? [
-            {
-              Item: "Recovery copies (local)",
-              Value: formatRecoveryDiskUsage(params.surface.recoveryCopies),
-            },
-          ]
-        : []),
+      ...buildStatusStorageRows(params.surface),
       {
         Item: "Secrets",
         Value:
