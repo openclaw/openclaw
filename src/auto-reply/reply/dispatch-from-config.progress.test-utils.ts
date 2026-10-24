@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerProgressPrivacyTests } from "./dispatch-from-config.progress-privacy.test-support.js";
+import { sendPolicySessionEntry } from "./dispatch-from-config.session-fixtures.test-support.js";
 import {
   createDispatcher,
   emptyConfig,
@@ -697,12 +698,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("keeps failed tools compact when preview tool-progress suppression is enabled", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "on" });
     const onCommandOutput = vi.fn();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -752,12 +748,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("keeps message-tool-only failed tool output compact in normal verbose mode", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "on" });
     const onCommandOutput = vi.fn();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -804,12 +795,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("hides message-tool-only error text without a progress callback", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "on" });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = createDirectCtx({ SessionKey: "agent:main:telegram:direct:U1" });
@@ -837,12 +823,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("allows message-tool-only failed tool output in verbose full mode", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "full",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "full" });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = createDirectCtx({ SessionKey: "agent:main:telegram:direct:U1" });
@@ -875,12 +856,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("forwards failed command progress in regular verbose mode", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "on" });
     const dispatcher = createDispatcher();
     const onCommandOutput = vi.fn();
     const ctx = createDirectCtx({ SessionKey: "agent:main:telegram:direct:U1" });
@@ -913,12 +889,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("preserves declined failed progress callback results", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "on" });
     const dispatcher = createDispatcher();
     const onCommandOutput = vi.fn(async () => false as const);
     const onItemEvent = vi.fn(async () => false as const);
@@ -962,12 +933,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("forwards failed group tool progress in regular verbose mode", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "on" });
     const dispatcher = createDispatcher();
     const onItemEvent = vi.fn();
     const ctx = buildTestCtx({
@@ -1004,12 +970,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("keeps earlier failed progress hidden when verbose turns on later", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "off",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "off" });
     const dispatcher = createDispatcher();
     const onCommandOutput = vi.fn();
     const ctx = createDirectCtx({ SessionKey: "agent:main:telegram:direct:U1" });

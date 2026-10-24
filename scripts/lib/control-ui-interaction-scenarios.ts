@@ -17,18 +17,27 @@ const sessionQuery = "Interaction 0999";
 const modelQuery = "Warm model 0999";
 const cronQuery = "Warm automation 0499";
 const activePane = ".chat-pane-cache__pane--active";
+const sidebarClocks = ".sidebar-recent-session openclaw-elapsed-time";
+const initialClockLabels = new WeakMap<Page, string>();
+
+type InteractionFixtureOptions = { runningSessions?: boolean };
 
 export type InteractionScenario = {
   id: string;
   route: string;
   expected: string;
+  fixture?: InteractionFixtureOptions;
   /** Count newly inserted rows across the action, including transient replacements. */
   rowSelector?: string;
   prepare: (page: Page, gateway: MockGatewayControls) => Promise<void>;
   run: (page: Page, gateway: MockGatewayControls) => Promise<void>;
 };
 
-export function createInteractionFixture(buildId: string, version: string) {
+export function createInteractionFixture(
+  buildId: string,
+  version: string,
+  options: InteractionFixtureOptions = {},
+) {
   const captureSources = ["Alpha", "Beta"].map((title) => ({
     providerId: "test-voice",
     guildId: "guild",
@@ -36,15 +45,37 @@ export function createInteractionFixture(buildId: string, version: string) {
     title,
   }));
   const config = { transcripts: { enabled: true, autoStart: captureSources } };
-  const sessions = Array.from({ length: 1_000 }, (_, index) => ({
-    key: sessionKeys[index] ?? `agent:main:interaction-${index}`,
-    sessionId: `interaction-session-${index}`,
-    agentId: "main",
-    kind: "direct" as const,
-    label: `Interaction ${String(index).padStart(4, "0")}`,
-    updatedAt: 1_800_000_000_000 - index * 1_000,
-    childOwnerSessionKeys: [],
-  }));
+  const keyForIndex = (index: number) => sessionKeys[index] ?? `agent:main:interaction-${index}`;
+  const startedAt = options.runningSessions ? Date.now() - 5_000 : undefined;
+  const sessions = Array.from({ length: 1_000 }, (_, index) => {
+    const runningChild = options.runningSessions && index > 0 && index <= 200;
+    return {
+      key: keyForIndex(index),
+      sessionId: `interaction-session-${index}`,
+      agentId: "main",
+      kind: "direct" as const,
+      label: `Interaction ${String(index).padStart(4, "0")}`,
+      updatedAt: 1_800_000_000_000 - index * 1_000,
+      childOwnerSessionKeys: runningChild ? [sessionKeys[0]] : [],
+      ...(options.runningSessions && index === 0
+        ? {
+            childSessions: Array.from({ length: 200 }, (_childValue, child) =>
+              keyForIndex(child + 1),
+            ),
+          }
+        : {}),
+      ...(runningChild
+        ? {
+            startedAt,
+            hasActiveRun: true,
+            activeRunIds: [`interaction-run-${index}`],
+            status: "running" as const,
+            spawnedBy: sessionKeys[0],
+            parentSessionKey: sessionKeys[0],
+          }
+        : {}),
+    };
+  });
   const jobs: CronJob[] = Array.from({ length: 500 }, (_, index) => ({
     id: `interaction-job-${index}`,
     name: `Warm automation ${String(index).padStart(4, "0")}`,
@@ -391,6 +422,56 @@ async function searchModels(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  {
+    id: "sidebar-clock-idle",
+    route: "/new",
+    fixture: { runningSessions: true },
+    expected: "At least 100 running child-session clocks advance during five idle seconds.",
+    rowSelector: sidebarClocks,
+    prepare: async (page) => {
+      await navigation(page, "sessions");
+      const toggle = page.locator(`[data-child-session-toggle="${sessionKeys[0]}"]`);
+      await toggle.waitFor();
+      if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+        await toggle.click();
+      }
+      await page.locator(sidebarClocks).first().waitFor({ state: "attached" });
+      const more = page.locator(`[data-show-more-children="${sessionKeys[0]}"]`);
+      if ((await page.locator(sidebarClocks).count()) < 100 && (await more.count()) > 0) {
+        await more.click();
+      }
+      await page.waitForFunction(
+        (selector) => document.querySelectorAll(selector).length >= 100,
+        sidebarClocks,
+      );
+      const viewport = page.viewportSize()!;
+      await page.mouse.move(viewport.width - 8, viewport.height - 8);
+      await page.locator('[role="tooltip"]:visible').first().waitFor({ state: "hidden" });
+      const label = await page.locator(sidebarClocks).first().textContent();
+      if (!label?.trim()) {
+        throw new Error("Running sidebar clocks must have an initial elapsed label");
+      }
+      initialClockLabels.set(page, label);
+    },
+    run: async (page) => {
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, 5_000);
+          }),
+      );
+      const clocks = page.locator(sidebarClocks);
+      const label = await clocks.first().textContent();
+      if (
+        (await clocks.count()) < 100 ||
+        !label?.trim() ||
+        label === initialClockLabels.get(page)
+      ) {
+        throw new Error("At least 100 running sidebar clocks must remain mounted and advance");
+      }
+      initialClockLabels.delete(page);
+    },
+  },
   {
     id: "agent-skills-refresh",
     route: pathForAgentPanel("main", "skills"),

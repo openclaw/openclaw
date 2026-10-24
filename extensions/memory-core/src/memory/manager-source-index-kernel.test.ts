@@ -383,85 +383,122 @@ describe("memory source index native kernel", () => {
     );
   });
 
-  it("coalesces small sources while preserving searchable text and source metadata", async () => {
-    const values = Array.from({ length: 8 }, (_, index): Replacement => {
-      const value = replacement(`memory/group-${index}.md`, `topic${index}`);
-      for (const chunk of value.chunks) {
-        chunk.importance = index + 1;
-        chunk.triggers = `trigger-${index}`;
-        chunk.projectKey = `project-${index}`;
-        chunk.provenance = undefined;
+  it.each([1, 100, 129])(
+    "coalesces %i sources while preserving searchable text and metadata",
+    async (count) => {
+      const values = Array.from({ length: count }, (_, index): Replacement => {
+        const value = replacement(
+          `memory/group-${String(index).padStart(3, "0")}.md`,
+          `topic${index}`,
+        );
+        for (const chunk of value.chunks) {
+          chunk.importance = (index % 10) + 1;
+          chunk.triggers = `trigger-${index}`;
+          chunk.projectKey = `project-${index}`;
+          chunk.provenance = undefined;
+        }
+        return {
+          ...value,
+          ...(index % 2 === 0
+            ? { source: "memory" as const }
+            : { source: "sessions" as const, agentId: "main", sessionId: `session-${index}` }),
+          model: `model-${index}`,
+          now: 200 + index,
+        };
+      });
+      let inserts = 0;
+      let sourceInserts = 0;
+      const savepoints: string[] = [];
+      const statements = observeHostDataSql((sql, preparingDatabase) => {
+        if (!preparingDatabase && /^insert into "memory_index_sources"\s/i.test(sql)) {
+          sourceInserts++;
+        }
+        if (/^SAVEPOINT\b/i.test(sql)) {
+          savepoints.push(sql);
+        }
+        if (
+          !preparingDatabase &&
+          /^insert into ["`]?memory_index_(?:chunks|chunk_recall_metadata|chunk_provenance)["`]?\s/i.test(
+            sql,
+          )
+        ) {
+          inserts++;
+        }
+      });
+      try {
+        writeGroup(values);
+      } finally {
+        statements.restore();
       }
-      return {
-        ...value,
-        ...(index % 2 === 0
-          ? { source: "memory" as const }
-          : { source: "sessions" as const, agentId: "main", sessionId: `session-${index}` }),
-        model: `model-${index}`,
-        now: 200 + index,
-      };
-    });
-    let inserts = 0;
-    const savepoints: string[] = [];
-    const statements = observeHostDataSql((sql, preparingDatabase) => {
-      if (/^SAVEPOINT\b/i.test(sql)) {
-        savepoints.push(sql);
-      }
-      if (
-        !preparingDatabase &&
-        /^insert into ["`]?memory_index_(?:chunks|chunk_recall_metadata|chunk_provenance)["`]?\s/i.test(
-          sql,
-        )
-      ) {
-        inserts++;
-      }
-    });
-    try {
-      writeGroup(values);
-    } finally {
-      statements.restore();
-    }
-    expect(inserts).toBe(3);
-    expect(savepoints).toEqual([]);
-    expect(
-      all(`SELECT c.path, c.source, c.model, c.text, c.updated_at,
+      expect(inserts).toBe(Math.ceil(count / 128) * 3);
+      expect(sourceInserts).toBe(Math.ceil(count / 128));
+      expect(select("sources", "COUNT(*) AS n").get()).toEqual({ n: count });
+      expect(savepoints).toEqual([]);
+      expect(
+        all(`SELECT c.path, c.source, c.model, c.text, c.updated_at,
                   r.importance, r.triggers, r.project_key,
                   p.origin_class, p.session_kind, p.observed_at
            FROM memory_index_chunks c
            JOIN memory_index_chunk_recall_metadata r ON r.chunk_id = c.id
            JOIN memory_index_chunk_provenance p ON p.chunk_id = c.id
            ORDER BY c.path`),
-    ).toEqual(
-      Array.from({ length: 8 }, (_, index) => ({
-        path: `memory/group-${index}.md`,
-        source: index % 2 === 0 ? "memory" : "sessions",
-        model: `model-${index}`,
-        text: `topic${index} indexed text`,
-        updated_at: 200 + index,
-        importance: index + 1,
-        triggers: `trigger-${index}`,
-        project_key: `project-${index}`,
-        origin_class: "untrusted",
-        session_kind: "unknown",
-        observed_at: 200 + index,
-      })),
-    );
-    expect(
-      select("chunks_fts", "path", "WHERE memory_index_chunks_fts MATCH ?").all("topic3"),
-    ).toEqual([{ path: "memory/group-3.md" }]);
-    expect(
-      all(
-        `SELECT c.path, v.distance FROM memory_index_chunks_vec v
+      ).toEqual(
+        Array.from({ length: count }, (_, index) => ({
+          path: `memory/group-${String(index).padStart(3, "0")}.md`,
+          source: index % 2 === 0 ? "memory" : "sessions",
+          model: `model-${index}`,
+          text: `topic${index} indexed text`,
+          updated_at: 200 + index,
+          importance: (index % 10) + 1,
+          triggers: `trigger-${index}`,
+          project_key: `project-${index}`,
+          origin_class: "untrusted",
+          session_kind: "unknown",
+          observed_at: 200 + index,
+        })),
+      );
+      expect(
+        select("chunks_fts", "path", "WHERE memory_index_chunks_fts MATCH ?").all("topic0"),
+      ).toEqual([{ path: "memory/group-000.md" }]);
+      expect(
+        all(
+          `SELECT c.path, v.distance FROM memory_index_chunks_vec v
            JOIN memory_index_chunks c ON c.id = v.id
-           WHERE v.embedding MATCH ? AND k = 8 ORDER BY c.path`,
-        Buffer.from(new Float32Array([1, 0, 0]).buffer),
-      ),
-    ).toEqual(
-      Array.from({ length: 8 }, (_, index) => ({
-        path: `memory/group-${index}.md`,
-        distance: 0,
-      })),
-    );
+           WHERE v.embedding MATCH ? AND k = ? ORDER BY c.path`,
+          Buffer.from(new Float32Array([1, 0, 0]).buffer),
+          count,
+        ),
+      ).toEqual(
+        Array.from({ length: count }, (_, index) => ({
+          path: `memory/group-${String(index).padStart(3, "0")}.md`,
+          distance: 0,
+        })),
+      );
+    },
+  );
+
+  it("bounds large source headers and keeps the final empty-source replacement", () => {
+    const first = replacement(`memory/${"界".repeat(12_000)}.md`, "first", 0);
+    const second = replacement(`memory/${"語".repeat(12_000)}.md`, "second", 0);
+    const last = { ...second, entry: { ...second.entry, hash: "last", size: 0 } };
+    let inserts = 0;
+    const statements = observeHostDataSql((sql, preparingDatabase) => {
+      if (!preparingDatabase && /^insert into "memory_index_sources"\s/i.test(sql)) {
+        inserts++;
+      }
+    });
+    try {
+      writeGroup([first, second, last]);
+    } finally {
+      statements.restore();
+    }
+    expect(inserts).toBe(2);
+    expect(select("sources", "hash, size", "WHERE path = ?").get(second.entry.path)).toEqual({
+      hash: "last",
+      size: 0,
+    });
+    expectCounts(["sources"], 2);
+    expectCounts(["chunks"], 0);
   });
 
   it("keeps later replacements and retained metadata authoritative within a group", async () => {
@@ -508,6 +545,9 @@ describe("memory source index native kernel", () => {
         embedding: embeddingHex([0, 1, 0]),
       })),
     );
+    expect(select("sources", "hash", "WHERE path = ?").get(initial.entry.path)).toEqual({
+      hash: "searchable",
+    });
     expectCounts(["chunks_vec"], 2);
   });
 

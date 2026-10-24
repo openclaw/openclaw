@@ -18,6 +18,28 @@ import {
   createTerminalPreparationInput,
   prepareAttempt,
 } from "./terminal-preparation.test-support.js";
+function hardTimeoutState(): NonNullable<Parameters<typeof prepareAttempt>[0]["terminalState"]> {
+  return {
+    outcome: {
+      reason: "hard_timeout",
+      status: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    },
+    signalOwnedInterruption: false,
+  };
+}
+
+function checkingToolTurn(): AssistantMessage {
+  return {
+    ...assistantMessage("toolUse"),
+    content: [
+      { type: "text", text: "Checking now" },
+      { type: "toolCall", id: "tool_1", name: "exec", arguments: {} },
+    ],
+  };
+}
+
 const payloadMocks = vi.hoisted(() => ({
   buildEmbeddedRunPayloads: vi.fn<typeof buildEmbeddedRunPayloads>(),
 }));
@@ -242,13 +264,7 @@ describe("prepareEmbeddedRunTerminal", () => {
   });
 
   it("marks narration from a completed tool-call message when the next message never finished", async () => {
-    const toolTurn = {
-      ...assistantMessage("toolUse"),
-      content: [
-        { type: "text" as const, text: "Checking now" },
-        { type: "toolCall" as const, id: "tool_1", name: "exec", arguments: {} },
-      ],
-    };
+    const toolTurn = checkingToolTurn();
     const prepared = await prepareAttempt({
       attempt: attemptResult({
         assistantTexts: ["Checking now"],
@@ -263,13 +279,7 @@ describe("prepareEmbeddedRunTerminal", () => {
   });
 
   it("prefers a later partial message over an earlier completed tool-call message", async () => {
-    const toolTurn = {
-      ...assistantMessage("toolUse"),
-      content: [
-        { type: "text" as const, text: "Checking now" },
-        { type: "toolCall" as const, id: "tool_1", name: "exec", arguments: {} },
-      ],
-    };
+    const toolTurn = checkingToolTurn();
     const partial = {
       ...assistantMessage("aborted"),
       content: [{ type: "text" as const, text: "Here is the partial answer" }],
@@ -517,15 +527,7 @@ describe("prepareEmbeddedRunTerminal", () => {
         currentAttemptCompletedAssistant: finalAssistant,
       }),
       currentAttemptCompletedAssistant: finalAssistant,
-      terminalState: {
-        outcome: {
-          reason: "hard_timeout",
-          status: "timeout",
-          timeoutPhase: "provider",
-          providerStarted: true,
-        },
-        signalOwnedInterruption: false,
-      },
+      terminalState: hardTimeoutState(),
     });
 
     expect(prepared.hasSuccessfulFinalAssistantAfterPromptTimeout).toBe(true);
@@ -557,15 +559,7 @@ describe("prepareEmbeddedRunTerminal", () => {
         currentAttemptCompletedAssistant: undefined,
       }),
       currentAttemptCompletedAssistant: undefined,
-      terminalState: {
-        outcome: {
-          reason: "hard_timeout",
-          status: "timeout",
-          timeoutPhase: "provider",
-          providerStarted: true,
-        },
-        signalOwnedInterruption: false,
-      },
+      terminalState: hardTimeoutState(),
     });
 
     expect(prepared.finalAssistantVisibleText).toBe("");

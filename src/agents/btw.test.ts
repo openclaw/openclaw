@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
@@ -118,9 +119,7 @@ describe("runBtwSideQuestion", () => {
     try {
       await started.promise;
       // Let the failed stream settle without a timed delay or polling.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       expect(settled).toBe(false);
     } finally {
       finishBlock.resolve();
@@ -591,9 +590,7 @@ describe("runBtwSideQuestion", () => {
         .toMatchObject({ usage, sessionId: "session-1", turnUsd: 0.25 });
       expect(consumeReplyUsageState(authorityRunId)).toBeUndefined();
       expect(sessionEntry).toEqual(originalEntry);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       expect.soft(diagnostics).toEqual([
         expect.objectContaining({
           type: "model.usage",
@@ -1081,11 +1078,7 @@ describe("runBtwSideQuestion", () => {
     const authStore = {
       version: 1 as const,
       profiles: {
-        "anthropic:primary": {
-          type: "api_key" as const,
-          provider: "anthropic",
-          key: "primary-key",
-        },
+        "anthropic:primary": createApiKeyCredential("anthropic", "primary-key"),
         "anthropic:backup": {
           type: "api_key" as const,
           provider: "anthropic",
@@ -1195,11 +1188,7 @@ describe("runBtwSideQuestion", () => {
     const authStore = {
       version: 1 as const,
       profiles: {
-        "openai:broken": {
-          type: "api_key" as const,
-          provider: "openai",
-          key: "broken-profile-key",
-        },
+        "openai:broken": createApiKeyCredential("openai", "broken-profile-key"),
       },
       order: { openai: ["openai:broken"] },
     };
@@ -1268,11 +1257,7 @@ describe("runBtwSideQuestion", () => {
       const staticAuthStore = {
         version: 1 as const,
         profiles: {
-          "anthropic:api": {
-            type: "api_key" as const,
-            provider: "anthropic",
-            key: "static-key",
-          },
+          "anthropic:api": createApiKeyCredential("anthropic", "static-key"),
         },
       };
       btw.ensureAuthProfileStoreMock.mockReturnValueOnce(staticAuthStore);

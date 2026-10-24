@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -791,4 +792,20 @@ describe("voice-call config migration", () => {
       "Removed plugins.entries.voice-call.config.realtime.agentContext.includeSystemPrompt.",
     ]);
   });
+});
+
+it("validates the realtime input transcription model in runtime and manifest schemas", () => {
+  const { configSchema } = JSON.parse(
+    readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+  );
+  const providers = { openai: { inputTranscriptionModel: "transcribe-prod" } };
+  expect(normalizeVoiceCallConfig({ realtime: { providers } }).realtime.providers).toEqual(
+    providers,
+  );
+  expect(
+    validateJsonSchemaValue({ schema: configSchema, value: { realtime: { providers } } }).ok,
+  ).toBe(true);
+  const invalid = { realtime: { providers: { openai: { inputTranscriptionModel: 123 } } } };
+  expect(() => normalizeVoiceCallConfig(invalid)).toThrow(/inputTranscriptionModel/);
+  expect(validateJsonSchemaValue({ schema: configSchema, value: invalid }).ok).toBe(false);
 });

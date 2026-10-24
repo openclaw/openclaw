@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import {
@@ -15,6 +14,7 @@ import type {
 } from "../prepared-model-runtime.types.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { createModelAliasMetadata } from "./model-alias-metadata.test-support.js";
 import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
 import { makeModel } from "./model.test-harness.js";
 
@@ -38,15 +38,7 @@ function configuredRow(modelId: string, maxSidePx: number, provider = PROVIDER) 
 }
 
 function metadata(aliases: Record<string, string> = {}) {
-  return createPluginMetadataSnapshotFixture({
-    plugins: [
-      {
-        id: PROVIDER,
-        providers: [PROVIDER],
-        modelIdNormalization: { providers: { [PROVIDER]: { aliases } } },
-      },
-    ],
-  });
+  return createModelAliasMetadata(PROVIDER, aliases);
 }
 
 function fixture(
@@ -195,17 +187,7 @@ describe("prepared configured model indexes", () => {
 
 describe("selected model materialization", () => {
   const provider = "selected-model-test";
-  const metadataSnapshot = createPluginMetadataSnapshotFixture({
-    plugins: [
-      {
-        id: provider,
-        providers: [provider],
-        modelIdNormalization: {
-          providers: { [provider]: { aliases: { entry: "middle", middle: "final" } } },
-        },
-      },
-    ],
-  });
+  const metadataSnapshot = createModelAliasMetadata(provider, { entry: "middle", middle: "final" });
 
   function createResolutionOptions() {
     const stores = createEmptyAgentDiscoveryStores();

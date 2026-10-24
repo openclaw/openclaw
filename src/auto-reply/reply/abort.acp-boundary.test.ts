@@ -45,13 +45,10 @@ import {
   type SessionEffectRef,
 } from "../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
 import { captureChannelSessionStop } from "./abort-operation.js";
 import { tryFastAbortFromMessage } from "./abort.js";
 import { buildTestCtx } from "./test-ctx.js";
+import { createAcpTestBindingRegistry } from "./test-fixtures/acp-runtime.js";
 
 const fixture = useChatAbortRegistryFixture();
 
@@ -109,18 +106,7 @@ it.each(["idle", "active", "native failure"])(
     const cfg = getRuntimeConfig();
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
     const registry = captureActivePluginRegistrySnapshot();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "stop-test",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "stop-test" }),
-            conversationBindings: { supportsCurrentConversationBinding: true },
-          },
-        },
-      ]),
-    );
+    setActivePluginRegistry(createAcpTestBindingRegistry("stop-test"));
     const binding = await getSessionBindingService().bind({
       targetSessionKey: acpKey,
       targetKind: "session",

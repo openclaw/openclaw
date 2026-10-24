@@ -7,6 +7,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../c
 import { callGateway } from "../../../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
+import { throwCollectedErrors } from "../../../infra/error-graph-internal.js";
 import { isPathInside } from "../../../infra/path-guards.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { listOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.test-support.js";
@@ -135,11 +136,7 @@ export function useSubagentPersistenceFixture() {
         failures.push(error);
       }
     }
-    if (failures.length) {
-      throw failures.length === 1
-        ? failures[0]
-        : new AggregateError(failures, "Subagent persistence cleanup failed");
-    }
+    throwCollectedErrors(failures, "Subagent persistence cleanup failed");
   });
 
   return {

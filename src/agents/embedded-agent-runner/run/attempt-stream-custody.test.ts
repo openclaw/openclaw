@@ -54,6 +54,7 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
+import { observeSettlement } from "../../promise-settlement.test-support.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -106,19 +107,6 @@ function anthropicSse(events: Array<Record<string, unknown>>): Response {
       .join(""),
     { headers: { "content-type": "text/event-stream" } },
   );
-}
-
-function observeSettlement<T>(promise: Promise<T>) {
-  let settled = false;
-  void promise.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
-  return () => settled;
 }
 
 function createFixture(

@@ -77,6 +77,18 @@ function successAttempt(provider: string, model: string): EmbeddedRunAttemptResu
   });
 }
 
+function makeRefusalAssistant(errorMessage: string, timestamp: number) {
+  return makeAssistantMessageFixture({
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: "claude-opus-5",
+    stopReason: "error",
+    content: [],
+    errorMessage,
+    diagnostics: [{ type: "provider_refusal", timestamp, details: { category: "cyber" } }],
+  });
+}
+
 describe("runEmbeddedAgent silent-error retry", () => {
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
@@ -383,15 +395,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     });
 
     it("ignores a historical refusal after compaction", async () => {
-      const refusal = makeAssistantMessageFixture({
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-opus-5",
-        stopReason: "error",
-        content: [],
-        errorMessage: "historical refusal",
-        diagnostics: [{ type: "provider_refusal", timestamp: 1, details: { category: "cyber" } }],
-      });
+      const refusal = makeRefusalAssistant("historical refusal", 1);
       mockedRunEmbeddedAttempt
         .mockResolvedValueOnce(
           makeAttemptResult({
@@ -417,15 +421,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     });
 
     it("preserves a completed current refusal after transcript projection removes its slice", async () => {
-      const refusal = makeAssistantMessageFixture({
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-opus-5",
-        stopReason: "error",
-        content: [],
-        errorMessage: "current refusal",
-        diagnostics: [{ type: "provider_refusal", timestamp: 2, details: { category: "cyber" } }],
-      });
+      const refusal = makeRefusalAssistant("current refusal", 2);
       mockedRunEmbeddedAttempt
         .mockResolvedValueOnce(
           makeAttemptResult({

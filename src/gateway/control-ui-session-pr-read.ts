@@ -10,7 +10,7 @@ import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
 import { readResidentUserProfileId } from "../state/user-profile-list.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
 import type { SessionPullRequestReadCredential } from "./control-ui-session-pr-request.js";
-import { selectTaskPublicationSessions } from "./control-ui-session-task-prs.js";
+import { prepareTaskPublicationSessions } from "./control-ui-session-task-prs.js";
 import { captureOwnGitHubPullRequestReader } from "./github-publication-inspect-reader.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
@@ -175,8 +175,8 @@ function withControlUiTaskPrTarget(
     generation: root.generation,
     entry: { sessionId: root.entry.sessionId, lifecycleRevision: root.entry.lifecycleRevision },
   };
-  const select = () => selectTaskPublicationSessions(projection, selected, getAllows());
-  const sessions = select();
+  const selection = prepareTaskPublicationSessions(projection, selected, getAllows);
+  const sessions = selection.sessions;
   const taskReceipts = { sessions, ...(ownerProfileId ? { ownerProfileId } : {}) };
   return {
     ...target,
@@ -185,22 +185,7 @@ function withControlUiTaskPrTarget(
     identity: JSON.stringify([target.identity, JSON.stringify(taskReceipts)]),
     assertCurrent: () => {
       target.assertCurrent?.();
-      const current = select();
-      if (
-        current.length !== sessions.length ||
-        current.some((session, index) => {
-          const previous = sessions[index];
-          return (
-            session !== previous &&
-            (session.agentId !== previous?.agentId ||
-              session.sessionKey !== previous.sessionKey ||
-              session.sessionId !== previous.sessionId ||
-              session.lifecycleRevision !== previous.lifecycleRevision)
-          );
-        })
-      ) {
-        throw new Error("Task pull-request audience changed");
-      }
+      selection.assertCurrent();
     },
   };
 }

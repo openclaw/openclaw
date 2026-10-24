@@ -61,7 +61,7 @@ import {
   readTranscriptMessagesByIdentity,
 } from "./sqlite-session.test-helpers.js";
 import {
-  createClientHarness,
+  createRequestClientHarness,
   createCodexTestModel,
   createCodexTestOAuthProfile,
   stubCodexInferenceTransportEnv,
@@ -128,21 +128,11 @@ function nativeClient(
     "thread/unsubscribe": () => ({ status: "unsubscribed" }),
     ...replies,
   };
-  const harness = createClientHarness({
-    onWrite: (line, send) => {
-      const message: unknown = JSON.parse(line);
-      if (
-        !isJsonObject(message) ||
-        typeof message.method !== "string" ||
-        message.id === undefined
-      ) {
-        return;
-      }
-      requests.push({ method: message.method, params: message.params });
-      const request = isJsonObject(message.params) ? message.params : {};
-      send({ id: message.id, result: handlers[message.method]?.(request, send) ?? {} });
-      afterResponse?.(message.method, request, send);
-    },
+  const harness = createRequestClientHarness((method, id, requestParams, send) => {
+    requests.push({ method, params: requestParams });
+    const request = isJsonObject(requestParams) ? requestParams : {};
+    send({ id, result: handlers[method]?.(request, send) ?? {} });
+    afterResponse?.(method, request, send);
   });
   return { ...harness, requests };
 }

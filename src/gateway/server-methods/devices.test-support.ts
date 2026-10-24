@@ -5,7 +5,6 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
-import { runNodeWakeAttempt, runNodeWakeNudgeAttempt } from "../node-wake-state.js";
 import { resetNodeWakeStateForTest } from "../node-wake-state.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -136,24 +135,6 @@ export async function captureSecurityEvents(run: () => Promise<unknown>) {
   } finally {
     stop();
   }
-}
-
-export async function seedNodeWakeState(nodeId: string): Promise<void> {
-  await runNodeWakeAttempt({
-    nodeId,
-    force: true,
-    throttleMs: 60_000,
-    attempt: async (markAttempted) => {
-      markAttempted();
-      return { available: true, throttled: false, path: "sent", durationMs: 1 };
-    },
-  });
-  await runNodeWakeNudgeAttempt({
-    nodeId,
-    throttleMs: 60_000,
-    throttled: () => ({ sent: false, throttled: true, reason: "throttled", durationMs: 0 }),
-    attempt: async () => ({ sent: true, throttled: false, reason: "sent", durationMs: 1 }),
-  });
 }
 
 export function resetDeviceHandlerTestState(): void {

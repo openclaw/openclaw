@@ -247,3 +247,14 @@ it.each([
 it("rejects a relative worktreeRoot", () => {
   expect(accepts({ worktreeRoot: "worktrees" })).toBe(false);
 });
+
+it("validates the realtime input transcription model as an optional string", () => {
+  const providers = { openai: { inputTranscriptionModel: "transcribe-prod" } };
+  expect(validated({ talk: { realtime: { providers } } }).talk?.realtime?.providers).toEqual(
+    providers,
+  );
+  expectSchemaIssue(
+    { talk: { realtime: { providers: { openai: { inputTranscriptionModel: 123 } } } } },
+    ["talk", "realtime", "providers", "openai", "inputTranscriptionModel"],
+  );
+});

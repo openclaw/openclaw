@@ -4,8 +4,9 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { type RawData, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
+import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { rawDataToText } from "./client-websocket.test-support.js";
 import { CodexAppServerClient } from "./client.js";
 import * as processRegistration from "./transport-process-registration.js";
 import { createWebSocketTransport } from "./transport-websocket.js";
@@ -271,13 +272,3 @@ describe("Codex app-server websocket transport", () => {
     expect(localRegistration).not.toHaveBeenCalled();
   });
 });
-
-function rawDataToText(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(new Uint8Array(data)).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
-}

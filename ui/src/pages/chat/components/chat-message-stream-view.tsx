@@ -226,6 +226,7 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
       <Show when={hasAvatar()}>
         <ChatAvatar
           role="assistant"
+          mediaReadAllowed={props.options.mediaReadAllowed}
           assistant={props.options.assistant}
           elementRef={(element) => (replyElements.avatar = element)}
         />

@@ -24,6 +24,7 @@ import {
   getChatBranchesQueryState,
   loadChatBranches,
 } from "./chat-history-branches.ts";
+import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { createChatMobilePeopleMentions } from "./chat-mobile-people-mentions.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
@@ -475,6 +476,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,
       gatewayStatus: this.gatewayStatus,
+      savedConversation: Boolean(
+        this.state &&
+        (!this.state.connected || isInitialChatHistoryUnavailable(this.state)) &&
+        this.state.chatMessages.length,
+      ),
       title,
       titlePending: !catalog && !title ? true : undefined,
       agent:
@@ -492,7 +498,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
       workspaceIcon: resolveChatPaneWorkspaceIcon({
-        sessionKey: workspace.root ? row?.key : undefined,
+        sessionKey:
+          workspace.root && this.state?.connected && !this.routeResolutionPending
+            ? row?.key
+            : undefined,
         resourceBasePath: this.context.resourceBasePath,
         hello: sharingSnapshot.hello,
         token: this.context.gateway.connection.token,

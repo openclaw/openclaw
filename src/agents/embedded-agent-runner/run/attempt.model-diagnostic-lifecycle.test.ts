@@ -2,13 +2,18 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { notifyProviderStreamOpened } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessageEvent,
+} from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareModelRequestBody } from "../../../../packages/ai/src/transports/model-request-body.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   onInternalDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
@@ -397,6 +402,168 @@ describe("model diagnostic lifecycle", () => {
     expect(events[1]).toMatchObject({ type: "mark", runId: "run-1", spanId: "call-1" });
     expect(JSON.stringify(events)).not.toContain("private preparation fixture");
   });
+
+  it.each(["disabled", "unobserved", "unrelated"] as const)(
+    "skips unconsumed prompt and byte statistics when diagnostics are %s",
+    async (mode) => {
+      resetDiagnosticEventsForTest();
+      setDiagnosticsEnabledForProcess(mode !== "disabled");
+      if (mode === "unrelated") {
+        onInternalDiagnosticEvent(() => {}, { include: ["model.usage"] });
+      }
+      let promptInspected = false;
+      const streamContext = {
+        systemPrompt: "system",
+        get messages() {
+          promptInspected = true;
+          return [{ role: "user", content: "x", timestamp: 1 }];
+        },
+        get tools() {
+          promptInspected = true;
+          return [{ name: "lookup", description: "d", parameters: { type: "object" } }];
+        },
+      };
+      const requestSerialized = vi.fn(() => ({ request: "synthetic" }));
+      const chunkSerialized = vi.fn(() => ({ response: "synthetic" }));
+      const resultSerialized = vi.fn(() => ({ result: "synthetic" }));
+      const assistant = Object.assign(
+        makeAssistantMessageFixture({ stopReason: "stop", errorMessage: undefined }),
+        { toJSON: resultSerialized },
+      );
+      const onTerminal = vi.fn();
+      const onSucceeded = vi.fn();
+      const wrapped = wrap(
+        async (model, _context, options) => {
+          await options?.onPayload?.({ toJSON: requestSerialized }, model);
+          const stream = createAssistantMessageEventStream();
+          const start = { type: "start" as const, partial: assistant, toJSON: chunkSerialized };
+          stream.push(start);
+          stream.push({ type: "done", reason: "stop", message: assistant });
+          stream.end(assistant);
+          return stream;
+        },
+        { onTerminal, onSucceeded },
+      );
+
+      const stream = await wrapped({} as never, streamContext as never, {});
+      await drain(stream);
+      expect(await stream.result()).toBe(assistant);
+
+      expect(promptInspected).toBe(false);
+      expect(requestSerialized).not.toHaveBeenCalled();
+      expect(chunkSerialized).not.toHaveBeenCalled();
+      expect(resultSerialized).not.toHaveBeenCalled();
+      expect(onTerminal).toHaveBeenCalledOnce();
+      expect(onSucceeded).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["stop", "error"] as const)(
+    "preserves exact byte and usage statistics for a metrics-only %s listener",
+    async (stopReason) => {
+      const baseUsage = { input: 11, output: 7, cacheRead: 3, cacheWrite: 2, reasoningTokens: 5 };
+      resetDiagnosticEventsForTest();
+      const events: DiagnosticEventPayload[] = [];
+      const type = stopReason === "stop" ? "model.call.completed" : "model.call.error";
+      const stop = onTrustedInternalDiagnosticEvent((event) => events.push(event), {
+        includeTrusted: [type],
+        includePromptStats: false,
+      });
+      const assistant = makeAssistantMessageFixture({
+        content: [{ type: "text", text: "reply" }],
+        stopReason,
+      });
+      assistant.usage = { ...assistant.usage, ...baseUsage, totalTokens: 28 };
+      const terminal: AssistantMessageEvent =
+        stopReason === "stop"
+          ? { type: "done", reason: "stop", message: assistant }
+          : { type: "error", reason: "error", error: assistant };
+      const delta = "é🦞";
+      const payload = { request: "synthetic" };
+      const wrapped = wrap(async (model, _context, options) => {
+        await options?.onPayload?.(payload, model);
+        const stream = createAssistantMessageEventStream();
+        stream.push({ type: "text_delta", contentIndex: 0, delta, partial: assistant });
+        stream.push(terminal);
+        stream.end(assistant);
+        return stream;
+      });
+      try {
+        const stream = await wrapped({} as never, { messages: [] });
+        await drain(stream);
+        await stream.result();
+        await waitForDiagnosticEventsDrained();
+      } finally {
+        stop();
+      }
+
+      expect(events).toEqual([
+        expect.objectContaining({
+          type,
+          requestPayloadBytes: Buffer.byteLength(JSON.stringify(payload), "utf8"),
+          responseStreamBytes:
+            Buffer.byteLength(delta, "utf8") + Buffer.byteLength(JSON.stringify(terminal), "utf8"),
+          usage: { ...baseUsage, total: 28, promptTokens: 16, cost: { total: 0 } },
+        }),
+      ]);
+      expect(events[0]).not.toHaveProperty("promptStats");
+    },
+  );
+
+  it.each(["hook", "trace"] as const)(
+    "preserves byte statistics for a %s consumer without diagnostic listeners",
+    async (consumer) => {
+      resetDiagnosticEventsForTest();
+      const { ended } = consumer === "hook" ? hooks() : { ended: undefined };
+      const traceEvents: DiagnosticEventPayload[] = [];
+      const stopTrace =
+        consumer === "trace"
+          ? registerDiagnosticTracePropagationBridge({
+              resolveTraceContext: (trace) => trace,
+              prepareEvent(event: DiagnosticEventPayload) {
+                if (event.type === "model.call.completed") {
+                  traceEvents.push(event);
+                }
+              },
+            })
+          : undefined;
+      setDiagnosticsEnabledForProcess(consumer === "trace");
+      const payload = { request: "é" };
+      const delta = "🦞";
+      const assistant = makeAssistantMessageFixture({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [{ type: "text", text: delta }],
+      });
+      const terminal = { type: "done" as const, reason: "stop" as const, message: assistant };
+      const wrapped = wrap(async (model, _context, options) => {
+        await options?.onPayload?.(payload, model);
+        const stream = createAssistantMessageEventStream();
+        stream.push({ type: "text_delta", contentIndex: 0, delta, partial: assistant });
+        stream.push(terminal);
+        stream.end(assistant);
+        return stream;
+      });
+      try {
+        const stream = await wrapped({} as never, { messages: [] });
+        await drain(stream);
+        await stream.result();
+        await waitForDiagnosticEventsDrained();
+      } finally {
+        stopTrace?.();
+      }
+
+      const observed = ended ? ended.mock.calls.map(([event]) => event) : traceEvents;
+      expect(observed).toEqual([
+        expect.objectContaining({
+          requestPayloadBytes: Buffer.byteLength(JSON.stringify(payload), "utf8"),
+          responseStreamBytes:
+            Buffer.byteLength(delta, "utf8") + Buffer.byteLength(JSON.stringify(terminal), "utf8"),
+          timeToFirstByteMs: expect.any(Number),
+        }),
+      ]);
+    },
+  );
 
   it("bounds activity marks and flag lookups independently of chunk volume", async () => {
     let now = 0;

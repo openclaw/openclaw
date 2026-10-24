@@ -150,6 +150,30 @@ function requireStoredSessionEntry(storePath: string, sessionKey = "main"): Sess
   );
 }
 
+function discordSourceContext(messageId: string) {
+  return {
+    Provider: "discord",
+    OriginatingChannel: "discord",
+    OriginatingTo: "channel:24680",
+    MessageSid: messageId,
+  } as const;
+}
+
+function fireworksCooldownFallback() {
+  return {
+    provider: "deepinfra",
+    model: "moonshotai/Kimi-K2.5",
+    attempts: [
+      {
+        provider: "fireworks",
+        model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+        error: "Provider fireworks is in cooldown (all profiles unavailable)",
+        reason: "rate_limit" as const,
+      },
+    ],
+  };
+}
+
 function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
     sessionId: "session",
@@ -610,12 +634,7 @@ function requireBuiltChannelSourceTurnId(
 describe("runReplyAgent active steering", () => {
   it("keeps the replacement source when retired admission completes", async ({ signal }) => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
-    const sourceContext = {
-      Provider: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "channel:24680",
-      MessageSid: "first-source-message",
-    };
+    const sourceContext = discordSourceContext("first-source-message");
     const { followupRun } = createMinimalRun({ sessionCtx: sourceContext });
     const first = createReplyOperation({
       sessionKey: "main",
@@ -965,12 +984,7 @@ describe("runReplyAgent active steering", () => {
       isActive: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
-      sessionCtx: {
-        Provider: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:24680",
-        MessageSid: "steer-fallback",
-      },
+      sessionCtx: discordSourceContext("steer-fallback"),
       runOverrides: { agentId: "main", messageProvider: "discord" },
     });
 
@@ -1419,12 +1433,7 @@ describe("runReplyAgent active steering", () => {
       isActive: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
-      sessionCtx: {
-        Provider: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:24680",
-        MessageSid: "rejected-steering-message",
-      },
+      sessionCtx: discordSourceContext("rejected-steering-message"),
       runOverrides: { messageProvider: "discord" },
       sessionEntry,
       sessionStore,
@@ -2334,12 +2343,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
 
     const { run, sourceTurnId } = createRecordedSessionRun("maybe send a terminal reply", {
-      sessionCtx: {
-        Provider: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:24680",
-        MessageSid: "discord-message-unknown",
-      },
+      sessionCtx: discordSourceContext("discord-message-unknown"),
       runOverrides: { messageProvider: "discord" },
       sessionEntry,
       sessionStore,
@@ -2366,12 +2370,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   it("rejects channel recovery admission without a source-keyed user turn", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const { run } = createMinimalRun({
-      sessionCtx: {
-        Provider: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:24680",
-        MessageSid: "discord-message-without-recorder",
-      },
+      sessionCtx: discordSourceContext("discord-message-without-recorder"),
       runOverrides: { messageProvider: "discord" },
       sessionEntry,
       sessionStore,
@@ -2396,12 +2395,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       return { payloads: [{ text: "visible final" }], meta: {} };
     });
     const { run } = createMinimalRun({
-      sessionCtx: {
-        Provider: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:24680",
-        MessageSid: "discord-message-without-source-id",
-      },
+      sessionCtx: discordSourceContext("discord-message-without-source-id"),
       sourceTurnId: "",
       runOverrides: { messageProvider: "discord" },
       sessionEntry,
@@ -2503,12 +2497,7 @@ describe("runReplyAgent pending final delivery capture", () => {
 
   it("drops a redelivered terminal channel source before hooks or model work", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
-    const sessionCtx = {
-      Provider: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "channel:24680",
-      MessageSid: "redelivered-terminal-message",
-    } as const;
+    const sessionCtx = discordSourceContext("redelivered-terminal-message");
     const first = createRecordedSessionRun("execute once", {
       sessionCtx,
       runOverrides: { messageProvider: "discord" },
@@ -2567,12 +2556,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("drops a redelivered active channel source before hooks or queue work", async () => {
-    const sessionCtx = {
-      Provider: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "channel:24680",
-      MessageSid: "redelivered-active-message",
-    } as const;
+    const sessionCtx = discordSourceContext("redelivered-active-message");
     const sourceTurnId = requireBuiltChannelSourceTurnId({
       provider: "discord",
       conversationId: "channel:24680",
@@ -2928,12 +2912,7 @@ describe("runReplyAgent pending final delivery capture", () => {
           },
         },
       },
-      sessionCtx: {
-        Provider: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:24680",
-        MessageSid: "discord-message-1",
-      },
+      sessionCtx: discordSourceContext("discord-message-1"),
       runOverrides: { messageProvider: "discord" },
       sessionEntry,
       sessionStore,
@@ -2987,12 +2966,7 @@ describe("runReplyAgent pending final delivery capture", () => {
         sourceReplyDeliveryMode: "message_tool_only",
         [REPLY_OPERATION_RUN_STATE]: receipt,
       },
-      sessionCtx: {
-        Provider: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:24680",
-        MessageSid: "discord-message-silent-hook",
-      },
+      sessionCtx: discordSourceContext("discord-message-silent-hook"),
       runOverrides: { messageProvider: "discord" },
       sessionEntry,
       sessionStore,
@@ -3033,12 +3007,7 @@ describe("runReplyAgent pending final delivery capture", () => {
         return result;
       });
       const { run } = createRecordedSessionRun("model-owned request", {
-        sessionCtx: {
-          Provider: "discord",
-          OriginatingChannel: "discord",
-          OriginatingTo: "channel:24680",
-          MessageSid: "discord-message-2",
-        },
+        sessionCtx: discordSourceContext("discord-message-2"),
         runOverrides: { messageProvider: "discord" },
         sessionEntry,
         sessionStore,
@@ -3658,14 +3627,8 @@ describe("runReplyAgent typing", () => {
   });
 
   it("drains pending tool delivery before returning an empty terminal-run failure", async () => {
-    let markToolResultStarted = () => {};
-    const toolResultStarted = new Promise<void>((resolve) => {
-      markToolResultStarted = resolve;
-    });
-    let releaseToolResult = () => {};
-    const toolResultReleased = new Promise<void>((resolve) => {
-      releaseToolResult = resolve;
-    });
+    const { resolve: markToolResultStarted, promise: toolResultStarted } = createDeferred();
+    const { resolve: releaseToolResult, promise: toolResultReleased } = createDeferred();
     let toolResultDelivered = false;
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       void params.onToolResult?.({ text: "late tool result" });
@@ -4036,20 +3999,7 @@ describe("runReplyAgent typing", () => {
     });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementationOnce(
-        makeCompletedFallbackRunner({
-          provider: "deepinfra",
-          model: "moonshotai/Kimi-K2.5",
-          attempts: [
-            {
-              provider: "fireworks",
-              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-              error: "Provider fireworks is in cooldown (all profiles unavailable)",
-              reason: "rate_limit",
-            },
-          ],
-        }),
-      );
+      .mockImplementationOnce(makeCompletedFallbackRunner(fireworksCooldownFallback()));
     try {
       const { run } = createMinimalRun({
         blockStreamingEnabled: true,
@@ -4080,20 +4030,7 @@ describe("runReplyAgent typing", () => {
     });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementationOnce(
-        makeCompletedFallbackRunner({
-          provider: "deepinfra",
-          model: "moonshotai/Kimi-K2.5",
-          attempts: [
-            {
-              provider: "fireworks",
-              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-              error: "Provider fireworks is in cooldown (all profiles unavailable)",
-              reason: "rate_limit",
-            },
-          ],
-        }),
-      );
+      .mockImplementationOnce(makeCompletedFallbackRunner(fireworksCooldownFallback()));
     try {
       const { run } = createMinimalRun({
         sessionEntry,
@@ -4444,16 +4381,7 @@ describe("runReplyAgent typing", () => {
                 "moonshotai/Kimi-K2.5",
                 "rate_limit",
               ),
-              provider: "deepinfra",
-              model: "moonshotai/Kimi-K2.5",
-              attempts: [
-                {
-                  provider: "fireworks",
-                  model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-                  error: "Provider fireworks is in cooldown (all profiles unavailable)",
-                  reason: "rate_limit",
-                },
-              ],
+              ...fireworksCooldownFallback(),
             };
           }
           return {

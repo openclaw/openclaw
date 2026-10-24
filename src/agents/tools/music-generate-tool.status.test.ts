@@ -10,7 +10,7 @@ vi.mock("../media-generation-activity.js", async (importOriginal) => {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as musicGenerationRegistry from "../../media-generation/registry.js";
 import type { MediaGenerationOperation } from "../media-generation-activity.js";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
+import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 import { MUSIC_GENERATION_TASK_KIND } from "../media-generation-task-status.js";
 import {
   createMusicGenerateDuplicateGuardResult,
@@ -37,7 +37,7 @@ function resetMusicStatusMocks() {
   mediaActivityMocks.listMediaGenerationOperations.mockImplementation((ownerKey) =>
     mediaActivityMocks.listOperations(ownerKey),
   );
-  resetRecentMediaGenerationDuplicateGuardsForTests();
+  resetGeneratedMediaTaskActivityForTests();
 }
 
 function musicStatusOperation(overrides: Partial<MediaGenerationOperation> = {}) {

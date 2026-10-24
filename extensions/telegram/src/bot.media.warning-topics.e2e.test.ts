@@ -19,7 +19,6 @@ import {
 } from "./bot.media.e2e.test-harness.js";
 import {
   TELEGRAM_TEST_TIMINGS,
-  createBotHandler,
   createBotHandlerWithOptions,
   createTelegramPhotoForTest,
   mockTelegramPngDownload,
@@ -139,7 +138,7 @@ function configureForum(requireMention: boolean) {
 
 describe("telegram inbound media", () => {
   it("captures pin and venue location payload fields", async () => {
-    const { handler, replySpy } = await createBotHandler();
+    const { handler, replySpy } = await createBotHandlerWithOptions({});
 
     const cases = [
       {
@@ -281,7 +280,7 @@ describe("telegram media groups", () => {
   ])(
     "$name album siblings in prompt context",
     async ({ partial, firstId, file, photo, caption }) => {
-      const { handler, replySpy, runtimeError } = await createBotHandler();
+      const { handler, replySpy, runtimeError } = await createBotHandlerWithOptions({});
       const fetchSpy = partial ? undefined : mockTelegramPngDownload();
       const timers = holdMediaGroup();
       const savedPaths = (partial ? [2, 3] : [1, 2, 3]).map(
@@ -346,7 +345,7 @@ describe("telegram media groups", () => {
   it(
     "buffers separate media groups independently",
     async () => {
-      const { handler, replySpy, runtimeError } = await createBotHandler();
+      const { handler, replySpy, runtimeError } = await createBotHandlerWithOptions({});
       const fetchSpy = mockTelegramPngDownload();
       const timers = holdMediaGroup();
 
@@ -381,7 +380,7 @@ describe("telegram media groups", () => {
     async () => {
       const restoreConfig = configureForum(false);
 
-      const { handler, replySpy, runtimeError } = await createBotHandler();
+      const { handler, replySpy, runtimeError } = await createBotHandlerWithOptions({});
       const fetchSpy = mockTelegramPngDownload();
       const timers = holdMediaGroup();
 

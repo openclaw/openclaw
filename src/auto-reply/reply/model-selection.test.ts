@@ -6,6 +6,7 @@ import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import * as activeThinkingPolicy from "../../plugins/provider-thinking-active.js";
 import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thinking.js";
@@ -145,6 +146,27 @@ function selectSession(
 }
 
 describe("catalog and thinking selection", () => {
+  it("reports the requested and selected model when the configured default falls outside a wildcard", async () => {
+    const capture = createWarnLogCapture("reply-model-fallback");
+    try {
+      const cfg = selectionConfig({
+        model: "custom/blocked",
+        modelPolicy: { allow: ["remote/*"] },
+      });
+      const selected = await createInitialState(cfg, "custom", "blocked", {
+        preparedModelCatalog: preparedCatalog([
+          { provider: "remote", id: "z-first", name: "First" },
+          { provider: "remote", id: "a-second", name: "Second" },
+        ]),
+      });
+      expect(selected).toMatchObject({ provider: "remote", model: "z-first" });
+      expect(await capture.findText("Falling back to")).toContain('"custom/blocked"');
+      expect(await capture.findText("Falling back to")).toContain('"remote/z-first"');
+    } finally {
+      capture.cleanup();
+    }
+  });
+
   it.each(["observed thinking", "automatic-primary thinking"] as const)(
     "uses prepared %s metadata",
     async (kind) => {

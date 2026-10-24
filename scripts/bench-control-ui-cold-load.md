@@ -245,10 +245,13 @@ cache during warm reloads. Without that option, Playwright's synthetic HTTP rout
 disable caching: "warm" then describes persisted application state only.
 `http.waterfall[].transferBytes` records the actual transfer.
 
-`--warm-reload --probe-dir /path/to/probes` adds cache/paint diagnostics. The probe directory supplies `loaf-mutation.init.js` and
-`ws-rpc-census.init.js`. The output records cache reads, cached transcript visibility,
+`--warm-reload` adds self-contained cache/paint diagnostics. An optional
+`--probe-dir /path/to/probes` supplies `mutattr.init.js`, `loaf-mutation.init.js`,
+and `ws-rpc-census.init.js` for additional attribution; `externalRig` records which
+extra instruments are available. The output records cache reads, cached transcript visibility,
 hello, live catch-up, enabled input, layout shifts, mutation batches, and retained
-row elements. Visibility and enabled-input milestones are DOM observations;
+row elements, duplicate visible row keys, and the same visible row's viewport offset
+at the cached-to-live handoff. Visibility and enabled-input milestones are DOM observations;
 FCP is the browser's paint metric. Diagnostic runs also save filmstrip frames.
 Use `--untraced` for timing comparisons without boot tracing or CPU sampling,
 then collect separate traced runs for the storyboard and attribution.

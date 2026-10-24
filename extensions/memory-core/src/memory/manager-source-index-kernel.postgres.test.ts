@@ -281,6 +281,17 @@ it.skipIf(!connection).each([
             supersedes_key: "latest-source",
           },
         ]);
+        db.runTransaction(() =>
+          new MemorySourceIndexKernel(db, state).replaceGroup(
+            ["earlier-header", "latest-header"].map((hash) => ({
+              header: { ...header, entry: { ...header.entry, hash }, delta: true },
+              rows: [],
+            })),
+          ),
+        );
+        expect(
+          db.prepare("SELECT hash FROM memory_index_sources WHERE path = ?").get(header.entry.path),
+        ).toEqual({ hash: "latest-header" });
       } finally {
         db.exec(`DROP SCHEMA "${namespace.replaceAll('"', '""')}" CASCADE`);
         db.close();

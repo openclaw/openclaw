@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -226,16 +227,12 @@ it(
                 apiKey: "synthetic-fixture-key",
                 api: "openai-completions",
                 models: [
-                  {
-                    id: "google/gemini-encrypted-fixture",
+                  modelDefinition("google/gemini-encrypted-fixture", {
                     name: "Encrypted fixture",
                     api: "openai-completions",
-                    reasoning: true,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                     contextWindow: 128000,
                     maxTokens: 4096,
-                  },
+                  }),
                 ],
               },
             },

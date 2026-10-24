@@ -1,9 +1,8 @@
 // Code Mode model matrix tests cover repeatable small-model acceptance evidence.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { useAutoCleanupTempDirTracker, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildCodeModeMatrixAgentEnv,
@@ -505,8 +504,7 @@ describe("Code Mode model matrix extended fixtures", () => {
 
 describe("Code Mode model matrix artifacts", () => {
   it("rejects output inside Git metadata", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-git-test-"));
-    try {
+    await withTempDir("openclaw-code-mode-git-test-", async (repoRoot) => {
       await fs.mkdir(path.join(repoRoot, ".git"));
       await expect(
         runCodeModeModelMatrix(
@@ -519,14 +517,11 @@ describe("Code Mode model matrix artifacts", () => {
       await expect(fs.access(path.join(repoRoot, ".git", "refs"))).rejects.toMatchObject({
         code: "ENOENT",
       });
-    } finally {
-      await fs.rm(repoRoot, { force: true, recursive: true });
-    }
+    });
   });
 
   it("rejects case aliases of missing runtime artifacts", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-case-test-"));
-    try {
+    await withTempDir("openclaw-code-mode-case-test-", async (repoRoot) => {
       const canonicalRoot = await fs.realpath(repoRoot);
       const rootName = path.basename(canonicalRoot);
       const letterIndex = rootName.search(/[a-z]/iu);
@@ -556,14 +551,11 @@ describe("Code Mode model matrix artifacts", () => {
       await expect(fs.access(path.join(repoRoot, "DIST", "evidence"))).rejects.toMatchObject({
         code: "ENOENT",
       });
-    } finally {
-      await fs.rm(repoRoot, { force: true, recursive: true });
-    }
+    });
   });
 
   it("rejects package artifact namespaces before reservation creates them", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-package-test-"));
-    try {
+    await withTempDir("openclaw-code-mode-package-test-", async (repoRoot) => {
       await fs.mkdir(path.join(repoRoot, "packages"));
       await expect(
         runCodeModeModelMatrix(
@@ -582,17 +574,14 @@ describe("Code Mode model matrix artifacts", () => {
           code: "ENOENT",
         },
       );
-    } finally {
-      await fs.rm(repoRoot, { force: true, recursive: true });
-    }
+    });
   });
 
   it.each(["dist", path.join("packages", "agent-core", "dist")])(
     "rejects output inside build-created runtime artifacts: %s",
     async (artifactDir) => {
-      const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-build-test-"));
-      let hashed = false;
-      try {
+      await withTempDir("openclaw-code-mode-build-test-", async (repoRoot) => {
+        let hashed = false;
         await expect(
           runCodeModeModelMatrix(
             matrixArtifactOptions(repoRoot, path.join(artifactDir, "evidence")),
@@ -614,9 +603,7 @@ describe("Code Mode model matrix artifacts", () => {
             code: "ENOENT",
           },
         );
-      } finally {
-        await fs.rm(repoRoot, { force: true, recursive: true });
-      }
+      });
     },
   );
 
@@ -711,8 +698,7 @@ describe("Code Mode model matrix artifacts", () => {
   });
 
   it("continues after cell crashes and reports first-pass versus eventual success", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-matrix-test-"));
-    try {
+    await withTempDir("openclaw-code-mode-matrix-test-", async (repoRoot) => {
       let calls = 0;
       let initialBuildRead = true;
       const result = await runCodeModeModelMatrix(
@@ -841,8 +827,6 @@ describe("Code Mode model matrix artifacts", () => {
       expect(evidence.entries[1]).toMatchObject({
         result: { status: "pass", timing: { wallMs: 10 } },
       });
-    } finally {
-      await fs.rm(repoRoot, { force: true, recursive: true });
-    }
+    });
   });
 });

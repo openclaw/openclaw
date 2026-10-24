@@ -3,6 +3,7 @@ import { AsyncResource } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { createEnteredGate as createGate } from "../../agents/entered-gate.test-support.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
@@ -88,19 +89,6 @@ function blockCompletion(options: InternalGetReplyOptions | undefined) {
     runState.replyCompletion?.expectation ?? "required",
     "blocked",
   );
-}
-
-function createGate() {
-  const entered = createDeferred();
-  const released = createDeferred();
-  return {
-    entered: entered.promise,
-    release: () => released.resolve(),
-    wait: async () => {
-      entered.resolve();
-      await released.promise;
-    },
-  };
 }
 
 beforeAll(async () => {

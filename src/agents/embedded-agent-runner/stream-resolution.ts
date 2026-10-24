@@ -9,7 +9,6 @@ import "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
-import { wrapStreamFnWithSessionFork, type EmbeddedSessionForkIdentity } from "./session-fork.js";
 
 const embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
 
@@ -80,7 +79,6 @@ type EmbeddedAgentStreamParams = EmbeddedStreamRuntimeOwner & {
   authProfileId?: string;
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
   assertCurrent?: () => void;
-  sessionFork?: EmbeddedSessionForkIdentity;
 };
 
 export function resolveEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
@@ -111,7 +109,6 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
     authProfileId: params.authProfileId,
     promptCacheKey: params.promptCacheKey,
     assertCurrent: params.assertCurrent,
-    sessionFork: params.sessionFork,
   };
   const wrapRunApiKey = (streamFn: StreamFn) =>
     wrapEmbeddedAgentStreamApiKey(streamFn, {
@@ -137,11 +134,7 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
       : context;
   if (params.providerStreamFn) {
     // Provider stream creation owns the plugin's cache-boundary capability.
-    return wrapCredentialedStream(
-      params.providerStreamFn,
-      { ...wrapOptions, sessionFork: undefined },
-      "provider",
-    );
+    return wrapCredentialedStream(params.providerStreamFn, wrapOptions, "provider");
   }
 
   const currentStreamFn = params.currentStreamFn ?? llmRuntime.streamSimple;
@@ -201,13 +194,12 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
   const promptCacheKey = params.promptCacheKey?.trim();
   return {
     streamFn:
-      !promptCacheKey && !params.signal && !params.assertCurrent && !params.sessionFork
+      !promptCacheKey && !params.signal && !params.assertCurrent
         ? currentStreamFn
         : wrapEmbeddedAgentStreamFn(currentStreamFn, {
             runSignal: params.signal,
             promptCacheKey,
             assertCurrent: params.assertCurrent,
-            sessionFork: params.sessionFork,
           }),
     strategy: isDefault ? "stream-simple" : "session-custom",
     wrapApiKey: keepStreamAuth,
@@ -236,14 +228,10 @@ function wrapEmbeddedAgentStreamFn(
     promptCacheKey?: string;
     transformContext?: (context: Parameters<StreamFn>[1]) => Parameters<StreamFn>[1];
     assertCurrent?: () => void;
-    sessionFork?: EmbeddedSessionForkIdentity;
   },
 ): StreamFn {
   const transformContext =
     params.transformContext ?? ((context: Parameters<StreamFn>[1]) => context);
-  const transport = params.sessionFork
-    ? wrapStreamFnWithSessionFork(inner, params.sessionFork)
-    : inner;
   const mergeRunSignal = (options: Parameters<StreamFn>[2]) => {
     const embeddedOptions = options as EmbeddedStreamOptions | undefined;
     const callerSignal = embeddedOptions?.signal;
@@ -270,7 +258,7 @@ function wrapEmbeddedAgentStreamFn(
     return admitProviderRateLimitStream(
       m,
       mergedOptions,
-      (admittedOptions) => transport(m, transformContext(context), admittedOptions),
+      (admittedOptions) => inner(m, transformContext(context), admittedOptions),
       params.assertCurrent,
     );
   };

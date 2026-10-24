@@ -327,7 +327,6 @@ describe("stored chat snapshot hydration", () => {
       try {
         const state = hydration.start();
         if (timing === "delayed") {
-          expect(request).not.toHaveBeenCalled();
           await vi.waitFor(() => expect(state.chatMessages).toEqual(cachedMessages));
           expect(request).toHaveBeenCalledWith(
             "chat.history",

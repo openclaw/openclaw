@@ -3,6 +3,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { logGatewayStartup } from "./server-startup-log.js";
@@ -337,15 +338,11 @@ describe("gateway startup log", () => {
               api: "google-generative-ai",
               baseUrl: "https://generativelanguage.googleapis.com/v1beta",
               models: [
-                {
-                  id: "gemma-4-26b-a4b-it",
+                modelDefinition("gemma-4-26b-a4b-it", {
                   name: "Gemma 4 26B",
                   reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 32_000,
-                  maxTokens: 8_192,
-                },
+                }),
               ],
             },
           },

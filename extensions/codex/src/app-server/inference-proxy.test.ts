@@ -7,6 +7,7 @@ import {
   WebSocketServer,
 } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 import { createCodexInferenceProxy, type CodexInferenceProxy } from "./inference-proxy.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
@@ -211,14 +212,7 @@ it.each(["HTTP", "WebSocket"] as const)(
             upstream.send(final);
           });
         });
-        await new Promise<void>((resolve) => {
-          server.listen(0, "127.0.0.1", resolve);
-        });
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("fixture did not listen");
-        }
-        transport.upstream = "ws://127.0.0.1:" + address.port;
+        transport.upstream = "ws://127.0.0.1:" + (await listenOnLoopback(server));
         socket = new WebSocket(next.proxy.baseUrl.replace("http:", "ws:") + "/responses");
         await once(socket, "open");
         const received = Promise.race([
@@ -507,14 +501,7 @@ describe("private inference WebSocket relay", () => {
           socket.send('{"type":"response.completed","response":{"id":"synthetic-response"}}');
         });
       });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("fixture did not listen");
-      }
-      transport.upstream = "ws://127.0.0.1:" + address.port;
+      transport.upstream = "ws://127.0.0.1:" + (await listenOnLoopback(server));
       const { proxy, registration, body } = await fixture(withInstructions);
       const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
       let responseHeaders: IncomingHttpHeaders | undefined;
@@ -603,14 +590,7 @@ it("preserves WebSocket connection error headers and body for native auth recove
         body,
     );
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fixture did not listen");
-  }
-  transport.upstream = "ws://127.0.0.1:" + address.port;
+  transport.upstream = "ws://127.0.0.1:" + (await listenOnLoopback(server));
   const { proxy } = await fixture();
   const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
   socket.on("error", () => {});

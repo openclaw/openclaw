@@ -48,6 +48,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { convertToLlm } from "../sessions/messages.js";
 import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
@@ -206,19 +207,15 @@ async function prepareAdmission(
 }
 
 async function holdTranscriptWriter(target: Parameters<typeof resolveSqliteTranscriptScope>[0]) {
-  const entered = createDeferred();
-  const release = createDeferred();
+  const writerGate = createEnteredGate();
   const locked = runExclusiveSqliteSessionWrite(
     resolveSqliteTranscriptScope(target),
-    async () => {
-      entered.resolve();
-      await release.promise;
-    },
+    writerGate.wait,
     "session.transcript.batch",
   );
-  await entered.promise;
+  await writerGate.entered;
   return async () => {
-    release.resolve();
+    writerGate.release();
     await locked;
   };
 }

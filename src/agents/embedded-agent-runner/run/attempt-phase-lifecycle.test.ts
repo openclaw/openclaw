@@ -7,10 +7,10 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { awaitAgentHarnessAgentEndHook } from "../../harness/lifecycle-hook-helpers.js";
 import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
 import { SessionManager } from "../../sessions/session-manager.js";
@@ -639,19 +639,15 @@ describe("embedded attempt phase lifecycle state", () => {
       runId: "after-turn",
       sessionId: target.sessionId,
     });
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const writerGate = createEnteredGate();
     const heldWriter = runOpenClawAgentWorkerWrite(
       { agentId: target.agentId, path: target.storePath },
-      async () => {
-        entered.resolve();
-        await release.promise;
-      },
+      writerGate.wait,
     );
     let afterTurn: Promise<void> | undefined;
     let completed = false;
     try {
-      await entered.promise;
+      await writerGate.entered;
       afterTurn = completeEmbeddedAttemptAfterTurn(
         {
           ...finalizationInput(prepared(sessionManager, scenario !== "completion not requested")),
@@ -695,7 +691,7 @@ describe("embedded attempt phase lifecycle state", () => {
       if (scenario === "abort while queued") {
         executionState.terminal = { kind: "aborted", source: "external" };
       }
-      release.resolve();
+      writerGate.release();
       await heldWriter;
       await afterTurn;
       const entries = SessionManager.open(target, dir).getEntries();
@@ -712,7 +708,7 @@ describe("embedded attempt phase lifecycle state", () => {
         );
       }
     } finally {
-      release.resolve();
+      writerGate.release();
       await Promise.allSettled([heldWriter, afterTurn]);
       await lifecycle.dispose();
     }

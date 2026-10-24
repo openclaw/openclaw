@@ -118,12 +118,19 @@ function createWalActivationFixture() {
     bytes: fs.readFileSync(activatedPath + suffix),
   }));
   activated.close();
-  const injected = afterFirstCopy(() => {
-    for (const { suffix, bytes } of family) {
-      fs.writeFileSync(fixture.sourcePath + suffix, bytes);
+  const copy = sqliteCopy.copySqliteFile;
+  let injected = false;
+  vi.spyOn(sqliteCopy, "copySqliteFile").mockImplementation(async (...args) => {
+    const result = await copy(...args);
+    if (!injected && args[0] === fixture.sourcePath) {
+      injected = true;
+      for (const { suffix, bytes } of family) {
+        fs.writeFileSync(fixture.sourcePath + suffix, bytes);
+      }
     }
+    return result;
   });
-  return { family, fixture, injected };
+  return { family, fixture, injected: () => injected };
 }
 
 function afterPrivateCopy(stagingRoot: string, operation: (pathname: string) => void): void {

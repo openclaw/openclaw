@@ -7,7 +7,12 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
-import type { CodexDynamicToolCallParams, JsonValue } from "./protocol.js";
+import type {
+  CodexDynamicToolCallParams,
+  CodexDynamicToolFunctionSpec,
+  CodexDynamicToolSpec,
+  JsonValue,
+} from "./protocol.js";
 
 export type BridgeOptions = Omit<
   Parameters<typeof createCodexDynamicToolBridge>[0],
@@ -97,4 +102,14 @@ export function installResultMiddleware(
     source: "test",
   });
   setActivePluginRegistry(registry);
+}
+
+export function flattenSpecsWithNamespace(
+  specs: readonly CodexDynamicToolSpec[],
+): Array<CodexDynamicToolFunctionSpec & { namespace?: string }> {
+  return specs.flatMap((spec) =>
+    spec.type === "namespace"
+      ? spec.tools.map((tool) => ({ ...tool, namespace: spec.name }))
+      : [spec],
+  );
 }

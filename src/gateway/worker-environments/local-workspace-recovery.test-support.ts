@@ -44,13 +44,13 @@ export async function proveOversizedWorkspaceRecovery({
   const first = await prepareSandbox();
   expect(first).toBeDefined();
   const projection = first!.workspaceDir;
-  const artifact = path.join(projection, ".openclaw/tmp/browsers/chrome");
+  const artifact = path.join(projection, "artifacts/archive.tgz");
   await fs.mkdir(path.dirname(artifact), { recursive: true });
   await fs.writeFile(artifact, "retained binary contents\n");
   await fs.truncate(artifact, 64 * 1024 * 1024 + 1);
   await fs.writeFile(path.join(projection, "source.txt"), "guest source remains recoverable\n");
   await expect(first!.checkpoint()).rejects.toThrow(
-    "Cloud workspace result is too large: .openclaw/tmp/browsers/chrome",
+    "Cloud workspace result is too large: artifacts/archive.tgz",
   );
   first![Symbol.dispose]();
   const pending = await readLocalWorkspaceProjection(owner.worktree.id);
@@ -58,7 +58,7 @@ export async function proveOversizedWorkspaceRecovery({
   expect(pending!.pending_ref).toBeTruthy();
   for (const message of ["Hello", "Continue"]) {
     await expect(prepareSandbox(), message).rejects.toThrow(
-      "Cloud workspace result is too large: .openclaw/tmp/browsers/chrome",
+      "Cloud workspace result is too large: artifacts/archive.tgz",
     );
     expect((await readLocalWorkspaceProjection(owner.worktree.id))!.pending_ref).toBe(
       pending!.pending_ref,
@@ -70,7 +70,7 @@ export async function proveOversizedWorkspaceRecovery({
   const recovery = {
     cfg,
     sessionKey: owner.sessionKey,
-    path: ".openclaw/tmp/browsers/chrome",
+    path: "artifacts/archive.tgz",
     recoveryId: randomUUID(),
     assertCurrent: owner.assertCurrent,
   };

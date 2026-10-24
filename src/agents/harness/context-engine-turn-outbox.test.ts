@@ -22,11 +22,11 @@ import type { ContextEngine, ContextEngineSessionTarget } from "../../context-en
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import {
   completedTurnMessageAnchor,
   captureCompletedTurnMessageAnchor,
@@ -627,16 +627,12 @@ describe("context-engine turn outbox", () => {
       agentId: "other",
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
-    const releaseOther = createDeferredCore();
-    const otherEntered = createDeferredCore();
+    const otherGate = createEnteredGate();
     const otherWrite = runOpenClawAgentWriteAdmission(
       { agentId: otherDatabase.agentId, path: otherDatabase.path },
-      async () => {
-        otherEntered.resolve();
-        await releaseOther.promise;
-      },
+      otherGate.wait,
     );
-    await otherEntered.promise;
+    await otherGate.entered;
     const otherQueuedWrite = runOpenClawAgentWriteAdmission(
       { agentId: otherDatabase.agentId, path: otherDatabase.path },
       () => undefined,
@@ -654,7 +650,7 @@ describe("context-engine turn outbox", () => {
       expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
       expect(readPayload(database, admission.logicalTurnId)).toMatchObject({ state: "admitted" });
     } finally {
-      releaseOther.resolve();
+      otherGate.release();
       await Promise.all([otherWrite, otherQueuedWrite]);
     }
   });

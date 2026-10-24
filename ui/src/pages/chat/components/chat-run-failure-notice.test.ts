@@ -154,3 +154,21 @@ it("keeps ordinary assistant warning text as authored content", () => {
   };
   expect(projectChatSystemNotice(item)).toEqual([item]);
 });
+
+it("shows a repeat count only for repeated failures and keeps the latest retry and copy payload", async () => {
+  const item = { ...failure("Rate-limit recovery stopped"), repeatCount: 3 };
+  const onRetry = vi.fn();
+  drawNotice(item, { failureActionsRunId: "run-a", onRetryRun: onRetry });
+  expect(container.querySelector(".chat-run-failure__repeat")?.textContent).toBe("· 3 times");
+  container.querySelector<HTMLButtonElement>('button[aria-label="Copy error"]')?.click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(writeText).toHaveBeenCalledExactlyOnceWith(item.runError.summary);
+  [...container.querySelectorAll("button")]
+    .find((button) => button.textContent?.includes("Try again"))
+    ?.click();
+  expect(onRetry).toHaveBeenCalledExactlyOnceWith("run-a");
+  for (const repeatCount of [1, undefined]) {
+    drawNotice({ ...item, repeatCount });
+    expect(container.querySelector(".chat-run-failure__repeat")).toBeNull();
+  }
+});

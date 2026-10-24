@@ -212,7 +212,10 @@ export function MessageGroupContent(props: {
         )}
       </For>
       {options().showToolCalls === false ? undefined : (
-        <BrowserTabPreviews previews={selectBrowserTabPreviews([props.group], options())} />
+        <BrowserTabPreviews
+          previews={selectBrowserTabPreviews([props.group], options())}
+          mediaReadAllowed={options().mediaReadAllowed}
+        />
       )}
     </Show>
   );
@@ -231,6 +234,7 @@ function GroupAvatar(props: {
         fallback={
           <ChatAvatar
             elementRef={props.elementRef}
+            mediaReadAllowed={options().mediaReadAllowed}
             role={frame().group.role}
             assistant={{
               agentId: options().agentId,
@@ -460,7 +464,10 @@ function FramedMessageGroup(props: {
           {options().frameContent}
         </Show>
         {frame().ownsRunFrame || options().showToolCalls === false ? undefined : (
-          <BrowserTabPreviews previews={selectBrowserTabPreviews([props.group], options())} />
+          <BrowserTabPreviews
+            previews={selectBrowserTabPreviews([props.group], options())}
+            mediaReadAllowed={options().mediaReadAllowed}
+          />
         )}
         <Show
           when={Boolean(options().activeContinuation)}
@@ -508,10 +515,15 @@ function FramedMessageGroup(props: {
               {frame().normalizedRole === "user" &&
               frame().showAvatar &&
               frame().avatarPlacement === "footer" ? (
-                <ChatAuthorAvatar
-                  sender={props.group.sender}
-                  channelAvatar={options().channelAvatar}
-                />
+                <Show
+                  when={options().mediaReadAllowed !== false}
+                  fallback={<span class="chat-author-avatar" aria-hidden="true" />}
+                >
+                  <ChatAuthorAvatar
+                    sender={props.group.sender}
+                    channelAvatar={options().channelAvatar}
+                  />
+                </Show>
               ) : undefined}
               <SenderIdentity frame={frame()} />
               <ChatSendStatus status={frame().sendStatus} actions={options()} />
