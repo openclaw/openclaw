@@ -1,7 +1,22 @@
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { renderTable } from "../../../packages/terminal-core/src/table.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
+import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
 import type { PendingRequest } from "../../shared/node-list-types.js";
+
+/**
+ * Operator scopes an approver must hold to approve this pending request: prefer
+ * the recorded declaration, fall back to deriving from its declared commands so
+ * the shown scopes always match what `approve` checks against the caller. These
+ * are approver authority, not scopes granted to the node; approval records the
+ * node's own declared command/capability ceiling.
+ */
+export function resolvePendingRequestApprovalScopes(request: PendingRequest): string[] {
+  if (request.requiredApproveScopes?.length) {
+    return [...request.requiredApproveScopes];
+  }
+  return resolveNodePairApprovalScopes(request.commands);
+}
 
 /** Render pending pairing requests with sanitized labels and relative request age. */
 export function renderPendingPairingRequestsTable(params: {
@@ -21,6 +36,7 @@ export function renderPendingPairingRequestsTable(params: {
       IP: sanitizeTerminalText(r.remoteIp ?? ""),
       Requested:
         typeof r.ts === "number" ? formatTimeAgo(Math.max(0, now - r.ts)) : theme.muted("unknown"),
+      Scopes: resolvePendingRequestApprovalScopes(r).join(", "),
     };
   });
   return {
@@ -32,6 +48,7 @@ export function renderPendingPairingRequestsTable(params: {
         { key: "Node", header: "Node", minWidth: 14, flex: true },
         { key: "IP", header: "IP", minWidth: 10 },
         { key: "Requested", header: "Requested", minWidth: 12 },
+        { key: "Scopes", header: "Approval scopes", minWidth: 14, flex: true },
       ],
       rows,
     }).trimEnd(),

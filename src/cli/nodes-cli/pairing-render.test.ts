@@ -38,4 +38,55 @@ describe("cli/nodes-cli/pairing-render", () => {
     expect(table).toContain("Phone");
     expect(table).toContain("10.0.0.1");
   });
+
+  it.each([
+    {
+      name: "renders recorded approval scopes",
+      scopes: ["operator.write"],
+      commands: ["node run"],
+      expected: "operator.write",
+    },
+    {
+      name: "joins multiple recorded scopes",
+      scopes: ["operator.write", "operator.admin"],
+      commands: ["node run"],
+      expected: "operator.write, operator.admin",
+    },
+    {
+      name: "falls back to deriving scopes from commands for older requests",
+      scopes: undefined,
+      commands: ["node run", "system.run"],
+      expected: "operator.pairing, operator.admin",
+    },
+    {
+      name: "falls back to operator.pairing when no scopes or commands",
+      scopes: undefined,
+      commands: undefined,
+      expected: "operator.pairing",
+    },
+  ])("$name", ({ scopes, commands, expected }) => {
+    const { pending } = parsePairingList({
+      pending: [
+        {
+          requestId: "r1",
+          nodeId: "n1",
+          displayName: "Phone",
+          remoteIp: "10.0.0.1",
+          ts: 1,
+          ...(scopes ? { requiredApproveScopes: scopes } : {}),
+          ...(commands ? { commands } : {}),
+        },
+      ],
+    });
+
+    const { table } = renderPendingPairingRequestsTable({
+      pending,
+      now: 1000,
+      tableWidth: 120,
+      theme,
+    });
+    for (const scope of expected.split(", ")) {
+      expect(table).toContain(scope);
+    }
+  });
 });
