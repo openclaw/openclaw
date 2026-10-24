@@ -223,10 +223,7 @@ it("clips CPU sample contributions to marks after ordering signed sample timesta
   const profile = {
     startTime: 1_000_000,
     endTime: 1_006_000,
-    nodes: [1, 2, 3, 4, 5].map((id) => ({
-      id,
-      callFrame: { functionName: `work${id}`, url: "app.ts", lineNumber: 0, columnNumber: 0 },
-    })),
+    nodes: [],
     samples: [1, 3, 2, 4, 5],
     timeDeltas: [1_000, 2_000, -1_000, 2_000, 1_000],
   };
