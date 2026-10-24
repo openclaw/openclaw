@@ -76,6 +76,7 @@ export function createClientFactory(
     managedRequirements?: JsonValue;
     hooks?: JsonValue[];
     terminalItems?: JsonValue[];
+    rejectOutputSchema?: boolean;
   } = {},
 ) {
   const methods: string[] = [];
@@ -156,6 +157,27 @@ export function createClientFactory(
       }
       queueMicrotask(() => {
         for (const handler of fixture.notifications) {
+          if (options.rejectOutputSchema && isRecord(params) && isRecord(params.outputSchema)) {
+            void handler({
+              method: "error",
+              params: {
+                threadId: "thread-finalizer",
+                turnId: "turn-finalizer",
+                error: {
+                  message: JSON.stringify({
+                    error: {
+                      type: "invalid_request_error",
+                      code: "invalid_json_schema",
+                      param: "text.format.schema",
+                    },
+                  }),
+                  codexErrorInfo: "other",
+                },
+                willRetry: false,
+              },
+            });
+            continue;
+          }
           for (let index = 0; index < (options.preBindDeltaCount ?? 0); index += 1) {
             void handler({
               method: "item/agentMessage/delta",
