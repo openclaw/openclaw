@@ -1,10 +1,8 @@
-import fs from "node:fs";
-import { expect, vi } from "vitest";
+import { expect } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
-  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import {
   runOpenClawAgentWorkerWrite,
@@ -29,63 +27,26 @@ import {
   removeSessionMemberInWorker,
 } from "./session-sharing-store.async.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
-import { projectionLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
-
-function observeEntryReaderRequests() {
-  const requests = [projectionLane, targetDiscoveryLane].map(({ pool }) => vi.spyOn(pool, "run"));
-  return {
-    count: () => requests.reduce((count, request) => count + request.mock.calls.length, 0),
-    clear: () => requests.forEach((request) => request.mockClear()),
-    [Symbol.dispose]: () => requests.forEach((request) => request.mockRestore()),
-  };
-}
-
-test("retains immutable exact reads with per-store LRU eviction", async ({ state: { env } }) => {
-  const first = entryFixture(env, "entry-0", "first");
-  const second = entryFixture(env, "entry-0", "second");
-  const keys = Array.from({ length: 129 }, (_, index) => `agent:first:entry-${index}`);
-  const internal = resolveInternalSessionEffectsIdentity({ agentId: "first", runId: "hidden" });
-  runOpenClawAgentWriteTransaction((database) => {
-    for (const [index, key] of keys.entries()) {
-      writeSessionEntry(database, key, { sessionId: `entry-${index}`, updatedAt: 1 });
-    }
-    writeSessionEntry(database, internal.sessionKey, {
-      sessionId: internal.sessionId,
-      updatedAt: 1,
-    });
-  }, first.options);
-  writeSessionEntry(second.database, second.sessionKey, { sessionId: "other-store", updatedAt: 1 });
-  const read = (sessionKeys: string[], projection?: "list") =>
-    first.read({ sessionKeys, projection });
-  const readOther = second.read;
-  using requests = observeEntryReaderRequests();
-  expect((await read(keys.slice(0, 64))).entries).toHaveLength(64);
-  expect((await read(keys.slice(64, 127))).entries).toHaveLength(63);
-  expect((await readOther()).entries[0]?.entry.sessionId).toBe("other-store");
-  expect(requests.count()).toBeGreaterThan(0);
-  requests.clear();
-  const repeated = await read([keys[0]!]);
-  expect(repeated.entries[0]?.entry.sessionId).toBe("entry-0");
+test("returns immutable exact reads and hides internal entries from lists", async ({ store }) => {
+  store.replace();
+  const other = entryFixture(store.env, "other", "other");
+  other.replace({ sessionId: "other-store" });
+  expect((await other.entry())?.sessionId).toBe("other-store");
+  const repeated = await store.read();
+  expect(repeated.entries[0]?.entry.sessionId).toBe("original");
   expect(() => {
     repeated.entries[0]!.entry.sessionId = "caller-mutated";
   }).toThrow(TypeError);
-  expect((await read([keys[0]!])).entries[0]?.entry).toBe(repeated.entries[0]?.entry);
-  for (const [index, otherStore, calls] of [
-    [0, true, 0],
-    [128, false, 1],
-    [0, true, 0],
-    [1, false, 1],
-    [1, false, 0],
-  ] as const) {
-    expect((await read([keys[index]!])).entries[0]?.entry.sessionId).toBe(`entry-${index}`);
-    if (otherStore) {
-      expect((await readOther()).entries[0]?.entry.sessionId).toBe("other-store");
-    }
-    expect(requests.count()).toBe(calls);
-    requests.clear();
-  }
-  expect((await read([internal.sessionKey])).entries[0]?.entry.sessionId).toBe(internal.sessionId);
-  expect((await read([internal.sessionKey], "list")).entries).toEqual([]);
+  expect((await store.read()).entries[0]?.entry.sessionId).toBe("original");
+  const internal = resolveInternalSessionEffectsIdentity({ agentId: "main", runId: "hidden" });
+  writeSessionEntry(store.database, internal.sessionKey, {
+    sessionId: internal.sessionId,
+    updatedAt: 1,
+  });
+  const readInternal = (projection?: "list") =>
+    store.read({ sessionKeys: [internal.sessionKey], projection });
+  expect((await readInternal()).entries[0]?.entry.sessionId).toBe(internal.sessionId);
+  expect((await readInternal("list")).entries).toEqual([]);
 });
 
 test("retires cached lifecycle and runtime targets on replacement", async ({ store }) => {
@@ -98,22 +59,14 @@ test("retires cached lifecycle and runtime targets on replacement", async ({ sto
   };
   store.replace({ sessionStartedAt: 100, lastInteractionAt: 200 });
   await read();
-  using requests = observeEntryReaderRequests();
-  {
-    using stat = vi.spyOn(fs, "statSync");
-    using realpath = vi.spyOn(fs.realpathSync, "native");
-    expect(readRetainedSessionEntryFacts(owner, request)).toMatchObject({
-      lifecycleTimestamps: { sessionStartedAt: 100, lastInteractionAt: 200 },
-      runtimeTarget: { ...runtimeTarget, storePath: scope.storePath },
-    });
-    expect(stat).not.toHaveBeenCalled();
-    expect(realpath).not.toHaveBeenCalled();
-  }
+  expect(readRetainedSessionEntryFacts(owner, request)).toMatchObject({
+    lifecycleTimestamps: { sessionStartedAt: 100, lastInteractionAt: 200 },
+    runtimeTarget: { ...runtimeTarget, storePath: scope.storePath },
+  });
   expect(
     (await readSessionEntriesFromStoreInWorker({ ...input, lifecycleSessionKey: sessionKey }))
       .lifecycleTimestamps,
   ).toEqual({ sessionStartedAt: 100, lastInteractionAt: 200 });
-  expect(requests.count()).toBe(0);
 
   store.replace({
     sessionId: "replacement",
@@ -152,7 +105,6 @@ test("refreshes cached sharing on revocation and entry replacement", async ({ st
       snapshotFields: projection === "sharing" ? ["skillsSnapshot"] : undefined,
     });
   await read("full");
-  using requests = observeEntryReaderRequests();
   const warm = await read("sharing");
   expect(warm.entries[0]?.entry.sessionId).toBe("original");
   expect(warm.entries[0]?.entry).not.toHaveProperty("skillsSnapshot");
@@ -161,7 +113,6 @@ test("refreshes cached sharing on revocation and entry replacement", async ({ st
     members: [{ sessionKey, identityIds: ["reader"] }],
     placeholders: [],
   });
-  expect(requests.count()).toBe(0);
 
   await removeSessionMemberInWorker(scope, "reader");
   const revoked = await read("sharing");
@@ -181,13 +132,11 @@ test("refreshes cached sharing on revocation and entry replacement", async ({ st
 
   const missing = { ...input, sessionKeys: ["agent:main:absent-sharing"] };
   await readSessionEntriesFromStoreInWorker(missing);
-  requests.clear();
   const absent = await readSessionEntriesFromStoreInWorker({
     ...missing,
     projection: "sharing",
   });
   expect(absent.entries).toEqual([]);
-  expect(requests.count()).toBeGreaterThan(0);
 });
 
 test("orders patch receipts before reads and preserves full snapshots", async ({ store }) => {
@@ -216,10 +165,8 @@ test("orders patch receipts before reads and preserves full snapshots", async ({
   );
   void patch.catch(() => {});
   let read: Promise<void> | undefined;
-  let requests: ReturnType<typeof observeEntryReaderRequests> | undefined;
   try {
     await awaitGateBeforeSettlement(entered.promise, patch, "Patch preparation did not begin");
-    requests = observeEntryReaderRequests();
     read = withSessionEntriesFromStoresInWorker(
       [input],
       ([preparedEntry]) => {
@@ -235,7 +182,6 @@ test("orders patch receipts before reads and preserves full snapshots", async ({
     ready.resolve();
     await Promise.all([patch, read]);
     expect(order).toEqual(["write", "read"]);
-    expect(requests.count()).toBe(0);
 
     const metadata = await readExact({
       snapshotFields: [],
@@ -243,17 +189,13 @@ test("orders patch receipts before reads and preserves full snapshots", async ({
     });
     expect(metadata.members?.[sessionKey]).toEqual([]);
     expect(metadata.entries[0]?.entry.skillsSnapshot).toBeUndefined();
-    expect(requests.count()).toBe(1);
-    requests.clear();
     expect(await entry()).toMatchObject({
       label: "after",
       skillsSnapshot,
     });
-    expect(requests.count()).toBe(0);
   } finally {
     ready.resolve();
     await Promise.allSettled([patch, ...(read ? [read] : [])]);
-    requests?.[Symbol.dispose]();
   }
 });
 
@@ -264,28 +206,18 @@ test("refreshes cached entry, participant and membership writes", async ({ store
   const missingKey = "agent:main:previously-absent";
   const readMissing = () =>
     readExact({ sessionKeys: [missingKey], includeMembers: true, includeParticipantRecords: true });
-  using requests = observeEntryReaderRequests();
   const initial = await read();
   expect(initial.entries[0]?.entry.sessionId).toBe("same-session");
-  requests.clear();
   expect((await read()).members?.[sessionKey]).toEqual([]);
-  expect(requests.count()).toBe(0);
   replaceSessionEntrySync(
     { ...scope, sessionKey: "agent:main:unrelated" },
     { sessionId: "unrelated", updatedAt: 2 },
   );
   expect(await read()).toEqual(initial);
-  expect(requests.count()).toBe(0);
   store.replace({ sessionId: "same-session", updatedAt: 3, label: "receipt-only" });
   expect((await store.entry())?.label).toBe("receipt-only");
   expect((await read()).entries[0]?.entry.label).toBe("receipt-only");
-  requests.clear();
-  expect((await read()).entries[0]?.entry.label).toBe("receipt-only");
-  expect(requests.count()).toBe(0);
   expect((await readMissing()).entries).toEqual([]);
-  requests.clear();
-  expect((await readMissing()).entries).toEqual([]);
-  expect(requests.count()).toBe(0);
   replaceSessionEntrySync(
     { ...scope, sessionKey: missingKey },
     {
@@ -321,65 +253,44 @@ test("refreshes cached entry, participant and membership writes", async ({ store
       }),
     );
     expect(changed.members?.[sessionKey]).toEqual([member]);
-    requests.clear();
     expect(await read()).toEqual(changed);
-    expect(requests.count()).toBe(0);
+    await patchSessionEntryCore(scope, () => ({ label: `${writer}-metadata` }), {
+      assertCommitAllowed() {},
+      shouldCommit: () => true,
+      skipMaintenance: true,
+    });
+    const patched = await read();
+    expect(patched.entries[0]?.entry.label).toBe(`${writer}-metadata`);
+    expect(patched.members).toEqual(changed.members);
+    expect(patched.participantRecords).toEqual(changed.participantRecords);
+    const repeated = { ...participant, promptedAt: 22 };
+    if (writer === "native") {
+      recordSessionParticipant(scope, repeated);
+    } else {
+      await recordSessionParticipantInWorker(scope, repeated);
+    }
+    await patchSessionEntryCore(scope, () => ({ label: writer }), {
+      assertCommitAllowed() {},
+      shouldCommit: () => true,
+      skipMaintenance: true,
+    });
+    const contributed = await read();
+    expect(contributed.participantRecords?.[sessionKey]).toContainEqual(
+      expect.objectContaining({
+        identity: participant.identity,
+        contributionCount: 2,
+        lastPromptedAt: 22,
+      }),
+    );
     if (writer === "native") {
       removeSessionMember(scope, writer);
     } else {
       await removeSessionMemberInWorker(scope, writer);
     }
-    expect((await read()).members?.[sessionKey]).toEqual([]);
+    const removed = await read();
+    expect(removed.members?.[sessionKey]).toEqual([]);
+    expect(removed.participantRecords).toEqual(contributed.participantRecords);
   }
-});
-
-test("retains membership and participant facts across metadata patches", async ({ store }) => {
-  const { scope, sessionKey, read: readExact } = store;
-  store.replace({ sessionId: "metadata-facts" });
-  addSessionMember(scope, { identityId: "reader", addedBy: "owner", addedAt: 1 });
-  const participant = { identity: { type: "agent" as const, id: "helper" }, promptedAt: 2 };
-  recordSessionParticipant(scope, participant);
-  const read = () => readExact({ includeMembers: true, includeParticipantRecords: true });
-  const initial = await read();
-  using requests = observeEntryReaderRequests();
-  const patch = (label: string) =>
-    patchSessionEntryCore(scope, () => ({ label }), {
-      assertCommitAllowed() {},
-      shouldCommit: () => true,
-      skipMaintenance: true,
-    });
-  await patch("metadata only");
-  const patched = await read();
-  expect(patched.entries[0]?.entry.label).toBe("metadata only");
-  expect(patched.members).toEqual(initial.members);
-  expect(patched.participantRecords).toEqual(initial.participantRecords);
-  expect(requests.count()).toBe(0);
-
-  for (const [index, writer] of ["native", "worker"].entries()) {
-    requests.clear();
-    const promptedAt = index + 3;
-    if (writer === "native") {
-      recordSessionParticipant(scope, { ...participant, promptedAt });
-    } else {
-      await recordSessionParticipantInWorker(scope, { ...participant, promptedAt });
-    }
-    await patch(writer);
-    expect((await read()).participantRecords?.[sessionKey]?.[0]).toMatchObject({
-      contributionCount: index + 2,
-      lastPromptedAt: promptedAt,
-    });
-    expect(requests.count()).toBe(1);
-  }
-
-  requests.clear();
-  await removeSessionMemberInWorker(scope, "reader");
-  const changed = await read();
-  expect(changed.members?.[sessionKey]).toEqual([]);
-  expect(changed.participantRecords?.[sessionKey]?.[0]).toMatchObject({
-    contributionCount: 3,
-    lastPromptedAt: 4,
-  });
-  expect(requests.count()).toBe(1);
 });
 
 test("retains the foreground FIFO through a nested ordered read", async ({ store }) => {

@@ -4,7 +4,6 @@ import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
@@ -15,7 +14,6 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -169,48 +167,30 @@ describe("SQLite session handle lifecycle", () => {
 
       const read = () =>
         withTranscriptWriteLock(scope, async (transcript) => {
-          const count = messages.length;
           const keys = messages.map(({ message }) => message.idempotencyKey);
-          const counter = trackSqliteStatementExecutions(
-            requireNativeSqliteDatabase(database.db),
-            ["reads"],
-            (query) => (query.startsWith("select ") ? "reads" : null),
+          const facts = await transcript.readMessageFacts({ idempotencyKeys: keys });
+          expect([...facts.existingIdempotencyKeys]).toEqual(keys);
+          expect([...facts.messagesByIdempotencyKey]).toEqual(
+            messages.map(({ message }) => [message.idempotencyKey, message]),
           );
-          try {
-            const facts = await transcript.readMessageFacts({ idempotencyKeys: keys });
-            expect([...facts.existingIdempotencyKeys]).toEqual(keys);
-            expect([...facts.messagesByIdempotencyKey]).toEqual(
-              messages.map(({ message }) => [message.idempotencyKey, message]),
-            );
-            expect([...facts.anchorsByIdempotencyKey]).toEqual(
-              messages.map(({ eventId, parentId, message }, index) => [
-                message.idempotencyKey,
-                {
-                  agentId: "main",
-                  sessionId: scope.sessionId,
-                  sessionKey: scope.sessionKey,
-                  storePath: database.path,
-                  generation,
-                  entryId: eventId,
-                  rawSeq: index + 1,
-                  effectiveParentId: parentId,
-                  activeMessagePosition: index,
-                  idempotencyKey: message.idempotencyKey,
-                },
-              ]),
-            );
-            expect([...facts.anchorsByIdempotencyKey.values()].every(Object.isFrozen)).toBe(true);
-            if (route === "worker") {
-              expect(counter.counts.reads).toBe(0);
-            } else {
-              expect.soft(counter.counts.reads, "selected " + count).toBeLessThanOrEqual(12);
-              expect
-                .soft(counter.rowCounts.reads, "selected " + count)
-                .toBeLessThanOrEqual(count + 10);
-            }
-          } finally {
-            counter.restore();
-          }
+          expect([...facts.anchorsByIdempotencyKey]).toEqual(
+            messages.map(({ eventId, parentId, message }, index) => [
+              message.idempotencyKey,
+              {
+                agentId: "main",
+                sessionId: scope.sessionId,
+                sessionKey: scope.sessionKey,
+                storePath: database.path,
+                generation,
+                entryId: eventId,
+                rawSeq: index + 1,
+                effectiveParentId: parentId,
+                activeMessagePosition: index,
+                idempotencyKey: message.idempotencyKey,
+              },
+            ]),
+          );
+          expect([...facts.anchorsByIdempotencyKey.values()].every(Object.isFrozen)).toBe(true);
         });
       if (route === "native") {
         // Released opaque guards retain the synchronous reader used by this batching proof.

@@ -8,7 +8,6 @@ import {
   loadUsageSessionContext,
   type UsageSessionSelection,
 } from "../../gateway/server-methods/usage-session-selection.js";
-import type { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { loadCombinedSessionStoreForGateway as loadSdkStore } from "../../plugin-sdk/session-transcript-hit.js";
 import {
   beginAgentDeletionJournalInDatabase,
@@ -41,6 +40,11 @@ import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { commitMemory } from "./session-actor-memory-publication.test-support.js";
 import { sessionTests } from "./session-entry-fixture.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import {
+  historyLane,
+  projectionLane,
+  targetDiscoveryLane,
+} from "./session-transcript-worker-resources.js";
 import type { SessionEntry } from "./types.js";
 
 const it = sessionTests();
@@ -86,50 +90,36 @@ function selection(
   };
 }
 
-const boundary = vi.hoisted(
-  (): {
-    beforeRequest: ((request: unknown) => void) | undefined;
-    afterReply: ((reply: unknown) => Promise<void>) | undefined;
-  } => ({ beforeRequest: undefined, afterReply: undefined }),
-);
-vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/worker-task-pool.js")>();
-  return {
-    ...actual,
-    createOwnedWorkerTaskPool: <Input, Output>(
-      ...poolArgs: Parameters<typeof actual.createOwnedWorkerTaskPool<Input, Output>>
-    ) => {
-      const pool = actual.createOwnedWorkerTaskPool<Input, Output>(...poolArgs);
-      return {
-        ...pool,
-        run(...args: Parameters<WorkerTaskPool<Input, Output>["run"]>) {
-          const [input, options] = args;
-          const beforeRequest = boundary.beforeRequest;
-          const prepare = typeof input === "function" ? input : () => input;
-          const result = pool.run(
-            beforeRequest
-              ? new Proxy(prepare, {
-                  async apply(target, receiver, parameters) {
-                    const request: unknown = await Reflect.apply(target, receiver, parameters);
-                    beforeRequest(request);
-                    return request;
-                  },
-                })
-              : input,
-            options,
-          );
-          const observe = boundary.afterReply;
-          return observe
-            ? result.then(async (reply) => {
-                await observe(reply);
-                return reply;
-              })
-            : result;
-        },
-      };
-    },
-  };
-});
+function interceptReads(hooks: {
+  beforeRequest?: (request: unknown) => void;
+  afterReply?: (reply: unknown) => Promise<void>;
+}) {
+  const spies = [historyLane, projectionLane, targetDiscoveryLane].map(({ pool }) => {
+    const run = pool.run.bind(pool);
+    return vi.spyOn(pool, "run").mockImplementation((input, options) => {
+      const prepare = typeof input === "function" ? input : () => input;
+      const result = run(
+        hooks.beforeRequest
+          ? new Proxy(prepare, {
+              async apply(target, receiver, args) {
+                const request: unknown = await Reflect.apply(target, receiver, args);
+                hooks.beforeRequest?.(request);
+                return request;
+              },
+            })
+          : input,
+        options,
+      );
+      return hooks.afterReply
+        ? result.then(async (reply) => {
+            await hooks.afterReply?.(reply);
+            return reply;
+          })
+        : result;
+    });
+  });
+  return { [Symbol.dispose]: () => spies.forEach((spy) => spy.mockRestore()) };
+}
 
 it.for([
   ["separate", "before-read"],
@@ -175,13 +165,17 @@ it.for([
       });
       closed = closeOpenClawAgentDatabaseByPathAsync(retiringPath, "retiring");
     };
-    if (when === "during-topology") {
-      boundary.beforeRequest = (request) => {
+    using _ = interceptReads({
+      beforeRequest: (request) => {
+        if (when !== "during-topology") {
+          return;
+        }
         if (!closed && isRecord(request) && request.kind === "combined-store-topology") {
           beginClosing();
         }
-      };
-    } else {
+      },
+    });
+    if (when !== "during-topology") {
       beginClosing();
       await closing.promise;
     }
@@ -199,7 +193,6 @@ it.for([
       }
       expect(closed).toBeDefined();
     } finally {
-      boundary.beforeRequest = undefined;
       release.resolve();
       await closed;
       unregister();
@@ -215,29 +208,27 @@ it("retains later stores while an earlier context read settles", async ({ state:
     selection(agentId, `${agentId}-before-close`),
   );
   let replaced = false;
-  boundary.afterReply = async (reply) => {
-    if (
-      isRecord(reply) &&
-      reply.ok === true &&
-      isRecord(reply.value) &&
-      reply.value.kind === "session-exact-entries" &&
-      Array.isArray(reply.value.entries) &&
-      !replaced
-    ) {
-      expect(
-        reply.value.entries.map((row) => (isRecord(row) ? row.sessionKey : undefined)),
-      ).toEqual(["agent:main:main"]);
-      replaced = true;
-      await closeOpenClawAgentDatabaseByPathAsync(other.path, "other");
-      seed("other", "agent:other:main", "other-successor", { updatedAt: 2 });
-    }
-  };
-  try {
-    await expect(loadUsageSessionContext(selected)).rejects.toThrow();
-    expect(replaced).toBe(true);
-  } finally {
-    boundary.afterReply = undefined;
-  }
+  using _ = interceptReads({
+    afterReply: async (reply) => {
+      if (
+        isRecord(reply) &&
+        reply.ok === true &&
+        isRecord(reply.value) &&
+        reply.value.kind === "session-exact-entries" &&
+        Array.isArray(reply.value.entries) &&
+        !replaced
+      ) {
+        expect(
+          reply.value.entries.map((row) => (isRecord(row) ? row.sessionKey : undefined)),
+        ).toEqual(["agent:main:main"]);
+        replaced = true;
+        await closeOpenClawAgentDatabaseByPathAsync(other.path, "other");
+        seed("other", "agent:other:main", "other-successor", { updatedAt: 2 });
+      }
+    },
+  });
+  await expect(loadUsageSessionContext(selected)).rejects.toThrow();
+  expect(replaced).toBe(true);
   expect((await loadCombinedStoreAsync(cfg)).store["agent:other:main"]).toMatchObject({
     sessionId: "other-successor",
   });
@@ -268,20 +259,20 @@ it("refuses physical context replacement even when the original file is restored
       restored = true;
     }
   };
-  boundary.beforeRequest = (request) => {
-    if (isRecord(request) && request.kind === "session-exact-entries") {
-      replace();
-    }
-  };
-  boundary.afterReply = async () => restore();
+  using _ = interceptReads({
+    beforeRequest: (request) => {
+      if (isRecord(request) && request.kind === "session-exact-entries") {
+        replace();
+      }
+    },
+    afterReply: async () => restore(),
+  });
   try {
     await expect(
       loadUsageSessionContext([selection(scope.agentId, "original", scope.sessionKey)]),
     ).rejects.toThrow(/physical owner|database.*changed|file identity changed/i);
     expect({ replaced, restored }).toEqual({ replaced: true, restored: true });
   } finally {
-    boundary.beforeRequest = undefined;
-    boundary.afterReply = undefined;
     restore();
   }
 });

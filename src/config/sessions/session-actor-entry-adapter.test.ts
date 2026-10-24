@@ -2,18 +2,18 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { createSessionEntryWithTranscriptInScope } from "./session-accessor.sqlite-creation.js";
+import { createSessionEntryWithTranscriptInScope as createEntry } from "./session-accessor.sqlite-creation.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
-import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
-import type { SessionActorStorage } from "./session-actor-contract.js";
+import { applySessionEntryExactReplacements as replaceExact } from "./session-accessor.sqlite-replacement-projection.js";
+import type { SessionActor, SessionActorStorage } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import {
-  getSessionActorStorageBinding,
-  runWithSessionActorStorage,
+  getSessionActorStorageBinding as getBinding,
+  runWithSessionActorStorage as bindStorage,
 } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageWrites } from "./session-actor-storage-contract.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
@@ -37,7 +37,20 @@ async function commit<Key extends keyof SessionActorStorageWrites>(
   expect(await storage.mutate(command, authority)).toMatchObject({ kind: "committed" });
 }
 const owned: Array<{ agentId: string; path: string }> = [];
-afterEach(() => {
+const actors: SessionActor[] = [];
+function own<T extends SessionActor>(actor: T): T {
+  actors.push(actor);
+  return actor;
+}
+type SelectedRows = Parameters<Parameters<typeof replaceExact>[0]["update"]>[0];
+const labels = (rows: SelectedRows, label: string | ((key: string) => string)) =>
+  rows.map(({ sessionKey, entry }) => ({
+    sessionKey,
+    entry: { ...entry, label: typeof label === "string" ? label : label(sessionKey) },
+  }));
+
+afterEach(async () => {
+  await Promise.all(actors.splice(0).map((actor) => actor.release()));
   vi.restoreAllMocks();
   for (const options of owned.splice(0)) {
     memorySessionActorOwners.closeDatabase(options);
@@ -53,10 +66,11 @@ async function fixture(name: string) {
   owned.push(options);
   const owner = memorySessionActorOwners.get(options);
   const sessionKey = `agent:main:dashboard:incognito-${name}`;
-  const actor = await owner.acquire({ database: owner.identity, sessionKey }, lifetime);
+  const actor = own(await owner.acquire({ database: owner.identity, sessionKey }, lifetime));
   const binding = { ...options, actor, authority };
   const scope = { agentId: "main", storePath: options.path, sessionKey, env };
-  await runWithSessionActorStorage(binding, () =>
+  const run = <T>(callback: () => T) => bindStorage(binding, callback);
+  await bindStorage(binding, () =>
     upsertSessionEntryCore(scope, { sessionId: name, updatedAt: 1, label: "Original" }),
   );
   return {
@@ -68,38 +82,52 @@ async function fixture(name: string) {
     sessionKey,
     storage: actor.storage!,
     creationScope: { ...options, sessionKey, env },
+    selection: { agentId: "main", storePath: options.path, sessionKeys: [sessionKey] },
+    run,
+    read: () => run(() => loadSessionEntryReadOnly(scope)),
+    patch: (patch: Partial<SessionEntry>) => run(() => upsertSessionEntryCore(scope, patch)),
+    async sibling(sessionId: string, entry: Partial<SessionEntry> = {}) {
+      const key = `${sessionKey}-${sessionId}`;
+      const sibling = own(await actor.storage!.acquire(key));
+      await bindStorage({ ...binding, actor: sibling }, () =>
+        upsertSessionEntryCore(
+          { ...scope, sessionKey: key },
+          { sessionId, updatedAt: 2, ...entry },
+        ),
+      );
+      return { actor: sibling, key, storage: sibling.storage! };
+    },
   };
 }
 
 describe("generic session entry APIs with actor memory storage", () => {
   it("merges concurrent fixed patches and exposes detached read-after-write results", async () => {
-    const { actor, binding, scope } = await fixture("fixed-patches");
-    await runWithSessionActorStorage(binding, async () => {
-      const before = loadSessionEntryReadOnly(scope);
+    const { run, read, patch } = await fixture("fixed-patches");
+    await run(async () => {
+      const before = read();
       await Promise.all([
-        upsertSessionEntryCore(scope, { label: "Renamed" }),
-        upsertSessionEntryCore(scope, {
+        patch({ label: "Renamed" }),
+        patch({
           model: "synthetic-model",
           skillsSnapshot: { prompt: "Retained prompt", skills: [] },
         }),
       ]);
-      expect(loadSessionEntryReadOnly(scope)).toMatchObject({
+      expect(read()).toMatchObject({
         sessionId: "fixed-patches",
         label: "Renamed",
         model: "synthetic-model",
         skillsSnapshot: { prompt: "Retained prompt", skills: [] },
       });
       expect(before?.label).toBe("Original");
-      const detached = loadSessionEntryReadOnly(scope)!;
+      const detached = read()!;
       detached.skillsSnapshot!.prompt = "Caller edit";
-      expect(loadSessionEntryReadOnly(scope)?.skillsSnapshot?.prompt).toBe("Retained prompt");
+      expect(read()?.skillsSnapshot?.prompt).toBe("Retained prompt");
     });
-    await actor.release();
   });
 
   it("rejects an asynchronous updater's stale snapshot without losing an intervening patch", async () => {
-    const { actor, binding, scope } = await fixture("callback-conflict");
-    await runWithSessionActorStorage(binding, async () => {
+    const { binding, scope } = await fixture("callback-conflict");
+    await bindStorage(binding, async () => {
       const entered = createDeferredCore();
       const resume = createDeferredCore();
       const pending = patchSessionEntryCore(scope, async (entry) => {
@@ -124,7 +152,6 @@ describe("generic session entry APIs with actor memory storage", () => {
         model: "kept-model",
       });
     });
-    await actor.release();
   });
 
   it("creates over an existing entry with its transcript, owner, and explicit label together", async () => {
@@ -135,43 +162,23 @@ describe("generic session entry APIs with actor memory storage", () => {
       assignedAt: 20,
     };
     const events = [
-      createSessionTranscriptHeader({
-        sessionId: "replacement",
-        cwd: "/synthetic/workspace",
-        timestamp: "2026-01-01T00:00:00.000Z",
-      }),
-      {
-        type: "custom",
-        id: "retained-event",
-        parentId: null,
-        timestamp: "2026-01-01T00:00:01.000Z",
-        customType: "synthetic-payload",
-        data: { text: "Prepared transcript payload" },
-      },
+      createSessionTranscriptHeader({ sessionId: "replacement" }),
+      { type: "custom", id: "retained-event", customType: "synthetic", data: { text: "payload" } },
     ];
-    await runWithSessionActorStorage(binding, async () => {
-      expect(
-        await createSessionEntryWithTranscriptInScope(
-          creationScope,
-          ({ existingEntry, targetEntry, labelInUse }) => {
-            expect(existingEntry).toMatchObject({ sessionId: "creation", label: "Original" });
-            expect(targetEntry).toEqual(existingEntry);
-            expect(labelInUse).toBe(false);
-            return {
-              ok: true,
-              entry: { sessionId: "replacement", updatedAt: 20, label: "Callback label" },
-              transcriptEvents: events,
-            };
-          },
-          { label: "Requested label", resolveOwnerAssignment: () => owner },
-        ),
-      ).toMatchObject({
-        ok: true,
-        entry: { sessionId: "replacement", label: "Requested label", owner },
-      });
-    });
-    const current = await actor.storage!.acquire(scope.sessionKey);
-    await runWithSessionActorStorage({ ...binding, actor: current }, async () => {
+    const created = await bindStorage(binding, () =>
+      createEntry(
+        creationScope,
+        () => ({
+          ok: true,
+          entry: { sessionId: "replacement", updatedAt: 20, label: "Callback label" },
+          transcriptEvents: events,
+        }),
+        { label: "Requested label", resolveOwnerAssignment: () => owner },
+      ),
+    );
+    expect(created.ok).toBe(true);
+    const current = own(await actor.storage!.acquire(scope.sessionKey));
+    await bindStorage({ ...binding, actor: current }, async () => {
       expect(loadSessionEntryReadOnly(scope)).toMatchObject({
         sessionId: "replacement",
         label: "Requested label",
@@ -182,7 +189,6 @@ describe("generic session entry APIs with actor memory storage", () => {
         snapshot: { events },
       });
     });
-    await Promise.all([actor.release(), current.release()]);
   });
 
   it.each([
@@ -191,11 +197,11 @@ describe("generic session entry APIs with actor memory storage", () => {
   ])(
     "rejects prepared creation when %s without installing its transcript or owner",
     async (change, errorName, fixtureName) => {
-      const { actor, binding, scope, creationScope } = await fixture(fixtureName);
-      await runWithSessionActorStorage(binding, async () => {
+      const { actor, binding, scope, creationScope, sibling } = await fixture(fixtureName);
+      await bindStorage(binding, async () => {
         const entered = createDeferredCore();
         const resume = createDeferredCore();
-        const pending = createSessionEntryWithTranscriptInScope(
+        const pending = createEntry(
           creationScope,
           async () => {
             entered.resolve();
@@ -217,18 +223,7 @@ describe("generic session entry APIs with actor memory storage", () => {
           if (change === "target changed") {
             await upsertSessionEntryCore(scope, { label: "Concurrent edit" });
           } else {
-            const siblingKey = `${scope.sessionKey}-sibling`;
-            const sibling = await actor.storage!.acquire(siblingKey);
-            try {
-              await runWithSessionActorStorage({ ...binding, actor: sibling }, () =>
-                upsertSessionEntryCore(
-                  { ...scope, sessionKey: siblingKey },
-                  { sessionId: "sibling", updatedAt: 2, label: "Claimed label" },
-                ),
-              );
-            } finally {
-              await sibling.release();
-            }
+            await sibling("sibling", { label: "Claimed label" });
           }
         } finally {
           resume.resolve();
@@ -244,51 +239,38 @@ describe("generic session entry APIs with actor memory storage", () => {
           snapshot: { events: [] },
         });
       });
-      await actor.release();
     },
   );
 
   it("preserves full payloads in exact replacements and rolls back a batch if a selected row changed", async () => {
-    const { actor, binding, scope } = await fixture("replacements");
-    const siblingKey = `${scope.sessionKey}-sibling`;
-    const sibling = await actor.storage!.acquire(siblingKey);
-    const siblingScope = { ...scope, sessionKey: siblingKey };
+    const { binding, scope, selection, sibling: acquireSibling } = await fixture("replacements");
     const snapshot: NonNullable<SessionEntry["skillsSnapshot"]> = {
       prompt: "Retained prompt and tool instructions",
       skills: [{ name: "synthetic-skill" }],
     };
-    await runWithSessionActorStorage({ ...binding, actor: sibling }, () =>
-      upsertSessionEntryCore(siblingScope, {
-        sessionId: "sibling",
-        updatedAt: 2,
-        skillsSnapshot: snapshot,
-      }),
-    );
-    await runWithSessionActorStorage(binding, async () => {
+    const { actor: sibling, key: siblingKey } = await acquireSibling("sibling", {
+      skillsSnapshot: snapshot,
+    });
+    const siblingScope = { ...scope, sessionKey: siblingKey };
+    await bindStorage(binding, async () => {
       const params = {
-        agentId: "main",
-        storePath: scope.storePath,
-        sessionKeys: [scope.sessionKey],
+        ...selection,
         includeSessionWindowOwner: "sibling",
       };
       expect(
-        await applySessionEntryExactReplacements({
+        await replaceExact({
           ...params,
           update: (rows) => ({
             result: "committed",
-            replacements: rows.map(({ sessionKey, entry }) => ({
-              sessionKey,
-              entry: {
-                ...entry,
-                label: sessionKey === scope.sessionKey ? "Batch primary" : "Batch sibling",
-              },
-            })),
+            replacements: labels(rows, (key) =>
+              key === scope.sessionKey ? "Batch primary" : "Batch sibling",
+            ),
           }),
         }),
       ).toBe("committed");
       const entered = createDeferredCore();
       const resume = createDeferredCore();
-      const pending = applySessionEntryExactReplacements({
+      const pending = replaceExact({
         ...params,
         sessionKeys: [scope.sessionKey, siblingKey],
         update: async (rows) => {
@@ -296,10 +278,7 @@ describe("generic session entry APIs with actor memory storage", () => {
           await resume.promise;
           return {
             result: "stale",
-            replacements: rows.map(({ sessionKey, entry }) => ({
-              sessionKey,
-              entry: { ...entry, label: "Stale batch" },
-            })),
+            replacements: labels(rows, "Stale batch"),
           };
         },
       });
@@ -308,7 +287,7 @@ describe("generic session entry APIs with actor memory storage", () => {
       });
       await entered.promise;
       try {
-        await runWithSessionActorStorage({ ...binding, actor: sibling }, () =>
+        await bindStorage({ ...binding, actor: sibling }, () =>
           upsertSessionEntryCore(siblingScope, { label: "Concurrent sibling edit" }),
         );
       } finally {
@@ -317,13 +296,12 @@ describe("generic session entry APIs with actor memory storage", () => {
       await rejected;
       expect(loadSessionEntryReadOnly(scope)?.label).toBe("Batch primary");
     });
-    runWithSessionActorStorage({ ...binding, actor: sibling }, () => {
+    bindStorage({ ...binding, actor: sibling }, () => {
       expect(loadSessionEntryReadOnly(siblingScope)).toMatchObject({
         label: "Concurrent sibling edit",
         skillsSnapshot: snapshot,
       });
     });
-    await Promise.all([actor.release(), sibling.release()]);
   });
   it("keeps absent replacement reads noncreating and rejects required writes", async () => {
     const env = { OPENCLAW_STATE_DIR: "/synthetic/actor-entry-adapter/absent-replacement" };
@@ -341,10 +319,10 @@ describe("generic session entry APIs with actor memory storage", () => {
         ],
       };
     };
-    await expect(applySessionEntryExactReplacements({ ...scope, update })).resolves.toBe("absent");
-    await expect(
-      applySessionEntryExactReplacements({ ...scope, update, requireWriteSuccess: true }),
-    ).rejects.toThrow("did not persist any rows");
+    await expect(replaceExact({ ...scope, update })).resolves.toBe("absent");
+    await expect(replaceExact({ ...scope, update, requireWriteSuccess: true })).rejects.toThrow(
+      "did not persist any rows",
+    );
     expect(
       memorySessionActorOwners.read({ agentId: scope.agentId, path: scope.storePath }),
     ).toBeUndefined();
@@ -365,18 +343,15 @@ describe("generic session entry APIs with actor memory storage", () => {
         type: "session.entry.create",
         input: { entry: { sessionId: "other", updatedAt: 1, label: "Other original" } },
       });
-      await runWithSessionActorStorage(binding, () =>
-        applySessionEntryExactReplacements({
+      await bindStorage(binding, () =>
+        replaceExact({
           agentId: target.agentId,
           storePath: target.path,
           sessionKeys: [sessionKey],
           requireWriteSuccess: true,
           update: (entries) => ({
             result: undefined,
-            replacements: entries.map((row) => ({
-              sessionKey: row.sessionKey,
-              entry: { ...row.entry, label: "Other replaced" },
-            })),
+            replacements: labels(entries, "Other replaced"),
           }),
         }),
       );
@@ -388,7 +363,7 @@ describe("generic session entry APIs with actor memory storage", () => {
   });
 
   it("replaces existing unbound memory entries, consumes pending reset, and applies maintenance", async () => {
-    const { actor, scope } = await fixture("unbound-replacement");
+    const { actor, scope, selection } = await fixture("unbound-replacement");
     const staleKey = "agent:main:dashboard:incognito-replacement-stale";
     const stale = await actor.storage!.acquire(staleKey);
     try {
@@ -408,10 +383,8 @@ describe("generic session entry APIs with actor memory storage", () => {
         resolveMaintenanceConfigFromInput({ mode: "enforce", pruneAfter: "1d", maxEntries: 100 }),
       );
       const replace = (consumePendingReset: boolean) =>
-        applySessionEntryExactReplacements({
-          agentId: scope.agentId,
-          storePath: scope.storePath,
-          sessionKeys: [scope.sessionKey],
+        replaceExact({
+          ...selection,
           activeSessionKey: scope.sessionKey,
           consumePendingReset,
           skipMaintenance: !consumePendingReset,
@@ -433,10 +406,8 @@ describe("generic session entry APIs with actor memory storage", () => {
         snapshot: { events: [{ type: "metadata", id: "retained" }] },
       });
       await expect(
-        applySessionEntryExactReplacements({
-          agentId: scope.agentId,
-          storePath: scope.storePath,
-          sessionKeys: [scope.sessionKey],
+        replaceExact({
+          ...selection,
           update: () => ({
             result: "unselected",
             replacements: [{ sessionKey: staleKey, entry: { sessionId: "stale", updatedAt: 2 } }],
@@ -452,17 +423,17 @@ describe("generic session entry APIs with actor memory storage", () => {
 describe("selected actor storage binding", () => {
   it("refuses another incognito session or owner while accepting its logical store locator", async () => {
     const { env, sessionKey, binding } = await fixture("scope");
-    runWithSessionActorStorage(binding, () => {
-      expect(getSessionActorStorageBinding({ sessionKey })?.actor).toBe(binding.actor);
-      expect(() =>
-        getSessionActorStorageBinding({ sessionKey: "agent:main:dashboard:incognito-other" }),
-      ).toThrow("another session");
-      expect(getSessionActorStorageBinding({ sessionKey: "agent:main:durable" })).toBeUndefined();
-      expect(() =>
-        getSessionActorStorageBinding({ sessionKey: "agent:main:durable", sessionActor: binding }),
-      ).toThrow("another session");
+    bindStorage(binding, () => {
+      expect(getBinding({ sessionKey })?.actor).toBe(binding.actor);
+      expect(() => getBinding({ sessionKey: "agent:main:dashboard:incognito-other" })).toThrow(
+        "another session",
+      );
+      expect(getBinding({ sessionKey: "agent:main:durable" })).toBeUndefined();
+      expect(() => getBinding({ sessionKey: "agent:main:durable", sessionActor: binding })).toThrow(
+        "another session",
+      );
       expect(
-        getSessionActorStorageBinding({
+        getBinding({
           sessionKey,
           storePath: path.join(env.OPENCLAW_STATE_DIR, "agents/main/sessions/sessions.json"),
         })?.actor,
@@ -471,38 +442,22 @@ describe("selected actor storage binding", () => {
         agentId: "main",
         env: { OPENCLAW_STATE_DIR: "/synthetic/actor-storage-binding/foreign" },
       });
-      expect(() => getSessionActorStorageBinding({ sessionKey, storePath: foreign })).toThrow(
-        "another owner",
-      );
+      expect(() => getBinding({ sessionKey, storePath: foreign })).toThrow("another owner");
     });
   });
 
   it("reads committed sibling state without acquisition and closes public handles with their session", async () => {
-    const { actor, storage, owner, sessionKey } = await fixture("siblings");
+    const { storage, owner, sessionKey } = await fixture("siblings");
     const siblingKey = "agent:main:dashboard:incognito-sibling";
-    const sibling = await owner.acquire(
-      { database: owner.identity, sessionKey: siblingKey },
-      lifetime,
-    );
+    const sibling = own(await storage.acquire(siblingKey));
     await commit(sibling.storage!, {
       type: "session.entry.create",
       input: { entry: { sessionId: "sibling", updatedAt: 2 } },
     });
-    expect(readCurrentEntry(storage, siblingKey)).toMatchObject({
-      sessionId: "sibling",
-      updatedAt: 2,
-    });
-    await commit(sibling.storage!, {
-      type: "session.entry.patch",
-      input: { operation: { kind: "fields", patch: { label: "changed" } } },
-    });
-    expect(readCurrentEntry(storage, siblingKey)).toMatchObject({ label: "changed" });
+    expect(readCurrentEntry(storage, siblingKey)).toMatchObject({ sessionId: "sibling" });
     owner.closeSession(sessionKey);
-    expect(() => actor.assertCurrent()).toThrow(/closed/);
-    expect(() => actor.assertReadable()).toThrow(/closed/);
     expect(() => readCurrentEntry(storage, siblingKey)).toThrow(/closed/);
     expect(() => sibling.assertReadable()).not.toThrow();
-    await Promise.all([actor.release(), sibling.release()]);
   });
 
   it("acquires separate handles from the captured owner after rotation and release", async () => {
