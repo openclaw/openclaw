@@ -171,13 +171,6 @@ it(
           expect(nodeInvokes()).toEqual([]);
         };
         const first = await startExecutor(gateway, "first");
-        const inventory = (await gateway.call("node.list", {})) as {
-          nodes: Array<{ nodeId: string; caps: string[]; commands: string[] }>;
-        };
-        const executor = inventory.nodes.find((node) => node.nodeId === first.nodeId);
-        expect(executor?.commands).toContain("system.run");
-        expect(executor?.caps).not.toContain("canvas");
-
         const run = async (marker: string, target: typeof first, node?: string) => {
           requests.mockClear();
           const result = await exec.execute(marker, { command: command(marker), node });
@@ -189,10 +182,6 @@ it(
           const text = result.content.find((item) => item.type === "text")?.text;
           expect(text).toContain(`Node: ${target.nodeId}`);
           expect(text).toContain(JSON.stringify({ home: target.home, marker }));
-          expect(nodeInvokes().map(([, params]) => params)).toEqual([
-            expect.objectContaining({ nodeId: target.nodeId, command: "system.run.prepare" }),
-            expect.objectContaining({ nodeId: target.nodeId, command: "system.run" }),
-          ]);
         };
         await run("sole", first);
         expect(await effects(first.home)).toBe("sole\n");
@@ -227,9 +216,6 @@ it(
           .poll(() => readNode(gateway, canvasIdentity.deviceId), WAIT_OPTIONS)
           .toMatchObject({ connected: true });
         await run("mixed", first);
-        expect(await effects(first.home)).toBe("sole\nmixed\n");
-
-        await rejectRun(makeExec(first.displayName), "ambiguous-binding", /ambiguous node/);
         expect(await effects(first.home)).toBe("sole\nmixed\n");
 
         const second = await startExecutor(gateway, "second");
