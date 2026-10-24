@@ -6,6 +6,7 @@ import type {
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { createDraftFixture, readyChatRoute } from "./draft-submission-flow.test-support.ts";
+import { placementDevice } from "./placement.test-support.ts";
 import { replaceBrowserPreference } from "./preferences.ts";
 
 const projectMethods = [
@@ -46,14 +47,10 @@ function deviceFixture(
     request: replies({
       "environments.list": async () => ({
         environments: [
-          {
-            id: `node:${id}`,
-            type: "node",
-            status: "available",
-            sessionHost: true,
+          placementDevice(id, {
             ...(options.deviceFolders ? { workerHost: { deviceFolders: true } } : {}),
             workerSlots: { total: 1, available: options.available?.() ?? 1 },
-          },
+          }),
         ],
         profiles: [],
       }),

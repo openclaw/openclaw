@@ -26,6 +26,19 @@ function option(container: ParentNode, value: string) {
   return container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`);
 }
 
+function fields(container: ParentNode) {
+  return {
+    trigger: expectDefined(
+      container.querySelector<HTMLButtonElement>("#new-session-where-trigger"),
+      "Where trigger",
+    ),
+    search: expectDefined(
+      container.querySelector<HTMLInputElement>('input[type="search"]'),
+      "environment search",
+    ),
+  };
+}
+
 function hoverDetails(row: Element | null | undefined) {
   return Array.from(
     row
@@ -69,10 +82,7 @@ describe("Where chip", () => {
     await waitForSolid(() =>
       expect(container.querySelector(".new-session-page__environment-list")).not.toBeNull(),
     );
-    const search = expectDefined(
-      container.querySelector<HTMLInputElement>('input[type="search"]'),
-      "environment search",
-    );
+    const { search } = fields(container);
     expect(document.activeElement).toBe(search);
     picker?.hide();
     picker?.show();
@@ -132,16 +142,9 @@ describe("Where chip", () => {
     );
     expect(container.querySelector('[data-section="devices"]')).not.toBeNull();
     expect(container.querySelector('[data-section="cloud"]')).not.toBeNull();
-    const trigger = expectDefined(
-      container.querySelector<HTMLButtonElement>("#new-session-where-trigger"),
-      "Where trigger",
-    );
+    const { trigger, search } = fields(container);
     expect(trigger.disabled).toBe(false);
     expect(container.querySelector('[data-action="manage-cloud-workers"]')).toBeNull();
-    const search = expectDefined(
-      container.querySelector<HTMLInputElement>('input[type="search"]'),
-      "environment search",
-    );
     search.focus();
     completion.resolve();
     await waitForSolid(() =>
@@ -326,86 +329,66 @@ describe("Where chip", () => {
     expect(hoverDetails(row)).toContain("This runtime does not support paired devices");
   });
 
-  it.each([
-    {
-      name: "no paired device hosts sessions",
-      issues: undefined,
-      reason: /no devices have session hosting enabled/i,
-    },
-    {
-      name: "a paired node must be updated before it can advertise session hosting",
-      issues: [
+  it.each<[DraftEnvironment["issues"], RegExp]>([
+    [undefined, /no devices have session hosting enabled/i],
+    [
+      [
         {
           code: "update-required",
           action: "update-and-reconnect",
           updateCommand: "openclaw update",
           headlessReconnectCommand: "openclaw node restart",
-        } as const,
+        },
       ],
-      reason: /openclaw update.*openclaw node restart/i,
-    },
-  ])(
-    "disables automatic selection with an actionable reason when $name",
-    async ({ issues, reason }) => {
-      const container = await renderPicker(false, undefined, {
-        environments: [
-          device("other", "Other", {
-            status: "offline",
-            sessionHost: false,
-            workerSlots: undefined,
-          }),
-          device("macbook", "MacBook", { sessionHost: false, workerSlots: undefined, issues }),
-        ],
-        cloudProfiles: [],
-      });
-
-      const automatic = option(container, "auto-device");
-      expect(automatic?.disabled).toBe(true);
-      expect(hoverDetails(automatic)).toMatch(reason);
-      expect(automatic?.querySelector(".session-menu__description")).toBeNull();
-    },
-  );
-
-  it.each([
-    {
-      name: "allows enabled remote execution without a free worker slot",
-      workerSlots: { total: 1, available: 0 },
-      invocableCommands: ["codex.exec-server.stdio.v1"],
-      state: "invocable" as const,
-      disabled: false,
-      label: "1 of 1 session slots in use",
-    },
-    {
-      name: "disables a declared remote command that the Gateway has not enabled",
-      workerSlots: { total: 1, available: 1 },
-      invocableCommands: [],
-      state: "unauthorized" as const,
-      disabled: true,
-      reason:
-        "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
-    },
-  ])("$name", async ({ workerSlots, invocableCommands, state, disabled, reason, label }) => {
-    const container = await renderPicker(true, undefined, {
+      /openclaw update.*openclaw node restart/i,
+    ],
+  ])("disables automatic selection with actionable remediation for %j", async (issues, reason) => {
+    const container = await renderPicker(false, undefined, {
       environments: [
-        device("runner", "Build runner", {
-          workerSlots,
-          capabilities: ["codex.exec-server.stdio.v1"],
-          invocableCommands,
-          requiredNodeCommand: { command: "codex.exec-server.stdio.v1", state },
+        device("other", "Other", {
+          status: "offline",
+          sessionHost: false,
+          workerSlots: undefined,
         }),
+        device("macbook", "MacBook", { sessionHost: false, workerSlots: undefined, issues }),
       ],
       cloudProfiles: [],
-      devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-        consumesWorkerSlot: false,
-      },
     });
 
-    const row = option(container, "device:runner");
-    expect(row?.matches(':disabled, [aria-disabled="true"]')).toBe(disabled);
-    expect(capacityCaption(row)).toBe(disabled ? undefined : label);
-    if (reason) {
-      expect(hoverDetails(row)).toContain(reason);
-    }
+    const automatic = option(container, "auto-device");
+    expect(automatic?.disabled).toBe(true);
+    expect(hoverDetails(automatic)).toMatch(reason);
+    expect(automatic?.querySelector(".session-menu__description")).toBeNull();
   });
+
+  it.each(["invocable", "unauthorized"] as const)(
+    "gates remote execution on %s command authority, not capacity",
+    async (state) => {
+      const disabled = state === "unauthorized";
+      const container = await renderPicker(true, undefined, {
+        environments: [
+          device("runner", "Build runner", {
+            workerSlots: { total: 1, available: disabled ? 1 : 0 },
+            capabilities: ["codex.exec-server.stdio.v1"],
+            invocableCommands: disabled ? [] : ["codex.exec-server.stdio.v1"],
+            requiredNodeCommand: { command: "codex.exec-server.stdio.v1", state },
+          }),
+        ],
+        cloudProfiles: [],
+        devicePlacement: {
+          requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+          consumesWorkerSlot: false,
+        },
+      });
+
+      const row = option(container, "device:runner");
+      expect(row?.matches(':disabled, [aria-disabled="true"]')).toBe(disabled);
+      expect(capacityCaption(row)).toBe(disabled ? undefined : "1 of 1 session slots in use");
+      if (disabled) {
+        expect(hoverDetails(row)).toContain(
+          "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
+        );
+      }
+    },
+  );
 });

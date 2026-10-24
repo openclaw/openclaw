@@ -136,12 +136,12 @@ it("renders an all-cold catalog as setup actions", async () => {
   await ready();
   const container = draw();
   expect(container.querySelector("[data-chat-model-select]")?.textContent).toContain(luna.name);
-  const options = [...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
-  expect(options).toHaveLength(1);
-  expect(options[0]?.textContent).toContain("Sign-in needed");
-  expect(
-    options.every((option) => !option.disabled && option.dataset.chatModelSetup === "true"),
-  ).toBe(true);
+  expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(1);
+  expect(find("model-option")).toMatchObject({
+    disabled: false,
+    textContent: expect.stringContaining("Sign-in needed"),
+    dataset: { chatModelSetup: "true" },
+  });
   expect(container.textContent).toContain("No models available");
   find("model-setup", "true")!.click();
   expect(navigate).toHaveBeenCalledWith("model-setup");
@@ -384,12 +384,7 @@ it.each(["auto", "ultrafast"] as const)(
   "restores a standalone speed preference %s",
   async (fastMode) => {
     const { context, control, draw } = setup([
-      {
-        ...luna,
-        reasoning: true,
-        available: true,
-        serviceTiers: ["ultrafast"],
-      },
+      { ...luna, reasoning: true, available: true, serviceTiers: ["ultrafast"] },
     ]);
     control.load(context, "main", true, { preference: { fastMode } });
     expect(control.isRestoringPreference()).toBe(true);

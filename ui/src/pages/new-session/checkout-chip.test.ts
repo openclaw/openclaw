@@ -1,5 +1,5 @@
 import { createComponent, createSignal, flush } from "solid-js";
-import { describe, expect, it, vi, type Mock } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -10,31 +10,12 @@ import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import type { DraftRepositoryRead } from "./draft-repository-state.ts";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
-type CheckoutFixture = {
-  state: ReturnType<typeof resolveCheckoutChip>;
-  remotePlacement: boolean;
+type CheckoutFixture = ReturnType<typeof checkoutDefaults> & {
   currentCheckoutUnavailableReason?: string;
-  repository?: boolean;
-  folderLabel: string;
-  worktree: boolean;
-  worktreeAvailable: boolean;
-  repositoryUnavailable?: boolean;
-  branches: Omit<Extract<DraftRepositoryState, { kind: "git" }>, "kind"> | null;
-  branchesLoading: boolean;
+  remoteRepository?: boolean;
+  repository: DraftRepositoryState;
   repositoryRead?: DraftRepositoryRead<unknown>;
   checkoutRead?: DraftRepositoryRead<unknown>;
-  baseRef: string;
-  worktreeName: string;
-  submitting: boolean;
-  pendingPlacement: boolean;
-  popoverOpen: boolean;
-  onPopoverShow: Mock<() => void>;
-  onPopoverHide: Mock<() => void>;
-  onPopoverAfterHide: Mock<() => void>;
-  onSelectWorktree: Mock<(value: boolean) => void>;
-  onBaseRefInput: Mock<(baseRef: string) => void>;
-  onWorktreeNameInput: Mock<(name: string) => void>;
-  onConfirm: Mock<() => void>;
 };
 
 function keydown(element: Element, key: string) {
@@ -64,31 +45,34 @@ function waitForOpen(container: Element) {
   );
 }
 
-function checkoutFixture(overrides: Partial<CheckoutFixture> = {}): CheckoutFixture {
+function checkoutDefaults() {
   return {
     state: { label: "New worktree from main" },
     remotePlacement: false,
     folderLabel: "OpenClaw",
     worktree: true,
     worktreeAvailable: true,
-    branches: {
+    baseRef: "main",
+    worktreeName: "",
+    onPopoverShow: vi.fn<() => void>(),
+    onPopoverHide: vi.fn<() => void>(),
+    onPopoverAfterHide: vi.fn<() => void>(),
+    onSelectWorktree: vi.fn<(value: boolean) => void>(),
+    onBaseRefInput: vi.fn<(value: string) => void>(),
+    onWorktreeNameInput: vi.fn<(value: string) => void>(),
+    onConfirm: vi.fn<() => void>(),
+  };
+}
+
+function checkoutFixture(overrides: Partial<CheckoutFixture> = {}): CheckoutFixture {
+  return {
+    ...checkoutDefaults(),
+    repository: {
+      kind: "git",
       repoRoot: "/repo",
       branches: [{ name: "main", kind: "local" }],
       headBranch: "main",
     },
-    branchesLoading: false,
-    baseRef: "main",
-    worktreeName: "",
-    submitting: false,
-    pendingPlacement: false,
-    popoverOpen: true,
-    onPopoverShow: vi.fn(),
-    onPopoverHide: vi.fn(),
-    onPopoverAfterHide: vi.fn(),
-    onSelectWorktree: vi.fn(),
-    onBaseRefInput: vi.fn(),
-    onWorktreeNameInput: vi.fn(),
-    onConfirm: vi.fn(),
     ...overrides,
   };
 }
@@ -102,46 +86,30 @@ function mountCheckout(initial: CheckoutFixture) {
     baseRef: { get: () => params().baseRef },
     remotePlacement: { get: () => params().remotePlacement },
     remoteRepository: {
-      get: () => (params().repository ? { url: "https://example.com/repo.git" } : undefined),
+      get: () => (params().remoteRepository ? { url: "https://example.com/repo.git" } : undefined),
     },
     currentCheckoutUnavailableReason: { get: () => params().currentCheckoutUnavailableReason },
     repositoryState: {
       get: () => ({ repositoryRead: params().repositoryRead, checkoutRead: params().checkoutRead }),
     },
-    repository: {
-      get: () => {
-        const current = params();
-        return current.branches
-          ? { kind: "git", ...current.branches }
-          : {
-              kind: current.branchesLoading
-                ? "checking"
-                : current.repositoryUnavailable
-                  ? "unavailable"
-                  : "idle",
-            };
-      },
-    },
+    repository: { get: () => params().repository },
   });
   vi.spyOn(place, "worktreeAvailable").mockImplementation(() => params().worktreeAvailable);
-  vi.spyOn(place, "selectWorktree").mockImplementation((value) => params().onSelectWorktree(value));
-  vi.spyOn(place, "setBaseRef").mockImplementation((value) => params().onBaseRefInput(value));
-  vi.spyOn(place, "setWorktreeName").mockImplementation((value) =>
-    params().onWorktreeNameInput(value),
-  );
-  vi.spyOn(browser, "popoverOpen").mockImplementation(() => params().popoverOpen);
-  vi.spyOn(browser, "popoverCallbacks").mockImplementation(() => params());
+  vi.spyOn(place, "selectWorktree").mockImplementation(initial.onSelectWorktree);
+  vi.spyOn(place, "setBaseRef").mockImplementation(initial.onBaseRefInput);
+  vi.spyOn(place, "setWorktreeName").mockImplementation(initial.onWorktreeNameInput);
+  vi.spyOn(browser, "popoverOpen").mockReturnValue(true);
+  vi.spyOn(browser, "popoverCallbacks").mockImplementation(() => ({
+    ...params(),
+    popoverOpen: true,
+  }));
   const options: NewSessionPlaceControlsOptions = {
     place,
     gateway,
     context: undefined,
     data: undefined,
-    get submitting() {
-      return params().submitting;
-    },
-    get pendingPlacement() {
-      return params().pendingPlacement;
-    },
+    submitting: false,
+    pendingPlacement: false,
     onConnectMachine: vi.fn(),
     onNavigate: vi.fn(),
     onChange: vi.fn(),
@@ -195,42 +163,31 @@ describe("Checkout chip state", () => {
     },
   );
 
-  it.each([
-    { worktree: false, remotePlacement: false, repository: false },
-    { worktree: true, remotePlacement: false, repository: false },
-    {
-      worktree: true,
-      remotePlacement: false,
-      repository: false,
-      currentCheckoutUnavailableReason: "Use an isolated worktree for this project and agent",
-    },
-    { worktree: true, remotePlacement: true, repository: false },
-    { worktree: false, remotePlacement: true, repository: true },
-    { worktree: false, remotePlacement: true, repository: true, emptyBranches: true },
+  it.each<[boolean, boolean, boolean, string?, boolean?]>([
+    [false, false, false],
+    [true, false, false],
+    [true, false, false, "Use an isolated worktree for this project and agent"],
+    [true, true, false],
+    [false, true, true],
+    [false, true, true, undefined, true],
   ])(
-    "offers explicit checkout choices (worktree=$worktree, remote=$remotePlacement, emptyBranches=$emptyBranches)",
-    async ({
+    "offers checkout choices (worktree=%s, remote=%s, repository=%s, reason=%s, empty=%s)",
+    async (
       worktree,
       remotePlacement,
       repository,
-      emptyBranches,
       currentCheckoutUnavailableReason,
-    }) => {
+      emptyBranches,
+    ) => {
       const params = checkoutFixture({
-        state: { label: worktree ? "New worktree from main" : "feature" },
         remotePlacement,
         currentCheckoutUnavailableReason,
-        repository,
+        remoteRepository: repository,
         worktree,
-        branches: {
+        repository: {
+          kind: "git",
           repoRoot: "/repo",
-          branches: emptyBranches
-            ? []
-            : [
-                { name: "main", kind: "local" },
-                { name: "release/next", kind: "local" },
-              ],
-          headBranch: "feature",
+          branches: emptyBranches ? [] : [{ name: "main", kind: "local" }],
         },
       });
       const { onSelectWorktree, onBaseRefInput, onConfirm } = params;
@@ -299,8 +256,7 @@ describe("Checkout chip state", () => {
       state: { label: "New worktree" },
       folderLabel: "Fixture project",
       worktreeAvailable: false,
-      branches: null,
-      branchesLoading: true,
+      repository: { kind: "checking", repoRoot: "/fixture" },
       repositoryRead: initialRead,
       checkoutRead: initialRead,
       currentCheckoutUnavailableReason: "Checking fixture checkout",
@@ -319,8 +275,7 @@ describe("Checkout chip state", () => {
     initial.reject(new Error("Fixture branch lookup failed"));
     update({
       ...params,
-      branchesLoading: false,
-      repositoryUnavailable: true,
+      repository: { kind: "unavailable", repoRoot: "/fixture" },
       currentCheckoutUnavailableReason: "Fixture checkout unavailable",
     });
     await waitForSolid(() => expect(branch.placeholder).toBe("From"));
@@ -332,14 +287,16 @@ describe("Checkout chip state", () => {
     const retry = createDeferred();
     const retryRead = { completed: retry.promise };
     update({ ...params, repositoryRead: retryRead, checkoutRead: retryRead });
-    const branches = { repoRoot: "/fixture", branches: [{ name: "main", kind: "local" as const }] };
     update({
       ...params,
       repositoryRead: retryRead,
       checkoutRead: retryRead,
       currentCheckoutUnavailableReason: undefined,
-      branchesLoading: false,
-      branches,
+      repository: {
+        kind: "git",
+        repoRoot: "/fixture",
+        branches: [{ name: "main", kind: "local" }],
+      },
       worktreeAvailable: true,
     });
     retry.resolve();
@@ -422,7 +379,8 @@ describe("Checkout chip state", () => {
     const renderBranches = (names: string[]) =>
       update({
         ...params,
-        branches: {
+        repository: {
+          kind: "git",
           repoRoot: "/repo",
           branches: names.map((branchName) => ({ name: branchName, kind: "local" })),
         },

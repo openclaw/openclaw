@@ -125,20 +125,18 @@ describe("new-session submission preview", () => {
 });
 
 describe("new-session composer keyboard submission", () => {
-  it("opens slash commands and inserts the selected command with Enter", () => {
-    replaceSlashCommands([
-      command("test-command"),
-      { ...command("local-command"), executeLocal: true },
-    ]);
+  it.each([
+    ["/", "slash", command("test-command")],
+    ["$", "skill", skill("release_notes")],
+  ] as const)("inserts the selected %s completion with Enter", (prefix, menuKind, entry) => {
+    replaceSlashCommands([entry, { ...command("local-command"), executeLocal: true }]);
     const { composer, textarea, onInput, onSubmit } = keyboardComposer();
-
-    typeDraft(textarea, "/");
-
-    const menu = composer.querySelector(".slash-menu")?.textContent;
-    expect(menu).toContain("/test-command");
-    expect(menu).not.toContain("/local-command");
+    typeDraft(textarea, prefix);
+    const menu = composer.querySelector(`.${menuKind}-menu`)?.textContent;
+    expect(menu).toContain(menuKind === "slash" ? `/${entry.name}` : entry.name);
+    expect(menu).not.toContain("local-command");
     enter(textarea);
-    expect(onInput).toHaveBeenLastCalledWith("/test-command ");
+    expect(onInput).toHaveBeenLastCalledWith(`${prefix}${entry.name} `);
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
@@ -225,17 +223,6 @@ describe("new-session composer keyboard submission", () => {
       expect(getSkillCommandCompletions("previous_owner_only")).toEqual([]);
     },
   );
-
-  it("opens skill mentions and inserts the selected skill with Enter", () => {
-    replaceSlashCommands([skill("release_notes")]);
-    const { composer, textarea, onInput } = keyboardComposer();
-
-    typeDraft(textarea, "$");
-
-    expect(composer.querySelector(".skill-menu")?.textContent).toContain("release_notes");
-    enter(textarea);
-    expect(onInput).toHaveBeenLastCalledWith("$release_notes ");
-  });
 
   it("closes a skill menu when a route change replaces the owned draft", () => {
     replaceSlashCommands([skill("release_notes")]);

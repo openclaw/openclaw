@@ -74,15 +74,10 @@ describe("new session draft route ownership", () => {
   it.each([false, true])(
     "retires composer frames through detach and reattach (reduced motion: %s)",
     async (reducedMotion) => {
-      vi.stubGlobal("matchMedia", (media: string) => ({
-        media,
+      const matchMedia = window.matchMedia;
+      vi.spyOn(window, "matchMedia").mockImplementation((media) => ({
+        ...matchMedia(media),
         matches: reducedMotion && media === "(prefers-reduced-motion: reduce)",
-        onchange: null,
-        addListener() {},
-        removeListener() {},
-        addEventListener() {},
-        removeEventListener() {},
-        dispatchEvent: () => true,
       }));
 
       const framesClock = createFrameClock();
@@ -227,7 +222,7 @@ describe("new session draft route ownership", () => {
     }
   });
 
-  it("keeps destination input through pending data, settlement, and agent resolution", async () => {
+  it("retains destination-owned input through settlement and clears it on a different route", async () => {
     const page = await mount(routeData("research"));
 
     window.history.replaceState({}, "", "/new?agent=research&catalog=claude");
@@ -242,13 +237,6 @@ describe("new session draft route ownership", () => {
     page.data = routeData("research", "claude");
     await settle(page);
     expect(message(page)).toBe("keep this fast draft");
-  });
-
-  it("clears a draft when a different route settles without destination-owned input", async () => {
-    const page = await mount(routeData("research", "claude"));
-    window.history.replaceState({}, "", "/new?agent=research&catalog=claude");
-    await enterMessage(page, "route-owned draft");
-
     window.history.replaceState({}, "", "/new?agent=main&catalog=codex");
     page.data = undefined;
     await settle(page);
