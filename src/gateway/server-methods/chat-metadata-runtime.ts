@@ -53,6 +53,11 @@ import type {
 
 type PreparedAgentMetadata = PreparedChatMetadataProjection["agent"];
 
+type PreparedAgentEntry = {
+  promise: Promise<PreparedAgentMetadata>;
+  ready?: PreparedAgentMetadata;
+};
+
 type PreparedProjection<T> = { read: () => T; isCurrent: () => boolean };
 
 type AgentProjectionEntry =
@@ -62,7 +67,7 @@ type AgentProjectionEntry =
 type PreparedMetadataGeneration = {
   facts: PreparedGenerationFacts;
   modelLists: ReturnType<typeof createChatMetadataModelList>;
-  agentsById: Map<string, Promise<PreparedAgentMetadata>>;
+  agentsById: Map<string, PreparedAgentEntry>;
   neutralProjectionByAgentId: Map<string, AgentProjectionEntry>;
   sessionProjectionByKey: Map<string, AgentProjectionEntry>;
 };
@@ -209,47 +214,54 @@ export function createGatewayChatMetadataRuntime(params: {
   const prepareAgent = (generation: PreparedMetadataGeneration, agentId: string) => {
     const existing = generation.agentsById.get(agentId);
     if (existing) {
-      return existing;
+      return existing.promise;
     }
     const agent = generation.facts.agents.find((candidate) => candidate.agentId === agentId);
     if (!agent) {
       return undefined;
     }
-    const preparing: Promise<PreparedAgentMetadata> = trackWork(
-      (async (): Promise<PreparedAgentMetadata> => {
-        let commands: unknown[] | undefined;
-        try {
-          const { buildCommandsListResult } = await import("./commands-list-result.js");
-          commands = (
-            await buildCommandsListResult({
-              cfg: generation.facts.config,
-              agentId,
-              includeArgs: true,
-              scope: "text",
-            })
-          ).commands;
-        } catch (error) {
-          params.log.warn(
-            `chat metadata continuing without text commands for ${agentId}: ${formatErrorMessage(error)}`,
-          );
-        }
-        const swarmEnabled = resolveSwarmConfig(generation.facts.config, agentId).enabled;
-        return {
-          ...agent,
-          ...(commands !== undefined ? { commands } : {}),
-          swarmEnabled,
-          revision: createHash("sha256")
-            .update(JSON.stringify({ commands, swarmEnabled }))
-            .digest("base64url"),
-        };
-      })().catch((error: unknown) => {
-        generation.agentsById.delete(agentId);
-        throw error;
-      }),
-    );
-    generation.agentsById.set(agentId, preparing);
+    const entry: PreparedAgentEntry = {
+      promise: trackWork(
+        (async (): Promise<PreparedAgentMetadata> => {
+          let commands: unknown[] | undefined;
+          try {
+            const { buildCommandsListResult } = await import("./commands-list-result.js");
+            commands = (
+              await buildCommandsListResult({
+                cfg: generation.facts.config,
+                agentId,
+                includeArgs: true,
+                scope: "text",
+              })
+            ).commands;
+          } catch (error) {
+            params.log.warn(
+              `chat metadata continuing without text commands for ${agentId}: ${formatErrorMessage(error)}`,
+            );
+          }
+          const swarmEnabled = resolveSwarmConfig(generation.facts.config, agentId).enabled;
+          return {
+            ...agent,
+            ...(commands !== undefined ? { commands } : {}),
+            swarmEnabled,
+            revision: createHash("sha256")
+              .update(JSON.stringify({ commands, swarmEnabled }))
+              .digest("base64url"),
+          };
+        })()
+          .then((prepared) => {
+            entry.ready = prepared;
+            return prepared;
+          })
+          .catch((error: unknown) => {
+            generation.agentsById.delete(agentId);
+            throw error;
+          }),
+      ),
+    };
+    generation.agentsById.set(agentId, entry);
     pruneMapToMaxSize(generation.agentsById, CHAT_METADATA_CACHE_MAX_ENTRIES);
-    return preparing;
+    return entry.promise;
   };
 
   const runRefresh = async (options: ChatMetadataRefreshOptions) => {
@@ -551,7 +563,7 @@ export function createGatewayChatMetadataRuntime(params: {
       return undefined;
     }
     const agentId = normalizeAgentId(readParams.agentId);
-    let agent: PreparedAgentMetadata | undefined;
+    let agent = generation.agentsById.get(agentId)?.ready;
     if (readParams.readPolicy !== "ready" && hasSessionContext) {
       agent = await prepareAgent(generation, agentId);
       if (
@@ -559,11 +571,13 @@ export function createGatewayChatMetadataRuntime(params: {
         current !== generation ||
         replacement ||
         pending ||
-        !authStoresCurrent(generation.facts) ||
-        !agent.owner.isCurrent()
+        !authStoresCurrent(generation.facts)
       ) {
         return undefined;
       }
+    }
+    if (agent && !agent.owner.isCurrent()) {
+      return undefined;
     }
     const neutral = generation.neutralProjectionByAgentId.get(agentId);
     const session = isUserModelAuthProfileId(profiles.preferredProfileId ?? "")
@@ -577,7 +591,7 @@ export function createGatewayChatMetadataRuntime(params: {
       !neutral.projection.isCurrent() ||
       !session.projection.isCurrent()
     ) {
-      return agent ? assemble(agent) : undefined;
+      return readParams.readPolicy !== "ready" && agent ? assemble(agent) : undefined;
     }
     return assemble(session.projection.agent, {
       sessionModelCatalog: session.projection.modelCatalog,

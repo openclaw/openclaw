@@ -203,6 +203,23 @@ describe("gateway chat metadata runtime", () => {
     },
   );
 
+  test("serves prepared neutral commands without preparing catalogs", async () => {
+    const harness = await preparedHarness();
+    await expect(harness.startup()).resolves.toBeUndefined();
+    expect(harness.buildCommands).not.toHaveBeenCalled();
+
+    await harness.startup({ sessionEntry: savedSelection() });
+    await expect(harness.startup()).resolves.toMatchObject({
+      metadata: {
+        commands: [{ ...chatMetadataCommandFields, name: "command-1-1" }],
+        swarmEnabled: true,
+      },
+    });
+    await expect(harness.startup({ readPolicy: "ready" })).resolves.toBeUndefined();
+    expect(harness.buildCommands).toHaveBeenCalledOnce();
+    expect(harness.buildProjection).not.toHaveBeenCalled();
+  });
+
   test("reads settled history and startup catalogs without serializing the model picker", async () => {
     const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
