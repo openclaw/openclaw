@@ -6434,7 +6434,9 @@ class NodeRuntime internal constructor(
       val defaultAgentId = root["defaultId"].asStringOrNull()?.trim().orEmpty()
       val agents = parseGatewayAgentSummaries(root)
       publishGatewayData(gatewayScope) {
-        if (!isGatewayMethodsSnapshotCurrent(methods) || chatSelectionSeq.get() != selectionSequence) return@publishGatewayData
+        if (!isGatewayMethodsSnapshotCurrent(methods)) return@publishGatewayData
+        // Initial discovery must finish even if a notification selects a conversation while waiting.
+        if (operatorConnected && chatSelectionSeq.get() != selectionSequence) return@publishGatewayData
         updateGatewayDefaultAgentId(defaultAgentId)
         _gatewayAgents.value = agents
         val selectable = agents.selectableAgents()

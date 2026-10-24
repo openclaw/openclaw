@@ -641,6 +641,29 @@ class NodeRuntimeAgentSelectionTest {
     }
 
   @Test
+  fun initialDiscoveryCompletesWithoutReplacingANewerConversationSelection() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val releaseRoster = CompletableDeferred<Unit>()
+      val conversation = "agent:agent-b:notification"
+      try {
+        val refreshes = answerAgentList(runtime, "agent-b", beforeAnswer = { releaseRoster.await() })
+        reconnectOperator(runtime)
+        val refresh = withTimeout(2_000) { refreshes.receive() }
+        runtime.switchChatSession(conversation, "agent-b")
+
+        releaseRoster.complete(Unit)
+        withTimeout(2_000) { refresh.join() }
+        assertTrue(runtime.gatewayConnectionDisplay.value.isConnected)
+        assertEquals(conversation, runtime.chat.sessionKey.value)
+        assertEquals("agent-b", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+      } finally {
+        releaseRoster.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
   fun failedDiscoveryRetryInitializesChatEvenWhenTheMainKeyIsUnchanged() =
     runBlocking {
       val runtime = createConnectedRuntime()
