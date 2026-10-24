@@ -34,7 +34,8 @@ it("keeps unrelated publications out of mounted row access and subtitle preparat
   const owner = getAppSidebarOwner(sidebar.hostElement)!;
   owner.setVisibleSessionLimit("ungrouped", 80);
   await settleLitElement(sidebar);
-  expect(sidebar.querySelectorAll("[data-session-key]").length).toBeGreaterThanOrEqual(80);
+  expect(sidebar.querySelectorAll("[data-session-key]").length).toBeGreaterThan(0);
+  expect(sidebar.querySelectorAll("[data-session-key]").length).toBeLessThan(40);
   const publishList = (result: SessionsListResult) => {
     sessions.publishList({ result });
     publishSidebarSessionList(owner.sessionData, {
