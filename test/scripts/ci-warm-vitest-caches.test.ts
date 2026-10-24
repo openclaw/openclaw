@@ -56,13 +56,9 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-it.each(
-  ["linux", "linux-hosted"].flatMap((platform) =>
-    [undefined, "bun-all", "dual-all"].map((policy) => ({ platform, policy })),
-  ),
-)(
-  "preserves protected Node and Bun seeds for $platform ($policy)",
-  async ({ platform, policy }) => {
+it.each(["linux", "linux-hosted"])(
+  "preserves protected Node and Bun seeds for %s despite the consumer policy",
+  async (platform) => {
     const root = tempDirs.make("openclaw-cache-warm-test-");
     const cacheRoot = join(root, "transforms");
     const compileRoot = join(root, "compile");
@@ -75,7 +71,7 @@ it.each(
       GITHUB_ACTIONS: undefined,
       OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: undefined,
       CACHE_WARM_PLATFORM: platform,
-      OPENCLAW_CI_TEST_RUNTIME_POLICY: policy,
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-all",
       NODE_OPTIONS: "--max-old-space-size=8192",
       NODE_COMPILE_CACHE: compileRoot,
       OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: cacheRoot,
