@@ -331,20 +331,20 @@ function* assembleOpenClawCodingTools(
     capabilityProfile.policy.explicitToolAllowlist,
     runtimePluginToolGrant,
   );
-  // Owner-only tools stay offered (resolveTurnToolSurface gates their calls);
-  // descendants and captured allowlists never inherit them.
+  // Owner-only tools stay listed; descendants and captured allowlists cannot inherit them.
   const pluginToolDenylist = [...capabilityProfile.policy.explicitToolDenylist];
-  const requesterToolDenylist = [...pluginToolDenylist, ...ownerOnlyCoreToolDenylist];
-  const inheritedToolDenylist = [
-    ...requesterToolDenylist,
-    ...(capabilityProfile.policy.inheritedToolPolicyForSpawn?.deny ?? []),
-  ];
+  const requesterToolDenylist = pluginToolDenylist.concat(
+    capabilityProfile.policy.inheritedToolPolicy?.deny ?? [],
+    ownerOnlyCoreToolDenylist,
+  );
+  const inheritedToolDenylist = requesterToolDenylist.concat(
+    capabilityProfile.policy.inheritedToolPolicyForSpawn?.deny ?? [],
+  );
   const delegatedToolDenyFloor = prepareDelegatedToolDenyFloor(
     capabilityProfile,
     ownerOnlyCoreToolDenylist,
   );
-  // sessions_spawn captures this array before the final tool list exists.
-  // Populate it after filtering so children inherit the applicable restrictions.
+  // Populate the spawn-captured array after final filtering.
   const inheritedToolAllowlist = options?.inheritedToolAllowlistRef ?? [];
   const cronCreatorToolAllowlist = options?.cronCreatorToolAllowlistRef ?? [];
   const gatewayCaller = resolveScheduledToolCallerContext({

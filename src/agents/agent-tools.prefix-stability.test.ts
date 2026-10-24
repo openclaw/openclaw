@@ -327,6 +327,6 @@ it("offers the session's tool definitions and refuses tools outside the replayed
   const refused = await completion.find((tool) => tool.name === "write")!.execute("write", {});
   expect(refused.details).toMatchObject({ gated: true });
   expect(JSON.stringify(refused.content)).toContain(
-    "write is outside the authority this completion turn carries",
+    "write is not available during a child-completion turn",
   );
 });
