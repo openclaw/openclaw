@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
 import { describe } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
@@ -159,14 +158,8 @@ describe.runIf(["darwin", "linux"].includes(process.platform))(
             `#!/bin/bash
 set -euo pipefail
 printf 'download\\n' >> "$fixture_curl_log"
-while [[ "$#" -gt 0 ]]; do
-  if [[ "$1" == --output ]]; then
-    cp "$fixture_downloads/$(basename "$2")" "$2"
-    exit 0
-  fi
-  shift
-done
-exit 2
+while [[ "$1" != --output ]]; do shift; done
+cp "$fixture_downloads/$(basename "$2")" "$2"
 `,
             0o755,
           );
@@ -186,12 +179,7 @@ exit 2
               },
             },
           );
-          const downloadsMade = await readFile(curlLog, "utf8").catch((error: unknown) => {
-            if (hasNodeErrorCode(error, "ENOENT")) {
-              return "";
-            }
-            throw error;
-          });
+          const downloadsMade = await readFile(curlLog, "utf8");
           expect(downloadsMade).toBe("download\ndownload\n" + (redownload ? "download\n" : ""));
           if (expectedError) {
             expect(result.status).not.toBe(0);

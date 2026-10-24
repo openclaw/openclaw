@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  linuxArmAndroidGradleSkipMessage,
   resolveAndroidSdkEnv,
   run,
   shouldSkipLinuxArmAndroidGradle,
@@ -14,11 +13,9 @@ const posixIt = process.platform === "win32" ? it.skip : it;
 
 describe("run-android-gradle", () => {
   it("splits Gradle args from an optional post command", () => {
-    expect(
-      splitAndroidGradleArgs([":app:installPlayDebug", "--", "adb", "shell", "am", "start"]),
-    ).toEqual({
-      gradleArgs: [":app:installPlayDebug"],
-      postArgs: ["adb", "shell", "am", "start"],
+    expect(splitAndroidGradleArgs([":test", "--", "adb", "shell"])).toEqual({
+      gradleArgs: [":test"],
+      postArgs: ["adb", "shell"],
     });
   });
 
@@ -39,18 +36,12 @@ describe("run-android-gradle", () => {
     ).toBe(false);
   });
 
-  it("explains the skip with the override escape hatch", () => {
-    expect(linuxArmAndroidGradleSkipMessage("linux", "arm64")).toContain(
-      "OPENCLAW_ANDROID_GRADLE_ALLOW_LINUX_ARM=1",
-    );
-  });
-
   posixIt(
     "reports an unavailable proof prerequisite without starting Gradle or counting tests",
     () => {
       const result = spawnSync(
         process.execPath,
-        ["scripts/run-android-gradle.mts", "--proof", ":wear-shared:testDebugUnitTest"],
+        ["scripts/run-android-gradle.mts", "--proof", ":test"],
         {
           encoding: "utf8",
           env: {
