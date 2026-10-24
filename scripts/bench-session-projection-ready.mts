@@ -13,6 +13,7 @@ import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import type { TranscriptEvent } from "../src/config/sessions/session-accessor.sqlite-contract.ts";
 import type { OpenClawConfig } from "../src/config/types.openclaw.ts";
+import type { OperatorScope } from "../src/gateway/operator-scopes.ts";
 import {
   publicKeyRawBase64UrlFromEd25519Pem,
   signEd25519Payload,
@@ -129,7 +130,7 @@ if (values["seed-only"]) {
   const config: OpenClawConfig = structuredClone(BASE_GATEWAY_BENCH_CONFIG);
   config.agents = { defaults: { skipBootstrap: true } };
   const origin = "https://projection-measure.example.invalid";
-  const scopes = ["operator.read", "operator.admin"];
+  const scopes: OperatorScope[] = ["operator.read", "operator.admin"];
   const identityName = "projection-measure";
   config.gateway = {
     ...config.gateway,
@@ -215,6 +216,18 @@ if (values["seed-only"]) {
   let gateway: ChildProcess | undefined;
   let client: ReturnType<typeof createGatewayWsClient> | undefined;
   let complete = false;
+  let stopping: Promise<void> | undefined;
+  const stop = () =>
+    (stopping ??= (async () => {
+      client?.close();
+      if (gateway) {
+        await stopChild(gateway, { teardownGraceMs: 30_000, killGraceMs: 2_000 });
+      }
+    })());
+  const interrupt = () => void stop().finally(() => process.exit(130));
+  const terminate = () => void stop().finally(() => process.exit(143));
+  process.once("SIGINT", interrupt);
+  process.once("SIGTERM", terminate);
   try {
     setPhase("boot");
     const port = await getFreePort();
@@ -345,11 +358,10 @@ if (values["seed-only"]) {
     }
     complete = true;
   } finally {
-    client?.close();
     setPhase("shutdown");
-    if (gateway) {
-      await stopChild(gateway, { teardownGraceMs: 30_000, killGraceMs: 2_000 });
-    }
+    await stop();
+    process.removeListener("SIGINT", interrupt);
+    process.removeListener("SIGTERM", terminate);
     setPhase("done");
     const requestCounts: Record<string, { requests: number; projectionRequests: number }> = {};
     for (const filename of readdirSync(output).filter((name) => /^sql-.*\.jsonl$/u.test(name))) {

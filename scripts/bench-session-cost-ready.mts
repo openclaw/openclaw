@@ -1,11 +1,11 @@
 /** Real Gateway + bundled iMessage /usage cost; synthetic fixtures only. */
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { parseArgs } from "node:util";
+import { parseArgs, promisify } from "node:util";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import { stopChild } from "./lib/gateway-bench-child.ts";
@@ -64,6 +64,9 @@ const events: object[] = [];
 const children: ChildProcess[] = [];
 const evidence = {
   format: "session-cost-ready-v1",
+  harnessVersion: "3.1.4",
+  children: [] as { name: string; pid: number }[],
+  turns: [],
   clients,
   samples,
   probeEnabled: values.probe,
@@ -126,7 +129,10 @@ async function handleRequest(
       const expected = expectedUsage[index];
       assert(activeBurst && expected, "Unexpected reply target or phase");
       assert(!activeBurst.replies.has(index), "Duplicate cost reply for a peer");
-      assert(reply.text?.includes("Usage cost"), "Reply is not a cost summary");
+      assert(
+        typeof reply.text === "string" && reply.text.includes("Usage cost"),
+        "Reply is not a cost summary",
+      );
       const detail = /^Session \$(\d+\.\d+)(?: \(partial\))? · (\d+) tokens$/mu.exec(reply.text);
       assert(detail, "Missing billed session detail");
       assert.equal(Number(detail[1]), expected.cost, "Wrong session cost");
@@ -163,6 +169,9 @@ function launch(args: string[], env: NodeJS.ProcessEnv, name: string): ChildProc
   child.stdout?.pipe(log);
   child.stderr?.pipe(log);
   children.push(child);
+  if (child.pid) {
+    evidence.children.push({ name, pid: child.pid });
+  }
   return child;
 }
 async function until(predicate: () => boolean, label: string): Promise<void> {
@@ -422,6 +431,13 @@ try {
   process.exitCode = 1;
 } finally {
   await cleanup();
+}
+if (gateway?.pid) {
+  const result = await promisify(execFile)("python3", [
+    path.join(path.dirname(path.resolve(values.observer)), "analyze.py"),
+    output,
+  ]);
+  writeFileSync(path.join(output, "analysis.log"), result.stdout + result.stderr);
 }
 console.log(
   JSON.stringify({

@@ -55,8 +55,8 @@ if (isMainThread && process.env.SESSION_COST_READY_PROBE) {
   syncBuiltinESMExports();
   process.on("exit", () => {
     fs.writeFileSync(
-      path.join(process.env.SESSION_COST_READY_PROBE, "cost-wait-probe.json"),
-      JSON.stringify({ format: "session-cost-ready-probe-v1", phases }, null, 2),
+      path.join(process.env.SESSION_COST_READY_PROBE, `cost-wait-probe-${process.pid}.json`),
+      JSON.stringify({ format: "session-cost-ready-probe-v1", pid: process.pid, phases }, null, 2),
     );
   });
 }
