@@ -14,6 +14,15 @@ const SCRIPT_FAILURE_COPY = {
   tool_budget_exceeded: "exceeded its tool budget",
 } satisfies Record<Exclude<CronTriggerFailureCode, "plugin_reload_failed">, string>;
 
+/** Fixed copy shared by run history and the safe chat notification projection. */
+export function formatCronWatchdogFailure(
+  reason: Extract<CronFailureNotificationDetail, { kind: "agent-watchdog" }>["reason"],
+): string {
+  return reason === "execution_deadline"
+    ? "Session watchdog stopped the run after its execution deadline."
+    : "Session watchdog stopped the run after no semantic progress.";
+}
+
 /** Renders only classified reasons or closed producer-authored failure facts. */
 export function cronFailureDetailLines(
   errorReason: FailoverReason | undefined,
@@ -39,6 +48,12 @@ export function cronFailureDetailLines(
       failureNotificationDetail.mode === "wall-clock"
         ? "Cause: command timed out"
         : "Cause: command stopped after producing no output",
+    ];
+  }
+  if (failureNotificationDetail.kind === "agent-watchdog") {
+    return [
+      `Cause: ${formatCronWatchdogFailure(failureNotificationDetail.reason)}`,
+      "Open automation history and inspect the stalled step before retrying.",
     ];
   }
   const label =

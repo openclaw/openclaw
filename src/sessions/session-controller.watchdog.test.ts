@@ -226,6 +226,7 @@ describe("operation-owned watchdog through controller admission", () => {
     expect(operation.abortSignal.reason).toMatchObject({
       name: "AbortError",
       code: "OPENCLAW_SESSION_WATCHDOG",
+      cause: "semantic_stall",
     });
     expect(recoverStalledModelCall).toHaveBeenCalledOnce();
     expectStalled(operation, cancel);
@@ -236,6 +237,10 @@ describe("operation-owned watchdog through controller admission", () => {
     const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
     attempt.setExecutionDeadline(1);
     await tickAt(operation.watchdog, 1);
+    expect(operation.abortSignal.reason).toMatchObject({
+      code: "OPENCLAW_SESSION_WATCHDOG",
+      cause: "execution_deadline",
+    });
     expect(recoverStalledModelCall).not.toHaveBeenCalled();
     expectStalled(operation, cancel);
   });

@@ -9,7 +9,12 @@ import {
   CRON_SETUP_TIMEOUT_ERROR,
   isCronTimeoutErrorText,
 } from "../execution-error-constants.js";
-import type { CronAgentExecutionStarted, CronRunErrorClassification } from "../types.js";
+import { formatCronWatchdogFailure } from "../failure-notification-text.js";
+import type {
+  CronAgentExecutionStarted,
+  CronFailureNotificationDetail,
+  CronRunErrorClassification,
+} from "../types.js";
 
 function formatCronTimeoutMessage(message: string, execution?: CronAgentExecutionStarted): string {
   const phase = formatEmbeddedAgentExecutionPhase(execution?.phase);
@@ -67,6 +72,40 @@ export function cronAbortErrorClassification(signal?: AbortSignal): CronRunError
   return !signal || (signal.reason instanceof Error && signal.reason.name === "TimeoutError")
     ? { kind: "reason", reason: "timeout" }
     : { kind: "aborted" };
+}
+
+export type CronWatchdogFailure = {
+  error: string;
+  errorClassification: Extract<CronRunErrorClassification, { kind: "permanent" }>;
+  failureNotificationDetail: Extract<CronFailureNotificationDetail, { kind: "agent-watchdog" }>;
+};
+
+/** Read the captured controller's signal, never provider prose or a replacement cleanup error. */
+export function resolveCronWatchdogFailure(
+  signal: AbortSignal | undefined,
+): CronWatchdogFailure | undefined {
+  if (!signal?.aborted) {
+    return undefined;
+  }
+  try {
+    const error = signal.reason;
+    if (!(error instanceof Error) || extractErrorCode(error) !== "OPENCLAW_SESSION_WATCHDOG") {
+      return undefined;
+    }
+    const reason = error.cause;
+    if (reason !== "execution_deadline" && reason !== "semantic_stall") {
+      return undefined;
+    }
+    return {
+      error: formatCronWatchdogFailure(reason),
+      // A stalled, already-started tool is not a transient model-provider failure.
+      errorClassification: { kind: "permanent" },
+      failureNotificationDetail: { kind: "agent-watchdog", reason },
+    };
+  } catch {
+    // An opaque cancellation reason cannot authorize classified chat disclosure.
+    return undefined;
+  }
 }
 
 /** Normalizes thrown cron run failures into stable log/run-history text. */
