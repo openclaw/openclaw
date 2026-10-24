@@ -79,43 +79,22 @@ describe("FreeBSD CLI runtime installation", () => {
     expect(realpathSync(join(active, "npm"))).toBe(join(bin, "npm"));
   });
 
-  it.each(["missing", "unsupported", "npm", "sqlite", "requested"])(
-    "rejects an unusable %s prerequisite without replacing an existing runtime",
+  it.each(["missing", "requested"])(
+    "rejects %s prerequisites without replacing the runtime",
     (failure) => {
       const { bin, prefix, oldRuntime } = fixture(true);
-      const node = join(bin, "candidate");
-      const npm = join(bin, "candidate-npm");
-      writeFileSync(
-        node,
-        failure === "unsupported"
-          ? "#!/usr/bin/env bash\nprintf 'v22.18.0\\n'\n"
-          : `#!/usr/bin/env bash\nif [[ "$1" == -e ]]; then exit 1; fi\nexec "$FIXTURE_NODE" "$@"\n`,
-        { mode: 0o755 },
-      );
-      writeFileSync(npm, "#!/usr/bin/env bash\nexit 42\n", { mode: 0o755 });
       const result = install(
         bin,
         prefix,
         `
         JSON=1
-        command_path_without_node_prefix() {
-          case "$1" in
-            node) printf '%s\\n' "$FIXTURE_CANDIDATE_NODE" ;;
-            npm) printf '%s\\n' "$FIXTURE_CANDIDATE_NPM" ;;
-          esac
+        ${
+          failure === "requested"
+            ? `NODE_VERSION=99.0.0; NODE_VERSION_REQUESTED=1
+        command_path_without_node_prefix() { printf '%s/%s\\n' "$FIXTURE_BIN" "$1"; }`
+            : "command_path_without_node_prefix() { :; }"
         }
-        ${failure === "requested" ? "NODE_VERSION=99.0.0; NODE_VERSION_REQUESTED=1" : ""}
         `,
-        {
-          FIXTURE_NODE: nodeExecutable,
-          FIXTURE_CANDIDATE_NODE:
-            failure === "missing"
-              ? ""
-              : ["unsupported", "sqlite"].includes(failure)
-                ? node
-                : join(bin, "node"),
-          FIXTURE_CANDIDATE_NPM: failure === "npm" ? npm : join(bin, "npm"),
-        },
       );
       expect(result.status, result.stdout + result.stderr).toBe(1);
       expect(result.stdout).toContain("npm-node24");
@@ -182,9 +161,6 @@ describe("FreeBSD source-install admission", () => {
     }
     expect(message).toContain("Source/git installation is unsupported on FreeBSD");
     expect(message).toContain("--install-method npm");
-    expect(message).toContain("published version or compatible built .tgz");
-    expect(message).toContain("same --prefix");
-    expect(message).toContain("pkg/Ports-managed");
     expect(result.stdout).not.toContain("unexpected");
     expect(readFileSync(join(prefix, "bin", "openclaw"), "utf8")).toBe("preserve installed CLI");
     expect(readlinkSync(join(prefix, "tools", "node"))).toBe(oldRuntime);

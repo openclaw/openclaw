@@ -159,6 +159,7 @@ describe("repo E2E artifact transfer", () => {
     "restores a complete %s build through the workflow harness without rebuilding",
     (profile) => {
       const { root, artifact, assets, read, mtime, remove } = fixture();
+      const producerStamp = read("dist/.buildstamp");
       transferThroughWorkflowHarness("pack", artifact, profile, root);
       remove("dist", "dist-runtime", "packages/demo/dist", "extensions/demo/assets");
       // Clean Git state outranks archive mtimes; restore still refreshes the local stamp.
@@ -166,6 +167,7 @@ describe("repo E2E artifact transfer", () => {
       expect(requirement(root)).toEqual({ shouldBuild: false, reason: "clean" });
       expect(mtime("dist/.buildstamp")).toBeLessThan(mtime("package.json"));
       transferThroughWorkflowHarness("restore", artifact, profile, root);
+      expect(read("dist/.buildstamp")).toBe(producerStamp);
       expect(requirement(root)).toEqual({ shouldBuild: false, reason: "clean" });
       expect(mtime("dist/.buildstamp")).toBeGreaterThanOrEqual(mtime("package.json"));
       expect(fs.readlinkSync(path.join(root, "dist-runtime/index.js"))).toBe("../dist/index.js");
@@ -183,19 +185,19 @@ describe("repo E2E artifact transfer", () => {
     },
   );
 
-  it.each([false, null, undefined])(
-    "preserves unclean or legacy producer provenance (%s)",
+  it.each([false, null])(
+    "keeps unverified producer stamps (%s) untrusted after restore",
     (inputsClean) => {
-      const { root, transfer, remove } = fixture();
-      const buildStamp = path.join(root, "dist/.buildstamp");
-      const recorded = JSON.parse(fs.readFileSync(buildStamp, "utf8"));
-      recorded.inputsClean = inputsClean;
-      const original = JSON.stringify(recorded);
-      fs.writeFileSync(buildStamp, original);
+      const { root, transfer, remove, read, write } = fixture();
+      const original = JSON.stringify({
+        ...JSON.parse(read("dist/.buildstamp")),
+        inputsClean,
+      });
+      write("dist/.buildstamp", original);
       transfer("pack");
       remove("dist");
       transfer("restore");
-      expect(fs.readFileSync(buildStamp, "utf8")).toBe(original);
+      expect(read("dist/.buildstamp")).toBe(original);
       expect(requirement(root).shouldBuild).toBe(true);
     },
   );

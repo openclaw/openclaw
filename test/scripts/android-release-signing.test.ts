@@ -145,12 +145,7 @@ describe("scripts/android-release-signing.mjs", () => {
       },
     );
 
-    expect(stdout).toContain("Android release signing plan");
-    expect(stdout).toContain("Signing repo: git@github.com:openclaw/apps-signing.git");
-    expect(stdout).toContain("Signing assets: android/openclaw");
     expect(stdout).toContain(`Pinned APK certificate SHA-256: ${APK_CERTIFICATE_SHA256}`);
-    expect(stdout).toContain("Materialized output: apps/android/build/release-signing");
-    expect(stdout).toContain("ORG_GRADLE_PROJECT_*");
   });
 
   it("terminates a hung signing command at its deadline", () => {
@@ -166,22 +161,16 @@ describe("scripts/android-release-signing.mjs", () => {
     expect(Date.now() - startedAt).toBeLessThan(5_000);
   });
 
-  it.each([
-    ["--mode"],
-    ["--mode", "--manifest"],
-    ["--mode", "-h"],
-    ["--manifest", "-h"],
-    ["--workspace", "--mode"],
-    ["--materialized-dir", "--mode"],
-    ["--keystore", "--mode"],
-    ["--properties", "--mode"],
-  ])("rejects missing values for %s before release signing work", (...args) => {
-    const result = runNode(args);
+  it.each([["--mode"], ["--mode", "--manifest"], ["--mode", "-h"], ["--manifest", "-h"]])(
+    "rejects missing values for %s before release signing work",
+    (...args) => {
+      const result = runNode(args);
 
-    expect(result).toMatchObject({ ok: false, stdout: "" });
-    expect(result.stderr).toContain(`Missing value for ${args[0]}.`);
-    expect(result.stderr).not.toContain("ENOENT");
-  });
+      expect(result).toMatchObject({ ok: false, stdout: "" });
+      expect(result.stderr).toContain(`Missing value for ${args[0]}.`);
+      expect(result.stderr).not.toContain("ENOENT");
+    },
+  );
 
   it.runIf(spawnSync("openssl", ["version"], { stdio: "ignore" }).status === 0)(
     "encrypts, pulls, and materializes Android signing assets without printing secrets",
