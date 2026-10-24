@@ -4,9 +4,9 @@ import type { CodeModeExecutorContinuation } from "./code-mode-executor-types.js
 import { runCodeModeExecutor } from "./code-mode-executor.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 
-vi.mock("../../cli-invocation.mjs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../cli-invocation.mjs")>()),
-  getStandaloneRuntimeBuild: () => ({ mode: "aot" }),
+vi.mock("../../standalone-runtime-profile.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../standalone-runtime-profile.mjs")>()),
+  getRuntimeExecutionProfile: () => "embedded-aot",
 }));
 
 const config = {

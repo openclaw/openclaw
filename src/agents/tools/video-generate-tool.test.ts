@@ -1,3 +1,5 @@
+import * as toolSchema from "@openclaw/ai/internal/tool-schema";
+import { finalizeAgentTools } from "../agent-tools.finalize.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 vi.mock("../media-generation-activity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
@@ -238,6 +240,64 @@ describe("createVideoGenerateTool", () => {
     vi.unstubAllEnvs();
     clearRuntimeConfigSnapshot();
   });
+
+  it.each([false, true])(
+    "reuses published schemas for reference audio=%s across runs and sessions",
+    (referenceAudioInputs) => {
+      const config: OpenClawConfig = {
+        plugins: { allow: ["external-video"], entries: { "external-video": { enabled: true } } },
+        agents: { defaults: { mediaModels: { video: { primary: "external-video/vid-v1" } } } },
+      };
+      const workspaceDir = "/workspace/video-schema-reuse";
+      setCurrentPluginMetadataSnapshot(
+        createVideoProviderSnapshot({
+          config,
+          workspaceDir,
+          id: "external-video",
+          origin: "bundled",
+          referenceAudioInputs,
+        }),
+        { config, workspaceDir },
+      );
+      const authProfileStore = createAuthStore("external-video");
+      const construct = (sessionId: string) => {
+        const tool = createVideoGenerateTool({ config, workspaceDir, authProfileStore }, true);
+        if (!tool) {
+          throw new Error("expected video_generate tool");
+        }
+        return finalizeAgentTools({
+          tools: [tool],
+          config,
+          hookContext: { sessionId },
+          modelProvider: "openai",
+          modelApi: "openai-responses",
+          wrapBeforeToolCallHook: false,
+        })[0]!;
+      };
+      const cold = construct("video-schema-first");
+      for (const name of ["audioRef", "audioRefs", "audioRoles"]) {
+        if (referenceAudioInputs) {
+          expect(cold.parameters).toHaveProperty(`properties.${name}`);
+        } else {
+          expect(cold.parameters).not.toHaveProperty(`properties.${name}`);
+        }
+      }
+      const bytes = JSON.stringify(cold.parameters);
+      const publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
+      try {
+        for (const sessionId of [
+          "video-schema-first",
+          "video-schema-second",
+          "video-schema-third",
+        ]) {
+          expect(JSON.stringify(construct(sessionId).parameters)).toBe(bytes);
+        }
+        expect(publish).not.toHaveBeenCalled();
+      } finally {
+        publish.mockRestore();
+      }
+    },
+  );
 
   it("exposes video generation for an auth-backed video provider", () => {
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);

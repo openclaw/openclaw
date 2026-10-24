@@ -59,6 +59,9 @@ includes its shared revision cells; later publications send only new or replaced
 facts, session scopes, and reference cells. Existing cells carry invalidation
 directly, so changing one fact does not resend every session's shared buffer.
 A new worker or database generation receives a complete snapshot.
+Worker exit republishes only databases that held that worker's reference; an
+unrelated exit does not rescan retained session scopes. Interrupted-write
+settlement and shared reference revocation still precede publication.
 
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use

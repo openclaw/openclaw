@@ -589,8 +589,10 @@ it.each([false, true])(
     element.desktop = desktop;
     await element.updateComplete;
     const environment = element.querySelector('[data-details-group="environment"]')!;
+    await waitForSolid(() =>
+      expect(environment.querySelector("button.chat-pr__create")?.textContent).toBe("Create PR"),
+    );
     const create = environment.querySelector<HTMLButtonElement>("button.chat-pr__create");
-    expect(create?.textContent).toBe("Create PR");
     expect(environment.textContent).toContain("+7");
     expect(environment.textContent).toContain("−2");
     expect(
@@ -695,14 +697,18 @@ it("keeps unresolved publication recovery and a different unpublished branch ava
     }),
   };
   await element.updateComplete;
-  expect(environment.querySelector(".chat-pr__create")?.textContent).toBe("Check publication");
+  await waitForSolid(() =>
+    expect(environment.querySelector(".chat-pr__create")?.textContent).toBe("Check publication"),
+  );
   element.props = {
     ...element.props!,
     githubPublication: failed,
     pullRequestsBranch: sessionBranch({ branch: "feature/next", additions: 3 }),
   };
   await element.updateComplete;
-  expect(environment.querySelector(".chat-pr__create")?.textContent).toBe("Retry");
+  await waitForSolid(() =>
+    expect(environment.querySelector(".chat-pr__create")?.textContent).toBe("Retry"),
+  );
   expect(environment.querySelector(".chat-pr__diff")?.textContent).toContain("+3");
 });
 

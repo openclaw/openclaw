@@ -5,20 +5,19 @@ import {
   type JsonSchemaRefinement,
   type TypeBoxValidationError,
 } from "@openclaw/normalization-core/json-schema";
+import { createJsonSchemaValidator } from "@openclaw/normalization-core/json-schema-validator";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { Format } from "typebox/format";
 import {
   Check,
-  CheckContext,
-  CheckSchema,
   Compile,
   HasUnevaluated,
   Pointer,
-  Stack,
   type Validator as TypeBoxValidator,
 } from "typebox/schema";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { getRuntimeExecutionProfile } from "../../standalone-runtime-profile.mjs";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -33,7 +32,7 @@ import type { PluginOrigin } from "./plugin-origin.types.js";
 
 type SchemaValidator = {
   Check(value: unknown): boolean;
-  Errors(value: unknown): ReturnType<TypeBoxValidator["Errors"]>;
+  Errors(value: unknown): [boolean, TypeBoxValidationError[]];
 };
 
 type CachedValidator = {
@@ -127,21 +126,18 @@ function applyValidatedSourceDefaults(
   return value;
 }
 
-function compileSchema(schema: JsonSchemaValue): SchemaValidator {
-  const validate: TypeBoxValidator = Compile(normalizeJsonSchemaForTypeBox(schema) as never);
-  const normalized = validate.Schema();
-  if (validate.IsAccelerated() || !HasUnevaluated({}, normalized)) {
-    return validate;
+function createSchemaValidator(schema: JsonSchemaValue): SchemaValidator {
+  const normalized = normalizeJsonSchemaForTypeBox(schema);
+  if (getRuntimeExecutionProfile() !== "embedded-aot") {
+    const validate: TypeBoxValidator = Compile(normalized);
+    if (validate.IsAccelerated() || !HasUnevaluated({}, normalized)) {
+      return validate;
+    }
   }
-  // TypeBox's fallback reuses evaluated state; each input needs its own context.
-  const stack = Stack({}, normalized);
+  const validate = createJsonSchemaValidator(normalized);
   return {
-    Check(value: unknown) {
-      return CheckSchema(stack, new CheckContext(), normalized, value);
-    },
-    Errors(value: unknown) {
-      return validate.Errors(value);
-    },
+    Check: validate.check,
+    Errors: (value) => [false, validate.errors(value)],
   };
 }
 
@@ -414,7 +410,7 @@ export function validateJsonSchemaValue(params: {
       const validationSchema = prepareJsonSchemaFormats(params.schema, createPluginFormatPolicy());
       cached = {
         hasDefaults: schemaHasDefaults(params.schema),
-        validate: compileSchema(validationSchema),
+        validate: createSchemaValidator(validationSchema),
         validationSchema,
         schema: params.schema,
       };

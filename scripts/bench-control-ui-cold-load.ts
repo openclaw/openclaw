@@ -65,6 +65,7 @@ import {
   mapColdLoadCpuProfile,
   prepareColdLoadTraceEvent,
   summarizeColdLoadTrace,
+  summarizeScriptCoverage,
   summarizeCpuProfile,
 } from "./lib/control-ui-cold-load-trace.ts";
 import {
@@ -287,6 +288,7 @@ const { values } = parseArgs({
     "first-load": { type: "boolean", default: false },
     "boot-route": { type: "string", default: "chat" },
     "cold-http-cache": { type: "boolean", default: false },
+    coverage: { type: "boolean", default: false },
     "network-latency-ms": { type: "string" },
     "download-kbps": { type: "string" },
     "cpu-throttle": { type: "string" },
@@ -1558,6 +1560,9 @@ try {
     const threadCpuBefore = values["thread-cpu-time"]
       ? (await cdp.send("Performance.getMetrics")).metrics
       : undefined;
+    if (values.coverage) {
+      await page.coverage.startJSCoverage({ resetOnNavigation: true });
+    }
     if (values["hold-boot-assets"]) {
       await page.goto(url, { waitUntil: "commit" });
       let captureTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -1618,6 +1623,22 @@ try {
       await page.reload({ waitUntil: "domcontentloaded" });
     }
     await settle();
+    const coverage = values.coverage
+      ? (await page.coverage.stopJSCoverage())
+          .filter((entry) => URL.parse(entry.url)?.pathname.startsWith("/assets/"))
+          .map((entry) =>
+            Object.assign(
+              { url: entry.url, functions: entry.functions },
+              summarizeScriptCoverage(entry),
+            ),
+          )
+      : undefined;
+    if (coverage) {
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.coverage.json`),
+        JSON.stringify(coverage, null, 2),
+      );
+    }
     if (historyValidatorDelayMs && historyValidatorRequests !== validatorRequestsBeforeReload + 1) {
       throw new Error("Measured reload did not request the delayed history validator exactly once");
     }
@@ -2512,6 +2533,7 @@ try {
       sidebarRowTransfer: values["sidebar-list-churn"] ? runTransfer : undefined,
       ...metrics,
       threadCpu,
+      coverage,
       trace: bootTrace,
       selectorStats,
       longTaskDetails:
@@ -2621,6 +2643,7 @@ try {
         gatewayHttp: values["gateway-http"],
         bootRoute,
         coldHttpCache: values["cold-http-cache"],
+        coverage: values.coverage,
         networkLatencyMs,
         downloadKbps,
         cpuThrottle,

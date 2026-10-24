@@ -27,3 +27,26 @@ and CPU profiles remain useful independently of wall-clock qualification.
 If current main does not reproduce the live shape, report the workload and rates
 and stop that item. No optimization is justified by a synthetic direct-store loop
 that bypasses the channel owner.
+
+## Boot audit workload
+
+Use `--messages 0 --receipts 173 --audit-prefill --seconds 60` to seed a full
+30,000-entry synthetic audit chain offline, then deliver 173 correctly signed
+receipts with no matching outbound binding through the real relay transport.
+Reef must quarantine those receipts and retain a valid bounded audit suffix.
+Each receipt produces two audit appends: a read observation and its quarantine
+record, for 346 appends. Wait until the relay observes the completed cursor
+before starting the warm phase.
+The seed is outside measurement; the Gateway's boot, warm polling, and shutdown
+remain separate phases. A fresh audit control omits `--audit-prefill`; an empty
+inbox control also sets `--receipts 0`.
+
+The target is the boot-only audit append: three upserts, two multi-key reads,
+two namespace count/expiry aggregates, and one retained-entry delete per append
+on the full chain, plus one transaction envelope. Attribute other owners
+separately. A candidate wins only if it removes target statements or requests
+without increasing warm statements, requests, or MAIN SQL, while preserving
+the audit chain, capacity, expiration visibility, and real-writer visibility.
+Use five alternating samples per arm for a performance claim; any adverse
+20% metric stops the candidate. No wall-time claim without the timing lock
+and host load below 24.

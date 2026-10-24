@@ -1,7 +1,18 @@
 import { Type, type TSchema } from "typebox";
-import { describe, expect, it } from "vitest";
+import { Settings } from "typebox/system";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeExecutionProfile } from "../../../standalone-runtime-profile.mjs";
 import type { Tool } from "./types.js";
-import { validateToolArguments } from "./validation.js";
+
+let validateToolArguments: (typeof import("./validation.js"))["validateToolArguments"];
+
+const runtimeProfile = vi.hoisted((): { value: RuntimeExecutionProfile } => ({
+  value: "dynamic-execution",
+}));
+vi.mock("../../../standalone-runtime-profile.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../standalone-runtime-profile.mjs")>()),
+  getRuntimeExecutionProfile: () => runtimeProfile.value,
+}));
 
 function validator(parameters: Tool["parameters"], name = "refs") {
   const tool: Tool = { name, description: "", parameters };
@@ -44,9 +55,31 @@ const nil = { type: "null" };
 const positiveInteger = { ...integer, minimum: 1 };
 const optionalLimit = Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]));
 const requiredCount = objectSchema({ count: integer }, { required: ["count"] });
-const validateDecimal = validator(closedObject({ amount: number, count: integer }), "decimal-tool");
 
-describe("validateToolArguments", () => {
+const profiles = ["dynamic-execution", "embedded-aot"] as const;
+describe.each(profiles)("validateToolArguments (%s)", (profile) => {
+  const settings = Settings.Get();
+  beforeEach(async () => {
+    runtimeProfile.value = profile;
+    Settings.Set({ useAcceleration: profile === "dynamic-execution" });
+    vi.resetModules();
+    ({ validateToolArguments } = await import("./validation.js"));
+  });
+  afterEach(() => Settings.Set(settings));
+
+  it("does not retain evaluated properties between tool calls", () => {
+    const validate = validator({
+      anyOf: [
+        { type: "object", properties: { a: number } },
+        { type: "object", properties: { b: number } },
+      ],
+      unevaluatedProperties: false,
+    });
+    expect(validate({ a: 1 })).toEqual({ a: 1 });
+    expect(() => validate({ a: "invalid" })).toThrow(/Validation failed/);
+    expect(validate({ b: 2 })).toEqual({ b: 2 });
+    expect(() => validate({ b: "invalid" })).toThrow(/Validation failed/);
+  });
   it.each([
     { label: "a missing required field", value: {} },
     { label: "an invalid field type", value: { leaf: "invalid" } },
@@ -166,6 +199,10 @@ describe("validateToolArguments", () => {
   });
 
   it("coerces strict decimal strings and rejects non-decimal JSON-schema numbers", () => {
+    const validateDecimal = validator(
+      closedObject({ amount: number, count: integer }),
+      "decimal-tool",
+    );
     for (const validate of [
       validateDecimal,
       validator(Type.Object({ amount: Type.Number(), count: Type.Integer() }), "decimal-tool"),
