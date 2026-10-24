@@ -1289,6 +1289,11 @@ describe("package-openclaw-for-docker", () => {
                 },
                 name: "@openclaw/ai",
                 version: "2026.6.17",
+                peerDependencies: { "@opentelemetry/api": "^1.9.0", retained: "1.0.0" },
+                peerDependenciesMeta: {
+                  "@opentelemetry/api": { optional: true },
+                  retained: { optional: true },
+                },
               })}\n`,
             );
             fs.writeFileSync(path.join(destination, "runtime.js"), "export {};\n");
@@ -1313,8 +1318,14 @@ describe("package-openclaw-for-docker", () => {
       expect(fs.existsSync(path.join(installedAiPath, "runtime.js"))).toBe(true);
       const stagedAiPackageJson = JSON.parse(
         fs.readFileSync(path.join(installedAiPath, "package.json"), "utf8"),
-      ) as { dependencies?: Record<string, string> };
+      ) as {
+        dependencies?: Record<string, string>;
+        peerDependencies?: Record<string, string>;
+        peerDependenciesMeta?: Record<string, { optional: boolean }>;
+      };
       expect(stagedAiPackageJson.dependencies).toBeUndefined();
+      expect(stagedAiPackageJson.peerDependencies).toEqual({ retained: "1.0.0" });
+      expect(stagedAiPackageJson.peerDependenciesMeta).toEqual({ retained: { optional: true } });
 
       await cleanup();
       expect(fs.readFileSync(packageJsonPath, "utf8")).toBe(originalPackageJson);

@@ -6,7 +6,7 @@ import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
@@ -110,6 +110,21 @@ export function SidebarAgentRoster(props: RosterProps) {
     };
   };
   const parkedSections = createParkedProjection(() => props.sections, presented);
+  const sectionsByAgent = createMemo(() => {
+    const indexed = new Map<string, SidebarVisibleSections["sections"]>();
+    for (const section of parkedSections()) {
+      const agentId = /^agent:([^:]+):/.exec(section.id)?.[1];
+      if (agentId) {
+        const sections = indexed.get(agentId);
+        if (sections) {
+          sections.push(section);
+        } else {
+          indexed.set(agentId, [section]);
+        }
+      }
+    }
+    return indexed;
+  });
   const navigation = createMemo(() => projectOwner(context.navigation, (owner) => owner.snapshot));
   const pinnedIds = createParkedProjection(
     () => new Set(navigation().read().pinnedAgentIds),
@@ -306,12 +321,9 @@ export function SidebarAgentRoster(props: RosterProps) {
                           href={card().target.href}
                           aria-label={card().name}
                           aria-current={active() ? "page" : undefined}
-                          onClick={(event: MouseEvent) => {
-                            if (shouldHandleNavigationClick(event)) {
-                              event.preventDefault();
-                              host().openMainSession(card().id);
-                            }
-                          }}
+                          onClick={(event: MouseEvent) =>
+                            handleNavigationClick(event, () => host().openMainSession(card().id))
+                          }
                         >
                           <span class="sidebar-pinned-agent__avatar" aria-hidden="true">
                             <SessionGlyph
@@ -350,25 +362,28 @@ export function SidebarAgentRoster(props: RosterProps) {
             {(card) => {
               const linkRef = createAgentLinkRef(card);
               const mainKey = () => host().selectedAgentMainSessionKey(card().id);
-              const sections = () =>
-                parkedSections().filter((section) => section.id.startsWith(`agent:${card().id}:`));
-              const main = createParkedProjection(
+              const sections = createMemo(() => sectionsByAgent().get(card().id) ?? []);
+              const parkedMain = createParkedProjection(
                 () => host().visibleHomeSession(card().id),
                 presented,
               );
-              const summaryRows = () => [
+              const main = createMemo(() => parkedMain());
+              const summaryRows = createMemo(() => [
                 ...(main() ? [main()!] : []),
                 ...sections().flatMap((section) => section.rows),
-              ];
-              const headerSummary = (): TeamSessionSlotsProps => ({
-                rows: summaryRows(),
-                includeChildren: true,
-                childCount: 0,
-                groupConflicts: summaryRows().reduce(
-                  (count, row) => count + (row.workspaceConflictCount ?? 0),
-                  0,
-                ),
-                statusOnly: true,
+              ]);
+              const headerSummary = createMemo<TeamSessionSlotsProps>(() => {
+                const rows = summaryRows();
+                return {
+                  rows,
+                  includeChildren: true,
+                  childCount: 0,
+                  groupConflicts: rows.reduce(
+                    (count, row) => count + (row.workspaceConflictCount ?? 0),
+                    0,
+                  ),
+                  statusOnly: true,
+                };
               });
               const active = () =>
                 isSessionRouteId(host().activeRouteId) &&
@@ -393,12 +408,9 @@ export function SidebarAgentRoster(props: RosterProps) {
                       data-agent-id={card().id}
                       href={card().target.href}
                       aria-current={active() ? "page" : undefined}
-                      onClick={(event: MouseEvent) => {
-                        if (shouldHandleNavigationClick(event)) {
-                          event.preventDefault();
-                          host().openMainSession(card().id);
-                        }
-                      }}
+                      onClick={(event: MouseEvent) =>
+                        handleNavigationClick(event, () => host().openMainSession(card().id))
+                      }
                     >
                       <span class="sidebar-agent-roster__avatar" aria-hidden="true">
                         <SessionGlyph
@@ -450,17 +462,20 @@ declare module "@solidjs/web" {
   }
 }
 
-export function renderSidebarPinnedSession(host: RosterHost, session: () => SidebarRecentSession) {
-  const agentId = createMemo(() => host.sessionNavigationAgentId(session()));
+export function SidebarPinnedSession(props: { host: RosterHost; session: SidebarRecentSession }) {
+  const session = () => props.session;
+  const agentId = createMemo(() => props.host.sessionNavigationAgentId(session()));
   const card = createMemo(() => {
     const cards =
-      cachedRosterCards(host) ??
-      (host.sessionDataContext ? rosterActivityStore(host.sessionDataContext).snapshot.cards : []);
+      cachedRosterCards(props.host) ??
+      (props.host.sessionDataContext
+        ? rosterActivityStore(props.host.sessionDataContext).snapshot.cards
+        : []);
     return cards.find((agent) => agent.id === agentId());
   });
   return (
     <SessionTree
-      host={host}
+      host={props.host}
       session={session()}
       listItem={false}
       icon={<AgentIdentityAvatar agent={card() ?? { id: agentId() }} />}

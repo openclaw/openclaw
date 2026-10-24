@@ -47,6 +47,24 @@ stopped backup and identify the changed file. This repair must
 be present in the runtime performing the snapshot, including the candidate worker
 when the installed updater delegates capture to it.
 
+Candidate Doctor also accepts an empty WAL index appearing or disappearing
+between an older updater's capture and migration admission, provided the database
+identity and committed contents still match and the index contains no write
+evidence. This preserves the installed updater's original fingerprint format.
+Changed committed data or write evidence still refuses migration and automatic
+restoration. The candidate must contain this repair.
+
+Update snapshots and database backups accept a database whose only integrity
+findings are `malformed inverted index` reports on canonical, schema-validated
+agent FTS tables. A Node upgrade that changes SQLite tokenization (for example,
+SQLite 3.54) produces exactly these findings on an intact database, and the
+runtime that next admits the copy rebuilds the indexes. The copies keep the
+original index bytes, so rollback to the previous runtime restores its own
+index. Unknown FTS definitions and findings mixed with any other damage still
+refuse the update. The candidate performs the rehearsal snapshot, so this applies
+from the first update to a candidate with the fix; activation-time backups need
+the installed updater to contain it.
+
 Memory embedding migrations space maintenance renewals from the completion of
 each renewal, so slow renewals leave time for conversion work. The candidate must
 contain this fix; it does not change an older migration already running.
@@ -55,6 +73,13 @@ On macOS, reinstall and uninstall reconcile the launchd registration by service
 label even if its plist was deleted. Reinstall warns when the previous definition
 is missing; an existing plist and its private environment files remain backed up
 for rollback if activation fails.
+
+When an updater stops a macOS LaunchAgent, it waits for both launchd's process
+and the verified serving Gateway child to exit before continuing. An unloaded
+job or a closed listener does not prove that the child has released its agent
+databases. Pending process cleanup produces a warning and shares the existing
+bounded stop deadline; other processes using the state still receive Doctor's
+maintenance refusal. The updater performing the stop must contain this fix.
 
 Candidate state workers drop advisory progress when stderr is temporarily full.
 Dropped writes do not consume the legacy progress budget, so reporting resumes
@@ -101,6 +126,14 @@ filesystem error stops preflight. The refresh does not check for dependencies
 that were never installed.
 These preparation changes require the installed updater to contain the fix;
 staging a newer candidate cannot change an older updater's initial install.
+
+Native pnpm package swaps preserve platform-filtered optional dependencies as
+absent. On Windows, a dangling link declared in its owner's
+`optionalDependencies` is removed from the staged copy instead of failing
+activation; missing required dependencies and other filesystem errors still
+fail. This requires the installed updater to contain the repair. A failed swap
+before any installation or service mutation records the previous Gateway
+observation without restart verification, including with `--no-restart`.
 
 Source candidates bound the native declaration compiler with the shared Go runtime
 policy used by local checks. Node's heap limit does not cover that compiler.
@@ -1527,6 +1560,13 @@ openclaw doctor
 ```
 
 Migrates config, audits DM policies, and checks gateway health. Doctor also compares active official plugins with the OpenClaw package the managed service will load after restart. Resolve any plugin restart-readiness warning before continuing. Details: [Doctor](/gateway/doctor)
+
+Standalone repair cancels its pre-repair original-state capture after ten minutes.
+If that capture times out, Doctor waits for its workers to settle and reports a
+warning with backup and retry instructions; repair-specific migration backups still apply.
+Doctor restores a managed Gateway it stopped, including after interruption. If
+restoration fails, it prints the failure and the command to start the Gateway
+after resolving it.
 
 On Linux, `openclaw doctor --fix` can reclaim abandoned updater runtimes even
 after a systemd user-manager re-exec. The manager's `--deserialize` argument and

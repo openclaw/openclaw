@@ -60,7 +60,7 @@ export function activateSubagentPersistenceRegistry(
     recoveryRuntime,
     resolveGatewayContext: () => gateway as never,
   };
-  return registry.activateSubagentRegistry(gateway.resolveGatewayContext);
+  return registry.activateSubagentRegistry(gateway.resolveGatewayContext).settled;
 }
 
 export async function closeSubagentPersistenceFixtureDatabases(params: {

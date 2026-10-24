@@ -9,7 +9,6 @@ import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.j
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import * as metadata from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { captureReplyExecutionSelection } from "../../sessions/session-controller.execution-selection.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import * as registryState from "../../sessions/session-controller.state.js";
 import { createCommandTurnContext } from "../command-turn-context.js";
@@ -28,7 +27,7 @@ import {
 } from "./reply-operation-run-state.js";
 import { resolveReplySteeringIntent } from "./reply-steering-intent.js";
 import * as toolAuthority from "./reply-tool-authority.js";
-import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { prepareReplyRunToolAuthority, prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { createQueueTestRun } from "./reply-tool-authority.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -296,17 +295,9 @@ describe("ordinary steering into automatic model fallback", () => {
         gatewayUiCommandTarget: { connId: "alice-tab", profileId: "alice" },
       });
     }
-    const snapshot = prepareReplyToolAuthority({
-      ...run,
-      ...(sameProfile
-        ? {
-            executionSelection: captureReplyExecutionSelection({
-              run: run.run,
-              sessionEntry: undefined,
-            }),
-          }
-        : {}),
-    });
+    const snapshot = sameProfile
+      ? prepareReplyRunToolAuthority(run, undefined)
+      : prepareReplyToolAuthority(run);
     await operation.bindToolAuthoritySnapshotAsync(
       scenario === "same-profile-legacy-snapshot"
         ? {

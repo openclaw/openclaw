@@ -37,6 +37,7 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
   runtimeProcessEntrypoints.sqliteReadOnly,
   runtimeProcessEntrypoints.sqliteSourceRevision,
   runtimeProcessEntrypoints.stateRead,
+  runtimeProcessEntrypoints.sessionTranscript,
   runtimeProcessEntrypoints.nativeHookRelayClient,
   runtimeProcessEntrypoints.spawnBroker,
   runtimeProcessEntrypoints.stateLeaseHeartbeat,
@@ -64,6 +65,9 @@ export function getStandaloneRuntimeProcessOutputOptions(name: string) {
   }
   if (name === sqliteReadEntry) {
     return { codeSplitting: true, chunkFileNames: "infra/sqlite-readonly-[name]-[hash].mjs" };
+  }
+  if (name === runtimeProcessEntrypoints.sessionTranscript.distWorkerPath.replace(/\.js$/u, "")) {
+    return { codeSplitting: true, chunkFileNames: "config/sessions/transcript-[name]-[hash].mjs" };
   }
   return { codeSplitting: false };
 }

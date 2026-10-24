@@ -16,6 +16,7 @@ import type { RawData, WebSocket } from "ws";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { installQueueRuntimeErrorSilencer } from "../../auto-reply/reply/queue.test-helpers.js";
+import { listSessionPendingInputs } from "../../config/sessions/session-accessor.js";
 import {
   areDiagnosticsEnabledForProcess,
   onTrustedInternalDiagnosticEvent,
@@ -35,6 +36,8 @@ import {
   captureSessionControllerSettlement,
   captureSessionTarget,
 } from "../../sessions/session-controller.lifecycle.js";
+import { retireSessionControllerInput } from "../../sessions/session-controller.mailbox-source.js";
+import { reserveSessionControllerSource } from "../../sessions/session-controller.mailbox.js";
 import { getGatewayRecoveryRuntime } from "../server-recovery-runtime-context.js";
 import {
   dispatchInboundMessageMock,
@@ -181,6 +184,72 @@ afterAll(async () => {
 });
 
 describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => {
+  it("acknowledges durable steers while an older input holds their injection order", async ({
+    signal,
+  }) => {
+    const queueMessage = await seedActiveTurn({
+      terminalRunId: "source-old",
+      sourceTurnId: SOURCE_TURN_ID,
+    });
+    const older = reserveSessionControllerSource(SESSION_KEY, {
+      policy: { mode: "followup" },
+      target: captureSessionTarget({
+        storeScope: testState.sessionStorePath!,
+        sessionKey: SESSION_KEY,
+        incarnation: "session-steer",
+        agentId: "main",
+      }),
+    });
+    expect(older.mailbox.owner.active).toBe(liveOperation);
+    const commit = createDeferred();
+    const injected = createDeferred();
+    const runIds = ["ordered-steer-first", "ordered-steer-second"];
+    const messages = ["First synthetic steering input.", "Second synthetic steering input."];
+    queueMessage.mockImplementation(async (_text, options, assertCurrent) => {
+      assertCurrent();
+      options?.onQueueAccepted?.(true);
+      if (queueMessage.mock.calls.length === 2) {
+        injected.resolve();
+      }
+      await commit.promise;
+      assertCurrent();
+      await options?.userTurnTranscriptRecorder?.persistApproved();
+    });
+    try {
+      for (const [index, runId] of runIds.entries()) {
+        // `older` is retired only after this loop, so an acknowledgement that waited for
+        // injection would never arrive; the default RPC timeout still fails that case.
+        // A tighter bound is unsafe: the first call pays cold handler setup (>1s on CI).
+        const response = await rpcReq(ws, "chat.send", {
+          sessionKey: SESSION_KEY,
+          message: messages[index],
+          idempotencyKey: runId,
+          queueMode: "steer",
+        });
+        expect(response).toMatchObject({ ok: true, payload: { status: "started", runId } });
+      }
+      expect(queueMessage).not.toHaveBeenCalled();
+      expect(
+        await listSessionPendingInputs({
+          agentId: "main",
+          sessionKey: SESSION_KEY,
+          sessionId: "session-steer",
+          storePath: testState.sessionStorePath!,
+        }),
+      ).toMatchObject({
+        items: runIds.map((runId) => ({ runId, state: "queued" })),
+        total: 2,
+      });
+      retireSessionControllerInput(older);
+      await withinTest(injected.promise, signal);
+      expect(queueMessage.mock.calls.map(([text]) => text)).toEqual(messages);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      retireSessionControllerInput(older);
+      commit.resolve();
+    }
+  });
+
   it.for([9_400, 15_800, 120_001])(
     "classifies an accepted steer waiting %sms as steering over the real transport",
     async (durationMs, { signal }) => {
@@ -189,12 +258,17 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
         sourceTurnId: SOURCE_TURN_ID,
       });
       const commit = createDeferred();
+      const accepted = createDeferred();
       const reported = createDeferred<DiagnosticEventPayload>();
       const previousDiagnostics = areDiagnosticsEnabledForProcess();
       setDiagnosticsEnabledForProcess(true);
       const stop = onTrustedInternalDiagnosticEvent(
         (event) => {
-          if (event.type === "diagnostic.phase.completed" && event.name === "chat.send.dispatch") {
+          if (
+            event.type === "diagnostic.phase.completed" &&
+            event.name === "chat.send.runAdmission" &&
+            event.details?.stage === "steer"
+          ) {
             reported.resolve(event);
           }
         },
@@ -205,6 +279,7 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
       queueMessage.mockImplementation(async (_text, options, assertCurrent) => {
         assertCurrent();
         options?.onQueueAccepted?.(true);
+        accepted.resolve();
         await commit.promise;
         assertCurrent();
       });
@@ -219,6 +294,7 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
           ok: true,
           payload: { status: "started" },
         });
+        await withinTest(accepted.promise, signal);
         expect(queueMessage).toHaveBeenCalledOnce();
         expect(queueMessage.mock.calls[0]?.[0]).toContain(
           "Synthetic steer awaiting the active run boundary.",
@@ -227,7 +303,7 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
         clock = durationMs;
         commit.resolve();
         expect(await withinTest(reported.promise, signal)).toMatchObject({
-          name: "chat.send.dispatch",
+          name: "chat.send.runAdmission",
           durationMs,
           details: { stage: "steer" },
         });

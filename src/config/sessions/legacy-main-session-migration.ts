@@ -24,7 +24,7 @@ import {
   prepareComparisonClaimsFromStores,
   storesHaveLegacyAgentSessionKey,
 } from "./legacy-main-session-key-scan.js";
-import { claimsMatch, restoreColdSessionClaims } from "./legacy-main-session-migration-claims.js";
+import { claimsMatch } from "./legacy-main-session-migration-claims.js";
 import {
   processIdenticalClaims,
   describeIdenticalClaims,
@@ -32,6 +32,7 @@ import {
   samePhysicalStore,
   warningForDivergence,
 } from "./legacy-main-session-migration-operations.js";
+import { restoreColdSessionClaims } from "./legacy-main-session-migration-restore.js";
 import type {
   LegacyMainSessionMigrationMode,
   LegacyMainSessionMigrationOutcome,

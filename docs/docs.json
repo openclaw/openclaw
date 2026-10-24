@@ -2204,6 +2204,7 @@
                   {
                     "group": "Chat and coding models",
                     "pages": [
+                      "providers/abliteration",
                       "providers/alibaba",
                       "providers/anthropic",
                       "plugins/reference/anthropic-vertex",
@@ -2300,6 +2301,7 @@
                       "providers/litellm",
                       "providers/neon",
                       "providers/openrouter",
+                      "providers/requesty",
                       "providers/vercel-ai-gateway"
                     ]
                   },

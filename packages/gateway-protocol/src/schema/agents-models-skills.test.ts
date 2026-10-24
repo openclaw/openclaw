@@ -223,3 +223,27 @@ it("SkillsDetailResultSchema: accepts official ClawHub skill publisher metadata"
 
   expectAccepted(S.SkillsDetailResultSchema, result);
 });
+
+it("ModelsListResultSchema: accepts only a canonical lowercase model family token", () => {
+  const withFamily = (family: unknown) => ({
+    models: [
+      { id: "claude-opus-5.5", name: "Claude Opus 5.5", provider: "github-copilot", family },
+    ],
+  });
+  expectAccepted(
+    S.ModelsListResultSchema,
+    { models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }] },
+    withFamily("anthropic"),
+    withFamily("moonshot"),
+    withFamily("a".repeat(64)),
+  );
+  expectRejected(
+    S.ModelsListResultSchema,
+    withFamily(""),
+    withFamily("Anthropic"),
+    withFamily("open ai"),
+    withFamily("-anthropic"),
+    withFamily("a".repeat(65)),
+    withFamily(7),
+  );
+});

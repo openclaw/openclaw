@@ -621,7 +621,6 @@ export function createBrowserTool(
       const result = dashboardTarget
         ? await withBrowserRequestScope(
             {
-              managedOnly: true,
               assertCurrent: async (admittedProfile) =>
                 (await import("./browser-dashboard.js")).assertBrowserDashboardTargetCurrent(
                   dashboardTarget,

@@ -62,6 +62,26 @@ describe("session catalog schemas", () => {
     ]);
   });
 
+  it("distinguishes pending empty discovery from a completed empty catalog", () => {
+    const emptyCatalog = {
+      id: "fixture",
+      label: "Fixture",
+      capabilities: { continueSession: false, archive: false },
+      hosts: [],
+    };
+    expect(Value.Check(SessionsCatalogListResultSchema, { catalogs: [emptyCatalog] })).toBe(true);
+    expect(
+      Value.Check(SessionsCatalogListResultSchema, {
+        catalogs: [{ ...emptyCatalog, pending: true }],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SessionsCatalogListResultSchema, {
+        catalogs: [{ ...emptyCatalog, pending: "true" }],
+      }),
+    ).toBe(false);
+  });
+
   it("accepts a closed catalog result with hosts", () => {
     const session = {
       threadId: "thread-1",

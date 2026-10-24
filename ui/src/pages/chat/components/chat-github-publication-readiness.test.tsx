@@ -66,6 +66,10 @@ it("observes a delayed owner read and retries its visible discovery failure once
   expect(request).toHaveBeenCalledTimes(1);
   initial.reject(new Error("Discovery unavailable"));
   await waitForSolid(() => expect(view.container.textContent).toContain("Discovery unavailable"));
+  expect(binding.view()).toMatchObject({
+    optionsUnavailable: true,
+    error: "Discovery unavailable",
+  });
   view.container
     .querySelector<HTMLButtonElement>('button[aria-label="Refresh publication"]')!
     .click();
@@ -73,7 +77,11 @@ it("observes a delayed owner read and retries its visible discovery failure once
     expect(button()?.disabled).toBe(false);
     expect(button()?.textContent).toContain("Publish PR");
   });
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(binding.view()).toMatchObject({ optionsUnavailable: false, error: null });
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "sessions.github.options",
+    "sessions.github.options",
+  ]);
   binding.detach();
 });
 
@@ -128,21 +136,22 @@ it("retires a held publication before displaying a replacement binding", async (
 });
 
 it("acknowledges a completed publication before reading the next action", async () => {
+  const published = {
+    status: "published",
+    requestId,
+    publisher: shared,
+    repository: "example/project",
+    branch: "feature/docs",
+    headCommit: "a".repeat(40),
+    url: "https://github.com/example/project/pull/1",
+  };
   const nextRead = Promise.withResolvers<unknown>();
   const request = vi
     .fn()
     .mockResolvedValueOnce({
       ...options,
       latestShared: {
-        result: {
-          status: "published",
-          requestId,
-          publisher: shared,
-          repository: "example/project",
-          branch: "feature/docs",
-          headCommit: "a".repeat(40),
-          url: "https://github.com/example/project/pull/1",
-        },
+        result: published,
         confirmation: null,
       },
     })
@@ -150,6 +159,8 @@ it("acknowledges a completed publication before reading the next action", async 
   const { binding } = bind(request);
   const view = render(binding);
   await waitForSolid(() => expect(view.getByRole("link", { name: "Open PR" })).toBeTruthy());
+  expect(binding.view()?.result).toEqual(published);
+  expect(binding.view()?.onPublish).toBeUndefined();
   view.getByRole("button", { name: "Dismiss" }).click();
   await waitForSolid(() => {
     expect(view.queryByRole("link", { name: "Open PR" })).toBeNull();
@@ -159,6 +170,11 @@ it("acknowledges a completed publication before reading the next action", async 
   });
   nextRead.resolve(options);
   await waitForSolid(() => expect(view.getByRole("button", { name: "Publish PR" })).toBeTruthy());
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(binding.view()?.result).toBeNull();
+  expect(binding.view()?.onPublish).toBeTypeOf("function");
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "sessions.github.options",
+    "sessions.github.options",
+  ]);
   binding.detach();
 });

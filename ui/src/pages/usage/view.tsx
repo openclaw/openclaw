@@ -32,8 +32,6 @@ import { SessionsCard } from "./view-sessions-card.tsx";
 
 registerEnglishCatalog(registerUsageEnglish);
 
-type ProviderUsageSnapshot = ProviderUsageSummary["providers"][number];
-
 function DateInput(props: { value: string; label: string; onChange: (value: string) => void }) {
   return (
     <input
@@ -48,7 +46,7 @@ function DateInput(props: { value: string; label: string; onChange: (value: stri
 }
 
 function renderProviderUsage(
-  providers: ProviderUsageSnapshot[],
+  providers: ProviderUsageSummary["providers"][number][],
   unavailable: boolean,
   stalled: boolean,
 ) {
@@ -516,12 +514,13 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
                   <For each={queryTerms()}>
                     {(term) => {
                       const label = term.raw;
+                      const removeLabel = () => `${t("usage.filters.remove")}: ${label}`;
                       return (
                         <span class="usage-query-chip">
                           {label}
-                          <openclaw-tooltip prop:content={t("usage.filters.remove")}>
+                          <openclaw-tooltip prop:content={removeLabel()}>
                             <button
-                              aria-label={t("usage.filters.remove")}
+                              aria-label={removeLabel()}
                               onClick={() =>
                                 props.callbacks.filters.onQueryDraftChange(
                                   removeQueryToken(props.filters.queryDraft, label),

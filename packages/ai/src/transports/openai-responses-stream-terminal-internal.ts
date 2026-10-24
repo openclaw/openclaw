@@ -60,20 +60,6 @@ export type ResponsesThinkingBlock = ThinkingContent & {
   [OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY]?: OpenAIResponsesReasoningReplayMetadata;
 };
 
-type TerminalOutput = AssistantMessage & {
-  usage: Usage & { reasoningTokens?: number };
-};
-type TerminalOptions = Pick<
-  ResponsesStreamOptions,
-  | "serviceTier"
-  | "promptCacheTtl"
-  | "onServiceTier"
-  | "resolveServiceTier"
-  | "applyServiceTierPricing"
-  | "reasoningReplayMetadata"
-  | "resolveResponseModel"
->;
-
 function splitToolCallId(id: string): [string, string | undefined] {
   const separator = id.indexOf("|");
   return separator === -1 ? [id, undefined] : [id.slice(0, separator), id.slice(separator + 1)];
@@ -120,10 +106,21 @@ export function resolveCompletedResponsesToolCall(
 }
 
 export function createResponsesTerminalController(params: {
-  output: TerminalOutput;
+  output: AssistantMessage & {
+    usage: Usage & { reasoningTokens?: number };
+  };
   stream: ResponsesEventSink;
   model: Model;
-  options?: TerminalOptions;
+  options?: Pick<
+    ResponsesStreamOptions,
+    | "serviceTier"
+    | "promptCacheTtl"
+    | "onServiceTier"
+    | "resolveServiceTier"
+    | "applyServiceTierPricing"
+    | "reasoningReplayMetadata"
+    | "resolveResponseModel"
+  >;
   outputs: ResponsesOutputTracker;
   toolCalls: Pick<
     ReturnType<typeof createResponsesToolCallTracker<ResponsesToolCallState & { block: ToolCall }>>,

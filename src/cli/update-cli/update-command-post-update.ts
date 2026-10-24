@@ -8,7 +8,8 @@ import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js"
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
-import { classifyUpdateOutcome, isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../../shared/update-outcome-classification.js";
+import { isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
 import type { FinishUpdateOptions, FinishUpdateParams } from "./update-command-finish-types.js";
@@ -91,9 +92,7 @@ async function finishSettledUpdate(
   const parkForegroundOrigin = () => parkForegroundUpdateForActivation(params, assertCurrent);
   assertCurrent();
   await assertUpdateCommandPackageFinalization(params);
-  const shouldRestart = progressFailure
-    ? false
-    : await preparePostUpdateService(params, assertCurrent);
+  const shouldRestart = !progressFailure && (await preparePostUpdateService(params, assertCurrent));
   assertCurrent();
   const { createFailure, settleResult } = terminal.bindUpdateFinalizationFailure(progressFailure);
   let rollbackAttempted = false;
@@ -346,6 +345,7 @@ async function finishSettledUpdate(
         opts: params.opts,
         env: currentServiceStop()?.serviceEnv ?? params.ownedManagedUpdateEnv,
         timeoutMs: params.updateStepTimeoutMs,
+        mutationStarted: params.mutationStarted,
         serviceStopped: !rolledBack && currentServiceStop()?.stopped,
         gatewayStartAttempted,
         definitionRecovery,

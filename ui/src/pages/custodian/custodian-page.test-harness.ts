@@ -35,6 +35,8 @@ type ContextHarness = {
   emitGatewayEvent: (event: Pick<GatewayEventFrame, "event" | "payload">) => void;
 };
 
+type OverlayListener = Parameters<ApplicationContext["overlays"]["subscribe"]>[0];
+
 export function createContext(
   request: Mock,
   methods: string[] = ["openclaw.chat"],
@@ -135,6 +137,42 @@ export function createContext(
     return promise.then(() => undefined);
   });
   const routeListeners = new Set<() => void>();
+  const overlayListeners = new Set<OverlayListener>();
+  // The real overlay owner bootstraps against the Gateway. These tests account for
+  // Custodian RPCs, so provide only the per-context observation surface used by the
+  // real Inbox; its existing unsubscribe retires the listener with the mount.
+  const overlays = {
+    snapshot: {
+      updateAvailable: null,
+      updateSchedule: null,
+      heldUpdateCampaignId: null,
+      updateRunning: false,
+      updateStatusRefreshing: false,
+      updateCampaignStatusHydrated: true,
+      updateReconciliationPending: false,
+      updateStatusBanner: null,
+      updateStatusCheckBanner: null,
+      recordedUpdateAttempt: null,
+      diagnosableUpdateFailureId: null,
+      reportableUpdateFailureId: null,
+      updateFailureReportBusy: false,
+      updateFailureReportNotice: null,
+      updateRun: null,
+      updateRunAcknowledged: false,
+      controlUiRefreshRequired: false,
+      approvalQueue: [],
+      approvalBusy: false,
+      approvalCanGrant: false,
+      approvalErrors: new Map(),
+      devicePairSetupOpen: false,
+      devicePairSetupLifecycle: { phase: "selection", access: "full" },
+      devicePairPendingCount: 0,
+    },
+    subscribe: (listener: OverlayListener) => {
+      overlayListeners.add(listener);
+      return () => overlayListeners.delete(listener);
+    },
+  } satisfies Pick<ApplicationContext["overlays"], "snapshot" | "subscribe">;
   const context = {
     gateway,
     runtimeConfig: {
@@ -173,6 +211,7 @@ export function createContext(
         return () => channelListeners.delete(listener);
       },
     },
+    overlays,
     basePath: "",
     navigate: vi.fn(),
     replace: vi.fn(),

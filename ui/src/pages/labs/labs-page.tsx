@@ -34,13 +34,8 @@ import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
-import {
-  labFeatureMergePatch,
-  labFeatureResetPatch,
-  LAB_FEATURES,
-  resolveLabFeatureState,
-  type LabFeature,
-} from "./labs-registry.ts";
+import { resolveLabFeatureState, type LabFeature } from "./labs-feature-state.ts";
+import { labFeatureMergePatch, labFeatureResetPatch, LAB_FEATURES } from "./labs-registry.ts";
 
 registerEnglishCatalog(registerLabsEnglish);
 
@@ -48,13 +43,13 @@ export function LabsPage() {
   const context = useApplication();
   const config = projectRuntimeConfig(context.runtimeConfig);
   type ExpectedSetting = { featureId: string; value: boolean | string };
-  let admitted = false;
+  let admittedFeatureId: string | null = null;
   let lifetime = Promise.withResolvers<void>();
   const [receipt, setReceipt] = createSignal({ completion: Promise.resolve() });
   const page = useGatewayPage({
     getGateway: () => latest(() => context.gateway),
     invalidateRequests: () => {
-      admitted = false;
+      admittedFeatureId = null;
       lifetime.resolve();
       lifetime = Promise.withResolvers<void>();
       setReceipt({ completion: Promise.resolve() });
@@ -69,6 +64,12 @@ export function LabsPage() {
     return { epoch, gateway, runtimeConfig, expected, setExpected, saving, setSaving };
   });
   const currentPending = () => presentation().expected();
+  const savingFeatureId = () => {
+    const expected = currentPending();
+    // The receipt publishes synchronous admission before the optimistic action starts.
+    receipt();
+    return admittedFeatureId ?? expected?.featureId ?? null;
+  };
   onSettled(() => {
     void context.runtimeConfig.ensureLoaded();
     const stopRoute = context.router.subscribe(() => {
@@ -98,11 +99,12 @@ export function LabsPage() {
       editableConfig() !== null
     );
   }
-  function canToggle(): boolean {
+  function toggleAvailable(): boolean {
     const state = config.read().state;
-    return Boolean(
-      state.connected && state.configSnapshot?.hash && !state.configLoading && !admitted,
-    );
+    return Boolean(state.connected && state.configSnapshot?.hash && !state.configLoading);
+  }
+  function canToggle(): boolean {
+    return toggleAvailable() && admittedFeatureId === null;
   }
   const presentSave = action(function* (
     view: ReturnType<typeof presentation>,
@@ -134,7 +136,7 @@ export function LabsPage() {
       page.isCurrent(scope) &&
       context.gateway === gateway &&
       context.runtimeConfig === runtimeConfig;
-    admitted = true;
+    admittedFeatureId = featureId;
     const retired = lifetime.promise;
     const work = (async () => {
       try {
@@ -144,7 +146,7 @@ export function LabsPage() {
         }
       } finally {
         if (isCurrent()) {
-          admitted = false;
+          admittedFeatureId = null;
         }
       }
     })();
@@ -285,7 +287,11 @@ export function LabsPage() {
           <SettingsToggleRow
             title={props.feature.title()}
             checked={checked()}
-            disabled={presentation().saving() || !canToggle()}
+            disabled={
+              !toggleAvailable() ||
+              (savingFeatureId() !== null && savingFeatureId() !== props.feature.id)
+            }
+            saving={savingFeatureId() === props.feature.id}
             onChange={(enabled) => setFeatureEnabled(props.feature, enabled)}
             actions={
               props.feature.settingsPluginId ? (

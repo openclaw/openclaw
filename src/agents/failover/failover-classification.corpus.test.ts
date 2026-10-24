@@ -59,6 +59,8 @@ const representativeCorpusIds = new Set([
   "billing-context-reasoning-required",
   "billing-context-dashscope-range",
   "billing-context-siliconflow-max-seq-len",
+  "billing-context-vllm-decoder-prompt",
+  "billing-context-vllm-engine-prompt",
   "http-legacy-bad-request-normalized",
   "billing-image-dimension",
   "billing-image-size",

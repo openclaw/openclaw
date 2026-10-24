@@ -32,6 +32,7 @@ import * as ownerLeaseRead from "./gateway-owner-lease.read.js";
 import * as stateOwners from "./gateway-state-owner.js";
 import { acquireGatewayStateOwner, tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { writeGatewayServiceRestartIntentSync } from "./restart-intent.js";
 import { readSqliteDatabaseCleanClose } from "./sqlite-database-admission.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
 import * as snapshotSource from "./sqlite-snapshot-source.js";
@@ -198,6 +199,47 @@ function readFreshProcessNamespace() {
 }
 
 describe("Gateway owner lease", () => {
+  it.runIf(process.platform === "darwin")(
+    "records native restart intent after a hostname change in the same kernel boot",
+    async () => {
+      await using owner = fixture();
+      const service = { kind: "launchd" as const, name: "ai.openclaw.hostname-fixture" };
+      const lease = owner.acquire({ mode: "supervised", supervisor: service });
+      await lease.ready;
+      withOpenClawStateStartupMigrationCheckpointDatabase(
+        (db) => {
+          db.prepare(
+            "UPDATE state_leases SET payload_json = json_set(payload_json, '$.owner.host', ?, '$.owner.processNamespace.host', ?) WHERE scope = 'gateway-owner'",
+          ).run("previous-hostname", "previous-hostname");
+        },
+        { env: owner.env },
+      );
+      let clearIntent: (() => void) | undefined;
+      try {
+        expect(
+          writeGatewayServiceRestartIntentSync({
+            env: owner.env,
+            service,
+            nativeStopped: false,
+            nativePid: process.pid,
+            assertCurrent: () => undefined,
+            onRecorded: (clear) => {
+              clearIntent = clear;
+            },
+          }),
+        ).toBe(true);
+        expect(readGatewayOwnerLease({ env: owner.env })).toMatchObject({
+          owner: lease.owner,
+          pid: process.pid,
+          host: "previous-hostname",
+          state: "live",
+        });
+      } finally {
+        clearIntent?.();
+      }
+    },
+  );
+
   it.each([
     { kind: "crashed legacy", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1 },
     { kind: "crashed qualified", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1 },

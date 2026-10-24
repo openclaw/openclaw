@@ -31,6 +31,8 @@ const SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS = 1_000;
 const IDLE_SAMPLE_INTERVAL_MS = 10_000;
 // A native request can wait on a blocked worker. It must not delay the sampler.
 const WORKER_CPU_SAMPLE_BUDGET_MS = 100;
+const CPU_USAGE_ORIGIN = { user: 0, system: 0 };
+const HOST_CPU_TIME_KEYS = ["user", "nice", "sys", "idle", "irq"] as const;
 const log = createSubsystemLogger("gateway/event-loop");
 
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
@@ -40,23 +42,6 @@ export type GatewayEventLoopHealth = SchemaContract<Static<typeof GatewayEventLo
 };
 
 type GatewayEventLoopHealthReason = GatewayEventLoopHealth["reasons"][number];
-
-type GatewayEventLoopHealthMonitor = {
-  snapshot: () => GatewayEventLoopHealth | undefined;
-  persistentDegradationSnapshot: () => GatewayEventLoopHealth | undefined;
-  reset: () => void;
-  stop: () => void;
-};
-
-type GatewayEventLoopHealthMonitorDeps = {
-  scheduler: GatewayScheduler;
-  isIdle?: () => boolean;
-};
-
-type GatewayEventLoopHealthMetrics = Pick<
-  GatewayEventLoopHealth,
-  "intervalMs" | "delayP99Ms" | "delayMaxMs" | "utilization" | "cpuCoreRatio"
->;
 
 function nanosecondsToMilliseconds(value: number): number {
   return roundMetric(value / 1_000_000, 1);
@@ -68,7 +53,7 @@ function readMainThreadCpuUsage(): NodeJS.CpuUsage | undefined {
       isMainThread && typeof process.threadCpuUsage === "function"
         ? process.threadCpuUsage()
         : undefined;
-    return cpuUsageDelta(usage, { user: 0, system: 0 }) === undefined ? undefined : usage;
+    return isValidCpuUsage(usage) ? usage : undefined;
   } catch {
     return undefined;
   }
@@ -84,6 +69,10 @@ function cpuUsageDelta(
   const user = current.user - previous.user;
   const system = current.system - previous.system;
   return Number.isFinite(user + system) && user >= 0 && system >= 0 ? user + system : undefined;
+}
+
+function isValidCpuUsage(usage: NodeJS.CpuUsage | undefined): usage is NodeJS.CpuUsage {
+  return cpuUsageDelta(usage, CPU_USAGE_ORIGIN) !== undefined;
 }
 
 function readHostCpuTimes(): CpuInfo["times"][] | undefined {
@@ -104,9 +93,10 @@ function hostCpuUtilization(
   }
   let total = 0;
   let idle = 0;
-  for (const [index, cpu] of current.entries()) {
+  for (let index = 0; index < current.length; index++) {
+    const cpu = current[index]!;
     const before = previous[index]!;
-    for (const key of ["user", "nice", "sys", "idle", "irq"] as const) {
+    for (const key of HOST_CPU_TIME_KEYS) {
       const delta = cpu[key] - before[key];
       if (delta < 0) {
         return undefined;
@@ -121,7 +111,10 @@ function hostCpuUtilization(
 }
 
 function classifyGatewayEventLoopHealthReasons(
-  metrics: GatewayEventLoopHealthMetrics,
+  metrics: Pick<
+    GatewayEventLoopHealth,
+    "intervalMs" | "delayP99Ms" | "delayMaxMs" | "utilization" | "cpuCoreRatio"
+  >,
 ): GatewayEventLoopHealthReason[] {
   const reasons: GatewayEventLoopHealthReason[] = [];
 
@@ -153,9 +146,15 @@ function classifyGatewayEventLoopHealthReasons(
   return reasons;
 }
 
-export function createGatewayEventLoopHealthMonitor(
-  deps: GatewayEventLoopHealthMonitorDeps,
-): GatewayEventLoopHealthMonitor {
+export function createGatewayEventLoopHealthMonitor(deps: {
+  scheduler: GatewayScheduler;
+  isIdle?: () => boolean;
+}): {
+  snapshot: () => GatewayEventLoopHealth | undefined;
+  persistentDegradationSnapshot: () => GatewayEventLoopHealth | undefined;
+  reset: () => void;
+  stop: () => void;
+} {
   const { scheduler } = deps;
   const nowMs = performance.now.bind(performance);
   const readCpuUsage = process.cpuUsage.bind(process);
@@ -190,9 +189,9 @@ export function createGatewayEventLoopHealthMonitor(
     if (process.versions.bun || typeof Worker.prototype.cpuUsage !== "function") {
       return;
     }
-    const { workers, revision } = getTrackedWorkerCpuSources();
+    const { workers, revision, currentRevision } = getTrackedWorkerCpuSources();
     const accept = (usage: NodeJS.CpuUsage[]) => {
-      if (revision !== getTrackedWorkerCpuSources().revision) {
+      if (revision !== currentRevision()) {
         return;
       }
       lastWorkerCpuWindow = { at, revision, usage };
@@ -206,8 +205,8 @@ export function createGatewayEventLoopHealthMonitor(
         return;
       }
       let total = 0;
-      for (const [index, current] of usage.entries()) {
-        const delta = cpuUsageDelta(current, previous.usage[index]);
+      for (let index = 0; index < usage.length; index++) {
+        const delta = cpuUsageDelta(usage[index], previous.usage[index]);
         if (delta === undefined) {
           return;
         }
@@ -244,12 +243,8 @@ export function createGatewayEventLoopHealthMonitor(
       if (!active || nowMs() - at > WORKER_CPU_SAMPLE_BUDGET_MS) {
         return;
       }
-      const valid = usage.filter(
-        (value): value is NodeJS.CpuUsage =>
-          value !== undefined && cpuUsageDelta(value, { user: 0, system: 0 }) !== undefined,
-      );
-      if (valid.length === workers.length) {
-        accept(valid);
+      if (usage.every(isValidCpuUsage)) {
+        accept(usage);
       }
     });
   };

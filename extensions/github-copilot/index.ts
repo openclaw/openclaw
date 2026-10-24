@@ -36,7 +36,7 @@ import {
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import {
   buildGithubCopilotReplayPolicy,
-  sanitizeGithubCopilotReplayHistory,
+  stripCopilotAssistantThinkingMessages,
 } from "./replay-policy.js";
 import { wrapCopilotProviderStream, wrapCopilotSimpleCompletionStream } from "./stream.js";
 
@@ -600,7 +600,10 @@ export default definePluginEntry({
       wrapStreamFn: wrapCopilotProviderStream,
       wrapSimpleCompletionStreamFn: wrapCopilotSimpleCompletionStream,
       buildReplayPolicy: buildGithubCopilotReplayPolicy,
-      sanitizeReplayHistoryAsync: sanitizeGithubCopilotReplayHistory,
+      sanitizeReplayHistoryAsync: (ctx) =>
+        ctx.modelApi === "openai-responses" || ctx.modelApi === "anthropic-messages"
+          ? stripCopilotAssistantThinkingMessages(ctx.messages)
+          : ctx.messages,
       resolveThinkingProfile,
       prepareRuntimeAuth: async (ctx) => {
         const source = parseGithubCopilotApiKey(ctx.apiKey);

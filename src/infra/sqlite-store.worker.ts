@@ -58,12 +58,14 @@ import {
   type SqliteWorkerTransferFrame,
 } from "./sqlite-worker-transfer.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
+import { serveWorkerMemorySamples } from "./worker-memory.js";
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 if (!parentPort) {
   throw new Error("SQLite store worker requires its host port");
 }
 const port = parentPort;
+serveWorkerMemorySamples(port);
 // Results use the host port; diagnostics must preserve the caller's structured stdout.
 routeLogsToStderr();
 type PreparedPostgresBridge = ReturnType<

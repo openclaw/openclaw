@@ -340,7 +340,7 @@ export async function runPublicSettleRecoveryCase(
       await import("../agents/subagents/registry/subagent-registry.js");
     await activateSubagentRegistry(
       expectDefined(kernel.gatewayRequestContext.resolveGatewayContext, "Gateway resolver"),
-    );
+    ).settled;
     child = context.installChild(subagentRuns.get(child.runId)!);
     sibling = subagentRuns.get(sibling.runId)!;
     expect(kernel.gatewayRequestContext.dedupe).not.toBe(priorDedupe);

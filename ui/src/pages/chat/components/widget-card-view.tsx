@@ -15,6 +15,7 @@ import { dispatchWidgetPrompt } from "../../../components/mcp-app-security.ts";
 import type { McpAppViewProps } from "../../../components/mcp-app-view-types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import { registerMcpAppEnglish } from "../../../i18n/locales/en-mcp-app.ts";
 import {
   canvasWidgetNameForDocument,
@@ -50,6 +51,8 @@ import {
 } from "./widget-card-menu.tsx";
 import { exportWidget } from "./widget-export.ts";
 import { WidgetPinButton, type WidgetPinTarget } from "./widget-pin-button.tsx";
+
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 registerEnglishCatalog(registerChatSessionEnglish);
 

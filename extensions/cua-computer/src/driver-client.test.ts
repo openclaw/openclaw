@@ -176,6 +176,15 @@ describe("CUA Driver direct session", () => {
     expectCall("endSession", { session: sessionOptions.publicSession });
   });
 
+  it("retries a rejected startup before admitting driver tools", async () => {
+    const failure = new Error("fixture startup failed");
+    mocks.startSession.mockRejectedValueOnce(failure);
+    await expect(driver.getDesktopState()).rejects.toBe(failure);
+    await driver.getDesktopState();
+    expectCalls(2, "startSession");
+    expectCalls(1, "getDesktopState");
+  });
+
   it("targets desktop input while keeping the global cursor read untargeted", async () => {
     const clicked = await driver.click(clickInput);
     expect(clicked).toMatchObject({ isError: false, action: { effect: 0, route: 2 } });

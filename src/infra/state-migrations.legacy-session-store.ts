@@ -234,8 +234,6 @@ async function archiveRemovedSessionTranscripts(params: {
   removedSessionFiles: Iterable<[string, string | undefined]>;
   referencedSessionIds: ReadonlySet<string>;
   storePath: string;
-  reason: "deleted";
-  restrictToStoreDir: true;
 }): Promise<Set<string>> {
   const { archiveSessionTranscriptsDetailed } = await loadSessionArchiveRuntime();
   const archivedDirs = new Set<string>();
@@ -247,8 +245,8 @@ async function archiveRemovedSessionTranscripts(params: {
       sessionId,
       storePath: params.storePath,
       sessionFile,
-      reason: params.reason,
-      restrictToStoreDir: params.restrictToStoreDir,
+      reason: "deleted",
+      restrictToStoreDir: true,
     });
     for (const { archivedPath } of archived) {
       archivedDirs.add(path.dirname(archivedPath));

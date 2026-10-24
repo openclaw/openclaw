@@ -75,6 +75,7 @@ import {
 } from "./openai-responses-stream-errors.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
+import { RESPONSES_BOOKKEEPING_TIMEOUT_MS } from "./openai-responses-stream-slots-internal.js";
 import { createRecoverableResponsesWebSocketStream } from "./openai-responses-websocket-recovery.js";
 import {
   combineWebSocketTimeoutSignal,
@@ -126,15 +127,11 @@ export function createOpenAIResponsesClient(
   });
 }
 
-type ResponsesPricingOptions = Pick<
-  NonNullable<Parameters<typeof processResponsesStream>[4]>,
-  "serviceTier" | "applyServiceTierPricing"
->;
 type ResponsesStreamParams = Parameters<typeof createResponsesStreamWithRecovery>[0] & {
   requestOptions: ReturnType<typeof buildOpenAISdkRequestOptions>;
 };
 
-type ResponsesTransportExecutorOptions = {
+function createResponsesTransportExecutor(config: {
   outputApi?: AssistantMessage["api"];
   firstEventTimeoutMs?: number;
   streamRequest?: boolean;
@@ -144,10 +141,11 @@ type ResponsesTransportExecutorOptions = {
   pricingOptions?: (
     options: OpenAIResponsesOptions | undefined,
     model: Model,
-  ) => ResponsesPricingOptions;
-};
-
-function createResponsesTransportExecutor(config: ResponsesTransportExecutorOptions): StreamFn {
+  ) => Pick<
+    NonNullable<Parameters<typeof processResponsesStream>[4]>,
+    "serviceTier" | "applyServiceTierPricing"
+  >;
+}): StreamFn {
   return (model, context, options) => {
     const responsesOptions = options as OpenAIResponsesOptions | undefined;
     const independent = independentResponsesRequest.has(options);
@@ -217,7 +215,8 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             stream: config.streamRequest,
             lifecycle: requestLifecycle,
             // The SDK replaces the fetch signal; retain the watchdog caller signal.
-            onSseComment: () => notifyLlmRequestActivity(options?.signal, false),
+            onSseComment: () =>
+              notifyLlmRequestActivity(options?.signal, false, RESPONSES_BOOKKEEPING_TIMEOUT_MS),
           }) ?? buildGuardedModelFetch(model),
           options?.onResponse,
           model,

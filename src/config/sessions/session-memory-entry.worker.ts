@@ -2,9 +2,9 @@ import { channel as diagnosticsChannel } from "node:diagnostics_channel";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { projectSessionEntryRecord } from "../../../packages/memory-host-sdk/src/host/session-entry-projection.js";
 import {
-  buildSessionEntryInProcess,
+  renderSessionEntrySnapshot,
   readSessionEntryResetRecallCutoff,
-} from "../../../packages/memory-host-sdk/src/host/session-files.js";
+} from "../../../packages/memory-host-sdk/src/host/session-entry-render.js";
 import { LruCache } from "../../infra/lru-cache.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
@@ -154,7 +154,7 @@ async function prepareSessionMemoryEntries(
         } else {
           retainSnapshot(snapshotKey(request), snapshot);
           const entry = snapshot
-            ? await buildSessionEntryInProcess(request.absPath, request.options, snapshot)
+            ? await renderSessionEntrySnapshot(request.absPath, request.options, snapshot)
             : null;
           value = {
             entry,

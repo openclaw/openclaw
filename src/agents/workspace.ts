@@ -10,7 +10,6 @@ import { isRootFileMissingFailure } from "../infra/boundary-file-read.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { retainMutationAuthority } from "../infra/mutation-authority.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { exactWorkspaceEntryExists } from "../memory/root-memory-files.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
@@ -45,8 +44,8 @@ import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import { createWorkspaceFileMutationGuard } from "./workspace-file-mutation-guard.js";
 import {
   createLoadedWorkspaceBootstrapFile,
-  isTransientWorkspaceReadError,
   readWorkspaceFileWithGuards,
+  retryWorkspaceRead,
 } from "./workspace-file-read.js";
 import { ensureGitRepo } from "./workspace-git.js";
 import { LEGACY_WORKSPACE_STATE_CURRENT_FILENAME } from "./workspace-legacy-state.js";
@@ -181,21 +180,13 @@ export async function fileDiffersFromTemplate(
   generatedHash?: string,
 ): Promise<boolean> {
   try {
-    return await retryAsync(
-      async () => {
-        const content = await fs.readFile(path.join(dir, fileName), "utf-8");
-        return (
-          (!generatedHash || sha256Hex(content) !== generatedHash) &&
-          !(await isGeneratedTemplateContent(fileName, content))
-        );
-      },
-      {
-        attempts: 3,
-        minDelayMs: 50,
-        maxDelayMs: 50,
-        shouldRetry: (err) => isTransientWorkspaceReadError(err),
-      },
-    );
+    return await retryWorkspaceRead(async () => {
+      const content = await fs.readFile(path.join(dir, fileName), "utf-8");
+      return (
+        (!generatedHash || sha256Hex(content) !== generatedHash) &&
+        !(await isGeneratedTemplateContent(fileName, content))
+      );
+    });
   } catch (err) {
     const anyErr = err as { code?: string };
     if (anyErr.code === "ENOENT") {

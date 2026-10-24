@@ -2,6 +2,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
+import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
 import { createHookRunner } from "./hooks.js";
@@ -524,6 +525,84 @@ describe("prompt hook invocation", () => {
 const promptEvent = (prompt: string) => ({ prompt, messages: [] });
 
 describe("before_prompt_build dispatch", () => {
+  it.each([
+    Object.freeze({ buffer: new SharedArrayBuffer(4) }),
+    new Error("shared", { cause: new Uint8Array(new SharedArrayBuffer(4)) }),
+    {
+      get buffer() {
+        return new SharedArrayBuffer(4);
+      },
+    },
+  ])("rejects unowned shared memory beside an owned payload (%#)", async (unowned) => {
+    const message = { role: "user", content: [{ type: "text", text: "owned" }] };
+    normalizeTranscriptJsonValue(message, "");
+    const handler = vi.fn();
+    const runner = promptRunner([{ handler }]);
+    await expect(
+      runner.runBeforePromptBuild({ prompt: "test", messages: [message, unowned] }, {}),
+    ).rejects.toThrow("before_prompt_build mutable input isolation failed");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 1, 2])(
+    "scans owned payloads only in the detached clone with %i handlers",
+    async (handlers) => {
+      const message = {
+        role: "user",
+        content: [{ type: "text", text: "caller history" }],
+      };
+      normalizeTranscriptJsonValue(message, "");
+      const owned = new Set<object>([message.content, message.content[0]!]);
+      const ownKeys = vi.spyOn(Reflect, "ownKeys");
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      const received: unknown[] = [];
+      try {
+        for (const hookName of ["before_prompt_build", "agent_turn_prepare"] as const) {
+          const runner = createHookRunner(
+            createMockPluginRegistry(
+              Array.from({ length: handlers }, (_, index) => ({
+                hookName,
+                handler: (value: unknown) => {
+                  const event = value as { messages: (typeof message)[] };
+                  const block = event.messages[0]!.content[0]!;
+                  expect(block.text).toBe(index === 0 ? "caller history" : "handler mutation");
+                  block.text = "handler mutation";
+                  received.push(event);
+                },
+              })),
+            ),
+          );
+          for (let turn = 0; turn < 2; turn++) {
+            ownKeys.mockClear();
+            clone.mockClear();
+            const event = { prompt: "test", messages: [message], queuedInjections: [] };
+            if (hookName === "before_prompt_build") {
+              await runner.runBeforePromptBuild(event, {});
+            } else {
+              await runner.runAgentTurnPrepare(event, {});
+            }
+            expect(clone).toHaveBeenCalledTimes(handlers ? 1 : 0);
+            expect(ownKeys.mock.calls.filter(([value]) => owned.has(value))).toHaveLength(0);
+            // Detached content still gets the complete post-clone scan.
+            if (handlers) {
+              const snapshot = clone.mock.results[0]!.value as typeof event;
+              expect(
+                ownKeys.mock.calls.some(([value]) => value === snapshot.messages[0]!.content[0]),
+              ).toBe(true);
+            }
+            expect(message.content[0]!.text).toBe("caller history");
+          }
+        }
+        if (handlers) {
+          expect(received[0]).not.toBe(received[handlers]);
+        }
+      } finally {
+        ownKeys.mockRestore();
+        clone.mockRestore();
+      }
+    },
+  );
+
   it("keeps sibling hook families and other runners active during dispatch", async () => {
     const turnPrepare = vi.fn(() => ({ prependContext: "turn" }));
     const heartbeat = vi.fn(() => ({ appendContext: "heartbeat" }));

@@ -1,8 +1,9 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, For, isPending, latest, Loading, onCleanup, Show } from "solid-js";
+import { createMemo, Errored, For, isPending, latest, Loading, Show } from "solid-js";
 import { stripFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import { createScrollPosition } from "../lib/reactive/scroll-state.ts";
@@ -52,11 +53,11 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
   let modalOpen = false;
   type Target = "search" | "item" | "button" | "close" | "body";
   const targets = new Map<HTMLElement, Target>();
-  const capture = (target: Target) => {
-    let node: HTMLElement;
-    onCleanup(() => targets.delete(node));
-    return (element: HTMLElement) => targets.set((node = element), target);
-  };
+  const capture = (target: Target) =>
+    elementRef((element: HTMLElement) => {
+      targets.set(element, target);
+      return () => targets.delete(element);
+    });
   // Keyed rows can move without remounting; navigation follows their committed DOM order.
   const ordered = (target: Target) =>
     [...targets]

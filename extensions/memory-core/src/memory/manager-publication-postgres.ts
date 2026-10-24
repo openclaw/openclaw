@@ -403,27 +403,31 @@ export function bindPostgresMemoryPublication(
             );
           }
           db.exec("DELETE FROM memory_index_chunks; DELETE FROM memory_index_sources");
-          const rows = records("reindex");
-          let next = rows.next();
-          while (!next.done) {
-            if (typeof next.value.header !== "string") {
-              throw new Error("Memory reindex source header is missing");
-            }
-            // SAFETY: Only stageSource writes headers into the reindex lane.
-            const source = JSON.parse(next.value.header) as MemorySourceIndexHeader;
-            checkSource(source);
-            next = rows.next();
-            function* fragments() {
-              while (!next.done && next.value.header === null) {
-                yield next.value;
-                next = rows.next();
+          function* sources() {
+            const rows = records("reindex");
+            let next = rows.next();
+            while (!next.done) {
+              if (typeof next.value.header !== "string") {
+                throw new Error("Memory reindex source header is missing");
               }
+              // SAFETY: Only stageSource writes headers into the reindex lane.
+              const source = JSON.parse(next.value.header) as MemorySourceIndexHeader;
+              checkSource(source);
+              next = rows.next();
+              function* fragments() {
+                while (!next.done && next.value.header === null) {
+                  yield next.value;
+                  next = rows.next();
+                }
+              }
+              // The kernel consumes each source before requesting the next header.
+              yield { header: source, rows: decode<MemorySourceIndexRow>(fragments()) };
             }
-            new MemorySourceIndexKernel(db, {
-              vector: { enabled: true, available: true },
-              fts: { enabled: true, available: true },
-            }).replaceRows(source, decode<MemorySourceIndexRow>(fragments()));
           }
+          new MemorySourceIndexKernel(db, {
+            vector: { enabled: true, available: true },
+            fts: { enabled: true, available: true },
+          }).replaceGroup(sources());
           writeMemoryIndexMetadata(db, metadata);
           if (command.input.vectorIndexComplete) {
             markMemoryVectorIndexClean(db);
@@ -602,20 +606,23 @@ export function bindPostgresMemoryPublication(
             : command.type === "source.replace.inline"
               ? [command.input]
               : [{ header: header as MemorySourceIndexHeader, fragments: undefined }]; // SAFETY: Paired source stage.start header.
-        for (const source of sources) {
-          if (!source.header) {
-            throw new Error("Memory source staging was not started");
-          }
-          if (rebuilding) {
-            stageSource(source.header, source.fragments);
-          } else {
-            checkSource(source.header);
-            new MemorySourceIndexKernel(db, command.input.state).replaceRows(
-              source.header,
-              decode<MemorySourceIndexRow>(source.fragments ?? records("source")),
-            );
+        function* replacements() {
+          for (const source of sources) {
+            if (!source.header) {
+              throw new Error("Memory source staging was not started");
+            }
+            if (rebuilding) {
+              stageSource(source.header, source.fragments);
+            } else {
+              checkSource(source.header);
+              yield {
+                header: source.header,
+                rows: decode<MemorySourceIndexRow>(source.fragments ?? records("source")),
+              };
+            }
           }
         }
+        new MemorySourceIndexKernel(db, command.input.state).replaceGroup(replacements());
         if (!rebuilding) {
           advanceMemoryIndexRevision(db);
         }

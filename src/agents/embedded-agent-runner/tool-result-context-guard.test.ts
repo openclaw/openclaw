@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
+import { estimateMessageTokenPressure } from "../sessions/context-token-pressure.js";
 import { convertToLlm } from "../sessions/messages.js";
 import {
   castAgentMessage,
@@ -14,7 +15,10 @@ import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { normalizeMessagesForLlmBoundary } from "./run/attempt-llm-boundary.js";
 import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
-import { checkMidTurnPrecheck } from "./run/preemptive-compaction.js";
+import {
+  checkMidTurnPrecheck,
+  resolveProjectedRequestPressure,
+} from "./run/preemptive-compaction.js";
 import {
   estimateMessageCharsCached,
   getToolResultText as getAllToolResultText,
@@ -297,6 +301,61 @@ describe("installToolResultContextGuard", () => {
 });
 
 describe("installContextEngineLoopHook", () => {
+  it.each(["live", "deferred"] as const)(
+    "budgets %s assembly in the mid-turn precheck's units",
+    async (mode) => {
+      const systemPrompt = "system rules ".repeat(2_000);
+      const tools = Array.from({ length: 40 }, (_, index) => ({
+        name: `tool_${index}`,
+        description: "Runs a fixture operation with several options. ".repeat(8),
+        parameters: Type.Object({ path: Type.String(), limit: Type.Optional(Type.Number()) }),
+      }));
+      const contextTokenBudget = 64_000;
+      const reserveTokens = 8_000;
+      const filler = () => makeUser("history filler ".repeat(100));
+      let lastAssembled: AgentMessage[] = [];
+      const engine = makeEngine();
+      // Fill the requested budget as tightly as the engine's raw estimate allows.
+      engine.assemble.mockImplementation(async ({ tokenBudget }) => {
+        const messages: AgentMessage[] = [];
+        let tokens = 0;
+        while (tokens + estimateMessageTokenPressure(filler()) <= (tokenBudget ?? 0)) {
+          messages.push(filler());
+          tokens += estimateMessageTokenPressure(filler());
+        }
+        lastAssembled = messages;
+        return { messages, estimatedTokens: tokens };
+      });
+      const { run } = hook(engine, {
+        tokenBudget: contextTokenBudget,
+        reserveTokens: () => reserveTokens,
+        getSystemPrompt: () => systemPrompt,
+        getTools: () => tools,
+        ...(mode === "deferred"
+          ? { deferredTurn: { prompt: "go", availableTools: new Set<string>() } }
+          : {}),
+      });
+      const view = await run([
+        makeUser("first"),
+        makeAssistant("calling a tool"),
+        makeToolResult("call_1", "tool output ".repeat(1_500)),
+      ]);
+      expect(lastAssembled.length).toBeGreaterThan(0);
+      const precheck = (messages: AgentMessage[]) =>
+        resolveProjectedRequestPressure({
+          context: { messages: convertToLlm(messages), systemPrompt, tools },
+          contextTokenBudget,
+          reserveTokens,
+        });
+
+      expect(precheck(view).route).toBe("fits");
+      // One more history item than the budget allows must overflow, so the
+      // budget is tight rather than conservatively small.
+      const pending = view.slice(lastAssembled.length);
+      expect(precheck([...lastAssembled, filler(), ...pending]).route).not.toBe("fits");
+    },
+  );
+
   it.each(["before", "upstream", "afterTurn", "ingestBatch", "ingest", "assemble"] as const)(
     "stops the next provider request when cancelled at %s",
     async (stage) => {

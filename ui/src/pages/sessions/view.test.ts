@@ -634,6 +634,7 @@ describe("sessions view", () => {
     await renderSettled(initial, { expandedSessionKey: "agent:main:main" });
 
     const selects = queryAll<HTMLSelectElement>("tbody select");
+    const stats = [...queryAll(".session-detail-stat")];
     const [, fast, verbose, reasoning] = selects;
     expect([fast?.value, verbose?.value, reasoning?.value]).toEqual(["on", "full", "custom-mode"]);
     expect(optionValues(verbose)).toEqual(["", "off", "on", "full"]);
@@ -647,6 +648,7 @@ describe("sessions view", () => {
       { expandedSessionKey: "agent:main:main" },
     );
     const refreshed = queryAll("tbody select");
+    expect([...queryAll(".session-detail-stat")]).toEqual(stats);
     for (const [index, select] of [...selects].entries()) {
       expect(refreshed[index]).toBe(select);
     }
@@ -770,6 +772,25 @@ const escapeKey = (options: KeyboardEventInit = {}) =>
   new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...options });
 
 describe("sessions transcript search view", () => {
+  it.each([{ isComposing: true }, { keyCode: 229 }, { ctrlKey: true }])(
+    "keeps transcript search open while Escape belongs to composition or a modified shortcut (%j)",
+    async (options) => {
+      document.body.append(container);
+      render({ transcriptSearchQuery: "keep query" });
+      transcriptTrigger()!.click();
+      await Promise.resolve();
+      const input = container.querySelector<HTMLInputElement>(
+        ".sessions-transcript-search__input input",
+      )!;
+      input.focus();
+      const event = escapeKey(options);
+      input.dispatchEvent(event);
+      await Promise.resolve();
+      expect(container.contains(input)).toBe(true);
+      expect(document.activeElement).toBe(input);
+      expect(event.defaultPrevented).toBe(false);
+    },
+  );
   it.each([true, false])(
     "keeps transcript submission separate from roster filtering (available=%s)",
     async (available) => {

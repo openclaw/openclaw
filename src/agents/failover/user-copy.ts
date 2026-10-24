@@ -382,41 +382,6 @@ export function resolveProviderRequestFailureCopy(params: {
 
 export type ReplyFallbackAttempt = FallbackAttemptRecord & { authMode?: string };
 
-function extractCodexUsageLimitErrorMessage(
-  attempts: readonly ReplyFallbackAttempt[],
-  directMessage: string,
-  directReason: FailoverReason | undefined,
-  directProvider: string | undefined,
-  sanitizeText?: (text: string) => string,
-): string | undefined {
-  const attempt = attempts.find(
-    (candidate) =>
-      candidate.provider === "openai" &&
-      candidate.reason === "rate_limit" &&
-      candidate.code !== AUTH_PROFILE_COOLDOWN_ERROR_CODE &&
-      candidate.error,
-  );
-  const text =
-    attempt?.error ??
-    (directProvider === "openai" && directReason === "rate_limit" ? directMessage : undefined);
-  if (!text) {
-    return undefined;
-  }
-  const message = renderSanitizedUserFacingText(sanitizeText?.(text) ?? text, {
-    errorContext: true,
-  })
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join(" ")
-    .trim();
-  if (!message) {
-    return undefined;
-  }
-  const truncated = message.length > 500 ? `${truncateUtf16Safe(message, 497)}...` : message;
-  return truncated.startsWith("⚠️") ? truncated : `⚠️ ${truncated}`;
-}
-
 /** Render the reply surface's rate-limit copy, including structured cooldown context. */
 export function renderRateLimitReplyCopy(params: {
   message: string;
@@ -450,16 +415,32 @@ export function renderRateLimitReplyCopy(params: {
   if (exhaustion) {
     return exhaustion;
   }
-  const usageLimit = extractCodexUsageLimitErrorMessage(
-    attempts,
-    providerMessage,
-    params.reason,
-    params.provider,
-    params.sanitizeText,
+  const { reason: directReason, provider: directProvider, sanitizeText } = params;
+  const usageAttempt = attempts.find(
+    (candidate) =>
+      candidate.provider === "openai" &&
+      candidate.reason === "rate_limit" &&
+      candidate.code !== AUTH_PROFILE_COOLDOWN_ERROR_CODE &&
+      candidate.error,
   );
-  if (usageLimit) {
-    return usageLimit;
+  const text =
+    usageAttempt?.error ??
+    (directProvider === "openai" && directReason === "rate_limit" ? providerMessage : undefined);
+  if (text) {
+    const message = renderSanitizedUserFacingText(sanitizeText?.(text) ?? text, {
+      errorContext: true,
+    })
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    if (message) {
+      const truncated = message.length > 500 ? `${truncateUtf16Safe(message, 497)}...` : message;
+      return truncated.startsWith("⚠️") ? truncated : `⚠️ ${truncated}`;
+    }
   }
+
   if (attempts.some((attempt) => attempt.reason === "billing") || params.reason === "billing") {
     return BILLING_ERROR_USER_MESSAGE;
   }

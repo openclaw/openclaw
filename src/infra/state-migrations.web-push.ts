@@ -297,10 +297,7 @@ export async function migrateLegacyWebPush(params: {
         await assertSourcesUnchanged(legacy.sources);
         // Claim both sources before the database transaction. A legacy writer can no longer
         // overwrite the retired paths after SQLite becomes canonical.
-        await claimLegacyMigrationSourceClaims(legacy.sources, {
-          beforeClaim: params.beforeClaim,
-          mismatchMessage: "legacy Web Push source changed before doctor could claim it",
-        });
+        await claimLegacyMigrationSourceClaims(legacy.sources, params.beforeClaim);
         claimed = legacy.sources.map(({ claim }) => claim);
       } catch (error) {
         warnings.push(`Failed migrating legacy Web Push state: ${String(error)}`);

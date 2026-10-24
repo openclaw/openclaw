@@ -73,6 +73,7 @@
       "google": {
         "api": "google-generative-ai",
         "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+        "family": "google",
         "models": [
           {
             "id": "gemini-4-argon",

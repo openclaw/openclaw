@@ -2,6 +2,7 @@
 import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { expect, it, vi } from "vitest";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { registerBoardDocumentEnglish } from "../locales/en-board-document.ts";
 import { registerBoardWebsiteEnglish } from "../locales/en-board-website.ts";
 import { registerBoardEnglish } from "../locales/en-board.ts";
 import { registerChatSessionEnglish } from "../locales/en-chat-session.ts";
@@ -9,22 +10,11 @@ import { en } from "../locales/en.ts";
 import { loadLazyLocaleTranslation } from "./registry.ts";
 import { captureI18nStateForTesting } from "./translate.test-support.ts";
 import { i18n } from "./translate.ts";
-import type { TranslationMap } from "./types.ts";
 
 vi.hoisted(() => vi.resetModules());
 
 it("keeps shared session labels eager while lazy renderers extend their retained namespaces", async () => {
   const restoreI18n = captureI18nStateForTesting();
-  const snapshots: { target: TranslationMap; value: TranslationMap }[] = [];
-  function remember(target: TranslationMap): void {
-    snapshots.push({ target, value: { ...target } });
-    for (const value of Object.values(target)) {
-      if (typeof value !== "string") {
-        remember(value);
-      }
-    }
-  }
-  remember(en.chat);
   const details = en.chat.sessionDetails;
   const diff = en.chat.sessionDiff;
   try {
@@ -39,19 +29,18 @@ it("keeps shared session labels eager while lazy renderers extend their retained
     expect(en.chat.sessionDetails).toBe(details);
     expect(en.chat.sessionDiff).toBe(diff);
   } finally {
-    for (const { target, value } of snapshots) {
-      for (const key of Object.keys(target)) {
-        if (!Object.hasOwn(value, key)) {
-          Reflect.deleteProperty(target, key);
-        }
-      }
-      Object.assign(target, value);
-    }
     await restoreI18n();
   }
 });
 
 it.each([
+  {
+    register: registerBoardDocumentEnglish,
+    activeKey: "kindWebsite",
+    activeText: "Webseite",
+    fallbackKey: "kindReport",
+    fallbackText: "Report",
+  },
   {
     register: registerBoardWebsiteEnglish,
     activeKey: "websiteOpen",
@@ -69,10 +58,10 @@ it.each([
 ])(
   "invalidates public t for lazy $activeKey fallback without replacing active translations",
   async ({ register, activeKey, activeText, fallbackKey, fallbackText }) => {
+    const install = vi.fn(register);
     const restoreI18n = captureI18nStateForTesting();
     const originalGerman = await loadLazyLocaleTranslation("de");
     const widget = en.board.widget;
-    const originalWidget = { ...widget };
     const labels: (readonly string[])[] = [];
     let dispose = () => {};
     try {
@@ -90,22 +79,17 @@ it.each([
       flush();
       expect(labels).toEqual([[activeText, `board.widget.${fallbackKey}`]]);
 
-      registerEnglishCatalog<ReturnType<typeof register>>(register);
+      registerEnglishCatalog(install);
       flush();
       expect(labels.at(-1)).toEqual([activeText, fallbackText]);
       expect(en.board.widget).toBe(widget);
       const count = labels.length;
-      registerEnglishCatalog<ReturnType<typeof register>>(register);
+      registerEnglishCatalog(install);
       flush();
       expect(labels).toHaveLength(count);
+      expect(install).toHaveBeenCalledTimes(1);
     } finally {
       dispose();
-      for (const key of Object.keys(widget)) {
-        if (!Object.hasOwn(originalWidget, key)) {
-          Reflect.deleteProperty(widget, key);
-        }
-      }
-      Object.assign(widget, originalWidget);
       if (originalGerman) {
         i18n.registerTranslation("de", originalGerman);
       }

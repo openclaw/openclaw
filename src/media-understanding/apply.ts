@@ -43,17 +43,6 @@ const AUDIO_ONLY_CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["audio"];
 const EMPTY_VOICE_NOTE_PLACEHOLDER =
   "[Voice note could not be transcribed because the audio attachment was too small]";
 
-function appendFileBlocks(body: string, suffix: string | undefined): string {
-  if (suffix === undefined) {
-    return body;
-  }
-  const base = typeof body === "string" ? body.trim() : "";
-  if (!base) {
-    return suffix;
-  }
-  return `${base}\n\n${suffix}`.trim();
-}
-
 const SELF_SERVE_CONTEXT_FIELDS = ["Body", "BodyForAgent", "agentText"] as const;
 
 function enableLocalPathSelfServe(
@@ -313,8 +302,14 @@ export async function applyMediaUnderstanding(params: {
     const contextBlocks = applyAttachmentMarkerBudget([...fileContext.blocks, ...mediaMarkers]);
     if (outputs.length > 0 || contextBlocks.length > 0) {
       const fileSuffix = contextBlocks.length > 0 ? contextBlocks.join("\n\n").trim() : undefined;
-      const enrich = (body?: string) =>
-        appendFileBlocks(formatMediaUnderstandingBody({ body, outputs }), fileSuffix);
+      const enrich = (body?: string) => {
+        const formatted = formatMediaUnderstandingBody({ body, outputs });
+        if (fileSuffix === undefined) {
+          return formatted;
+        }
+        const base = typeof formatted === "string" ? formatted.trim() : "";
+        return base ? `${base}\n\n${fileSuffix}`.trim() : fileSuffix;
+      };
       // Channels may carry preflight transcripts only in prepared agent text.
       // Enrich that base before changing the separate transport envelope.
       ctx.agentText = enrich(ctx.agentText ?? ctx.BodyForAgent ?? ctx.Body);

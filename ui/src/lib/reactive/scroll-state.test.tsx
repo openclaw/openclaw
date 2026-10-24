@@ -207,20 +207,6 @@ it("defers bounded reveal and cancels replaced, cleared, and disposed requests",
   expect(nativeScroll).not.toHaveBeenCalled();
 });
 
-it("keeps untracked scroll state until the next layout observation", () => {
-  const { element, values } = externalScroll({ trackScroll: false });
-  expectFrame(element, true, false);
-
-  values.offset = 200;
-  element.dispatchEvent(new Event("scroll"));
-  vi.advanceTimersToNextFrame();
-  expect(element.dataset.atEnd).toBe("false");
-
-  observers.at(-1)!.deliver(element);
-  vi.advanceTimersToNextFrame();
-  expect(element.dataset.atEnd).toBe("true");
-});
-
 it("resamples loaded font metrics only for the current presented element", () => {
   const readiness = vi.fn(() => Promise.resolve());
   const fonts = new EventTarget();

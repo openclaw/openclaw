@@ -3,6 +3,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, expect, it, vi } from "vitest";
 import adminHttpRpcPlugin from "../../../../extensions/admin-http-rpc/index.js";
 import canvasPlugin from "../../../../extensions/canvas/index.js";
+import { createCanvasDocument } from "../../../../src/canvas/documents.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
@@ -20,7 +21,6 @@ import {
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
 } from "../../../../src/plugins/runtime.js";
-import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
 
 const TOKEN = "qa-hosted-web-token";
@@ -34,7 +34,7 @@ afterEach(async () => {
 });
 
 it(
-  "serves the Control UI, admin RPC, and capability-scoped A2UI assets",
+  "serves the Control UI, admin RPC, and capability-scoped Canvas documents",
   { timeout: 90_000 },
   async () => {
     await withOpenClawTestState(
@@ -58,6 +58,12 @@ it(
           "<!doctype html><html><body>Gateway hosted Control UI</body></html>",
           "utf8",
         );
+        const canvasHtml =
+          "<!doctype html><html><body>Gateway hosted Canvas document</body></html>";
+        const canvasDocument = await createCanvasDocument({
+          title: "Gateway hosted Canvas document",
+          html: canvasHtml,
+        });
 
         const config: OpenClawConfig = {
           gateway: {
@@ -182,26 +188,18 @@ it(
             "/cap/wrong-capability",
           );
 
-          await withEnvAsync({ NODE_ENV: undefined, VITEST: undefined }, async () => {
-            for (const fileName of ["a2ui.bundle.js", "a2ui-v0.9.bundle.js"]) {
-              const asset = await fetch(`${scopedCanvasUrl}/__openclaw__/a2ui/${fileName}`);
-              expect(asset.status).toBe(200);
-              expect(asset.headers.get("content-type")).toContain("javascript");
-              expect((await asset.text()).length).toBeGreaterThan(100);
-            }
+          const document = await fetch(`${scopedCanvasUrl}${canvasDocument.entryUrl}`);
+          expect(document.status).toBe(200);
+          expect(document.headers.get("content-type")).toContain("text/html");
+          expect(await document.text()).toBe(canvasHtml);
 
-            const wrongCapability = await fetch(
-              `${wrongCapabilityUrl}/__openclaw__/a2ui/a2ui.bundle.js`,
-            );
-            expect(wrongCapability.status).toBe(401);
+          const wrongCapability = await fetch(`${wrongCapabilityUrl}${canvasDocument.entryUrl}`);
+          expect(wrongCapability.status).toBe(401);
 
-            vi.useFakeTimers({ toFake: ["Date"] });
-            vi.setSystemTime(capabilityIssuedAtMs + 24 * 60 * 60_000);
-            const expiredCapability = await fetch(
-              `${scopedCanvasUrl}/__openclaw__/a2ui/a2ui.bundle.js`,
-            );
-            expect(expiredCapability.status).toBe(401);
-          });
+          vi.useFakeTimers({ toFake: ["Date"] });
+          vi.setSystemTime(capabilityIssuedAtMs + 24 * 60 * 60_000);
+          const expiredCapability = await fetch(`${scopedCanvasUrl}${canvasDocument.entryUrl}`);
+          expect(expiredCapability.status).toBe(401);
         } finally {
           if (operator) {
             await disconnectGatewayClient(operator).catch(() => undefined);

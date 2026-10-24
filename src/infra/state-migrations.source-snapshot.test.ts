@@ -373,9 +373,7 @@ describe("doctor legacy migration source contract", () => {
       const attempt =
         operation === "claim"
           ? claim.claim(claimOptions(snapshot))
-          : claimBatch([{ claim, snapshot }], {
-              mismatchMessage: "source changed",
-            });
+          : claimBatch([{ claim, snapshot }]);
 
       await expect(attempt).rejects.toMatchObject(
         operation === "claim" ? { code: "invalid-path" } : { cause: { code: "invalid-path" } },
@@ -429,12 +427,9 @@ describe("doctor legacy migration source contract", () => {
           { claim: firstClaim, snapshot: firstSnapshot },
           { claim: secondClaim, snapshot: secondSnapshot },
         ],
-        {
-          beforeClaim: () => fs.renameSync(replacementPath, secondPath),
-          mismatchMessage: "batch source changed before claim",
-        },
+        () => fs.renameSync(replacementPath, secondPath),
       ),
-    ).rejects.toThrow("batch source changed before claim");
+    ).rejects.toThrow("legacy Web Push source changed before doctor could claim it");
 
     expect(fs.readFileSync(sourcePath)).toEqual(firstSnapshot.buffer);
     expect(fs.readFileSync(secondPath)).toEqual(secondSnapshot.buffer);

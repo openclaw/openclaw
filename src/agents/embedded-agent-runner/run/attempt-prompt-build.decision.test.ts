@@ -23,7 +23,6 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import { leasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import {
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
@@ -36,10 +35,6 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 vi.mock("../../../plugins/host-hook-state.js", () => ({
   drainPluginNextTurnInjectionContext: vi.fn(async () => ({ queuedInjections: [] })),
-}));
-vi.mock("../../subagents/registry/subagent-registry.js", () => ({
-  leasePendingAgentSteeringItems: vi.fn(async () => undefined),
-  prependAgentSteeringPrompt: ({ prompt }: { prompt: string }) => prompt,
 }));
 registerAgentSessionLoopTestLifecycle();
 afterEach(() => {
@@ -80,7 +75,6 @@ function captureRequests(reply = () => "done") {
 }
 const modes = ["structured", "search", "code"] as const;
 const authorityChanges = ["opt-out", "owner-close", "abort"] as const;
-const preparationBoundaries = ["steering", "operator"] as const;
 let sequence = 0;
 async function fixture(
   cfg = config(),
@@ -166,7 +160,6 @@ async function fixture(
       applyPromptBuildToolsAllow: (allow, pruneForDecision) =>
         policy.apply(allow, pruneForDecision).callableToolNames,
       setActiveSessionSystemPrompt: () => {},
-      setLeasedSteering: () => {},
     });
   const submit = async (
     assembly: Awaited<ReturnType<typeof assemble>>,
@@ -187,7 +180,6 @@ async function fixture(
       transcriptLeafId: null,
       trajectoryRecorder: null,
       onFinalPromptText: () => {},
-      onSteeringAcknowledged: () => {},
       assertHostActive: assembly.assertHostActive,
       persistToolResultProjections,
       promptActiveSession: (prompt, options) => session.prompt(prompt, options),
@@ -210,27 +202,6 @@ describe("prompt assembly with registered Decision runtime", () => {
 
     expect(call).toHaveBeenCalledTimes(2);
     expect(f.session.getActiveToolNames()).toEqual(["inspect_file"]);
-  });
-
-  it("reads the permission baseline after preparation awaits and admits a later nonempty generation", async () => {
-    const { call, ...f } = await fixture();
-    const tools = f.tools.slice();
-    vi.mocked(leasePendingAgentSteeringItems).mockImplementationOnce(async () => {
-      f.tools.splice(0);
-      f.session.setActiveToolsByName([]);
-      f.policy.refresh();
-      return undefined;
-    });
-    await f.assemble({ sessionKey: "agent:main:tools-revoked" });
-    expect(f.attempt.disableTools).toBeUndefined();
-    expect(call).not.toHaveBeenCalled();
-    expect(f.session.getActiveToolNames()).toEqual([]);
-
-    f.tools.push(...tools);
-    f.session.setActiveToolsByName(tools.map((tool) => tool.name));
-    f.policy.refresh();
-    await f.assemble();
-    expect(call).toHaveBeenCalledOnce();
   });
 
   it("keeps client-only model tools eligible for Decision inference", async () => {
@@ -345,30 +316,22 @@ describe("prompt assembly with registered Decision runtime", () => {
     expect(f.policy.current.tools).toHaveLength(3);
     expect(call).toHaveBeenCalledTimes(1);
   });
-  it.each(preparationBoundaries)("observes opt-out across %s preparation", async (boundary) => {
+  it("observes opt-out across operator preparation", async () => {
     let revoked = false;
     const cfg = config();
     setRuntimeConfigSnapshot(cfg);
     const { call, ...f } = await fixture(cfg);
-    if (boundary === "steering") {
-      vi.mocked(leasePendingAgentSteeringItems).mockImplementationOnce(async () => {
+    const original = operatorInvocation.captureAmbientGatewayOperatorAuthority;
+    const capture = vi
+      .spyOn(operatorInvocation, "captureAmbientGatewayOperatorAuthority")
+      .mockImplementationOnce(async (params) => {
+        const authority = await original(params);
+        expect(call.mock.calls.length, "operator barrier must precede provider I/O").toBe(0);
         setRuntimeConfigSnapshot(config(false));
         revoked = true;
-        return undefined;
+        return authority;
       });
-    } else {
-      const original = operatorInvocation.captureAmbientGatewayOperatorAuthority;
-      const capture = vi
-        .spyOn(operatorInvocation, "captureAmbientGatewayOperatorAuthority")
-        .mockImplementationOnce(async (params) => {
-          const authority = await original(params);
-          expect(call.mock.calls.length, "operator barrier must precede provider I/O").toBe(0);
-          setRuntimeConfigSnapshot(config(false));
-          revoked = true;
-          return authority;
-        });
-      onTestFinished(() => capture.mockRestore());
-    }
+    onTestFinished(() => capture.mockRestore());
     await f.assemble({ sessionKey: "agent:main:consent-transition" });
     expect(revoked).toBe(true);
     expect(call).not.toHaveBeenCalled();

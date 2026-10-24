@@ -815,7 +815,7 @@ describe("session.message websocket events", () => {
             messages: [userTurn(messageId, text)],
           },
         );
-        expect(persisted.appendedCount).toBe(1);
+        expect(persisted.messages.filter((m) => m.appended)).toHaveLength(1);
         for (const delivery of await Promise.all(deliveries)) {
           expectRecordFields(delivery.payload, {
             messageId,
@@ -1027,7 +1027,7 @@ describe("session.message websocket events", () => {
         messages: [userTurn(earlierMessage.id, earlierMessage.text, 1_699_999_999_999)],
       },
     );
-    expect(seeded.appendedCount).toBe(1);
+    expect(seeded.messages.filter((m) => m.appended)).toHaveLength(1);
 
     const webWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
     const tuiWs = await harness.openWs();
@@ -1071,7 +1071,7 @@ describe("session.message websocket events", () => {
         { agentId: "main", sessionId, sessionKey, storePath },
         committedTurn,
       );
-      expect(persisted.appendedCount).toBe(committedMessages.length);
+      expect(persisted.messages.filter((m) => m.appended)).toHaveLength(committedMessages.length);
 
       for (const [clientIndex, clientDeliveries] of deliveriesByClient.entries()) {
         const frames = await Promise.all(clientDeliveries);
@@ -1120,7 +1120,7 @@ describe("session.message websocket events", () => {
         { agentId: "main", sessionId, sessionKey, storePath },
         committedTurn,
       );
-      expect(replayed.appendedCount).toBe(0);
+      expect(replayed.messages.filter((m) => m.appended)).toHaveLength(0);
       await expect(Promise.all(duplicateDeliveries)).resolves.toEqual([false, false]);
     } finally {
       webWs.close();
@@ -1213,7 +1213,7 @@ describe("session.message websocket events", () => {
               updateMode: "file-only",
             },
           );
-          expect(committed.appendedCount).toBe(2);
+          expect(committed.messages.filter((m) => m.appended)).toHaveLength(2);
 
           for (const frame of await Promise.all(invalidations)) {
             const payload = requireRecord(frame.payload, "identity-only transcript invalidation");

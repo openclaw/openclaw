@@ -38,6 +38,7 @@ export function ModelProvidersContent(props: { controller: ModelProvidersOwner }
         <ModelProviders
           {...current().props}
           defaultsSaving={props.controller.mutations.defaultsSaving()}
+          defaultsSavingField={props.controller.mutations.defaultsSavingField()}
           logoutSaving={props.controller.logoutSaving()}
           providerDetailsReady={showProviderDetails()}
           accountRecovery={<Recovery />}

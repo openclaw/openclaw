@@ -1,3 +1,4 @@
+import { isOwnedTranscriptPayload } from "../config/sessions/transcript-json.js";
 import type { PluginHookName } from "./types.js";
 
 export class HookIsolationError extends Error {}
@@ -18,7 +19,7 @@ function containsSharedMemory(value: unknown, seen: Set<object>, sourceData = fa
       Reflect.get(prototype, "buffer", value) instanceof SharedArrayBuffer
     );
   }
-  if (value instanceof ArrayBuffer) {
+  if (value instanceof ArrayBuffer || isOwnedTranscriptPayload(value)) {
     return false;
   }
   const webAssemblyMemory = (
@@ -29,11 +30,10 @@ function containsSharedMemory(value: unknown, seen: Set<object>, sourceData = fa
   if (
     webAssemblyMemory &&
     value instanceof webAssemblyMemory &&
-    typeof SharedArrayBuffer !== "undefined"
+    typeof SharedArrayBuffer !== "undefined" &&
+    Reflect.get(webAssemblyMemory.prototype, "buffer", value) instanceof SharedArrayBuffer
   ) {
-    if (Reflect.get(webAssemblyMemory.prototype, "buffer", value) instanceof SharedArrayBuffer) {
-      return true;
-    }
+    return true;
   }
   if (seen.has(value)) {
     return false;
@@ -89,8 +89,8 @@ function containsSharedMemory(value: unknown, seen: Set<object>, sourceData = fa
 
 export function cloneHookIsolationValue<T>(hookName: PluginHookName, value: T): T {
   try {
-    // The pinned Bun clone omits Error.cause. Validate source data edges too;
-    // accessors are evaluated only once, by the native clone below.
+    // Bun omits Error.cause, so scan unowned source edges too; owned transcript JSON is frozen.
+    // Accessors run only in the native clone; its unowned result is fully scanned below.
     if (containsSharedMemory(value, new Set<object>(), true)) {
       throw new TypeError("shared memory cannot be isolated");
     }

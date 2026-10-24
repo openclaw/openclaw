@@ -331,6 +331,7 @@ export async function prepareWorkspaceStageInput(input: WorkspaceStageInput<stri
       stagingRoot: input.stagingRoot,
       stagedResultRef: input.stagedResultRef,
       buildCacheInputs: input.buildCacheInputs,
+      gitHistory: input.gitHistory,
       ...("publication" in input
         ? {
             publication: {

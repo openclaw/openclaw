@@ -11,6 +11,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import {
   acquireGatewayTestWebSocket,
   closeGatewayTestWebSocket,
@@ -223,6 +224,7 @@ async function createSessionPortalProof() {
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
     gateway = await createGatewaySuiteHarness();
     await gateway.server.startupSettled;
+    await waitForGatewayStartup(gateway.port);
     const { port } = gateway;
     const startup = runtimeFactory.mock.calls.at(-1)?.[0];
     assert(startup, "Gateway must create its real worker runtime");

@@ -1292,10 +1292,9 @@ function resolveZaloEntries<T>(
 export async function resolveZaloGroupsByEntries(params: {
   profile?: string | null;
   entries: string[];
-  credentialPersistence?: CredentialPersistenceMode;
 }): Promise<Array<{ input: string; resolved: boolean; id?: string }>> {
   const groups = await listZaloGroups(params.profile, {
-    credentialPersistence: params.credentialPersistence ?? "persist",
+    credentialPersistence: "read-only",
   });
   const byName = buildZaloNameIndex(groups, (group) => group.name);
 
@@ -1305,10 +1304,9 @@ export async function resolveZaloGroupsByEntries(params: {
 export async function resolveZaloAllowFromEntries(params: {
   profile?: string | null;
   entries: string[];
-  credentialPersistence?: CredentialPersistenceMode;
 }): Promise<Array<{ input: string; resolved: boolean; id?: string; note?: string }>> {
   const friends = await listZaloFriends(params.profile, {
-    credentialPersistence: params.credentialPersistence ?? "persist",
+    credentialPersistence: "read-only",
   });
   const byName = buildZaloNameIndex(friends, (friend) => friend.displayName);
 

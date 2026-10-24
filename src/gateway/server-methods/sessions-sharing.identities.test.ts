@@ -25,8 +25,8 @@ import {
   runOpenClawAgentWriteAdmission,
 } from "../../state/openclaw-agent-write-admission.js";
 import * as userProfileReads from "../../state/user-profile-reads.js";
-import { setDisplayName } from "../../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { setDisplayName, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createBoardViewTicket } from "../board-view-ticket.js";
 import {
   bindSessionRowProjection,
@@ -96,17 +96,27 @@ it("lists sharing evidence and adds members independently of placement display f
     bindSessionRowProjection(requestContext, () => projection);
     try {
       await projection.ensureMaterialized();
-      const expected = await call("session.members.listEvidence", { sessionKey }, requestContext);
-      expect(expected[0]?.[1]).toMatchObject({
+      const expectedEvidence = await call(
+        "session.members.listEvidence",
+        { sessionKey },
+        requestContext,
+      );
+      const expectedLegacy = await call("session.members.list", { sessionKey }, requestContext);
+      expect(expectedEvidence[0]?.[1]).toMatchObject({
         members: [{ identityId: "guest", addedBy: "owner", addedAt: 1 }],
+        permissions: [],
       });
+      expect(expectedLegacy[0]?.[1]).not.toHaveProperty("permissions");
       vi.spyOn(placements, "readProjection").mockRejectedValue(
         new Error("placement display unavailable"),
       );
       sessionChanges.emit({ all: true, scope: "worker-placements" });
-      for (const method of ["session.members.listEvidence", "session.members.list"] as const) {
-        expect(await call(method, { sessionKey }, requestContext)).toEqual(expected);
-      }
+      expect(await call("session.members.listEvidence", { sessionKey }, requestContext)).toEqual(
+        expectedEvidence,
+      );
+      expect(await call("session.members.list", { sessionKey }, requestContext)).toEqual(
+        expectedLegacy,
+      );
       expect(
         await call("session.members.add", { sessionKey, identityId: member.id }, requestContext),
       ).toEqual([[true, { ok: true, sessionKey, identityId: member.id }, undefined]]);
@@ -628,4 +638,167 @@ it("authorizes tickets against their signed agent and issuing Gateway", () =>
     gatewayAActive = false;
     await expectTargetRequired(undefined, gatewayA, "board.event");
     await expectTargetRequired(memberClient, gatewayA, "board.action", unscopedTicket);
+  }));
+
+it("projects current participation and exact choices through the sharing handlers", () =>
+  withState(async () => {
+    const owner = ensureProfileForEmail("owner@example.test");
+    const gatewayOwner = ensureGatewayOwnerProfile("Gateway owner");
+    const baseline = ensureProfileForEmail("baseline@example.test");
+    const explicit = ensureProfileForEmail("explicit@example.test");
+    const inherited = ensureProfileForEmail("inherited@example.test");
+    const viewOnly = ensureProfileForEmail("view-only@example.test");
+    const limited = ensureProfileForEmail("limited@example.test");
+    const denied = ensureProfileForEmail("denied@example.test");
+    const sandboxed = ensureProfileForEmail("sandboxed@example.test");
+    const wrongAgent = ensureProfileForEmail("other-agent@example.test");
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "baseline",
+          definitions: {
+            baseline: {
+              sessions: { others: "suggest" },
+              agents: "*",
+              scopes: ["operator.read", "operator.write"],
+            },
+            writer: {
+              sessions: { others: "write" },
+              agents: "*",
+              scopes: ["operator.read", "operator.write"],
+            },
+            viewOnly: {
+              sessions: { others: "view" },
+              agents: "*",
+              scopes: ["operator.read", "operator.write"],
+            },
+            limited: { sessions: { others: "suggest" }, agents: "*", scopes: ["operator.read"] },
+            denied: {
+              sessions: { others: "none" },
+              agents: "*",
+              scopes: ["operator.read", "operator.write"],
+            },
+            sandboxed: {
+              sessions: { others: "write" },
+              agents: "*",
+              scopes: ["operator.read", "operator.write"],
+              sandbox: "required",
+            },
+            otherAgent: {
+              sessions: { others: "write" },
+              agents: ["other"],
+              scopes: ["operator.read", "operator.write"],
+            },
+          },
+        },
+      },
+    };
+    for (const [profile, role] of [
+      [inherited, "writer"],
+      [limited, "limited"],
+      [viewOnly, "viewOnly"],
+      [denied, "denied"],
+      [sandboxed, "sandboxed"],
+      [wrongAgent, "otherAgent"],
+    ] as const) {
+      setUserProfileRole(profile.id, role);
+    }
+    setRuntimeConfigSnapshot(cfg);
+    const sessionKey = "agent:main:permissions";
+    await seed(sessionKey, "permissions", {
+      visibility: "read-only",
+      createdActor: { type: "human", source: "profile", id: owner.id },
+    });
+    let requestContext = context(vi.fn(), cfg);
+    const client = identifiedClient(owner.id);
+    const invoke = (method: Parameters<typeof call>[0], params: Record<string, unknown> = {}) =>
+      call(method, { sessionKey, ...params }, requestContext, client);
+    const read = async () => {
+      const result = await invoke("session.members.listEvidence");
+      expect(result[0]?.[0]).toBe(true);
+      return Value.Decode(SessionMembersListEvidenceResultSchema, result[0]?.[1]);
+    };
+    await invoke("session.members.add", { identityId: explicit.id });
+    const first = await read();
+    const permission = (id: string) => first.permissions?.find((row) => row.identityId === id);
+    expect(permission(baseline.id)).toEqual({
+      identityId: baseline.id,
+      level: "read",
+      options: ["read", "send"],
+    });
+    expect(permission(explicit.id)).toEqual({
+      identityId: explicit.id,
+      level: "send",
+      options: ["read", "send"],
+    });
+    expect(permission(inherited.id)).toEqual({
+      identityId: inherited.id,
+      level: "send",
+      options: ["send"],
+    });
+    expect(permission(limited.id)).toEqual({
+      identityId: limited.id,
+      level: "read",
+      options: ["read"],
+    });
+    expect(permission(sandboxed.id)).toEqual({
+      identityId: sandboxed.id,
+      level: "read",
+      options: ["read"],
+    });
+    expect(permission(wrongAgent.id)).toEqual({
+      identityId: wrongAgent.id,
+      level: "read",
+      options: ["read"],
+    });
+    expect(permission(denied.id)).toBeUndefined();
+    expect(permission(owner.id)).toBeUndefined();
+    expect(permission(gatewayOwner.id)).toBeUndefined();
+
+    await invoke("session.members.add", { identityId: baseline.id });
+    expect((await read()).permissions).toContainEqual({
+      identityId: baseline.id,
+      level: "send",
+      options: ["read", "send"],
+    });
+    await invoke("session.members.remove", { identityId: baseline.id });
+    await invoke("session.visibility.set", { visibility: "suggest" });
+    expect((await read()).permissions).toContainEqual({
+      identityId: baseline.id,
+      level: "suggest",
+      options: ["suggest", "send"],
+    });
+    expect((await read()).permissions).toContainEqual({
+      identityId: viewOnly.id,
+      level: "read",
+      options: ["read", "send"],
+    });
+    setUserProfileRole(baseline.id, "writer");
+    expect((await read()).permissions).toContainEqual({
+      identityId: baseline.id,
+      level: "send",
+      options: ["send"],
+    });
+
+    for (const visibility of ["shared", "draft"] as const) {
+      await invoke("session.visibility.set", { visibility });
+      expect((await read()).permissions).toEqual([]);
+    }
+    await invoke("session.visibility.set", { visibility: "read-only" });
+    const unconfiguredCfg = {};
+    setRuntimeConfigSnapshot(unconfiguredCfg);
+    requestContext = context(vi.fn(), unconfiguredCfg);
+    const unconfigured = await read();
+    expect(unconfigured.permissions).toContainEqual({
+      identityId: baseline.id,
+      level: "read",
+      options: ["read", "send"],
+    });
+    expect(unconfigured.permissions).toContainEqual({
+      identityId: explicit.id,
+      level: "send",
+      options: ["read", "send"],
+    });
+    const legacy = await invoke("session.members.list");
+    expect(legacy[0]?.[1]).not.toHaveProperty("permissions");
   }));

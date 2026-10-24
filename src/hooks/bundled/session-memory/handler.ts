@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   normalizeOptionalString,
   normalizeLowercaseStringOrEmpty,
@@ -286,7 +287,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
             preparedRunAdmission.close();
           }
         } catch (err) {
-          const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+          const message = err instanceof Error ? formatErrorStackWithMessage(err) : String(err);
           slugGeneratorLog.error(`Failed to generate slug: ${message}`);
         }
       }

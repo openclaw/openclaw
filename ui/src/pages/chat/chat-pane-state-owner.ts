@@ -223,6 +223,7 @@ export abstract class ChatPaneStateOwner {
   sessionKey = "";
   // This session-keyed pane retains its initial skeleton through URL canonicalization.
   routeLoadingSkeleton = false;
+  deferSnapshotRows = false;
   routeResolutionPending = false;
   agentId?: string = undefined;
   inputRegion: ChatInputRegion = "page";

@@ -58,9 +58,6 @@ export type SubagentCompletionDeliveryState = {
   windowStartedAt?: number;
   deadlineAt?: number;
   nextAttemptAt?: number;
-  steeringLeaseId?: string;
-  steeringLeasedAt?: number;
-  steeringInjectedAt?: number;
   suspendedAt?: number;
   suspendedReason?: "expiry" | "permanent_failure";
   dismissedAt?: number;

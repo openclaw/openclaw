@@ -9,9 +9,9 @@ import {
   CONTROL_UI_PERFORMANCE_BUDGETS,
   collectControlUiPerformanceMetrics as collectMetrics,
   evaluateControlUiPerformanceBudgets as evaluateBudgets,
-  extractControlUiStartupAssetPaths as extractStartupAssets,
   formatControlUiPerformanceReport as formatReport,
 } from "../../scripts/check-control-ui-performance.mts";
+import { extractControlUiStartupAssetPaths as extractStartupAssets } from "../../ui/config/control-ui-startup-assets.ts";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
@@ -19,6 +19,7 @@ import { createNestedGitEnv } from "../helpers/temp-repo.js";
 const tsxImport = new URL("../../scripts/tsx.mjs", import.meta.url).href;
 const performanceSources = [
   "scripts/check-control-ui-performance.mts",
+  "ui/config/control-ui-startup-assets.ts",
   "src/gateway/control-ui-route-preloads.ts",
   ...[
     "check-limits.mts",
@@ -120,6 +121,12 @@ describe("Control UI performance budgets", () => {
 
   function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
     const rootDir = tempDirs.make("openclaw-control-ui-budget-cli-");
+    fs.mkdirSync(path.join(rootDir, "node_modules"));
+    fs.symlinkSync(
+      fs.realpathSync(path.resolve("ui/node_modules/pako")),
+      path.join(rootDir, "node_modules/pako"),
+      "junction",
+    );
     const baselinePath = path.join(rootDir, baselineName);
     fs.mkdirSync(path.dirname(baselinePath), { recursive: true });
     const { distDir, writeAsset, writeHtml } = createDistFixture(
@@ -170,6 +177,16 @@ describe("Control UI performance budgets", () => {
     return JSON.parse(result.stdout);
   }
 
+  it("attributes startup without requiring route preload templates", () => {
+    const fixture = createCliFixture();
+    const result = jsonCli(fixture, ["--module-attribution"]);
+    expect(result.moduleAttribution.startup).toMatchObject({
+      shippedGzipBytes: 65,
+      missingSourceMaps: ["assets/index-a.js"],
+    });
+    expect(Object.keys(result.moduleAttribution)).toEqual(["startup"]);
+  });
+
   beforeAll(async () => {
     const { rootDir } = createCliFixture();
     const { bundles } = await compileFixture(rootDir, [scriptName], { write: false });
@@ -201,6 +218,16 @@ describe("Control UI performance budgets", () => {
         <link rel="manifest" href="./manifest.webmanifest">
       `),
     ).toEqual(["assets/index-abc.css", "assets/index-abc.js", "assets/runtime-def.js"]);
+  });
+
+  it("counts identity bytes for each missing compression sidecar", () => {
+    const { distDir } = createStartupFixture();
+    fs.unlinkSync(path.join(distDir, "assets/index-a.js.gz"));
+    fs.unlinkSync(path.join(distDir, "assets/index-c.css.br"));
+    expect(collectMetrics(distDir).startup).toMatchObject({
+      js: { rawBytes: 100, gzipBytes: 100, brotliBytes: 30 },
+      css: { rawBytes: 50, gzipBytes: 15, brotliBytes: 50 },
+    });
   });
 
   it("counts route boot preloads once without changing the initial-entry budget", () => {
@@ -558,6 +585,36 @@ describe("Control UI performance budgets", () => {
       fs.truncateSync(gzipPath, originalBytes);
     }
   });
+
+  it.each([
+    { baselineBytes: 315_881, limit: 316_457 },
+    { baselineBytes: 311_544, limit: 312_120 },
+  ])(
+    "enforces unchanged startup allowances for a $baselineBytes B baseline",
+    ({ baselineBytes, limit }) => {
+      const fixture = createCliFixture();
+      // Synthetic assets and their baseline must not depend on the live build ratchet.
+      fs.writeFileSync(fixture.baselinePath, JSON.stringify(startupBaseline(baselineBytes)));
+      const assetsDir = path.join(fixture.distDir, "assets");
+      writeAssetAt(assetsDir, "index-a.js", 200_000, 200_000, 200_000);
+      writeAssetAt(assetsDir, "runtime-b.js", limit - 200_000);
+      fs.appendFileSync(path.join(fixture.distDir, "index.html"), preload("runtime-b.js"));
+
+      expect(jsonCli(fixture)).toMatchObject({
+        budgets: { startupJsGzipBytes: 325_131 },
+        startupBudgetBaseline: { startupJsGzipBytes: baselineBytes },
+        startupJsTolerance: 512,
+        startupJsBuildVariance: 64,
+        metrics: { startup: { js: { gzipBytes: limit, requests: 2 } } },
+        violations: [],
+      });
+
+      fs.appendFileSync(path.join(assetsDir, "index-a.js.gz"), "x");
+      expect(jsonCli(fixture, [], 1).violations).toEqual([
+        { metric: "startup JS gzip", actual: limit + 1, limit, unit: "bytes" },
+      ]);
+    },
+  );
 
   it("updates the baseline from generated or explicitly measured metrics", () => {
     const { run, baselinePath, distDir } = createCliFixture();

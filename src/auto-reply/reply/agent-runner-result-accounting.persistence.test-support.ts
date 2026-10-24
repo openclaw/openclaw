@@ -19,7 +19,6 @@ import type {
   AgentTurnExecutionResult,
 } from "./agent-runner-execution.types.js";
 import { accountAgentTurn, accountFollowupTurn } from "./agent-runner-result-accounting.js";
-import { completeReplyAgentRun } from "./agent-runner-result-complete.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { createReplyParams } from "./agent-runner-steer-adoption.test-support.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
@@ -336,23 +335,8 @@ export async function createAgentAccountingPersistenceFixture({
       setMeta({ contextTokens: 1_000, contextBudgetStatus: diagnostic, ...meta });
       if (lane === "ordinary") {
         await withCompletion(async (completion) => {
-          const current = { ...context, completion };
-          const accounting = await accountAgentTurn(current);
-          await completeReplyAgentRun({
-            context: current,
-            accounting,
-            prepared: {
-              kind: "continue",
-              activeSessionEntry: accounting.activeSessionEntry,
-              replyCompletion: { expectation: "required", outcome: "delivered" },
-              // The reply was already delivered; exercise completion bookkeeping
-              // without creating another pending delivery intent.
-              completedSourceReplyDelivery: true,
-              reminderNoteAppended: false,
-              guardedReplyPayloads: [],
-              responseUsageLine: undefined,
-            },
-          });
+          await accountAgentTurn({ ...context, completion });
+          await completion?.complete();
         });
       } else {
         turn.preflightCompactionApplied = context.preflightCompactionApplied === true;

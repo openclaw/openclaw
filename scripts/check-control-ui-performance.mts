@@ -7,6 +7,7 @@ import {
   CONTROL_UI_ROUTE_PRELOAD_ATTRIBUTE,
   selectControlUiRoutePreloads,
 } from "../src/gateway/control-ui-route-preloads.ts";
+import { extractControlUiStartupAssetPaths } from "../ui/config/control-ui-startup-assets.ts";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { isRecord } from "./lib/record-shared.mjs";
@@ -59,13 +60,15 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Separate panel headers and defer Labs/Usage copy: 1,324,362 B Chat / 814,674 B New.
-  // Preserve main's relative headroom against the matched 721d124 build.
-  chatBootJsGzipBytes: 1_373_793,
-  newBootJsGzipBytes: 822_617,
+  // Defer optional root English: matched bf93c438 1,269,817 to 1,268,099 B Chat.
+  // New Session 763,598 to 761,956 B; preserve each surface's relative headroom.
+  chatBootJsGzipBytes: 1_357_842,
+  newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
-  startupJsGzipBytes: 325_081,
+  // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
+  // The separate 512 B growth and 64 B build-variance allowances are unchanged.
+  startupJsGzipBytes: 325_131,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
@@ -76,48 +79,20 @@ const controlUiPerformanceBudgets = {
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
-function controlUiAssetPathFromUrl(value: string): string | null {
-  const normalized = value.split(/[?#]/u, 1)[0]?.replace(/\\/gu, "/") ?? "";
-  const markerIndex = normalized.lastIndexOf("assets/");
-  if (markerIndex === -1) {
-    return null;
-  }
-  const assetPath = normalized.slice(markerIndex);
-  if (assetPath.includes("../") || !/\.(?:css|js)$/u.test(assetPath)) {
-    return null;
-  }
-  return assetPath;
-}
-
-export function extractControlUiStartupAssetPaths(html: string): string[] {
-  const assets = new Set<string>();
-  for (const tag of html.matchAll(/<(?:link|script)\b[^>]*>/giu)) {
-    const attribute = tag[0].match(/\s(?:href|src)\s*=\s*["']([^"']+)["']/iu);
-    const assetPath = attribute?.[1] ? controlUiAssetPathFromUrl(attribute[1]) : null;
-    if (assetPath) {
-      assets.add(assetPath);
-    }
-  }
-  return [...assets].toSorted((left, right) => left.localeCompare(right));
-}
-
 function readAssetMetrics(assetsDir: string, entry: fs.Dirent) {
   const file = `assets/${entry.name}`;
   const sourcePath = path.join(assetsDir, entry.name);
   const gzipPath = `${sourcePath}.gz`;
   const brotliPath = `${sourcePath}.br`;
-  for (const sidecarPath of [gzipPath, brotliPath]) {
-    if (!fs.existsSync(sidecarPath)) {
-      throw new Error(`Control UI performance check missing ${path.basename(sidecarPath)}`);
-    }
-  }
+  const rawBytes = fs.statSync(sourcePath).size;
   const type = entry.name.endsWith(".js") ? "js" : "css";
   return {
     file,
     type,
-    rawBytes: fs.statSync(sourcePath).size,
-    gzipBytes: fs.statSync(gzipPath).size,
-    brotliBytes: fs.statSync(brotliPath).size,
+    rawBytes,
+    // The Gateway serves identity when a requested compression sidecar is absent.
+    gzipBytes: fs.statSync(gzipPath, { throwIfNoEntry: false })?.size ?? rawBytes,
+    brotliBytes: fs.statSync(brotliPath, { throwIfNoEntry: false })?.size ?? rawBytes,
   };
 }
 
@@ -497,7 +472,7 @@ export function formatControlUiPerformanceReport(
   );
   const lines = [
     "Control UI performance:",
-    `  measurement: shipped gzip sidecars; Node ${process.version}`,
+    `  measurement: shipped sidecars with identity fallback; Node ${process.version}`,
     `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(startupJsLimits.enforcementLimit)} gzip / ${startupJsLimits.enforcementLimit} B)`,
   ];
   if (startupBudgetBaseline) {
@@ -805,10 +780,10 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   if (moduleAttribution) {
     const { collectControlUiModuleAttribution, formatControlUiModuleAttribution } =
       await import("./lib/control-ui-module-attribution.mts");
-    if (!result.metrics.routeBoot) {
-      throw new Error("Module attribution requires a build with route preload templates");
-    }
-    attribution = collectControlUiModuleAttribution(distDir, result.metrics.routeBoot);
+    attribution = collectControlUiModuleAttribution(distDir, {
+      startup: result.metrics.startup,
+      ...result.metrics.routeBoot,
+    });
     result.report += `\n${formatControlUiModuleAttribution(attribution)}`;
   }
   if (json) {

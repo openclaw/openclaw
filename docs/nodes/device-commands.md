@@ -26,8 +26,6 @@ Notes:
 - The agent-facing path is [`show_widget`](/tools/show-widget) with
   `presentation.target: "node_panel"`; use the CLI helpers for direct operator
   control.
-- A2UI renders on [session dashboards](/web/dashboards), not through node
-  Canvas commands.
 
 ## Photos + videos (node camera)
 

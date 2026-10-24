@@ -758,8 +758,26 @@ describe("host-owned current admission annotation", () => {
   it("refuses conflicting native provenance without rewriting again", async () => {
     await withAdmission(async (f) => {
       await f.annotate();
-      await f.expectRefused({ ...nativeAnnotation(), mirrorIdentity: "conflict" });
+      await f.expectRefused({ ...nativeAnnotation(), mirrorOrigin: "other-harness" });
     });
+  });
+
+  it("refuses a native annotation recorded for another run", async () => {
+    await withAdmission(
+      async (f) => {
+        await f.expectRefused(undefined, "recorded provenance");
+      },
+      {
+        beforeMessageWrite: ({ message }) => ({
+          ...message,
+          __openclaw: {
+            ...asOptionalRecord(Reflect.get(message, "__openclaw")),
+            ...nativeAnnotation(),
+            runId: "another-run",
+          },
+        }),
+      },
+    );
   });
 
   it("does not rerun admission hooks or bless their content edits", async () => {

@@ -96,6 +96,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       ),
   });
   const { snapshot, baseConfig: baseCfg } = preflight;
+  if (!shouldRepair && !params.options.json) {
+    const { collectRecoveryDiskUsage, formatRecoveryDiskUsage } =
+      await import("./recovery-disk-usage.js");
+    note(
+      formatRecoveryDiskUsage(collectRecoveryDiskUsage({ cfg: baseCfg, env: process.env })),
+      "Recovery copies (read-only)",
+    );
+  }
   preparingResources.use(preflight.pluginCache);
   if (!snapshot.exists || snapshot.valid) {
     await setAppliedRuntimeConfigSnapshot(snapshot.runtimeConfig, snapshot.sourceConfig);
@@ -591,6 +599,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(notes.sanitizeDoctorNote(mutableAllowlistWarnings.join("\n")), "Doctor warnings");
   }
 
+  // Retain normalized source facts before retirement removes heartbeat settings.
   const modelBillingRouteConfig = state.candidate;
   state = await applyRetiredConfigStep({
     state,
@@ -688,6 +697,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     [Symbol.asyncDispose]: () => resources.disposeAsync(),
     ...finalized,
     cfg,
+    heartbeatMigrationSource: modelBillingRouteConfig,
     ...(shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
       ? {
           confirmedConfigSource: {

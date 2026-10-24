@@ -70,11 +70,6 @@ apps/macos-mlx-tts/.build/**
 apps/ios/*.xcfilelist
 
 # Vendor build artifacts
-vendor/a2ui/renderers/lit/dist/
-src/canvas-host/a2ui/*.bundle.js
-src/canvas-host/a2ui/*.map
-extensions/canvas/src/host/a2ui/*.bundle.js
-extensions/canvas/src/host/a2ui/*.map
 .bundle.hash
 
 # fastlane (iOS)

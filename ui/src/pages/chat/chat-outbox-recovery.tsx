@@ -2,7 +2,9 @@ import { action, createMemo, createOptimistic, createSignal, For, onSettled, Sho
 import type { SessionsListResult } from "../../api/types.ts";
 import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import type { DurableComposerRecoveryEntry } from "../../lib/chat/composer-draft-store.runtime.ts";
+import "../../styles/chat/outbox-recovery.css";
 import {
   captureChatOutboxRecoveryDestination,
   discardChatOutboxRecovery,
@@ -11,7 +13,6 @@ import {
   retireDeliveredChatOutboxRecovery,
   type ChatOutboxRecoveryEntry,
 } from "../../lib/chat/outbox-recovery.ts";
-import "../../styles/chat/outbox-recovery.css";
 import {
   parseStoredChatOutboxScope,
   storageTargetForGateway,
@@ -19,10 +20,12 @@ import {
   subscribeStoredChatOutboxChanges,
 } from "../../lib/chat/outbox-store.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 type RecoveryEntry = ChatOutboxRecoveryEntry | DurableComposerRecoveryEntry;
 type RecoveryHost = Parameters<typeof captureChatOutboxRecoveryDestination>[0] &

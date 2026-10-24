@@ -63,12 +63,15 @@ import {
   type AbortedPartialSnapshot,
 } from "./chat-aborted-partial.js";
 import { persistAbortedPartials } from "./chat-transcript-persistence.js";
+import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type ChatAbortLifecycle = {
+  /** Internal composition may advance only after this exact run was cancelled. */
+  onExactRunAborted?: (runId: string) => void;
   onDescendantsCancelled?: (
     result: NonNullable<Awaited<ReturnType<typeof abortControlledSubagents>>>,
   ) => void;
@@ -93,10 +96,10 @@ export async function handleChatAbortRequestWithLifecycle(
   }
   const { sessionKey: rawSessionKey, runId, preserveSideRuns, discardPendingInput } = params;
   if (discardPendingInput && !runId) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "discardPendingInput requires an exact runId"),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      "discardPendingInput requires an exact runId",
     );
     return;
   }
@@ -118,15 +121,12 @@ export async function handleChatAbortRequestWithLifecycle(
     ? (agentIdOverride ?? normalizeAgentId(parsedAbortSessionKey.agentId))
     : bareSessionAgentResolution?.agentId;
   if (!abortAgentId) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        rawSessionKey.trim().toLowerCase() === "global"
-          ? "agentId is required for global chat.abort when no compatibility owner exists"
-          : "agentId is required for unscoped chat.abort when no compatibility owner exists",
-      ),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      rawSessionKey.trim().toLowerCase() === "global"
+        ? "agentId is required for global chat.abort when no compatibility owner exists"
+        : "agentId is required for unscoped chat.abort when no compatibility owner exists",
     );
     return;
   }
@@ -135,13 +135,10 @@ export async function handleChatAbortRequestWithLifecycle(
     parsedAbortSessionKey &&
     normalizeAgentId(parsedAbortSessionKey.agentId) !== normalizeAgentId(agentIdOverride)
   ) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `agentId "${agentIdOverride}" does not match session key "${rawSessionKey}"`,
-      ),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      `agentId "${agentIdOverride}" does not match session key "${rawSessionKey}"`,
     );
     return;
   }
@@ -151,13 +148,10 @@ export async function handleChatAbortRequestWithLifecycle(
     storeAgentId: abortAgentId,
   });
   if (discardPendingInput && isIncognitoSessionKey(canonicalAbortSessionKey)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "Removing accepted queued input is unavailable in incognito sessions. Use Stop to cancel it.",
-      ),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      "Removing accepted queued input is unavailable in incognito sessions. Use Stop to cancel it.",
     );
     return;
   }
@@ -171,11 +165,7 @@ export async function handleChatAbortRequestWithLifecycle(
       admittedTarget.sessionKey !== canonicalAbortSessionKey ||
       admittedTarget.agentId !== normalizeAgentId(abortAgentId))
   ) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "session target is unavailable"),
-    );
+    respondError(respond, ErrorCodes.INVALID_REQUEST, "session target is unavailable");
     return;
   }
   const requiredSessionId = narrow ? admittedTarget?.sessionId : undefined;
@@ -217,7 +207,7 @@ export async function handleChatAbortRequestWithLifecycle(
       prepareAbortSession,
     );
     if (res.unauthorized) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "unauthorized");
       return;
     }
     if (res.descendants?.killed || res.descendants?.continuationRetired) {
@@ -261,7 +251,7 @@ export async function handleChatAbortRequestWithLifecycle(
           ? "unauthorized"
           : undefined;
     if (rejection) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, rejection));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, rejection);
       return;
     }
     // Routing has no physical session yet. Cancel only this captured source, never
@@ -329,7 +319,7 @@ export async function handleChatAbortRequestWithLifecycle(
       narrow,
     });
     if (rejection) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, rejection));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, rejection);
     }
     return rejection === undefined;
   };
@@ -432,7 +422,10 @@ export async function handleChatAbortRequestWithLifecycle(
     assertCurrent();
     const settlement = workerCancellation.cancel({
       assertCurrent,
-      onCancelled: (id) => workerRunIds.add(id),
+      onCancelled: (id) => {
+        workerRunIds.add(id);
+        lifecycle.onExactRunAborted?.(id);
+      },
     });
     workerSettlement = settlement;
     void settlement.catch(() => undefined);
@@ -524,7 +517,7 @@ export async function handleChatAbortRequestWithLifecycle(
           !identity.sessionId ||
           !canRequesterAbortChatRun(target, requester, { requireOwnerMatch: true })
         ) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+          respondError(respond, ErrorCodes.INVALID_REQUEST, "unauthorized");
           return;
         }
         if (!authorizeRunTarget(target)) {
@@ -566,7 +559,7 @@ export async function handleChatAbortRequestWithLifecycle(
       return;
     }
     if (!requester.isAdmin) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "unauthorized");
       return;
     }
     cancelWorker();
@@ -602,6 +595,7 @@ export async function handleChatAbortRequestWithLifecycle(
     assertCurrent,
     hookContext: stopHookContext,
     afterParent: cancelWorker,
+    onAborted: () => lifecycle.onExactRunAborted?.(runId),
     onAbortPrepared: () => {
       const text = context.chatRunState.resolveBuffer(runId, { final: true }).text;
       if (!partialSession || !text?.trim()) {

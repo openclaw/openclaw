@@ -267,8 +267,6 @@ openclaw-chat-details[mobile] {
   color: var(--muted);
 }
 .chat-details__row > span,
-.chat-details__value,
-.chat-details__value > span,
 .chat-details__creator > span:last-child,
 .chat-details__person > span:last-child {
   min-width: 0;
@@ -646,29 +644,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
   border-radius: 8px;
   background: var(--card);
 }
-.chat-details .chat-pr__header {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-}
-.chat-details .chat-pr__header .chat-pr__repo {
-  flex: 0 1 auto;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 400;
-}
-.chat-details .chat-pr__header .chat-pr__number {
-  flex: none;
-  overflow-wrap: normal;
-  white-space: nowrap;
-  line-height: 18px;
-}
-.chat-details .chat-pr__header .chat-pr__icon {
-  flex: none;
-  width: 15px;
-  height: 15px;
-}
 .chat-details .chat-pr__actions {
   flex: none;
   margin-inline-start: auto;
@@ -745,11 +720,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
   }
 }
 
-.chat-details__value {
-  display: grid;
-  gap: 2px;
-  flex: 1;
-}
 .chat-details__badge {
   color: var(--muted);
   font-size: 10px;
@@ -869,10 +839,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
 }
 .chat-environment__counts {
   margin-inline-start: auto;
-}
-.chat-environment__counts svg {
-  width: 12px;
-  height: 12px;
 }
 .chat-environment__counts > .chat-environment__added {
   color: var(--ok);

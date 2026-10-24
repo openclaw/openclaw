@@ -4,6 +4,7 @@ import type { SessionSystemPromptReport } from "../../../../../src/config/sessio
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
@@ -24,6 +25,7 @@ import {
 import { createDetailsDesktopReveal } from "./chat-details-desktop-section.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 const labelKeys = {
   messages: "contextMessages",

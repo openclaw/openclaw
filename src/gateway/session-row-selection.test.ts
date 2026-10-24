@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
 import {
   persistRegistryFixture,
@@ -38,6 +39,7 @@ import {
   type Row,
 } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import { holdSubagentExecution } from "./session-row-projection.read-fixture.test-support.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { createSessionRowEntrySelector, selectMatchingSessionRows } from "./session-row-scope.js";
 import * as childOwners from "./session-utils-core.js";
@@ -803,12 +805,17 @@ it("lists indexed children without inspecting unrelated resident ownership", asy
         task: "Synthetic child selection",
         cleanup: "keep",
         createdAt: now - 2_000,
-        execution: { status: "terminal", startedAt: now - 1_500, endedAt: now - 1_000 },
+        execution: { status: "running", startedAt: now - 1_500 },
         completion: { required: false },
         delivery: { status: "not_required" },
       });
       const runtime = run("runtime", parent);
       const runs = new Map([runtime, run("moved", other)].map((row) => [row.runId, row]));
+      using runtimeExecution = holdSubagentExecution(runtime.runId, runtime.childSessionKey);
+      using movedExecution = holdSubagentExecution("moved", key("moved"));
+      for (const controlledRun of runs.values()) {
+        subagentRuns.set(controlledRun.runId, controlledRun);
+      }
       saveSubagentRegistryToSqlite(runs);
       const release = retainSessionListForegroundWork();
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
@@ -838,6 +845,7 @@ it("lists indexed children without inspecting unrelated resident ownership", asy
           0,
         );
         runs.set(runtime.runId, { ...runtime, controllerSessionKey: other });
+        subagentRuns.set(runtime.runId, runs.get(runtime.runId)!);
         persistRegistryFixture(runs, [runtime.runId]);
         const moved = await list();
         expect(moved.sessions.map((row) => row.key)).toEqual([
@@ -850,11 +858,17 @@ it("lists indexed children without inspecting unrelated resident ownership", asy
           controllerSessionKey: undefined,
           requesterSessionKey: parent,
         });
+        subagentRuns.set(runtime.runId, runs.get(runtime.runId)!);
         persistRegistryFixture(runs, [runtime.runId]);
         expect((await list()).totalCount).toBe(4);
       } finally {
         ownership.mockRestore();
         projection.dispose();
+        runtimeExecution[Symbol.dispose]();
+        movedExecution[Symbol.dispose]();
+        for (const runId of runs.keys()) {
+          subagentRuns.delete(runId);
+        }
         release();
         clock.mockRestore();
       }

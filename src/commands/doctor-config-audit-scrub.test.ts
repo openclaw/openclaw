@@ -6,6 +6,7 @@ import {
   configAuditScrubToHealthFinding,
   configAuditScrubToRepairEffect,
   detectConfigAuditScrubIssue,
+  maybeScrubConfigAuditLog,
 } from "./doctor-config-audit-scrub.js";
 
 let tempRoot: string | null = null;
@@ -23,7 +24,7 @@ afterEach(async () => {
 });
 
 describe("detectConfigAuditScrubIssue", () => {
-  it("detects config-audit scrub work without rewriting the log", async () => {
+  it("previews config-audit scrub work and rewrites only on repair", async () => {
     const home = await makeHome();
     const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
     await fs.mkdir(path.dirname(auditPath), { recursive: true, mode: 0o700 });
@@ -47,6 +48,9 @@ describe("detectConfigAuditScrubIssue", () => {
       auditPath,
     });
     expect(await fs.readFile(auditPath, "utf8")).toBe(`${JSON.stringify(record)}\n`);
+    const env = { OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+    await maybeScrubConfigAuditLog({ shouldRepair: true, env });
+    expect(await fs.readFile(auditPath, "utf8")).not.toContain(record.argv[5]);
   });
 
   it("maps scrub work to structured findings and dry-run effects", async () => {
@@ -65,7 +69,6 @@ describe("detectConfigAuditScrubIssue", () => {
       kind: "file",
       action: "would-scrub-config-audit-log",
       target: auditPath,
-      dryRunSafe: false,
     });
   });
 });

@@ -8,6 +8,7 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { SettingsPageHeader, LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -24,6 +25,8 @@ import type {
   SessionBackfillRollbackResult,
 } from "./view-types.ts";
 import { MemoryImport } from "./view.tsx";
+
+registerRouteSubtitlesEnglish();
 
 const SESSION_BACKFILL_BATCH_DAYS = 14;
 const MEMORY_IMPORT_DOCS_URL = "https://docs.openclaw.ai/install/migrating";

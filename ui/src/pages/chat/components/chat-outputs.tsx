@@ -13,10 +13,13 @@ import {
 import type { ArtifactSummary } from "../../../../../packages/gateway-protocol/src/schema/artifacts.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
+import { registerChatOutputsEnglish } from "../../../i18n/locales/en-chat-outputs.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { SessionWorkspaceArtifacts } from "./chat-session-workspace-types.ts";
 import "./chat-outputs.css";
+
+registerEnglishCatalog(registerChatOutputsEnglish);
 
 type ChatOutputsDashboard = {
   title: string;
@@ -334,6 +337,7 @@ export function ChatOutputsMobile(props: ChatOutputsProps) {
               }
             >
               <PanelEmptyState
+                presentation="mobile"
                 icon={<Icon name="fileText" />}
                 heading={t("outputs.emptyTitle")}
                 description={t("outputs.emptyDescription")}

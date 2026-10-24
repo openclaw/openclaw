@@ -1,9 +1,16 @@
+import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { Value } from "typebox/value";
-import { expect, it, vi, type Mock } from "vitest";
+import { afterAll, expect, it, vi, type Mock } from "vitest";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 import type { createSessionsSpawnTool as SpawnToolFactory } from "./sessions-spawn-tool.js";
+
+const requireRecord = createRequireRecord("record", "expected-label");
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-spawn-guidance-");
 
 export function registerSessionsSpawnInputTests({
   createTool,
@@ -97,6 +104,34 @@ export function registerSessionsSpawnInputTests({
     expect(hoisted.inProcessCreationMock).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "rejects branch-prefixed worktree names before dispatch (visible=%s)",
+    async (visible) => {
+      const tool = createTool();
+      const input = { task: "inspect", visible, worktree: true };
+      for (const worktreeName of [
+        "codex/qa-telemetry-prompt-cache-20261016",
+        " padded ",
+        "",
+        "a".repeat(65),
+      ]) {
+        const invalid = { ...input, worktreeName };
+        expect(Value.Check(tool.parameters, invalid)).toBe(false);
+        await expect(tool.execute("invalid-worktree-name", invalid)).rejects.toThrow(
+          "worktree name must match [a-z0-9][a-z0-9-]{0,63}",
+        );
+      }
+      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+      expect(hoisted.inProcessCreationMock).not.toHaveBeenCalled();
+      expect(
+        Value.Check(tool.parameters, {
+          ...input,
+          worktreeName: "qa-telemetry-prompt-cache-20261016",
+        }),
+      ).toBe(true);
+    },
+  );
+
   it("gives an executable visible retry for visible-only parameters on a hidden spawn", async () => {
     const callGateway = mockGateway({
       key: "agent:main:dashboard:child",
@@ -161,5 +196,85 @@ export function registerSessionsSpawnInputTests({
 
     expect(result.details).toMatchObject({ status: "accepted", runId: "run-visible" });
     expect(callGateway).toHaveBeenCalledOnce();
+  });
+
+  it("registers requester target guidance in the description, not the agentId schema", () => {
+    registerAcpBackendForTest();
+    const config = {
+      acp: { defaultAgent: "codex" },
+      tools: { swarm: { defaultAgentId: "planner" } },
+      agents: {
+        defaults: { subagents: { allowAgents: ["main", "planner"] } },
+        entries: { main: {}, planner: {} },
+      },
+    };
+    const tool = createTool({ config });
+    expect(tool.description).toContain(
+      'With runtime="subagent" (default): Configured agent to target: main, planner.',
+    );
+    expect(tool.description).toContain(
+      'With collect=true, omit to target tools.swarm.defaultAgentId ("planner")',
+    );
+    expect(tool.description).toContain('With runtime="acp": ACP harness id');
+    // Codex strips schema descriptions on large tool schemas; guidance must not ride on them.
+    const schema = requireRecord(tool.parameters, "schema");
+    expect(requireRecord(schema.properties, "properties").agentId).not.toHaveProperty(
+      "description",
+    );
+    const swarmOff = createTool({
+      config: { ...config, tools: { swarm: { enabled: false, defaultAgentId: "planner" } } },
+    });
+    expect(swarmOff.description).not.toContain("collect=true");
+  });
+
+  it("narrows ACP guidance from the prepared requester fact, never a store read", async () => {
+    registerAcpBackendForTest();
+    const dir = sessionDirs.make();
+    const storePath = path.join(dir, "sessions.json");
+    const config = {
+      session: { store: storePath },
+      acp: { defaultAgent: "codex" },
+      agents: {
+        entries: { main: { subagents: { allowAgents: ["codex"], requireAgentId: true } } },
+      },
+    };
+    const narrowed = 'With runtime="acp": ACP harness id from: codex. agentId is required.';
+    const omitDefault = 'Omit to use the configured ACP default ("codex")';
+    const descriptionFor = (agentSessionKey: string, requesterIsSubagent?: boolean) =>
+      createTool({ agentSessionKey, config, requesterIsSubagent }).description;
+    // A stored subagent envelope on a non-subagent key must not narrow guidance.
+    const storedKey = "agent:main:acp:child";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: storedKey, storePath },
+      { sessionId: storedKey, updatedAt: 1, spawnedBy: "agent:main:subagent:parent" },
+    );
+    expect(descriptionFor(storedKey)).toContain(omitDefault);
+    expect(descriptionFor(storedKey, true)).toContain(narrowed);
+    expect(descriptionFor("agent:main:subagent:child")).toContain(narrowed);
+    expect(descriptionFor("agent:main:main")).toContain(omitDefault);
+  });
+
+  it("applies sender restrictions and requester policy to native and ACP guidance", () => {
+    registerAcpBackendForTest();
+    const config = {
+      acp: { defaultAgent: "main", allowedAgents: ["main"] },
+      agents: { entries: { main: { subagents: { requireAgentId: true } }, planner: {} } },
+    };
+    const description = createTool({
+      config,
+      workspaceDir: "/work",
+      inheritedToolPolicySource: "sender",
+    }).description;
+    expect(description).toContain(
+      'With runtime="subagent" (default): Sender policy allows only hidden helpers of the requester agent',
+    );
+    expect(description).toContain(
+      'With runtime="acp": ACP harness id from: main. agentId is required.',
+    );
+  });
+
+  it("adds no agentId guidance for a lone agent without ACP", () => {
+    const tool = createTool({ config: { agents: { entries: { main: {} } } } });
+    expect(tool.description).not.toContain("`agentId` targets:");
   });
 }

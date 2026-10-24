@@ -11,24 +11,9 @@ import {
 } from "./lobster-pet-plans.ts";
 import { LobsterPetTimers } from "./lobster-pet-timers.ts";
 
-// Facing, reactions, and the act loop stay owned by the pet element; the
-// controller only reports crossing milestones.
-type LobsterTrafficHooks = {
-  visitsEnabled: () => boolean;
-  passerOptions: () => LobsterPasserOptions;
-  onPasserStart: (plan: LobsterPasserPlan) => void;
-  // Fired at crossing start (toward the entry side) and mid-cross (travel
-  // direction) so the resident can watch the traffic go by.
-  onPasserFacing: (facing: 1 | -1) => void;
-  onPasserMidCross: () => void;
-  onPasserDone: () => void;
-};
-
-type LobsterBottleScene = { spotPct: number; opened: boolean; fortune: string };
-
 export class LobsterLedgeTraffic {
   passer: LobsterPasserPlan | null = null;
-  bottle: LobsterBottleScene | null = null;
+  bottle: { spotPct: number; opened: boolean; fortune: string } | null = null;
   private connected = false;
   private readonly timers = new LobsterPetTimers<
     "passerTimer" | "passerEndTimer" | "passerWatchTimer" | "bottleTimer" | "bottleEndTimer"
@@ -39,7 +24,18 @@ export class LobsterLedgeTraffic {
 
   constructor(
     private readonly notify: () => void,
-    private readonly hooks: LobsterTrafficHooks,
+    // Facing, reactions, and the act loop stay owned by the pet element; the
+    // controller only reports crossing milestones.
+    private readonly hooks: {
+      visitsEnabled: () => boolean;
+      passerOptions: () => LobsterPasserOptions;
+      onPasserStart: (plan: LobsterPasserPlan) => void;
+      // Fired at crossing start (toward the entry side) and mid-cross (travel
+      // direction) so the resident can watch the traffic go by.
+      onPasserFacing: (facing: 1 | -1) => void;
+      onPasserMidCross: () => void;
+      onPasserDone: () => void;
+    },
   ) {}
 
   connect() {

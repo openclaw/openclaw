@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { offlineDeviceSession } from "../chat-pane.test-support.ts";
 import {
@@ -25,25 +26,7 @@ function mountHeader(patch: Partial<ChatPaneHeaderProps> = {}) {
 }
 
 it("retains the focused mobile Actions trigger while session commands become available", async () => {
-  const mobileHost: ChatMobileHost = {
-    scopeKey: "menu-retention",
-    open: false,
-    suspended: false,
-    mode: "dock",
-    height: undefined,
-    reservedHeight: 0,
-    destination: { area: "panels" },
-    detailsMount: null,
-    setDetailsMount: vi.fn(),
-    navigate: vi.fn(),
-    reveal: vi.fn(),
-    close: vi.fn(),
-    back: vi.fn(),
-    toggleExpanded: vi.fn(),
-    resize: vi.fn(),
-    keyboardVisible: false,
-    onComposerEditingChange: vi.fn(),
-  };
+  const mobileHost: ChatMobileHost = createChatMobileHostFixture("menu-retention");
   const mounted = mountHeader({
     mergedChrome: true,
     detailsControl: {
@@ -109,29 +92,14 @@ it("retains the People page and lookup across native host replacement and deskto
     request: async () => {},
     insert: () => false,
   };
-  const mobileHost: ChatMobileHost = {
-    scopeKey: "people-retention",
-    open: false,
-    suspended: false,
+  const mobileHost: ChatMobileHost = createChatMobileHostFixture("people-retention", {
     mode: "expanded",
-    height: undefined,
-    reservedHeight: 0,
-    destination: { area: "panels" },
-    detailsMount: null,
-    setDetailsMount: vi.fn(),
     navigate: (destination) => {
       mobileHost.open = true;
       mobileHost.destination = destination;
       refreshHost();
     },
-    reveal: vi.fn(),
-    close: vi.fn(),
-    back: vi.fn(),
-    toggleExpanded: vi.fn(),
-    resize: vi.fn(),
-    keyboardVisible: false,
-    onComposerEditingChange: vi.fn(),
-  };
+  });
   const detailsControl = {
     chat: undefined,
     elements: {},
