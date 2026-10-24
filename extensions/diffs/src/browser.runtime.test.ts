@@ -148,7 +148,10 @@ describe("PlaywrightDiffScreenshotter", () => {
         }
       });
 
-      const launchOptions = await renderWithBrowserDiscovery();
+      launchMock.mockResolvedValue(createMockBrowser([]));
+      const screenshotter = new PlaywrightDiffScreenshotter({ config: {} });
+      await screenshotter.screenshotHtml(screenshotParams({ image: { scale: 1 } }));
+      const [launchOptions] = expectDefined(launchMock.mock.calls[0], "browser launch");
       if (hasFullChromium) {
         // Playwright's default headless launch requests the absent shell binary.
         expect(launchOptions.executablePath).toBe(managedPath);

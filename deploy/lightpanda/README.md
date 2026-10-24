@@ -86,7 +86,7 @@ without download or execution.
 The retained adapter observations above do not qualify this version's Compose
 WebSocket-readiness probe, independent probe-session close, crash restart, or
 SIGTERM/stop-grace behavior. Those container-specific checks require execution
-against the exact pinned image; historical 0.4.1 results are not 1.0.0 proof.
+against the exact pinned image; historical 0.4.1 results are not proof for the selected image.
 
 ## Existing JavaScript clients
 

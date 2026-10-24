@@ -136,8 +136,10 @@ moving `latest` or `nightly` version.
 
 The healthcheck opens an independent local CDP WebSocket session and checks its
 handshake. This proves listener readiness, not successful browsing or OpenClaw
-integration. The sample sets a 1 GiB memory limit, one CPU, and 256 PIDs; adjust
-`LIGHTPANDA_MEMORY_LIMIT` and `LIGHTPANDA_CPUS` for your measured workload.
+integration. The sample leaves memory, CPU, and PID limits unset. Set limits for
+your measured workload in your deployment's Compose configuration, or use
+[`docker update`](https://docs.docker.com/reference/cli/docker/container/update/)
+with `--memory`, `--cpus`, and `--pids-limit` for an existing container.
 `restart: unless-stopped` restarts a crashed engine but does not restart a
 still-running unhealthy container. Monitor unhealthy status and replace failed
 workers through your deployment's supervisor. Restarting loses that worker's

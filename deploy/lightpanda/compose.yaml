@@ -2,8 +2,8 @@
 # the repository's docker-compose.yml for an unpublished container-only endpoint.
 services:
   lightpanda:
-    # Optional external AGPL engine, not an MIT-only image. Upstream 1.0.0
-    # disagrees on -only vs -or-later; see README.md for the source evidence.
+    # Optional external AGPL engine, not an MIT-only image. Upstream declarations
+    # disagree on -only vs -or-later; see README.md for the source evidence.
     # See README.md before mirroring, bundling, or modifying this distribution.
     # Official 1.0.2 multi-platform index: linux/amd64 and linux/arm64.
     image: docker.io/lightpanda/browser:1.0.2@sha256:5d1d724c476957d8c2f8393a51fd089477523b0e5aa9c783c48688785d934fb9
@@ -32,11 +32,6 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
-    # Starting limits, not a promise of maximum task memory or concurrency.
-    # Raise these for the verified workload; an OOM restart loses page state.
-    mem_limit: ${LIGHTPANDA_MEMORY_LIMIT:-1g}
-    cpus: ${LIGHTPANDA_CPUS:-1.0}
-    pids_limit: 256
     # Override the upstream image's SIGKILL so Tini can forward graceful stop.
     stop_signal: SIGTERM
     stop_grace_period: 10s
