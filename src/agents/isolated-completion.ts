@@ -631,7 +631,7 @@ async function runIsolatedCompletionOwned(
                         : authorization,
                     streamParams: resolveIsolatedStreamParams(request, completionModel),
                   }),
-                (result) => result.assistant,
+                (completion) => completion.assistant,
               );
             const pending = diagnostics ? diagnostics.dispatch("harness", dispatch) : dispatch();
             priorProfileAttempted ||= attempt?.kind === "profile";
@@ -679,7 +679,7 @@ async function runIsolatedCompletionOwned(
                   timeoutMs: remainingTimeoutMs(),
                 }),
               ),
-            (result) => result.assistant,
+            (completion) => completion.assistant,
           );
         result = await (diagnostics ? diagnostics.dispatch("harness", dispatch) : dispatch());
         execution.assertCurrent?.();
