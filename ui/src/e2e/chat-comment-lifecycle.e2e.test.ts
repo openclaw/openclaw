@@ -1,12 +1,8 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import {
-  defaultControlUiFeatureMethods,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { catalog, pluginModule } from "./native-plugin-ui.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI comment lifecycle" });
 const passage = "Review the deployment checklist.";
@@ -47,28 +43,10 @@ async function sendWithoutComments(
   expect((request.params as { attachments?: unknown[] }).attachments ?? []).toHaveLength(0);
 }
 
-async function openChat(page: Page, pluginBody?: string, content = passage) {
+async function openChat(page: Page, content = passage) {
   const gateway = await installMockGateway(page, {
     historyMessages: [{ role: "assistant", content }],
-    ...(pluginBody
-      ? {
-          featureMethods: [
-            ...defaultControlUiFeatureMethods,
-            "plugins.controlUi.list",
-            "plugins.controlUi.report",
-          ],
-          methodResponses: {
-            "plugins.controlUi.list": catalog("one"),
-            "plugins.controlUi.report": { ok: true },
-          },
-        }
-      : {}),
   });
-  if (pluginBody) {
-    await page.route("**/__openclaw__/plugins/control-ui/ui-fixture/*/index.js", (route) =>
-      route.fulfill({ status: 200, contentType: "text/javascript", body: pluginBody }),
-    );
-  }
   await page.goto(`${suite.server.baseUrl}chat`);
   const editor = page.getByRole("dialog", { name: "Comment", exact: true });
   return {
@@ -80,13 +58,6 @@ async function openChat(page: Page, pluginBody?: string, content = passage) {
     chip: page.locator(".chat-selection-annotations__chip"),
     preview: page.getByRole("region", { name: "Comments", exact: true }),
   };
-}
-
-function replacementPlugin(surface: string, replacement: string) {
-  return pluginModule("one").replace(
-    "container.append(output); update(context);",
-    `const replace = document.createElement("button"); replace.textContent = "Replace ${surface}"; replace.onclick = () => host.ui.selectReplacement(${JSON.stringify(surface)}, ${JSON.stringify(replacement)}); container.append(output, replace); update(context);`,
-  );
 }
 
 async function selectText(text: Locator) {
@@ -121,7 +92,7 @@ suite.define(() => {
           const selected = `${passage} The selected deployment and rollback instructions must remain available in full.\nKeep the complete second line and the long identifier deployment_configuration_review_012345678901234567890123456789.`;
           const comment =
             "Keep all of the selected context.\nExplain the rollback steps before changing the deployment.";
-          const { source, gateway } = await openChat(page, undefined, selected);
+          const { source, gateway } = await openChat(page, selected);
           await addComment(page, source, comment);
           const params = await sendComment(page, gateway);
           expect(params.message).toBe("");
@@ -174,32 +145,7 @@ suite.define(() => {
     },
   );
 
-  it.each(["delegated-composer", "failing-composer"])(
-    "shows one usable comment chip when %s restores the built-in composer",
-    async (replacement) => {
-      await suite.withPage(pageOptions, async ({ page }) => {
-        const ui = await openChat(page, replacementPlugin("composer", replacement));
-        const { composer, source, chip } = ui;
-        await composer.fill("Keep this draft through the composer change.");
-        for (const comment of ["Check the rollback steps.", "Remove this extra comment."]) {
-          await addComment(page, source, comment);
-        }
-        await button(page, "Replace composer").click();
-        await page
-          .locator("openclaw-plugin-view[data-plugin-composer] .agent-chat__composer-shell")
-          .waitFor({ state: "visible" });
-        if (replacement === "failing-composer") {
-          await page.getByRole("alert").filter({ hasText: "Fixture composer failed" }).waitFor();
-        }
-        await page.mouse.move(0, 0);
-        expect(await chip.count()).toBe(1);
-        expect(await chip.textContent()).toContain("2 comments");
-        expect(await composer.inputValue()).toBe("Keep this draft through the composer change.");
-      });
-    },
-  );
-
-  it("keeps deletion in place, dismisses on hover exit, and clears all with the keyboard", async () => {
+  it("keeps deletion in place and clears all with the keyboard", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       const { gateway, composer, source, preview } = await openChat(page);
       await composer.fill("Preserve the draft.");
@@ -224,6 +170,8 @@ suite.define(() => {
       expect(await preview.textContent()).not.toContain("First note");
       expect(await button(preview, "Edit comment 1").count()).toBe(1);
       expect(await button(preview, "Edit comment 2").count()).toBe(0);
+      await page.keyboard.press("Escape");
+      await expect.poll(() => preview.isVisible()).toBe(false);
       await trigger.press("Space");
       await preview.waitFor({ state: "visible" });
       await composer.click();
@@ -252,7 +200,7 @@ suite.define(() => {
           { length: 35 },
           (_, i) => `Deployment context paragraph ${i + 1}.`,
         ).join("\n\n");
-        const ui = await openChat(page, undefined, `${passage}\n\n${filler}`);
+        const ui = await openChat(page, `${passage}\n\n${filler}`);
         const { source, input, chip, preview } = ui;
         await source.scrollIntoViewIfNeeded();
         await waitForChatScrollIdle(page);

@@ -11,7 +11,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { installMockGateway } from "./new-session-page.test-support.ts";
+import { installMockGateway, ONE_PIXEL_PNG_B64 } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "command palette file drops" });
 const profile = (id: string, displayName: string) => ({
@@ -27,44 +27,34 @@ const profile = (id: string, displayName: string) => ({
 });
 
 async function attach(target: Locator, kind: "paste" | "drop" | "drag") {
-  return target.evaluate((element, eventKind) => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 160;
-    canvas.height = 100;
-    const context = canvas.getContext("2d")!;
-    context.fillStyle = "#203549";
-    context.fillRect(0, 0, 160, 100);
-    context.fillStyle = "#9ec7d8";
-    context.fillRect(12, 14, 136, 18);
-    context.fillStyle = "#ff7164";
-    context.fillRect(12, 44, 62, 40);
-    context.fillStyle = "#6d9bac";
-    context.fillRect(86, 44, 62, 40);
-    const content = canvas.toDataURL("image/png").split(",")[1]!;
-    const transfer = new DataTransfer();
-    transfer.items.add(
-      new File([Uint8Array.from(atob(content), (c) => c.charCodeAt(0))], "launcher.png", {
-        type: "image/png",
-      }),
-    );
-    if (eventKind === "paste") {
-      element.dispatchEvent(
-        new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }),
-      );
-    } else {
+  return target.evaluate(
+    (element, { eventKind, content }) => {
+      const transfer = new DataTransfer();
       transfer.items.add(
-        new File(["Synthetic design brief"], "design-brief.pdf", { type: "application/pdf" }),
+        new File([Uint8Array.from(atob(content), (c) => c.charCodeAt(0))], "launcher.png", {
+          type: "image/png",
+        }),
       );
-      for (const type of eventKind === "drag"
-        ? ["dragenter", "dragover"]
-        : ["dragenter", "dragover", "drop"]) {
+      if (eventKind === "paste") {
         element.dispatchEvent(
-          new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }),
+          new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }),
         );
+      } else {
+        transfer.items.add(
+          new File(["Synthetic design brief"], "design-brief.pdf", { type: "application/pdf" }),
+        );
+        for (const type of eventKind === "drag"
+          ? ["dragenter", "dragover"]
+          : ["dragenter", "dragover", "drop"]) {
+          element.dispatchEvent(
+            new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }),
+          );
+        }
       }
-    }
-    return content;
-  }, kind);
+      return content;
+    },
+    { eventKind: kind, content: ONE_PIXEL_PNG_B64 },
+  );
 }
 
 suite.define(() => {
