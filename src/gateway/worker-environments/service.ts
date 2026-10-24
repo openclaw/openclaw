@@ -688,6 +688,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { abandonment, forceAbandon }),
       ),
+    reclaim: async (environmentId: string) =>
+      environmentAccess.project(await providerLifecycle.reclaim(environmentId)),
     requestDestroy: async (environmentId: string) =>
       environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { retryRequested: false }),

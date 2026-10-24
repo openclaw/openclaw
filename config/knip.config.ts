@@ -5,7 +5,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { collectPluginSourceEntries } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { createManagedHandoffBuildConfigs } from "../scripts/lib/managed-handoff-build-config.mts";
+import { createNativeTypeScriptParser } from "../scripts/lib/native-typescript.mts";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
+import { readUpdateCompatibilityInventory } from "../scripts/lib/update-compat-chunks.mts";
+import { ModuleGraph } from "../scripts/lib/update-compat-module-graph.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
 import aiBuildConfig from "../tsdown.ai.config.ts";
@@ -123,6 +126,8 @@ const repositoryScriptEntries = [
   "scripts/perf/provider-request-prepare-measure.ts!",
   "scripts/perf/session-profile-reference-measure.ts!",
   "scripts/perf/worker-task-metrics-measure.ts!",
+  // scripts/perf/README.md invokes this worker protocol benchmark by path.
+  "scripts/perf/worker-module-graphs-measure.mjs!",
   // scripts/perf/README.md invokes this cold usage-cache measurement CLI by path.
   "scripts/perf/chat-metadata-burst-measure.ts!",
   // scripts/perf/README.md invokes this model-prompt statistics measurement CLI by path.
@@ -183,7 +188,6 @@ const repositoryScriptEntries = [
   "scripts/perf/branch-rotation-measure-preload.ts!",
   // The documented placement shutdown reproduction is invoked as a standalone CLI.
   "scripts/perf/worker-placement-reconcile-shutdown-measure.ts!",
-  "scripts/bundle-a2ui.mts!",
   // The standalone build guide invokes this builder by path.
   "scripts/build-bun-standalone.mjs!",
   // Maintainers invoke the isolated macOS standalone Doctor proof by path.
@@ -823,6 +827,46 @@ function compileDynamicMjsConsumers(source: string, filePath: string): string {
   return source;
 }
 
+function compileUpdateCompatibilityConsumers(rootDir: string): string[] {
+  using parser = createNativeTypeScriptParser({ cwd: rootDir });
+  const graph = new ModuleGraph(parser, rootDir);
+  const inventory = readUpdateCompatibilityInventory(
+    path.join(rootDir, "scripts/lib/update-compat-inventory.json"),
+  );
+  const recordedOrigins = new Map<string, { module: string; symbol: string }>();
+  for (const release of inventory.releases) {
+    for (const chunk of release.chunks) {
+      for (const { origin } of chunk.exports) {
+        recordedOrigins.set(`${origin.module}:${origin.symbol}`, origin);
+      }
+    }
+  }
+  const imports: string[] = [];
+  const origins = [...recordedOrigins.values()].toSorted((left, right) =>
+    `${left.module}:${left.symbol}`.localeCompare(`${right.module}:${right.symbol}`),
+  );
+  for (const [index, origin] of origins.entries()) {
+    const sourceFile = path.join(rootDir, origin.module);
+    if (graph.names(sourceFile).includes(origin.symbol)) {
+      imports.push(
+        `import { ${origin.symbol} as __updateCompatibilityConsumer${index} } from ${JSON.stringify(`./${origin.module}`)};`,
+      );
+      continue;
+    }
+    const currentOrigin = graph.localOrigin(sourceFile, origin.symbol);
+    if (
+      !currentOrigin ||
+      (currentOrigin.module === origin.module && currentOrigin.symbol === origin.symbol) ||
+      !graph.names(path.join(rootDir, currentOrigin.module)).includes(currentOrigin.symbol)
+    ) {
+      throw new Error(
+        `Recorded updater binding ${origin.module}:${origin.symbol} is neither a named export nor an imported named binding`,
+      );
+    }
+  }
+  return imports;
+}
+
 function compileBundledPackageConsumers(source: string, filePath: string): string {
   const manifestPath = path.resolve(filePath);
   if (
@@ -838,10 +882,13 @@ function compileBundledPackageConsumers(source: string, filePath: string): strin
     if (typeof neverBundle !== "function") {
       throw new Error("Expected the AI build's externalization callback.");
     }
-    return Object.keys(manifest.dependencies ?? {})
+    const imports = Object.keys(manifest.dependencies ?? {})
       .filter((dependency) => neverBundle(dependency, undefined, false))
-      .map((dependency) => `import ${JSON.stringify(dependency)};`)
-      .join("\n");
+      .map((dependency) => `import ${JSON.stringify(dependency)};`);
+    if (manifestPath === path.resolve("package.json")) {
+      imports.push(...compileUpdateCompatibilityConsumers(path.dirname(manifestPath)));
+    }
+    return imports.join("\n");
   }
   // JSON has no import graph in Knip unless a compiler supplies one.
   return "";
@@ -1067,7 +1114,6 @@ const config = {
         "playwright-core",
         "partial-json",
         // The native Canvas bundle falls back without optional Markdown support.
-        "@a2ui/markdown-it",
         "sqlite-vec",
         "tree-sitter-bash",
         ...rootToolingAndWorkspaceDependencies,
@@ -1201,6 +1247,7 @@ const config = {
       entry: ["index.js!", "scripts/postinstall.js!"],
       project: ["index.js!", "scripts/**/*.js!"],
     },
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/abliteration`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock-mantle`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic`]: bundledPluginWorkspace(),
@@ -1228,14 +1275,7 @@ const config = {
       // The opt-in browser benchmark is documented and invoked directly by path.
       "scripts/bench-lightweight.ts!",
     ]),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([
-      // Package build/copy scripts are invoked from package.json.
-      "scripts/copy-a2ui.mjs!",
-      // Rolldown consumes this config and its browser bootstrap entry.
-      "src/host/a2ui-app/rolldown.config.mjs!",
-      "src/host/a2ui-app/bootstrap.jsx!",
-      "src/host/a2ui-app/bootstrap-v0.9.jsx!",
-    ]),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cloudflare-ai-gateway`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/chutes`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/clawrouter`]: bundledPluginWorkspace(),

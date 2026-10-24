@@ -1,7 +1,6 @@
 import os from "node:os";
 import { runGitBuffered } from "../../agents/worktrees/git.js";
 import { enqueueGitRefMutation, gitCommandArgv } from "../../infra/git-exec.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
 import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
 
 export const WORKSPACE_RESULT_GIT_TIMEOUT_MS = 10 * 60_000;
@@ -44,6 +43,7 @@ export async function requireWorkspaceResultGit(
   args: string[],
   options: { input?: Uint8Array; baseEnv?: NodeJS.ProcessEnv; beforeInput?: () => void } = {},
 ): Promise<string> {
+  const { runCommandWithTimeout } = await import("../../process/exec.js");
   const result = await withGitProcessOperation(
     "workspace.result",
     () =>

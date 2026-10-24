@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 282539,
-  "reason": "Defer 245 optional feature English strings: matched b19bade build 285482 to 282539 B gzip with 7 JS and 1 CSS request.",
+  "startupJsGzipBytes": 281233,
+  "reason": "Defer optional root English at consuming routes: matched bf93c438 startup 282747 to 281233 B gzip; 7 JS and 1 CSS request unchanged.",
   "updatedAt": "2026-10-23"
 }

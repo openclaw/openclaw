@@ -287,9 +287,11 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
               </Show>
               <Show when={!published() && !branchName() && !work() && changes()}>
                 <div class="chat-details__row chat-environment__row">
-                  <Show
-                    when={props.onOpenUncommitted ?? props.work?.onOpenSessionDiff}
-                    fallback={
+                  <EnvironmentAction
+                    presented={props.presented}
+                    onOpen={props.onOpenUncommitted ?? props.work?.onOpenSessionDiff}
+                  >
+                    {() => (
                       <>
                         <Icon name="diff" />
                         <span>{t("chat.sessionDetails.changes")}</span>
@@ -297,25 +299,8 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
                           {(result) => <EnvironmentChangeCounts result={result()} />}
                         </Show>
                       </>
-                    }
-                  >
-                    <button
-                      class="chat-environment__action"
-                      type="button"
-                      onClick={() => {
-                        if (props.presented) {
-                          (props.onOpenUncommitted ?? props.work?.onOpenSessionDiff)?.();
-                        }
-                      }}
-                    >
-                      <Icon name="diff" />
-                      <span>{t("chat.sessionDetails.changes")}</span>
-                      <Show when={changes()}>
-                        {(result) => <EnvironmentChangeCounts result={result()} />}
-                      </Show>
-                      <Icon name="chevronRight" />
-                    </button>
-                  </Show>
+                    )}
+                  </EnvironmentAction>
                 </div>
               </Show>
             </ChatDetailsDesktopSection>

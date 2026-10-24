@@ -138,14 +138,18 @@ export function hasMeaningfulRetiredMediaCarrier(message: object): boolean {
   );
 }
 
-const LEGACY_MEDIA_KINDS = new Set<MediaKind>([
+const MEDIA_KINDS = [
   "image",
   "audio",
   "video",
   "document",
   "sticker",
   "unknown",
-]);
+] as const satisfies readonly MediaKind[];
+
+export function isMediaKind(kind: string | undefined): kind is MediaKind {
+  return MEDIA_KINDS.some((candidate) => candidate === kind);
+}
 
 type CanonicalizedPersistedMediaMessage<T extends object> = {
   changed: boolean;
@@ -206,10 +210,10 @@ export function canonicalizePersistedUserMessageMedia<T extends object>(
     const existing = canonicalInputs[index];
     const bareLegacyKind =
       legacyType &&
-      LEGACY_MEDIA_KINDS.has(legacyType as MediaKind) &&
+      isMediaKind(legacyType) &&
       !normalizeOptionalString(existing?.contentType) &&
       existing?.kind === undefined;
-    const explicitKind = existing?.kind ?? (bareLegacyKind ? (legacyType as MediaKind) : undefined);
+    const explicitKind = existing?.kind ?? (bareLegacyKind ? legacyType : undefined);
     media.push({
       ...(fact.path ? { path: fact.path } : {}),
       ...(fact.url ? { url: fact.url } : {}),
@@ -276,9 +280,7 @@ export function resolveMediaFactKind(fact: MediaFactInput): MediaKind | undefine
       return mimeKind;
     }
     // Legacy channel-mode projections persist bare image or sticker kind as MediaType.
-    return LEGACY_MEDIA_KINDS.has(normalizedContentType as MediaKind)
-      ? (normalizedContentType as MediaKind)
-      : undefined;
+    return isMediaKind(normalizedContentType) ? normalizedContentType : undefined;
   }
   const source = normalizeOptionalString(fact.path) ?? normalizeOptionalString(fact.url);
   if (!source) {

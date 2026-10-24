@@ -205,7 +205,12 @@ describe("VisitorAccessService authority", () => {
 
       expect(fixture.emails()).toEqual([email]);
       expect(fixture.grants.get(email)).toEqual(
-        previous ?? { email, createdAt: NOW, expiresAt: NOW },
+        previous ?? {
+          email,
+          onboarding: { state: "pending", updatedAt: NOW },
+          createdAt: NOW,
+          expiresAt: NOW,
+        },
       );
     },
   );

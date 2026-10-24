@@ -229,7 +229,6 @@
     "dist-runtime/",
     // Intentional negative-test corpora contain parser and lint violations by contract.
     "test/fixtures/oxlint-boundary-guards/**",
-    "**/a2ui.bundle.js",
     "extensions/diffs/assets/viewer-runtime.js",
     "extensions/diffs-language-pack/assets/viewer-runtime.js",
     "node_modules/",

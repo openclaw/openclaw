@@ -37,6 +37,7 @@ import { resolveExplicitIncognitoAgentSqliteTarget } from "../../state/openclaw-
 import {
   hasCompletedMainSessionRecoveryOutcome,
   isMainRestartRecoveryTerminalOnly,
+  isKilledMainSessionRecoveryFenceOnly,
   transitionMainSessionRecovery,
 } from "./main-session-recovery-state.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
@@ -70,7 +71,7 @@ async function markRecoveryStore(params: {
         replaceRuns?: boolean;
         runs?: RestartRecoveryRun[];
       }
-    | { action: "retire_terminal" }
+    | { action: "retire_terminal" | "release_killed" }
     | { action: "restore_yielded"; isCurrent: () => boolean }
     | undefined;
 }) {
@@ -104,7 +105,7 @@ async function markRecoveryStore(params: {
           }
           transitionMainSessionRecovery(
             entry,
-            plan.action === "restore_yielded"
+            plan.action === "restore_yielded" || plan.action === "release_killed"
               ? { kind: "clear" }
               : {
                   kind: "observe",
@@ -491,6 +492,12 @@ async function markOrphanedMainSessionStore(
           };
         }
         return undefined;
+      }
+      if (isKilledMainSessionRecoveryFenceOnly(entry)) {
+        // Stop is terminal. An ownerless fence must not resurrect the run or
+        // hold the conversation forever; pending delivery remains with recovery.
+        orphanChecks.push(hasLiveOwner);
+        return { action: "release_killed" };
       }
       // A crash or early restart abort can persist the interruption without a claim.
       // Reuse the normal mark transition, preserving budgets on existing cycles.

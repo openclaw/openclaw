@@ -37,8 +37,12 @@ export type TeamShapeExtrasOptions = {
   settledRuns?: boolean;
   approvals: number;
   cronJobs: number;
+  cronAnnounceLast?: boolean;
   projects: number;
   worktreeFiles?: number;
+  worktreeFileBytes?: number;
+  worktreeInstallFailure?: boolean;
+  worktreeColdCommits?: number;
   nestedRepository?: boolean;
   githubOptionsConnected?: boolean;
   now: number;
@@ -125,6 +129,7 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
     path: string;
     id: string;
     branch: string;
+    coldBaseRefs?: string[];
   }> = [];
   const gitEnv = {
     ...process.env,
@@ -151,6 +156,22 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
     }
     await fs.writeFile(path.join(repoRoot, "README.md"), `# Synthetic project ${index}\n`);
     await git("add", "README.md");
+    if (index === 0 && options.worktreeInstallFailure) {
+      await fs.writeFile(
+        path.join(repoRoot, "package.json"),
+        JSON.stringify({
+          name: "synthetic-attempt-setup",
+          private: true,
+          packageManager: "pnpm@12.0.0",
+          scripts: { preinstall: "exit 1" },
+        }),
+      );
+      await fs.writeFile(
+        path.join(repoRoot, "pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\nimporters:\n  .: {}\n",
+      );
+      await git("add", "package.json", "pnpm-lock.yaml");
+    }
     await git("-c", "commit.gpgSign=false", "commit", "-m", "test: seed synthetic project");
     await fs.mkdir(path.dirname(worktreePath), { recursive: true });
     const branch = `fixture/task-${index}`;
@@ -166,7 +187,13 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
           await waitForTeamShapeWriteBudget();
           await fs.mkdir(bucket, { recursive: true });
         }
-        await fs.writeFile(path.join(bucket, `${file}.txt`), "");
+        const content = Buffer.alloc(options.worktreeFileBytes ?? 0);
+        let random = file + 1;
+        for (let offset = 0; offset < content.length; offset++) {
+          random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
+          content[offset] = random >>> 24;
+        }
+        await fs.writeFile(path.join(bucket, `${file}.txt`), content);
       }
       await git("-C", worktreePath, "add", "inventory");
       await git(
@@ -200,6 +227,19 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
         "test: seed nested synthetic repository",
       );
     }
+    const coldBaseRefs: string[] = [];
+    if (index === 0 && options.worktreeColdCommits) {
+      const tree = (await git("rev-parse", "refs/heads/main^{tree}")).stdout.trim();
+      const parent = (await git("rev-parse", "refs/heads/main")).stdout.trim();
+      for (let cold = 0; cold < options.worktreeColdCommits; cold++) {
+        const ref = `refs/heads/benchmark-cold-${cold}`;
+        const commit = (
+          await git("commit-tree", tree, "-p", parent, "-m", `test: cold template ${cold}`)
+        ).stdout.trim();
+        await git("update-ref", ref, commit);
+        coldBaseRefs.push(ref);
+      }
+    }
     const repository = await resolveRepositoryIdentity(repoRoot);
     const project = runOpenClawStateWriteTransaction(({ db }) => {
       const registered = insertProjectRegistryInDatabase(db, {
@@ -228,6 +268,7 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
       projectId: project.id,
       repoRoot,
       path: worktreePath,
+      ...(coldBaseRefs.length ? { coldBaseRefs } : {}),
       id: projectId,
       branch,
     });
@@ -370,9 +411,19 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
       index % 2 === 0
         ? { kind: "every", everyMs: 3_600_000, anchorMs: options.now }
         : { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-    sessionTarget: "main",
     wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: `Synthetic inspection ${index}` },
+    ...(options.cronAnnounceLast
+      ? {
+          sessionTarget: "isolated" as const,
+          sessionKey: options.sessions[1]!.sessionKey,
+          payload: { kind: "agentTurn" as const, message: `Synthetic inspection ${index}` },
+          delivery: { mode: "announce" as const, channel: "last" },
+          failureAlert: false as const,
+        }
+      : {
+          sessionTarget: "main" as const,
+          payload: { kind: "systemEvent" as const, text: `Synthetic inspection ${index}` },
+        }),
     state: { lastRunAtMs: options.now - DAY_MS, lastRunStatus: index % 5 === 0 ? "error" : "ok" },
   }));
   if (jobs.length > 0) {
@@ -389,9 +440,13 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
     retainedRunStates,
     approvals: options.approvals,
     cronJobs: jobs.length,
+    cronAnnounceLast: options.cronAnnounceLast ?? false,
     projects: projectWorktrees.length,
     githubOptionsConnected: options.githubOptionsConnected ?? false,
     worktreeFiles: options.worktreeFiles ?? 0,
+    worktreeFileBytes: options.worktreeFileBytes ?? 0,
+    worktreeInstallFailure: options.worktreeInstallFailure ?? false,
+    worktreeColdCommits: options.worktreeColdCommits ?? 0,
     nestedRepository: options.nestedRepository ?? false,
     projectWorktrees,
     extrasGenerationMs: performance.now() - started,

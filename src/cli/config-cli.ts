@@ -32,6 +32,9 @@ import { collectOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
+const CONFIG_ALLOW_EXEC_DESCRIPTION =
+  "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)";
+
 const CONFIG_SET_DESCRIPTION = [
   "Set config values by path (value mode, ref/provider builder mode, or batch JSON mode).",
   "Examples:",
@@ -313,11 +316,7 @@ export function registerConfigCli(program: Command) {
       "Validate changes without writing openclaw.json (checks run in builder/json/batch modes; exec SecretRefs are skipped unless --allow-exec is set)",
       false,
     )
-    .option(
-      "--allow-exec",
-      "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
-      false,
-    )
+    .option("--allow-exec", CONFIG_ALLOW_EXEC_DESCRIPTION, false)
     .option("--merge", "Merge object/map values instead of replacing the target path", false)
     .option(
       "--replace",
@@ -387,11 +386,7 @@ export function registerConfigCli(program: Command) {
       "Validate changes without writing openclaw.json (checks schema and SecretRef resolvability; exec SecretRefs are skipped unless --allow-exec is set)",
       false,
     )
-    .option(
-      "--allow-exec",
-      "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
-      false,
-    )
+    .option("--allow-exec", CONFIG_ALLOW_EXEC_DESCRIPTION, false)
     .option("--json", "Output dry-run result as JSON", false)
     .option(
       "--replace-path <path>",

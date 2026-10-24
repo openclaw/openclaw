@@ -22,6 +22,7 @@ const mock = vi.hoisted(() => {
     query: vi.fn<() => []>(),
     settle: vi.fn<(operation: (source: { db: object }) => unknown) => unknown>(),
     unrelatedHandlerLoaded: false,
+    database: undefined as object | undefined,
     bridges: [] as { worker: Worker; control: Int32Array; online: Promise<void> }[],
     bootstrapLoading: Promise.withResolvers<void>(),
     bootstrapRelease: Promise.withResolvers<void>(),
@@ -84,12 +85,13 @@ vi.mock("../infra/gateway-owner-lease.worker.js", async (importOriginal) => ({
     onAdmitted();
   },
 }));
+// mock-isolation: Dispatch tests supply fixture handles without opening their synthetic source paths.
 vi.mock("./openclaw-state-db-read-connection.js", () => ({
   closeRetainedOpenClawStateReadConnections: vi.fn(),
   readOpenClawStateReadOnlyLocation: mock.settle,
   withOpenClawStateReadOnlyLocation: (operation: (source: { db: object }) => unknown) => {
     mock.admit();
-    return operation({ db: {} });
+    return operation({ db: mock.database ?? {} });
   },
 }));
 
@@ -109,6 +111,7 @@ afterEach(async () => {
 });
 
 beforeEach(() => {
+  mock.database = undefined;
   mock.admit.mockReset();
   mock.query.mockReset().mockReturnValue([]);
   mock.settle.mockReset().mockImplementation((operation) => {
@@ -135,6 +138,33 @@ it.each([
     expect(mock.query).toHaveBeenCalledExactlyOnceWith({}, request.databasePath, false);
   }
   expect(mock.unrelatedHandlerLoaded).toBe(false);
+});
+
+it("reads an absent publication receipt without loading unrelated handlers", async () => {
+  const db = openNodeSqliteDatabase(":memory:");
+  mock.database = db;
+  try {
+    const reply = await mock.handler({
+      ...request,
+      command: {
+        type: "githubPublications.sharedObservation",
+        input: {
+          session: { agentId: "main", sessionKey: "agent:main:fixture", sessionId: "fixture" },
+          selector: {},
+          entry: {},
+        },
+      },
+    });
+    expect(reply).toEqual({
+      ok: true,
+      type: "githubPublications.sharedObservation",
+      sourceAdmitted: true,
+      row: undefined,
+    });
+    expect(mock.unrelatedHandlerLoaded).toBe(false);
+  } finally {
+    db.close();
+  }
 });
 
 it("starts its PG bridge while the first command module is still loading", async () => {

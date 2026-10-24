@@ -6,6 +6,7 @@ import { expect, it } from "vitest";
 import { warmReloadProbe } from "../../../scripts/lib/control-ui-warm-reload-probe.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { controlUiE2eWaitTimeoutMs } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
@@ -35,6 +36,15 @@ suite.define(() => {
         sidebarPersistentChildren: true,
       });
       const { parentKey, childKeys } = fixture.sidebarPersistentChildren!;
+      const owner = fixture.sidebarListInput.rows[0]!.owner!;
+      const ownerMatch = { ownerId: owner.actor.id };
+      // Involving me excludes off-window child links. Keep an owned roster
+      // larger than a boot page so its children still require a separate read.
+      const ownedRoots = fixture.sidebarListInput.rows.slice(0, fixture.counts.firstPage + 1);
+      const children = fixture.sidebarListInput.rows.filter((row) => childKeys.includes(row.key));
+      for (const row of [...ownedRoots, ...children]) {
+        row.owner = owner;
+      }
       const lists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 1000 } },
@@ -49,7 +59,7 @@ suite.define(() => {
             }
           });
           await page.addInitScript(
-            ({ settingsKey, ownerKey, entries }) => {
+            ({ settingsKey, ownerKey, ownerId, entries }) => {
               localStorage.setItem(
                 settingsKey,
                 JSON.stringify({
@@ -58,10 +68,11 @@ suite.define(() => {
                   navigationByProfile: { "team-person-001": { railShortcuts: entries } },
                 }),
               );
-              localStorage.setItem(ownerKey, "involving-me");
+              localStorage.setItem(ownerKey, `owner:${ownerId}`);
             },
             {
               settingsKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+              ownerId: owner.actor.id,
               ownerKey: `openclaw.control.sidebarSessionOwnerFilter.v1:${controlUiBundledGatewayUrl(suite.server.baseUrl)}:team-person-001`,
               entries: fixture.sidebarEntries,
             },
@@ -148,7 +159,7 @@ suite.define(() => {
           await capture("cached");
           const childMatch = { spawnedBy: parentKey };
           await gateway.deferNext("sessions.list", childMatch);
-          await gateway.deferNext("sessions.list", { involvingMe: true });
+          await gateway.deferNext("sessions.list", ownerMatch);
           if (rootLast) {
             await gateway.deferNext("sessions.list", { ownerFirst: true });
           }
@@ -160,19 +171,28 @@ suite.define(() => {
           const canonical = await gateway.waitForRequest("sessions.list", {
             match: { ownerFirst: true },
           });
-          const involving = await gateway.waitForRequest("sessions.list", {
-            match: { involvingMe: true },
+          const owned = await gateway.waitForRequest("sessions.list", {
+            match: ownerMatch,
           });
           expect(await sidebar.getAttribute("data-snapshot-state")).toBe("cached");
           expect(await rowKeys()).toEqual(expected);
           await gateway.resolveDeferred(
             "sessions.list",
-            lists.list(asRecord(involving.params)!).result,
+            lists.list(asRecord(owned.params)!).result,
             {
-              match: { involvingMe: true },
+              match: ownerMatch,
             },
           );
-          await page.clock.runFor(100);
+          await expect
+            .poll(
+              async () => {
+                // Reply delivery can outlive a clock jump. Drain the frame that discovers children.
+                await page.clock.runFor(20);
+                return (await gateway.getRequests("sessions.list", childMatch)).length;
+              },
+              { timeout: controlUiE2eWaitTimeoutMs },
+            )
+            .toBeGreaterThan(0);
           const childRequest = await gateway.waitForRequest("sessions.list", { match: childMatch });
           const childResult = lists.list(asRecord(childRequest.params)!).result;
           let childReleased = false;
@@ -256,9 +276,7 @@ suite.define(() => {
               expect(retainedRow).not.toBeNull();
               const stoppedRow = sidebar.locator(`[data-session-key="${stopped.key}"]`);
               expect(await stoppedRow.getAttribute("class")).toContain("session-row-host--running");
-              const refreshBefore = (
-                await gateway.getRequests("sessions.list", { involvingMe: true })
-              ).length;
+              const refreshBefore = (await gateway.getRequests("sessions.list", ownerMatch)).length;
               lists.apply({ upsert: [renamed, stopped, created], removeKeys: [deleted.key] });
               for (const [row, reason] of [
                 [renamed, "patch"],
@@ -280,7 +298,7 @@ suite.define(() => {
               await page.clock.runFor(5001);
               await page.clock.resume();
               await gateway.waitForRequest("sessions.list", {
-                match: { involvingMe: true },
+                match: ownerMatch,
                 after: refreshBefore,
               });
               await renamedRow.getByText(renamed.label, { exact: true }).waitFor();
@@ -293,17 +311,24 @@ suite.define(() => {
                 .waitFor({ state: "detached" });
               expect(await retainedRow!.evaluate((element) => element.isConnected)).toBe(true);
               await retainedRow!.dispose();
-              const ownerId = stopped.owner?.actor.id;
-              assert.ok(ownerId, "The stopped fixture session must have an owner id");
-              await chooseSidebarOwner(page, `owner:${ownerId}`);
-              await gateway.waitForRequest("sessions.list", { match: { ownerId } });
+              const otherOwnerRow = fixture.sidebarListInput.rows.find(
+                (row) =>
+                  row.owner?.actor.id !== owner.actor.id &&
+                  !row.snoozedUntil &&
+                  !row.pinned &&
+                  !row.spawnedBy,
+              )!;
+              const otherOwnerId = otherOwnerRow.owner?.actor.id;
+              assert.ok(otherOwnerId, "The other fixture session must have an owner id");
+              await chooseSidebarOwner(page, `owner:${otherOwnerId}`);
+              await gateway.waitForRequest("sessions.list", { match: { ownerId: otherOwnerId } });
               await sidebar
                 .locator(`[data-session-key="${parentKey}"]`)
                 .waitFor({ state: "detached" });
               await sidebar
                 .getByText(created.label, { exact: true })
                 .waitFor({ state: "detached" });
-              await stoppedRow.waitFor();
+              await sidebar.locator(`[data-session-key="${otherOwnerRow.key}"]`).waitFor();
             }
 
             await releaseChildren();

@@ -23,12 +23,21 @@ import {
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
+import {
+  boundInFlightRunSnapshotForChatHistory,
+  getMaxChatHistoryMessagesBytes,
+  reportOmittedChatHistory,
+} from "../chat-history-budget.js";
+import {
+  decodeChatHistoryPageCursor,
+  resolveChatHistorySelectorError,
+} from "../chat-history-page-cursor.js";
+import { prepareChatHistoryResponsePage } from "../chat-history-response-page.js";
 import { resolveInFlightRunSnapshot } from "../chat-inflight-snapshot.runtime.js";
 import { resolveClaudeCliBindingSessionId } from "../cli-session-history.claude.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { SerializedJsonArray } from "../serialized-json.js";
-import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.js";
 import { registerDeflatedSegment } from "../server/ws-compression.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
@@ -42,22 +51,13 @@ import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { getSessionDefaults, resolveSessionModelRef } from "../session-utils.js";
 import { withPreparedSessionResolve } from "../sessions-resolve.js";
-import {
-  boundInFlightRunSnapshotForChatHistory,
-  reportOmittedChatHistory,
-} from "./chat-history-budget.js";
 import { readChatHistoryDelta } from "./chat-history-delta.js";
-import {
-  decodeChatHistoryPageCursor,
-  resolveChatHistorySelectorError,
-} from "./chat-history-page-cursor.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
 import {
   resolveEmbeddedAgentRunRecoverySnapshot,
   respondChatHistoryUnavailable,
   type ChatHistoryMethod,
 } from "./chat-history-recovery.js";
-import { prepareChatHistoryResponsePage } from "./chat-history-response-page.js";
 import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import { captureQueuedChatInputRunIds, readChatPendingInputs } from "./chat-pending-inputs.js";

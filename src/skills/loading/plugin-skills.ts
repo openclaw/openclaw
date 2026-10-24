@@ -18,7 +18,6 @@ import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-sna
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { iteratePluginRootContributions } from "../../plugins/plugin-root-contributions.js";
 import { isPathInside } from "../../security/scan-paths.js";
-import { readPluginSkillBundle } from "./plugin-skill-bundle.js";
 import type { PluginSkillRoot } from "./plugin-skill-root.js";
 import { resolvePluginSkillsDir } from "./skill-paths.js";
 import { loadSkillRootRecords } from "./skill-root-loader.js";
@@ -235,6 +234,7 @@ export async function readPluginSkill(
   if (!pluginRoot) {
     throw new Error("Installed plugin root not found.");
   }
+  const { readPluginSkillBundle } = await import("./plugin-skill-bundle.js");
   const result = await readPluginSkillBundle({
     pluginRoot,
     rootPath: path.relative(pluginRoot, matches[0]!.skill.baseDir).split(path.sep).join("/") || ".",

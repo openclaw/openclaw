@@ -4,9 +4,11 @@ import { once } from "node:events";
 import {
   appendFileSync,
   createWriteStream,
+  existsSync,
   mkdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
@@ -15,7 +17,10 @@ import path from "node:path";
 import { finished } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { McpServer } from "@modelcontextprotocol/server";
 import { Value } from "typebox/value";
+import { z } from "zod";
 import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.ts";
 import { HelloOkSchema } from "../../packages/gateway-protocol/src/schema/frames.ts";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions-patch.ts";
@@ -69,10 +74,19 @@ const { values } = parseArgs({
     "cpu-profile": { type: "boolean", default: false },
     "workload-cpu-profile": { type: "boolean", default: false },
     "capture-responses": { type: "boolean", default: false },
+    "list-filter-churn": { type: "boolean", default: false },
     "trace-gc": { type: "boolean", default: false },
     "worker-memory": { type: "boolean", default: false },
+    "worker-snapshots": { type: "boolean", default: false },
+    "worker-retained-heap": { type: "boolean", default: false },
+    "worker-heap-snapshot": { type: "boolean", default: false },
+    "worker-heap-done-file": { type: "string" },
+    "worker-heap-peer-done-file": { type: "string" },
+    "worker-baseline-dir": { type: "string" },
     "baseline-owners": { type: "boolean", default: false },
     "stress-tools": { type: "boolean", default: false },
+    "attempt-setup-image": { type: "string" },
+    "cold-session-rounds": { type: "string", default: "0" },
     "stress-session-store": { type: "boolean", default: false },
     "transcript-hydration-counts": { type: "boolean", default: false },
     "operator-access-policy": { type: "boolean", default: false },
@@ -86,6 +100,8 @@ const { values } = parseArgs({
     "github-options-observe": { type: "boolean", default: false },
     "github-observation-owner": { type: "string" },
     "github-availability-owner": { type: "string" },
+    "github-state-handlers": { type: "string" },
+    "github-publication-reader": { type: "string" },
     "stream-start-diagnostics": { type: "boolean", default: false },
     "stream-start-allocations": { type: "boolean", default: false },
     "active-work-diagnostics": { type: "boolean", default: false },
@@ -126,6 +142,7 @@ const { values } = parseArgs({
     "chunk-interval-ms": { type: "string", default: "10" },
     "prompt-kib": { type: "string", default: "128" },
     "chat-attachment-kib": { type: "string", default: "0" },
+    "chat-active-hold-ms": { type: "string", default: "0" },
     "heap-snapshot": { type: "boolean", default: false },
     "session-census": { type: "boolean", default: false },
     "fingerprint-retention": { type: "boolean", default: false },
@@ -133,6 +150,7 @@ const { values } = parseArgs({
     "presence-deltas": { type: "boolean", default: false },
     "session-envelope-refs": { type: "boolean", default: false },
     "start-at": { type: "string" },
+    "start-file": { type: "string" },
     "list-interval-ms": { type: "string", default: "0" },
     "list-profile-reference": { type: "string" },
     "poll-seed": { type: "string" },
@@ -141,10 +159,19 @@ const { values } = parseArgs({
 if (!values["state-dir"]) {
   throw new Error("--state-dir is required (existing team-shape fixture)");
 }
+if (values["worker-heap-snapshot"] && !values["worker-retained-heap"]) {
+  throw new Error("--worker-heap-snapshot requires --worker-retained-heap");
+}
+if (values["worker-baseline-dir"] && path.resolve(values.entry) !== path.resolve("src/entry.ts")) {
+  throw new Error("--worker-baseline-dir requires --entry src/entry.ts");
+}
 if (
   (values["github-options-observe"] &&
     (!values["dashboard-rpc"] || path.resolve(values.entry) !== path.resolve("src/entry.ts"))) ||
-  ((values["github-observation-owner"] || values["github-availability-owner"]) &&
+  ((values["github-observation-owner"] ||
+    values["github-availability-owner"] ||
+    values["github-state-handlers"] ||
+    values["github-publication-reader"]) &&
     !values["github-options-observe"])
 ) {
   throw new Error(
@@ -182,13 +209,18 @@ if (
     "memory-soak",
     "plugins.reload",
     "plugin.scope",
+    "cron.list",
+    "board.get",
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, sessions.describe, sessions.patch, sessions.cleanup, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, plugins.reload, or plugin.scope",
+    "--scenario must be sessions.list, sessions.describe, sessions.patch, sessions.cleanup, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, plugins.reload, plugin.scope, cron.list, or board.get",
   );
 }
 const retentionScenario = scenario === "attempt-retention";
+if (values["list-filter-churn"] && scenario !== "sessions.list") {
+  throw new Error("--list-filter-churn requires --scenario sessions.list");
+}
 const idleScenario = scenario === "session-idle-retention";
 const soakScenario = scenario === "memory-soak";
 const historyTurns = integer(values["history-turns"], "--history-turns", 0);
@@ -237,6 +269,10 @@ if (
   );
 }
 const toolScenario = scenario === "chat.send" || reasoningScenario;
+const chatActiveHoldMs = integer(values["chat-active-hold-ms"], "--chat-active-hold-ms", 0);
+if (chatActiveHoldMs && (scenario !== "chat.send" || values["session-event-wake"])) {
+  throw new Error("--chat-active-hold-ms requires direct --scenario chat.send");
+}
 const chatAttachmentBytes =
   integer(values["chat-attachment-kib"], "--chat-attachment-kib", 0) * 1024;
 if (chatAttachmentBytes && (scenario !== "chat.send" || values["session-event-wake"])) {
@@ -256,7 +292,7 @@ if (
   !values["stream-start-allocations"] &&
   !values["workload-cpu-profile"] &&
   !values["operator-access-policy"] &&
-  !(scenario === "chat.send" && values.diagnostics) &&
+  !values.diagnostics &&
   !(["sessions.list", "sessions.patch"].includes(scenario) && values["capture-responses"]) &&
   scenario !== "transcript-broadcast" &&
   scenario !== "plugin.scope" &&
@@ -265,7 +301,7 @@ if (
   !soakScenario
 ) {
   throw new Error(
-    "--scenario requires --allocations, --workload-cpu-profile, --diagnostics for chat.send, or --capture-responses for sessions.list/sessions.patch",
+    "--scenario requires --allocations, --workload-cpu-profile, --diagnostics, or --capture-responses for sessions.list/sessions.patch",
   );
 }
 const operations = integer(
@@ -339,6 +375,21 @@ if (
   );
 }
 const rounds = integer(values.rounds, "--rounds");
+const coldSessionRounds = integer(values["cold-session-rounds"], "--cold-session-rounds", 0);
+if (
+  (coldSessionRounds || values["attempt-setup-image"]) &&
+  (scenario !== "chat.send" ||
+    values["stress-tools"] ||
+    values["session-event-wake"] ||
+    historyTurns)
+) {
+  throw new Error(
+    "Attempt setup measurements require direct chat.send without stress tools or seeded history",
+  );
+}
+if (coldSessionRounds > rounds) {
+  throw new Error("--cold-session-rounds must not exceed --rounds");
+}
 const durationMs = integer(values["duration-ms"], "--duration-ms");
 const warmupMs = integer(values["warmup-ms"], "--warmup-ms", 0);
 const roundIntervalMs = integer(values["round-interval-ms"], "--round-interval-ms");
@@ -546,7 +597,13 @@ const recordListRequests =
   values["stream-start-diagnostics"] ||
   values["cpu-profile"] ||
   values["poll-seed"] !== undefined;
-const startAt = values["start-at"] ? integer(values["start-at"], "--start-at") : undefined;
+let startAt = values["start-at"] ? integer(values["start-at"], "--start-at") : undefined;
+if (startAt !== undefined && values["start-file"]) {
+  throw new Error("Use only one of --start-at and --start-file");
+}
+if (values["worker-snapshots"] && !values["worker-memory"]) {
+  throw new Error("--worker-snapshots requires --worker-memory; use a separate diagnostic pass");
+}
 if (values["session-envelope-refs"] && !values["session-row-deltas"]) {
   throw new Error("--session-envelope-refs requires --session-row-deltas");
 }
@@ -557,6 +614,13 @@ const promptContent = createCipheriv(
   Buffer.alloc(16),
 );
 const root = path.resolve(values["state-dir"]);
+if (
+  (process.env.OPENCLAW_PERF_MEDIA_IO === "1" ||
+    process.env.OPENCLAW_PERF_FSYNC_DELAY_MS !== undefined) &&
+  path.resolve(values.entry) !== path.resolve("scripts/perf/fsync-gateway-entry.ts")
+) {
+  throw new Error("Filesystem probe settings require --entry scripts/perf/fsync-gateway-entry.ts");
+}
 const fixture: unknown = JSON.parse(
   readFileSync(path.join(root, "team-shape-summary.json"), "utf8"),
 );
@@ -568,7 +632,84 @@ if (values["github-options-connected"] && fixture.githubOptionsConnected !== tru
 }
 const output = path.join(root, `broadcast-measure-${Date.now()}`);
 mkdirSync(output);
+type WorkerHeapEvidence = {
+  prefix: string;
+  script: string;
+  threadId: number;
+  before?: Record<string, unknown>;
+  start?: Record<string, unknown>;
+  stop?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+  snapshot?: Record<string, unknown>;
+};
+const workerHeapEvidence = {
+  complete: true,
+  acceptanceTiming:
+    !values.allocations &&
+    !values["stream-start-allocations"] &&
+    !values["worker-snapshots"] &&
+    !idleScenario &&
+    (!soakScenario || retainedProfileMs === 0),
+  errors: [] as string[],
+  workers: [] as WorkerHeapEvidence[],
+};
+const workerHeapDoneFile = values["worker-heap-done-file"];
+const workerHeapPeerDoneFile = values["worker-heap-peer-done-file"];
+if (
+  Boolean(workerHeapDoneFile) !== Boolean(workerHeapPeerDoneFile) ||
+  (workerHeapDoneFile &&
+    (!values["worker-retained-heap"] ||
+      scenario !== "memory-soak" ||
+      values["mixed-rpc"] ||
+      values["fingerprint-retention"] ||
+      !workerHeapEvidence.acceptanceTiming))
+) {
+  throw new Error(
+    "Worker heap pair markers require both paths and an unprofiled memory soak without mixed RPCs or fingerprint retention",
+  );
+}
+if (
+  workerHeapDoneFile &&
+  workerHeapPeerDoneFile &&
+  path.resolve(workerHeapDoneFile) === path.resolve(workerHeapPeerDoneFile)
+) {
+  throw new Error("Worker heap pair markers must use distinct paths");
+}
+async function workerHeapCommand(worker: WorkerHeapEvidence, operation: string) {
+  const id = `${operation}-${randomUUID()}`;
+  const commandPath = `${worker.prefix}.command.json`;
+  const replyPath = `${worker.prefix}.${id}.json`;
+  try {
+    writeFileSync(`${commandPath}.tmp`, JSON.stringify({ id, operation }));
+    renameSync(`${commandPath}.tmp`, commandPath);
+    const deadline = Date.now() + (operation === "snapshot" ? 120_000 : 30_000);
+    while (!existsSync(replyPath) && Date.now() < deadline) {
+      await delay(25);
+    }
+    const reply: unknown = JSON.parse(readFileSync(replyPath, "utf8"));
+    if (!isRecord(reply) || reply.ok !== true || reply.complete === false) {
+      throw new Error(`Worker heap ${operation} failed: ${JSON.stringify(reply)}`);
+    }
+    return reply;
+  } catch (error) {
+    const message = `${worker.script}/${worker.threadId} ${operation}: ${String(error)}`;
+    workerHeapEvidence.complete = false;
+    workerHeapEvidence.errors.push(message);
+    return { ok: false, error: message };
+  }
+}
+const targetWorkerScript = (script: string) =>
+  /^(sqlite-store|prepared-model-catalog)\.worker\.[cm]?[jt]s$/.test(script);
 const project = Array.isArray(fixture.projectWorktrees) ? fixture.projectWorktrees[0] : undefined;
+const coldBaseRefs =
+  isRecord(project) && Array.isArray(project.coldBaseRefs)
+    ? project.coldBaseRefs.filter((ref: unknown): ref is string => typeof ref === "string")
+    : [];
+if (values["attempt-setup-image"] && coldBaseRefs.length < coldSessionRounds * runCount) {
+  throw new Error(
+    "Regenerate the fixture with --worktree-cold-commits >= cold-session-rounds * runs",
+  );
+}
 const fixtureSessionCount = typeof fixture.sessionCount === "number" ? fixture.sessionCount : 0;
 const patchKeys =
   scenario === "sessions.patch"
@@ -586,7 +727,7 @@ if (values["mixed-rpc"] && fixtureSessionCount < 1) {
 }
 let stressWorktree: string | undefined;
 let diffControlOriginal: string | undefined;
-if (values["stress-tools"] || values["mixed-rpc"]) {
+if (values["stress-tools"] || values["mixed-rpc"] || values["attempt-setup-image"]) {
   if (!isRecord(project) || typeof project.path !== "string") {
     throw new Error("stress tools and mixed RPCs require a fixture generated with --projects >= 1");
   }
@@ -833,6 +974,52 @@ module.exports = { id, register(api) {
     load: { paths: [plugin.pluginsDir] },
   };
 }
+if (values["attempt-setup-image"]) {
+  cfg.tools.toolSearch = { enabled: false };
+  cfg.tools.sandbox = { tools: { allow: ["*"] } };
+  cfg.agents.defaults.sandbox = {
+    mode: "all",
+    backend: "podman",
+    scope: "session",
+    workspaceAccess: "rw",
+    workspaceRoot: path.join(root, "sandboxes"),
+    docker: {
+      image: values["attempt-setup-image"],
+      containerPrefix: `bench-attempt-${port}-`,
+      network: "none",
+      cpus: 1,
+      memory: "512m",
+    },
+  };
+  const plugin = writePluginFixtures(output, { count: 1, activationOnStartup: true });
+  writeFileSync(
+    path.join(plugin.pluginsDir, plugin.pluginIds[0]!, "index.cjs"),
+    `module.exports = { id: ${JSON.stringify(plugin.pluginIds[0])}, register(api) {
+      api.registerTool({ name: "benchmark_probe", label: "Benchmark probe",
+        description: "Read a synthetic benchmark fact.", parameters: { type: "object", properties: {} },
+        execute: async () => ({ content: [{ type: "text", text: "synthetic-plugin-ready" }] }) });
+    } };\n`,
+  );
+  cfg.plugins = {
+    ...cfg.plugins,
+    enabled: true,
+    allow: [...new Set([...(cfg.plugins?.allow ?? []), ...plugin.pluginIds])],
+    load: { paths: [plugin.pluginsDir] },
+  };
+  const manifestPath = path.join(plugin.pluginsDir, plugin.pluginIds[0]!, "openclaw.plugin.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  manifest.contracts = { tools: ["benchmark_probe"] };
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  cfg.mcp = {
+    servers: {
+      benchmark: {
+        transport: "streamable-http",
+        url: `http://127.0.0.1:${mockPort}/mcp`,
+        enabled: true,
+      },
+    },
+  };
+}
 const authorityPreload = path.join(output, "authority-counts-preload.mjs");
 if (values["authority-counts"]) {
   // Source observation belongs to the rig; the production owners expose no benchmark hooks.
@@ -1048,6 +1235,9 @@ if (trustedProxyScenario) {
   };
 }
 const toolPaths = Array.from({ length: retentionScenario ? 3 : 1 }, (_, index) => {
+  if (values["attempt-setup-image"]) {
+    return "README.md";
+  }
   const file = path.join(root, "workspace", `synthetic-tool-input-${index}.txt`);
   writeFileSync(
     file,
@@ -1329,6 +1519,8 @@ function createPollRandom(round: number, client: number) {
   };
 }
 const sessionEventRuns = new Map<string, { resolve: (runId: string) => void }>();
+const queuedChatInputs = new Map<string, () => void>();
+const terminalChatInputs = new Map<string, (state: string) => void>();
 let cohort:
   | {
       id: string;
@@ -1368,12 +1560,35 @@ const expectedHistoricalReasoning =
           ),
       )
     : [];
+const attemptSetupCatalog = new Set<string>();
 const mock = createServer((req, res) => {
   if (req.url === "/health") {
     res.end("ok");
     return;
   }
   void (async () => {
+    if (values["attempt-setup-image"] && req.url === "/mcp") {
+      const server = new McpServer({ name: "attempt-setup-fixture", version: "1.0.0" });
+      server.registerTool(
+        "lookup_note",
+        {
+          description: "Read a synthetic fixture note.",
+          inputSchema: z.object({ id: z.string() }),
+        },
+        async () => ({ content: [{ type: "text", text: "synthetic-mcp-ready" }] }),
+      );
+      const transport = new NodeStreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        enableJsonResponse: true,
+      });
+      await server.connect(transport);
+      try {
+        await transport.handleRequest(req, res);
+      } finally {
+        await server.close();
+      }
+      return;
+    }
     const body: unknown = JSON.parse(
       await readBody(
         req,
@@ -1433,6 +1648,24 @@ const mock = createServer((req, res) => {
               .split("\n")
               .some((line) => stripInboundMetadata(line).trim() === primaryMessage)
           : stripInboundMetadata(lastUser).trim().split("\n")[0] === primaryMessage);
+    if (primary && values["attempt-setup-image"]) {
+      const tools = isRecord(body) && Array.isArray(body.tools) ? body.tools : [];
+      const names = new Set(
+        tools.flatMap((tool: unknown) => {
+          if (!isRecord(tool)) {
+            return [];
+          }
+          const name = tool.name ?? (isRecord(tool.function) ? tool.function.name : undefined);
+          return typeof name === "string" ? [name] : [];
+        }),
+      );
+      for (const expected of ["benchmark_probe", "benchmark__lookup_note"]) {
+        if (!names.has(expected)) {
+          throw new Error(`Attempt setup did not expose synthetic tool ${expected}`);
+        }
+        attemptSetupCatalog.add(expected);
+      }
+    }
     const requestPhase = primary
       ? `primary:${index}`
       : continuation
@@ -1469,7 +1702,11 @@ const mock = createServer((req, res) => {
         toolOutputs.some(
           (toolResult) =>
             typeof toolResult.output !== "string" ||
-            !toolResult.output.includes("Synthetic allocation benchmark tool result.") ||
+            !toolResult.output.includes(
+              values["attempt-setup-image"]
+                ? "# Synthetic project "
+                : "Synthetic allocation benchmark tool result.",
+            ) ||
             (values["stress-tools"] && !toolResult.output.includes("synthetic-code-exec-verified")),
         )
       ) {
@@ -1836,6 +2073,15 @@ const ownedListeners = new Set<ChildProcess>();
 const env = {
   ...createGatewayBenchEnv(path.join(root, "home"), configPath, { startupTrace: false }),
   OPENCLAW_STATE_DIR: root,
+  ...(values["attempt-setup-image"] && process.env.CONTAINERS_STORAGE_CONF
+    ? { CONTAINERS_STORAGE_CONF: process.env.CONTAINERS_STORAGE_CONF }
+    : {}),
+  ...(values["attempt-setup-image"] && process.env.CONTAINERS_CONF
+    ? { CONTAINERS_CONF: process.env.CONTAINERS_CONF }
+    : {}),
+  ...(values["attempt-setup-image"] && process.env.OPENCLAW_PATH_BOOTSTRAPPED === "1"
+    ? { OPENCLAW_PATH_BOOTSTRAPPED: "1" }
+    : {}),
   TMPDIR: path.join(root, "tmp"),
   OPENAI_API_KEY: "synthetic-fixture",
   ...(values["github-options-connected"]
@@ -1858,11 +2104,20 @@ const env = {
   ...(process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1"
     ? { OPENCLAW_BENCH_WORKER_ATTRIBUTION: "1" }
     : {}),
+  ...(process.env.OPENCLAW_PERF_MEDIA_IO === "1" ? { OPENCLAW_PERF_MEDIA_IO: "1" } : {}),
+  ...(process.env.OPENCLAW_PERF_FSYNC_DELAY_MS !== undefined
+    ? { OPENCLAW_PERF_FSYNC_DELAY_MS: process.env.OPENCLAW_PERF_FSYNC_DELAY_MS }
+    : {}),
   ...(values["session-projection-counts"] ? { OPENCLAW_BENCH_SESSION_PROJECTION_COUNTS: "1" } : {}),
   ...(sessionProjectionSource
     ? { OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE: sessionProjectionSource }
     : {}),
   ...(values["worker-memory"] ? { OPENCLAW_BENCH_WORKER_MEMORY_DIR: output } : {}),
+  ...(values["worker-snapshots"] ? { OPENCLAW_BENCH_WORKER_SNAPSHOTS: "1" } : {}),
+  ...(values["worker-retained-heap"] ? { OPENCLAW_BENCH_RETAINED_WORKER_DIR: output } : {}),
+  ...(values["worker-baseline-dir"]
+    ? { OPENCLAW_BENCH_BASELINE_DIR: path.resolve(values["worker-baseline-dir"]) }
+    : {}),
   ...(values["baseline-owners"] ? { OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS: "1" } : {}),
   ...(values["github-observation-owner"]
     ? { OPENCLAW_BENCH_GITHUB_OBSERVATION_OWNER: path.resolve(values["github-observation-owner"]) }
@@ -1870,6 +2125,14 @@ const env = {
   ...(values["github-availability-owner"]
     ? {
         OPENCLAW_BENCH_GITHUB_AVAILABILITY_OWNER: path.resolve(values["github-availability-owner"]),
+      }
+    : {}),
+  ...(values["github-state-handlers"]
+    ? { OPENCLAW_BENCH_GITHUB_STATE_HANDLERS: path.resolve(values["github-state-handlers"]) }
+    : {}),
+  ...(values["github-publication-reader"]
+    ? {
+        OPENCLAW_BENCH_GITHUB_PUBLICATION_READER: path.resolve(values["github-publication-reader"]),
       }
     : {}),
 };
@@ -2917,6 +3180,77 @@ async function runRound(
     reject,
   };
   const current = cohort;
+  const activeInputs: {
+    sessionKey: string;
+    runId: string;
+    message: string;
+    terminal: Promise<string>;
+  }[] = [];
+  const createActiveInput = (sessionKey: string, message: string) => {
+    const runId = randomUUID();
+    const terminal = Promise.withResolvers<string>();
+    terminalChatInputs.set(runId, terminal.resolve);
+    const input = { sessionKey, runId, message, terminal: terminal.promise };
+    activeInputs.push(input);
+    return input;
+  };
+  const activeAckLatenciesMs: number[] = [];
+  let activeAcksBeforeRelease = 0;
+  let activeInputWork: Promise<void>[] = [];
+  if (chatActiveHoldMs) {
+    const beforeRelease = current.beforeRelease;
+    current.beforeRelease = async () => {
+      await beforeRelease?.();
+      // An older queued input must own custody before later steering attempts arrive.
+      await Promise.all(
+        roundKeys.map(async (sessionKey) => {
+          const input = createActiveInput(
+            sessionKey,
+            `Synthetic queued predecessor ${randomUUID()}.`,
+          );
+          const queued = Promise.withResolvers<void>();
+          queuedChatInputs.set(input.runId, queued.resolve);
+          try {
+            await rpc(client, "chat.send", {
+              sessionKey,
+              message: `/followup ${input.message}`,
+              idempotencyKey: input.runId,
+              queueMode: "followup",
+              deliver: false,
+            });
+            await Promise.race([queued.promise, current.ready]);
+          } finally {
+            queuedChatInputs.delete(input.runId);
+          }
+        }),
+      );
+      activeInputWork = roundKeys.flatMap((sessionKey) =>
+        Array.from({ length: 2 }, async () => {
+          const input = createActiveInput(
+            sessionKey,
+            `Synthetic active steering input ${randomUUID()}.`,
+          );
+          const started = performance.now();
+          await rpc(client, "chat.send", {
+            sessionKey,
+            message: input.message,
+            idempotencyKey: input.runId,
+            queueMode: "steer",
+            deliver: false,
+          });
+          activeAckLatenciesMs.push(performance.now() - started);
+          if (current.phases.streamsReleasedAtEpochMs === undefined) {
+            activeAcksBeforeRelease++;
+          }
+        }),
+      );
+      for (const work of activeInputWork) {
+        void work.catch(current.reject);
+      }
+      // Release independently of ACKs: a blocked baseline reports the held-turn delay.
+      await delay(chatActiveHoldMs);
+    };
+  }
   // Include the first response processing after the mock releases the whole cohort.
   const captureWork =
     profilePath || heapProfilePath || finishAdmissionDiagnostics
@@ -2942,14 +3276,15 @@ async function runRound(
           }
         })()
       : undefined;
+  const providerTimeoutMs = values["attempt-setup-image"] ? 170_000 : 45_000;
   const timeout = setTimeout(
     () =>
       current.reject(
         new Error(
-          `only ${current.arrivals.size}/${current.expectedCount} primary model requests arrived in 45s`,
+          `only ${current.arrivals.size}/${current.expectedCount} primary model requests arrived in ${providerTimeoutMs}ms`,
         ),
       ),
-    45_000,
+    providerTimeoutMs,
   );
   const turnLatencies: number[] = [];
   let subagentWork: Awaited<ReturnType<typeof startStressSubagent>> | undefined;
@@ -3042,12 +3377,91 @@ async function runRound(
       ? finishStressSubagent(client, subagentWork)
       : undefined;
     await Promise.all([cohortReady, captureWork, turns, subagentCompletion]);
+    if (chatActiveHoldMs) {
+      await Promise.all(activeInputWork);
+      // agent.wait reports queued custody immediately; wait for each public terminal event first.
+      const terminalDeadline = Promise.withResolvers<never>();
+      const terminalTimeout = setTimeout(
+        () => terminalDeadline.reject(new Error("active inputs did not complete within 170s")),
+        170_000,
+      );
+      try {
+        await Promise.race([
+          Promise.all(
+            activeInputs.map(async (input) => {
+              const state = await input.terminal;
+              if (state !== "final") {
+                throw new Error(`active input terminated with ${state}`);
+              }
+            }),
+          ),
+          terminalDeadline.promise,
+        ]);
+      } finally {
+        clearTimeout(terminalTimeout);
+      }
+      await Promise.all(
+        activeInputs.map(async ({ runId }) => {
+          const result = await rpc(client, "agent.wait", { runId, timeoutMs: 170_000 });
+          if (!isRecord(result) || result.status !== "ok") {
+            throw new Error(`active input did not settle successfully: ${JSON.stringify(result)}`);
+          }
+        }),
+      );
+      for (const sessionKey of roundKeys) {
+        const inputs = activeInputs.filter((input) => input.sessionKey === sessionKey);
+        const history = await rpc(client, "chat.history", {
+          sessionKey,
+          limit: 100,
+          inputRunIds: inputs.map((input) => input.runId),
+        });
+        if (
+          !isRecord(history) ||
+          !Array.isArray(history.messages) ||
+          !Array.isArray(history.inputReceipts)
+        ) {
+          throw new Error("active input history or custody receipts are missing");
+        }
+        for (const input of inputs) {
+          const messages = history.messages.filter(
+            (message: unknown) =>
+              isRecord(message) &&
+              message.role === "user" &&
+              isRecord(message["__openclaw"]) &&
+              message["__openclaw"].idempotencyKey === `${input.runId}:user` &&
+              contentText(message.content).includes(input.message),
+          );
+          const receipts = history.inputReceipts.filter(
+            (receipt: unknown) => isRecord(receipt) && receipt.runId === input.runId,
+          );
+          // Standalone promotion removes its pending row; only collected inputs retain receipts.
+          if (messages.length !== 1 || receipts.length !== 0) {
+            throw new Error(
+              `active input was not consumed exactly once: ${JSON.stringify({
+                runId: input.runId,
+                matchingMessages: messages.length,
+                receipts,
+              })}`,
+            );
+          }
+        }
+      }
+    }
     const subagent = await subagentCompletion;
     if (soakScenario) {
       completedSoakRounds++;
     }
     return {
       phases: current.phases,
+      ...(chatActiveHoldMs
+        ? {
+            activeChatSendAck: {
+              ...latencySummary(activeAckLatenciesMs),
+              acknowledgedBeforeRelease: activeAcksBeforeRelease,
+              consumedExactlyOnce: activeInputs.length,
+            },
+          }
+        : {}),
       turnLatencyMs: summarizeLatencies(turnLatencies),
       providerRequestMs: summarizeLatencies(
         [...current.turns.values()].flatMap((turn) => turn.providerRequestMs ?? []),
@@ -3062,6 +3476,9 @@ async function runRound(
       ...capture,
     };
   } finally {
+    for (const input of activeInputs) {
+      terminalChatInputs.delete(input.runId);
+    }
     if (stressSubagent) {
       stressSubagent.cancelled = true;
       stressSubagent.releaseChild();
@@ -3299,6 +3716,24 @@ async function connectClient(index: number) {
       }
       const payload = isRecord(event.payload) ? event.payload : undefined;
       if (
+        index === 0 &&
+        event.event === "chat" &&
+        typeof payload?.runId === "string" &&
+        typeof payload.state === "string" &&
+        ["final", "error", "aborted"].includes(payload.state)
+      ) {
+        terminalChatInputs.get(payload.runId)?.(payload.state);
+      }
+      if (
+        index === 0 &&
+        event.event === "chat" &&
+        typeof payload?.runId === "string" &&
+        isRecord(payload.message) &&
+        contentText(payload.message.content).includes("Your message is queued for a new turn")
+      ) {
+        queuedChatInputs.get(payload.runId)?.();
+      }
+      if (
         event.event === "agent" &&
         payload?.stream === "lifecycle" &&
         isRecord(payload.data) &&
@@ -3508,6 +3943,9 @@ try {
       ...(values["worker-memory"] || values["baseline-owners"]
         ? ["--import", "./scripts/perf/transcript-worker-memory-preload.ts"]
         : []),
+      ...(values["worker-retained-heap"] || values["worker-baseline-dir"]
+        ? ["--import", "./scripts/perf/worker-retained-heap-preload.ts"]
+        : []),
       ...(values["dashboard-rpc"] ? ["--import", dashboardPreload] : []),
       ...(values["github-options-observe"]
         ? ["--import", "./scripts/perf/github-options-measure-preload.ts"]
@@ -3571,6 +4009,9 @@ try {
           ...(stressWorktree ? { cwd: stressWorktree } : {}),
           ...(values["activity-summaries"] ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
           fork: false,
+          ...(values["attempt-setup-image"]
+            ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
+            : {}),
           visibility: "shared",
           displayName: "Synthetic broadcast child",
         });
@@ -3746,8 +4187,30 @@ try {
       throw new Error(`stress cron did not complete its real agent turn: ${JSON.stringify(run)}`);
     }
   }
+  if (scenario === "cron.list" && (fixture.cronJobs !== 40 || fixture.cronAnnounceLast !== true)) {
+    throw new Error("cron.list requires a fixture generated with --cron 40 --cron-announce-last");
+  }
+  if (scenario === "board.get") {
+    for (let index = 0; index < 3; index++) {
+      await rpc(sender, "board.widget.put", {
+        sessionKey: parentKey,
+        name: `synthetic-gc-audit-${index}`,
+        content: { kind: "html", html: `<p>Synthetic widget ${index}</p>` },
+      });
+    }
+  }
   console.log("PHASE subscribed-and-reset");
   let idleTurnCohorts: Awaited<ReturnType<typeof runRound>>[] = [];
+  const listFilterShapes = [
+    {},
+    { archived: false },
+    { archived: true },
+    { search: "team-shape" },
+    { agentId: "main" },
+    { excludeSubagents: true },
+    { excludeSystem: true, excludeCron: true },
+  ];
+  let listChurnSequence = 0;
   const runScenario = async (measuredRound?: number, operationCount = operations) => {
     if (idleScenario) {
       idleTurnCohorts = [];
@@ -3813,10 +4276,19 @@ try {
               }
             } else if (scenario === "sessions.list" || scenario === "subscribe") {
               const method = scenario === "subscribe" ? "sessions.subscribe" : "sessions.list";
+              if (values["list-filter-churn"] && (offset + index) % 10 === 0) {
+                const params = {
+                  key: parentKey,
+                  label: `Synthetic list filter churn ${listChurnSequence++}`,
+                };
+                assertSessionPatch(params, await rpc(workerClient, "sessions.patch", params));
+              }
               const result = await rpc(workerClient, method, {
                 limit,
                 rowMode,
-                archived: "all",
+                ...(values["list-filter-churn"]
+                  ? listFilterShapes[(offset + index) % listFilterShapes.length]
+                  : { archived: "all" }),
               });
               assertListPage(
                 scenario === "subscribe"
@@ -3858,6 +4330,57 @@ try {
                 result.afterCount !== result.beforeCount
               ) {
                 throw new Error("sessions.cleanup did not preserve the warning-mode fixture");
+              }
+            } else if (scenario === "cron.list") {
+              const result = await rpc(workerClient, "cron.list", {
+                includeDisabled: true,
+                compact: false,
+                limit: 200,
+              });
+              if (
+                !isRecord(result) ||
+                !Array.isArray(result.jobs) ||
+                result.jobs.length !== 40 ||
+                !isRecord(result.deliveryPreviews) ||
+                Object.keys(result.deliveryPreviews).length !== 40
+              ) {
+                throw new Error(
+                  "cron.list did not return all 40 disabled jobs with delivery previews",
+                );
+              }
+              const jobIds = new Set<string>();
+              for (const job of result.jobs) {
+                if (!isRecord(job) || typeof job.id !== "string" || job.enabled !== false) {
+                  throw new Error("cron.list returned an unexpected job");
+                }
+                jobIds.add(job.id);
+                const preview = result.deliveryPreviews[job.id];
+                if (
+                  !isRecord(preview) ||
+                  preview.label !== "announce -> last" ||
+                  typeof preview.detail !== "string" ||
+                  !preview.detail.startsWith("last -> no route, will be blocked:")
+                ) {
+                  throw new Error(
+                    "cron.list omitted the synthetic job's unresolved last-route preview",
+                  );
+                }
+              }
+              if (
+                !Array.from({ length: 40 }, (_, jobIndex) => `team-shape-cron-${jobIndex}`).every(
+                  (id) => jobIds.has(id),
+                )
+              ) {
+                throw new Error("cron.list changed the synthetic job inventory");
+              }
+            } else if (scenario === "board.get") {
+              const result = await rpc(workerClient, "board.get", { sessionKey: parentKey });
+              if (
+                !isRecord(result) ||
+                !Array.isArray(result.widgets) ||
+                result.widgets.length !== 3
+              ) {
+                throw new Error("board.get did not return all three synthetic widgets");
               }
             } else if (scenario === "plugin.scope") {
               const sequence = offset + index;
@@ -3928,6 +4451,44 @@ try {
     );
   }
   console.log("PHASE warmed");
+  if (values["worker-retained-heap"]) {
+    const resources = await readGatewayResources(gateway, { includeWorkers: true });
+    const live = [
+      ...(resources.workers?.workerHeaps ?? []),
+      ...(resources.workers?.workerMemoryMissing ?? []),
+    ].filter((worker) => targetWorkerScript(worker.script));
+    for (const worker of live) {
+      const prefix = path.join(output, `worker-${gateway.pid}-${worker.threadId}`);
+      if (worker.threadId === undefined || !existsSync(`${prefix}.ready.json`)) {
+        workerHeapEvidence.complete = false;
+        workerHeapEvidence.errors.push(
+          `Missing worker heap preload: ${worker.script}/${worker.threadId}`,
+        );
+        continue;
+      }
+      const evidence: WorkerHeapEvidence = {
+        prefix,
+        script: worker.script,
+        threadId: worker.threadId,
+      };
+      workerHeapEvidence.workers.push(evidence);
+      evidence.before = await workerHeapCommand(evidence, "collect");
+    }
+    for (const script of ["sqlite-store.worker.js", "prepared-model-catalog.worker.js"]) {
+      const workers = workerHeapEvidence.workers.filter((worker) => worker.script === script);
+      if (!workers.length) {
+        workerHeapEvidence.complete = false;
+        workerHeapEvidence.errors.push(`No warmed target worker: ${script}`);
+      }
+    }
+  }
+  if (values["start-file"]) {
+    while (!existsSync(values["start-file"])) {
+      assertGatewayAlive();
+      await delay(250);
+    }
+    startAt = integer(readFileSync(values["start-file"], "utf8").trim(), "--start-file epoch");
+  }
   if (startAt !== undefined) {
     if (Date.now() >= startAt) {
       throw new Error("--start-at passed before fixture readiness and warmup");
@@ -3957,12 +4518,39 @@ try {
       includeWorkers: values["worker-allocations"],
     });
   }
+  const startedHeapWorkers: WorkerHeapEvidence[] = [];
+  for (const worker of workerHeapEvidence.workers) {
+    worker.start = await workerHeapCommand(worker, "start");
+    if (worker.start.ok === true) {
+      startedHeapWorkers.push(worker);
+    }
+  }
   const measurementStartedAt = Date.now();
   const measuredGateway = gateway;
+  const wholeChatDiagnosticsEnabled =
+    scenario === "chat.send" &&
+    !values["attempt-setup-image"] &&
+    values.diagnostics &&
+    !values.allocations &&
+    !values["cpu-profile"] &&
+    !values["workload-cpu-profile"] &&
+    !values["stream-start-allocations"];
   const finishWholeWorkloadDiagnostics =
-    (soakScenario || scenario === "plugins.reload") &&
+    (soakScenario ||
+      scenario === "plugins.reload" ||
+      wholeChatDiagnosticsEnabled ||
+      values["attempt-setup-image"]) &&
     (values.diagnostics || values.allocations || values["trace-gc"])
-      ? await startGatewayDiagnostics(gateway, soakScenario ? "whole-soak" : "whole-reload")
+      ? await startGatewayDiagnostics(
+          gateway,
+          soakScenario
+            ? "whole-soak"
+            : values["attempt-setup-image"]
+              ? "whole-attempt-setup"
+              : scenario === "chat.send"
+                ? "whole-chat"
+                : "whole-reload",
+        )
       : undefined;
   const samples = [];
   const memorySamples: Array<{
@@ -4055,6 +4643,31 @@ try {
       : round < (idleScenario ? 2 : rounds);
     round++
   ) {
+    if (scenario === "chat.send" && round < coldSessionRounds) {
+      for (const [index, previous] of keys.entries()) {
+        const key = `agent:main:transcript-broadcast-cold-${port}-${round}-${index}`;
+        await rpc(sender, "sessions.create", {
+          key,
+          ...(stressWorktree ? { cwd: stressWorktree } : {}),
+          ...(values["attempt-setup-image"]
+            ? { worktree: true, worktreeBaseRef: coldBaseRefs[round * runCount + index] }
+            : {}),
+          parentSessionKey: parentKey,
+          spawnDepth: 1,
+          fork: false,
+          visibility: "shared",
+          displayName: "Synthetic cold setup",
+        });
+        for (const client of clients.slice(0, exactClients)) {
+          await rpc(client, "sessions.messages.unsubscribe", {
+            key: previous,
+            subscriptionId: previous,
+          });
+          await rpc(client, "sessions.messages.subscribe", { key, subscriptionId: key });
+        }
+        keys[index] = key;
+      }
+    }
     const roundStartedAt = Date.now();
     if (
       soakScenario &&
@@ -4097,7 +4710,7 @@ try {
     activeWorkCounts = undefined;
     const finishGatewayDiagnostics =
       values.diagnostics || values["transport-counts"] || values["session-projection-counts"]
-        ? await startGatewayDiagnostics(gateway)
+        ? await startGatewayDiagnostics(gateway, `round-${round}`)
         : undefined;
     const finishControllerDiagnostics = values.diagnostics
       ? startGatewayBenchDiagnostics()
@@ -4297,7 +4910,9 @@ try {
         : undefined;
       try {
         streamStart = await runScenario(round);
-        await drainEvents();
+        if (!values["dashboard-rpc"]) {
+          await drainEvents();
+        }
         if (values["dashboard-rpc"]) {
           // Dashboards keep polling between bursts of agent work.
           const pacedUntil = Math.min(
@@ -4729,6 +5344,26 @@ try {
       ]);
     }
   }
+  for (const worker of startedHeapWorkers) {
+    worker.stop = await workerHeapCommand(worker, "stop");
+  }
+  if (values["worker-retained-heap"]) {
+    const resources = await readGatewayResources(gateway, { includeWorkers: true });
+    const late = [
+      ...(resources.workers?.workerHeaps ?? []),
+      ...(resources.workers?.workerMemoryMissing ?? []),
+    ].filter(
+      (worker) =>
+        targetWorkerScript(worker.script) &&
+        !startedHeapWorkers.some((started) => started.threadId === worker.threadId),
+    );
+    if (late.length) {
+      workerHeapEvidence.complete = false;
+      workerHeapEvidence.errors.push(
+        `Workers outside measured census: ${JSON.stringify(late.map(({ script, threadId }) => ({ script, threadId })))}`,
+      );
+    }
+  }
   let fingerprintRetention;
   if (values["fingerprint-retention"]) {
     // Keep the diagnostic baseline through reopening. Attribute retention only
@@ -4766,6 +5401,16 @@ try {
     await delay(Math.max(0, durationMs - (Date.now() - measurementStartedAt)));
   }
   const wholeWorkloadDiagnostics = await finishWholeWorkloadDiagnostics?.();
+  if (workerHeapDoneFile && workerHeapPeerDoneFile) {
+    writeFileSync(workerHeapDoneFile, String(Date.now()));
+    const deadline = Date.now() + 120_000;
+    while (!existsSync(workerHeapPeerDoneFile)) {
+      if (Date.now() >= deadline) {
+        throw new Error("Worker heap peer did not finish its timing window");
+      }
+      await delay(100);
+    }
+  }
   if (values["dashboard-rpc"] && dashboardFixtureRequests === 0) {
     throw new Error("Dashboard GitHub preview never reached the synthetic transport");
   }
@@ -4795,6 +5440,12 @@ try {
         ? { workerManifestPath: `${soakAllocationPath}.workers.json` }
         : {}),
     };
+  }
+  // Both worker and whole-workload timing windows have ended before forced collections.
+  for (const worker of startedHeapWorkers) {
+    if (worker.stop?.ok === true) {
+      worker.after = await workerHeapCommand(worker, "collect");
+    }
   }
   let retainedProfile;
   if (soakScenario) {
@@ -4918,8 +5569,27 @@ try {
     }
     writeFileSync(path.join(output, "list-responses.json"), JSON.stringify(listResponses));
   }
+  if (values["worker-heap-snapshot"]) {
+    // Capture serially after every metric/profile window; snapshots cannot alter recorded timings.
+    const heapBytes = (worker: WorkerHeapEvidence) =>
+      isRecord(worker.after?.memory) && typeof worker.after.memory.heapUsed === "number"
+        ? worker.after.memory.heapUsed
+        : -1;
+    for (const script of ["sqlite-store.worker.js", "prepared-model-catalog.worker.js"]) {
+      const largest = startedHeapWorkers
+        .filter((worker) => worker.script === script && worker.after?.ok === true)
+        .toSorted((a, b) => heapBytes(b) - heapBytes(a))[0];
+      if (largest) {
+        largest.snapshot = await workerHeapCommand(largest, "snapshot");
+      }
+    }
+  }
   // Process exit plus drained log streams makes promotion accounting independent of pipe buffering.
   await cleanup();
+  const wholeChatGc =
+    wholeChatDiagnosticsEnabled && wholeWorkloadDiagnostics && values["trace-gc"]
+      ? readGatewayGcTrace(path.join(output, "gateway.stdout.log"), "whole-chat", "diagnostics")
+      : undefined;
   let wholeSoakGc;
   if (soakScenario && wholeWorkloadDiagnostics && (values.allocations || values["trace-gc"])) {
     const trace = readGatewayGcTrace(
@@ -4942,6 +5612,7 @@ try {
   }
   const result = {
     output,
+    ...(values["worker-retained-heap"] ? { workerHeapEvidence } : {}),
     scenario,
     verifyHistoryReplay,
     revision: values.revision ?? null,
@@ -4949,6 +5620,7 @@ try {
     completedRounds: samples.length,
     sessionResets,
     warmupOperations: turnScenario ? undefined : warmupOperations,
+    scheduledStartAtEpochMs: startAt,
     rpcConcurrency,
     rpcIntervalMs,
     reconnectStaggerMs,
@@ -5052,12 +5724,24 @@ try {
     cpuProfile: values["cpu-profile"],
     workloadCpuProfile: values["workload-cpu-profile"],
     captureResponses: values["capture-responses"],
+    listFilterChurn: values["list-filter-churn"],
     traceGc: values["trace-gc"] || values.allocations || values["stream-start-allocations"],
     streamStartDiagnostics: values["stream-start-diagnostics"],
     streamStartAllocations: values["stream-start-allocations"],
     activeWorkDiagnostics: values["active-work-diagnostics"],
     measurementStartedAt,
+    ...(env.OPENCLAW_PERF_MEDIA_IO || env.OPENCLAW_PERF_FSYNC_DELAY_MS
+      ? {
+          fsyncProbe: {
+            mediaIo: env.OPENCLAW_PERF_MEDIA_IO === "1",
+            delayMs: Number(env.OPENCLAW_PERF_FSYNC_DELAY_MS ?? 0),
+          },
+        }
+      : {}),
     ...(scenario === "plugins.reload" ? { wholeReloadDiagnostics: wholeWorkloadDiagnostics } : {}),
+    ...(wholeChatDiagnosticsEnabled
+      ? { wholeChatDiagnostics: wholeWorkloadDiagnostics, wholeChatGc }
+      : {}),
     initialFullFrame,
     clientCount,
     exactClients,
@@ -5071,6 +5755,46 @@ try {
             samples.flatMap((sample) => sample.rpc["chat.send"]?.latenciesMs ?? []),
           ),
           chatAttachmentBytes,
+          ...(chatActiveHoldMs
+            ? {
+                chatActiveHoldMs,
+                activeChatSendAck: {
+                  ...latencySummary(
+                    samples.flatMap(
+                      (sample) => sample.streamStart?.activeChatSendAck?.latenciesMs ?? [],
+                    ),
+                  ),
+                  acknowledgedBeforeRelease: samples.reduce(
+                    (sum, sample) =>
+                      sum + (sample.streamStart?.activeChatSendAck?.acknowledgedBeforeRelease ?? 0),
+                    0,
+                  ),
+                  consumedExactlyOnce: samples.reduce(
+                    (sum, sample) =>
+                      sum + (sample.streamStart?.activeChatSendAck?.consumedExactlyOnce ?? 0),
+                    0,
+                  ),
+                },
+              }
+            : {}),
+          attemptSetupImage: values["attempt-setup-image"],
+          attemptSetupCatalog: [...attemptSetupCatalog].toSorted(),
+          coldSessionRounds,
+          firstModelRequest: {
+            "cold-session": latencySummary(
+              samples
+                .filter((sample) => sample.round < coldSessionRounds)
+                .flatMap((sample) => sample.streamStart?.providerRequestMs.latencies ?? []),
+            ),
+            "warm-session": latencySummary(
+              samples
+                .filter((sample) => sample.round >= coldSessionRounds)
+                .flatMap((sample) => sample.streamStart?.providerRequestMs.latencies ?? []),
+            ),
+          },
+          ...(values["attempt-setup-image"]
+            ? { wholeAttemptSetupDiagnostics: wholeWorkloadDiagnostics }
+            : {}),
         }
       : {}),
     ...(scenario === "sessions.cleanup" ? { sessionMaintenanceMode: "warn" } : {}),
@@ -5132,6 +5856,46 @@ try {
       : {}),
     samples: samples.map((sample) =>
       Object.assign(sample, {
+        ...(!turnScenario &&
+        !connectionScenario &&
+        listIntervalMs === 0 &&
+        values.diagnostics &&
+        !values.allocations &&
+        !values["workload-cpu-profile"]
+          ? {
+              naturalGc: (() => {
+                const operationCount = Object.values(sample.rpc).reduce(
+                  (sum, measurement) => sum + measurement.count,
+                  0,
+                );
+                if (operationCount !== operations || !sample.diagnostics) {
+                  throw new Error(
+                    "Natural GC capture must contain the declared completed RPC count",
+                  );
+                }
+                const gcTrace = values["trace-gc"]
+                  ? readGatewayGcTrace(
+                      path.join(output, "gateway.stdout.log"),
+                      `round-${sample.round}`,
+                      "diagnostics",
+                    )
+                  : undefined;
+                return {
+                  operationCount,
+                  timingGateEligible: !values["trace-gc"],
+                  ...(gcTrace
+                    ? { gcTrace, promotedBytesPerOperation: gcTrace.promotedBytes / operationCount }
+                    : {}),
+                  millisecondsPerOperation: Object.fromEntries(
+                    Object.entries(sample.diagnostics.gateway.gc).map(([kind, metric]) => [
+                      kind,
+                      metric.total / operationCount,
+                    ]),
+                  ),
+                };
+              })(),
+            }
+          : {}),
         ...(sample.allocation
           ? {
               allocation: {
@@ -5164,6 +5928,18 @@ try {
   };
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));
   console.log(`RESULT ${path.join(output, "result.json")}`);
+} catch (error) {
+  if (values["github-options-observe"]) {
+    writeFileSync(
+      path.join(output, "github-options-failure.json"),
+      JSON.stringify({
+        stages: githubStages,
+        upstreamRequests: githubFixtureRequests,
+        observations: githubOptionsObservations,
+      }),
+    );
+  }
+  throw error;
 } finally {
   await cleanup();
 }

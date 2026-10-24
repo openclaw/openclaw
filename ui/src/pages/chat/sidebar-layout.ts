@@ -51,6 +51,15 @@ function createSidebarColumn(): SidebarColumn {
   };
 }
 
+// Layout edits mutate containers and launcher state; panel records are immutable.
+function editSidebarLayout(layout: SidebarLayout): SidebarLayout {
+  return {
+    ...layout,
+    columns: layout.columns.map((column) => ({ ...column, panels: [...column.panels] })),
+    ...(layout.newTab ? { newTab: { ...layout.newTab } } : {}),
+  };
+}
+
 /** Logical presentation, independent of responsive/narrow viewport projection. */
 export function sidebarDashboardPresentation(
   layout: SidebarLayout,
@@ -124,7 +133,7 @@ function removePanel(layout: SidebarLayout, panelId: string, sideIds: string[]):
 }
 
 export function ensureSidebarConversation(layout: SidebarLayout): SidebarLayout {
-  const next = structuredClone(layout);
+  const next = editSidebarLayout(layout);
   const column = (next.columns[0] ??= createSidebarColumn());
   let conversation = column.panels.find((panel) => panel.slot === "conversation");
   if (!conversation) {
@@ -141,7 +150,7 @@ export function ensureSidebarConversation(layout: SidebarLayout): SidebarLayout 
 export function promoteSidebarPanel(layout: SidebarLayout, panelId: string): SidebarLayout {
   const target = layout.columns[0]?.panels.find((panel) => panel.id === panelId);
   if (!target || sidebarMainPanel(layout)?.id === panelId) {
-    return structuredClone(layout);
+    return layout;
   }
   const next = ensureSidebarConversation(layout);
   const previousMainId = next.mainPanelId!;
@@ -183,7 +192,7 @@ export function openSidebarNewTab(
 }
 
 export function closeSidebarNewTab(layout: SidebarLayout): SidebarLayout {
-  const next = structuredClone(layout);
+  const next = editSidebarLayout(layout);
   const tab = next.newTab;
   if (!tab) {
     return next;
@@ -212,7 +221,7 @@ export function replaceSidebarNewTab(
   opened: SidebarLayout,
   slot: SidebarSlotId,
 ): SidebarLayout {
-  const next = structuredClone(opened);
+  const next = editSidebarLayout(opened);
   const tab = before.newTab;
   const column = next.columns[0];
   const panel = column?.panels.find((entry) => entry.slot === slot);
@@ -237,7 +246,7 @@ export function finishSidebarCloseAll(layout: SidebarLayout): SidebarLayout | nu
 }
 
 export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLayout {
-  const next = structuredClone(layout);
+  const next = editSidebarLayout(layout);
   if ((sidebarMainPanel(next)?.slot ?? "conversation") === slot) {
     return next.expandedSide ? setSidebarExpanded(next, false) : next;
   }
@@ -252,7 +261,12 @@ export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLay
 }
 
 export function closeSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLayout {
-  let next = structuredClone(layout);
+  if (!layout.columns[0]?.panels.some((panel) => panel.slot === slot)) {
+    return layout.columns.length === 0 && layout.open !== false
+      ? { ...layout, open: false }
+      : layout;
+  }
+  let next = editSidebarLayout(layout);
   const panel = next.columns[0]?.panels.find((entry) => entry.slot === slot);
   if (panel) {
     if (next.expandedSide && panel.id === sidebarActivePanel(next)?.id) {
@@ -286,7 +300,7 @@ export function closeSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLa
 }
 
 export function activatePanel(layout: SidebarLayout, panelId: string): SidebarLayout {
-  const next = structuredClone(layout);
+  const next = editSidebarLayout(layout);
   const column = next.columns[0];
   if (
     column &&
@@ -304,7 +318,7 @@ export function reorderPanel(
   targetPanelId: string,
   placement: "before" | "after",
 ): SidebarLayout {
-  const next = structuredClone(layout);
+  const next = editSidebarLayout(layout);
   const panels = next.columns[0]?.panels;
   if (!panels || panelId === targetPanelId) {
     return next;
@@ -338,7 +352,7 @@ export function reorderPanel(
 }
 
 export function setSidebarOpen(layout: SidebarLayout, open: boolean): SidebarLayout {
-  const next = structuredClone(layout);
+  const next = { ...layout, columns: [...layout.columns] };
   if (open) {
     next.columns[0] ??= createSidebarColumn();
   }
@@ -352,7 +366,7 @@ export function setSidebarOpen(layout: SidebarLayout, open: boolean): SidebarLay
 
 export function setSidebarExpanded(layout: SidebarLayout, expanded: boolean): SidebarLayout {
   // Restore split must reveal the side even when focus began with that panel closed.
-  const next = structuredClone(layout);
+  const next = { ...layout };
   delete next.expandedSide;
   return { ...next, expanded, ...(expanded ? { open: true } : {}) };
 }
@@ -367,7 +381,7 @@ export function toggleSidebarPanelExpanded(layout: SidebarLayout, panelId?: stri
     panelId !== layout.newTab?.id &&
     !sidebarSidePanels(layout).some((panel) => panel.id === panelId)
   ) {
-    return structuredClone(layout);
+    return layout;
   }
   if (
     layout.expanded &&
@@ -414,7 +428,7 @@ export function presentNarrowSidebarLayout(
 }
 
 export function setSidebarDock(layout: SidebarLayout, dock: SidebarDock): SidebarLayout {
-  return { ...structuredClone(layout), dock };
+  return { ...layout, dock };
 }
 
 export function resizeSidebarPanel(
@@ -422,17 +436,23 @@ export function resizeSidebarPanel(
   columnId: string,
   size: number,
 ): SidebarLayout {
-  const next = structuredClone(layout);
-  const column = next.columns.find((entry) => entry.id === columnId);
-  if (column && Number.isFinite(size)) {
-    if (sidebarDock(next) === "bottom") {
-      column.height = clampHeight(size);
-    } else {
-      column.width = clampWidth(size);
-      delete column.browserWidthPending;
-    }
+  if (!Number.isFinite(size)) {
+    return layout;
   }
-  return next;
+  return {
+    ...layout,
+    columns: layout.columns.map((column) => {
+      if (column.id !== columnId) {
+        return column;
+      }
+      if (sidebarDock(layout) === "bottom") {
+        return { ...column, height: clampHeight(size) };
+      }
+      const next = { ...column, width: clampWidth(size) };
+      delete next.browserWidthPending;
+      return next;
+    }),
+  };
 }
 
 export { normalizeSidebarLayout } from "./sidebar-layout-normalize.ts";

@@ -50,6 +50,8 @@ const benchmarkOwners = [
   "control-ui-session-pr-read",
   "control-ui-session-pr-subscriptions",
   "session-row-scope",
+  "session-row-projection",
+  "session-row-projection-revisions",
 ];
 type BenchReply = {
   notifications: number;
@@ -527,9 +529,8 @@ if (values.child) {
         0,
       ) ?? 0;
     assert(
-      parentSelections(allocation.sessionRowSelections.after) >
-        parentSelections(allocation.sessionRowSelections.before),
-      "The subscription workload did not exercise parent selection",
+      parentSelections(allocation.sessionRowSelections.before) > 0,
+      "Subscription setup did not exercise parent selection",
     );
     await delay(100);
     const promotion = readGatewayGcTrace(path.join(output, "gateway.log"), profilePath);

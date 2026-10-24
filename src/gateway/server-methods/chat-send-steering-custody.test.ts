@@ -421,13 +421,22 @@ describe("steering input custody", () => {
           expect(ownerUserContext).not.toContain(incomingProfile.id);
         }
         fixture.beforeApprove.mockClear();
+        const steeringAccepted = createDeferred();
         const queueMessage = vi.fn<
           NonNullable<ReplyBackendMessageInjectionV2["queueMessageAsync"]>
         >(async (text, options, preparation, authorityKind) =>
           steerActiveSessionWithOptionalDeliveryWait(
             session,
             text,
-            options,
+            {
+              ...options,
+              onQueueAccepted: (nativeAccepted) => {
+                options?.onQueueAccepted?.(nativeAccepted);
+                if (nativeAccepted) {
+                  steeringAccepted.resolve();
+                }
+              },
+            },
             fixture.scope.sessionKey,
             () => {
               preparation.assertCurrent();
@@ -491,6 +500,7 @@ describe("steering input custody", () => {
           expect(dispatch.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
         }
         if (accepted) {
+          await withinTest(steeringAccepted.promise, signal);
           expect(
             session.getSteeringMessages(),
             JSON.stringify(vi.mocked(fixture.context.logGateway.warn).mock.calls),

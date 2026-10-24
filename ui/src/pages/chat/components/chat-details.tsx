@@ -129,6 +129,9 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         props.mobileHost.destination.area === "details" &&
         (!props.mobileHost.destination.page || Boolean(props.mobileHost.destination.page.details))
       : intent() === "open" || (intent() === "auto" && canDock()));
+  const outputsDemand = createMemo(() =>
+    desktop() && opened() && props.chat?.outputs ? props.chat.retainOutputs : undefined,
+  );
   // Load on first presentation, then retain disclosure state while closed.
   const [sessionOpened] = createSignal<boolean>((previous) => previous === true || opened());
   const docked = () => opened() && canDock();
@@ -549,6 +552,12 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       ref={(element) => (host = element)}
       mobile={props.mobile ? "" : undefined}
     >
+      <Show when={outputsDemand()} keyed>
+        {(retain) => {
+          onSettled(retain);
+          return null;
+        }}
+      </Show>
       <button
         ref={(element) => (trigger = element)}
         class="chat-details-toggle"

@@ -55,7 +55,14 @@ export function AgentSkills(params: AgentSkillsProps) {
   );
   const report = createMemo(async () => {
     const read = issued();
-    return read?.agentId === params.agentId ? read.result : cached();
+    const fallback = cached();
+    try {
+      return {
+        report: read?.agentId === params.agentId ? ((await read.result) ?? fallback) : fallback,
+      };
+    } catch (error) {
+      return { report: fallback, error: formatUiError(error) };
+    }
   });
   const scope = createMemo(() => `${params.agentId}:${params.readData().requestGeneration}`);
   return (
@@ -108,19 +115,13 @@ export function AgentSkills(params: AgentSkillsProps) {
           />
         );
         return (
-          <Show when={issued() ?? scope()} keyed>
-            {(_receipt) => (
-              <Errored
-                fallback={(error) => (
-                  <Content report={cached()} pending={false} readError={formatUiError(error())} />
-                )}
-              >
-                <Loading fallback={<Content report={cached()} pending />}>
-                  <Content report={report() ?? cached()} pending={isPending(report)} />
-                </Loading>
-              </Errored>
-            )}
-          </Show>
+          <Loading fallback={<Content report={cached()} pending />}>
+            <Content
+              report={report().report}
+              pending={isPending(report)}
+              readError={isPending(report) ? undefined : report().error}
+            />
+          </Loading>
         );
       }}
     </Show>
@@ -282,14 +283,15 @@ function AgentSkillsContent(
                                     ["agents.skillsPanel.reason", computeSkillReasons(skill())],
                                   ] as const
                                 }
+                                keyed={(entry) => entry[0]}
                               >
-                                {(entry) =>
-                                  entry[1].length > 0 ? (
+                                {(entry) => (
+                                  <Show when={entry()[1].length > 0}>
                                     <span class="settings-row__desc">
-                                      {t(entry[0], { items: entry[1].join(", ") })}
+                                      {t(entry()[0], { items: entry()[1].join(", ") })}
                                     </span>
-                                  ) : undefined
-                                }
+                                  </Show>
+                                )}
                               </For>
                               {learned() ? (
                                 <span class="settings-row__desc">

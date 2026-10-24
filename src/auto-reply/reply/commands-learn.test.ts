@@ -14,6 +14,12 @@ vi.mock("../../skills/workshop/review-undo.js", async (importOriginal) => ({
   undoWorkshopReview,
 }));
 
+const getMemoryLearnContribution = vi.hoisted(() => vi.fn());
+vi.mock("../../plugins/memory-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/memory-state.js")>()),
+  getMemoryLearnContribution,
+}));
+
 const DEFAULT_TEST_MODELS: NonNullable<OpenClawConfig["models"]> = {
   providers: {
     openai: {
@@ -79,7 +85,10 @@ function buildLearnParams(
   } as unknown as HandleCommandsParams;
 }
 
-afterEach(() => cliBackendsTesting.resetDepsForTest());
+afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
+  getMemoryLearnContribution.mockReset();
+});
 
 describe("learn command", () => {
   it("uses isolated workshop availability in a global session", async () => {
@@ -187,6 +196,82 @@ describe("learn command", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
+  });
+
+  describe("memory provider learning", () => {
+    const memoryLearn = () => {
+      const buildGuidance = vi.fn(({ availableTools }: { availableTools: Set<string> }) =>
+        availableTools.has("memory_save") ? ["Memory: follow the provider learning skill."] : [],
+      );
+      getMemoryLearnContribution.mockReturnValue({
+        pluginId: "acme-memory",
+        toolNames: ["memory_save", "memory_search"],
+        buildGuidance,
+      });
+      return buildGuidance;
+    };
+
+    it("routes lessons between skills and memory when both are available", async () => {
+      memoryLearn();
+      const params = buildLearnParams("/learn trajectories/");
+
+      const result = await handleLearnCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(true);
+      expect(params.ctx.BodyForAgent).toContain("Route each lesson to one medium.");
+      expect(params.ctx.BodyForAgent).toContain("Memory: follow the provider learning skill.");
+      expect(params.ctx.BodyForAgent).toContain("Write skills with skill_workshop");
+    });
+
+    it("learns into memory alone when policy hides skill_workshop", async () => {
+      const buildGuidance = memoryLearn();
+      const params = buildLearnParams("/learn", {
+        tools: { deny: ["skill_workshop", "memory_search"] },
+      });
+
+      const result = await handleLearnCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(true);
+      expect(buildGuidance).toHaveBeenCalledWith({ availableTools: new Set(["memory_save"]) });
+      expect(params.ctx.BodyForAgent).toContain("The user asked you to learn.");
+      expect(params.ctx.BodyForAgent).toContain("Learn what is worth keeping");
+      expect(params.ctx.BodyForAgent).not.toContain("skill_workshop");
+    });
+
+    it("honors plugin-ID and group:plugins policy entries for memory learning tools", async () => {
+      const buildGuidance = memoryLearn();
+      const allowed = buildLearnParams("/learn", { tools: { allow: ["acme-memory"] } });
+
+      expect((await handleLearnCommand(allowed, true))?.shouldContinue).toBe(true);
+      expect(buildGuidance).toHaveBeenCalledWith({
+        availableTools: new Set(["memory_save", "memory_search"]),
+      });
+
+      buildGuidance.mockClear();
+      for (const deny of [["acme-memory"], ["group:plugins"]]) {
+        const denied = buildLearnParams("/learn", { tools: { deny } });
+        const result = await handleLearnCommand(denied, true);
+        expect(denied.ctx.BodyForAgent).not.toContain(
+          "Memory: follow the provider learning skill.",
+        );
+        expect(result?.shouldContinue).toBe(true);
+      }
+      expect(buildGuidance).not.toHaveBeenCalled();
+    });
+
+    it("names both media when policy hides both", async () => {
+      memoryLearn();
+      const params = buildLearnParams("/learn", {
+        tools: { deny: ["skill_workshop", "memory_save"] },
+      });
+
+      const result = await handleLearnCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain(
+        "neither the skill_workshop tool nor the memory plugin's learning tools",
+      );
+    });
   });
 
   describe("undo", () => {

@@ -51,12 +51,29 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         sessionKey: parentKey,
         sessions: [parentRow(startedAt), ...children],
-        historyMessages: [{ role: "assistant", content: "Coordinating four workers." }],
+        historyMessages: [
+          {
+            role: "assistant",
+            content: "Coordinating four workers.",
+            __openclaw: { id: "launch", runId: "parent-run" },
+            activity: children.map((child, index) => ({
+              itemId: "spawn-" + index,
+              kind: "tool",
+              title: "Delegate review",
+              phase: "end",
+              status: "completed",
+              delegation: [
+                { runId: child.sessionId, childSessionKey: child.key, groupId, status: "accepted" },
+              ],
+            })),
+          },
+        ],
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
-      const widget = page.locator('[data-test-id="chat-swarm"]');
-      const tasks = widget.locator(".chat-swarm__task");
-      const taskNames = widget.locator(".chat-swarm__task-name");
+      const widget = page.locator('[data-test-id="chat-delegation"]');
+      const tasks = widget.locator(".chat-delegation__task");
+      const taskNames = widget.locator(".chat-delegation__name");
+      await widget.locator(".chat-delegation__summary").click();
       await expect.poll(() => tasks.count()).toBe(4);
       await gateway.waitForRequest("sessions.list", {
         match: { spawnedBy: parentKey, limit: 10_000 },
@@ -81,7 +98,9 @@ suite.define(() => {
         });
         await expect.poll(() => taskNames.allTextContents()).toContain(child.label);
         await expect
-          .poll(() => widget.locator(".chat-swarm__tasks .chat-swarm__task-icon--done").count())
+          .poll(() =>
+            widget.locator(".chat-delegation__tasks .chat-delegation__icon--done").count(),
+          )
           .toBe(children.filter((entry) => entry.status === "done").length);
       };
       for (let step = 1; step <= 12; step += 1) {
@@ -92,24 +111,34 @@ suite.define(() => {
         await publish(child, step, "run");
       }
       await expect
-        .poll(() => widget.locator(".chat-swarm__outcome").textContent())
-        .toContain("Child runs finished. The parent is processing their results.");
+        .poll(() => widget.locator(".chat-delegation__summary").textContent())
+        .toContain("Completed");
       const updateDescribes =
         (await gateway.getRequests("sessions.describe")).length - initialDescribes;
       expect.soft(updateDescribes).toBe(0);
       expect(await tasks.count()).toBe(4);
 
-      const added = childRow(4, "Worker 5, newly launched", 13);
+      // A roster-only arrival must not be silently assigned to this earlier launch.
+      const added = childRow(4, "Worker 5, unrelated launch", 13);
       children = [...children, added];
       const beforeMember = (await gateway.getRequests("sessions.describe")).length;
-      await publish(added, 13, "create");
-      await expect.poll(() => tasks.count()).toBe(5);
-      const memberDescribes =
-        (await gateway.getRequests("sessions.describe")).length - beforeMember;
-      expect(memberDescribes).toBeLessThanOrEqual(1);
-      expect((await taskNames.allTextContents()).toSorted()).toEqual(
-        children.map((child) => child.label).toSorted(),
+      const parent = parentRow(startedAt + 13);
+      await gateway.emitGatewayEvent("sessions.changed", {
+        sessionKey: added.key,
+        agentId: "main",
+        sessionId: added.sessionId,
+        reason: "create",
+        ts: startedAt + 13,
+        session: added,
+        ancestorSessions: [parent],
+      });
+      await expect.poll(() => tasks.count()).toBe(4);
+      expect((await taskNames.allTextContents()).some((name) => name.includes("unrelated"))).toBe(
+        false,
       );
+      expect(
+        (await gateway.getRequests("sessions.describe")).length - beforeMember,
+      ).toBeLessThanOrEqual(1);
     });
   });
 });

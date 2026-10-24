@@ -391,8 +391,7 @@ export function putBoardWidgetInDatabase(
           parseDescriptor(existing.descriptor_json).serverName ===
             canonicalParams.content.descriptor.serverName
         : existing.descriptor_json !== null &&
-          (canonicalParams.content.kind === "plugin" ||
-            canonicalParams.content.kind === "registered") &&
+          canonicalParams.content.kind === "plugin" &&
           parsePluginContent(existing.descriptor_json).pluginKind ===
             canonicalParams.content.pluginKind
     : true;
@@ -477,9 +476,6 @@ export function grantBoardWidgetInDatabase(
         manifest: serializeManifest(
           {
             contentOwner: widget.contentOwner,
-            ...(widget.registeredContentKind
-              ? { registeredContentKind: widget.registeredContentKind }
-              : {}),
           },
           declared,
           decision,
@@ -489,9 +485,7 @@ export function grantBoardWidgetInDatabase(
                 interactive: manifest.mcpAppInteractive,
                 instanceId: manifest.mcpAppInstanceId,
               }
-            : manifest.registeredInstanceId
-              ? { kind: "registered" as const, instanceId: manifest.registeredInstanceId }
-              : undefined,
+            : undefined,
           {
             presentation: manifest.presentation,
             heightMode: manifest.heightMode,

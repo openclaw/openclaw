@@ -214,8 +214,9 @@ function requireRealtimeConsultToolHandler() {
 async function startConsult(
   config: VoiceCallConfig,
   agentRuntime: ReturnType<typeof createConsultRuntime>,
+  coreConfig: OpenClawConfig = {},
 ) {
-  await createRuntime({ config, agentRuntime: agentRuntime as never });
+  await createRuntime({ config, agentRuntime: agentRuntime as never, coreConfig });
   return requireRealtimeConsultToolHandler();
 }
 
@@ -511,7 +512,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
       transcript: [{ speaker: "user", text: "Can you check shipment status?" }],
     });
 
-    const handler = await startConsult(config, agentRuntime);
+    const handler = await startConsult(config, agentRuntime, {
+      agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+    });
 
     const tools = requireRealtimeTools();
     expect(tools.map((tool) => requireRecord(tool, "realtime tool").name)).toEqual([
@@ -562,6 +565,30 @@ describe("createVoiceCallRuntime lifecycle", () => {
       "Caller: Can you check shipment status?",
       "Caller: Also check the ETA.",
     );
+  });
+
+  it("dispatches realtime consults on the configured default model, not the compiled-in default", async () => {
+    const config = createRealtimeConfig();
+    const runEmbeddedAgent = answeringAgent("Checked with the configured model.");
+    setConsultCall({
+      agentId: "support",
+      direction: "outbound",
+      transcript: [{ speaker: "user", text: "What is the status?" }],
+    });
+
+    const handler = await startConsult(config, createDefaultConsultRuntime(runEmbeddedAgent), {
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-5-5" } } },
+    });
+
+    await expect(
+      handler({ question: "Status?" }, "call-1", { partialUserTranscript: "" }),
+    ).resolves.toEqual({
+      text: "Checked with the configured model.",
+    });
+    expect(consultParamsFrom(runEmbeddedAgent)).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-5-5",
+    });
   });
 
   it("always exposes the built-in end-call tool without allowing configured replacement", async () => {

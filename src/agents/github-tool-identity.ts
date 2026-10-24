@@ -18,6 +18,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { AGENT_GIT_CONFIG_PARAMETERS } from "../infra/git-maintenance-env.js";
 import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import {
   prepareAppGitHubIdentity,
@@ -50,7 +51,6 @@ import {
 } from "./github-read-identity.js";
 import { managedGitHubHosts, type GitHubToolAccount } from "./github-tool-account.js";
 import {
-  AGENT_GIT_CONFIG_PARAMETERS,
   githubCredentialEnvironmentExclusions,
   managedGitHubIdentityEnvironment,
 } from "./github-tool-identity-env.js";

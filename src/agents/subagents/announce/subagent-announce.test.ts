@@ -272,6 +272,36 @@ describe("subagent announce seam flow", () => {
     expect(agentSpy).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { name: "channel-less", origin: undefined, canDeliver: false },
+    {
+      name: "internal session target",
+      origin: { channel: "internal", to: "agent:main:main" },
+      canDeliver: false,
+    },
+    { name: "channel", origin: { channel: "discord", to: "channel:123" }, canDeliver: true },
+    { name: "WebChat", origin: { channel: "webchat" }, canDeliver: true },
+  ])(
+    "guides private $name completions according to the requester route",
+    async ({ origin, canDeliver }) => {
+      expect(
+        await runAnnounceFlow({
+          completionTarget: "parent",
+          requesterOrigin: origin,
+          ...terminalResult("private child result"),
+        }),
+      ).toBe("delivered");
+      const trigger = agentSpy.mock.calls[0]?.[0].triggerMessage;
+      if (canDeliver) {
+        expect(trigger).toContain("send it through an available, permitted messaging tool");
+      } else {
+        expect(trigger).not.toContain("messaging tool");
+        expect(trigger).toContain("Your final reply is recorded in this session for the requester");
+        expect(trigger).toContain("no messaging send is needed");
+      }
+    },
+  );
+
   it("keeps private retry input stable when late usage arrives after failure", async () => {
     let usage: Record<string, number> = {};
     loadSessionStoreMock.mockImplementation(() => ({

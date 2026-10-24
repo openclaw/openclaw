@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { inspectCronRowsForDoctor } from "../../commands/doctor/cron/store-inventory.js";
+import {
+  inspectCronOwnerRowsForDoctor,
+  inspectCronRowsForDoctor,
+} from "../../commands/doctor/cron/store-inventory.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { runSqliteReadOnlyWorkerSync } from "../../infra/sqlite-readonly-worker.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
@@ -101,6 +104,16 @@ serveWorkerTasks<CronReadOnlyResult, CronReadOnlyRequest>(async (input, _channel
       // The connection owner retains failed-close token custody without imposing a schema gate.
       const db = connection?.database.db ?? openNodeSqliteDatabase(location, { readOnly: true });
       try {
+        if (input.inspect) {
+          assertStateReadSchema(db, location);
+          return {
+            ok: true,
+            owners:
+              input.inspect === "owners" && storeKey !== undefined
+                ? inspectCronOwnerRowsForDoctor(db, storeKey)
+                : undefined,
+          } satisfies CronReadOnlyResult;
+        }
         if (input.history && storeKey !== undefined) {
           // History consumes the canonical released table only after read admission.
           assertStateReadSchema(db, location);
