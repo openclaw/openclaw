@@ -14,7 +14,6 @@
   font-size: 12px;
   text-decoration: none;
   white-space: nowrap;
-  cursor: pointer;
 }
 .lr-external:hover {
   background: var(--border);
