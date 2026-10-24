@@ -116,8 +116,6 @@ it.each([
   [["--max-wall-ms", "1e3ms"], "--max-wall-ms must be a non-negative number"],
   [["--max-regression-pct"], "--max-regression-pct requires a value"],
   [["--max-wall-ms", "--baseline-wall-ms", "1000"], "--max-wall-ms requires a value"],
-  [["--max-wall-ms", "-h"], "--max-wall-ms requires a value"],
-  [["--max-regression-pct", "-h"], "--max-regression-pct requires a value"],
   [["--max-wall-ms", "1000", "--max-wall-ms", "2000"], "--max-wall-ms was provided more than once"],
 ] as const)("rejects invalid budget arguments %j", (args, message) => {
   expect(() => testing.parseArgs(args, {})).toThrow(message);

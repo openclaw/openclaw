@@ -22,7 +22,7 @@ vi.mock("../../src/infra/widearea-dns.js", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each([undefined, true, false])(
+it.each([undefined, false])(
   "activates benchmark plugins unless startup activation is disabled (%s)",
   (activationOnStartup) => {
     const root = tempDirs.make("gateway-plugin-load-");

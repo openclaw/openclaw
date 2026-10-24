@@ -6,6 +6,7 @@ import {
   buildInstallerSmokeScript,
   runCommand,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
+import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.ts";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -13,25 +14,6 @@ const windows = process.platform === "win32";
 
 function installerTempFiles(dir: string) {
   return readdirSync(dir).filter((entry) => entry.startsWith("openclaw-installer-"));
-}
-
-async function listen(server: ReturnType<typeof createServer>) {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Installer proof server did not bind to a TCP port.");
-  }
-  return `http://127.0.0.1:${address.port}`;
-}
-
-async function close(server: ReturnType<typeof createServer>) {
-  server.closeAllConnections();
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
 }
 
 function installer(baseUrl: string, route: string, platform: "linux" | "win32") {
@@ -82,7 +64,7 @@ it("buffers installers before execution and cleans up timed-out downloads", asyn
   });
 
   try {
-    const baseUrl = await listen(server);
+    const baseUrl = await listenLoopback(server);
     const env = {
       ...process.env,
       ...(windows
@@ -132,6 +114,6 @@ it("buffers installers before execution and cleans up timed-out downloads", asyn
     // Each installer uses a distinct GUID, so the final inventory covers both cleanups.
     expect(installerTempFiles(dir)).toEqual([]);
   } finally {
-    await close(server);
+    await closeHttpServer(server);
   }
 }, 15_000);
