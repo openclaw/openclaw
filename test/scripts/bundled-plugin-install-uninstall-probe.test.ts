@@ -740,14 +740,15 @@ describe("bundled plugin install/uninstall probe", () => {
   });
 
   it.each([
-    [503, '{"ready":false,"failing":["qa-channel"]}', undefined],
+    [503, '{"ready":false,"failing":["qa-channel"]}', undefined, undefined],
     [
       503,
       '{"ready":false,"failing":["unexpected"]}',
       '/readyz returned HTTP 503: {"ready":false,"failing":["unexpected"]}',
+      undefined,
     ],
-    [500, '{"ready":true}', '/readyz returned HTTP 500: {"ready":true}'],
-    [503, "not json", '/readyz returned HTTP 503: "not json"'],
+    [500, '{"ready":true}', '/readyz returned HTTP 500: {"ready":true}', undefined],
+    [503, "not json", '/readyz returned HTTP 503: "not json"', undefined],
     [503, "", "/readyz probe response body exceeded 1048576 bytes", 1024 * 1024 + 1],
   ] as const)(
     "validates readyz HTTP %s with body %s",

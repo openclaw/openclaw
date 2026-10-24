@@ -32,8 +32,10 @@ it("runs release tooling only from the trusted revision without persisted creden
   for (const entry of tooling) {
     const checkout = entry.with as Record<string, unknown>;
     expect(checkout).toMatchObject({ ref: "${{ github.sha }}", "persist-credentials": false });
-    if (checkout["sparse-checkout"] !== undefined) {
-      expect(String(checkout["sparse-checkout"]).split(/\s+/u)).toContain("scripts");
+    const sparseCheckout = checkout["sparse-checkout"];
+    if (sparseCheckout !== undefined) {
+      assert(typeof sparseCheckout === "string");
+      expect(sparseCheckout.split(/\s+/u)).toContain("scripts");
     }
   }
   const targets = allSteps.filter((entry) => String(entry.name).startsWith("Checkout target"));
@@ -153,9 +155,9 @@ describe("full release same-parent recovery workflow", () => {
               expect(runInNewContext(String(dispatch.if), context)).toBe(
                 attempt === 1 && reused !== "true",
               );
-              expect(runInNewContext(String(recovery.if ?? "true"), context)).toBe(
-                reused !== "true",
-              );
+              const recoveryCondition = recovery.if ?? "true";
+              assert(typeof recoveryCondition === "string");
+              expect(runInNewContext(recoveryCondition, context)).toBe(reused !== "true");
             }
           }
         }

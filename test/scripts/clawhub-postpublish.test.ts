@@ -862,7 +862,7 @@ describe("ClawHub detached postpublish verification", () => {
       expect(result.packages).toHaveLength(noChild ? 0 : 1);
       expect(f.registryReads.length > 0).toBe(!noChild);
       if (noChild) {
-        expect(result.outcome).toBe("no-normal-clawhub-publication");
+        expect(result).toMatchObject({ outcome: "no-normal-clawhub-publication" });
       }
     },
   );

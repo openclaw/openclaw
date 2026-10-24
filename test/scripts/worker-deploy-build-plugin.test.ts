@@ -7,11 +7,12 @@ import { promisify } from "node:util";
 import { encodePngRgba } from "rastermill";
 import * as tar from "tar";
 import { build } from "tsdown";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.js";
 import {
   createWorkerDeployBuildPlugin,
+  resolveWorkerDeployGeneratorInputs,
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { createWorkerBundleProducer } from "../../src/gateway/worker-environments/bundle.js";
@@ -23,6 +24,17 @@ import {
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+vi.mock("tsdown", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("tsdown")>();
+  return { ...actual, build: vi.fn(actual.build) };
+});
+
+// Runtime cases consume the prepared graph without spending their deadline compiling it.
+beforeEach(() => {
+  vi.mocked(build).mockClear();
+});
+afterEach(() => expect(build).not.toHaveBeenCalled());
 
 const fail = (message: string): never => {
   throw new Error(message);
@@ -42,35 +54,16 @@ function workerEnv(root: string): NodeJS.ProcessEnv {
   };
 }
 
-function probeArgs(script: string, entry: string, args: string[] = []) {
-  return [
-    "--input-type=module",
-    "--eval",
-    `import assert from "node:assert/strict";
-import { pathToFileURL } from "node:url";
-const [entry, ...args] = process.argv.slice(1);
-process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
-${script}`,
-    entry,
-    ...args,
-  ];
-}
-
-async function runtimeProbe(
-  script: string,
-  entry: string,
-  root: string,
-  args: string[] = [],
-  cwd = root,
-) {
-  return promisify(execFile)(
-    process.execPath,
-    [...(process.versions.bun ? ["--no-install"] : []), ...probeArgs(script, entry, args)],
-    { cwd, timeout: 30_000, env: workerEnv(root) },
-  );
-}
-
 describe("worker deploy build plugin", () => {
+  it("tracks the pinned fs-safe manifest and lock before relocation", () => {
+    expect(resolveWorkerDeployGeneratorInputs()).toEqual(
+      expect.arrayContaining([
+        fs.realpathSync(path.resolve("node_modules/@openclaw/fs-safe/package.json")),
+        path.resolve("pnpm-lock.yaml"),
+      ]),
+    );
+  });
+
   it.each(["", 'require("../package.json"); require("../package.json");'])(
     "rejects changed fs-safe native manifest lookup shape %#",
     (code) => {
@@ -110,29 +103,6 @@ describe("worker deploy build plugin", () => {
     );
     let preparedDist: string;
     let preparedArchive: string;
-
-    async function extractArchive(root: string, relativePath = "bundle") {
-      const relocated = path.join(root, relativePath);
-      fs.mkdirSync(relocated, { recursive: true });
-      await tar.extract({ file: preparedArchive, cwd: relocated });
-      return relocated;
-    }
-
-    async function nodeProbe(
-      script: string,
-      entry: string,
-      env: NodeJS.ProcessEnv,
-      options: Parameters<typeof runNodeScript>[3],
-      output: string,
-      args: string[] = [],
-    ) {
-      const result = await fixtureLifetime.track(
-        runNodeScript(probeArgs(script, entry, args), env, 30_000, options),
-      );
-      expect(result.error, result.stderr).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe(output);
-    }
 
     afterEach(() => fixtureLifetime.cleanup());
 
@@ -195,12 +165,23 @@ describe("worker deploy build plugin", () => {
                 return `${code}
 export { highlight, supportsLanguage } from "../agents/utils/syntax-highlight.js";
 export { createOwnedStdioProcess, closeOwnedStdioProcess } from "../process/owned-stdio.js";
+export { explainShellCommand } from "../infra/command-explainer/extract.js";
+export { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 export { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
 export { updateExecApprovals, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 export { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+export { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+export { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+export { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
+export { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.test-support.js";
 export { readSecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
+export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
+export { createComputerTool } from "../agents/tools/computer-tool.js";
 export { createImageProcessor, convertBmpToPngWithWorker } from "../media/image-processor.js";
+export { createReadTool } from "../agents/sessions/tools/read.js";
+export { createEditTool } from "../agents/sessions/tools/edit.js";
+export { createWriteTool } from "../agents/sessions/tools/write.js";
 export { createWorkerPlacementTools } from "./worker-placement-tools.js";
 export { createRealtimeTranscriptionWebSocketSession } from "../realtime-transcription/websocket-session.js";
 export { runDesktopWebSocketRuntimeProbe } from "../gateway/desktop/websocket-runtime.test-support.js";
@@ -249,10 +230,19 @@ export { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";`;
 
     it("denies workspace exec without a Gateway transcript worker in the archive", async () => {
       const root = tempDirs.make("openclaw-worker-exec-permission-");
-      const relocated = await extractArchive(root);
+      const relocated = path.join(root, "bundle");
+      fs.mkdirSync(relocated);
+      await tar.extract({ file: preparedArchive, cwd: relocated });
       expect(fs.existsSync(path.join(relocated, "session-transcript.worker.mjs"))).toBe(false);
-      await nodeProbe(
-        `
+      const result = await runNodeScript(
+        [
+          "--input-type=module",
+          "--eval",
+          `
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const entry = process.argv[1];
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
 const { createWorkerPlacementTools, closeOpenClawStateDatabaseAsync } = await import(pathToFileURL(entry).href);
 try {
   const exec = createWorkerPlacementTools({
@@ -274,12 +264,18 @@ try {
   await closeOpenClawStateDatabaseAsync();
 }
 `,
-        path.join(relocated, "worker.mjs"),
+          path.join(relocated, "worker.mjs"),
+        ],
         {
           ...workerEnv(root),
           OPENCLAW_STATE_DIR: path.join(root, "state"),
         },
+        30_000,
         { cwd: root },
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(
         "relocated worker exec permission denied without Gateway storage",
       );
     });
@@ -289,7 +285,9 @@ try {
       ({ signal }) =>
         fixtureLifetime.run(async () => {
           const root = fixtureLifetime.createTempDir("openclaw-worker-exec-authorization-");
-          const relocated = await extractArchive(root, "dist/worker");
+          const relocated = path.join(root, "dist", "worker");
+          fs.mkdirSync(relocated, { recursive: true });
+          await tar.extract({ file: preparedArchive, cwd: relocated });
           expect(
             fs.readFileSync(path.join(relocated, WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH)),
           ).toEqual(
@@ -300,9 +298,16 @@ try {
               ),
             ),
           );
-          await fixtureLifetime.track(
-            nodeProbe(
-              `
+          const result = await fixtureLifetime.track(
+            runNodeScript(
+              [
+                "--input-type=module",
+                "--eval",
+                `
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const entry = process.argv[1];
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
 const {
   commitExecAuthorizationLocked,
   loadOrCreateDeviceIdentity,
@@ -310,6 +315,10 @@ const {
   readExecApprovalsSnapshot,
   readSecretStoreExecEnvironment,
   closeOpenClawStateDatabaseAsync,
+  resolveOpenClawStateSqlitePath,
+  readStableSqliteFileGeneration,
+  seedOpenClawDatabaseQuarantine,
+  readOpenClawDatabaseQuarantineFailure,
 } = await import(pathToFileURL(entry).href);
 const match = { id: "portable-exec", pattern: process.execPath };
 const command = "portable exec authorization";
@@ -324,26 +333,43 @@ try {
     authorization: { source: "current-policy", security: "full", ask: "off", allowlistSatisfied: true },
   });
   assertCurrent();
+  console.log("relocated exec authorization committed");
   await closeOpenClawStateDatabaseAsync();
   const stored = readExecApprovalsSnapshot().file.agents.main.allowlist[0];
   assert.equal(stored.lastUsedCommand, command);
   assert.equal(stored.lastResolvedPath, process.execPath);
   assert.ok(stored.lastUsedAt > 0);
   await closeOpenClawStateDatabaseAsync();
+  const statePath = resolveOpenClawStateSqlitePath();
+  seedOpenClawDatabaseQuarantine({
+    kind: "state", path: statePath, reason: "portable integrity failure",
+    generation: readStableSqliteFileGeneration(statePath),
+  });
+  assert.equal(readOpenClawDatabaseQuarantineFailure("state", statePath)?.name, "SqliteIntegrityError");
+  await assert.rejects(
+    updateExecApprovals({ update: { kind: "replace", file: { version: 1, defaults: { security: "deny", ask: "off" } } } }),
+    /quarantined after integrity verification failed/,
+  );
 } finally {
   await closeOpenClawStateDatabaseAsync();
 }
 console.log("relocated exec authorization persisted");
 `,
-              path.join(relocated, "worker.mjs"),
+                path.join(relocated, "worker.mjs"),
+              ],
               {
                 ...workerEnv(root),
                 OPENCLAW_STATE_DIR: path.join(root, "state"),
               },
+              30_000,
               { cwd: root, signal },
-              "relocated exec authorization persisted",
             ),
           );
+          const diagnostics = `${result.stderr}\n${result.stdout}`;
+          expect(result.error, diagnostics).toBeUndefined();
+          expect(result.status, diagnostics).toBe(0);
+          expect(result.stdout).toContain("relocated exec authorization committed");
+          expect(result.stdout).toContain("relocated exec authorization persisted");
         }),
       180_000,
     );
@@ -354,7 +380,9 @@ console.log("relocated exec authorization persisted");
       async (fault, { signal }) =>
         fixtureLifetime.run(async () => {
           const root = fixtureLifetime.createTempDir("openclaw-worker-native-refusal-");
-          const relocated = await extractArchive(root);
+          const relocated = path.join(root, "bundle");
+          fs.mkdirSync(relocated);
+          await tar.extract({ file: preparedArchive, cwd: relocated });
           const asset =
             process.arch === "arm64"
               ? WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS["darwin-arm64"]
@@ -365,15 +393,21 @@ console.log("relocated exec authorization persisted");
           } else {
             fs.writeFileSync(assetPath, "tampered native addon");
           }
-          await fixtureLifetime.track(
-            nodeProbe(
-              `
+          const result = await fixtureLifetime.track(
+            runNodeScript(
+              [
+                "--input-type=module",
+                "--eval",
+                `
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-const [fault] = args;
+import { pathToFileURL } from "node:url";
+const [entry, fault] = process.argv.slice(1);
 const require = createRequire(pathToFileURL(entry));
 assert.throws(() => require.resolve("@openclaw/fs-safe-darwin-" + process.arch), { code: "MODULE_NOT_FOUND" });
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
 const { loadOrCreateDeviceIdentity, getNativeFallbackDiagnostic } = await import(pathToFileURL(entry).href);
 assert.throws(() => loadOrCreateDeviceIdentity(), error => {
   assert.equal(error.code, "helper-unavailable");
@@ -386,7 +420,9 @@ assert.equal(fs.existsSync(path.join(process.env.OPENCLAW_STATE_DIR, "client", "
 assert.deepEqual(Object.keys(require.cache).filter(file => file.endsWith(".node")), []);
 console.log("archive-owned native credentials refused " + fault);
 `,
-              path.join(relocated, "worker.mjs"),
+                path.join(relocated, "worker.mjs"),
+                fault,
+              ],
               {
                 PATH: process.env.PATH,
                 HOME: root,
@@ -394,11 +430,14 @@ console.log("archive-owned native credentials refused " + fault);
                 TMPDIR: root,
                 NODE_DISABLE_COMPILE_CACHE: "1",
               },
+              30_000,
               { cwd: root, signal },
-              `archive-owned native credentials refused ${fault}`,
-              [fault],
             ),
           );
+          const diagnostics = `${result.stderr}\n${result.stdout}`;
+          expect(result.error, diagnostics).toBeUndefined();
+          expect(result.status, diagnostics).toBe(0);
+          expect(result.stdout.trim()).toBe(`archive-owned native credentials refused ${fault}`);
         }),
     );
 
@@ -408,14 +447,16 @@ console.log("archive-owned native credentials refused " + fault);
         fixtureLifetime.run(async () => {
           const root = fixtureLifetime.createTempDir("openclaw-worker-facade-");
           const packageRoot = path.join(root, "pkg");
-          const relocated = await extractArchive(packageRoot, "dist/worker");
+          const relocated = path.join(packageRoot, "dist/worker");
           const bundledRoot = path.join(packageRoot, "dist/extensions");
           const pluginRoot = path.join(bundledRoot, "fixture");
+          fs.mkdirSync(relocated, { recursive: true });
           fs.mkdirSync(pluginRoot, { recursive: true });
           fs.writeFileSync(
             path.join(packageRoot, "package.json"),
             JSON.stringify({ name: "openclaw", version: "0.0.0", type: "module" }),
           );
+          await tar.extract({ file: preparedArchive, cwd: relocated });
           fs.writeFileSync(
             path.join(pluginRoot, "package.json"),
             JSON.stringify({
@@ -443,8 +484,16 @@ console.log("archive-owned native credentials refused " + fault);
             `globalThis[Symbol.for("worker-facade-evaluations")] = (globalThis[Symbol.for("worker-facade-evaluations")] ?? 0) + 1;
 export const marker = "relocated";`,
           );
-          await nodeProbe(
-            `
+          const result = await fixtureLifetime.track(
+            runNodeScript(
+              [
+                "--input-type=module",
+                "--eval",
+                `
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const entry = process.argv[1];
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
 const {
   loadActivatedBundledPluginPublicSurfaceModuleSync: load,
   listImportedBundledPluginFacadeIds,
@@ -473,6 +522,10 @@ if (process.platform === "darwin") {
 }
 const diagnostic = getNativeFallbackDiagnostic("inspectDarwinAcl");
 assert.equal(diagnostic.reason, process.platform === "darwin" ? "loaded" : "disabled");
+if (diagnostic.packageName) {
+  const versions = ${JSON.stringify(JSON.parse(fs.readFileSync(path.resolve("node_modules/@openclaw/fs-safe/package.json"), "utf8")).optionalDependencies)};
+  assert.equal(diagnostic.packageVersion, versions[diagnostic.packageName]);
+}
 assert.deepEqual(await readOwnerAndDaclBatch([]), []);
 if (process.platform !== "win32") {
   assert.deepEqual(await readOwnerAndDaclBatch([entry]), [{
@@ -501,26 +554,33 @@ assert.equal(initializations(), 1);
 assert.equal(evaluations(), 1);
 console.log("relocated worker facade activation follows the shared config snapshot");
 `,
-            path.join(relocated, "worker.mjs"),
-            {
-              ...workerEnv(root),
-              OPENCLAW_HOME: root,
-              OPENCLAW_STATE_DIR: path.join(root, "state"),
-              OPENCLAW_CONFIG_PATH: path.join(root, "missing-config.json"),
-              OPENCLAW_FS_SAFE_NATIVE_MODE: "require",
-              OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-              XDG_CONFIG_HOME: path.join(root, "config"),
-              XDG_CACHE_HOME: path.join(root, "cache"),
-              XDG_DATA_HOME: path.join(root, "data"),
-              JITI_FS_CACHE: "0",
-              NODE_DISABLE_COMPILE_CACHE: "1",
-            },
-            {
-              cwd: packageRoot,
-              signal,
-              requireProcessTreeExit: process.platform !== "win32",
-              maxBuffer: 64 * 1024,
-            },
+                path.join(relocated, "worker.mjs"),
+              ],
+              {
+                ...workerEnv(root),
+                OPENCLAW_HOME: root,
+                OPENCLAW_STATE_DIR: path.join(root, "state"),
+                OPENCLAW_CONFIG_PATH: path.join(root, "missing-config.json"),
+                OPENCLAW_FS_SAFE_NATIVE_MODE: "require",
+                OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+                XDG_CONFIG_HOME: path.join(root, "config"),
+                XDG_CACHE_HOME: path.join(root, "cache"),
+                XDG_DATA_HOME: path.join(root, "data"),
+                JITI_FS_CACHE: "0",
+                NODE_DISABLE_COMPILE_CACHE: "1",
+              },
+              30_000,
+              {
+                cwd: packageRoot,
+                signal,
+                requireProcessTreeExit: process.platform !== "win32",
+                maxBuffer: 64 * 1024,
+              },
+            ),
+          );
+          expect(result.error, `${root}\n${result.stderr}`).toBeUndefined();
+          expect(result.status, result.stderr).toBe(0);
+          expect(result.stdout.trim()).toBe(
             "relocated worker facade activation follows the shared config snapshot",
           );
 
@@ -545,24 +605,92 @@ console.log("relocated worker facade activation follows the shared config snapsh
       180_000,
     );
 
-    it("delivers native image processing from a relocated archive", async () => {
+    it("delivers image operations and file reads and edits from a relocated archive", async () => {
       const root = tempDirs.make("openclaw-worker-images-");
-      const relocated = await extractArchive(root);
+      const relocated = path.join(root, "bundle");
+      fs.mkdirSync(relocated);
+      await tar.extract({ file: preparedArchive, cwd: relocated });
       fs.writeFileSync(
         path.join(root, "window.png"),
         encodePngRgba(new Uint8Array(1500 * 934 * 4).fill(255), 1500, 934, 1),
       );
-      const result = await runtimeProbe(
-        `
+      const result = await promisify(execFile)(
+        process.execPath,
+        [
+          ...(process.versions.bun ? ["--no-install"] : []),
+          "--input-type=module",
+          "--eval",
+          `
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import { createRequire } from "node:module";
-const [imagePath] = args;
-for (const dependency of ["rastermill", "@silvia-odwyer/photon-node"]) {
+import { pathToFileURL } from "node:url";
+const [entry, imagePath] = process.argv.slice(1);
+for (const dependency of ["rastermill", "@silvia-odwyer/photon-node", "diff"]) {
   assert.throws(() => createRequire(pathToFileURL(entry)).resolve(dependency), { code: "MODULE_NOT_FOUND" });
 }
-const { createImageProcessor, convertBmpToPngWithWorker } = await import(pathToFileURL(entry).href);
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+const { createComputerTool, createImageProcessor, convertBmpToPngWithWorker, createReadTool, createEditTool, createWriteTool } = await import(pathToFileURL(entry).href);
 const input = fs.readFileSync(imagePath);
 try {
+const filePath = imagePath + ".txt";
+const written = await createWriteTool(process.cwd()).execute("portable-write", {
+  path: filePath, content: "const label = “hello”; // keep — unchanged\\n",
+});
+assert.equal(written.details.created, true);
+assert.match(written.details.patch, /\\+const label = “hello”/);
+const edited = await createEditTool(process.cwd()).execute("portable-edit", {
+  path: filePath,
+  edits: [{ oldText: 'const label = "hello";', newText: 'const label = "hi";' }],
+});
+assert.equal(edited.details.changed, true);
+assert.match(edited.details.diff, /\\+1 const label = "hi"; \\/\\/ keep — unchanged/);
+assert.equal(fs.readFileSync(filePath, "utf8"), 'const label = "hi"; // keep — unchanged\\n');
+for (const extension of [".txt", ".sqlite"]) {
+  const readPath = imagePath + extension;
+  fs.writeFileSync(readPath, "portable file read\\n");
+  const read = await createReadTool(process.cwd()).execute("portable-read", { path: readPath });
+  assert.ok(read.content.some(block => block.type === "text" && block.text.includes("portable file read")));
+}
+const inputs = [];
+const computer = createComputerTool({
+  transport: {
+    computerUse: {
+      contractVersion: 2,
+      provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+      actions: ["get_window_state", "left_click"],
+      targets: ["window"],
+      deliveryModes: ["foreground"],
+      observations: ["image"],
+      features: { recording: false, agentCursor: false, multiDisplay: false },
+    },
+    resolveNode: async () => ({ nodeId: "synthetic-node" }),
+    invoke: async ({ commandParams }) => {
+      inputs.push(commandParams);
+      return {
+        ok: true,
+        details: { coordinateSpace: "image-pixels" },
+        observation: { kind: "window", observationId: "window-observation", base64: input.toString("base64"), format: "png", width: 1500, height: 934 },
+      };
+    },
+  },
+});
+for (let index = 0; index < 3; index++) {
+  const projected = await computer.execute("portable-observe-" + index, {
+    action: "get_window_state", windowRef: "window-1",
+  });
+  const images = projected.content.filter(block => block.type === "image");
+  assert.equal(images.length, 1, JSON.stringify(projected.content));
+  const observation = JSON.parse(projected.content[0].text).observation;
+  assert.equal(observation.width, 1200);
+  assert.equal(observation.height, 747);
+  assert.equal(observation.base64, "[image]");
+}
+await computer.execute("portable-click", {
+  action: "left_click", windowRef: "window-1", observationId: "window-observation", coordinate: [400, 300],
+});
+assert.equal(inputs.at(-1).x, 500);
+assert.equal(inputs.at(-1).y, 300 * (934 / 747));
 assert.deepEqual(await createImageProcessor().transparency(input), { hasAlphaChannel: true, hasTransparentPixels: false });
 const bmp = Buffer.from("424d3e0000000000000036000000280000000200000001000000010018000000000008000000000000000000000000000000000000000000ff00ff000000", "hex");
 const png = await convertBmpToPngWithWorker(bmp);
@@ -570,35 +698,63 @@ const metadata = await createImageProcessor().probe(png);
 assert.equal(metadata.width, 2);
 assert.equal(metadata.height, 1);
 assert.equal(metadata.format, "png");
-console.log("relocated native image processing passed");
+console.log("relocated computer observations, image operations, and file reads and edits passed");
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
 }
 `,
-        path.join(relocated, "worker.mjs"),
-        root,
-        [path.join(root, "window.png")],
-        relocated,
+          path.join(relocated, "worker.mjs"),
+          path.join(root, "window.png"),
+        ],
+        {
+          cwd: relocated,
+          timeout: 30_000,
+          env: workerEnv(root),
+        },
       );
-      expect(result.stdout).toContain("relocated native image processing passed");
+      expect(result.stdout).toContain(
+        "relocated computer observations, image operations, and file reads and edits passed",
+      );
     }, 180_000);
 
-    it("keeps worker bootstrap, highlighting, and Windows child spawning portable", async () => {
+    it("keeps worker bootstrap, shell analysis, and Windows child spawning portable", async () => {
       const root = tempDirs.make("openclaw-worker-portable-");
       fs.cpSync(preparedDist, path.join(root, "dist"), { recursive: true });
-      const result = await runtimeProbe(
-        `
+      const result = await promisify(execFile)(
+        process.execPath,
+        [
+          ...(process.versions.bun ? ["--no-install"] : []),
+          "--input-type=module",
+          "--eval",
+          `
+import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-assert.throws(() => createRequire(pathToFileURL(entry)).resolve("highlight.js"), { code: "MODULE_NOT_FOUND" });
-const { highlight, supportsLanguage, createOwnedStdioProcess, closeOwnedStdioProcess } = await import(pathToFileURL(entry).href);
+import { pathToFileURL } from "node:url";
+const entry = process.argv[1];
+for (const dependency of ["highlight.js", "web-tree-sitter", "tree-sitter-bash"]) {
+  assert.throws(() => createRequire(pathToFileURL(entry)).resolve(dependency), { code: "MODULE_NOT_FOUND" });
+}
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+const { highlight, supportsLanguage, explainShellCommand, planShellAuthorization, rejectUnsafeExecControlShellCommand, createOwnedStdioProcess, closeOwnedStdioProcess } = await import(pathToFileURL(entry).href);
 const initializations = () => globalThis[Symbol.for("worker-highlight-initializations")] ?? 0;
 assert.equal(initializations(), 0, "headless worker bootstrap must not initialize syntax highlighting");
+assert.equal(supportsLanguage("abnf"), true);
 assert.equal(supportsLanguage("javascript"), true);
 assert.match(highlight("const answer = 42;", "javascript", {
   keyword: text => "[" + text + "]",
 }), /\\[const\\]/);
 assert.equal(initializations(), 1, "rendering must initialize the bundled highlighter only once");
+const explanation = await explainShellCommand('printf "%s" "$(whoami)" | cat');
+assert.equal(explanation.ok, true);
+assert.deepEqual(explanation.topLevelCommands.map(step => step.executable), ["printf", "cat"]);
+assert.deepEqual(explanation.nestedCommands.map(step => step.executable), ["whoami"]);
+assert.equal((await planShellAuthorization({ command: 'printf "%s" safe | cat', cwd: process.cwd() })).ok, true);
+await rejectUnsafeExecControlShellCommand('printf "%s" safe');
+await assert.rejects(
+  () => rejectUnsafeExecControlShellCommand('echo $(/approve synthetic allow-once)'),
+  /exec cannot run \\/approve commands/,
+);
 if (process.platform === "win32") {
   assert.throws(() => createRequire(pathToFileURL(entry)).resolve("koffi"), { code: "MODULE_NOT_FOUND" });
   const owned = await createOwnedStdioProcess({
@@ -618,12 +774,17 @@ if (process.platform === "win32") {
     owned.dispose();
   }
 }
-console.log("portable worker highlighting and child spawning passed");
+console.log("portable worker highlighting and shell analysis passed");
 `,
-        path.join(root, "dist/worker/worker.mjs"),
-        root,
+          path.join(root, "dist/worker/worker.mjs"),
+        ],
+        {
+          cwd: root,
+          timeout: 30_000,
+          env: workerEnv(root),
+        },
       );
-      expect(result.stdout.trim()).toBe("portable worker highlighting and child spawning passed");
+      expect(result.stdout.trim()).toBe("portable worker highlighting and shell analysis passed");
       expect(result.stderr).toBe("");
     });
 
@@ -657,12 +818,17 @@ console.log("portable worker highlighting and child spawning passed");
         }
         fs.renameSync(output, relocated);
         const probe = `
+import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createRequire } from "node:module";
-const [url] = args;
+import { pathToFileURL } from "node:url";
+const [entry, url] = process.argv.slice(1);
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
 assert.throws(() => createRequire(pathToFileURL(entry)).resolve("ws/package.json"), { code: "MODULE_NOT_FOUND" });
 const { WebSocket, createRealtimeTranscriptionWebSocketSession, runDesktopWebSocketRuntimeProbe } = await import(pathToFileURL(entry).href);
-await runDesktopWebSocketRuntimeProbe("desktop");
+for (const mode of ["observer-close", "observer-backpressure", "observer-payload", "desktop", "portal"]) {
+  await runDesktopWebSocketRuntimeProbe(mode);
+}
 const socket = new WebSocket(url + "/client", { headers: { "x-worker-proof": "client-header" } });
 await once(socket, "open");
 const message = once(socket, "message");
@@ -689,14 +855,20 @@ try {
 } finally { session.close(); }
 console.log("relocated worker WebSocket and transcription passed");
 `;
-        await nodeProbe(
-          probe,
-          path.join(relocated, "worker/worker.mjs"),
+        const result = await runNodeScript(
+          [
+            "--input-type=module",
+            "--eval",
+            probe,
+            path.join(relocated, "worker/worker.mjs"),
+            `ws://127.0.0.1:${address.port}`,
+          ],
           workerEnv(root),
+          30_000,
           { cwd: relocated },
-          "relocated worker WebSocket and transcription passed",
-          [`ws://127.0.0.1:${address.port}`],
         );
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout.trim()).toBe("relocated worker WebSocket and transcription passed");
         expect(requests).toEqual([
           { path: "/client", header: "client-header" },
           { path: "/transcription", header: "transcription-header" },
@@ -715,8 +887,10 @@ console.log("relocated worker WebSocket and transcription passed");
 
   it("replaces optional host-native modules with a failing virtual module", () => {
     const plugin = createWorkerDeployBuildPlugin();
-    const load = new Function(plugin.load(WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID) ?? "");
-    expect(load).toThrow("optional host-native dependency unavailable");
+
+    expect(plugin.load(WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID)).toContain(
+      "optional host-native dependency unavailable",
+    );
   });
 
   it("initializes the composed Browser runtime only when its factory is called", async () => {
@@ -771,6 +945,25 @@ export async function createAttachedBrowserToolRuntime(params) {
     await first.dispose();
     await second.dispose();
     expect(fs.readFileSync(eventsPath, "utf8")).toBe("initialized\ndisposed\ndisposed\n");
+  });
+
+  it("embeds the Playwright package identity and browser registry", () => {
+    const modulePath = path.resolve("node_modules/playwright-core/lib/coreBundle.js");
+    const transformed = createWorkerDeployBuildPlugin().transform.call(
+      { error: fail },
+      fs.readFileSync(modulePath, "utf8"),
+      modulePath,
+    );
+    expect(transformed).toContain('packageJSON = {"name":"playwright-core","version":"1.64.1"};');
+    expect(transformed).toContain(
+      'registry = new Registry({"comment":"Do not edit this file, use utils/roll_browser.js"',
+    );
+    expect(transformed).not.toContain(
+      'require(import_path8.default.join(packageRoot, "package.json"))',
+    );
+    expect(transformed).not.toContain(
+      'require(import_path19.default.join(packageRoot, "browsers.json"))',
+    );
   });
 
   it.each([

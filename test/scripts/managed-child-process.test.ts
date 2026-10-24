@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type TestContext } from "vitest";
 import {
   createManagedCommandSpawnSpec,
@@ -1407,7 +1408,7 @@ child.once('message', () => {});
         async () => {
           const failure = await releaseAndWait();
           if (!asserted && failure !== undefined) {
-            throw failure;
+            throw toErrorObject(failure, "Escaped-output fixture failed");
           }
         },
         async () => {

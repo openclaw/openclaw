@@ -417,6 +417,7 @@ function modeRow(mode: "code" | "direct", repetition = 1) {
       fixtureSha256: `fixture-${repetition}`,
       settings: {
         thinking: "low",
+        fast: false,
         allowedTools: ["read", "write"],
         timeoutSeconds: 60,
       },
