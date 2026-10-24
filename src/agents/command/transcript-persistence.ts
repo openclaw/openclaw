@@ -95,14 +95,15 @@ async function persistTextTurnTranscript(
     params.skipAssistantTurn !== true && params.assistantUsageOnly === true;
   const userMessage =
     params.userMessage ??
-    (await params.userTurnTranscriptRecorder?.resolveMessage()) ??
-    (promptText
-      ? buildPersistedUserTurnMessage({
-          text: promptText,
-          timestamp: Date.now(),
-          provenance: params.inputProvenance,
-        })
-      : undefined);
+    (params.userTurnTranscriptRecorder
+      ? await params.userTurnTranscriptRecorder.resolveMessage()
+      : promptText
+        ? buildPersistedUserTurnMessage({
+            text: promptText,
+            timestamp: Date.now(),
+            provenance: params.inputProvenance,
+          })
+        : undefined);
   if (!userMessage && !replyText && !persistAssistantUsage) {
     return { kind: "persisted", sessionEntry: params.sessionEntry };
   }
