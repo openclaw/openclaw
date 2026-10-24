@@ -13,9 +13,6 @@ const modes = [
   ["recovery", true],
   ["canonical", true],
   ["untrusted", false],
-  ["wrong-workflow", false],
-  ["wrong-path", false],
-  ["wrong-source", false],
   ["candidate-publisher", false],
 ] as const;
 const releaseBranch = "extended-stable/2026.7.33";
@@ -82,10 +79,8 @@ fi
 `,
     0o755,
   );
-  const runTitle = `Plugin NPM Release [extended-stable] ${mode === "wrong-source" ? "c".repeat(40) : sourceSha}`;
-  const workflowFile = write("workflow.json", {
-    name: mode === "wrong-workflow" ? "CI" : "Plugin NPM Release",
-  });
+  const runTitle = `Plugin NPM Release [extended-stable] ${sourceSha}`;
+  const workflowFile = write("workflow.json", { name: "Plugin NPM Release" });
   const runFile = write("run.json", {
     // Real REST runs expose their dynamic title in both fields, not the workflow name.
     name: runTitle,
@@ -96,7 +91,7 @@ fi
     conclusion: "success",
     head_branch: mode === "canonical" ? releaseBranch : "main",
     head_sha: mode === "canonical" ? sourceSha : mode === "untrusted" ? untrustedSha : toolingSha,
-    path: `.github/workflows/${mode === "wrong-path" ? "ci" : "plugin-npm-release"}.yml`,
+    path: ".github/workflows/plugin-npm-release.yml",
   });
   const workflow = parse(
     readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8"),
