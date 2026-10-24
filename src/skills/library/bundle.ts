@@ -147,8 +147,7 @@ function encodeSkillLibraryFile(buffer: Buffer): Pick<SkillLibraryFile, "content
   // ASCII stays a one-byte JS string; a single non-Latin-1 character can double it.
   if (isAscii(buffer)) {
     const content = buffer.toString("utf8");
-    // oxlint-disable-next-line no-control-regex -- Binary control bytes must retain base64 transport.
-    if (!/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(content)) {
+    if (!/[^\t\n\r -~]/u.test(content)) {
       const base64Bytes = Math.ceil(buffer.length / 3) * 4;
       let jsonBytes = buffer.length;
       const escapes = /["\\\t\n\r]/g;
