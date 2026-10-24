@@ -150,3 +150,113 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     catalog.dispose();
   }
 });
+
+it.each(["abort", "dispose", "reject", "supersede"] as const)(
+  "prepares current catalog without a retired fallback after %s",
+  async (outcome) => {
+    let next = [{ provider: "unit-test", id: "original", name: "Original" }];
+    const catalog = createSessionRowProjectionCatalog({
+      getModelCatalog: async () => next,
+      onInvalidated: () => catalog.invalidate(),
+      onRefreshed: () => {},
+    });
+    const replacement = createDeferredCore();
+    const successor = createDeferredCore();
+    const controller = new AbortController();
+    try {
+      await catalog.prepareCurrent();
+      const original = catalog.current;
+      notifyPreparedModelRuntimePublication({
+        phase: "invalidated",
+        replacement: replacement.promise,
+      });
+      let settled = false;
+      const pending = catalog.prepareCurrent(controller.signal).finally(() => {
+        settled = true;
+      });
+      const failure = new Error("replacement failed");
+      if (outcome === "abort") {
+        controller.abort(failure);
+      } else if (outcome === "dispose") {
+        catalog.dispose();
+      } else if (outcome === "reject") {
+        replacement.reject(failure);
+      } else {
+        notifyPreparedModelRuntimePublication({
+          phase: "invalidated",
+          replacement: successor.promise,
+        });
+        replacement.resolve();
+        await replacement.promise;
+        expect(settled).toBe(false);
+        expect(catalog.current).toBe(original);
+        next = [{ provider: "unit-test", id: "successor", name: "Successor" }];
+        successor.resolve();
+        await pending;
+        expect(catalog.current).toBe(next);
+        expect(catalog.needsCurrentRead).toBe(false);
+        return;
+      }
+      await expect(pending).rejects.toThrow(outcome === "reject" ? failure : "Operation aborted");
+      expect(catalog.current).toBe(original);
+    } finally {
+      replacement.resolve();
+      successor.resolve();
+      catalog.dispose();
+    }
+  },
+);
+
+it("keeps an explicitly supplied catalog when no renewal owner exists", async () => {
+  const entries = [{ provider: "unit-test", id: "static", name: "Static" }];
+  const catalog = createSessionRowProjectionCatalog({
+    modelCatalog: entries,
+    onInvalidated: () => {},
+    onRefreshed: () => {},
+  });
+  try {
+    await catalog.prepareCurrent();
+    expect(catalog.current).toBe(entries);
+  } finally {
+    catalog.dispose();
+  }
+});
+
+it("waits for the successor when replacement begins during catalog preparation", async () => {
+  const original = [{ provider: "unit-test", id: "original", name: "Original" }];
+  const next = [{ provider: "unit-test", id: "successor", name: "Successor" }];
+  const reading = createDeferredCore<typeof original>(),
+    entered = createDeferredCore();
+  const replacement = createDeferredCore();
+  const read = vi.fn(async () => original);
+  const catalog = createSessionRowProjectionCatalog({
+    getModelCatalog: read,
+    onInvalidated: () => catalog.invalidate(),
+    onRefreshed: () => {},
+  });
+  try {
+    await catalog.prepareCurrent();
+    read.mockImplementationOnce(() => {
+      entered.resolve();
+      return reading.promise;
+    });
+    read.mockResolvedValue(next);
+    catalog.invalidate();
+    const pending = catalog.prepareCurrent();
+    await entered.promise;
+    notifyPreparedModelRuntimePublication({
+      phase: "invalidated",
+      replacement: replacement.promise,
+    });
+    reading.resolve([{ provider: "unit-test", id: "abandoned", name: "Abandoned" }]);
+    await reading.promise;
+    expect(catalog.current).toBe(original);
+    replacement.resolve();
+    await pending;
+    expect(catalog.current).toBe(next);
+  } finally {
+    reading.resolve(original);
+    replacement.resolve();
+    catalog.dispose();
+  }
+});
