@@ -269,42 +269,34 @@ describe("controller-owned execution guard", () => {
   });
 
   it.each([
-    ["enqueueSession", "synchronous"],
-    ["enqueueSession", "asynchronous"],
-    ["enqueueGlobal", "synchronous"],
-    ["enqueueGlobal", "asynchronous"],
+    [false, "user", "spawn"],
+    [true, "cron", "cron"],
   ] as const)(
-    "passes run identity through %s with %s global capacity refusal",
-    async (enqueueMethod, refusal) => {
-      for (const trigger of ["user", "cron"] as const) {
-        let observedOptions: Parameters<CommandQueueEnqueueFn>[1];
-        const refused = new Error("queue admission refused");
-        const { controller } = create("child-run", {
-          enqueue: (_task, options) => {
-            observedOptions = options;
-            if (refusal === "asynchronous") {
-              return Promise.reject(refused);
-            }
-            throw refused;
-          },
-          trigger,
-          sessionKey: "agent:example:subagent:child",
-          spawnedBy: "agent:example:main",
-        });
-        const enterGlobal = () => controller.enqueueGlobal(result);
-
-        await expect(async () =>
-          enqueueMethod === "enqueueSession"
-            ? await controller.enqueueSession(enterGlobal)
-            : await enterGlobal(),
-        ).rejects.toBe(refused);
-        expect(observedOptions?.taskIdentity).toEqual({
-          taskKind: trigger === "cron" ? "cron" : "spawn",
-          sessionKey: "agent:example:subagent:child",
-          runId: "child-run",
-          requesterSessionKey: "agent:example:main",
-        });
-      }
+    "propagates capacity refusal (async=%s, trigger=%s)",
+    async (async, trigger, taskKind) => {
+      const refused = new Error("queue admission refused");
+      let identity: Parameters<CommandQueueEnqueueFn>[1];
+      const { controller } = create("child-run", {
+        trigger,
+        sessionKey: "agent:example:subagent:child",
+        spawnedBy: "agent:example:main",
+        enqueue: (_task, options) => {
+          identity = options;
+          if (async) {
+            return Promise.reject(refused);
+          }
+          throw refused;
+        },
+      });
+      await expect(controller.enqueueSession(() => controller.enqueueGlobal(result))).rejects.toBe(
+        refused,
+      );
+      expect(identity?.taskIdentity).toEqual({
+        taskKind,
+        sessionKey: "agent:example:subagent:child",
+        runId: "child-run",
+        requesterSessionKey: "agent:example:main",
+      });
     },
   );
 
@@ -328,9 +320,13 @@ describe("controller-owned execution guard", () => {
     expect(enqueue.mock.calls[0]?.[0]?.taskTimeoutMs).toBeUndefined();
   });
 
-  it("retains successor custody after the deadline until the raw producer settles", async () => {
+  it("retains successor custody and fences late preflight after the deadline until raw settlement", async () => {
     const first = create("first");
-    const { entered, finish, run } = pauseSession(first, { taskTimeoutMs: 25 });
+    const execute = vi.fn(result);
+    const { entered, finish, run } = pauseSession(first, { taskTimeoutMs: 25 }, async () => {
+      first.controller.throwIfAborted();
+      await first.controller.enqueueGlobal(execute);
+    });
     const failed = expect(run).rejects.toThrow();
     await entered;
     const operation = first.getParams().replyOperation!;
@@ -340,6 +336,7 @@ describe("controller-owned execution guard", () => {
     expect(first.controller.abortSignal.aborted).toBe(true);
     expect(dispatch).not.toHaveBeenCalled();
     expect(getSessionControllerOperation(key)).toBe(operation);
+    expect(getCommandLaneSnapshot(globalLane).activeCount).toBe(0);
     let settled = false;
     void operation.ownerSettlement.then(() => {
       settled = true;
@@ -348,25 +345,9 @@ describe("controller-owned execution guard", () => {
     expect(settled).toBe(false);
     finish();
     await failed;
+    expect(execute).not.toHaveBeenCalled();
     await expect(second).resolves.toBe("successor");
     expect(settled).toBe(true);
-  });
-
-  it("fences late preflight resumption before global admission without claiming timeout settlement", async () => {
-    const state = create("late-preflight");
-    const { controller } = state;
-    const execute = vi.fn(result);
-    const { entered, finish, run } = pauseSession(state, { taskTimeoutMs: 25 }, async () => {
-      controller.throwIfAborted();
-      await controller.enqueueGlobal(execute);
-    });
-    const failed = expect(run).rejects.toThrow();
-    await entered;
-    await tickAt(1_025, state);
-    expect(getCommandLaneSnapshot(globalLane).activeCount).toBe(0);
-    finish();
-    await failed;
-    expect(execute).not.toHaveBeenCalled();
   });
 
   it("keeps a queued session alive while another session's stalled global producer settles", async () => {
@@ -483,18 +464,31 @@ describe("exact attempt deadline transfer", () => {
     }
   });
 
-  it.each([0, GRACE_MS - 1, GRACE_MS])(
-    "preserves the abort error after %sms while retaining raw capacity",
-    async (elapsedMs) => {
+  it.each([
+    ["Stop", 0],
+    ["Stop", GRACE_MS - 1],
+    ["Stop", GRACE_MS],
+    ["runtime timeout", GRACE_MS],
+  ] as const)(
+    "preserves %s classification after %sms while retaining raw capacity",
+    async (source, elapsedMs) => {
       const rawFailure = new Error("native abort");
       rawFailure.name = "AbortError";
       const { operation, controls, controller, raw, run } = await setup(rawFailure);
       const control = controls({ initialTimeoutMs: MAX_TIMER_TIMEOUT_MS });
       const outcome = run.catch((error: unknown) => error);
-      control.onAttemptAbort();
-      expect(controller.abortSignal.reason).toMatchObject({ name: "AbortError" });
+      const settled = vi.fn();
+      void operation.ownerSettlement.then(settled);
+      if (source === "Stop") {
+        control.onAttemptAbort();
+        expect(controller.abortSignal.reason).toMatchObject({ name: "AbortError" });
+      } else {
+        control.onAttemptTimeout(new Error("runtime timeout"));
+      }
       await vi.advanceTimersByTimeAsync(elapsedMs);
+      expect(controller.abortSignal.aborted).toBe(true);
       expect(getCommandLaneSnapshot(attemptLane).activeCount).toBe(1);
+      expect(settled).not.toHaveBeenCalled();
       raw.resolve();
       const error = await outcome;
       if (elapsedMs < GRACE_MS) {
@@ -640,31 +634,6 @@ describe("exact attempt deadline transfer", () => {
       expect(controller.abortSignal.aborted).toBe(false);
     }
   });
-
-  it.each(["Stop", "runtime timeout"] as const)(
-    "retains raw capacity after %s and one cleanup grace",
-    async (source) => {
-      const { operation, controls, controller, raw, run } = await setup();
-      const control = controls({ initialTimeoutMs: MAX_TIMER_TIMEOUT_MS });
-      if (source === "Stop") {
-        control.onAttemptAbort();
-      } else {
-        control.onAttemptTimeout(new Error("runtime timeout"));
-      }
-      await vi.advanceTimersByTimeAsync(GRACE_MS);
-      expect(controller.abortSignal.aborted).toBe(true);
-      expect(getCommandLaneSnapshot(attemptLane).activeCount).toBe(1);
-      let settled = false;
-      void operation.ownerSettlement.then(() => {
-        settled = true;
-      });
-      await Promise.resolve();
-      expect(settled).toBe(false);
-      raw.resolve();
-      await Promise.allSettled([run]);
-      await operation.ownerSettlement;
-    },
-  );
 
   it("commits Stop before reentrant creation of successor controls", async () => {
     const { controller, controls } = await setup();

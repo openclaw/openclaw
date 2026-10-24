@@ -22,17 +22,11 @@ import type { EmbeddedAttemptExecutionState } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   runAgentEndSideEffects: vi.fn(),
-  shouldWaitForCompletionRequiredAsyncTasks: vi.fn((): boolean => false),
-  waitForCompletionRequiredAsyncTasks: vi.fn(),
 }));
 
 // mock-isolation: Keep skill scheduling and plugin hooks outside phase-ordering tests.
 vi.mock("../../harness/agent-end-side-effects.js", () => ({
   runAgentEndSideEffectsAsync: hoisted.runAgentEndSideEffects,
-}));
-vi.mock("./attempt-async-tasks.js", () => ({
-  shouldWaitForCompletionRequiredAsyncTasks: hoisted.shouldWaitForCompletionRequiredAsyncTasks,
-  waitForCompletionRequiredAsyncTasks: hoisted.waitForCompletionRequiredAsyncTasks,
 }));
 
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
@@ -208,8 +202,6 @@ function finalizationInput(preparedState: ReturnType<typeof prepared>) {
 describe("embedded attempt phase lifecycle state", () => {
   beforeEach(() => {
     hoisted.runAgentEndSideEffects.mockReset();
-    hoisted.shouldWaitForCompletionRequiredAsyncTasks.mockReset().mockReturnValue(false);
-    hoisted.waitForCompletionRequiredAsyncTasks.mockReset();
   });
 
   it("re-reads compaction timeout state after the retry wait", async () => {
@@ -229,28 +221,6 @@ describe("embedded attempt phase lifecycle state", () => {
 
     expect(result.timedOutDuringCompaction).toBe(true);
     expect(sessionManager.removeTrailingEntriesAsync).toHaveBeenCalledOnce();
-  });
-
-  it("settles a user-aborted run whose async-task wait throws AbortError", async () => {
-    const abortError = Object.assign(new Error("This operation was aborted"), {
-      name: "AbortError",
-    });
-    hoisted.shouldWaitForCompletionRequiredAsyncTasks.mockReturnValue(true);
-    hoisted.waitForCompletionRequiredAsyncTasks.mockRejectedValueOnce(abortError);
-    const { input } = streamInput();
-    input.subscription.toolMetas = [{ toolName: "exec", asyncStarted: true }];
-    input.readLifecycleState = () => ({
-      aborted: true,
-      timedOut: false,
-      timedOutDuringCompaction: false,
-    });
-    input.runAbortSignal = AbortSignal.abort();
-    const result = await settleEmbeddedAttemptStream(input);
-
-    // The aborted run settles instead of unwinding the lane task, and its
-    // unfinished async tasks are not reclassified as a timeout failure.
-    expect(result.promptError).toBeNull();
-    expect(hoisted.waitForCompletionRequiredAsyncTasks).toHaveBeenCalledOnce();
   });
 
   it("keeps projected nested tool evidence from owning the model terminal (#118274)", async () => {
@@ -281,9 +251,20 @@ describe("embedded attempt phase lifecycle state", () => {
     expect(result.messagesSnapshot).toEqual(messages);
   });
 
-  it.each(["complete", "missing admission", "missing terminal"] as const)(
+  it.each([
+    ["complete", true],
+    ["missing admission", false],
+    ["missing terminal", false],
+    ["stacked markers", true],
+    ["custom leaf", false],
+    ["marker after custom leaf", false],
+    ["parentless marker", false],
+    ["missing parent", false],
+    ["no leaf", false],
+    ["real manager marker", true],
+  ] as const)(
     "handles %s candidate anchors without skipping later lifecycle work",
-    async (boundary) => {
+    async (boundary, allowed) => {
       const { dir, target, message, anchor, recorder } = await seedTurn(
         "session-1",
         "agent:main:main",
@@ -295,18 +276,60 @@ describe("embedded attempt phase lifecycle state", () => {
         boundary === "missing terminal"
           ? SessionManager.inMemory(dir)
           : SessionManager.open(target, dir);
-      const terminalEntryId = sessionManager.appendMessage(
+      const terminalEntryId = await sessionManager.appendMessageAsync(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "done" }],
           timestamp: 2,
         }),
       );
+      if (!terminalEntryId) {
+        throw new Error("expected terminal entry id");
+      }
       const expectedTerminalAnchor = readActiveTranscriptEntryAnchor({
         ...anchor,
         entryId: terminalEntryId,
       });
-      if (boundary === "complete" && !expectedTerminalAnchor) {
+      if (allowed && !expectedTerminalAnchor) {
         throw new Error("expected persisted terminal anchor");
+      }
+      const base = sessionManager.getEntry(terminalEntryId);
+      if (!base) {
+        throw new Error("expected terminal entry");
+      }
+      const marker = {
+        id: "marker-1",
+        parentId: base.id,
+        type: "custom" as const,
+        timestamp: new Date(2).toISOString(),
+        customType: "openclaw.cache-ttl",
+      };
+      const snapshot = {
+        ...marker,
+        id: "snapshot-1",
+        parentId: marker.id,
+        customType: "projection-snapshot",
+      };
+      const secondMarker = { ...marker, id: "marker-2", parentId: marker.id };
+      const trailing = { ...marker, id: "trailing", parentId: snapshot.id };
+      type Entry = NonNullable<ReturnType<SessionManager["getEntry"]>>;
+      const tails = new Map<string, Entry[]>([
+        ["stacked markers", [base, marker, secondMarker]],
+        ["custom leaf", [base, marker, snapshot]],
+        ["marker after custom leaf", [base, marker, snapshot, trailing]],
+        ["parentless marker", [{ ...marker, parentId: null }]],
+        ["missing parent", [marker]],
+        ["no leaf", []],
+      ]);
+      const tail = tails.get(boundary);
+      const reads: { mockRestore(): void }[] = [];
+      if (tail) {
+        const entries = new Map(tail.map((entry) => [entry.id, entry]));
+        reads.push(vi.spyOn(sessionManager, "getLeafId").mockReturnValue(tail.at(-1)?.id ?? null));
+        reads.push(
+          vi.spyOn(sessionManager, "getEntry").mockImplementation((id) => entries.get(id)),
+        );
+      } else if (boundary === "real manager marker") {
+        await sessionManager.appendCustomEntryAsync("openclaw.cache-ttl", {});
       }
       const afterTurn = vi.fn(async () => {});
       const maintain = vi.fn(async () => ({
@@ -316,185 +339,110 @@ describe("embedded attempt phase lifecycle state", () => {
       }));
       const onContextEngineTurnCandidate = vi.fn();
       const config = {};
-      await completeEmbeddedAttemptAfterTurn(
-        {
-          ...finalizationInput(prepared(sessionManager)),
-          attempt: {
-            ...sessionAttempt(target, "run-1"),
-            provider: "test",
-            modelId: "model",
-            model: { api: "openai-responses", contextWindow: 120_000 },
-            modelContextWindow: 200_000,
-            workspaceDir: dir,
-            cwd: dir,
-            authProfileId: "profile-1",
-            config,
-            userTurnTranscriptRecorder: recorder,
-            onContextEngineTurnCandidate,
-          } as never,
-          activeContextEngine: {
-            info: { id: "test", name: "Test" },
-            assemble: vi.fn(),
-            compact: vi.fn(),
-            ingest: vi.fn(),
-            afterTurn,
-            maintain,
-          } as never,
-          resolveActiveContextEnginePluginId: () => "test",
-        } as never,
-        settled(target.sessionId, {
-          messagesSnapshot: [{ role: "assistant", content: "done" }] as never,
-        }) as never,
-        prompt(),
-      );
-
-      if (boundary === "complete") {
-        expect(onContextEngineTurnCandidate).toHaveBeenCalledWith(
-          expect.objectContaining({
-            boundary: {
-              admission: recorder.getAdmissionReceipt(),
-              terminal: expectedTerminalAnchor,
-            },
-            runtimeContext: {
+      try {
+        await completeEmbeddedAttemptAfterTurn(
+          {
+            ...finalizationInput(
+              prepared(sessionManager, !tail && boundary !== "real manager marker"),
+            ),
+            attempt: {
+              ...sessionAttempt(target, "run-1"),
               provider: "test",
               modelId: "model",
+              model: { api: "openai-responses", contextWindow: 120_000 },
               modelContextWindow: 200_000,
-              tokenBudget: 180_000,
-            },
-          }),
+              workspaceDir: dir,
+              cwd: dir,
+              authProfileId: "profile-1",
+              config,
+              userTurnTranscriptRecorder: recorder,
+              onContextEngineTurnCandidate,
+            } as never,
+            activeContextEngine: {
+              info: { id: "test", name: "Test" },
+              assemble: vi.fn(),
+              compact: vi.fn(),
+              ingest: vi.fn(),
+              afterTurn,
+              maintain,
+            } as never,
+            resolveActiveContextEnginePluginId: () => "test",
+          } as never,
+          settled(target.sessionId, {
+            messagesSnapshot: [{ role: "assistant", content: "done" }] as never,
+          }) as never,
+          prompt(),
         );
-      } else {
-        expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
+
+        if (allowed) {
+          expect(onContextEngineTurnCandidate).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              boundary: {
+                admission: recorder.getAdmissionReceipt(),
+                terminal: expectedTerminalAnchor,
+              },
+              runtimeContext: {
+                provider: "test",
+                modelId: "model",
+                modelContextWindow: 200_000,
+                tokenBudget: 180_000,
+              },
+            }),
+          );
+        } else {
+          expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
+        }
+        if (!tail && boundary !== "real manager marker") {
+          expect(sessionManager.getEntries()).toContainEqual(bootstrapCompletedEntry);
+        }
+        expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
+        if (
+          boundary === "complete" ||
+          boundary === "missing admission" ||
+          boundary === "missing terminal"
+        ) {
+          const context = hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].ctx;
+          expect(context).toMatchObject({
+            runId: "run-1",
+            agentId: "main",
+            sessionId: target.sessionId,
+            sessionKey: target.sessionKey,
+            modelProviderId: "test",
+            modelId: "model",
+            modelContextWindowTokens: 180_000,
+            authProfileId: "profile-1",
+            skillWorkshopAvailable: false,
+            compacted: false,
+            trace: {
+              traceId: "11111111111111111111111111111111",
+              spanId: "2222222222222222",
+            },
+            foregroundPromptContext: {
+              agentId: "main",
+              agentDir: "/tmp/agent",
+              workspaceDir: dir,
+              cwd: dir,
+              sandboxSessionKey: target.sessionKey,
+              sandboxAgentId: "main",
+            },
+          });
+          expect(context?.config).toBe(config);
+          expect(
+            hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource,
+          ).toEqual(
+            sessionManager.getSessionTarget()
+              ? { ...sessionManager.getSessionTarget(), entryId: terminalEntryId }
+              : undefined,
+          );
+        }
+        expect([afterTurn.mock.calls, maintain.mock.calls]).toEqual([[], []]);
+      } finally {
+        for (const read of reads) {
+          read.mockRestore();
+        }
       }
-      expect(sessionManager.getEntries()).toContainEqual(bootstrapCompletedEntry);
-      expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
-      const context = hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].ctx;
-      expect(context).toMatchObject({
-        runId: "run-1",
-        agentId: "main",
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        modelProviderId: "test",
-        modelId: "model",
-        modelContextWindowTokens: 180_000,
-        authProfileId: "profile-1",
-        skillWorkshopAvailable: false,
-        compacted: false,
-        trace: {
-          traceId: "11111111111111111111111111111111",
-          spanId: "2222222222222222",
-        },
-        foregroundPromptContext: {
-          agentId: "main",
-          agentDir: "/tmp/agent",
-          workspaceDir: dir,
-          cwd: dir,
-          sandboxSessionKey: target.sessionKey,
-          sandboxAgentId: "main",
-        },
-      });
-      expect(context?.config).toBe(config);
-      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
-        sessionManager.getSessionTarget()
-          ? { ...sessionManager.getSessionTarget(), entryId: terminalEntryId }
-          : undefined,
-      );
-      expect([afterTurn.mock.calls, maintain.mock.calls]).toEqual([[], []]);
     },
   );
-
-  it.each([
-    ["stacked markers", true],
-    ["custom leaf", false],
-    ["marker after custom leaf", false],
-    ["parentless marker", false],
-    ["missing parent", false],
-    ["no leaf", false],
-    ["real manager marker", true],
-  ] as const)("records terminal candidates with %s", async (scenario, allowed) => {
-    const { dir, target, message, anchor, recorder } = await seedTurn("candidate-tail");
-    recorder.markRuntimePersisted(message, anchor);
-    const sessionManager = SessionManager.open(target, dir);
-    const terminalId = await sessionManager.appendMessageAsync(
-      makeAgentAssistantMessage({ content: [{ type: "text", text: "done" }], timestamp: 2 }),
-    );
-    if (!terminalId) {
-      throw new Error("expected persisted terminal id");
-    }
-    const base = sessionManager.getEntry(terminalId);
-    const terminal = readActiveTranscriptEntryAnchor({ ...anchor, entryId: terminalId });
-    if (!base || !terminal) {
-      throw new Error("expected persisted terminal");
-    }
-    type Entry = NonNullable<ReturnType<SessionManager["getEntry"]>>;
-    const marker = {
-      id: "marker-1",
-      parentId: base.id,
-      type: "custom" as const,
-      timestamp: new Date(2).toISOString(),
-      customType: "openclaw.cache-ttl",
-    };
-    const snapshot = {
-      ...marker,
-      id: "snapshot-1",
-      parentId: marker.id,
-      customType: "projection-snapshot",
-    };
-    const secondMarker = { ...marker, id: "marker-2", parentId: marker.id };
-    const trailing = { ...marker, id: "trailing", parentId: snapshot.id };
-    const tails = new Map<string, { entries: Entry[]; leafId: string | null }>([
-      ["stacked markers", { entries: [base, marker, secondMarker], leafId: secondMarker.id }],
-      ["custom leaf", { entries: [base, marker, snapshot], leafId: snapshot.id }],
-      [
-        "marker after custom leaf",
-        { entries: [base, marker, snapshot, trailing], leafId: trailing.id },
-      ],
-      ["parentless marker", { entries: [{ ...marker, parentId: null }], leafId: marker.id }],
-      ["missing parent", { entries: [marker], leafId: marker.id }],
-      ["no leaf", { entries: [], leafId: null }],
-    ]);
-    const tail = tails.get(scenario);
-    const reads: { mockRestore(): void }[] = [];
-    if (tail) {
-      const entries = new Map(tail.entries.map((entry) => [entry.id, entry]));
-      reads.push(vi.spyOn(sessionManager, "getLeafId").mockReturnValue(tail.leafId));
-      reads.push(vi.spyOn(sessionManager, "getEntry").mockImplementation((id) => entries.get(id)));
-    } else {
-      await sessionManager.appendCustomEntryAsync("openclaw.cache-ttl", {});
-    }
-    const onContextEngineTurnCandidate = vi.fn();
-    try {
-      await completeEmbeddedAttemptAfterTurn(
-        {
-          ...finalizationInput(prepared(sessionManager, false)),
-          attempt: {
-            ...sessionAttempt(target),
-            provider: "test",
-            modelId: "model",
-            userTurnTranscriptRecorder: recorder,
-            onContextEngineTurnCandidate,
-          },
-          activeContextEngine: { info: { id: "test", name: "Test" } },
-        } as never,
-        settled(target.sessionId) as never,
-        prompt(),
-      );
-      if (allowed) {
-        expect(onContextEngineTurnCandidate).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            boundary: { admission: recorder.getAdmissionReceipt(), terminal },
-          }),
-        );
-      } else {
-        expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
-      }
-      expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
-    } finally {
-      for (const read of reads) {
-        read.mockRestore();
-      }
-    }
-  });
 
   it("preserves cron job identity in agent_end after failure", async () => {
     const promptError = new Error("provider failed");

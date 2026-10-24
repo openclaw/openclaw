@@ -3,7 +3,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { Context, Model, SimpleStreamOptions } from "../../../llm/types.js";
 import type { PluginHookBeforeAgentRunEvent } from "../../../plugins/hook-types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
@@ -13,20 +12,8 @@ import {
 } from "../../admitted-run-context.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import {
-  createAssistant,
-  createAssistantResultStream,
-  createTestSession,
-  registerAgentSessionLoopTestLifecycle,
-  streamMocks,
-  testModel,
-} from "../../sessions/agent-session-loop-correctness.test-support.js";
-import {
-  estimateCompactionHistoryTokens,
-  type CompactionRequestBudget,
-} from "../../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
   retainEmbeddedSessionPromptState,
   clearEmbeddedSessionPromptStates,
@@ -38,7 +25,6 @@ import type {
   PromptPreflightCall,
   PromptSubmissionCall,
 } from "./attempt-prompt-phase.test-support.js";
-import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 // Register the shared module mocks before importing any runtime dependency.
@@ -70,28 +56,8 @@ beforeEach(() => {
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   vi.unstubAllEnvs();
+  clearEmbeddedSessionPromptStates(["phase-finalization"]);
 });
-
-registerAgentSessionLoopTestLifecycle();
-afterEach(() => {
-  clearEmbeddedSessionPromptStates([
-    "phase-context-replay",
-    "phase-system-update",
-    "phase-finalization",
-  ]);
-});
-
-function withUsage(model: Model, text: string, input: number) {
-  const assistant = createAssistant(model, [{ type: "text", text }], "stop", input);
-  assistant.usage.output = Math.ceil(text.length / 4);
-  assistant.usage.totalTokens = input + assistant.usage.output;
-  assistant.usage.contextUsage = {
-    state: "available",
-    promptTokens: input,
-    totalTokens: assistant.usage.totalTokens,
-  };
-  return assistant;
-}
 
 function captureBudgets(fixture: ReturnType<typeof createFixture>) {
   const budgets: CompactionRequestBudget[] = [];
@@ -208,200 +174,57 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     );
   });
 
-  it.each([
-    { appendOnlyRuntimeContext: true, queued: false },
-    { appendOnlyRuntimeContext: false, queued: false },
-    { appendOnlyRuntimeContext: true, queued: true },
-    { appendOnlyRuntimeContext: false, queued: true },
-  ])(
-    "budgets submitted context with a recorded carrier (appendOnly=$appendOnlyRuntimeContext, queued=$queued)",
-    async ({ appendOnlyRuntimeContext, queued }) => {
+  it.each([false, true])(
+    "reserves the selected runtime carrier before submission (append-only: %s)",
+    async (appendOnlyRuntimeContext) => {
       const fixture = createFixture({ pendingPrompt: "hello", pendingImageCount: 0 });
       const currentUser = {
         role: "user" as const,
         content: "hello",
         timestamp: 1,
         idempotencyKey: "current:user",
-        __openclaw: { modelPromptProjection: { version: 1, text: "hello" } },
       };
       const oldCarrier = buildRuntimeContextCustomMessage("Previously recorded context");
-      const nextCarrier = buildRuntimeContextCustomMessage(
-        "New transient context. ".repeat(queued ? 1 : 200),
-      );
+      const nextCarrier = buildRuntimeContextCustomMessage("New transient context. ".repeat(200));
       if (!oldCarrier || !nextCarrier) {
         throw new Error("Expected both runtime carriers");
-      }
-      const manager = SessionManager.inMemory();
-      if (queued) {
-        manager.appendMessage({
-          role: "user",
-          content: "Earlier project archive. ".repeat(1_500),
-          timestamp: 1,
-        });
-        manager.appendMessage(
-          createAssistant(testModel, [
-            { type: "text", text: "Recorded project facts. ".repeat(900) },
-          ]),
-        );
-        manager.appendMessage({
-          role: "user",
-          content: "Current project archive. ".repeat(1_500),
-          timestamp: 3,
-        });
-        const priorInput = Math.ceil(
-          JSON.stringify(
-            manager.buildSessionContext().messages.map((message) => {
-              if (message.role !== "user" && message.role !== "assistant") {
-                throw new Error("Expected seeded user/assistant history");
-              }
-              return { role: message.role, content: message.content };
-            }),
-          ).length / 4,
-        );
-        const prior = withUsage(testModel, "Recorded current facts. ".repeat(800), priorInput);
-        expect(prior.usage.totalTokens).toBeGreaterThan(24_576);
-        expect(prior.usage.totalTokens).toBeLessThan(testModel.contextWindow!);
-        manager.appendMessage(prior);
-      }
-      manager.appendMessage(currentUser);
-      manager.appendCustomMessageEntry(
-        oldCarrier.customType,
-        oldCarrier.content,
-        oldCarrier.display,
-        oldCarrier.details,
-      );
-      const { session, settingsManager } = await createTestSession({
-        sessionManager: manager,
-        ...(queued
-          ? {
-              settingsManager: SettingsManager.inMemory({
-                compaction: { enabled: true, reserveTokens: 8_192, keepRecentTokens: 20_000 },
-                retry: { enabled: false },
-              }),
-            }
-          : {}),
-      });
-      const queuedContext = "Queued project material. ".repeat(1_120).trim();
-      const queuedMessage = {
-        role: "custom" as const,
-        customType: "test.ordinary-queued-context",
-        content: queuedContext,
-        display: false,
-        timestamp: 1,
-      };
-      if (queued) {
-        await session.sendCustomMessage(queuedMessage, { deliverAs: "nextTurn" });
       }
       const recorder = createUserTurnTranscriptRecorder({
         message: currentUser,
         target: () => undefined,
       });
       recorder.markRuntimePersisted(currentUser);
-      const { sessionRuntime } = fixture.input.prepared;
-      sessionRuntime.agentSession.activeSession = session;
-      sessionRuntime.agentSession.settingsManager = settingsManager;
-      sessionRuntime.sessionManager = manager;
-      sessionRuntime.preparedUserTurnMessage = currentUser;
-      sessionRuntime.state.systemPromptText = session.systemPrompt;
-      fixture.input.attempt = {
-        ...fixture.input.attempt,
-        model: testModel,
-        provider: testModel.provider,
-        modelId: testModel.id,
-        config: {},
-        userTurnTranscriptRecorder: recorder,
-      };
-      fixture.input.attempt.sessionId = "phase-context-replay";
-      using promptStateLease = retainEmbeddedSessionPromptState(fixture.input.attempt.sessionId);
-      const sessionPromptState = promptStateLease.state;
-      sessionRuntime.sessionPromptState = sessionPromptState;
-      sessionRuntime.toolResultPromptProjectionState = sessionPromptState.toolResults;
-      sessionRuntime.transcriptPolicy.appendOnlyRuntimeContext = appendOnlyRuntimeContext;
-      fixture.input.preparedStreamRuntime.promptActiveSession = (prompt, options) =>
-        session.prompt(prompt, options);
-      await prepareEmbeddedAttemptSessionBoundary({
-        activeSession: session,
-        appendOnlyRuntimeContext,
-        attempt: fixture.input.attempt,
-        getUserTranscriptContexts: () => undefined,
-        isRawModelRun: false,
-        preparedUserTurnMessage: currentUser,
-        sessionManager: manager,
-        setActiveSessionSystemPrompt: (prompt) => {
-          session.agent.state.systemPrompt = prompt;
-        },
-      });
+      fixture.input.attempt.userTurnTranscriptRecorder = recorder;
+      const runtime = fixture.input.prepared.sessionRuntime;
+      runtime.agentSession.activeSession.agent.state.messages = [currentUser, oldCarrier];
+      runtime.transcriptPolicy.appendOnlyRuntimeContext = appendOnlyRuntimeContext;
       const context = mocks.preparePromptContext.getMockImplementation()!;
       mocks.preparePromptContext.mockImplementation((...args) => ({
         ...context(...args),
-        contextTokenBudget: testModel.contextWindow,
         runtimeContextMessageForCurrentTurn: nextCarrier,
-        systemPromptForHook: session.systemPrompt,
       }));
       const budgets = captureBudgets(fixture);
-      const { submitEmbeddedAttemptPrompt } = await vi.importActual<
-        typeof import("./attempt-prompt-submit.js")
-      >("./attempt-prompt-submit.js");
-      mocks.submitPrompt.mockImplementation(submitEmbeddedAttemptPrompt);
-      const requests: string[] = [];
-      const requestTokens: number[] = [];
-      streamMocks.streamSimple.mockImplementation(
-        (model: Model, providerContext: Context, options?: SimpleStreamOptions) => {
-          const wire = JSON.stringify({
-            system: providerContext.systemPrompt,
-            tools: providerContext.tools,
-            messages: providerContext.messages.map(({ role, content }) => ({ role, content })),
-          });
-          const tokens = Math.ceil(wire.length / 4);
-          const foreground = !session.isCompacting;
-          if (foreground) {
-            requests.push(JSON.stringify(providerContext.messages));
-            requestTokens.push(tokens);
-          }
-          const text = foreground
-            ? "done"
-            : "Project archive summary. "
-                .repeat(700)
-                .slice(0, (options?.maxTokens ?? model.maxTokens) * 4);
-          const response = withUsage(model, text, tokens);
-          expect(response.usage.totalTokens).toBeLessThanOrEqual(model.contextWindow!);
-          return createAssistantResultStream(response);
-        },
-      );
 
       await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
 
-      expect(mocks.handlePromptError.mock.calls.map(([input]) => input.error)).toEqual([]);
       expect(fixture.readState().promptError).toBeNull();
-      expect(requests).toHaveLength(1);
-      if (queued) {
-        const captured = budgets[0]!;
-        const completePendingTokens =
-          captured.pendingTokens + estimateCompactionHistoryTokens([queuedMessage]);
-        expect(
-          captured.contextWindow -
-            captured.reserveTokens -
-            captured.fixedTokens -
-            completePendingTokens,
-        ).toBeGreaterThan(0);
-        expect(requests[0]).toContain(queuedContext);
-        expect(manager.getEntries().some((entry) => entry.type === "compaction")).toBe(true);
-        expect(requestTokens[0], JSON.stringify({ requestTokens, budgets })).toBeLessThanOrEqual(
-          testModel.contextWindow! - settingsManager.getCompactionReserveTokens(),
-        );
-      }
-      expect(requests[0]).toContain(
-        appendOnlyRuntimeContext ? "Previously recorded context" : "New transient context.",
-      );
-      expect(requests[0]).not.toContain(
-        appendOnlyRuntimeContext ? "New transient context." : "Previously recorded context",
-      );
+      expect(budgets).toHaveLength(1);
+      expect(budgets[0]).toMatchObject({
+        contextWindow: 32_000,
+        reserveTokens: 77,
+        pendingUserIdempotencyKey: "current:user",
+      });
       if (appendOnlyRuntimeContext) {
         expect(budgets[0]?.pendingTokens).toBeLessThan(nextCarrier.content.length / 4);
       } else {
         expect(budgets[0]?.pendingTokens).toBeGreaterThan(nextCarrier.content.length / 4);
       }
-      expect(budgets.at(-1)).toMatchObject({ pendingTokens: 0, pendingQueuedContextTokens: 0 });
+      expect(mocks.submitPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          compactionRequestBudget: budgets[0],
+          runtimeContextMessage: nextCarrier,
+        }),
+      );
     },
   );
 

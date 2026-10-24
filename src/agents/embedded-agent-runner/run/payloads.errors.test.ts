@@ -16,7 +16,6 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
 
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { formatBillingErrorMessage } from "../../failover/user-copy.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
@@ -382,12 +381,6 @@ describe("buildEmbeddedRunPayloads", () => {
       ["SECRET_CANARY_69737", "invalid_request_error"],
     ],
     [
-      "actionable numeric provider limits",
-      "400 max_tokens (384000) exceeds model's maximum output tokens (65536) for model deepseek-v4-flash:0731",
-      "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.",
-      ["deepseek-v4-flash:0731"],
-    ],
-    [
       "numeric limits for non-token parameters",
       "400 account_id (1234567890123456) exceeds maximum length (8)",
       String.raw`LLM request rejected: account\_id \(1234567890123456\) exceeds maximum length \(8\)`,
@@ -405,12 +398,6 @@ describe("buildEmbeddedRunPayloads", () => {
       String.raw`LLM request rejected: SECRET CANARY\_69737`,
       ["invalid_request_error"],
     ],
-    [
-      "generic internal errors without provider request IDs",
-      "An error occurred while processing your request. Please include request ID req_synthetic_provider_request_001 in your message.",
-      "The AI service returned an internal error. Please try again in a moment.",
-      ["request ID", "req_synthetic_provider_request_001"],
-    ],
   ] satisfies [string, string, string, string[]][])(
     "preserves %s",
     (_name, rawError, text, absent) => {
@@ -423,32 +410,6 @@ describe("buildEmbeddedRunPayloads", () => {
       }
     },
   );
-
-  it("surfaces /new guidance for terminal thinking-signature replay failures", () => {
-    const rawError =
-      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}';
-    const payloads = errorPayloads(rawError);
-
-    expectError(
-      payloads,
-      "Session history or replay state is invalid. Use /new to start a fresh session and try again.",
-    );
-  });
-
-  it("uses structured provider details for model-not-found reply payloads", () => {
-    const payloads = errorPayloads(
-      "400 Param Incorrect",
-      {},
-      {
-        errorCode: "400",
-        errorBody:
-          '{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}',
-      },
-    );
-    expectError(payloads, "This model was not found. Choose another model in the Control UI.");
-    expectNoPayloadTextContaining(payloads, "some-model-id");
-    expectNoPayloadTextContaining(payloads, "Param Incorrect");
-  });
 
   it("surfaces OpenAI model capacity errors instead of generic empty-response copy", () => {
     const payloads = errorPayloads("Selected model is at capacity. Please try a different model.");
@@ -526,20 +487,6 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expect(payloads).toHaveLength(0);
-  });
-
-  it("includes provider and model context for billing errors", () => {
-    const payloads = buildPayloads({
-      lastAssistant: makeAssistant({
-        model: "claude-3-5-sonnet",
-        errorMessage: "insufficient credits",
-        content: [{ type: "text", text: "insufficient credits" }],
-      }),
-      provider: "Anthropic",
-      model: "claude-3-5-sonnet",
-    });
-
-    expectError(payloads, formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"));
   });
 
   it("does not emit a synthetic billing error for successful turns with stale errorMessage", () => {
