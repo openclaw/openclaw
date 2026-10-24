@@ -1,12 +1,8 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
-import { takeControlUiViewportScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({
@@ -14,17 +10,6 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
-});
-
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let proofDir: string;
-beforeEach(() => {
-  if (captureUiProofEnabled) {
-    proofDir = createControlUiE2eArtifactDir(
-      "secrets-store",
-      path.join(process.cwd(), ".artifacts", "control-ui-e2e", "secrets-store"),
-    );
-  }
 });
 
 function entry(name: string, content: string | string[]): SecretStoreEntry {
@@ -48,32 +33,6 @@ const longNameSecretEntry = {
   ...secretEntry,
   name: "REUTERS_OUTLOOK_CALENDAR_ICS_PRODUCTION_ACCESS_TOKEN",
 };
-
-async function capture(
-  page: Page,
-  fileName: string,
-  surface: Locator = page.locator(".shell"),
-  content: readonly Locator[] = [
-    page.locator(".settings-section__heading", { hasText: "Secrets" }),
-  ],
-) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(proofDir, { recursive: true });
-  if (page.video()) {
-    await writeFile(
-      path.join(proofDir, fileName),
-      await takeControlUiViewportScreenshot(page, surface, content),
-    );
-  } else {
-    await page.screenshot({
-      animations: "disabled",
-      fullPage: true,
-      path: path.join(proofDir, fileName),
-    });
-  }
-}
 
 async function tableBodyContrast(page: Page): Promise<number> {
   return await page
@@ -140,10 +99,6 @@ async function openStore(
 
 async function expectMode(dialog: Locator, name: RegExp) {
   expect(await dialog.getByRole("radio", { name }).isChecked()).toBe(true);
-}
-
-async function captureDialog(page: Page, file: string, dialog: Locator, content: Locator) {
-  await capture(page, file, dialog.locator("dialog"), [content]);
 }
 
 async function openDialog(page: Page, label: string) {
@@ -248,15 +203,12 @@ suite.define(() => {
         set: { sequence: [saved, saved] },
       });
 
-      async function reject(dialog: Locator, text = "Enter a value.", proof?: string) {
+      async function reject(dialog: Locator, text = "Enter a value.") {
         // Complete the modal's opening transition before submitting its form.
         await dialog.locator('dialog[data-phase="open"]').waitFor();
         await button(dialog, "Save").click();
         await dialog.getByRole("alert").getByText(text).waitFor();
         expect(await gateway.getRequests("secrets.store.set")).toHaveLength(0);
-        if (proof) {
-          await capture(page, proof);
-        }
         await button(dialog, "Cancel").click();
       }
       await rowAction(page, "SERVICE_API_KEY", "edit");
@@ -266,16 +218,12 @@ suite.define(() => {
       const addSecret = await openDialog(page, "Add");
       await field(addSecret, "Name").fill("EMPTY_API_KEY");
       await expectMode(addSecret, /Protected secret/u);
-      await reject(addSecret, "Enter a value.", "04-empty-secret-local-validation.png");
+      await reject(addSecret);
 
       const protectedBulk = await openDialog(page, "Bulk Add");
       await bulkValue(protectedBulk).fill("EMPTY_API_KEY=\nEMPTY_ENV=");
       await protectedBulk.getByText("1 protected secret detected").waitFor();
-      await reject(
-        protectedBulk,
-        "EMPTY_API_KEY: Enter a value.",
-        "05-empty-bulk-local-validation.png",
-      );
+      await reject(protectedBulk, "EMPTY_API_KEY: Enter a value.");
 
       const addEnv = await openDialog(page, "Add");
       await field(addEnv, "Name").fill("EMPTY_ENV");
@@ -301,18 +249,12 @@ suite.define(() => {
   });
 
   it("adds env and secret values, bulk imports, and deletes without revealing secrets", async () => {
-    if (captureUiProofEnabled) {
-      await mkdir(proofDir, { recursive: true });
-    }
     await suite.withPage(
       {
         colorScheme: "dark",
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1440 },
-        ...(captureUiProofEnabled
-          ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1440 } } }
-          : {}),
       },
       async ({ page }) => {
         const gateway = await openStore(page, {
@@ -334,7 +276,6 @@ suite.define(() => {
         await addDialog.getByText(/The agent can print, transmit, or persist it/u).waitFor();
         await field(addDialog, "Name").fill("SERVICE_URL");
         await field(addDialog, "Value").fill("https://service.test");
-        await captureDialog(page, "02-add-dialog.png", addDialog, field(addDialog, "Value"));
         await button(addDialog, "Save").click();
         await notice(
           page,
@@ -346,12 +287,6 @@ suite.define(() => {
         await expectMode(secretDialog, /Protected secret/u);
         await field(secretDialog, "Value").fill("super-secret-material");
         await secretDialog.locator('textarea[name="allowed-hosts"]').fill("api.example.com");
-        await captureDialog(
-          page,
-          "02-secret-allowed-hosts.png",
-          secretDialog,
-          secretDialog.locator('textarea[name="allowed-hosts"]'),
-        );
         await field(secretDialog, "Name").press("Enter");
         await notice(
           page,
@@ -371,7 +306,6 @@ suite.define(() => {
           'BULK_PRIVATE_KEY="line one\nline two"\nBULK_URL=https://bulk.test',
         );
         await bulkDialog.getByText("1 protected secret detected").waitFor();
-        await captureDialog(page, "03-bulk-add-dialog.png", bulkDialog, bulkValue(bulkDialog));
         await button(bulkDialog, "Save").click();
         await notice(
           page,
@@ -392,7 +326,6 @@ suite.define(() => {
         expect(await gateway.getRequests("secrets.store.delete")).toHaveLength(1);
         expect(await page.content()).not.toContain("super-secret-material");
         expect(await tableBodyContrast(page)).toBeGreaterThanOrEqual(9.5);
-        await capture(page, "01-populated-dark.png");
       },
     );
   });
@@ -452,7 +385,6 @@ suite.define(() => {
               exact: true,
             })
             .waitFor();
-          await capture(page, "06-client-replacement-delete-rejected.png");
           await entryRow.waitFor();
         } else {
           await expect
