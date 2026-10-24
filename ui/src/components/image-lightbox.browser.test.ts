@@ -301,19 +301,22 @@ it.each(["no-preference", "reduce"] as const)(
       ...first,
       gallery: { index: 0, items: [async () => first, async () => second] },
     });
-    const animate = Element.prototype.animate;
-    // Pause real animations before async DOM waits can outlast the 100ms crossfade.
-    const animationSpy = vi.spyOn(Element.prototype, "animate").mockImplementation(function (
-      this: Element,
-      ...args: Parameters<Element["animate"]>
-    ) {
-      const animation = animate.apply(this, args);
-      if (viewer.contains(this)) {
-        animation.pause();
+    const cloneNode = image.cloneNode.bind(image);
+    // Pause each real outgoing animation before DOM waits can outlast its 100ms duration.
+    const cloneSpy = vi.spyOn(image, "cloneNode").mockImplementation((deep) => {
+      const clone = cloneNode(deep);
+      if (clone instanceof HTMLImageElement) {
+        const animate = clone.animate.bind(clone);
+        const animationSpy = vi.spyOn(clone, "animate").mockImplementation((...args) => {
+          const animation = animate(...args);
+          animation.pause();
+          return animation;
+        });
+        onTestFinished(() => animationSpy.mockRestore());
       }
-      return animation;
+      return clone;
     });
-    onTestFinished(() => animationSpy.mockRestore());
+    onTestFinished(() => cloneSpy.mockRestore());
     for (const item of [second, first, second, first]) {
       const previousBounds = image.getBoundingClientRect();
       viewer
