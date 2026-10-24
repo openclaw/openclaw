@@ -160,8 +160,6 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
       providerHttpMocks.fetchWithTimeoutMock(...args),
     );
   };
-  // A completed submission can download directly without first installing polling mocks.
-  installTimeoutTransportMock();
   const installTransportMocks = () => {
     installTimeoutTransportMock();
     vi.spyOn(guardedTransport, "fetchWithSsrFGuard").mockImplementation(async (params) => ({
@@ -175,6 +173,8 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
       release: async () => {},
     }));
   };
+  // Completed submissions can download directly without first installing polling mocks.
+  installTransportMocks();
   providerHttpMocks.readProviderJsonResponseMock.mockImplementation(
     actual.readProviderJsonResponse,
   );

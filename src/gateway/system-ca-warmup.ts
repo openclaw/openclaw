@@ -1,24 +1,10 @@
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 
 const SYSTEM_CA_WARMUP_TIMEOUT_MS = 10_000;
-const SYSTEM_CA_WORKER_SOURCE = String.raw`
-  const { getCACertificates } = require("node:tls");
-  const { parentPort } = require("node:worker_threads");
-
-  try {
-    getCACertificates("default");
-    parentPort.postMessage({ ok: true });
-  } catch (error) {
-    parentPort.postMessage({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  } finally {
-    parentPort.close();
-  }
-`;
 
 type SystemCaWarmupOptions = {
   log?: { warn: (message: string) => void };
@@ -36,8 +22,9 @@ async function warmMacOSSystemCaOffMainThread(options: SystemCaWarmupOptions = {
 
   let worker: ReturnType<typeof createCpuTrackedWorker>;
   try {
-    worker = createCpuTrackedWorker(SYSTEM_CA_WORKER_SOURCE, {
-      eval: true,
+    const url = resolveRuntimeProcessEntrypointUrl("systemCaWarmup");
+    worker = createCpuTrackedWorker(url, {
+      execArgv: resolveRuntimeWorkerThreadExecArgv(url),
     });
   } catch (error) {
     // CA prewarming is an optimization. Node can still load trust settings lazily.

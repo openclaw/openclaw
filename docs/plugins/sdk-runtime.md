@@ -46,6 +46,34 @@ surface and session root. Channels may use this capability to enable helper
 tools for restricted senders. Core remains responsible for authorization and
 containment. The same ID is advertised in Gateway `hello-ok.features.capabilities`.
 
+## Module loading and host identity
+
+Declare plugin entries in `package.json` under `openclaw.extensions`, import
+documented `openclaw/plugin-sdk/*` subpaths, and declare `openclaw` as a peer
+dependency. The running host owns SDK classes, registries, and lifecycle state;
+do not bundle a second SDK copy. Installation and Doctor repair the peer link.
+Loading retains the existing peer-identity, captured-source, and instance
+disposal checks and never installs dependencies.
+
+[Standalone builds](/install/standalone) validate an explicit map of package SDK
+runtime exports and bundled runtime/setup entries. Those modules execute from the
+image and cannot be replaced through cache deletion or export mutation.
+Replacing bundled code requires restarting its owner. JIT and bytecode standalone
+builds, including a matched JIT companion, lazily load a host-owned Jiti package
+when a plugin needs transformation. The host supplies its native SDK namespace
+directly. This preserves SDK identity
+without evaluating another SDK copy. Native JavaScript loading retains its
+existing behavior.
+
+Use `api.logger` for plugin logs, owned fetch wrappers and the declared provider
+`createStreamFn`/`wrapStreamFn` hooks for transport behavior, and `onDiagnosticEvent` from
+`openclaw/plugin-sdk/diagnostic-runtime` for observability. Local wrappers,
+owned subclasses, and metadata on individual response objects avoid competing
+process-wide `console`, `fetch`, process-method, or prototype patches. Loader
+interception cannot observe every import in a compiled host. Qualify a plugin's
+transitive dependencies and activation/shutdown behavior against the actual host
+runtime; the compiled entry map is not a compatibility certificate.
+
 ## What each page covers
 
 - [Config and utilities](/plugins/sdk-runtime/config-and-utilities) — runtime config reads and writes, plus the shared process, error, and model-picker utilities.
@@ -113,52 +141,47 @@ session, and current model authority.
 Start a normal parent turn
 in the current runtime before requesting a fork. The native hook relay must be
 enabled and available; otherwise the request fails closed.
-The built-in `openclaw` runtime replays the parent's recorded provider request,
-followed by its completed messages and the side question, preserving its system prompt, tools, reasoning
-settings, and prompt-cache affinity for OpenAI and Anthropic. It reuses prepared
-payload data without re-running the parent's one-shot continuation hooks.
-Completed asynchronous tool calls, their outcomes, and the final answer remain in
-conversation order.
-If a published tool call is still running when the fork starts, the built-in
-runtime includes a non-error placeholder saying its result is not available yet.
-This does not cancel the parent call or persist a result in the parent session.
-The replay uses the current prepared model's proxy and TLS policy. Session read
-authority is checked immediately before every network send, including retries.
+The built-in `openclaw` runtime builds the fork request when `forkSession` is
+called. Normal model turns do not serialize or retain fork snapshots, copy
+published messages, or schedule fork expiry timers. Active forks read the running
+session's current context; completed sessions are reconstructed from the persisted
+model context, including compaction and the pinned system prompt and tool schemas.
+Sessions with history can be forked after a restart without sending another normal
+message first. Routes without a persisted prompt pin rebuild their configured
+system prompt at fork time.
+Completed-session forks apply the configured channel history window and preserve
+compaction summaries. All built-in runtime forks omit the parent's prompt-cache
+identity, including forks of running sessions: they rebuild context independently
+and do not share the parent's complete request preparation.
+
+The fork uses the same provider payload builders as a normal request. Unchanged
+prompt and tool prefixes can reuse the provider's prompt cache. Cache reuse is
+not guaranteed: reconstruction, compaction, images, and one-shot context or
+payload hooks can produce different bytes. Forks do not re-run the parent's
+one-shot hooks. They return text and usage even when reconstruction misses the
+cache; callers should use the returned cache-read usage to measure actual reuse.
+
+Completed tool calls and their outcomes remain in conversation order. A tool
+call still running when the fork starts receives a non-error placeholder saying
+its result is not available yet. This does not cancel the call or persist a
+result in the parent session.
+
+The request uses the current model's credentials, proxy, and TLS policy. Session
+read authority is checked immediately before network sends, including retries.
 Native ChatGPT forks use independent connections without consuming or replacing
 the parent's continuation. Supported APIs are OpenAI Responses (including native
 ChatGPT), Chat Completions, and Anthropic Messages. Other APIs, including Bedrock,
-fail before dispatch because their transports cannot enforce the fork's live
-request authority.
-Tool choice is set to `none` before dispatch to prevent hosted tool execution;
-local tool calls are also denied, with at most two additional inference attempts.
-On Anthropic, changing tool choice invalidates the messages cache, but preserves
-the tool and system caches. Other APIs without a supported hosted-tool prohibition
-are rejected when the recorded request contains tools.
-The built-in runtime keeps snapshots for up to 90 minutes, with a shared 64 MiB
-retained-data budget and at most 1,000 sessions, until expiry or session cleanup.
-The budget includes request bytes, detached replay options, later publications
-(including Blob and typed-array backing storage), and conservative container and
-timer overhead. Shared transport runtimes are owned by their lifecycle, outside
-this request-data budget. Data that cannot be safely copied and accounted for
-does not replace an existing snapshot; an unretainable publication retires it.
-Opaque Blob publications retain a copy of their visible bytes, so a slice cannot
-pin a larger backing allocation. Forks wait for those copies before replay;
-shared-memory buffers cannot be retained for isolated replay.
-Keeping a snapshot does not retain the completed parent session or its transcript manager.
-The built-in runtime retains the prepared provider prefix instead of a second copy
-of conversation history. Forks convert only later publications and the side question;
-HTTP continuations retain the full prefix even when the parent sends only a suffix.
-Read-only forks do not acquire workspace placement authority, so a parent's
-pending placement publication does not block them. Normal parent settlement and
-usage updates preserve the fork's read authority. Session reset or deletion
-revokes even an in-flight fork before its answer can be returned.
-After a restart or without a prepared parent turn, the request fails closed:
-"Cache-parity session fork requires a parent turn prepared by this OpenClaw
-runtime. Send a normal message first." CLI runtimes are unsupported for
-`forkSession`, even when their backend can disable native tools. Ordinary `/btw`
-keeps its lightweight, tool-free context; CLI backends with native tools must
-explicitly support disabling them for side questions, while backends with no
-native tools need no additional declaration.
+fail before dispatch because their transports cannot enforce live fork authority.
+Tool choice is set to `none` to prevent hosted tool execution; local tool calls
+are denied, with at most two additional inference attempts. On Anthropic, changing
+tool choice invalidates the messages cache, while the tool and system caches can
+remain reusable.
+
+Read-only forks do not acquire workspace placement authority, write a transcript,
+or change the parent's history. Normal parent settlement preserves a fork's read
+authority; session reset or deletion revokes it before an answer can be returned.
+CLI runtimes remain unsupported for `forkSession`. Ordinary `/btw` keeps its
+lightweight, tool-free context.
 
 Conversation access is required through
 `plugins.entries.<id>.hooks.allowConversationAccess` (enabled by default only for

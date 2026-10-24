@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import {
   createCodexOAuthAuthStore,
+  createOpenAIOAuthProfile,
   openAIImageConfig,
 } from "./image-generation-provider.test-support.js";
 
@@ -134,13 +135,7 @@ describe("OpenAI image generation auth availability", () => {
     authStore = {
       version: 1,
       profiles: {
-        "openai:chatgpt": {
-          type: "oauth",
-          provider: "openai",
-          access: "chatgpt-access",
-          refresh: "chatgpt-refresh",
-          expires: Date.now() + 60_000,
-        },
+        "openai:chatgpt": createOpenAIOAuthProfile("chatgpt-access", "chatgpt-refresh"),
       },
     };
 

@@ -6,26 +6,12 @@ import {
   installPinnedHostnameTestHooks,
 } from "openclaw/plugin-sdk/test-media-understanding";
 import { expect, it } from "vitest";
+import { listenOnLoopback as listenLoopbackServer } from "../test-support/hanging-loopback-server.js";
 import googlePlugin from "./index.js";
 import { describeGeminiVideo, transcribeGeminiAudio } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
 const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
-
-async function listenLoopbackServer(server: Server): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
-}
 
 function createOversizedJsonServer(): { server: Server; closed: Promise<number> } {
   let resolveClosed: (sentBytes: number) => void = () => {};

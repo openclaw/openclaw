@@ -20,6 +20,7 @@ import {
   splitSessionEntrySnapshots,
   writeSessionEntrySnapshots,
 } from "./session-entry-snapshots.js";
+import { promptReport } from "./system-prompt-report.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const openedDatabases: DatabaseSync[] = [];
@@ -108,14 +109,7 @@ it("skips absent-field clearing only when the complete previous field set surviv
   // Match the initial complete snapshot, including its report.
   const previousEntry = {
     ...previous,
-    systemPromptReport: {
-      source: "run" as const,
-      generatedAt: 1,
-      systemPrompt: { chars: 0, projectContextChars: 0, nonProjectContextChars: 0 },
-      injectedWorkspaceFiles: [],
-      skills: { promptChars: 0, entries: [] },
-      tools: { listChars: 0, schemaChars: 0, entries: [] },
-    },
+    systemPromptReport: promptReport(1, 0, 0),
   };
   const writes = trackSqliteStatementExecutions(database.db, ["delete"], (query) =>
     /^delete from "session_entry_snapshots"/iu.test(query) ? "delete" : null,

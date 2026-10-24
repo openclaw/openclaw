@@ -112,7 +112,7 @@ async function checkAccessiblePins(page: Page, width: number) {
     }
     await card.waitFor({ state: "visible" });
     await content.waitFor({ state: "visible" });
-    expect(await content.textContent()).toContain(assistantReply);
+    await expect.poll(() => content.textContent()).toContain(assistantReply);
     expect(await content.textContent()).not.toContain("A newer user question");
     expect(await link.getAttribute("aria-describedby")).toBeTruthy();
     await expectHorizontalBounds(card, width);

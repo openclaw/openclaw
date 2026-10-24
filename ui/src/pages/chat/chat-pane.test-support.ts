@@ -34,6 +34,7 @@ import { createAgentCapability } from "../../lib/agents/index.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createNavigationPreferencesFixture } from "../../test-helpers/application-context.ts";
 import {
   createTestGatewayClient,
@@ -336,17 +337,10 @@ export function createInitializationContext(client?: GatewayBrowserClient): Appl
   return withLiveCapabilities({
     basePath: "",
     gateway: {
-      snapshot: {
+      snapshot: createApplicationGatewaySnapshot({
         client: client ?? null,
         phase: client ? "connected" : "stopped",
-        offlineStable: false,
-        hello: null,
-        canvasPluginSurfaceUrl: null,
-        assistantAgentId: null,
-        sessionKey: "",
-        lastError: null,
-        lastErrorCode: null,
-      },
+      }),
       subscribe: () => () => {},
       subscribeEvents: () => () => {},
       connection: {
@@ -413,21 +407,15 @@ export function createSessionContext(
   const snapshotListeners = new Set<
     (snapshot: ApplicationContext["gateway"]["snapshot"]) => void
   >();
-  let snapshot: ApplicationContext["gateway"]["snapshot"] = {
+  let snapshot: ApplicationContext["gateway"]["snapshot"] = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    offlineStable: false,
     hello: gatewayHelloForMethods([
       ...SESSION_MUTATION_TEST_METHODS,
       "taskSuggestions.list",
       "session.suggestions.list",
     ]),
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
-    sessionKey: "",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const context = withLiveCapabilities({
     gateway: {
       get snapshot() {

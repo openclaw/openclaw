@@ -12,6 +12,7 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import {
@@ -74,15 +75,11 @@ it("retires a terminal callback when another completion replaces its session-eff
   signal,
 }) => {
   const entry = createRunEntry({ expectsCompletionMessage: false });
-  const progressEntered = createDeferredCore();
-  const releaseProgress = createDeferredCore();
+  const progressGate = createEnteredGate();
   const { controller, cleanupBrowser, complete } = fixture({
     entry,
     callGateway: vi.fn(),
-    emitSubagentProgressEndedForRun: async () => {
-      progressEntered.resolve();
-      await releaseProgress.promise;
-    },
+    emitSubagentProgressEndedForRun: progressGate.wait,
   });
   const announce = vi.spyOn(controller, "startSubagentAnnounceCleanupFlow").mockReturnValue(false);
   const createSessionEffects = () => ({
@@ -92,14 +89,14 @@ it("retires a terminal callback when another completion replaces its session-eff
   });
   const first = complete({ sessionEffects: createSessionEffects() });
   try {
-    await withinTest(progressEntered.promise, signal);
+    await withinTest(progressGate.entered, signal);
     await complete({ sessionEffects: createSessionEffects() });
-    releaseProgress.resolve();
+    progressGate.release();
     await first;
     expect(announce).toHaveBeenCalledOnce();
     expect(cleanupBrowser).toHaveBeenCalledOnce();
   } finally {
-    releaseProgress.resolve();
+    progressGate.release();
     await first;
   }
 });

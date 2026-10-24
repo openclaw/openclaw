@@ -29,12 +29,14 @@ export type ResolvedMemorySearchConfig = Omit<
   | "local"
   | "outputDimensionality"
   | "queryInputType"
+  | "queryInstruction"
   | "remote"
   | "store"
   | "sync"
 > & {
   inputType?: string;
   queryInputType?: string;
+  queryInstruction?: string;
   documentInputType?: string;
   outputDimensionality?: number;
   cache: Omit<ProducedMemorySearchConfig["cache"], "maxEntries"> & { maxEntries?: number };
@@ -190,6 +192,7 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
     model,
     inputType,
     queryInputType,
+    queryInstruction: (overrides?.queryInstruction ?? defaults?.queryInstruction) || undefined,
     documentInputType,
     outputDimensionality,
     local: { modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath },

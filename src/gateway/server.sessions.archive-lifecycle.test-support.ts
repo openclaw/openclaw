@@ -20,6 +20,7 @@ import { registerChatAbortController } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
 import { soloClient } from "./server-methods/sessions-sharing.test-support.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 import type { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import {
   getGatewayConfigModule,
@@ -140,12 +141,7 @@ export function identifiedClient(profileId: string): GatewayClient {
     ...soloClient(),
     connId: `${profileId}-connection`,
     authenticatedUserId: `${profileId}@example.com`,
-    authenticatedUserProfile: {
-      profileId,
-      displayName: profileId,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: gatewayProfile(profileId, profileId),
   };
 }
 

@@ -5,13 +5,6 @@ import { withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../infra/device-identity.js";
-import { approveDevicePairing } from "../infra/device-pairing-approval.js";
-import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
-import { requestDevicePairing } from "../infra/device-pairing.js";
 import { resetLogger } from "../logging/logger.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -19,6 +12,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import type { GatewayClient, GatewayClientOptions } from "./client.js";
+import { pairOperatorDeviceFixture } from "./paired-device.test-support.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import { startGatewayServerCore } from "./server-start.js";
 
@@ -205,23 +199,14 @@ describe("gateway plugin install authority", () => {
   }
 
   async function openDeviceTokenClient(pluginId: string) {
-    const identity = loadOrCreateDeviceIdentity({
-      path: state.path(`${pluginId}-identity`, "client", "credentials.sqlite"),
-    });
     const client = { clientName: "test", mode: "test" } as const;
-    const pending = await requestDevicePairing({
-      deviceId: identity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    const { identity, issued: rotated } = await pairOperatorDeviceFixture({
+      identityPath: state.path(`${pluginId}-identity`, "client", "credentials.sqlite"),
+      scopes: ["operator.admin"],
+      tokenScopes: ["operator.admin"],
       clientId: client.clientName,
       clientMode: client.mode,
-      role: "operator",
-      scopes: ["operator.admin"],
-    });
-    await approveDevicePairing(pending.request.requestId, { callerScopes: ["operator.admin"] });
-    const rotated = await rotateDeviceToken({
-      deviceId: identity.deviceId,
-      role: "operator",
-      scopes: ["operator.admin"],
+      callerScopes: ["operator.admin"],
     });
     expect(rotated).toMatchObject({ ok: true, entry: { token: expect.any(String) } });
     if (!rotated.ok) {

@@ -29,6 +29,7 @@ import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createTestModelDefinition } from "../test-runtime-config-helpers.js";
 import { runAuthProbes, withAuthProbeStateOwnership } from "./list.probe.js";
 
 const createNativeBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
@@ -121,15 +122,7 @@ it.each([
             apiKey: "synthetic-probe-credential",
             baseUrl: "https://fixture.invalid/v1",
             models: [
-              {
-                id: "probe-model",
-                name: "Probe model",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 8192,
-                maxTokens: 64,
-              },
+              createTestModelDefinition("probe-model", { name: "Probe model", maxTokens: 64 }),
             ],
           },
         },

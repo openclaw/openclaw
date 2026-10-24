@@ -127,6 +127,16 @@ describe("matched standalone support artifacts", () => {
           bun: { version: "1.4.4" },
           openclaw: { version: "2026.10.3", commit: "a".repeat(40) },
           plugins: { embedded: ["slack", "codex"], omitted: ["matrix"] },
+          pluginContract: {
+            schemaVersion: 1,
+            sdk: {
+              "openclaw/plugin-sdk/core": {
+                source: "dist/plugin-sdk/core.js",
+                entry: "/$bunfs/root/core.js",
+              },
+            },
+            plugins: {},
+          },
           nativeModules: [],
           embedded: { modules: 1, plugins: 2, workers: 0, inlineWorkers: 0 },
           pruning: {
@@ -147,7 +157,19 @@ describe("matched standalone support artifacts", () => {
       expect(aot).toMatchObject({
         mode: "aot",
         build: { id: "matched-build", flavor: "standard" },
-        plugins: { embedded: ["codex", "slack"] },
+        plugins: {
+          embedded: ["codex", "slack"],
+          contract: {
+            schemaVersion: 1,
+            sdk: {
+              "openclaw/plugin-sdk/core": {
+                source: "dist/plugin-sdk/core.js",
+                entry: "/$bunfs/root/core.js",
+              },
+            },
+            plugins: {},
+          },
+        },
       });
       expect(support).toMatchObject({
         mode: "jit",

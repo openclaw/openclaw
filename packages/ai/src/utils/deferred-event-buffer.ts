@@ -1,8 +1,4 @@
-type EventSink<T> = {
-  push(event: T): void;
-};
-
-export function createDeferredEventBuffer<T>(sink: EventSink<T>) {
+export function createDeferredEventBuffer<T>(sink: { push(event: T): void }) {
   let events: T[] = [];
   return {
     push(event: T): void {

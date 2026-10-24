@@ -13,6 +13,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { resolveGatewayOperatorAccessAuthority } from "../operator-access-policy.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { createOperatorClient } from "../server-plugin-in-process-dispatch.test-support.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
@@ -262,12 +263,7 @@ it.for([
       } else {
         const respond = vi.fn<Parameters<typeof handleGatewayRequest>[0]["respond"]>();
         await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "recover-interrupted-child",
-            method: "sessions.recover",
-            params: { key: sessionKey },
-          },
+          req: gatewayRequest("recover-interrupted-child", "sessions.recover", { key: sessionKey }),
           client: fixture.client,
           context: fixture.context,
           isWebchatConnect: () => true,

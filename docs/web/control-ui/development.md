@@ -38,12 +38,17 @@ checker's growth and build-variance allowances; the baseline itself may not exce
 325,000 B. Startup CSS is limited to one request. Each complete chat and New Session
 boot is limited to three CSS requests: the initial sheet, shared route styles,
 and the route's own sheet. Optional component styles stay with their lazy modules.
-CSS consolidation is bounded by the largest-sheet cap and at most 64 B total
-CSS raw and gzip growth against the merge base; splitting files is not a byte reduction.
+CSS consolidation is bounded by the largest-sheet cap and fixed total CSS ceilings
+of 303,372 B gzip and 1,595,521 B raw. If the merge base already exceeds a ceiling,
+only 64 B of build variance is allowed. Startup CSS growth must stay below 1.5 KiB
+against the merge base; splitting files is not a byte reduction.
 The boot manifest retains reachable CSS imports even when extraction removes their
 JavaScript source-map entries. Complete boot JavaScript is capped
 at 1,500,000 B gzip for chat and 1,035,000 B gzip for New Session, including the
-initial-entry assets.
+initial-entry assets. Chat content modulepreload hints use low fetch priority while
+the composer and shared prerequisites retain normal priority, so signing and input
+readiness can pass larger route downloads. Requested assets and lazy evaluation
+boundaries stay the same.
 JSON5 remains in its own lazy chunk so snapshot validation cannot pull the raw
 configuration parser into chat boot. Syntax highlighting and its language grammars
 load on the first code block; code stays escaped and copyable while they load or
@@ -152,6 +157,18 @@ watch separately when developing its implementation. Stopping Vite stops its
 proxy, without stopping the Gateway or deleting either application's state.
 Without `OPENCLAW_UI_DEV_GATEWAY_URL`, `pnpm ui:dev` retains its existing
 standalone connection behavior. This setting does not affect `pnpm ui:build`.
+
+### First paint
+
+The document contains a data-free loading frame before the application bundle runs.
+Its critical geometry lives in `ui/index.html` and is shared with the Solid
+connection fallback. The existing inline theme bootstrap selects the palette
+before this frame paints. The entry stylesheet downloads at preload priority
+without blocking the frame; the application waits for that sheet before mounting
+and replaces the static children in the same task as its first render.
+
+This frame contains no saved conversation or interactive controls. Earlier display
+of a retained transcript is a separate [design proposal](/reference/control-ui-warm-transcript-design).
 
 ### Measure cold HTTP delivery
 
@@ -268,7 +285,9 @@ The first connected, presented transcript commit renders two neighboring rows be
 viewport edge. The next animation frame restores the six-row scrolling buffer;
 pending navigation, focus, or anchor reconciliation uses that full buffer immediately,
 including neighboring controls such as folded-work headers. Focused and anchored
-rows remain retained independently. Link-preview discovery
+rows remain retained independently. The first automatic Details body waits for the
+pane's existing post-paint hydration boundary; explicit opens remain immediate, and
+an already mounted body stays retained during later hydration. Link-preview discovery
 waits for browser idle time, then follows transcript mutations instead of rescanning
 unchanged content on every pane update. Hiding or retiring the pane cancels pending
 discovery.

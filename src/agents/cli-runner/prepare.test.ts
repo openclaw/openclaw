@@ -141,6 +141,7 @@ import { finalizeCliContextEngineTurn } from "./cli-run-transcript.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import {
+  createCliMcpTool,
   createJsonlStdinBackendConfig,
   registerCliMcpPreparationTests,
   setRawCliBackendForPrepareTest,
@@ -244,15 +245,7 @@ function createBundledMessageToolConfig(): OpenClawConfig {
     getActiveMcpLoopbackRuntime: vi.fn(createLoopbackRuntime),
     resolveMcpLoopbackScopedTools: vi.fn(() => ({
       agentId: "main",
-      tools: [
-        {
-          name: "message",
-          label: "Message",
-          description: "Send a message",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
-      ],
+      tools: [createCliMcpTool("message", "Message", "Send a message")],
     })),
   });
   return createCliBackendConfig({ bundleMcp: true });
@@ -2273,24 +2266,10 @@ describe("prepareCliRunContext", () => {
     const resolveMcpLoopbackScopedTools = vi.fn((scope: McpProjectionParams) => ({
       agentId: "main",
       tools: [
-        {
-          name: "message",
-          label: "Message",
-          description: "Send a message",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
+        createCliMcpTool("message", "Message", "Send a message"),
         ...(scope.context.senderIsOwner === false
           ? []
-          : [
-              {
-                name: "gateway",
-                label: "Gateway",
-                description: "Manage the gateway",
-                parameters: { type: "object", properties: {} },
-                execute: vi.fn(),
-              },
-            ]),
+          : [createCliMcpTool("gateway", "Gateway", "Manage the gateway")]),
       ],
     }));
     setCliRunnerPrepareTestDeps({
@@ -2466,13 +2445,7 @@ describe("prepareCliRunContext", () => {
     const resolveMcpLoopbackScopedTools = vi.fn((_scope: McpProjectionParams) => ({
       agentId: "main",
       tools: [
-        {
-          name: "memory_search",
-          label: "Memory Search",
-          description: "Search memory",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
+        createCliMcpTool("memory_search", "Memory Search", "Search memory"),
         {
           name: "fake_web_tool",
           label: "Fake web tool",
@@ -2589,15 +2562,7 @@ describe("prepareCliRunContext", () => {
     const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
     const resolveMcpLoopbackScopedTools = vi.fn(() => ({
       agentId: "main",
-      tools: [
-        {
-          name: "memory_search",
-          label: "Memory Search",
-          description: "Search memory",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
-      ],
+      tools: [createCliMcpTool("memory_search", "Memory Search", "Search memory")],
     }));
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime,
@@ -3212,15 +3177,7 @@ describe("prepareCliRunContext", () => {
     };
     const resolveMcpLoopbackScopedTools = vi.fn(() => ({
       agentId: "main",
-      tools: [
-        {
-          name: "skill_workshop",
-          label: "Skill Workshop",
-          description: "Manage skills",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
-      ],
+      tools: [createCliMcpTool("skill_workshop", "Skill Workshop", "Manage skills")],
     }));
     setCliRunnerPrepareTestDeps({ resolveMcpLoopbackScopedTools });
     const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));

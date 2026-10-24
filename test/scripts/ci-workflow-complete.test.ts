@@ -311,7 +311,7 @@ describe("CI check failure collection", () => {
     expect(result.status, result.stderr).toBe(1);
     expect(result.stdout).toContain("CHECK check:max-lines-ratchet --base base");
     expect(result.stdout).toContain("CHECK plugins:inventory:check");
-    expect(result.stdout.match(/^CHECK /gm)).toHaveLength(8);
+    expect(result.stdout.match(/^CHECK /gm)).toHaveLength(9);
   });
   it("preserves the combined baseline runner's failure", () => {
     const result = runChecks("checks-baseline-ratchets", "Run baseline ratchets", {
@@ -341,7 +341,7 @@ describe("CI check failure collection", () => {
       BASE_SHA: "base",
     });
     expect(result.status, result.stderr).toBe(1);
-    expect(result.stdout.match(/^CHECK /gm)).toHaveLength(7);
+    expect(result.stdout.match(/^CHECK /gm)).toHaveLength(8);
     expect(result.stdout).toContain("scripts/check-protocol-since.mts");
   });
   it("finishes legacy native locale checks after a failed native check", () => {

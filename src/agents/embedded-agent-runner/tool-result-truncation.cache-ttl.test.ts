@@ -8,6 +8,7 @@ import {
   createToolResultPromptProjectionState as newState,
   retainEmbeddedSessionPromptState as retainState,
 } from "./session-prompt-state.js";
+import { replayToolResultPromptProjections } from "./tool-result-projection-replay.js";
 import {
   pruneExpiredCacheTtlToolResults,
   reconcileToolResultPromptProjectionState as reconcile,
@@ -110,6 +111,31 @@ function toolText(messages: AgentMessage[], id: string): string {
 }
 
 describe("cache-TTL tool-result projection", () => {
+  it.each(["cache-TTL", "aggregate"])(
+    "replays %s bytes for a fork without pruning new results or changing parent state",
+    (kind) => {
+      const state = newState();
+      const history = prunableHistory([
+        tool({ id: "old", text: "a".repeat(100_000) }),
+        tool({ id: "older", text: "c".repeat(100_000) }),
+      ]);
+      const sent =
+        kind === "cache-TTL"
+          ? project(history, { projectionState: state })
+          : truncate(history, 128_000, 100_000, 1_000, state).messages;
+      expect(toolText(sent, "old").length).toBeLessThan(100_000);
+      const freshResult = tool({ id: "fresh", text: "b".repeat(100_000) });
+      const before = structuredClone(state);
+
+      expect(replayToolResultPromptProjections([...history, freshResult], state)).toEqual([
+        ...sent,
+        freshResult,
+      ]);
+      expect(state).toEqual(before);
+      expect(toolText(history, "old")).toBe("a".repeat(100_000));
+    },
+  );
+
   it("preserves ordinary projected bytes across turn teardown and compaction", () => {
     const maxChars = 4_000;
     const sessionId = "ordinary-turn-teardown";

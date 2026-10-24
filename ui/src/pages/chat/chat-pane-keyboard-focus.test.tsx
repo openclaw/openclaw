@@ -27,7 +27,7 @@ function createFocusedPane() {
   const textarea = composer.appendChild(document.createElement("textarea"));
   getChatComposerState(pane.presentationId).composerTextarea = textarea;
   pane.append(composer);
-  return { pane, state, focus: vi.spyOn(textarea, "focus") };
+  return { pane, state, textarea, focus: vi.spyOn(textarea, "focus") };
 }
 
 function typingTarget(pane: ReturnType<typeof createFocusedPane>["pane"], target: HTMLElement) {
@@ -163,3 +163,105 @@ it("uses current panel availability before consuming its keyboard shortcut", () 
   expect(available.defaultPrevented).toBe(true);
   expect(isSidebarSlotVisible(state.sidebarLayout, "terminal")).toBe(true);
 });
+
+it.each([
+  { platform: "MacIntel", shiftKey: false },
+  { platform: "MacIntel", shiftKey: true },
+  { platform: "Win32", shiftKey: false },
+  { platform: "Win32", shiftKey: true },
+])(
+  "hands native paste to the composer on $platform with Shift=$shiftKey without canceling the browser action",
+  ({ platform, shiftKey }) => {
+    const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+    onTestFinished(() => platformSpy.mockRestore());
+    const { pane, focus } = createFocusedPane();
+    const transcript = pane.appendChild(document.createElement("div"));
+    const event = new KeyboardEvent("keydown", {
+      key: "v",
+      code: "KeyV",
+      metaKey: platform === "MacIntel",
+      ctrlKey: platform !== "MacIntel",
+      shiftKey,
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    transcript.addEventListener("keydown", (key) => pane.handleDocumentKeydown(key));
+    transcript.dispatchEvent(event);
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(event.defaultPrevented).toBe(false);
+  },
+);
+
+it.each([
+  { name: "Control on Mac", platform: "MacIntel", ctrlKey: true },
+  { name: "Command on Windows", platform: "Win32", metaKey: true },
+  { name: "both primary modifiers", ctrlKey: true, metaKey: true },
+  { name: "Alt", ctrlKey: true, altKey: true },
+  { name: "another shortcut", ctrlKey: true, key: "c" },
+])("leaves $name with its existing owner", ({ name: _name, platform = "Win32", ...keys }) => {
+  const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+  onTestFinished(() => platformSpy.mockRestore());
+  const { pane, focus } = createFocusedPane();
+  pane.handleDocumentKeydown(
+    new KeyboardEvent("keydown", { key: "v", code: "KeyV", shiftKey: true, ...keys }),
+  );
+  expect(focus).not.toHaveBeenCalled();
+});
+
+it.each([
+  { name: "input", markup: "<input>" },
+  { name: "textarea", markup: "<textarea></textarea>" },
+  { name: "contenteditable", markup: '<div contenteditable="true"><span></span></div>' },
+  { name: "textbox", markup: '<div role="textbox"><span></span></div>' },
+  { name: "combobox", markup: '<div role="combobox"><span></span></div>' },
+  { name: "exempt editor", markup: "<div data-chat-autotype-exempt><span></span></div>" },
+  { name: "dialog", markup: "<dialog open><button></button></dialog>" },
+])("keeps paste in $name", ({ markup }) => {
+  const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+  onTestFinished(() => platformSpy.mockRestore());
+  const { pane, focus } = createFocusedPane();
+  const fixture = bodyElement("div");
+  fixture.innerHTML = markup;
+  const target = fixture.querySelector<HTMLElement>("span, button, input, textarea")!;
+  target.addEventListener("keydown", (event) => pane.handleDocumentKeydown(event));
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "v", ctrlKey: true, shiftKey: true, bubbles: true }),
+  );
+  expect(focus).not.toHaveBeenCalled();
+});
+
+it.each(["inactive", "hidden", "disabled", "readonly", "inert", "handled"])(
+  "does not redirect paste when the session composer is %s",
+  (state) => {
+    const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+    onTestFinished(() => platformSpy.mockRestore());
+    const { pane, textarea, focus } = createFocusedPane();
+    if (state === "inactive") {
+      pane.active = false;
+    }
+    if (state === "hidden") {
+      pane.presented = false;
+    }
+    if (state === "disabled") {
+      textarea.disabled = true;
+    }
+    if (state === "readonly") {
+      textarea.readOnly = true;
+    }
+    if (state === "inert") {
+      pane.setAttribute("inert", "");
+    }
+    const event = new KeyboardEvent("keydown", {
+      key: "v",
+      ctrlKey: true,
+      shiftKey: true,
+      cancelable: true,
+    });
+    if (state === "handled") {
+      event.preventDefault();
+    }
+    pane.handleDocumentKeydown(event);
+    expect(focus).not.toHaveBeenCalled();
+  },
+);

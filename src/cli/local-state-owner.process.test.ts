@@ -55,6 +55,7 @@ import {
 } from "../test-utils/port-claims.js";
 import { localStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { stateOwnerEnv } from "./cli-process-fixture.test-support.js";
 import { registerWorktreeListingOwnerTests } from "./local-state-owner-listing.test-support.js";
 
 const execFileAsync = promisify(execFile);
@@ -64,21 +65,7 @@ const entrypoint = resolveRuntimeWorkerArgv(
   resolveRuntimeWorkerUrl(localStateOwnerFixtureEntrypoint),
 );
 
-function environment(root: string): NodeJS.ProcessEnv {
-  return {
-    PATH: process.env.PATH,
-    SystemRoot: process.env.SystemRoot,
-    HOME: root,
-    USERPROFILE: root,
-    OPENCLAW_HOME: root,
-    OPENCLAW_STATE_DIR: path.join(root, "state"),
-    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-    OPENCLAW_GATEWAY_TOKEN: token,
-    OPENCLAW_NO_RESPAWN: "1",
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    NODE_DISABLE_COMPILE_CACHE: "1",
-  };
-}
+const environment = (root: string) => stateOwnerEnv(root, { OPENCLAW_GATEWAY_TOKEN: token });
 
 async function git(repo: string, ...args: string[]) {
   return (await execFileAsync("git", ["-C", repo, ...args])).stdout.trim();

@@ -5,8 +5,10 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { loadConfig } from "./config-gateway-operations.ts";
+import { configSnapshot } from "./config-snapshot.test-support.ts";
 import { nextRequestVersion } from "./config-state-model.ts";
-import { configSnapshot } from "./config-suite.test-support.ts";
+// Retain this suite's existing cleanup registration without adding it to new fixture consumers.
+import "./config-suite.test-support.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createConfigCapabilityHarness,

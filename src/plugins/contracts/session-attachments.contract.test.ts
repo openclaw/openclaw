@@ -5,7 +5,7 @@ import { FILE_TYPE_SNIFF_MAX_BYTES } from "@openclaw/media-core/mime";
 import { registerTestPlugin } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -18,6 +18,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../runt
 import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
+import { seedPluginSessionEntry } from "./test-helpers/session-entry.js";
 
 const workflowMocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
@@ -86,11 +87,7 @@ async function writeSessionEntry(
   },
   key = MAIN_SESSION_KEY,
 ) {
-  await replaceSessionEntry({ storePath, sessionKey: key }, {
-    sessionId: "session-id",
-    updatedAt: Date.now(),
-    ...entry,
-  } as unknown as SessionEntry);
+  await seedPluginSessionEntry(storePath, entry, key);
 }
 
 function mockSuccessfulAttachmentDelivery(messageId = "attachment-1") {

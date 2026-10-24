@@ -10,6 +10,7 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as exec from "../process/exec.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { hasErrnoCode } from "./errno.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
@@ -188,14 +189,13 @@ describe("update triage child lifecycle", () => {
     const timeout = failure === "timeout with zero exit";
     const { promptPath, run } = await createInstalledTriage(timeout ? {} : { promptPath: "" });
     if (timeout) {
-      vi.spyOn(exec, "runCommandWithTimeout").mockResolvedValueOnce({
-        stdout: JSON.stringify({ promptPath }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: true,
-        termination: "timeout",
-      });
+      vi.spyOn(exec, "runCommandWithTimeout").mockResolvedValueOnce(
+        createCommandResult({
+          stdout: JSON.stringify({ promptPath }),
+          killed: true,
+          termination: "timeout",
+        }),
+      );
     }
     expect(await run()).toMatchObject({
       status: "failed",

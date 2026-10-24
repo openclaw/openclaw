@@ -222,6 +222,12 @@ installations that need those capabilities can retain an operator-configured
 Password task. Reinstall refreshes its launcher files without replacing its
 account, credentials, action, or triggers.
 
+Agent exec prefers a native PowerShell 7 executable and falls back to Windows
+PowerShell 5.1. Inaccessible Microsoft Store app-execution aliases are skipped:
+they can fail with `spawn EPERM` under S4U while PowerShell is running in another
+logon session. Install PowerShell 7 with the MSI or ZIP distribution if you need
+PowerShell 7 syntax, such as `&&`, in unattended exec commands.
+
 The installer reports the selected startup mode. Node hosts retain per-user
 interactive tasks for desktop access. If the account cannot be identified or
 task creation is denied, the desktop task or Startup-folder fallback requires

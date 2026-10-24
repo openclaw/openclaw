@@ -63,24 +63,25 @@ vi.mock("../agents/agent-scope.js", () => ({
 }));
 
 // mock-isolation: Hook toggle fixtures own the config snapshot and write receipt without touching operator state.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
-  loadConfig: mocks.getRuntimeConfig,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
-    async () =>
-      mocks.getRuntimeConfig(...args),
-  transformConfigFile: async ({ transform }: TransformConfigFileParams<HookStatusEntry>) => {
-    const snapshot = await mocks.readConfigFileSnapshot();
-    const transformed = await transform(
-      snapshot.sourceConfig,
-      { snapshot, previousHash: snapshot.hash, attempt: 0 },
-      {},
-    );
-    await mocks.replaceConfigFile({ nextConfig: transformed.nextConfig, baseHash: snapshot.hash });
-    return transformed;
-  },
-}));
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "getRuntimeConfig"),
+    transformConfigFile: async ({ transform }: TransformConfigFileParams<HookStatusEntry>) => {
+      const snapshot = await mocks.readConfigFileSnapshot();
+      const transformed = await transform(
+        snapshot.sourceConfig,
+        { snapshot, previousHash: snapshot.hash, attempt: 0 },
+        {},
+      );
+      await mocks.replaceConfigFile({
+        nextConfig: transformed.nextConfig,
+        baseHash: snapshot.hash,
+      });
+      return transformed;
+    },
+  };
+});
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,

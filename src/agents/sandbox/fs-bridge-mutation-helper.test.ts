@@ -98,8 +98,12 @@ const FORCED_CREATE_FAILURE_WITH_REPLACEMENT_MUTATION_PYTHON = injectCreatePubli
 ]);
 
 const FORCED_CREATE_TEMP_SUBSTITUTION_MUTATION_PYTHON = injectCreatePublicationRace([
-  "        os.unlink(temp_name, dir_fd=staging_fd)",
-  "        replacement_fd = os.open(temp_name, WRITE_FLAGS, 0o600, dir_fd=staging_fd)",
+  "        original_fd = os.open(temp_name, os.O_RDONLY, dir_fd=staging_fd)",
+  "        try:",
+  "            os.unlink(temp_name, dir_fd=staging_fd)",
+  "            replacement_fd = os.open(temp_name, WRITE_FLAGS, 0o600, dir_fd=staging_fd)",
+  "        finally:",
+  "            os.close(original_fd)",
   "        try:",
   "            os.write(replacement_fd, b'replacement')",
   "        finally:",

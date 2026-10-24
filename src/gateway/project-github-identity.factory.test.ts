@@ -7,6 +7,7 @@ import { prepareGatewayProjectGitHubIdentity } from "./project-github-identity.j
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { coreGatewayHandlers } from "./server-methods/core-handlers.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 const catalog = vi.hoisted(() => ({ emails: ["github:engineering.ghe.com:42"] }));
 // Resident catalog facts replace storage only; all admission decisions remain production code.
@@ -43,19 +44,8 @@ function client(): GatewayClient {
     connId: "human-connection",
     authenticatedFactoryGitHubAccountId: 42,
     authenticatedUserId: `github:${host}:42`,
-    authenticatedUserProfile: {
-      profileId: "person-1",
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "cli", version: "test", platform: "test", mode: "cli" },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
+    authenticatedUserProfile: gatewayProfile("person-1"),
+    connect: gatewayConnect(["operator.read"], { id: "cli", mode: "cli" }),
     internal: { authenticatedOperator: true },
   };
 }

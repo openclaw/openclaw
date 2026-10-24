@@ -270,7 +270,6 @@ export function ChatDetailsBackground(
                 <ChatSubagentActivity
                   rows={subagents()}
                   limit={subagentsExpanded() ? undefined : PREVIEW_ROWS}
-                  compact={true}
                   onOpenSubagent={props.details.onOpenSubagent}
                   onOpenSession={props.details.onSessionSelect}
                 />
@@ -298,7 +297,6 @@ export function ChatDetailsBackground(
               >
                 <ChatSubagentActivity
                   rows={unlisted()}
-                  compact={true}
                   onOpenSession={props.details.onSessionSelect}
                 />
               </Show>

@@ -1,8 +1,8 @@
-import { once } from "node:events";
 import { createServer, type Server } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { captureFirecrawlTools } from "./firecrawl-tools.test-support.js";
 
 describe("Firecrawl search cache", () => {
@@ -29,12 +29,8 @@ describe("Firecrawl search cache", () => {
           response.destroy(new Error("credential response failed", { cause: error })),
       );
     });
-    await once(server.listen(0, "127.0.0.1"), "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected a loopback TCP address");
-    }
-    baseUrl = `http://127.0.0.1:${address.port}`;
+    const port = await listenOnLoopback(server);
+    baseUrl = `http://127.0.0.1:${port}`;
   });
 
   afterEach(async () => {

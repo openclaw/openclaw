@@ -14,18 +14,8 @@ const fsMocks = vi.hoisted(() => ({
 
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      access: fsMocks.access,
-      realpath: fsMocks.realpath,
-      stat: fsMocks.stat,
-    },
-    access: fsMocks.access,
-    realpath: fsMocks.realpath,
-    stat: fsMocks.stat,
-  };
+  const mocked = { ...actual, ...fsMocks };
+  return { ...mocked, default: mocked };
 });
 
 import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";

@@ -301,6 +301,22 @@ it.each(["no-preference", "reduce"] as const)(
       ...first,
       gallery: { index: 0, items: [async () => first, async () => second] },
     });
+    const cloneNode = image.cloneNode.bind(image);
+    // Pause each real outgoing animation before DOM waits can outlast its 100ms duration.
+    const cloneSpy = vi.spyOn(image, "cloneNode").mockImplementation((deep) => {
+      const clone = cloneNode(deep);
+      if (clone instanceof HTMLImageElement) {
+        const animate = clone.animate.bind(clone);
+        const animationSpy = vi.spyOn(clone, "animate").mockImplementation((...args) => {
+          const animation = animate(...args);
+          animation.pause();
+          return animation;
+        });
+        onTestFinished(() => animationSpy.mockRestore());
+      }
+      return clone;
+    });
+    onTestFinished(() => cloneSpy.mockRestore());
     for (const item of [second, first, second, first]) {
       const previousBounds = image.getBoundingClientRect();
       viewer
@@ -312,7 +328,6 @@ it.each(["no-preference", "reduce"] as const)(
       await nextFrame();
       const animations = viewer.getAnimations({ subtree: true });
       for (const animation of animations) {
-        animation.pause();
         animation.currentTime = 50;
       }
       const bounds = image.getBoundingClientRect();

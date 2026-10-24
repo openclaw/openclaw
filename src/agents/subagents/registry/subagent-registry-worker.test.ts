@@ -45,6 +45,7 @@ import {
   getSubagentRegistryPublicationRevision,
   subscribeSubagentRunChanges,
 } from "./subagent-registry-publication.js";
+import { createSubagentManagerTestOptions } from "./subagent-registry-queued-recovery.test-support.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import {
   loadSubagentRegistryFromSqlite,
@@ -586,32 +587,11 @@ it("settles a requester cohort while many children finish and one is killed", as
     },
   });
   await register(...children, stopped);
-  const manager = createSubagentRunManager({
-    runs: subagentRuns,
-    getChildSessionCandidates: (key) =>
-      [...subagentRuns.values()].filter((row) => row.childSessionKey === key),
-    getRunsForChildSession: (key) =>
-      [...subagentRuns.values()].filter((row) => row.childSessionKey === key),
-    resumedRuns: new Set(),
-    acquireTerminalCompletionLock: async () => () => {},
-    callGateway: async () => {
+  const manager = createSubagentRunManager(
+    createSubagentManagerTestOptions(subagentRuns, async () => {
       throw new Error("Stress fixture unexpectedly called the Gateway");
-    },
-    getRuntimeConfig: () => ({}),
-    ensureListener: () => {},
-    startSweeper: () => {},
-    stopSweeper: () => {},
-    resumeSubagentRun: () => {},
-    clearPendingLifecycleError: () => {},
-    clearPendingLifecycleTimeout: () => {},
-    resolveSubagentWaitTimeoutMs: () => 100,
-    scheduleSweep: () => {},
-    resolveSubagentSessionCompletion: async () => null,
-    resolveSubagentSessionStartedAt: async () => undefined,
-    notifyContextEngineSubagentEnded: async () => {},
-    completeCleanupBookkeeping: async () => {},
-    completeSubagentRun: async () => {},
-  });
+    }),
+  );
   const context = captureOpenClawStateWorkerContext();
   const completions = children.map((child) =>
     change(child.runId, (row) => {

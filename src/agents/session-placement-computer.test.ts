@@ -6,6 +6,7 @@ import { createAdmittedHostCapabilityTestFixture } from "./harness/host-capabili
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import { withSessionPlacementComputer } from "./session-placement-computer.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 import type { ComputerToolTransport } from "./tools/computer-tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -64,13 +65,7 @@ describe.each([false, true])(
                 tools: resolveSandboxToolPolicyForAgent(config, "main"),
               })
             : undefined,
-          toolConstructionPlan: {
-            includeBaseCodingTools: false,
-            includeShellTools: false,
-            includeChannelTools: false,
-            includeOpenClawTools: true,
-            includePluginTools: false,
-          },
+          toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
         };
         try {
           const ordinary = host.hostCapabilities.createToolSurface?.(options) ?? [];

@@ -1,5 +1,6 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -80,6 +81,113 @@ async function addComment(page: Page, source: Locator, comment: string) {
 }
 
 suite.define(() => {
+  it("keeps the annotation-only bubble visible while its sent attachment is read", async () => {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const { source, gateway } = await openChat(page);
+      const comment = "Explain the rollback steps before changing the deployment.";
+      await addComment(page, source, comment);
+      await gateway.deferNext("chat.send");
+      const sent = await sendComment(page, gateway);
+      expect(sent.message).toBe("");
+      const inline = page.locator(".chat-sent-comments-inline");
+      const quote = inline.getByRole("button", { name: passage, exact: true });
+      await quote.waitFor();
+      const before = await inline.boundingBox();
+      expect(before).not.toBeNull();
+      const read = await page.evaluateHandle(() => {
+        const original = window.fetch;
+        const gate = Promise.withResolvers<void>();
+        let pending = false;
+        window.fetch = async (...args) => {
+          const input = args[0];
+          if (typeof input === "string" && input.startsWith("data:text/plain;base64,")) {
+            pending = true;
+            await gate.promise;
+          }
+          return original(...args);
+        };
+        return {
+          pending: () => pending,
+          release: () => {
+            window.fetch = original;
+            gate.resolve();
+          },
+        };
+      });
+      try {
+        await gateway.resolveDeferred("chat.send", {
+          runId: sent.idempotencyKey,
+          status: "started",
+        });
+        await expect.poll(() => read.evaluate((gate) => gate.pending())).toBe(true);
+        expect(await quote.isVisible()).toBe(true);
+        expect(await inline.textContent()).toContain(comment);
+        expect(await inline.textContent()).not.toContain("Loading");
+        const during = await inline.boundingBox();
+        expect(during?.height).toBe(before!.height);
+      } finally {
+        await read.evaluate((gate) => gate.release());
+        await read.dispose();
+      }
+      await quote.waitFor();
+      const canonicalBody = createDeferred();
+      await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+        if (new URL(route.request().url()).searchParams.has("meta")) {
+          await route.fulfill({
+            json: {
+              available: true,
+              mediaTicket: "annotation-fixture",
+              mediaTicketExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+            },
+          });
+          return;
+        }
+        await canonicalBody.promise;
+        await route.fulfill({ contentType: "text/plain", body: sent.attachment });
+      });
+      const canonicalId = `mock-user:${sent.idempotencyKey}`;
+      const canonical = {
+        role: "user",
+        content: "",
+        idempotencyKey: `${sent.idempotencyKey}:user`,
+        __openclaw: {
+          id: canonicalId,
+          seq: 1,
+          media: [
+            {
+              kind: "file",
+              url: "media://inbound/selection-comment.txt",
+              fileName: "selection-comment.txt",
+              contentType: "text/plain",
+            },
+          ],
+        },
+      };
+      const session = await gateway.getSessionRow(sent.sessionKey);
+      try {
+        await gateway.emitGatewayEvent("session.message", {
+          sessionKey: sent.sessionKey,
+          sessionId: session.sessionId,
+          status: session.status,
+          hasActiveRun: session.hasActiveRun,
+          activeRunIds: session.activeRunIds,
+          session,
+          clientRunId: sent.idempotencyKey,
+          messageId: canonicalId,
+          messageSeq: 1,
+          message: canonical,
+        });
+        await page.locator(`[data-entry-id="${canonicalId}"]`).waitFor();
+        expect(await quote.isVisible()).toBe(true);
+        expect(await inline.textContent()).toContain(comment);
+        expect((await inline.boundingBox())?.height).toBe(before!.height);
+      } finally {
+        canonicalBody.resolve();
+      }
+      await quote.waitFor();
+      expect(await inline.textContent()).toContain(comment);
+    });
+  });
   it.each([
     { width: 1440, height: 900, theme: "dark" },
     { width: 390, height: 844, theme: "light" },

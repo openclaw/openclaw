@@ -24,6 +24,7 @@ import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 vi.mock("../commands/agent.js", () => ({ agentCommandFromGatewayIngress: vi.fn() }));
 
@@ -64,12 +65,7 @@ function createOperatorRunFixture() {
     requestAuth: {
       authMethod: "trusted-proxy",
       trustDeclaredOperatorScopes: true,
-      authenticatedUserProfile: {
-        profileId: person.id,
-        displayName: person.displayName,
-        hasAvatar: false,
-        updatedAt: person.updatedAt,
-      },
+      authenticatedUserProfile: gatewayProfile(person.id, person.displayName, person.updatedAt),
       operatorAccessAuthority: {
         signal: source.signal,
         assertCurrent: () => source.signal.throwIfAborted(),

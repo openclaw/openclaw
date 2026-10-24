@@ -73,7 +73,10 @@ import {
 } from "../embedded-agent-runner/runs.test-support.js";
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../internal-event-contract.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "../internal-runtime-context.js";
+import { configFor } from "../model-auth.fixtures.test-support.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { createOpenClawOnlyToolConstructionPlan } from "../test-helpers/tool-construction-plan.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
@@ -316,19 +319,6 @@ function createTranscriptAnchor(
   };
 }
 
-function createFinalAssistant(): NonNullable<EmbeddedRunAttemptResult["lastAssistant"]> {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: "final answer" }],
-    api: "openai-responses",
-    provider: "openai",
-    model: "gpt-5.5",
-    usage: createZeroUsageFixture(),
-    stopReason: "stop",
-    timestamp: 0,
-  };
-}
-
 function registerHarness(overrides: Partial<AgentHarness> = {}) {
   const id = overrides.id ?? "codex";
   const harness: AgentHarness = {
@@ -345,18 +335,15 @@ function registerHarness(overrides: Partial<AgentHarness> = {}) {
 function registerFailingCodexHarness(): void {
   // Forces the selected plugin runtime to throw so fallback behavior is
   // exercised through runAgentHarnessAttempt, not only selectAgentHarness.
-  registerAgentHarness(
-    {
-      id: "codex",
-      label: "Failing Codex",
-      supports: (ctx) =>
-        ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
-      runAttempt: vi.fn(async () => {
-        throw new Error("codex startup failed");
-      }),
-    },
-    { ownerPluginId: "codex" },
-  );
+  registerHarness({
+    id: "codex",
+    label: "Failing Codex",
+    supports: (ctx) =>
+      ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+    runAttempt: vi.fn(async () => {
+      throw new Error("codex startup failed");
+    }),
+  });
 }
 
 function registerSuccessfulCodexHarness(): void {
@@ -402,17 +389,9 @@ function groupDenyAllConfig(): OpenClawConfig {
 }
 
 function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        [provider]: {
-          baseUrl: "https://api.openai.com/v1",
-          agentRuntime: { id: runtime },
-          models: [],
-        },
-      },
-    },
-  } as OpenClawConfig;
+  return configFor(provider, "https://api.openai.com/v1", {
+    agentRuntime: { id: runtime },
+  });
 }
 
 function agentModelRuntimeConfig(
@@ -498,20 +477,17 @@ function registerTestCompactor(
   const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(
     async () => options.result ?? { ok: true, compacted: false },
   );
-  registerAgentHarness(
-    {
-      id,
-      label: id,
-      supports:
-        options.supports ??
-        ((ctx) =>
-          ctx.provider === provider ? { supported: true, priority: 100 } : { supported: false }),
-      runAttempt: vi.fn(async () => createAttemptResult(id)),
-      compact,
-      ...(options.authBootstrap ? { authBootstrap: options.authBootstrap } : {}),
-    },
-    { ownerPluginId: id },
-  );
+  registerHarness({
+    id,
+    label: id,
+    supports:
+      options.supports ??
+      ((ctx) =>
+        ctx.provider === provider ? { supported: true, priority: 100 } : { supported: false }),
+    runAttempt: vi.fn(async () => createAttemptResult(id)),
+    compact,
+    ...(options.authBootstrap ? { authBootstrap: options.authBootstrap } : {}),
+  });
   return compact;
 }
 
@@ -675,28 +651,25 @@ describe("runAgentHarnessAttempt", () => {
           32,
         ),
       };
-      registerAgentHarness(
-        {
-          id: "native",
-          label: "Native",
-          supports: () => ({ supported: true, priority: 100 }),
-          runAttempt: async (attempt) => {
-            expect((await loadTranscriptEvents(target))[0]).toMatchObject({
-              type: "session",
-              cwd: cwd ?? workspaceDir,
-            });
-            if (attempt.suppressNextUserMessagePersistence) {
-              expect(attempt.hostCapabilities?.annotateCurrentUserTurn).toBeUndefined();
-            } else {
-              const annotate = attempt.hostCapabilities?.annotateCurrentUserTurn;
-              expect(annotate).toBeTypeOf("function");
-              await annotate?.(annotation);
-            }
-            return createAttemptResult(target.sessionId);
-          },
+      registerHarness({
+        id: "native",
+        label: "Native",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: async (attempt) => {
+          expect((await loadTranscriptEvents(target))[0]).toMatchObject({
+            type: "session",
+            cwd: cwd ?? workspaceDir,
+          });
+          if (attempt.suppressNextUserMessagePersistence) {
+            expect(attempt.hostCapabilities?.annotateCurrentUserTurn).toBeUndefined();
+          } else {
+            const annotate = attempt.hostCapabilities?.annotateCurrentUserTurn;
+            expect(annotate).toBeTypeOf("function");
+            await annotate?.(annotation);
+          }
+          return createAttemptResult(target.sessionId);
         },
-        { ownerPluginId: "native" },
-      );
+      });
       const config = providerRuntimeConfig("codex", "native");
       const params = {
         ...createAttemptParams(config),
@@ -884,18 +857,22 @@ describe("runAgentHarnessAttempt", () => {
           expect(attempt).not.toHaveProperty(field);
         }
         return {
-          assistant: createFinalAssistant(),
+          assistant: makeAgentAssistantMessage({
+            content: [{ type: "text", text: "final answer" }],
+            model: "gpt-5.5",
+            usage: createZeroUsageFixture(),
+          }),
         };
       },
     );
-    const harness: AgentHarness = {
+    const harness: AgentHarness = registerHarness({
       id: "codex",
       label: "Codex",
       supports: () => ({ supported: true, priority: 100 }),
       runAttempt,
       finalizeSettledTurn,
-    };
-    registerAgentHarness(harness, { ownerPluginId: "codex" });
+    });
+
     const params = Object.assign(
       createAttemptParams(providerRuntimeConfig("codex", "codex")),
       Object.fromEntries(privateHarnessParamCases.map(({ field, value }) => [field, value])),
@@ -925,13 +902,12 @@ describe("runAgentHarnessAttempt", () => {
   });
 
   it("fails closed when the selected harness has no settled-turn finalizer", async () => {
-    const harness: AgentHarness = {
+    const harness: AgentHarness = registerHarness({
       id: "codex",
       label: "Codex",
       supports: () => ({ supported: true, priority: 100 }),
       runAttempt: async () => createAttemptResult("run"),
-    };
-    registerAgentHarness(harness, { ownerPluginId: "codex" });
+    });
 
     await expect(
       runAgentHarnessSettledTurnFinalization(
@@ -958,25 +934,16 @@ describe("runAgentHarnessAttempt", () => {
       toolNames = createOpenClawCodingTools({
         config: { tools: { allow: ["read"], deny: ["openclaw"], toolSearch: true } },
         runtimeToolAllowlist: ["openclaw"],
-        toolConstructionPlan: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: true,
-          includePluginTools: false,
-        },
+        toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
       }).map((tool) => tool.name);
       return createAttemptResult(harnessId);
     });
-    registerAgentHarness(
-      {
-        id: harnessId,
-        label: harnessId,
-        supports: () => ({ supported: true, priority: 100 }),
-        runAttempt: pluginRunAttempt,
-      },
-      { ownerPluginId: harnessId },
-    );
+    registerHarness({
+      id: harnessId,
+      label: harnessId,
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: pluginRunAttempt,
+    });
     const params = createAttemptParams(
       providerRuntimeConfig("codex", harnessId),
     ) as EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions };
@@ -1637,13 +1604,7 @@ describe("runAgentHarnessAttempt", () => {
       toolNames = createOpenClawCodingTools({
         config: { tools: { allow: ["read"], deny: ["openclaw"], toolSearch: true } },
         runtimeToolAllowlist: ["openclaw"],
-        toolConstructionPlan: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: true,
-          includePluginTools: false,
-        },
+        toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
       }).map((tool) => tool.name);
       return createAttemptResult("openclaw");
     });
@@ -1702,17 +1663,14 @@ describe("runAgentHarnessAttempt", () => {
   it("annotates non-ok harness result classifications for outer model fallback", async () => {
     const classify = vi.fn<NonNullable<AgentHarness["classify"]>>(() => "empty" as const);
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));
-    registerAgentHarness(
-      {
-        id: "codex",
-        label: "Classifying Codex",
-        supports: (ctx) =>
-          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
-        runAttempt,
-        classify,
-      },
-      { ownerPluginId: "codex" },
-    );
+    registerHarness({
+      id: "codex",
+      label: "Classifying Codex",
+      supports: (ctx) =>
+        ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt,
+      classify,
+    });
 
     const params = createAttemptParams();
     const result = await runAgentHarnessAttempt(params);
@@ -1945,7 +1903,7 @@ describe("runAgentHarnessAttempt", () => {
       });
       return createAttemptResult("codex");
     });
-    const harness: AgentHarness = {
+    registerHarness({
       id: "codex",
       label: "Codex",
       conversationToolPolicySupport: "exact",
@@ -1959,8 +1917,7 @@ describe("runAgentHarnessAttempt", () => {
       supports: (ctx) =>
         ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
       runAttempt,
-    };
-    registerAgentHarness(harness, { ownerPluginId: "codex" });
+    } satisfies AgentHarness);
 
     const policies = [
       { deny: ["image_generate"] },
@@ -2000,7 +1957,7 @@ describe("runAgentHarnessAttempt", () => {
       received.push(attempt.pluginHarnessToolPolicyRestricted === true);
       return createAttemptResult("codex");
     });
-    const harness: AgentHarness = {
+    const harness: AgentHarness = registerHarness({
       id: "codex",
       label: "Codex",
       conversationToolPolicySupport: "exact",
@@ -2015,8 +1972,7 @@ describe("runAgentHarnessAttempt", () => {
       supports: (ctx) =>
         ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
       runAttempt,
-    };
-    registerAgentHarness(harness, { ownerPluginId: "codex" });
+    });
 
     const cases: Array<{
       config?: OpenClawConfig;
@@ -2118,16 +2074,13 @@ describe("runAgentHarnessAttempt", () => {
   it("rejects restrictive policy before an unsupported plugin harness runs", async () => {
     const policy = { conversationToolPolicy: { deny: ["exec"] } };
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("other"));
-    registerAgentHarness(
-      {
-        id: "other",
-        label: "Other runtime",
-        supports: (ctx) =>
-          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
-        runAttempt,
-      },
-      { ownerPluginId: "other" },
-    );
+    registerHarness({
+      id: "other",
+      label: "Other runtime",
+      supports: (ctx) =>
+        ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt,
+    });
 
     await expect(
       runAgentHarnessAttempt({
@@ -2264,33 +2217,24 @@ describe("selectAgentHarness", () => {
       supported: false as const,
       reason: "provider mismatch",
     }));
-    registerAgentHarness(
-      {
-        id: "codex-low",
-        label: "Low Codex",
-        supports: lowPrioritySupports,
-        runAttempt: vi.fn(async () => createAttemptResult("codex-low")),
-      },
-      { ownerPluginId: "codex-low" },
-    );
-    registerAgentHarness(
-      {
-        id: "codex-high",
-        label: "High Codex",
-        supports: highPrioritySupports,
-        runAttempt: vi.fn(async () => createAttemptResult("codex-high")),
-      },
-      { ownerPluginId: "codex-high" },
-    );
-    registerAgentHarness(
-      {
-        id: "other",
-        label: "Other Harness",
-        supports: unsupportedSupports,
-        runAttempt: vi.fn(async () => createAttemptResult("other")),
-      },
-      { ownerPluginId: "other" },
-    );
+    registerHarness({
+      id: "codex-low",
+      label: "Low Codex",
+      supports: lowPrioritySupports,
+      runAttempt: vi.fn(async () => createAttemptResult("codex-low")),
+    });
+    registerHarness({
+      id: "codex-high",
+      label: "High Codex",
+      supports: highPrioritySupports,
+      runAttempt: vi.fn(async () => createAttemptResult("codex-high")),
+    });
+    registerHarness({
+      id: "other",
+      label: "Other Harness",
+      supports: unsupportedSupports,
+      runAttempt: vi.fn(async () => createAttemptResult("other")),
+    });
 
     const harness = selectAgentHarness({
       provider: "codex",

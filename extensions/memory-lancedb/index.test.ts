@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 /**
  * Memory Plugin E2E Tests
  *
@@ -7,8 +8,6 @@
  * - Auto-recall via hooks
  * - Auto-capture filtering
  */
-
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
@@ -23,6 +22,7 @@ import {
 } from "openclaw/plugin-sdk/memory-host-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, test, expect, vi } from "vitest";
+import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
 import { createEmbeddings, isMemoryRecallTimeoutError, runWithTimeout } from "./embeddings.js";
 import memoryPlugin from "./index.js";
 import { looksLikeEnvelopeSludge } from "./memory-capture-sanitization.js";
@@ -204,6 +204,7 @@ function createStandardMemoryTableHarness(
     toArray?: ReturnType<typeof vi.fn>;
     limit?: ReturnType<typeof vi.fn>;
     vectorSearch?: ReturnType<typeof vi.fn>;
+    query?: ReturnType<typeof vi.fn>;
     countRows?: ReturnType<typeof vi.fn>;
     add?: ReturnType<typeof vi.fn>;
     deleteRows?: ReturnType<typeof vi.fn>;
@@ -220,6 +221,7 @@ function createStandardMemoryTableHarness(
     schema: createAgentScopedSchemaMock(),
     checkoutLatest: vi.fn(async () => undefined),
     vectorSearch,
+    query: options.query,
     countRows,
     add,
     delete: deleteRows,
@@ -951,19 +953,7 @@ describe("memory plugin e2e", () => {
     const limit = vi.fn(() => ({ toArray }));
     const select = vi.fn(() => ({ limit, toArray }));
     const query = vi.fn(() => ({ where: vi.fn(() => ({ select })) }));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          checkoutLatest: vi.fn(async () => undefined),
-          schema: createAgentScopedSchemaMock(),
-          query,
-          countRows: vi.fn(async () => 0),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
-        })),
-      })),
-    }));
+    const { loadLanceDbModule } = createStandardMemoryTableHarness({ query });
 
     installOpenAiMemoryModuleMocks({
       ensureGlobalUndiciEnvProxyDispatcher,
@@ -1099,16 +1089,14 @@ describe("memory plugin e2e", () => {
     const post = vi.fn(
       () =>
         new Promise((resolve) => {
-          setTimeout(
-            () =>
-              resolve({
-                data: [{ embedding: [0.1, 0.2, 0.3] }],
-              }),
-            30_000,
-          );
+          setTimeout(resolve, 30_000, { data: [{ embedding: [0.1, 0.2, 0.3] }] });
         }),
     );
-    const toArray = vi.fn(() => new Promise(() => {}));
+    const queryStarted = createDeferred<void>();
+    const toArray = vi.fn(() => {
+      queryStarted.resolve();
+      return new Promise(() => {});
+    });
     const limit = vi.fn(() => ({ toArray }));
     const {
       api: mockApi,
@@ -1166,7 +1154,7 @@ describe("memory plugin e2e", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     post.mockResolvedValueOnce({ data: [{ embedding: [0.1, 0.2, 0.3] }] });
     const probeResult = recall();
-    await vi.advanceTimersByTimeAsync(0);
+    await queryStarted.promise;
     expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(15_000);
     await expect(probeResult).resolves.toBeUndefined();
@@ -1531,20 +1519,14 @@ describe("memory plugin e2e", () => {
   test("bounds completed text history without refreshing repeated hits", async () => {
     const harness = await setupAutoCaptureCursorHarness();
     const context = { agentId: "main", sessionKey: "session-material-window" };
-    const facts = Array.from({ length: 61 }, (_, index) => ({
-      role: "user",
-      content: `I prefer meeting room ${index} for project planning.`,
-      timestamp: index,
-    }));
+    const facts = Array.from({ length: 61 }, (_, index) =>
+      makeUserMessage(`I prefer meeting room ${index} for project planning.`, index),
+    );
     const history: typeof facts = [];
     const first = facts[0]!;
     const newest = facts[60]!;
-    const anchor = { role: "user", content: "That covers this topic.", timestamp: 200 };
-    const next = {
-      role: "user",
-      content: "I prefer written agendas for new projects.",
-      timestamp: 201,
-    };
+    const anchor = makeUserMessage("That covers this topic.", 200);
+    const next = makeUserMessage("I prefer written agendas for new projects.", 201);
     for (const fact of facts.slice(0, 60)) {
       history.push(fact);
       await harness.capture([...history], context);

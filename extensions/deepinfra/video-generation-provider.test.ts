@@ -8,6 +8,7 @@ import {
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import { DEEPINFRA_VIDEO_FALLBACK_MODELS } from "./media-models.js";
 import { MP4_VIDEO } from "./video-generation.test-support.js";
 
@@ -198,17 +199,13 @@ describe("deepinfra video generation provider", () => {
       provider: "deepinfra",
       model: "deepinfra/Pixverse/Pixverse-T2V",
       prompt: "A request policy video",
-      cfg: {
-        models: {
-          providers: {
-            deepinfra: {
-              baseUrl: "https://api.deepinfra.com/v1/openai",
-              models: [],
-              request: requestPolicy,
-            },
-          },
+      cfg: createModelProviderConfig({
+        deepinfra: {
+          baseUrl: "https://api.deepinfra.com/v1/openai",
+          models: [],
+          request: requestPolicy,
         },
-      },
+      }),
     });
 
     expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(requestPolicy);

@@ -222,6 +222,34 @@ describe("secrets runtime snapshot channel inactive variants", () => {
     },
   );
 
+  it.each([
+    {
+      name: "an explicit default override",
+      accountId: "default",
+      baseUrl: "https://mattermost.example.invalid",
+    },
+    { name: "no root base URL", accountId: "work", baseUrl: undefined },
+  ])("keeps unused Mattermost root refs inactive with $name", async ({ accountId, baseUrl }) => {
+    const botToken = envRef("MISSING_MATTERMOST_DEFAULT");
+    const snapshot = await prepare({
+      mattermost: {
+        baseUrl,
+        botToken,
+        accounts: {
+          [accountId]: { baseUrl: "https://work.example.invalid", botToken: "work-bot-token" },
+        },
+      },
+    });
+
+    expect(getPath(snapshot.config, ["channels", "mattermost", "botToken"])).toEqual(botToken);
+    expect(snapshot.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "channels.mattermost.botToken",
+      }),
+    );
+  });
+
   it("keeps top-level Google Chat serviceAccount inactive when an explicit default overrides it", async () => {
     const snapshot = await prepare(
       {

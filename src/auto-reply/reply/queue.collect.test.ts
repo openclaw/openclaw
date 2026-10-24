@@ -30,6 +30,7 @@ import {
 } from "./queue.js";
 import {
   createQueueTestRun as createRun,
+  createOffloadedImageQueueRun,
   enqueueTestRun,
   rejectQueuePreparation,
   enqueueSlackRun,
@@ -558,15 +559,7 @@ describe("followup queue collect routing", () => {
       ["one", "101.001"],
       ["two", "101.002"],
     ] as const) {
-      q.enqueue({
-        prompt,
-        messageId: replyToId,
-        originatingChannel: "slack",
-        originatingTo: "channel:A",
-        originatingReplyToId: replyToId,
-        originatingReplyToMode: "off",
-        originatingChatType: "channel",
-      });
+      q.slackAnchor(prompt, replyToId, "off");
     }
 
     await q.drain();
@@ -584,15 +577,7 @@ describe("followup queue collect routing", () => {
       ["one", "101.001"],
       ["two", "101.002"],
     ] as const) {
-      q.enqueue({
-        prompt,
-        messageId: replyToId,
-        originatingChannel: "slack",
-        originatingTo: "channel:A",
-        originatingReplyToId: replyToId,
-        originatingReplyToMode: "all",
-        originatingChatType: "channel",
-      });
+      q.slackAnchor(prompt, replyToId, "all");
     }
 
     await q.drain();
@@ -1399,24 +1384,7 @@ describe("followup queue collect routing", () => {
   it("preserves prepared media through elided overflow and collected execution", async () => {
     const q = createQueueCase({ cap: 1 });
     for (const [index, prompt] of ["first", "second", "survivor"].entries()) {
-      const source: InternalFollowupRun = {
-        ...createRun({ prompt, originatingChannel: "slack", originatingTo: "channel:A" }),
-        currentTurnImagesPrepared: true,
-        images: [],
-        imageOrder: ["offloaded"],
-        media: [
-          { path: `/tmp/offloaded-${index}.png`, contentType: "image/png" },
-          {
-            path: `/tmp/missing-${index}.png`,
-            contentType: "image/png",
-            hydrationSuppressed: true,
-          },
-        ],
-        mediaImageLayout: {
-          slots: [{ kind: "offloaded", factIndex: 0 }],
-          suppressedFactIndexes: [1],
-        },
-      };
+      const source = createOffloadedImageQueueRun(prompt, index);
       q.add(source);
     }
     await drainSettledQueue(q.key, q.runFollowup);
@@ -1446,24 +1414,7 @@ describe("followup queue collect routing", () => {
   it("offsets prepared media layout fact indexes across collected batches", async () => {
     const q = createQueueCase();
     for (const [index, prompt] of ["one", "two"].entries()) {
-      const preparedRun: InternalFollowupRun = {
-        ...createRun({ prompt, originatingChannel: "slack", originatingTo: "channel:A" }),
-        currentTurnImagesPrepared: true,
-        images: [],
-        imageOrder: ["offloaded"],
-        media: [
-          { path: `/tmp/offloaded-${index}.png`, contentType: "image/png" },
-          {
-            path: `/tmp/missing-${index}.png`,
-            contentType: "image/png",
-            hydrationSuppressed: true,
-          },
-        ],
-        mediaImageLayout: {
-          slots: [{ kind: "offloaded", factIndex: 0 }],
-          suppressedFactIndexes: [1],
-        },
-      };
+      const preparedRun = createOffloadedImageQueueRun(prompt, index);
       q.add(preparedRun);
     }
     await q.drain();

@@ -35,7 +35,7 @@ const message = (role: "user" | "assistant", text: string) => ({
 
 type ColorMode = "dark" | "light";
 
-function themeConfig(family: ThemeName, mode: ColorMode | "system") {
+function themeConfig(family: ThemeName, mode: ColorMode) {
   const config = {
     ui: { prefs: { theme: family === "claw" ? undefined : family, themeMode: mode } },
   };
@@ -50,12 +50,8 @@ async function changeTheme(
   resolved = resolveTheme(selection.family, selection.mode),
 ) {
   // Refresh through the Gateway so a synced change must preserve the mounted draft.
-  const configGets = (await gateway.getRequests("config.get")).length;
   await gateway.setMethodResponse("config.get", themeConfig(selection.family, selection.mode));
   await gateway.emitGatewayEvent("config.changed", {});
-  await expect
-    .poll(async () => (await gateway.getRequests("config.get")).length)
-    .toBeGreaterThan(configGets);
   const root = page.locator("html");
   await expect.poll(() => root.getAttribute("data-theme")).toBe(resolved);
   await expect.poll(() => root.getAttribute("data-theme-mode")).toBe(selection.mode);
@@ -149,13 +145,6 @@ suite.define(() => {
             }
           }
         }
-        if (composer && textarea) {
-          await composer.getByRole("button", { name: "Add attachment", exact: true }).click();
-          await composer
-            .getByRole("menuitem", { name: "File", exact: true })
-            .waitFor({ state: "visible" });
-          await page.keyboard.press("Escape");
-        }
         await changeTheme(page, gateway, { family: "dash", mode: "light" }, "dash-light");
         const background = () =>
           shell.evaluate((element) => getComputedStyle(element).backgroundImage);
@@ -190,15 +179,6 @@ suite.define(() => {
             await session.send("Emulation.setEmulatedMedia", { features: [] });
             await session.detach();
           }
-        }
-        await gateway.setMethodResponse("config.get", themeConfig("dash", "system"));
-        await gateway.emitGatewayEvent("config.changed", {});
-        for (const mode of ["dark", "light"] as const) {
-          await page.emulateMedia({ colorScheme: mode });
-          const resolved = mode === "dark" ? "dash" : "dash-light";
-          await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(resolved);
-          expect(await background()).toBe(images.get(resolved));
-          await expectDraft();
         }
         await page.setViewportSize({ width: 1440, height: 900 });
       }

@@ -6,6 +6,7 @@ import {
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import { CRON_SCOPED_READ_ACTIONS, isAutomationsToolName } from "./tools/automations-tool-name.js";
 import { readToolStringParam, type AnyAgentTool } from "./tools/common.js";
+import { prepareCronToolArguments } from "./tools/cron-tool-canonicalize.js";
 
 /**
  * A scheduler notice or wake (for example "automation was auto-disabled"). The
@@ -63,8 +64,8 @@ export function resolveTurnToolSurface(params: {
       params.schedulerSystemTurn === true &&
       turnTool !== undefined &&
       isAutomationsToolName(tool.name) &&
-      // Preparation can perform work; only a plain executor can be split by action.
-      !turnTool.prepareArguments &&
+      // Cron's native preparer only repairs arguments; other preparers may perform work.
+      (!turnTool.prepareArguments || turnTool.prepareArguments === prepareCronToolArguments) &&
       !turnTool.prepareBeforeToolCallParams &&
       !turnTool.finalizeBeforeToolCallParams;
     const gated = gateAgentToolExecution(

@@ -290,3 +290,7 @@ validators are current. CI runs this freshness check alongside the normal build.
   behavior.
 
 See also [Scripts](https://docs.openclaw.ai/help/scripts) for public-facing script guidance.
+
+### Dynamic validator benchmark
+
+`node --import ./scripts/tsx.mjs scripts/bench-dynamic-validators.mts <jit|aot> [iterations] [warmup] [mcp|plugin|llm|llm-coerce]` measures the actual validation owners. Compare five interleaved fresh baseline/candidate processes per fixture; import/setup and warm CPU/wall costs are reported separately.

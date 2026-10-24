@@ -7,6 +7,7 @@ import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 // Amazon Bedrock tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { bedrockModel } from "./bedrock.test-support.js";
 import amazonBedrockPlugin from "./index.js";
 
 type InferenceProfileResult =
@@ -302,18 +303,11 @@ describe("amazon-bedrock provider plugin", () => {
     const normalized = provider.normalizeResolvedModel?.({
       provider: "amazon-bedrock",
       modelId: "us.anthropic.claude-opus-4-6-v1",
-      model: {
+      model: bedrockModel({
         id: "us.anthropic.claude-opus-4-6-v1",
         name: "Claude Opus 4.6",
-        provider: "amazon-bedrock",
-        api: "bedrock-converse-stream",
-        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1_000_000,
-        maxTokens: 4096,
-      },
+      }),
     } as never);
 
     expect(normalized?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
@@ -620,19 +614,14 @@ describe("amazon-bedrock provider plugin", () => {
       await callWrappedStreamWithPayload(
         provider,
         APP_INFERENCE_PROFILE_ARN,
-        {
+        bedrockModel({
           id: APP_INFERENCE_PROFILE_ARN,
-          provider: "amazon-bedrock",
-          api: "bedrock-converse-stream",
           name: "Test profile",
           params: { canonicalModelId: "claude-haiku-4-5" },
-          baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
           reasoning: false,
-          input: ["text"],
           contextWindow: 200000,
           maxTokens: 1024,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        },
+        }),
         { cacheRetention: "short" },
         payload,
         {

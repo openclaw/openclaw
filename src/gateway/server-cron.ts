@@ -617,8 +617,8 @@ export function buildGatewayCronService(params: {
         jobSnapshot?.sessionKey ??
         evt.sessionKey;
       const scopedAgentId = jobSnapshot?.owner?.agentId ?? jobSnapshot?.agentId;
-      // Views fetch definitions and run details on demand; the sidebar only needs
-      // attention state. Keep the full event for hooks and notifications below.
+      // Views fetch definitions and run details on demand; the sidebar needs
+      // bounded status and freshness. Keep the full event for hooks and notifications below.
       const {
         job: eventJob,
         summary: _summary,
@@ -635,6 +635,9 @@ export function buildGatewayCronService(params: {
                 state: pickDefined(eventJob.state, [
                   "nextRunAtMs",
                   "lastRunAtMs",
+                  "lastDurationMs",
+                  "lastTriggerEvalAtMs",
+                  "lastMeaningfulResult",
                   "lastRunStatus",
                   "lastStatus",
                   "runningAtMs",

@@ -1,4 +1,9 @@
 import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isApplePlatform,
+  matchesKeyboardShortcut,
+  resolveAsciiShortcutKey,
+} from "../../../../src/shared/keyboard-shortcuts.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { capturePlacementStartupConnection } from "../../app/session-placement-startup.ts";
@@ -217,20 +222,26 @@ function openDropdownOwnsKey(root: HTMLElement, key: string): boolean {
   );
 }
 
-export function focusChatComposerFromPrintableKeydown(
+export function focusChatComposerFromKeydown(
   root: HTMLElement,
   event: KeyboardEvent,
   composer: HTMLTextAreaElement | null,
+  options: { allowPaste?: boolean } = {},
 ): void {
+  const nativePaste =
+    options.allowPaste === true &&
+    matchesKeyboardShortcut(
+      { modifiers: event.shiftKey ? ["mod", "shift"] : ["mod"], key: "v", platformSpecific: true },
+      event,
+      isApplePlatform(),
+      resolveAsciiShortcutKey(event),
+    );
   // Native callers cross modal and composer renderer boundaries to transfer keyboard ownership.
   if (
     event.defaultPrevented ||
     event.isComposing ||
-    event.metaKey ||
-    event.ctrlKey ||
-    event.altKey ||
+    (!nativePaste && (event.metaKey || event.ctrlKey || event.altKey || event.key.length !== 1)) ||
     openDropdownOwnsKey(root, event.key) ||
-    event.key.length !== 1 ||
     keyboardEventPathHasInteractiveTarget(event) ||
     root.closest("[inert]") ||
     hasModalSurface(root.ownerDocument)
@@ -240,7 +251,8 @@ export function focusChatComposerFromPrintableKeydown(
   if (!composer || composer.disabled || composer.readOnly) {
     return;
   }
-  // Focus transfers ownership; block old-target dropdown typeahead from cancelling input.
+  // Keep the native default: paste must reach this textarea with its original clipboard data.
+  // Block old-target dropdown typeahead from cancelling the transferred input.
   composer.focus({ preventScroll: true });
   event.stopImmediatePropagation();
 }

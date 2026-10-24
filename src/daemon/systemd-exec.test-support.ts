@@ -26,3 +26,7 @@ export const createExecFileError = (
   }
   return err;
 };
+
+export function nativeExit(stdout = "", stderr = "", code = 0) {
+  return { stdout, stderr, code, termination: "exit" as const };
+}

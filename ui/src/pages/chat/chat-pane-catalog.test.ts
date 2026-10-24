@@ -23,6 +23,7 @@ import {
 import * as chatThreadBuild from "./chat-thread-build.ts";
 import { renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import {
+  flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
@@ -85,7 +86,7 @@ function expectNoContinuation({ pane, state }: ReturnType<typeof createCatalogCo
 }
 
 describe("chat pane catalog", () => {
-  it("reuses unchanged catalog history while admitting an older page", () => {
+  it("reuses unchanged catalog history while admitting an older page", async () => {
     installTranscriptDomMocks();
     onTestFinished(resetTranscriptTestDom);
     const { pane, state, context } = createRefreshChatPane(createGatewayBrowserClientFixture());
@@ -153,6 +154,7 @@ describe("chat pane catalog", () => {
     };
 
     draw();
+    await flushDeferredRowPrune();
     expect(container.textContent).toContain("Saved catalog answer");
     expect(container.textContent).not.toContain("Unrelated live tool");
     expect(container.querySelector(".chat-question-panel, .chat-inline-approval")).toBeNull();
@@ -167,6 +169,7 @@ describe("chat pane catalog", () => {
     });
     draw();
     expect(build).toHaveBeenCalledTimes(2);
+    await flushDeferredRowPrune();
     expect(container.textContent).toContain("Older catalog answer");
     expect(container.textContent).toContain("Saved catalog answer");
     expect(container.textContent).not.toContain("Unrelated live tool");

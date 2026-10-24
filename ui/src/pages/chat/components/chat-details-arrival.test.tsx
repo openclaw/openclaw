@@ -2,6 +2,8 @@
 import { createComponent, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
+import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsDesktopComposition } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
@@ -37,25 +39,18 @@ function mountDetails() {
     progressCardInitialLoading: true,
   };
   const [details, setDetails] = createSignal(initial);
-  const [presented, setPresented] = createSignal(true);
   const view = mountSolid(() =>
     createComponent(ChatDetailsDesktopComposition, {
       get props() {
         return details();
       },
-      get presented() {
-        return presented();
-      },
+      presented: true,
     }),
   );
   flush();
   onTestFinished(() => {
     view.unmount();
-    if (animate) {
-      Object.defineProperty(Element.prototype, "animate", animate);
-    } else {
-      Reflect.deleteProperty(Element.prototype, "animate");
-    }
+    restorePropertyDescriptor(Element.prototype, "animate", animate);
     vi.useRealTimers();
   });
   return {
@@ -63,10 +58,6 @@ function mountDetails() {
     initial,
     update(patch: Partial<ChatDetailsProps>) {
       setDetails((previous) => ({ ...previous, ...patch }));
-      flush();
-    },
-    present(value: boolean) {
-      setPresented(value);
       flush();
     },
     group: (name: string) => view.container.querySelector(`[data-details-group="${name}"]`),
@@ -94,6 +85,9 @@ it("keeps unknown and empty desktop Outputs and Progress quiet during slow reads
   view.update({ outputs: { ...view.initial.outputs!, artifacts: [], dashboard: null } });
   expect(view.group("outputs")).toBeNull();
   view.update({ outputs: { ...view.initial.outputs!, artifactsError: "Cannot load files" } });
+  const outputs = view.group("outputs")!;
+  expect(outputs.querySelector("summary")?.getAttribute("aria-expanded")).toBe("false");
+  outputs.querySelector("summary")!.click();
   await vi.advanceTimersByTimeAsync(0);
   expect(view.group("outputs")?.textContent).toContain("Cannot load files");
   view.update({
@@ -109,66 +103,20 @@ it("keeps unknown and empty desktop Outputs and Progress quiet during slow reads
   expect(view.container.textContent).toContain("Review the layout");
 });
 
-it("delays the first Context arrival, preserves its deadline and disclosure, and retires a replaced session's pending entrance", async () => {
-  const view = mountDetails();
-  const usage = {
-    ...view.initial.selectedSession!,
-    contextTokens: 128_000,
-    totalTokens: 3_840,
-    totalTokensFresh: true,
-  };
-  view.update({ selectedSession: usage });
-  expect(view.group("context")).toBeNull();
-  await vi.advanceTimersByTimeAsync(1_000);
-  view.update({ selectedSession: { ...usage, totalTokens: 5_120 } });
-  view.present(false);
-  await vi.advanceTimersByTimeAsync(2_000);
-  expect(view.group("context")).toBeNull();
-  view.present(true);
-  await vi.advanceTimersByTimeAsync(1_000);
-  view.update({ selectedSession: { ...usage, totalTokens: 6_400 } });
-  await vi.advanceTimersByTimeAsync(999);
-  expect(view.group("context")).toBeNull();
-  await vi.advanceTimersByTimeAsync(1);
-  const context = view.group("context")!;
-  expect(context.textContent).toContain("5%");
-  context.querySelector("summary")!.click();
-  flush();
-  expect(context.querySelector("summary")?.getAttribute("aria-expanded")).toBe("true");
-  view.present(false);
-  view.present(true);
-  expect(view.group("context")).toBe(context);
-  expect(context.querySelector("summary")?.getAttribute("aria-expanded")).toBe("true");
-
-  view.update({
-    sessionKey: "agent:main:pending",
-    selectedSession: { key: "agent:main:pending", sessionId: "pending-1", kind: "direct" },
-  });
-  view.update({ selectedSession: { ...usage, key: "agent:main:pending", sessionId: "pending-1" } });
-  await vi.advanceTimersByTimeAsync(1_000);
-  view.update({
-    sessionKey: "agent:main:empty",
-    selectedSession: { key: "agent:main:empty", sessionId: "empty-1", kind: "direct" },
-  });
-  await vi.advanceTimersByTimeAsync(2_000);
-  expect(view.group("context")).toBeNull();
-  view.update({
-    sessionKey: "agent:main:cached",
-    selectedSession: { ...usage, key: "agent:main:cached", sessionId: "cached-1" },
-  });
-  expect(view.group("context")?.textContent).toContain("3%");
-});
-
 it("keeps an empty Environment absent while its owner reads, and admits each real content source", () => {
   const view = mountDetails();
   expect(view.group("environment")).toBeNull();
   const release = vi.fn();
   const request = vi.fn(() => release);
   const environment = { onRequestUncommitted: request };
-  view.update({
-    environment,
-    desktopDisclosures: { expanded: { environment: false }, onExpandedChange() {} },
-  });
+  const disclosures: NonNullable<ChatDetailsProps["desktopDisclosures"]> = {
+    expanded: { environment: false },
+    onExpandedChange(section, expanded) {
+      disclosures.expanded[section] = expanded;
+      view.update({ desktopDisclosures: { ...disclosures } });
+    },
+  };
+  view.update({ environment, desktopDisclosures: disclosures });
   expect(request).toHaveBeenCalledTimes(1);
   expect(view.group("environment")).toBeNull();
 
@@ -185,11 +133,12 @@ it("keeps an empty Environment absent while its owner reads, and admits each rea
       },
     },
   });
-  expect(view.group("environment")?.textContent).toContain("Changes");
-  expect(view.group("environment")?.querySelector("summary")?.getAttribute("aria-expanded")).toBe(
-    "false",
-  );
+  const environmentGroup = view.group("environment")!;
+  expect(environmentGroup.querySelector("summary")?.getAttribute("aria-expanded")).toBe("false");
   expect(release).toHaveBeenCalledTimes(1);
+  environmentGroup.querySelector("summary")!.click();
+  flush();
+  expect(view.group("environment")?.textContent).toContain("Changes");
 
   view.update({ environment });
   expect(view.group("environment")).toBeNull();
@@ -209,19 +158,13 @@ it("keeps an empty Environment absent while its owner reads, and admits each rea
   view.update({
     selectedSession: {
       ...view.initial.selectedSession!,
-      placement: {
-        state: "active",
-        generation: 1,
-        createdAtMs: 1,
+      placement: createActiveSessionPlacement({
         updatedAtMs: 2,
         stateChangedAtMs: 2,
-        environmentId: "worker:device",
-        activeOwnerEpoch: 1,
-        workerBundleHash: "a".repeat(64),
         workspaceBaseManifestRef: "base-manifest",
         remoteWorkspaceDir: "/worker/repo",
         runner: { kind: "device", status: "available" },
-      },
+      }),
     },
   });
   expect(view.group("environment")?.textContent).toContain("worker:device");

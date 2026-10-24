@@ -16,6 +16,7 @@ import {
   editMessageMSTeams,
   sendMessageMSTeams,
 } from "./send.js";
+import { createMSTeamsTestConfig } from "./setup.test-support.js";
 
 const mockState = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
@@ -293,15 +294,11 @@ describe("editMessageMSTeams", () => {
     mockState.resolveMarkdownTableMode.mockImplementation(markdown.resolveMarkdownTableMode);
     mockState.convertMarkdownTables.mockImplementation(text.convertMarkdownTables);
     mockContext({ app: {}, ref: { conversation: { id: conversationId } } });
-    const cfg: OpenClawConfig = {
-      channels: {
-        msteams: {
-          defaultAccount: "support",
-          markdown: { tables: "off" },
-          accounts: { support: { markdown: { tables: "bullets" } } },
-        },
-      },
-    };
+    const cfg: OpenClawConfig = createMSTeamsTestConfig({
+      defaultAccount: "support",
+      markdown: { tables: "off" },
+      accounts: { support: { markdown: { tables: "bullets" } } },
+    });
     await editMessageMSTeams({
       cfg,
       accountId: undefined,

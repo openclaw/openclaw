@@ -11,6 +11,7 @@ import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-pr
 import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 import { createSubscriptionMock } from "./attempt-spawn-workspace.subscription-mock.test-support.js";
+import { createSettledStreamResult } from "./attempt-stream.test-helpers.js";
 import { resolveSettledToolTerminalContinuation } from "./incomplete-turn-recovery.js";
 import { buildPayloads } from "./payloads.test-helpers.js";
 import { normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
@@ -48,21 +49,11 @@ function createResultFixture(params: ResultInput = {}) {
     beforeAgentRunBlockedBy: undefined,
     trajectoryEndRecorded: false,
   };
-  const settled: Parameters<typeof completeEmbeddedAttemptResult>[1] = {
-    promptError: null,
-    promptErrorSource: null,
-    timedOutDuringCompaction: false,
-    compactionOccurredThisAttempt: false,
-    sessionIdUsed: "session-1",
+  const settled: Parameters<typeof completeEmbeddedAttemptResult>[1] = createSettledStreamResult({
     messagesSnapshot: params?.messagesSnapshot ?? [],
-    lastAssistant: undefined,
-    currentAttemptAssistant: undefined,
     currentAttemptCompletedAssistant: params?.currentAttemptCompletedAssistant,
     successfulNestedToolNames: params?.successfulNestedToolNames ?? [],
-    attemptUsage: undefined,
-    lastCallUsage: undefined,
-    promptCache: undefined,
-  };
+  });
   const prompt: Parameters<typeof completeEmbeddedAttemptResult>[2] = {
     preflightRecovery: undefined,
     contextBudgetStatus: undefined,

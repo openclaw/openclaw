@@ -56,12 +56,18 @@ export async function openChatPanels(
   await waitForLayoutSettled(pane.page(), "openclaw-chat-pane :is(" + headers + ")");
   // The scenario owns its target layout; old controls may remain visible during a viewport change.
   if (presentation === "mobile") {
-    const trigger = pane.locator(".agent-chat__header--mobile .chat-header-session-menu__trigger");
-    await trigger.waitFor({ state: "visible" });
-    if (!(await pane.locator(".chat-mobile-host").isVisible())) {
-      await selectMenuItem(await openSessionActions(pane), "Panels");
+    const trigger = pane
+      .locator(".agent-chat__header--mobile")
+      .getByRole("button", { name: "Panels", exact: true });
+    if (await trigger.isVisible()) {
+      if (!(await pane.locator(".chat-mobile-host").isVisible())) {
+        await trigger.click();
+      }
+      return trigger;
     }
-    return trigger;
+    const menu = await openSessionActions(pane);
+    await menu.getByRole("menuitem", { name: "Panels", exact: true }).click();
+    return menu.locator(".chat-header-session-menu__trigger");
   }
   const trigger = pane
     .locator(".sidebar-region__panels-toggle")
@@ -71,21 +77,6 @@ export async function openChatPanels(
     await trigger.click();
   }
   return trigger;
-}
-
-/** Desktop choices are menu checkboxes; mobile choices are pressed buttons in Advanced. */
-export async function openChatConversationOptions(scope: Page | Locator): Promise<Locator> {
-  const pane = nativePane(scope);
-  const menu = await openSessionActions(pane);
-  if (await pane.locator(".agent-chat__header--mobile").isVisible()) {
-    await menu.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-    const options = pane.locator('.chat-mobile-host__page[data-mobile-page="session-advanced"]');
-    await options.waitFor();
-    return options;
-  }
-  await menu.getByRole("menuitem", { name: "View", exact: true }).click();
-  await menu.getByRole("menuitemcheckbox", { name: "Reasoning", exact: true }).waitFor();
-  return menu;
 }
 
 async function selectMenuItem(menu: Locator, name: string | RegExp): Promise<void> {
@@ -104,6 +95,13 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
   const mobile = await pane.locator(".agent-chat__header--mobile").isVisible();
   const host = pane.locator(".chat-mobile-host");
   const side = pane.locator('[data-region-header="side"]');
+  const toggle = mobile
+    ? pane
+        .locator(".agent-chat__header--mobile")
+        .getByRole("button", { name: "Panels", exact: true })
+    : pane
+        .locator(".sidebar-region__panels-toggle")
+        .getByRole("button", { name: "Panels", exact: true });
 
   if (
     matches("Side panel") ||
@@ -118,10 +116,7 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
     } else if (mobile) {
       await openChatPanels(pane, "mobile");
     } else {
-      await pane
-        .locator(".sidebar-region__panels-toggle")
-        .getByRole("button", { name: "Panels", exact: true })
-        .click();
+      await toggle.click();
     }
     return;
   }

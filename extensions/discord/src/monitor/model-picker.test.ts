@@ -13,7 +13,11 @@ import {
   findProviderBucketLocation,
   parseDiscordModelPickerData,
 } from "./model-picker.state.js";
-import { createModelsProviderData, setFixtureRuntimeChoices } from "./model-picker.test-utils.js";
+import {
+  createFixtureRuntimeChoices,
+  createModelsProviderData,
+  setFixtureRuntimeChoices,
+} from "./model-picker.test-utils.js";
 import {
   renderDiscordModelPickerModelsView,
   renderDiscordModelPickerProvidersView,
@@ -524,24 +528,7 @@ describe("Discord model picker rendering", () => {
     const data = createModelsProviderData({ google: models });
     setFixtureRuntimeChoices(
       data,
-      new Map([
-        [
-          "google",
-          [
-            {
-              id: "google-gemini-cli",
-              label: "Google Gemini CLI",
-              description:
-                "Use the Google Gemini CLI runtime selected by the effective harness policy.",
-            },
-            {
-              id: "openclaw",
-              label: "OpenClaw Default",
-              description: "Use the built-in OpenClaw runtime.",
-            },
-          ],
-        ],
-      ]),
+      new Map([["google", createFixtureRuntimeChoices("google-gemini-cli")]]),
     );
 
     const rows = renderModelsViewRows({
@@ -580,24 +567,7 @@ describe("Discord model picker rendering", () => {
     const data = createModelsProviderData({ "google-gemini-cli": models });
     setFixtureRuntimeChoices(
       data,
-      new Map([
-        [
-          "google-gemini-cli",
-          [
-            {
-              id: "google-gemini-cli",
-              label: "Google Gemini CLI",
-              description:
-                "Use the Google Gemini CLI runtime selected by the effective harness policy.",
-            },
-            {
-              id: "openclaw",
-              label: "OpenClaw Default",
-              description: "Use the built-in OpenClaw runtime.",
-            },
-          ],
-        ],
-      ]),
+      new Map([["google-gemini-cli", createFixtureRuntimeChoices("google-gemini-cli")]]),
     );
 
     const rows = renderModelsViewRows({
@@ -932,26 +902,7 @@ describe("Discord model picker rendering", () => {
       openai: ["gpt-4.1", "gpt-4o", "o3"],
       anthropic: ["claude-sonnet-4-5"],
     });
-    setFixtureRuntimeChoices(
-      data,
-      new Map([
-        [
-          "openai",
-          [
-            {
-              id: "codex",
-              label: "OpenAI Codex",
-              description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
-            },
-            {
-              id: "openclaw",
-              label: "OpenClaw Default",
-              description: "Use the built-in OpenClaw runtime.",
-            },
-          ],
-        ],
-      ]),
-    );
+    setFixtureRuntimeChoices(data, new Map([["openai", createFixtureRuntimeChoices("codex")]]));
 
     const rows = renderModelsViewRows({
       command: "models",
@@ -995,26 +946,7 @@ describe("Discord model picker rendering", () => {
     const data = createModelsProviderData({
       openai: ["gpt-4.1", "gpt-4o"],
     });
-    setFixtureRuntimeChoices(
-      data,
-      new Map([
-        [
-          "openai",
-          [
-            {
-              id: "codex",
-              label: "OpenAI Codex",
-              description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
-            },
-            {
-              id: "openclaw",
-              label: "OpenClaw Default",
-              description: "Use the built-in OpenClaw runtime.",
-            },
-          ],
-        ],
-      ]),
-    );
+    setFixtureRuntimeChoices(data, new Map([["openai", createFixtureRuntimeChoices("codex")]]));
 
     const rows = renderModelsViewRows({
       command: "models",

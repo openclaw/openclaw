@@ -11,8 +11,10 @@ import {
 import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json-schema";
 import fastUri from "fast-uri";
 import { Compile } from "typebox/compile";
+import { getRuntimeExecutionProfile } from "../../standalone-runtime-profile.mjs";
 import { toErrorObject } from "../infra/errors.js";
 import { findJsonSchemaShapeError } from "../shared/json-schema-defaults.js";
+import { createInterpretedMcpJsonSchemaValidator } from "./mcp-json-schema-validator-interpreted.js";
 
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
 
@@ -42,6 +44,9 @@ export function createMcpJsonSchemaValidator(): jsonSchemaValidator {
     uriResolver: fastUri,
   });
   addFormats(ajv);
+  if (getRuntimeExecutionProfile() === "embedded-aot") {
+    return createInterpretedMcpJsonSchemaValidator(ajv.formats);
+  }
   const defaultValidator = new AjvJsonSchemaValidator(ajv);
 
   return {

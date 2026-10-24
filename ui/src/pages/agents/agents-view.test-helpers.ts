@@ -1,5 +1,6 @@
 import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import type { AgentFiles } from "./panels-files.tsx";
 import type { Agents } from "./view.tsx";
 
@@ -107,17 +108,10 @@ export function createAgentViewTestProps(
       decisionModels: [],
       modelCatalogRetired: false,
       modelCatalogHasSnapshot: false,
-      modelCatalogGateway: {
-        client: null,
+      modelCatalogGateway: createApplicationGatewaySnapshot({
         phase: "connected",
-        offlineStable: false,
-        hello: null,
-        canvasPluginSurfaceUrl: null,
-        assistantAgentId: null,
         sessionKey: "main",
-        lastError: null,
-        lastErrorCode: null,
-      },
+      }),
       modelSelectionPolicy: undefined,
       onModelChange: () => false,
       onDecisionModelChange: () => false,

@@ -5,11 +5,9 @@ import {
   type DecisionProviderContextV2,
 } from "openclaw/plugin-sdk/decisions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import plugin from "./index.js";
+import { registerLevantoTestProvider } from "./registration.test-support.js";
 
 const { lookup } = vi.hoisted(() => ({ lookup: vi.fn<LookupFn>() }));
 vi.mock("node:dns/promises", async (importOriginal) => ({
@@ -49,18 +47,7 @@ const answer = {
 };
 function fixture(fetchFn: typeof fetch, overrides: Partial<DecisionProviderContextV2> = {}) {
   vi.stubGlobal("fetch", fetchFn);
-  const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
-  const api = createTestPluginApi({ id: "levanto", registerDecisionProvider });
-  api.runtime.media = {
-    getImageMetadata: vi.fn(async () => ({ width: 1, height: 1 })),
-    loadWebMedia: vi.fn(),
-    detectMime: vi.fn(),
-    mediaKindFromMime: vi.fn(),
-    isVoiceCompatibleAudio: vi.fn(),
-    resizeToJpeg: vi.fn(),
-  };
-  plugin.register(api);
-  const provider = registerDecisionProvider.mock.calls[0]?.[0];
+  const provider = registerLevantoTestProvider(vi.fn(async () => ({ width: 1, height: 1 })));
   assert(provider?.contractVersion === 2);
   const context: DecisionProviderContextV2 = {
     model: {

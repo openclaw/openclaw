@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveQaArtifactPath } from "./cli-paths.js";
 import { buildQaOccurrenceEvidenceSummary, type QaEvidenceOccurrence } from "./evidence-summary.js";
+import { makeQaSuiteTestLaunch } from "./suite-test-helpers.js";
 import {
   buildScriptProducerEvidence,
   makeTestFileScenario,
@@ -38,14 +39,7 @@ describe("script evidence reader", () => {
       retryOf: null,
       terminalStatus: "pass",
       assertions: null,
-      launch: {
-        source: { ref: null, integrity: null },
-        runtime: { id: null, version: null },
-        package: null,
-        protocol: null,
-        accountRef: null,
-        proofClass: null,
-      },
+      launch: makeQaSuiteTestLaunch(),
       receipts: [],
     };
     occurrence.receipts.push({

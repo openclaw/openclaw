@@ -11,11 +11,11 @@ import {
   transferCoreTtsToolResultProvenance,
 } from "../../tools/tts-tool-result-provenance.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
-import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { buildEmbeddedRunPayloads } from "./payloads.js";
 import {
   assistantMessage,
   attemptResult,
+  createTerminalPreparationInput,
   prepareAttempt,
 } from "./terminal-preparation.test-support.js";
 const payloadMocks = vi.hoisted(() => ({
@@ -33,10 +33,6 @@ describe("prepareEmbeddedRunTerminal", () => {
         assistantTranscriptOwned: false,
         assistantTranscriptIdempotencyKey: "saved-partial",
       }),
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
     });
     expect(prepared.agentMeta.terminalReceipt?.assistantTranscriptIdempotencyKey).toBe(
       "saved-partial",
@@ -131,10 +127,6 @@ describe("prepareEmbeddedRunTerminal", () => {
       attempt,
       admittedRunContext,
       sourceReplyDeliveryMode: "message_tool_only",
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
     });
     const markedMedia = (prepared.payloadsWithToolMedia ?? []).filter(
       (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
@@ -183,10 +175,6 @@ describe("prepareEmbeddedRunTerminal", () => {
           currentAttemptAssistant: undefined,
           currentAttemptCompletedAssistant: undefined,
         }),
-        terminalState: {
-          outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-          signalOwnedInterruption: false,
-        },
       });
 
       expect(prepared.finalAssistantVisibleText).toBe(expected ?? "");
@@ -247,10 +235,6 @@ describe("prepareEmbeddedRunTerminal", () => {
         currentAttemptCompletedAssistant: emptyFinal,
       }),
       currentAttemptCompletedAssistant: emptyFinal,
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
     });
 
     expect(prepared.finalAssistantRawText).toBeUndefined();
@@ -273,10 +257,6 @@ describe("prepareEmbeddedRunTerminal", () => {
         currentAttemptCompletedAssistant: toolTurn,
       }),
       currentAttemptCompletedAssistant: toolTurn,
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
     });
 
     expect(prepared.finalAssistantMessageRawText).toBe("");
@@ -302,10 +282,6 @@ describe("prepareEmbeddedRunTerminal", () => {
         currentAttemptCompletedAssistant: toolTurn,
       }),
       currentAttemptCompletedAssistant: toolTurn,
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
     });
 
     expect(prepared.finalAssistantMessageRawText).toBe("Here is the partial answer");
@@ -324,10 +300,6 @@ describe("prepareEmbeddedRunTerminal", () => {
         currentAttemptCompletedAssistant: final,
       }),
       currentAttemptCompletedAssistant: final,
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
     });
 
     expect(prepared.finalAssistantRawText).toBe("Done");
@@ -339,39 +311,28 @@ describe("prepareEmbeddedRunTerminal", () => {
     async (stopReason) => {
       const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
       const assistant = assistantMessage(stopReason);
-      const prepared = prepareEmbeddedRunTerminal({
-        runParams: {
+      const prepared = prepareEmbeddedRunTerminal(
+        createTerminalPreparationInput({
           admittedRunContext: createTestAdmittedRunContext("run-1"),
-          sessionId: "session-1",
-          runId: "run-1",
-          workspaceDir: "/tmp/openclaw-test",
-          prompt: "hi",
-          trigger: "user",
-          timeoutMs: 60_000,
-        },
-        attempt: attemptResult({
-          lastAssistant: assistant,
-          currentAttemptAssistant: assistant,
+          runParams: {
+            sessionId: "session-1",
+            runId: "run-1",
+          },
+          attempt: attemptResult({
+            lastAssistant: assistant,
+            currentAttemptAssistant: assistant,
+            currentAttemptCompletedAssistant: assistant,
+          }),
           currentAttemptCompletedAssistant: assistant,
+          terminalState: {
+            outcome:
+              stopReason === "aborted"
+                ? { reason: "aborted", status: "error", stopReason }
+                : { reason: "failed", status: "error", stopReason, error: "provider failed" },
+            signalOwnedInterruption: false,
+          },
         }),
-        currentAttemptCompletedAssistant: assistant,
-        provider: "openai",
-        model: "gpt-5.4",
-        activeErrorContext: { provider: "openai", model: "gpt-5.4" },
-        authProfileStore: { version: 1, profiles: {} },
-        sessionIdUsed: "session-1",
-        outerContextTokenMeta: {},
-        usageAccumulator: createUsageAccumulator(),
-        contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-        resolvedToolResultFormat: "markdown",
-        terminalState: {
-          outcome:
-            stopReason === "aborted"
-              ? { reason: "aborted", status: "error", stopReason }
-              : { reason: "failed", status: "error", stopReason, error: "provider failed" },
-          signalOwnedInterruption: false,
-        },
-      });
+      );
 
       expect(prepared.finalAssistantVisibleText).toBe("");
       expect(prepared.finalAssistantRawText).toBeUndefined();
@@ -400,39 +361,25 @@ describe("prepareEmbeddedRunTerminal", () => {
         },
       };
       const completedAssistant = completed ? currentAssistant : undefined;
-      const prepared = prepareEmbeddedRunTerminal({
-        runParams: {
+      const prepared = prepareEmbeddedRunTerminal(
+        createTerminalPreparationInput({
           admittedRunContext: createTestAdmittedRunContext("run-current"),
-          sessionId: "session-current",
-          runId: "run-current",
-          workspaceDir: "/tmp/openclaw-test",
-          prompt: "hi",
-          trigger: "user",
-          timeoutMs: 60_000,
-        },
-        attempt: attemptResult({
-          assistantTexts: ["Analysis...", finalText],
-          toolMetas: [{ toolName: "update_plan" }],
-          lastAssistant: staleAssistant,
-          currentAttemptAssistant: currentAssistant,
+          runParams: {
+            sessionId: "session-current",
+            runId: "run-current",
+          },
+          attempt: attemptResult({
+            assistantTexts: ["Analysis...", finalText],
+            toolMetas: [{ toolName: "update_plan" }],
+            lastAssistant: staleAssistant,
+            currentAttemptAssistant: currentAssistant,
+            currentAttemptCompletedAssistant: completedAssistant,
+            runtimeModelSelection: nativeSelection,
+          }),
           currentAttemptCompletedAssistant: completedAssistant,
-          runtimeModelSelection: nativeSelection,
+          sessionIdUsed: "session-current",
         }),
-        currentAttemptCompletedAssistant: completedAssistant,
-        provider: "openai",
-        model: "gpt-5.4",
-        activeErrorContext: { provider: "openai", model: "gpt-5.4" },
-        authProfileStore: { version: 1, profiles: {} },
-        sessionIdUsed: "session-current",
-        outerContextTokenMeta: {},
-        usageAccumulator: createUsageAccumulator(),
-        contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-        resolvedToolResultFormat: "markdown",
-        terminalState: {
-          outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-          signalOwnedInterruption: false,
-        },
-      });
+      );
 
       expect(prepared.finalAssistantVisibleText).toBe(finalText);
       expect(prepared.finalAssistantRawText).toBe(finalText);
@@ -479,37 +426,24 @@ describe("prepareEmbeddedRunTerminal", () => {
       total: 1_124_767,
     };
     const usageAccumulator = Object.assign(createUsageAccumulator(), aggregate);
-    const prepared = prepareEmbeddedRunTerminal({
-      runParams: {
+    const prepared = prepareEmbeddedRunTerminal(
+      createTerminalPreparationInput({
         admittedRunContext: createTestAdmittedRunContext("run-cli-usage"),
-        sessionId: "session-cli-usage",
-        runId: "run-cli-usage",
-        workspaceDir: "/tmp/openclaw-test",
-        prompt: "hi",
-        trigger: "user",
-        timeoutMs: 60_000,
-      },
-      attempt: attemptResult({
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
+        runParams: {
+          sessionId: "session-cli-usage",
+          runId: "run-cli-usage",
+        },
+        attempt: attemptResult({
+          lastAssistant: assistant,
+          currentAttemptAssistant: assistant,
+          currentAttemptCompletedAssistant: assistant,
+        }),
         currentAttemptCompletedAssistant: assistant,
+        sessionIdUsed: "session-cli-usage",
+        usageAccumulator,
+        lastRunPromptUsage: { input: 42_000, output: 1_000, total: 43_000 },
       }),
-      currentAttemptCompletedAssistant: assistant,
-      provider: "openai",
-      model: "gpt-5.4",
-      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
-      authProfileStore: { version: 1, profiles: {} },
-      sessionIdUsed: "session-cli-usage",
-      outerContextTokenMeta: {},
-      usageAccumulator,
-      lastRunPromptUsage: { input: 42_000, output: 1_000, total: 43_000 },
-      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-      resolvedToolResultFormat: "markdown",
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
-    });
+    );
 
     expect(prepared.agentMeta.usage).toEqual(aggregate);
     expect(prepared.agentMeta.lastCallUsage).toEqual({
@@ -521,43 +455,29 @@ describe("prepareEmbeddedRunTerminal", () => {
   it("projects a Code Mode cron tool failure into terminal metadata", async () => {
     const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
     const assistant = assistantMessage("stop");
-    const prepared = prepareEmbeddedRunTerminal({
-      runParams: {
+    const prepared = prepareEmbeddedRunTerminal(
+      createTerminalPreparationInput({
         admittedRunContext: createTestAdmittedRunContext("run-1"),
-        sessionId: "session-1",
-        runId: "run-1",
-        workspaceDir: "/tmp/openclaw-test",
-        prompt: "hi",
-        trigger: "cron",
-        timeoutMs: 60_000,
-      },
-      attempt: attemptResult({
-        codeModeEngaged: true,
-        lastToolError: {
-          toolName: "exec",
-          errorCode: "invalid_input",
-          error:
-            "Unknown tool id: MCP.notes.read. Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name.",
+        runParams: {
+          sessionId: "session-1",
+          runId: "run-1",
+          trigger: "cron",
         },
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
+        attempt: attemptResult({
+          codeModeEngaged: true,
+          lastToolError: {
+            toolName: "exec",
+            errorCode: "invalid_input",
+            error:
+              "Unknown tool id: MCP.notes.read. Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name.",
+          },
+          lastAssistant: assistant,
+          currentAttemptAssistant: assistant,
+          currentAttemptCompletedAssistant: assistant,
+        }),
         currentAttemptCompletedAssistant: assistant,
       }),
-      currentAttemptCompletedAssistant: assistant,
-      provider: "openai",
-      model: "gpt-5.4",
-      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
-      authProfileStore: { version: 1, profiles: {} },
-      sessionIdUsed: "session-1",
-      outerContextTokenMeta: {},
-      usageAccumulator: createUsageAccumulator(),
-      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-      resolvedToolResultFormat: "markdown",
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
-    });
+    );
 
     expect(prepared.failureSignal).toBeUndefined();
     expect(prepared.terminalToolFailure).toEqual({
@@ -672,10 +592,6 @@ describe("prepareEmbeddedRunTerminal", () => {
     await prepareAttempt({
       attempt,
       currentAttemptCompletedAssistant: completedAssistant,
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
     });
 
     expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(

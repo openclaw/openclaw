@@ -1,3 +1,5 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { expect, it } from "vitest";
 import {
   PROMETHEUS_FAMILY_RESERVES,
@@ -35,6 +37,11 @@ it("keeps earlier scrape bytes stable across value changes, gauge removal, and r
   );
   expect(updated).toContain(
     'openclaw_run_duration_seconds_sum{a="first",le="replaced",z="雪\\"\\\\\\n"} 2.5\n',
+  );
+  const largeLabel = "雪😀".repeat(1024);
+  store.gauge("openclaw_worker_queue_depth", "Depth.", { label: largeLabel }, 7);
+  expect(store.render().toString()).toContain(
+    `openclaw_worker_queue_depth{label="${largeLabel}"} 7\n`,
   );
   store.clearGauges("openclaw_worker_queue_depth");
   expect(store.render().toString()).not.toContain("openclaw_worker_queue_depth");
@@ -79,11 +86,13 @@ it("bounds retained entries while reserving every family and releasing cleared g
       store.gauge(name, "Synthetic admission pressure.", { index: String(index) }, index);
     }
   }
-  const samples = store
-    .render()
-    .toString()
-    .split("\n")
-    .filter((line) => line.includes('{index="'));
+  const rendered = store.render().toString();
+  expect(rendered).toContain(
+    "# HELP openclaw_prometheus_family_series_dropped_total New-series observations dropped by bounded metric family.\n" +
+      "# TYPE openclaw_prometheus_family_series_dropped_total counter\n" +
+      'openclaw_prometheus_family_series_dropped_total{family="openclaw_chat_history_requests_total"} 1\n',
+  );
+  const samples = rendered.split("\n").filter((line) => line.includes('{index="'));
   expect(samples).toHaveLength(16384);
   for (const name of families) {
     const count = samples.filter((line) => line.startsWith(`${name}{`)).length;
@@ -124,4 +133,56 @@ it("bounds retained entries while reserving every family and releasing cleared g
       .split("\n")
       .filter((line) => line.startsWith(`${late}{`)),
   ).toHaveLength(128);
+});
+
+it("renders exact UTF-8 exposition bytes, including help, all sample kinds, and empty values", () => {
+  const store = createPrometheusMetricStore();
+  const labels = { label: '雪😀"\\\n', empty: "" };
+  store.counter("openclaw_run_completed_total", "Runs 雪\\\n.", labels, 2);
+  store.gauge("openclaw_worker_queue_depth", "Depth.", {}, -1.25);
+  store.histogram("openclaw_run_duration_seconds", "Duration.", labels, 0.5, [1]);
+  const suffix = '{empty="",label="雪😀\\"\\\\\\n"}';
+  const expected = [
+    "# HELP openclaw_run_completed_total Runs 雪\\\\\\n.",
+    "# TYPE openclaw_run_completed_total counter",
+    `openclaw_run_completed_total${suffix} 2`,
+    "# HELP openclaw_worker_queue_depth Depth.",
+    "# TYPE openclaw_worker_queue_depth gauge",
+    "openclaw_worker_queue_depth -1.25",
+    "# HELP openclaw_run_duration_seconds Duration.",
+    "# TYPE openclaw_run_duration_seconds histogram",
+    'openclaw_run_duration_seconds_bucket{empty="",label="雪😀\\"\\\\\\n",le="1"} 1',
+    'openclaw_run_duration_seconds_bucket{empty="",label="雪😀\\"\\\\\\n",le="+Inf"} 1',
+    `openclaw_run_duration_seconds_sum${suffix} 0.5`,
+    `openclaw_run_duration_seconds_count${suffix} 1`,
+    "",
+  ].join("\n");
+  expect(store.render()).toEqual(Buffer.from(expected));
+});
+
+it("does not retain unrelated pool slabs between scrapes while series stay live", async () => {
+  const store = createPrometheusMetricStore();
+  const churn = "x".repeat(Buffer.poolSize / 2 - 8);
+  const markSeries = (index: number) => {
+    // Start beyond the previous pool, which may contain unrelated live buffers.
+    Buffer.from(churn);
+    Buffer.from(churn);
+    Buffer.from(churn);
+    const before = Buffer.from("marker");
+    store.gauge("openclaw_worker_queue_depth", "Depth.", { index: String(index) }, index);
+    store.render().buffer.transfer(0);
+    const after = Buffer.from("marker");
+    return [new WeakRef(before.buffer), new WeakRef(after.buffer)];
+  };
+  const references = Array.from({ length: 32 }, (_, index) => markSeries(index)).flat();
+  // Move Node's current pool past all marked slabs before checking store retention.
+  for (let index = 0; index < 3; index++) {
+    Buffer.from(churn);
+  }
+  const control = new WeakRef({});
+  await nextTurn();
+  queryObjects(WeakRef);
+  expect(control.deref()).toBeUndefined();
+  expect(references.filter((reference) => reference.deref() !== undefined)).toHaveLength(0);
+  expect(store.render().toString()).toContain('openclaw_worker_queue_depth{index="31"} 31\n');
 });

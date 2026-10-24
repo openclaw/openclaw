@@ -6,6 +6,7 @@ import { WorkshopReviewNotFoundError } from "../../skills/workshop/review-undo.j
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { handleLearnCommand } from "./commands-learn.js";
+import { buildSessionCommandTestParams } from "./commands-session-params.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const undoWorkshopReview = vi.hoisted(() => vi.fn());
@@ -20,25 +21,29 @@ vi.mock("../../plugins/memory-state.js", async (importOriginal) => ({
   getMemoryLearnContribution,
 }));
 
-const DEFAULT_TEST_MODELS: NonNullable<OpenClawConfig["models"]> = {
-  providers: {
-    openai: {
-      baseUrl: "https://api.openai.com/v1",
-      models: [
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          reasoning: true,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128_000,
-          maxTokens: 16_384,
-          compat: { supportsTools: true },
-        },
-      ],
+function createLearnModels(supportsTools: boolean): NonNullable<OpenClawConfig["models"]> {
+  return {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        models: [
+          {
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128_000,
+            maxTokens: 16_384,
+            compat: { supportsTools },
+          },
+        ],
+      },
     },
-  },
-};
+  };
+}
+
+const DEFAULT_TEST_MODELS = createLearnModels(true);
 
 function buildLearnParams(
   commandBodyNormalized: string,
@@ -46,6 +51,17 @@ function buildLearnParams(
 ): HandleCommandsParams {
   const loadedConfig = createCanonicalAgentConfigFixture(cfg).config;
   return {
+    ...buildSessionCommandTestParams({
+      commandBodyNormalized,
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      senderId: "tester",
+      channel: INTERNAL_MESSAGE_CHANNEL,
+      channelId: INTERNAL_MESSAGE_CHANNEL,
+      surface: INTERNAL_MESSAGE_CHANNEL,
+      ownerList: [],
+      rawBodyNormalized: commandBodyNormalized,
+    }),
     cfg: { ...loadedConfig, models: loadedConfig.models ?? DEFAULT_TEST_MODELS },
     ctx: {
       Provider: INTERNAL_MESSAGE_CHANNEL,
@@ -58,30 +74,9 @@ function buildLearnParams(
       BodyForAgent: commandBodyNormalized,
       BodyStripped: commandBodyNormalized,
     },
-    command: {
-      commandBodyNormalized,
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      senderId: "tester",
-      channel: INTERNAL_MESSAGE_CHANNEL,
-      channelId: INTERNAL_MESSAGE_CHANNEL,
-      surface: INTERNAL_MESSAGE_CHANNEL,
-      ownerList: [],
-      rawBodyNormalized: commandBodyNormalized,
-    },
     directives: {},
-    elevated: { enabled: true, allowed: true, failures: [] },
-    agentId: "main",
     sessionKey: "agent:main:webchat:test",
-    workspaceDir: "/tmp",
-    provider: "openai",
     model: "gpt-5.5",
-    contextTokens: 0,
-    defaultGroupActivation: () => "mention",
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel: async () => undefined,
-    isGroup: false,
   } as unknown as HandleCommandsParams;
 }
 
@@ -171,25 +166,7 @@ describe("learn command", () => {
 
   it("replies without continuing when the selected model disables tools", async () => {
     const params = buildLearnParams("/learn", {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            models: [
-              {
-                id: "gpt-5.5",
-                name: "GPT-5.5",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128_000,
-                maxTokens: 16_384,
-                compat: { supportsTools: false },
-              },
-            ],
-          },
-        },
-      },
+      models: createLearnModels(false),
     });
 
     const result = await handleLearnCommand(params, true);

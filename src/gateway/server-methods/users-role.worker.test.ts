@@ -15,6 +15,7 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
 import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
+import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import {
   createDispatchTestHarness,
@@ -80,13 +81,7 @@ function profileClient(
 ): GatewayWsClient {
   return {
     ...createOperatorWsClient({ connId, socket: { close } }),
-    authenticatedUserProfile: {
-      profileId,
-      displayName: null,
-      avatarRevision: "1",
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: dispatchProfile(profileId),
   };
 }
 

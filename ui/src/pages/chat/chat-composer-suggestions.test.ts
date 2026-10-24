@@ -145,7 +145,7 @@ describe("chat composer suggestion accessibility", () => {
     expectAbsent(container.querySelector(".agent-chat__composer-combobox"), "aria-expanded");
   });
 
-  it("keeps a stable composer name when attachments change its placeholder", async () => {
+  it("keeps a stable composer name and placeholder when attachments change", async () => {
     const harness = createReactiveDraftHarness();
     const textarea = getComposerTextarea(harness.container);
     const initialPlaceholder = textarea.placeholder;
@@ -157,7 +157,7 @@ describe("chat composer suggestion accessibility", () => {
     await waitForSolid(() =>
       expect(harness.container.querySelector(".chat-attachment-thumb")).not.toBeNull(),
     );
-    expect(textarea.placeholder).not.toBe(initialPlaceholder);
+    expect(textarea.placeholder).toBe(initialPlaceholder);
     expectComposerName(textarea);
 
     harness.renderCurrent({ attachments: [] });

@@ -4,6 +4,7 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatUiError } from "../../lib/format-error.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSidebarRegionCallbackMocks } from "../../test-helpers/sidebar-region-callbacks.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { SidebarPanel } from "./chat-pane-embedded-view.tsx";
@@ -146,16 +147,9 @@ describe("chat pane lazy sidebar failures", () => {
           renderSidebarRegion({
             presentationId: "sidebar-layout-fixture",
             availableWidth: 1_400,
-            callbacks: {
-              activatePanel: vi.fn(),
-              togglePanelExpanded: vi.fn(),
-              setDock: vi.fn(),
+            callbacks: createSidebarRegionCallbackMocks({
               closeSlot: (slot) => setLayout((current) => closeSlot(current, slot)),
-              openSlot: vi.fn(),
-              reorderPanel: vi.fn(),
-              resizePanel: vi.fn(),
-              setOpen: vi.fn(),
-            },
+            }),
             layout: layout(),
             narrow: false,
             panelDefinitions: sidebarPanelDefinitions().map((definition) =>

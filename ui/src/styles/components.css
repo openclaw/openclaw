@@ -18,49 +18,10 @@
   font-size: 14px;
 }
 
-.connect-splash--skeleton,
 .loading-skeleton {
-  /* Several palettes share bg-muted and bg-hover, hiding the default sweep.
-     A translucent text tint stays visible in both light and dark themes. */
+  /* Generic lazy views retain their shimmer; the critical connection frame is static. */
   --skeleton-highlight: color-mix(in srgb, var(--text) 18%, transparent);
   --skeleton-duration: 2s;
-}
-
-.connect-splash--skeleton {
-  position: relative;
-  align-items: stretch;
-}
-
-.connect-splash__layout {
-  display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-}
-
-.connect-splash__sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  padding: 28px 24px;
-  border-right: 1px solid var(--border);
-  background: var(--bg);
-}
-
-.connect-splash__new-session {
-  height: 40px;
-  margin: 16px 0;
-}
-
-.connect-splash--skeleton .connect-splash__status {
-  position: absolute;
-  inset: auto 24px 12px;
-  margin: 0;
-  text-align: center;
-}
-
-.loading-skeleton {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -121,14 +82,6 @@
 }
 
 @media (max-width: 768px) {
-  .connect-splash__layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .connect-splash__sidebar {
-    display: none;
-  }
-
   .loading-skeleton {
     gap: 24px;
     padding: 20px 20px 40px;
