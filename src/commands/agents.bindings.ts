@@ -11,6 +11,7 @@ import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginContributionIds } from "../plugins/plugin-registry.js";
+import { normalizeRouteBindingChannelId } from "../routing/binding-scope.js";
 import { normalizeAccountId, normalizeAgentId } from "../routing/session-key.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
@@ -23,7 +24,7 @@ function bindingMatchKey(match: AgentRouteBinding["match"]) {
 function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {
   const roles = Array.isArray(match.roles) ? normalizeSortedUniqueStringEntries(match.roles) : [];
   return JSON.stringify([
-    match.channel,
+    normalizeRouteBindingChannelId(match.channel) ?? "",
     match.peer?.kind ?? "",
     match.peer?.id ?? "",
     match.guildId ?? "",
