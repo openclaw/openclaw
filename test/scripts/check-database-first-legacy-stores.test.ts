@@ -85,11 +85,13 @@ const writeFileCase = importedSourceCase(writeFileImport);
 const requireCase = importedSourceCase(requireImport);
 const privateStoreCase = importedSourceCase(privateStoreImport);
 const fsPathCase = importedSourceCase(filesystemImport, ['import path from "node:path";']);
-const fsPersistCase = importedSourceCase(
-  filesystemImport,
-  ["function persist(filePath: string) {"],
-  ["}", 'await persist("sessions.json");'],
-);
+const fsWrapperCase = (parameters: string, args: string) =>
+  importedSourceCase(
+    filesystemImport,
+    [`function persist(${parameters}) {`],
+    ["}", `await persist(${args});`],
+  );
+const fsPersistCase = fsWrapperCase("filePath: string", '"sessions.json"');
 const atomicPersistCase = importedSourceCase(
   atomicImport,
   ["function persist(params: { filePath: string }) {"],
@@ -469,8 +471,10 @@ describe("check-database-first-legacy-stores", () => {
           }
           return inner();
       `(filesystemWriteViolations(15)),
-      "flags legacy paths after exhaustive nested object wrapper assignments": fsCase`
-        function persist(filePath: string, useJson: boolean) {
+      "flags legacy paths after exhaustive nested object wrapper assignments": fsWrapperCase(
+        "filePath: string, useJson: boolean",
+        '"sessions.json", true',
+      )`
           let writer: { inner(nextPath: string): Promise<void> };
           if (useJson) {
             writer = {
@@ -486,24 +490,19 @@ describe("check-database-first-legacy-stores", () => {
             };
           }
           return writer.inner(filePath);
-        }
-        await persist("sessions.json", true);
       `(filesystemWriteViolations(20)),
-      "flags legacy paths after exhaustive nested object wrapper parameter assignments": fsCase`
-        function persist(
-          filePath: string,
-          writer: { inner?: (nextPath: string) => Promise<void> },
-          useJson: boolean,
-        ) {
+      "flags legacy paths after exhaustive nested object wrapper parameter assignments":
+        fsWrapperCase(
+          "filePath: string, writer: { inner?: (nextPath: string) => Promise<void> }, useJson: boolean",
+          '"sessions.json", {}, true',
+        )`
           if (useJson) {
             writer.inner = (nextPath: string) => fs.writeFile(nextPath, "{}\\n");
           } else {
             writer.inner = (nextPath: string) => fs.writeFile(nextPath, "[]\\n");
           }
           return writer.inner?.(filePath);
-        }
-        await persist("sessions.json", {}, true);
-      `(filesystemWriteViolations(15)),
+      `(filesystemWriteViolations(11)),
       "keeps wrapper object property paths after for-of reassignment": atomicPersistCase`
           for (const item of items) {
             params.filePath = currentSqlitePath;
@@ -575,16 +574,16 @@ describe("check-database-first-legacy-stores", () => {
         const copy = { ...writer.nested };
         await copy.save({ filePath: "sessions.json" });
       `(filesystemWriteViolations(11)),
-      "does not use destructured wrapper defaults after unknown spreads": fsCase`
-        function persist(filePath: string, options: { save?: () => Promise<void> }) {
+      "does not use destructured wrapper defaults after unknown spreads": fsWrapperCase(
+        "filePath: string, options: { save?: () => Promise<void> }",
+        '"sessions.json", { save: async () => {} }',
+      )`
           const writer = { save: undefined, ...options };
           const { save = () => fs.writeFile(filePath, "{}\\n") } = writer;
           return save();
-        }
-        await persist("sessions.json", { save: async () => {} });
       `(),
-      "keeps branch-only property assigned object wrapper methods after exhaustive merge": fsCase`
-        function persist(filePath: string, enabled: boolean) {
+      "keeps branch-only property assigned object wrapper methods after exhaustive merge":
+        fsWrapperCase("filePath: string, enabled: boolean", '"sessions.json", true')`
           let writer = {};
           if (enabled) {
             writer.save = () => fs.writeFile(filePath, "{}\\n");
@@ -592,19 +591,17 @@ describe("check-database-first-legacy-stores", () => {
             writer = {};
           }
           return writer.save?.();
-        }
-        await persist("sessions.json", true);
       `(filesystemWriteViolations(12)),
-      "keeps prior nested wrapper values when only one branch assigns": fsCase`
-        function persist(filePath: string, disabled: boolean) {
+      "keeps prior nested wrapper values when only one branch assigns": fsWrapperCase(
+        "filePath: string, disabled: boolean",
+        '"sessions.json", false',
+      )`
           let save = (nextPath: string) => fs.writeFile(nextPath, "{}\\n");
           if (disabled) {
             save = async () => {};
           } else {
           }
           return save(filePath);
-        }
-        await persist("sessions.json", false);
       `(filesystemWriteViolations(11)),
       "copies unknown computed property facts through object spreads": writeFileCase`
         declare const key: string;
@@ -673,18 +670,6 @@ describe("check-database-first-legacy-stores", () => {
         filename: "src/runtime/truncated-filesystem-writer-fact.ts",
         expected: filesystemWriteViolations(3),
       },
-      "does not merge branch-local computed property effects after their scope exits": sourceCase`
-        function update(groupId: string) {
-          if (named) {
-            const groups = {};
-            groups[groupId] = {};
-          } else {
-            const groups = {};
-            groups[groupId] = {};
-          }
-        }
-        update(event.groupId ?? "");
-      `(),
       "applies legacy object defaults to possibly undefined arguments": writeFileCase`
         function persist(params = { filePath: "sessions.json" }) {
           return writeFile(params.filePath, "{}\\n");

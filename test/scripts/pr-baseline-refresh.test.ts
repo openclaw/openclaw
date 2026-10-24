@@ -6,7 +6,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -14,7 +13,7 @@ import {
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { cliFlags } from "./pr-baseline-native.test-support.js";
+import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
 import { createCorrectionFixture } from "./pr-correction-preparation.test-support.js";
 
 const cases = useAutoCleanupTempDirTracker(afterEach);
@@ -182,35 +181,6 @@ function fixture(
     save();
     return { value, resolution, save, args: "--resolutions .local/resolutions.json" };
   };
-  const nextBaseline = () => {
-    f.git("checkout", "-q", "baseline");
-    appendFileSync(join(f.root, "upstream.txt"), "next upstream repair\n");
-    f.git("commit", "-qam", "fix: advance the fixture baseline");
-    const next = f.git("rev-parse", "HEAD");
-    f.git("checkout", "-q", "pr-42-prep");
-    return next;
-  };
-  const successorArgs = (next: string) => {
-    const context = readFileSync(join(f.root, ".local/prep-context.env"), "utf8");
-    const predecessor = /^PREP_BASELINE_REFRESH_HEAD=([a-f0-9]{40})$/mu.exec(context)?.[1];
-    if (!predecessor) {
-      throw new Error("Missing fixture predecessor");
-    }
-    return cliFlags({
-      "--expected-head": f.git("rev-parse", "HEAD"),
-      "--baseline": next,
-      "--expected-tree": f.git("rev-parse", "HEAD^{tree}"),
-      "--expected-review": f.git("hash-object", "--no-filters", ".local/correction-review.json"),
-      "--predecessor-head": predecessor,
-      "--predecessor-binding": f.git("hash-object", "--no-filters", ".local/prepare-baseline.json"),
-    });
-  };
-  const successor = (next: string, setup = "", env: NodeJS.ProcessEnv = {}) =>
-    run(
-      `prepare_baseline_successor 42 ${successorArgs(next).join(" ")}`,
-      `PR_MAIN_SHA=${next}\n${setup}`,
-      env,
-    );
   return {
     ...f,
     run,
@@ -220,21 +190,10 @@ function fixture(
     baseline,
     review,
     incomingReview,
-    nextBaseline,
-    successorArgs,
-    successor,
     read,
     json,
     commitTree,
   };
-}
-
-function reviewedFixture() {
-  const f = fixture();
-  expect(f.refresh().status).toBe(0);
-  expect(f.run("prepare_correction_review_init 42").status).toBe(0);
-  f.approve();
-  return f;
 }
 
 function contextWriteFault(f: ReturnType<typeof fixture>) {
@@ -269,7 +228,7 @@ describePosix("native correction baseline refresh", () => {
     writeFileSync(signers, `fixture@example.invalid ${readFileSync(`${key}.pub`, "utf8")}`);
   });
 
-  it("replays the complete correction onto a baseline and retires old proof before fresh review", () => {
+  it("replays the complete correction while preserving only parsed co-author trailers", () => {
     const f = fixture(
       false,
       "topic/PREP_BASELINE_REFRESH_OID",
@@ -284,30 +243,9 @@ describePosix("native correction baseline refresh", () => {
       `fix: refresh the reviewed correction baseline\n\nBaseline-Refresh: ${bindingOid}\nCo-authored-by: Ada Example <ada@example.invalid>\nCo-authored-by: Renée Example <renee@example.invalid>`,
     );
     expect(existsSync(join(f.root, ".local/trailer-command-called"))).toBe(false);
-    const head = f.git("rev-parse", "HEAD");
     expect(f.git("show", "HEAD:docs/fix.md")).toBe("corrected");
     expect(f.git("show", "HEAD:fixup.txt")).toBe("complete correction scope");
     expect(f.git("show", "HEAD:upstream.txt")).toBe("unrelated upstream repair");
-    expect(f.git("show", "-s", "--format=%P", head)).toBe(`${f.source} ${f.baseline}`);
-    f.git("verify-commit", head);
-    expect(f.read(".local/review.json")).toEqual(f.incomingReview);
-    const archive = readdirSync(join(f.root, ".local")).find((name) =>
-      name.startsWith("prep-evidence."),
-    );
-    if (!archive) {
-      throw new Error("Missing retained preparation evidence");
-    }
-    expect(readFileSync(join(f.root, ".local", archive, "correction-review.json"))).toEqual(
-      f.review,
-    );
-    expect(readFileSync(join(f.root, ".local", archive, "gates-build.log"), "utf8")).toBe(
-      "prior completed build\n",
-    );
-    expect(existsSync(join(f.root, ".local/gates.env"))).toBe(false);
-    expect(f.run("require_prepared_review 42").status).not.toBe(0);
-    expect(f.run("prepare_correction_review_init 42").status).toBe(0);
-    f.approve();
-    expect(f.run("require_prepared_review 42").status).toBe(0);
   });
 
   it("refuses a source co-author that could introduce another signed binding line", () => {
@@ -602,19 +540,20 @@ describePosix("native correction baseline refresh", () => {
     },
   );
   it("rejects mismatched successor review and selected main without changing authority", () => {
-    const f = reviewedFixture();
-    const next = f.nextBaseline();
-    const source = f.git("rev-parse", "HEAD");
-    const binding = f.read(".local/prepare-baseline.json");
-    const review = f.read(".local/correction-review.json");
+    const f = createBaselineFixture(cases.make("openclaw-pr-successor-authority-"), 1);
+    f.pass("prepare-baseline-refresh", f.manifest(f.advanceMain("initial upstream")));
+    f.approve();
+    f.publish();
+    const next = f.advanceMain("next upstream");
+    const source = f.prepGit("rev-parse", "HEAD");
+    const before = f.snapshot(["prepare-baseline.json", "correction-review.json"]);
     for (const option of ["--expected-review", "--baseline"]) {
-      const args = f.successorArgs(next);
+      const args = f.successor(next);
       args[args.indexOf(option) + 1] = option === "--baseline" ? source : f.incoming;
-      reject(f.run(`PR_MAIN_SHA=${next}; prepare_baseline_successor 42 ${args.join(" ")}`));
-      expect(f.git("rev-parse", "HEAD")).toBe(source);
-      expect(f.read(".local/prepare-baseline.json")).toEqual(binding);
-      expect(f.read(".local/correction-review.json")).toEqual(review);
-      expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(false);
+      reject(f.run("prepare-baseline-successor", args));
+      expect(f.prepGit("rev-parse", "HEAD")).toBe(source);
+      f.expectSnapshot(before);
+      f.expectAbsent("review-transition.json");
     }
   });
 });

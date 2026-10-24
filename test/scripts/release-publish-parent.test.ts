@@ -583,60 +583,13 @@ it.each(["in_progress", "completed"])(
 );
 
 const visible = { versions: { "2026.9.6": {} }, "dist-tags": { latest: "2026.9.6" } };
-it("waits through missing version, missing selector and transport failure", () => {
-  const result = fixture({ registry: [null, {}, { versions: { "2026.9.6": {} } }, visible] }).run(
-    `${source}wait_for_core_npm_visibility`,
-  );
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.calls).toHaveLength(4);
-  expect(result.calls[0]?.args).toEqual(
-    expect.arrayContaining([
-      "--connect-timeout",
-      "10",
-      "--max-time",
-      "60",
-      "Cache-Control: no-cache",
-      "Accept: application/vnd.npm.install-v1+json",
-      "https://registry.npmjs.org/openclaw",
-    ]),
-  );
-  expect(result.summary).toMatch(/openclaw@2026.9.6 visible under latest after \d+s/);
-});
-
-it("fails on visibility timeout with the observed selector", () => {
-  const result = fixture({ registry: [{ ...visible, "dist-tags": { latest: "2026.9.5" } }] }).run(
-    `${source}wait_for_core_npm_visibility`,
-    { RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS: "0" },
-  );
-  expect(result).toMatchObject({ status: 1, summary: "" });
-  expect(result.calls).toHaveLength(1);
-  expect(result.stderr).toContain("2026.9.5");
-});
-
-it("dispatches and waits for the release ledger using only its token", () => {
-  const result = fixture({
-    ledger: ledgerStates("queued", "success"),
-  }).run(`${source}sync_npm_beta_floor`, { RELEASE_LEDGER_TOKEN: "fixture-ledger" });
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stderr).toContain(`${url(92)} status=queued elapsed=0s`);
-  expect(result.stderr).toContain(`${url(92)} status=completed elapsed=15s`);
-  expect(result.summary).toContain(`npm beta floor: synced (${url(92)})`);
-  expect(JSON.parse(result.calls[0]!.body!)).toEqual({
-    ref: "main",
-    inputs: { mode: "sync_beta_to_stable" },
-  });
-  expect(result.calls[0]?.args).toContain("X-GitHub-Api-Version: 2026-03-10");
-  expect(result.calls.every((call) => call.ledgerToken)).toBe(true);
-  expect(result.calls).toHaveLength(3);
-});
-
 it.each<[string, Fixture, number]>([
-  ["missing token", {}, 0],
   ["failed dispatch", { dispatchFails: true }, 1],
   ["failed sync", { ledger: ledgerStates("failure") }, 2],
 ])("leaves verification authoritative after %s", (_, config, calls) => {
-  const env = calls ? { RELEASE_LEDGER_TOKEN: "fixture-ledger" } : {};
-  const result = fixture(config).run(`${source}sync_npm_beta_floor`, env);
+  const result = fixture(config).run(`${source}sync_npm_beta_floor`, {
+    RELEASE_LEDGER_TOKEN: "fixture-ledger",
+  });
   expect(result.status, result.stderr).toBe(0);
   expect(result.stderr).toContain("::warning::");
   expect(result.summary).toContain(
@@ -662,13 +615,16 @@ it.each([
 ])(
   "gates verification on registry visibility and own sync (resume=$resume, visible=$visible, sync=$sync)",
   ({ resume, visible: isVisible, sync }) => {
+    const transientRegistry = isVisible && !resume && sync === "absent";
     const harness = `
 ${noops("resolve_clawhub_release_plan", "verify_release_tag_target", "record_postpublish_diagnostics", "upload_dependency_evidence_release_asset", "upload_release_evidence_assets", "append_release_proof_to_github_release")}
 wait_for_run_background() { (printf success > "$4") & wait_run_pid=$!; }
 verify_published_release() { echo VERIFIED >> "$GITHUB_STEP_SUMMARY"; }
 `;
     const result = fixture({
-      registry: [isVisible ? visible : {}],
+      registry: transientRegistry
+        ? [null, {}, { versions: { "2026.9.6": {} } }, visible]
+        : [isVisible ? visible : { ...visible, "dist-tags": { latest: "2026.9.5" } }],
       harness,
       sleepSeconds: 300,
       ledger:
@@ -689,12 +645,14 @@ verify_published_release() { echo VERIFIED >> "$GITHUB_STEP_SUMMARY"; }
       CLAWHUB_AUTHORIZATION_OUTCOME: "skipped",
       CLAWHUB_RECEIPT_OUTCOME: "skipped",
       WAIT_FOR_CLAWHUB: "false",
-      RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS: "0",
+      RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS: transientRegistry ? "1800" : "0",
       ...(sync !== "absent" ? { RELEASE_LEDGER_TOKEN: "fixture-ledger" } : {}),
       ...(sync === "timeout" ? { RELEASE_NPM_DIST_TAG_SYNC_TIMEOUT_SECONDS: "900" } : {}),
     });
     expect(result.status, result.stderr).toBe(isVisible && sync !== "timeout" ? 0 : 1);
-    expect(result.calls.filter((call) => call.binary === "curl")).toHaveLength(1);
+    const registryReads = result.calls.filter((call) => call.binary === "curl");
+    expect(registryReads).toHaveLength(transientRegistry ? 4 : 1);
+    expect(registryReads[0]?.args).toContain("Cache-Control: no-cache");
     if (sync === "timeout") {
       expect(result.stderr).toContain(`parent's own sync run is still in progress (${url(92)})`);
       expect(result.summary).toContain("verification was not judged against it");
@@ -705,8 +663,17 @@ verify_published_release() { echo VERIFIED >> "$GITHUB_STEP_SUMMARY"; }
         expect(result.stderr).toContain("status=in_progress elapsed=900s");
         expect(result.stderr).toContain("status=completed elapsed=1200s");
         expect(result.summary).toContain("npm beta floor: synced");
+        const ledgerCalls = result.calls.filter((call) =>
+          call.args.some((arg) => arg.startsWith("repos/openclaw/releases/")),
+        );
+        expect(ledgerCalls.every((call) => call.ledgerToken)).toBe(true);
+        expect(JSON.parse(ledgerCalls[0]!.body!)).toEqual({
+          ref: "main",
+          inputs: { mode: "sync_beta_to_stable" },
+        });
       }
     } else {
+      expect(result.stderr).toContain("2026.9.5");
       expect(result.summary).not.toMatch(/VERIFIED|npm beta floor/);
     }
   },

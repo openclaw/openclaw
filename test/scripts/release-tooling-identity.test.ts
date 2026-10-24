@@ -510,44 +510,41 @@ function qualificationFixture({
     toolingSha: SHA,
   };
   function reader(artifactOverrides = {}, runOverrides = {}) {
-    const job = {
-      id: 999,
-      name: producer.jobName,
-      run_id: Number(RUN_ID),
+    const run = parentRun({
+      id: Number(RUN_ID),
       run_attempt: 1,
-      head_sha: SHA,
+      path: workflowPath,
+      head_branch: producerRef,
       status: "completed",
       conclusion: "success",
-    };
-    return (args: string[]) => {
-      const endpoint = args[1];
-      if (!endpoint) {
-        throw new Error("Expected GitHub API endpoint.");
-      }
-      if (endpoint.endsWith("/artifacts/555")) {
-        return JSON.stringify({
-          ...artifactMetadata(qualified.artifact),
-          ...artifactOverrides,
-        });
-      }
-      if (endpoint.includes("/jobs?")) {
-        return JSON.stringify({ total_count: 1, jobs: [job] });
-      }
-      if (endpoint.endsWith("/attempts/1") || endpoint.endsWith(`/actions/runs/${RUN_ID}`)) {
-        return JSON.stringify(
-          parentRun({
-            id: Number(RUN_ID),
+      head_repository: { full_name: producer.repository },
+      ...runOverrides,
+    });
+    const responses: Record<string, unknown> = {
+      [`actions/runs/${RUN_ID}`]: run,
+      [`actions/runs/${RUN_ID}/attempts/1`]: run,
+      [`actions/runs/${RUN_ID}/attempts/1/jobs?per_page=100&page=1`]: {
+        total_count: 1,
+        jobs: [
+          {
+            id: 999,
+            name: producer.jobName,
+            run_id: Number(RUN_ID),
             run_attempt: 1,
-            path: workflowPath,
-            head_branch: producerRef,
+            head_sha: SHA,
             status: "completed",
             conclusion: "success",
-            head_repository: { full_name: producer.repository },
-            ...runOverrides,
-          }),
-        );
+          },
+        ],
+      },
+      "actions/artifacts/555": { ...artifactMetadata(qualified.artifact), ...artifactOverrides },
+    };
+    return ([, endpoint]: string[]) => {
+      const route = endpoint?.replace(`repos/${producer.repository}/`, "");
+      if (!route || !Object.hasOwn(responses, route)) {
+        throw new Error(`Unexpected proof request: ${endpoint}`);
       }
-      throw new Error(`Unexpected proof request: ${endpoint}`);
+      return JSON.stringify(responses[route]);
     };
   }
   return {
