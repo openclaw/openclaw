@@ -104,7 +104,17 @@ export function controlUiBootPreloadsPlugin(): Plugin {
               tag: "link",
               attrs: file.endsWith(".css")
                 ? { rel: "preload", as: "style", crossorigin: "", href: `./${file}` }
-                : { rel: "modulepreload", crossorigin: "", href: `./${file}` },
+                : {
+                    rel: "modulepreload",
+                    crossorigin: "",
+                    // Let signing pass Chat content without delaying shared prerequisites.
+                    ...(route === "chat" &&
+                    bundle[file]?.type === "chunk" &&
+                    bundle[file].name.startsWith("control-ui-boot-chat")
+                      ? { fetchpriority: "low" }
+                      : {}),
+                    href: `./${file}`,
+                  },
             }));
           return {
             tag: "template",

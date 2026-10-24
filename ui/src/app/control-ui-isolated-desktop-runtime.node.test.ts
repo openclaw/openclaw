@@ -30,12 +30,15 @@ it("keeps desktop codec detection lazy without adding boot facade requests", asy
   const desktop = local("desktop.js");
   const sidebar = modulePath("../components/app-sidebar.tsx");
   const outbox = modulePath("../lib/chat/outbox-store-projection.ts");
+  const chat = modulePath("../pages/chat/route-loader.ts");
   // Real manifest entry IDs and payloads above the production group's minimum size.
   const sidebarValue = "sidebar-value-".repeat(12_000);
   const outboxValue = "outbox-value-".repeat(12_000);
+  const chatValue = "chat-value-".repeat(50_000);
   const sources: Record<string, string> = {
     [sidebar]: `globalThis.desktopBuildFixture.events.push("sidebar"); export const value = ${JSON.stringify(sidebarValue)};`,
     [outbox]: `globalThis.desktopBuildFixture.events.push("outbox"); export const value = ${JSON.stringify(outboxValue)};`,
+    [chat]: `globalThis.desktopBuildFixture.events.push("chat"); export const value = ${JSON.stringify(chatValue)};`,
   };
   const files = {
     "package.json": '{"type":"module"}',
@@ -43,6 +46,7 @@ it("keeps desktop codec detection lazy without adding boot facade requests", asy
       '<html><head></head><body><script type="module" src="./main.js"></script></body></html>',
     "main.js": `globalThis.desktopBuildFixture.loadSidebar = () => import("fixture:sidebar");
        globalThis.desktopBuildFixture.loadOutbox = () => import("fixture:outbox");
+       globalThis.desktopBuildFixture.loadChat = () => import("fixture:chat");
        globalThis.desktopBuildFixture.loadDesktop = () => import("@novnc/novnc");`,
     "desktop.js": `globalThis.desktopBuildFixture.events.push("desktop");
        globalThis.desktopBuildFixture.entered();
@@ -56,6 +60,7 @@ it("keeps desktop codec detection lazy without adding boot facade requests", asy
     "@novnc/novnc": desktop,
     "fixture:sidebar": sidebar,
     "fixture:outbox": outbox,
+    "fixture:chat": chat,
   };
   const buildFixture = async (isolated: boolean) => {
     const outDir = local(isolated ? "isolated" : "original");
@@ -103,11 +108,33 @@ it("keeps desktop codec detection lazy without adding boot facade requests", asy
     (chunk) => sidebar in chunk.modules && outbox in chunk.modules,
   );
   expect(shared).toBeDefined();
+  const chatChunk = isolated.chunks.find((chunk) => chat in chunk.modules);
+  expect(chatChunk).toBeDefined();
   for (const route of ["chat", "new"] as const) {
     const before = routePreloads(original.html, route);
     const after = routePreloads(isolated.html, route);
-    expect(after).toEqual([shared!.fileName]);
+    expect(after).toEqual(
+      expect.arrayContaining(
+        route === "chat" ? [shared!.fileName, chatChunk!.fileName] : [shared!.fileName],
+      ),
+    );
+    expect(after).toHaveLength(route === "chat" ? 2 : 1);
     expect(before.length).toBeGreaterThan(after.length);
+    const routeHints = new RegExp(
+      `<template data-openclaw-route-preloads="${route}">([\\s\\S]*?)</template>`,
+      "u",
+    ).exec(isolated.html)?.[1];
+    const hints = routeHints?.match(/<link[^>]*>/gu) ?? [];
+    expect(hints.find((hint) => hint.includes(shared!.fileName))).not.toContain(
+      'fetchpriority="low"',
+    );
+    if (route === "chat") {
+      expect(hints.find((hint) => hint.includes(chatChunk!.fileName))).toContain(
+        'fetchpriority="low"',
+      );
+    } else {
+      expect(routeHints).not.toContain('fetchpriority="low"');
+    }
   }
   const desktopChunk = isolated.chunks.find((chunk) => chunk.exports.includes("default"));
   expect(desktopChunk).toBeDefined();
@@ -125,6 +152,7 @@ it("keeps desktop codec detection lazy without adding boot facade requests", asy
     codecReady: codec.promise,
     loadSidebar: notLoaded<{ value: string }>,
     loadOutbox: notLoaded<{ value: string }>,
+    loadChat: notLoaded<{ value: string }>,
     loadDesktop: notLoaded<{ default: { codec: string } }>,
   };
   vi.stubGlobal("desktopBuildFixture", fixture);
@@ -136,6 +164,8 @@ it("keeps desktop codec detection lazy without adding boot facade requests", asy
   expect(fixture.events).toEqual(["sidebar"]);
   await expect(fixture.loadOutbox()).resolves.toMatchObject({ value: outboxValue });
   expect(fixture.events).toEqual(["sidebar", "outbox"]);
+  await expect(fixture.loadChat()).resolves.toMatchObject({ value: chatValue });
+  expect(fixture.events).toEqual(["sidebar", "outbox", "chat"]);
 
   let resolved = false;
   const loadingDesktop = fixture.loadDesktop().then((module) => {
@@ -144,7 +174,7 @@ it("keeps desktop codec detection lazy without adding boot facade requests", asy
   });
   try {
     await Promise.race([entered.promise, loadingDesktop]);
-    expect(fixture.events).toEqual(["sidebar", "outbox", "desktop"]);
+    expect(fixture.events).toEqual(["sidebar", "outbox", "chat", "desktop"]);
     expect(resolved).toBe(false);
   } finally {
     codec.resolve("h264");
