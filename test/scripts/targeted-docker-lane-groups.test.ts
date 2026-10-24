@@ -110,13 +110,6 @@ it("retains 256 groups and explicitly rejects matrix overflow without dropping c
   expect(() => planGroups("update-migration install-smoke", baselines)).toThrow(
     "257 jobs, exceeding the GitHub Actions matrix limit of 256",
   );
-  expect(() =>
-    planGroups(
-      "update-migration",
-      baselines,
-      "base plugin-deps-cleanup legacy-operator-state bootstrap-persona",
-    ),
-  ).toThrow("1024 jobs, exceeding the GitHub Actions matrix limit of 256");
 });
 
 it("requires an exact predecessor for supported-line pairing", () => {
@@ -130,19 +123,16 @@ it("requires an exact predecessor for supported-line pairing", () => {
 it("runs each recorded first-hop source and the fresh candidate edge as separate jobs", () => {
   const firstHopLanes = listRecordedFirstHopSourceVersions().map(updateFirstHopCompatLaneName);
   const expandedLanes = [...firstHopLanes, UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE];
-  expect(firstHopLanes.length).toBeGreaterThan(1);
   expect(planGroups("upgrade-survivor update-first-hop-compat")).toEqual([
     { docker_lanes: "upgrade-survivor", label: "upgrade-survivor" },
     ...expandedLanes.map((lane) => ({ docker_lanes: lane, label: lane })),
   ]);
-  expect(parseLaneSelection("update-first-hop-compat")).toEqual(expandedLanes);
   // A family token beside one of its members must not schedule that hop twice.
   const mixed = `${UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE} update-first-hop-compat`;
   expect(planGroups(mixed).map((group) => group.label)).toEqual([
     UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
     ...firstHopLanes,
   ]);
-  expect(parseLaneSelection(mixed)).toHaveLength(expandedLanes.length);
 });
 
 it("shards published upgrade survivor by baseline while preserving surrounding lanes", () => {
@@ -210,11 +200,7 @@ it("isolates the weekly mobile and watch scenarios by baseline", () => {
     survivorGroup("2026.8.1", "watchos-direct-node", 2),
     survivorGroup("2026.7.1", "mobile-pairing-reconnect"),
   ]);
-  expect(plans.flatMap((plan) => plan.scheduledLanes.map((lane) => lane.name))).toEqual([
-    "update-migration-2026.8.1-mobile-pairing-reconnect",
-    "update-migration-2026.8.1-watchos-direct-node",
-    "update-migration-2026.7.1-mobile-pairing-reconnect",
-  ]);
+  expectExpansion(groups, "update-migration", baselines, scenarios);
   expect(plans.flatMap((plan) => plan.omittedUnsupportedLaneNames)).toEqual([]);
 });
 

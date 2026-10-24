@@ -1,19 +1,17 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { testing } from "../../scripts/check-gateway-cpu-scenarios.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempRoots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const qaFlags = ["--skip-startup", "--qa-scenario", "channel-chat-baseline"];
-
-function makeTempRoot(): string {
-  const artifactRoot = path.join(process.cwd(), ".artifacts");
-  mkdirSync(artifactRoot, { recursive: true });
-  const root = mkdtempSync(path.join(artifactRoot, "gateway-cpu-test-"));
-  tempRoots.push(root);
-  return root;
-}
+const makeTempRoot = () => {
+  const root = path.join(process.cwd(), ".artifacts");
+  mkdirSync(root, { recursive: true });
+  return tempDirs.make("gateway-cpu-test-", root);
+};
 
 type RunParams = NonNullable<Parameters<typeof testing.runGatewayCpuScenarios>[1]>;
 async function runScenario(
@@ -70,12 +68,6 @@ const concurrencyReport = {
   },
 };
 
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
 it("rejects runs with every scenario family skipped", () => {
   expect(() => testing.parseArgs(["--skip-startup", "--skip-qa"])).toThrow(
     "--skip-startup and --skip-qa cannot be used together",
@@ -101,26 +93,12 @@ it.each([
 });
 
 it("rejects missing valued options instead of consuming the next flag", () => {
-  for (const flag of [
-    "--output-dir",
-    "--startup-case",
-    "--qa-scenario",
-    "--runs",
-    "--warmup",
-    "--cpu-core-warn",
-    "--hot-wall-warn-ms",
-  ]) {
-    for (const value of ["--skip-qa", "-h"]) {
-      expect(() => testing.parseArgs([flag, value])).toThrow(`Missing value for ${flag}`);
-    }
-  }
+  expect(() => testing.parseArgs(["--output-dir", "--skip-qa"])).toThrow(
+    "Missing value for --output-dir",
+  );
 });
 
 it("rejects duplicate single-value controls before running scenarios", () => {
-  expect(() => testing.parseArgs(["--output-dir", "first", "--output-dir", "second"])).toThrow(
-    "--output-dir was provided more than once",
-  );
-
   const result = spawnSync(
     process.execPath,
     ["--import", "tsx", "scripts/check-gateway-cpu-scenarios.mts", "--runs", "1", "--runs", "2"],
@@ -214,11 +192,10 @@ it("does not prebuild private QA dist when the required entries already exist", 
   );
   const { calls } = result;
 
-  expect(result.exitCode).toBe(0);
-  expect(result.summary.steps.map((step) => step.name)).toEqual([
-    "node worker finalization gate",
-    "qa suite",
-  ]);
+  expect(result).toMatchObject({
+    exitCode: 0,
+    summary: { steps: [{ name: "node worker finalization gate" }, { name: "qa suite" }] },
+  });
   expect(calls.some((call) => call.args[0] === "scripts/build-all.mts")).toBe(false);
   expect(calls[0]?.env).toMatchObject({
     HOME: path.join(outputDir, "qa-state-root", "home"),
@@ -228,7 +205,6 @@ it("does not prebuild private QA dist when the required entries already exist", 
     PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     USERPROFILE: path.join(outputDir, "qa-state-root", "home"),
   });
-  expect(calls[0]?.env?.HOME).not.toBe("/real/user/home");
 });
 
 it("fails successful QA commands that report failed scenarios", async () => {

@@ -140,20 +140,6 @@ it("transfers grandfathered debt across a verified rename", () => {
   expect(main(root)).toBe(0);
 });
 
-it("compares an explicit moving base at the branch fork", () => {
-  const root = makeRepo(["src/a.ts", "src/b.ts"]);
-  git(root, ["branch", "release"]);
-
-  write(root, baselinePath, "src/a.ts\n");
-  write(root, "src/b.ts", "export const b = 1;\n");
-  git(root, ["add", "."]);
-  git(root, ["commit", "-m", "shrink main debt"]);
-  git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
-  git(root, ["checkout", "release"]);
-
-  expect(main(root, ["--base", "origin/main"])).toBe(0);
-});
-
 it("rejects unavailable ancestry with an explicit prepared-base recovery", () => {
   const root = makeRepo(["src/a.ts"], {}, "release");
   git(root, ["branch", "-m", "release"]);

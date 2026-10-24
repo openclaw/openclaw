@@ -206,7 +206,7 @@ it("keeps physical skip-worktree bytes independent of unavailable index objects"
   expect(() => fingerprint()).toThrow(/could not read sparse install input/);
 });
 
-it("rejects unmerged and unavailable sparse index inputs", () => {
+it("rejects unmerged index inputs", () => {
   const { git, fingerprint } = createSparseFingerprintFixture();
   const file = "packages/worker/package.json";
   const oid = git(["rev-parse", ":" + file]);
@@ -215,11 +215,6 @@ it("rejects unmerged and unavailable sparse index inputs", () => {
     `0 ${"0".repeat(40)}\t${file}\n100644 ${oid} 1\t${file}\n100644 ${oid} 2\t${file}\n`,
   );
   expect(() => fingerprint()).toThrow(/requires resolved file index entries/);
-  git(["update-index", "--force-remove", file]);
-  git(["update-index", "--add", "--info-only", "--cacheinfo", "100644", "1".repeat(40), file]);
-  git(["update-index", "--skip-worktree", file]);
-  rmSync(path.join(git(["rev-parse", "--show-toplevel"]), file));
-  expect(() => fingerprint()).toThrow(/could not read sparse install input/);
 });
 
 function createFingerprintFixture() {

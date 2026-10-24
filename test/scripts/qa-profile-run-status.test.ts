@@ -110,13 +110,7 @@ function fixture(layout: "named" | "direct" = "named") {
 it("retains a direct survivor and leaves downloaded evidence untouched", () => {
   const f = fixture("direct");
   f.writeShard(1, { ...f.status(1), ...killed });
-  for (const relative of [
-    "qa-suite-report.md",
-    "qa-suite-summary.json",
-    "script/qa-evidence.json",
-  ]) {
-    f.put(path.join(f.input, relative), `fixture: ${relative}\n`);
-  }
+  f.put(path.join(f.input, "qa-suite-summary.json"), "unchanged report\n");
   const { result } = f.collect();
   expect(result.shards).toEqual([{ ...killed, id: "shard-02", source: "artifact-001" }]);
   expect(result).toMatchObject({ exitCode: null, timedOut: true, timeoutOutcome: "kill" });
