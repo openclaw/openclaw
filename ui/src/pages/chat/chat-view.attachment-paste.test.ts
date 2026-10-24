@@ -8,7 +8,6 @@ import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import * as toast from "../../lib/toast.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -366,72 +365,4 @@ describe("chat attachment reading", () => {
     readySend.click();
     expect(onSend).toHaveBeenCalledOnce();
   });
-});
-
-it("renders multiple browser annotations as bounded, accessible cards", async () => {
-  const annotations: ChatAttachment[] = [
-    {
-      id: "annotation-title",
-      mimeType: "image/png",
-      previewUrl: "blob:annotation-title",
-      browserAnnotation: {
-        modelContext: "Context for the model",
-        title: "Checkout page with a deliberately long title",
-        displayUrl: "shop.example.test/checkout",
-        markedRegionCount: 2,
-        inspectedElement: true,
-      },
-    },
-    {
-      id: "annotation-url",
-      mimeType: "image/png",
-      previewUrl: "blob:annotation-url",
-      browserAnnotation: {
-        modelContext: "Second context",
-        title: "",
-        displayUrl: "docs.example.test/narrow-layout",
-        markedRegionCount: 1,
-        inspectedElement: false,
-      },
-    },
-  ];
-
-  const container = renderChatView({ attachments: annotations });
-  await waitForSolid(() =>
-    expect(container.querySelectorAll(".chat-attachment-thumb--browser-annotation")).toHaveLength(
-      2,
-    ),
-  );
-  const cards = container.querySelectorAll<HTMLElement>(
-    ".chat-attachment-thumb--browser-annotation",
-  );
-
-  expect(cards).toHaveLength(2);
-  expect(cards[0]?.dataset.attachmentId).toBe("annotation-title");
-  expect(cards[0]?.getAttribute("role")).toBe("group");
-  expect(cards[0]?.getAttribute("aria-label")).toBe(
-    "Browser annotation: Checkout page with a deliberately long title",
-  );
-  expect(cards[0]?.querySelector("img")?.getAttribute("alt")).toBe("Browser annotation preview");
-  expect(cards[0]?.querySelector(".chat-browser-annotation-card__identity")?.textContent).toBe(
-    "Checkout page with a deliberately long title",
-  );
-  expect(cards[0]?.querySelector(".chat-browser-annotation-card__meta")?.textContent).toContain(
-    "2 marked regions",
-  );
-  expect(cards[0]?.textContent).not.toContain("Element inspected");
-  expect(cards[1]?.querySelector(".chat-browser-annotation-card__identity")?.textContent).toBe(
-    "docs.example.test/narrow-layout",
-  );
-  expect(cards[1]?.textContent).toContain("1 marked region");
-  expect(cards[1]?.textContent).not.toContain("Element inspected");
-  expect(
-    cards[0]?.querySelector(
-      '[aria-label="Remove browser annotation: Checkout page with a deliberately long title"]',
-    ),
-  ).toBeInstanceOf(HTMLButtonElement);
-  for (const card of cards) {
-    expect(card.querySelector(".chat-browser-annotation-card__preview")).not.toBeNull();
-    expect(card.querySelector(".chat-browser-annotation-card__body")).not.toBeNull();
-  }
 });

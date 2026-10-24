@@ -197,6 +197,71 @@ it.each(["read", "write"])(
   },
 );
 
+it("shows pending attribution, rolls back a rejected save, and reloads the accepted retry", async () => {
+  const pending = createDeferred<{ status: "ok" }>();
+  let enabled = false;
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    if (method === "users.self") {
+      return { profile: modelAccountProfile };
+    }
+    if (method === "users.listModelAccounts") {
+      return { profileId: modelAccountProfile.id, accounts: [], links: [] };
+    }
+    if (method === "users.prefs.get") {
+      return {
+        status: "ok",
+        entries: { "github.prAttribution.enabled": enabled, [GIT_COAUTHOR_PREFERENCE_KEY]: false },
+      };
+    }
+    if (method === "users.prefs.set") {
+      expect(params).toEqual({ entries: { "github.prAttribution.enabled": true } });
+      if (request.mock.calls.filter(([name]) => name === "users.prefs.set").length === 1) {
+        return pending.promise;
+      }
+      enabled = true;
+      return { status: "ok" };
+    }
+    throw new Error("unexpected method: " + method);
+  });
+  const { context } = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: modelAccountProfile.id,
+  });
+  let page = mountProfilePage(context);
+  await waitForFast(() => expect(attributionToggle(page)?.disabled).toBe(false));
+  const toggle = attributionToggle(page)!;
+  toggle.click();
+  await waitForFast(() => {
+    expect(attributionToggle(page)).toBe(toggle);
+    expect(toggle.checked).toBe(true);
+    expect(toggle.disabled).toBe(true);
+  });
+  toggle.click();
+  expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1);
+  pending.reject(new Error("Attribution could not be saved"));
+  await waitForFast(() => {
+    expect(toggle.checked).toBe(false);
+    expect(toggle.disabled).toBe(false);
+    expect(page.querySelector('[role="alert"]')?.textContent).toContain(
+      "Attribution could not be saved",
+    );
+  });
+  toggle.click();
+  await waitForFast(() => {
+    expect(toggle.checked).toBe(true);
+    expect(toggle.disabled).toBe(false);
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+  });
+  expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(1);
+  expect(page.querySelector<HTMLInputElement>("input.settings-toggle__input")?.checked).toBe(false);
+  page.unmount();
+  page = mountProfilePage(context);
+  await waitForFast(() => {
+    expect(attributionToggle(page)?.disabled).toBe(false);
+    expect(attributionToggle(page)?.checked).toBe(true);
+  });
+  expect(request.mock.calls.filter(([method]) => method === "users.prefs.get")).toHaveLength(2);
+});
+
 it("does not offer personal PR attribution without a durable profile", async () => {
   const request = vi.fn(async (method: string) => {
     if (method === "users.self") {
@@ -247,6 +312,10 @@ it("retires a pending attribution save when the requester changes", async () => 
       "Another person",
     ),
   );
+  await waitForFast(() => {
+    expect(attributionToggle(page)?.disabled).toBe(false);
+    expect(attributionToggle(page)?.checked).toBe(false);
+  });
   save.resolve({ status: "ok" });
   await waitForFast(() => expect(attributionToggle(page)?.disabled).toBe(false));
   expect(attributionToggle(page)?.checked).toBe(false);

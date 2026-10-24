@@ -83,7 +83,7 @@ it(
           mode: GATEWAY_CLIENT_MODES.UI,
           origin: instance.url.replace("ws:", "http:"),
           deviceIdentity: loadOrCreateDeviceIdentity({
-            path: instance.state.path("client.sqlite"),
+            env: { OPENCLAW_STATE_DIR: instance.stateDir },
           }),
         },
         {

@@ -424,21 +424,19 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
           : {}),
       }
     : { ...sessionCtx, ThreadStarterBody: undefined };
-  let inboundContextSessionEntry =
-    isInternalEvent
-      ? undefined
-      : ((sessionKey !== undefined ? sessionStore?.[sessionKey] : undefined) ??
-        sessionEntryHandle?.getCurrent() ??
-        sessionEntry);
+  let inboundContextSessionEntry = isInternalEvent
+    ? undefined
+    : ((sessionKey !== undefined ? sessionStore?.[sessionKey] : undefined) ??
+      sessionEntryHandle?.getCurrent() ??
+      sessionEntry);
   const requester = getRequesterProfile(inboundUserContextSessionCtx);
-  const attributionEnabled =
-    !isHeartbeat && !isInternalEvent
-      ? await preparePrAttribution({
-          requesterProfileId: requester?.id,
-          sessionKey,
-          incognito: inboundContextSessionEntry?.incognito,
-        })
-      : () => false;
+  const attributionEnabled = !isInternalEvent
+    ? await preparePrAttribution({
+        requesterProfileId: requester?.id,
+        sessionKey,
+        incognito: inboundContextSessionEntry?.incognito,
+      })
+    : () => false;
   // Current human context reaches all harnesses without changing the stable system/tool prefix.
   const attributionPrompt = () =>
     `${markInboundContextLabel("PR attribution:")}
@@ -448,19 +446,18 @@ ${buildPrAttributionPrompt(
   // Synthetic turns retain routing facts without inventing user-role inbound context.
   const buildInboundContextState = () => ({
     activeGoalContext: formatActiveGoalContext(inboundContextSessionEntry),
-    inboundUserContext:
-      isInternalEvent
-        ? ""
-        : [
-            isHeartbeat ? "" : attributionPrompt(),
-            buildInboundUserContextPrefix(
-              inboundUserContextSessionCtx,
-              envelopeOptions,
-              inboundContextSessionEntry,
-            ),
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
+    inboundUserContext: isInternalEvent
+      ? ""
+      : [
+          attributionPrompt(),
+          buildInboundUserContextPrefix(
+            inboundUserContextSessionCtx,
+            envelopeOptions,
+            inboundContextSessionEntry,
+          ),
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
   });
   let { activeGoalContext, inboundUserContext } = buildInboundContextState();
   const refreshInboundContextAfterAdmissionWait = () => {

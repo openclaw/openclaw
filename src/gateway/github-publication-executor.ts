@@ -681,11 +681,9 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     if (
       isAbortError(error) ||
       error instanceof GitHubPublicationRequesterUnavailableError ||
-      error instanceof GatewayOperatorAccessUnavailableError
+      error instanceof GatewayOperatorAccessUnavailableError ||
+      error instanceof GitHubPublicationRecoveryPendingError
     ) {
-      throw error;
-    }
-    if (error instanceof GitHubPublicationRecoveryPendingError) {
       throw error;
     }
     if (error instanceof GitHubPublicationAuthorityLostError && params.defer) {

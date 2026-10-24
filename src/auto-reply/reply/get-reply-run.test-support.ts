@@ -1,7 +1,11 @@
+import path from "node:path";
 import { vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -11,6 +15,14 @@ import type { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
+
+const replyRunTempDirs = createTempDirTracker();
+
+export function resetPreparedReplySessionStore() {
+  vi.mocked(resolveSessionStorePathCore).mockReturnValue(
+    path.join(replyRunTempDirs.make("openclaw-reply-run-"), "session-store"),
+  );
+}
 
 const activePreparedFixtures: ReturnType<typeof createReplyOperation>[] = [];
 
@@ -32,6 +44,11 @@ export async function cleanupPreparedReplyFixtures() {
   }
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  replyRunTempDirs.cleanup();
+}
+
+export function jsonContext(label: string, value: unknown) {
+  return [label, "```json", JSON.stringify(value, null, 2), "```"].join("\n");
 }
 
 export function createInboundBody<T extends string>(body: T) {
@@ -199,4 +216,13 @@ export function nonReasoningModelState(): Parameters<typeof runPreparedReply>[0]
     ],
     allowedModelCatalog: [{ provider: "openai", id: "chat-latest", name: "Chat Latest" }],
   };
+}
+
+export function preparedTarget(sessionId: string) {
+  return captureSessionTarget({
+    storeScope: resolveSessionStorePathCore(undefined, { agentId: "default" }),
+    sessionKey: "session-key",
+    incarnation: sessionId,
+    agentId: "default",
+  });
 }

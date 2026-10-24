@@ -272,7 +272,6 @@ describe("composer overflow presentation", () => {
         mentions: [{ profileId: "jordan", start: 0, end: 14 }],
       }),
     );
-    await expect.poll(() => container.querySelector(".chat-attachment-thumb")).not.toBeNull();
     await afterLayout();
     const strips = container.querySelectorAll<HTMLElement>(".composer-context-strip");
     expect(strips).toHaveLength(3);

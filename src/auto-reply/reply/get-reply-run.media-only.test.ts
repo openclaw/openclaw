@@ -27,6 +27,7 @@ import * as gatewayModule from "../../agents/tools/gateway.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import {
   getCronManagementAuthority,
@@ -71,6 +72,7 @@ import {
   baseParams,
   cleanupPreparedReplyFixtures,
   createInboundBody,
+  jsonContext,
   createInboundTurn,
   createPreparedReplyTurn as turn,
   createSessionBody,
@@ -79,6 +81,8 @@ import {
   createTelegramGroupSession,
   ownerParams,
   nonReasoningModelState,
+  preparedTarget,
+  resetPreparedReplySessionStore,
 } from "./get-reply-run.test-support.js";
 import { buildGroupIntro, buildSourceConversationContext } from "./groups.js";
 import {
@@ -475,15 +479,6 @@ async function prepareActiveQueue(
   return { runtime, operation };
 }
 
-function preparedTarget(sessionId: string) {
-  return captureSessionTarget({
-    storeScope: resolveSessionStorePathCore(undefined, { agentId: "default" }),
-    sessionKey: "session-key",
-    incarnation: sessionId,
-    agentId: "default",
-  });
-}
-
 function runPrepared(overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {}) {
   return runPreparedReply(baseParams(overrides));
 }
@@ -512,10 +507,6 @@ function expectTurnText(call: ReturnType<typeof requireRunReplyAgentCall>, text:
 
 const PR_ATTRIBUTION_OFF = `PR attribution: ⟦openclaw:ctx⟧
 ${buildPrAttributionPrompt(false)}`;
-
-function jsonContext(label: string, value: unknown) {
-  return [label, "```json", JSON.stringify(value, null, 2), "```"].join("\n");
-}
 
 describe("runPreparedReply media-only handling", () => {
   describe.each(["followup", "collect"] as const)("queued owner authority: %s", (mode) => {
@@ -564,6 +555,13 @@ describe("runPreparedReply media-only handling", () => {
         let completedRuns = 0;
         vi.mocked(runReplyAgent).mockImplementationOnce(async ({ followupRun, opts }) => {
           capturedOpts = opts;
+          if (refreshOwner) {
+            // The synthetic queued admission below needs the session a real admission initializes.
+            await replaceSessionEntry(
+              { agentId: "default", sessionKey: key, storePath: resolveSessionStorePathCore() },
+              { sessionId: followupRun.run.sessionId, updatedAt: 1 },
+            );
+          }
           if (kind === "without-source-factory") {
             followupRun.createChannelCronAuthority = undefined;
           }
@@ -951,6 +949,7 @@ describe("runPreparedReply media-only handling", () => {
     preparedReplyMockState.unexpectedCalls.length = 0;
     loadSessionEntryMock.mockReset();
     vi.clearAllMocks();
+    resetPreparedReplySessionStore();
     vi.mocked(buildSourceConversationContext).mockReturnValue("");
     vi.mocked(buildGroupIntro).mockReturnValue("");
     vi.mocked(buildInboundUserContextPrefix).mockReset().mockReturnValue("");
