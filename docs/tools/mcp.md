@@ -160,6 +160,19 @@ the agent so it can follow the server's recovery guidance. The tool's
 `outputSchema` validates successful structured results only; structured error
 details do not need to match that schema.
 
+### JSON Schema validation
+
+MCP schemas use draft-07 unless they declare draft-2020-12. Draft-07 checks known
+formats such as `email`; draft-2020-12 treats formats as annotations. Schema URLs
+identify resources; validation does not fetch them from the network. Local
+references and resources already registered by the same MCP client are supported.
+
+Node, Bun, and JIT standalone hosts retain compiled validators. AOT standalone
+hosts evaluate cached schemas without generating JavaScript. In AOT hosts,
+`__proto__`, `constructor`, and `prototype` must be actual input properties when
+a schema requires them; inherited JavaScript prototype members do not satisfy
+those requirements.
+
 ### The server appears in Settings but exposes no tools
 
 Run `openclaw mcp doctor <name> --probe`. Doctor validates the saved definition first, then opens a live connection and reports the tools and other capabilities the server advertises. If it connects but expected tools are missing, check `toolFilter.include` and `toolFilter.exclude`.

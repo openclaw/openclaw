@@ -64,6 +64,7 @@
     "node-compile-cache.mjs",
     "gateway-prewarm.mjs",
     "openclaw.mjs",
+    "standalone-runtime-profile.mjs",
     "worker-heap-flag.mjs",
     "pnpm-workspace.yaml",
     "README.md",
