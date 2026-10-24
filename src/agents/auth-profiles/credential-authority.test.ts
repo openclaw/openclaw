@@ -33,6 +33,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import * as credentialAuthorityOwner from "../../state/user-model-account-authority.js";
 import {
   authProfileCredentialPublication,
   beginAuthProfileCredentialBatch,
@@ -673,6 +674,66 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
 });
 
 describe("prepared persisted credential readers", () => {
+  it.each(["committed", "unknown"] as const)(
+    "waits for an in-flight catalog publication before preparing credentials (%s)",
+    async (outcome) => {
+      const current = fixture("shared-state");
+      useReaderEnvironment(current);
+      const batch = beginAuthProfileCredentialBatch(current.context);
+      const attempted = Promise.withResolvers<void>();
+      const capture = credentialAuthorityOwner.captureAuthProfileCredentialAuthority;
+      const observer = vi
+        .spyOn(credentialAuthorityOwner, "captureAuthProfileCredentialAuthority")
+        .mockImplementation((...args) => {
+          const authority = capture(...args);
+          return {
+            ...authority,
+            readCurrentCredential() {
+              try {
+                return authority.readCurrentCredential();
+              } finally {
+                attempted.resolve();
+              }
+            },
+          };
+        });
+      let settled = false;
+      const preparing = current.prepareRead().then(
+        (read) => {
+          settled = true;
+          return { read };
+        },
+        (error: unknown) => {
+          settled = true;
+          return { error };
+        },
+      );
+      try {
+        await attempted.promise;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(settled).toBe(false);
+        current.write("published");
+        batch.finish(outcome === "committed");
+        const result = await preparing;
+        if (outcome === "committed") {
+          expect("read" in result && result.read?.()).toEqual(credential("published"));
+          current.remove();
+          expect("read" in result && result.read?.()).toBeUndefined();
+        } else {
+          expect("error" in result && result.error).toMatchObject({
+            message: "Auth profile credential authority is unavailable; retry after owner recovery",
+          });
+        }
+      } finally {
+        batch.finish(true);
+        observer.mockRestore();
+        await preparing;
+      }
+    },
+  );
+
   it.each([false, true])(
     "retains local and inherited ownership after read-scope cleanup (local initially present=%s)",
     async (localPresent) => {
