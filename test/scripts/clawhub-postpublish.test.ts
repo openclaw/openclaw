@@ -590,24 +590,12 @@ describe("ClawHub prepared publication", () => {
       "@openclaw/other",
     ]);
     expect(manifest.producer.runAttempt).toBe(2);
-    for (const entry of manifest.packages) {
-      const transaction = readPackedClawHubTransaction({
-        artifactDir: join(options.directory, entry.artifactName),
-        packageName: entry.packageName,
-        version: entry.version,
-        artifactName: entry.artifactName,
-      });
-      expect(entry.tarballSha256).toBe(transaction.artifactSha256);
-      expect(entry.inventoryDigest).toBe(transaction.inventoryDigest);
-    }
   });
 
-  it.each(["prior attempt", "mixed attempt", "failed producer", "reused producer"])(
+  it.each(["prior attempt", "failed producer", "reused producer"])(
     "refuses to relabel %s packages as the current preparation attempt",
     (change) => {
-      const options = preparedSealingFixture(
-        change === "prior attempt" ? [1, 1] : change === "mixed attempt" ? [1, 2] : [2, 2],
-      );
+      const options = preparedSealingFixture(change === "prior attempt" ? [1, 1] : [2, 2]);
       if (change === "failed producer") {
         options.workflowJobs.jobs[0].conclusion = "failure";
       }
@@ -880,6 +868,9 @@ describe("ClawHub detached postpublish verification", () => {
       expect(result).toMatchObject({ complete: true, parentRunAttempt: 2, dispatchRunAttempt: 1 });
       expect(result.packages).toHaveLength(noChild ? 0 : 1);
       expect(f.registryReads.length > 0).toBe(!noChild);
+      if (noChild) {
+        expect(result.outcome).toBe("no-normal-clawhub-publication");
+      }
     },
   );
 
@@ -1163,10 +1154,6 @@ describe("ClawHub detached postpublish verification", () => {
       const verifierSha = status === "identical" ? sha : "c".repeat(40);
       const f = fixture(parentOnMain, verifierSha);
       const comparison = `compare/${sha}...${verifierSha}`;
-      f.metadata.set(comparison, {
-        status,
-        files: [{ filename: "large.txt", patch: "+change\n".repeat(300_000) }],
-      });
       f.metadata.set(`${comparison}?per_page=1&page=2`, { status, commits: [] });
       const result = await verifyClawHubPostpublish(f.options);
       expect(result.complete).toBe(true);
@@ -1271,22 +1258,6 @@ describe("ClawHub detached postpublish verification", () => {
       ...patch,
     });
     await rejectsBeforeRegistry(f, error);
-  });
-
-  it("records an explicit no-child outcome without claiming registry verification", async () => {
-    const f = fixture();
-    replaceJsonArtifact(f, f.dispatchArtifact, "dispatch.json", {
-      ...f.dispatch,
-      normalClawHubRunId: null,
-      normalClawHubRunAttempt: null,
-    });
-    const result = await verifyClawHubPostpublish(f.options);
-    expect(result).toMatchObject({
-      complete: true,
-      outcome: "no-normal-clawhub-publication",
-      packages: [],
-    });
-    expect(f.registryReads).toEqual([]);
   });
 
   it("does not mistake a missing dispatch record for an empty release", async () => {

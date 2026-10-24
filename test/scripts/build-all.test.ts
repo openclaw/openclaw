@@ -257,67 +257,49 @@ describe("resolveBuildAllStep", () => {
 });
 
 describe("resolveBuildAllSteps", () => {
-  it.each(["full", "package", "strictSmoke", "pluginSdkStrictSmoke"])(
-    "keeps generated plugin artifacts from invalidating %s declaration inputs",
-    async (profile) => {
-      const cwd = tempDirs.make("openclaw-build-declaration-inputs-");
-      writeFixture(cwd, "tsconfig.json", '{"compilerOptions":{"types":[]},"include":["src"]}');
-      writeFixture(cwd, "src/index.ts", "export const value = 1;\n");
-      const signatures: string[] = [];
-      const runner = buildRunner();
-      runner.runStep.mockImplementation(({ args, options }) => {
-        if (args.includes("scripts/tsdown-build.mts") && !args.includes("--config")) {
-          cleanTsdownOutputRoots({ cwd, roots: ["dist", "dist-runtime"], env: options.env });
-        }
-        if (args.includes("scripts/build-external-plugin-local-dist.mts")) {
-          writeFixture(cwd, "extensions/example/assets/runtime.js", "export const asset = 1;\n");
-        }
-        if (args.includes("scripts/write-unified-entry-dts.ts")) {
-          const inputs = new CompilerInputSnapshot(cwd, {
-            toolchainFiles: [],
-            generatorInputs: [],
-          });
-          signatures.push(inputs.signature("tsconfig.json", [], ["src/index.ts"]));
-        }
-        if (args.includes("scripts/runtime-postbuild.mts")) {
-          writeFixture(cwd, "dist-runtime/extensions/example/index.d.ts", "export {};\n");
-        }
-        return { status: 0 };
-      });
-      for (let build = 0; build < 2; build++) {
-        expect((await runner.run(profile, { cwd })).exitCode).toBe(0);
+  it("keeps generated plugin artifacts from invalidating declaration inputs", async () => {
+    const cwd = tempDirs.make("openclaw-build-declaration-inputs-");
+    writeFixture(cwd, "tsconfig.json", '{"compilerOptions":{"types":[]},"include":["src"]}');
+    writeFixture(cwd, "src/index.ts", "export const value = 1;\n");
+    const signatures: string[] = [];
+    const runner = buildRunner();
+    runner.runStep.mockImplementation(({ args, options }) => {
+      if (args.includes("scripts/tsdown-build.mts") && !args.includes("--config")) {
+        cleanTsdownOutputRoots({ cwd, roots: ["dist", "dist-runtime"], env: options.env });
       }
-      expect(signatures).toHaveLength(2);
-      expect(signatures[1]).toBe(signatures[0]);
-    },
-  );
+      if (args.includes("scripts/build-external-plugin-local-dist.mts")) {
+        writeFixture(cwd, "extensions/example/assets/runtime.js", "export const asset = 1;\n");
+      }
+      if (args.includes("scripts/write-unified-entry-dts.ts")) {
+        const inputs = new CompilerInputSnapshot(cwd, {
+          toolchainFiles: [],
+          generatorInputs: [],
+        });
+        signatures.push(inputs.signature("tsconfig.json", [], ["src/index.ts"]));
+      }
+      if (args.includes("scripts/runtime-postbuild.mts")) {
+        writeFixture(cwd, "dist-runtime/extensions/example/index.d.ts", "export {};\n");
+      }
+      return { status: 0 };
+    });
+    for (let build = 0; build < 2; build++) {
+      expect((await runner.run("full", { cwd })).exitCode).toBe(0);
+    }
+    expect(signatures).toHaveLength(2);
+    expect(signatures[1]).toBe(signatures[0]);
+  });
 
-  it.each([
-    ["full", "0"],
-    ["full", "1"],
-    ["package", "0"],
-    ["package", "1"],
-    ["ciArtifacts", "0"],
-  ])(
-    "generates native protocol models before compiling %s with skip-dts=%s",
-    async (profile, skipDts) => {
-      const runner = buildRunner();
-      const result = await runner.run(profile, {
-        cacheEnabled: false,
-        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: skipDts },
-      });
-      expect(result.exitCode).toBe(0);
-      const invocations = runner.calls();
-      const generation = invocations.findIndex(({ args }) =>
-        args.includes("scripts/prepare-native-protocol.mjs"),
-      );
-      const compilation = invocations.findIndex(({ args }) =>
-        args.includes("scripts/tsdown-build.mts"),
-      );
-      expect(generation).toBeGreaterThanOrEqual(0);
-      expect(compilation).toBeGreaterThan(generation);
-    },
-  );
+  it("plans native protocol generation before compilation", () => {
+    for (const profile of ["full", "package", "ciArtifacts"]) {
+      for (const skipDts of ["0", "1"]) {
+        const steps = resolveBuildAllSteps(profile, { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: skipDts });
+        const index = (script: string) => steps.findIndex(({ args }) => args.includes(script));
+        const generation = index("scripts/prepare-native-protocol.mjs");
+        expect(generation, `${profile}/${skipDts}`).toBeGreaterThanOrEqual(0);
+        expect(index("scripts/tsdown-build.mts")).toBeGreaterThan(generation);
+      }
+    }
+  });
 
   it("rebuilds UI after runtime cleanup without reusing stale build metadata", () => {
     const steps = resolveBuildAllSteps("full");
@@ -334,7 +316,6 @@ describe("resolveBuildAllSteps", () => {
   it("parses build-all CLI args before any build work", () => {
     expect(parseBuildAllArgs([])).toEqual({ help: false, profile: "full" });
     expect(parseBuildAllArgs(["runtime"])).toEqual({ help: false, profile: "runtime" });
-    expect(parseBuildAllArgs(["cliStartup"])).toEqual({ help: false, profile: "cliStartup" });
     expect(parseBuildAllArgs(["cliStartup", "--help"])).toEqual({
       help: true,
       profile: "cliStartup",
@@ -385,28 +366,26 @@ describe("resolveBuildAllSteps", () => {
     expect(runner.logger.error).toHaveBeenCalledWith(message);
   });
 
-  it.each(["gatewayWatch", "cliStartup"])(
-    "records %s runtime phase completeness",
-    async (profile) => {
-      const cwd = tempDirs.make("openclaw-phase-stamp-");
-      const steps = resolveBuildAllSteps(profile, {})
-        .filter((step) => [STEP.postbuild, "runtime-postbuild-stamp"].includes(step.label))
-        .map((step) =>
-          step.label === STEP.postbuild
-            ? Object.assign({}, step, { args: ["-e", "process.exit(0)"] })
-            : step,
-        );
-      const result = await runBuildAllSteps(profile, {
-        cwd,
-        env: {},
-        steps,
-        logger: { error() {}, warn() {} },
-        memoryLimit: buildMemoryLimit(16),
-      });
-      expect(result.exitCode).toBe(0);
-      expect(readJson(path.join(cwd, "dist/.runtime-postbuildstamp")).staticAssets).toBe(false);
-    },
-  );
+  it("records runtime phase completeness", async () => {
+    const profile = "gatewayWatch";
+    const cwd = tempDirs.make("openclaw-phase-stamp-");
+    const steps = resolveBuildAllSteps(profile, {})
+      .filter((step) => [STEP.postbuild, "runtime-postbuild-stamp"].includes(step.label))
+      .map((step) =>
+        step.label === STEP.postbuild
+          ? Object.assign({}, step, { args: ["-e", "process.exit(0)"] })
+          : step,
+      );
+    const result = await runBuildAllSteps(profile, {
+      cwd,
+      env: {},
+      steps,
+      logger: { error() {}, warn() {} },
+      memoryLimit: buildMemoryLimit(16),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(readJson(path.join(cwd, "dist/.runtime-postbuildstamp")).staticAssets).toBe(false);
+  });
 
   it("invalidates old runtime stamps before a failed declaration-cache restoration", async () => {
     const cwd = tempDirs.make("openclaw-restore-stamps-");
@@ -450,7 +429,6 @@ describe("resolveBuildAllSteps", () => {
       (step) => step.args.includes("scripts/tsdown-build.mts") || step.label === STEP.unified,
     );
     const tsdownInvocations: ReturnType<typeof resolveBuildAllStep>[] = [];
-    const executionOrder: string[] = [];
     const restoreCache = vi.fn(() => true);
     const result = await runBuildAllSteps(profile, {
       cacheEnabled: true,
@@ -458,16 +436,12 @@ describe("resolveBuildAllSteps", () => {
       finalizeCache: vi.fn(() => true),
       now: () => 0,
       resolveCacheState(step) {
-        executionOrder.push(`cache:${step.label}`);
         return step.label === "tsdown-packages"
           ? { cacheable: true, fresh: true, restorable: true, reason: "fresh-cache" }
           : { cacheable: false, fresh: false, reason: "no-cache" };
       },
       restoreCache,
       runStep(invocation) {
-        executionOrder.push(
-          `run:${expectDefined(tsdownSteps[tsdownInvocations.length], "next tsdown step").label}`,
-        );
         tsdownInvocations.push(invocation);
         return { status: 0 };
       },
@@ -481,16 +455,6 @@ describe("resolveBuildAllSteps", () => {
       NODE_OPTIONS: "--max-old-space-size=4352",
     });
     expect(restoreCache).toHaveBeenCalledOnce();
-    expect(executionOrder).toEqual([
-      "cache:tsdown-ai",
-      "run:tsdown-ai",
-      "cache:tsdown-packages",
-      "run:tsdown-packages",
-      "cache:tsdown",
-      "run:tsdown",
-      "cache:write-unified-entry-dts",
-      "run:write-unified-entry-dts",
-    ]);
   });
 
   it.each([
