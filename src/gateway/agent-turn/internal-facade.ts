@@ -279,7 +279,9 @@ export function createInternalAgentTurnFacade(
       };
       const operation = context.trackExecution(async () => {
         preparationOwnedByExecution = true;
+        let releaseExecutionSource: (() => void) | undefined;
         try {
+          releaseExecutionSource = dispatchOptions.executionSource?.retain?.();
           return await runWithGatewayRequestEnvelope(
             method,
             options.client,
@@ -353,6 +355,7 @@ export function createInternalAgentTurnFacade(
             },
           );
         } finally {
+          releaseExecutionSource?.();
           entry?.release();
         }
       });

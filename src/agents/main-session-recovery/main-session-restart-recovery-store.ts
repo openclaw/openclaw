@@ -483,7 +483,7 @@ export async function recoverStore(params: {
         !requesterOrigin &&
         source !== "cron" &&
         expectedRecoverySourceRunId &&
-        requiresDelegatedRecoverySource(entry, source)
+        requiresDelegatedRecoverySource(entry, source, sessionKey)
       ) {
         const { prepareConsumedSessionSendSource } =
           await import("../../gateway/session-send-recovery-source.js");
@@ -510,7 +510,7 @@ export async function recoverStore(params: {
         !recoverableHarnessCompletion &&
         !completionSource &&
         (source === "cron" || !requesterOrigin) &&
-        requiresDelegatedRecoverySource(entry, source)
+        requiresDelegatedRecoverySource(entry, source, sessionKey)
       ) {
         const outcome = await finishDelegatedRestartRecovery({
           ...target,

@@ -699,14 +699,22 @@ it
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "resumes a drain-interrupted dashboard child once before notifying its parent",
+it.skipIf(process.platform === "win32").for([
+  { parentAgentId: "main", parentKey: "agent:main:main", followup: false },
+  {
+    parentAgentId: "requester",
+    parentKey: "agent:requester:x:group:restart-fixture",
+    followup: true,
+  },
+])(
+  "resumes a drain-interrupted dashboard child once for $parentKey (follow-up: $followup)",
   { timeout: 240_000 },
-  async ({ signal }) => {
-    const parentKey = "agent:main:main";
+  async ({ parentAgentId, parentKey, followup }, { signal }) => {
     const parentRequest = "DASHBOARD_RESTART_PARENT: start a visible child, then finish.";
     const childTask = "DASHBOARD_RESTART_CHILD: finish the retained assignment.";
     const childFinal = "DASHBOARD_CHILD_COMPLETED";
+    const leafTask = "DASHBOARD_RESTART_LEAF: finish the nested assignment.";
+    const leafResponse = createDeferred<ServerResponse>();
     const parentFinal = "DASHBOARD_PARENT_RECEIVED_RESULT";
     const failed = createDeferred<never>();
     void failed.promise.catch(() => {});
@@ -714,6 +722,7 @@ it.skipIf(process.platform === "win32")(
     const resumedChild = createDeferred<ServerResponse>();
     let parentCalls = 0;
     let childCalls = 0;
+    const resumedCall = followup ? 4 : 3;
     const reservation = await reserveTestPortListener({
       port: 64_872,
       offsets: [0, 1, 2, 3],
@@ -750,6 +759,8 @@ it.skipIf(process.platform === "win32")(
             } else {
               text(title);
             }
+          } else if (input.includes(leafTask) && !input.includes(childTask)) {
+            leafResponse.resolve(response);
           } else if (input.includes(parentRequest)) {
             parentCalls += 1;
             if (parentCalls === 1) {
@@ -759,6 +770,7 @@ it.skipIf(process.platform === "win32")(
                 "sessions_spawn",
                 {
                   task: childTask,
+                  agentId: "main",
                   taskName: "dashboard_restart_child",
                   visible: true,
                   context: "isolated",
@@ -777,18 +789,22 @@ it.skipIf(process.platform === "win32")(
           } else {
             expect(input).toContain(childTask);
             childCalls += 1;
-            expect(childCalls).toBeLessThanOrEqual(4);
+            expect(childCalls).toBeLessThanOrEqual(resumedCall + 1);
             if (childCalls === 1) {
               writeRestartToolCall(
                 response,
                 "dashboard_checkpoint",
-                "subagents",
-                { action: "list" },
+                followup ? "sessions_spawn" : "subagents",
+                followup
+                  ? { task: leafTask, taskName: "dashboard_restart_leaf", context: "isolated" }
+                  : { action: "list" },
                 childCalls,
               );
-            } else if (childCalls === 2) {
+            } else if (followup && childCalls === 2) {
+              text(childFinal);
+            } else if (childCalls === resumedCall - 1) {
               initialChild.resolve();
-            } else if (childCalls === 3) {
+            } else if (childCalls === resumedCall) {
               resumedChild.resolve(response);
             } else {
               // A resumed agent must be able to inspect retained work before finishing.
@@ -797,7 +813,7 @@ it.skipIf(process.platform === "win32")(
                   (item) =>
                     isRecord(item) &&
                     item.type === "function_call_output" &&
-                    item.call_id === "call_dashboard_recovered_history_3",
+                    item.call_id === `call_dashboard_recovered_history_${resumedCall}`,
                 ),
               );
               expect(output.output).toBeTypeOf("string");
@@ -869,7 +885,10 @@ it.skipIf(process.platform === "win32")(
             },
           },
           agents: {
+            ownership: "explicit",
             defaults: {
+              systemAgent: { agentId: "main" },
+              subagents: { maxSpawnDepth: 2 },
               workspace: instance.state.workspaceDir,
               model: { primary: model.modelRef },
               modelPolicy: { allow: [model.modelRef] },
@@ -883,7 +902,10 @@ it.skipIf(process.platform === "win32")(
               skills: [],
               timeoutSeconds: 180,
             },
-            entries: { main: {} },
+            entries: {
+              main: {},
+              requester: { subagents: { allowAgents: ["main"] } },
+            },
           },
           tools: {
             allow: ["sessions_spawn", "sessions_send", "sessions_history", "subagents"],
@@ -900,27 +922,61 @@ it.skipIf(process.platform === "win32")(
         });
         await instance.startGateway();
         client = await connect();
-        await client.request("sessions.create", { key: parentKey, agentId: "main" });
+        await client.request("sessions.create", { key: parentKey, agentId: parentAgentId });
         const accepted = await client.request<{ runId: string }>(
           "chat.send",
           { sessionKey: parentKey, message: parentRequest, idempotencyKey: "dashboard-original" },
           { expectFinal: false },
         );
-        await wait(initialChild.promise);
+        if (!followup) {
+          await wait(initialChild.promise);
+        }
         expect(
           await client.request("agent.wait", { runId: accepted.runId, timeoutMs: 60_000 }),
         ).toMatchObject({ status: "ok" });
         const rows = await client.request<SessionsListResult>("sessions.list", { agentId: "main" });
         const child = rows.sessions.find((row) => row.key.includes(":dashboard:"));
-        expect(child, instance.logs()).toMatchObject({ status: "running", hasActiveRun: true });
+        expect(child, instance.logs()).toBeDefined();
         if (!child) {
           throw new Error("Visible spawn did not publish its dashboard child");
         }
-        expect(parentCalls).toBe(2);
+        if (followup) {
+          await wait(
+            vi.waitFor(
+              async () => {
+                const settled = await client!.request<SessionsListResult>("sessions.list", {});
+                for (const key of [parentKey, child.key]) {
+                  expect(settled.sessions.find((row) => row.key === key)).toMatchObject({
+                    status: "done",
+                    hasActiveRun: false,
+                  });
+                }
+                expect(parentCalls).toBe(3);
+              },
+              { timeout: 60_000 },
+            ),
+          );
+          // The finished child's registry task is historical; the leaf owns this new continuation.
+          writeOpenAiResponsesText(await wait(leafResponse.promise), {
+            text: "DASHBOARD_LEAF_COMPLETED",
+            messageId: "msg_dashboard_leaf_final",
+            responseId: "resp_dashboard_leaf_final",
+          });
+          await wait(initialChild.promise);
+        }
+        const beforeRestart = await client.request<SessionsListResult>("sessions.list", {
+          agentId: "main",
+        });
+        expect(beforeRestart.sessions.find((row) => row.key === child.key)).toMatchObject({
+          status: "running",
+          hasActiveRun: true,
+          ...(followup ? { subagentRunState: "historical" } : {}),
+        });
+        expect(parentCalls).toBe(followup ? 3 : 2);
         await restart();
         const resumedResponse = await wait(resumedChild.promise);
-        expect(parentCalls, instance.logs()).toBe(2);
-        expect(childCalls).toBe(3);
+        expect(parentCalls, instance.logs()).toBe(followup ? 3 : 2);
+        expect(childCalls).toBe(resumedCall);
         const running = await client!.request<SessionsListResult>("sessions.list", {
           agentId: "main",
         });
@@ -936,9 +992,7 @@ it.skipIf(process.platform === "win32")(
           childCalls,
         );
         const assertCompleted = async () => {
-          const sessions = await client!.request<SessionsListResult>("sessions.list", {
-            agentId: "main",
-          });
+          const sessions = await client!.request<SessionsListResult>("sessions.list", {});
           for (const key of [parentKey, child.key]) {
             expect(
               sessions.sessions.find((row) => row.key === key),
@@ -954,7 +1008,10 @@ it.skipIf(process.platform === "win32")(
           expect(
             history.messages.map(extractAssistantPhaseText).filter((text) => text === parentFinal),
           ).toHaveLength(1);
-          expect({ parentCalls, childCalls }).toEqual({ parentCalls: 3, childCalls: 4 });
+          expect({ parentCalls, childCalls }).toEqual({
+            parentCalls: 3,
+            childCalls: resumedCall + 1,
+          });
         };
         await wait(vi.waitFor(assertCompleted, { timeout: 60_000 }));
         const recoveryPasses = () =>

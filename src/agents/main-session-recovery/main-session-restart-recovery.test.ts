@@ -750,8 +750,8 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("marks only recoverable sessions owned by active runs", async () => {
-    // Only top-level admitted main sessions are restart-recoverable. Completed,
-    // child, cron, and non-active sessions must not be marked.
+    // Session history does not exclude an independent child turn. Completed,
+    // cron, and non-active sessions must not be marked.
 
     const { sessionsDir } = await makeStoreFixture({
       "agent:main:main": runningSessionEntry("main-session"),
@@ -782,10 +782,10 @@ describe("main-session-restart-recovery", () => {
     });
 
     const store = readStore(path.join(sessionsDir, "sessions.json"));
-    expect(result).toEqual({ marked: 1, skipped: 1 });
+    expect(result).toEqual({ marked: 2, skipped: 0 });
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
     expect(store["agent:main:completed"]?.abortedLastRun).toBeUndefined();
-    expect(store["agent:main:subagent:child"]?.abortedLastRun).toBeUndefined();
+    expect(store["agent:main:subagent:child"]?.abortedLastRun).toBe(true);
     expect(store["cron:nightly"]?.abortedLastRun).toBeUndefined();
     expect(store["agent:main:other"]?.abortedLastRun).toBeUndefined();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();

@@ -234,6 +234,21 @@ it.for(["before capture", "after capture"] as const)(
   },
 );
 
+it("records an independent interrupted turn in a child of a cross-agent group parent", async () => {
+  using store = createStore();
+  const child = await store.session("dashboard:historical-child", {
+    spawnDepth: 1,
+    spawnedBy: "agent:requester:discord:group:synthetic",
+    parentSessionKey: "agent:requester:discord:group:synthetic",
+    lifecycleRunId: "dashboard:historical-child-run",
+  });
+  expect(await store.mark({ activeRuns: [child.run] })).toEqual({ marked: 1, skipped: 0 });
+  expect(child.read()).toMatchObject({
+    abortedLastRun: true,
+    mainRestartRecovery: { chargedAttempts: 0 },
+  });
+});
+
 it("loads only orphan candidates for main-session startup recovery", async () => {
   using store = createStore();
   const { storePath } = store;

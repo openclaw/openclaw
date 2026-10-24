@@ -297,6 +297,16 @@ If restart cancellation finishes a collected run before that record commits,
 shutdown retains its recovery custody unless the session or run owner changes.
 Backend-owned restart aborts retain the same custody even when the caller's
 abort signal stays open and lifecycle persistence finishes after reply cleanup.
+Recovery follows the interrupted turn, including later turns in a child whose
+original subagent task has finished. Channel, group, cross-agent, and nested
+parents do not exclude those turns. Active subagent tasks retain their registry
+recovery owner; independent child turns use the ordinary session recovery cycle
+and can be resumed with `sessions.recover`.
+Delegated recovery rechecks the recorded parent identity and current cross-agent
+spawn policy. If that authority cannot be restored, the child records why it
+stopped, and its unchanged parent receives a local transcript notice. A deleted
+archived, or replaced parent cannot receive that notice. A fresh authenticated message to
+the child carries its own authority.
 Startup discovery excludes archived sessions, recovery tombstones, and rows without
 recovery obligations before preparing targets. Completed sessions with pending
 recovery obligations still settle. Other skipped candidates are logged with a
