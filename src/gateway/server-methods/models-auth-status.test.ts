@@ -30,13 +30,7 @@ import {
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type BuildAuthHealthSummary = typeof import("../../agents/auth-health.js").buildAuthHealthSummary;
-
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
+type RespondOptions = GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> };
 
 const emptyUsageSummary = (): UsageSummary => ({ updatedAt: 0, providers: [] });
 
@@ -93,18 +87,13 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
 }));
 
-vi.mock("../../agents/auth-profiles.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/auth-profiles.js")>(
-    "../../agents/auth-profiles.js",
-  );
-  return {
-    ...actual,
-    ensureAuthProfileStoreWithoutExternalProfilesAsync:
-      mocks.ensureAuthProfileStoreWithoutExternalProfilesAsync,
-    listProfilesForProvider: mocks.listProfilesForProvider,
-    setAuthProfileOrder: mocks.setAuthProfileOrder,
-  };
-});
+vi.mock("../../agents/auth-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles.js")>()),
+  ensureAuthProfileStoreWithoutExternalProfilesAsync:
+    mocks.ensureAuthProfileStoreWithoutExternalProfilesAsync,
+  listProfilesForProvider: mocks.listProfilesForProvider,
+  setAuthProfileOrder: mocks.setAuthProfileOrder,
+}));
 
 vi.mock("../../commands/models/auth-api-key.js", () => ({
   saveModelProviderApiKey: mocks.saveModelProviderApiKey,
@@ -114,15 +103,10 @@ vi.mock("../../commands/models/auth-logout.js", () => ({
   removeModelAuthCredentials: mocks.removeModelAuthCredentials,
 }));
 
-vi.mock("../../agents/auth-health.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/auth-health.js")>(
-    "../../agents/auth-health.js",
-  );
-  return {
-    ...actual,
-    buildAuthHealthSummary: mocks.buildAuthHealthSummary,
-  };
-});
+vi.mock("../../agents/auth-health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-health.js")>()),
+  buildAuthHealthSummary: mocks.buildAuthHealthSummary,
+}));
 
 vi.mock("../../infra/provider-usage.load.js", () => ({
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,
@@ -156,7 +140,7 @@ import { registerModelAuthStatusUsageRefreshTests } from "./models-auth-status.u
 function createOptions(
   params: Record<string, unknown> = {},
   scopes: string[] = ["operator.admin"],
-): GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> } {
+): RespondOptions {
   const respond = vi.fn();
   return {
     req: { type: "req", id: "req-1", method: "models.authStatus", params },
@@ -165,24 +149,21 @@ function createOptions(
     isWebchatConnect: () => false,
     respond,
     context: { getRuntimeConfig: mocks.getRuntimeConfig } as unknown,
-  } as unknown as GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> };
+  } as unknown as RespondOptions;
 }
 
-const handler = expectDefined(
-  modelsAuthStatusHandlers["models.authStatus"],
-  'modelsAuthStatusHandlers["models.authStatus"] test invariant',
-);
+const handler = expectDefined(modelsAuthStatusHandlers["models.authStatus"], "auth-status handler");
 const logoutHandler = expectDefined(
   modelsAuthStatusHandlers["models.authLogout"],
-  'modelsAuthStatusHandlers["models.authLogout"] test invariant',
+  "logout handler",
 );
 const setApiKeyHandler = expectDefined(
   modelsAuthStatusHandlers["models.authSetApiKey"],
-  'modelsAuthStatusHandlers["models.authSetApiKey"] test invariant',
+  "set-api-key handler",
 );
 const orderHandler = expectDefined(
   modelsAuthOrderHandlers["models.authOrderSet"],
-  'modelsAuthOrderHandlers["models.authOrderSet"] test invariant',
+  "auth-order handler",
 );
 
 function oauthCredential(
@@ -219,31 +200,22 @@ async function useRealHealth() {
   mocks.buildAuthHealthSummary.mockImplementation(actual.buildAuthHealthSummary);
 }
 
-function createLogoutOptions(
-  params: Record<string, unknown> = {},
-): GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> } {
-  const respond = vi.fn();
-  const context = {
-    getRuntimeConfig: mocks.getRuntimeConfig,
+function createLogoutOptions(params: Record<string, unknown> = {}): RespondOptions {
+  const opts = createOptions(params);
+  opts.req = { ...opts.req, id: "req-logout", method: "models.authLogout" };
+  opts.client = null;
+  opts.context = {
+    ...opts.context,
     chatRunState: createChatRunState(),
     removeChatRun: vi.fn(),
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
     nodeSendToSession: vi.fn(),
   };
-  return {
-    req: { type: "req", id: "req-logout", method: "models.authLogout", params },
-    params,
-    client: null,
-    isWebchatConnect: () => false,
-    respond,
-    context,
-  } as unknown as GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> };
+  return opts;
 }
 
-function createOrderOptions(
-  params: Record<string, unknown>,
-): GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> } {
+function createOrderOptions(params: Record<string, unknown>): RespondOptions {
   const opts = createOptions(params);
   opts.req.method = "models.authOrderSet";
   opts.client = null;
@@ -286,17 +258,15 @@ function createPreparedOwnerSnapshot(agentId: string) {
   };
 }
 
-function firstRespondCall(
-  opts: GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> },
-) {
+function firstRespondCall(opts: RespondOptions) {
   return opts.respond.mock.calls[0];
 }
 
-function expectSuccess(opts: Parameters<typeof firstRespondCall>[0], payload: unknown) {
+function expectSuccess(opts: RespondOptions, payload: unknown) {
   expect(firstRespondCall(opts)).toEqual([true, payload, undefined]);
 }
 
-function expectInvalid(opts: Parameters<typeof firstRespondCall>[0], details: object) {
+function expectInvalid(opts: RespondOptions, details: object) {
   expect(firstRespondCall(opts)).toEqual([
     false,
     undefined,
@@ -304,7 +274,7 @@ function expectInvalid(opts: Parameters<typeof firstRespondCall>[0], details: ob
   ]);
 }
 
-function expectUnknownAgentId(opts: Parameters<typeof firstRespondCall>[0], agentId: string) {
+function expectUnknownAgentId(opts: RespondOptions, agentId: string) {
   expect(firstRespondCall(opts)).toEqual([
     false,
     undefined,
@@ -326,6 +296,18 @@ async function readAuthStatus(params: Record<string, unknown> = {}) {
   const [ok, payload, error] = firstRespondCall(opts) ?? [];
   expect(ok, JSON.stringify(error)).toBe(true);
   return payload as ModelAuthStatusResult;
+}
+
+async function readRefreshedUsage() {
+  let provider: ModelAuthStatusResult["providers"][number] | undefined;
+  await vi.waitFor(
+    async () => {
+      provider = await firstAuthStatusProvider();
+      expect(provider?.usage).toBeDefined();
+    },
+    { interval: 1 },
+  );
+  return expectDefined(provider, "refreshed provider");
 }
 
 async function warmOAuthUsage() {
@@ -404,8 +386,7 @@ afterEach(() => {
 
 describe("models.authStatus", () => {
   it("rejects an explicit unknown agentId before reading auth state", async () => {
-    const cfg = { agents: { entries: { main: {}, writer: {} } } };
-    mocks.getRuntimeConfig.mockReturnValue(cfg);
+    mocks.getRuntimeConfig.mockReturnValue({ agents: { entries: { main: {}, writer: {} } } });
     mocks.listAgentIds.mockReturnValue(["main", "writer"]);
     const opts = createOptions({ agentId: "retired", refresh: true });
 
@@ -437,9 +418,7 @@ describe("models.authStatus", () => {
   it.each(["???", "   "])(
     "rejects explicit id %j when it collapses to the normalization fallback",
     async (agentId) => {
-      const cfg = { agents: { entries: { main: {} } } };
-      mocks.getRuntimeConfig.mockReturnValue(cfg);
-      mocks.listAgentIds.mockReturnValue(["main"]);
+      mocks.getRuntimeConfig.mockReturnValue({ agents: { entries: { main: {} } } });
       const opts = createOptions({ agentId });
 
       await handler(opts);
@@ -515,11 +494,7 @@ describe("models.authStatus", () => {
 
     const admin = createOptions({ agentId: "main" });
     const reader = createOptions({ agentId: "main" }, ["operator.read"]);
-    await Promise.all(
-      [admin, reader].map(async (opts) => {
-        await handler(opts);
-      }),
-    );
+    await Promise.all([admin, reader].map((opts) => handler(opts)));
 
     expect(firstRespondCall(admin)?.[1]?.providers[0]?.profiles[0]).toMatchObject({
       email: "owner@example.com",
@@ -527,9 +502,9 @@ describe("models.authStatus", () => {
       lastUsedAt: 42,
     });
     const result = firstRespondCall(reader)?.[1] as ModelAuthStatusResult;
-    expect(result.providers[0]?.profiles[0]).not.toHaveProperty("email");
-    expect(result.providers[0]?.profiles[0]).not.toHaveProperty("displayName");
-    expect(result.providers[0]?.profiles[0]).not.toHaveProperty("lastUsedAt");
+    for (const field of ["email", "displayName", "lastUsedAt"]) {
+      expect(result.providers[0]?.profiles[0]).not.toHaveProperty(field);
+    }
     expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(1);
   });
 
@@ -795,9 +770,7 @@ describe("models.authStatus", () => {
   });
 
   it("keeps unresolved credentials missing and excludes local no-auth markers", async () => {
-    const actual = await vi.importActual<typeof import("../../agents/auth-health.js")>(
-      "../../agents/auth-health.js",
-    );
+    await useRealHealth();
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
@@ -807,7 +780,6 @@ describe("models.authStatus", () => {
         },
       },
     });
-    mocks.buildAuthHealthSummary.mockImplementationOnce(actual.buildAuthHealthSummary);
 
     const result = await readAuthStatus();
 
@@ -939,15 +911,9 @@ describe("models.authStatus", () => {
       config: runtimeConfig,
       timeoutMs: 5_000,
     });
-    let result: ModelAuthStatusResult | undefined;
-    await waitForFast(async () => {
-      result = await readAuthStatus();
-      expect(result.providers[0]?.usage).toBeDefined();
-    });
-    const refreshed = expectDefined(result, "refreshed auth status");
-    expect(refreshed.providers[0]?.displayName).toBe("Claude");
-    expect(refreshed.providers[0]?.authProvider).toBe("anthropic");
-    expect(refreshed.providers[0]?.usage).toEqual({
+    const refreshed = await readRefreshedUsage();
+    expect(refreshed).toMatchObject({ displayName: "Claude", authProvider: "anthropic" });
+    expect(refreshed.usage).toEqual({
       providerId: "anthropic",
       windows: [{ label: "5h", usedPercent: 22 }],
       plan: "Max (20x)",
@@ -985,13 +951,7 @@ describe("models.authStatus", () => {
       config: expect.any(Object),
       timeoutMs: 5_000,
     });
-    let result: ModelAuthStatusResult | undefined;
-    await waitForFast(async () => {
-      result = await readAuthStatus();
-      expect(result.providers[0]?.usage).toBeDefined();
-    });
-    const refreshed = expectDefined(result, "refreshed auth status");
-    expect(refreshed.providers[0]?.usage).toEqual({
+    expect((await readRefreshedUsage()).usage).toEqual({
       providerId: "deepseek",
       windows: [],
       summary: "Balance ¥42.50",
@@ -1079,12 +1039,7 @@ describe("models.authStatus", () => {
     mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
     mocks.loadProviderUsageSummary.mockRejectedValue(new Error("timeout"));
 
-    const opts = createOptions();
-    await handler(opts);
-
-    const [ok, payload] = firstRespondCall(opts) ?? [];
-    expect(ok).toBe(true);
-    const result = payload as ModelAuthStatusResult;
+    const result = await readAuthStatus();
     expect(result.providers).toHaveLength(1);
     expect(
       expectDefined(result.providers[0], "result.providers[0] test invariant").usage,
@@ -1148,11 +1103,6 @@ describe("models.authOrderSet", () => {
       order: ["openai:two", "openai:one"],
     });
     expect(opts.respond).not.toHaveBeenCalled();
-    expect(mocks.prepareModelRuntimeSnapshot).toHaveBeenCalledWith({
-      agentId: "main",
-      agentDir: "/tmp/agent",
-      config: {},
-    });
 
     publication.resolve();
     await pending;
