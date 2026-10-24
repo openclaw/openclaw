@@ -28,14 +28,15 @@ RSS and Git trace2 children, then verifies retained objects.
 Use --policy baseline or --policy candidate (default) at prepare time to compare
 the existing owner with and without the managed project repository policy.
 Use a fresh fixture for each run; measurement consumes its fragmented layout.
-Dependency-free native Git MIDX probe (Node's built-in TypeScript support):
+Dependency-free native Git MIDX probe (Linux/GNU time or macOS/BSD time):
   node scripts/perf/managed-git-maintenance-measure.ts --mode prepare-midx --packs 32 --blobs-per-pack 65536 --state-dir <new-directory>
   node scripts/perf/managed-git-maintenance-measure.ts --mode measure-midx --state-dir <prepared-directory>
 This fixture contains 2,097,152 unique 16-byte blobs (32 MiB payload), written in
 sequential packs. The probe times the old full MIDX write and repeated cat-file
 lookups with/without that optional cache; it does not invoke the maintenance owner.
-Add --consolidate to perform one native equivalent of its 512 MiB pack / 32 MiB
-index batch before the probe. This consumes the fixture's fragmented layout.
+Add --consolidate to perform one native equivalent of its geometric batch before
+the probe, capped at 512 MiB of packs / 32 MiB of indexes. At least two packs must
+fit, with their total size at least twice the largest. This consumes fragmentation.
 The caller supplies the quiet-slot lock, swapped CPU placement, production guard,
 MemoryMax, and low CPU/IO priority. RSS is not an aggregate process-tree bound.`);
   process.exit(0);
@@ -46,7 +47,11 @@ assert(
   "invalid --mode",
 );
 assert(["baseline", "candidate"].includes(values.policy), "invalid --policy");
-assert.equal(process.platform, "linux", "This benchmark requires Linux and GNU time");
+const nativeMidx = values.mode.endsWith("-midx");
+assert(
+  process.platform === "linux" || (nativeMidx && process.platform === "darwin"),
+  "The owner benchmark requires Linux; native MIDX probes also support macOS",
+);
 const root = path.resolve(values["state-dir"]);
 const repo = path.join(root, "repository");
 const marker = path.join(root, "fixture.json");
@@ -54,7 +59,6 @@ const trace = path.join(root, "maintenance.trace.jsonl");
 const summary = path.join(root, "maintenance.json");
 const packCount = Number(values.packs);
 const blobsPerPack = Number(values["blobs-per-pack"]);
-const nativeMidx = values.mode.endsWith("-midx");
 const blobBytes = nativeMidx ? 16 : 32 * 1024;
 const payloadBytes = packCount * blobsPerPack * blobBytes;
 assert(Number.isSafeInteger(packCount) && packCount >= 16, "--packs must be an integer >=16");
@@ -102,6 +106,9 @@ const packs = async () =>
     name.endsWith(".pack"),
   ).length;
 async function checkDirty() {
+  if (process.platform !== "linux") {
+    return;
+  }
   const meminfo = await fs.readFile("/proc/meminfo", "utf8");
   const dirtyKiB = Number(/^Dirty:\s+(\d+)/m.exec(meminfo)?.[1]);
   assert(Number.isFinite(dirtyKiB) && dirtyKiB < 2 * 1024 * 1024, "Host Dirty exceeds 2 GiB");
@@ -240,8 +247,7 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
           });
         }
       }
-      assert(inventory.length >= 16, "Native consolidation requires at least 16 fixture packs");
-      const selected: string[] = [];
+      const selected: Array<{ name: string; bytes: number }> = [];
       let bytes = 0;
       let indexBytes = 0;
       for (const pack of inventory.toSorted(
@@ -257,44 +263,49 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
         ) {
           break;
         }
-        selected.push(pack.name);
+        selected.push(pack);
         bytes += pack.bytes;
         indexBytes += pack.indexBytes;
       }
-      assert(selected.length >= 2, "No bounded consolidation batch fits");
-      await run("git", [
-        "-C",
-        packDirectory,
-        "-c",
-        "pack.threads=1",
-        "verify-pack",
-        "--object-format=sha1",
-        ...selected,
-      ]);
-      const published = await git(
-        [
+      while (selected.length > 1 && bytes < 2 * selected.at(-1)!.bytes) {
+        bytes -= selected.pop()!.bytes;
+      }
+      if (selected.length >= 2) {
+        const selectedNames = selected.map((pack) => pack.name);
+        await run("git", [
+          "-C",
+          packDirectory,
           "-c",
-          "alias.fixture-consolidate=!git pack-objects --stdin-packs --stdout --window=0 --threads=1 | git index-pack --stdin --threads=1",
-          "fixture-consolidate",
-        ],
-        `${selected.join("\n")}\n`,
-      );
-      const hash = /^pack\s+([a-f0-9]{40})$/.exec(published)?.[1];
-      assert(hash, "Native consolidation did not publish a pack identity");
-      for (const name of selected) {
-        if (name === `pack-${hash}.pack`) {
-          continue;
-        }
-        for (const extension of ["idx", "pack", "rev"]) {
-          await fs.rm(path.join(packDirectory, name.replace(/\.pack$/, `.${extension}`)), {
-            force: true,
-          });
+          "pack.threads=1",
+          "verify-pack",
+          "--object-format=sha1",
+          ...selectedNames,
+        ]);
+        const published = await git(
+          [
+            "-c",
+            "alias.fixture-consolidate=!git pack-objects --stdin-packs --stdout --window=0 --threads=1 | git index-pack --stdin --threads=1",
+            "fixture-consolidate",
+          ],
+          `${selectedNames.join("\n")}\n`,
+        );
+        const hash = /^pack\s+([a-f0-9]{40})$/.exec(published)?.[1];
+        assert(hash, "Native consolidation did not publish a pack identity");
+        for (const name of selectedNames) {
+          if (name === `pack-${hash}.pack`) {
+            continue;
+          }
+          for (const extension of ["idx", "pack", "rev"]) {
+            await fs.rm(path.join(packDirectory, name.replace(/\.pack$/, `.${extension}`)), {
+              force: true,
+            });
+          }
         }
       }
       consolidation = {
         packsBefore: inventory.length,
         packsAfter: await packs(),
-        selected: selected.length,
+        selected: selected.length >= 2 ? selected.length : 0,
       };
     }
     const indexNames = (await fs.readdir(packDirectory)).filter((name) => name.endsWith(".idx"));
@@ -302,15 +313,26 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
     const started = performance.now();
     await run(
       "/usr/bin/time",
-      ["-v", "-o", timingPath, "git", "-C", repo, "multi-pack-index", "write", "--stdin-packs"],
+      [
+        ...(process.platform === "darwin" ? ["-l", "-p"] : ["-v"]),
+        "-o",
+        timingPath,
+        "git",
+        "-C",
+        repo,
+        "multi-pack-index",
+        "write",
+        "--stdin-packs",
+      ],
       `${indexNames.join("\n")}\n`,
     );
     const elapsedMs = performance.now() - started;
     const timing = await fs.readFile(timingPath, "utf8");
-    const peakProcessRssKiB = Number(
-      /Maximum resident set size \(kbytes\):\s+(\d+)/.exec(timing)?.[1],
-    );
-    assert(peakProcessRssKiB > 0, "GNU time did not report peak RSS");
+    const peakProcessRssKiB =
+      process.platform === "darwin"
+        ? Number(/(\d+)\s+maximum resident set size/.exec(timing)?.[1]) / 1024
+        : Number(/Maximum resident set size \(kbytes\):\s+(\d+)/.exec(timing)?.[1]);
+    assert(peakProcessRssKiB > 0, "time did not report peak RSS");
     const savedIndexPath = path.join(root, "saved-multi-pack-index");
     const lookups: Array<{ midx: boolean; elapsedMs: number; objects: number }> = [];
     // Mix packs deterministically rather than giving ordinary indexes pack-local reads.
@@ -348,14 +370,26 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
       JSON.stringify(
         {
           mode: values.mode,
+          platform: process.platform,
+          gitVersion: await run("git", ["--version"]),
           objectCount: fixture.objectCount,
           packs: await packs(),
           consolidation,
           payloadBytes: fixture.payloadBytes,
           elapsedMs,
           peakProcessRssKiB,
-          userSeconds: Number(/User time \(seconds\):\s+([\d.]+)/.exec(timing)?.[1]),
-          systemSeconds: Number(/System time \(seconds\):\s+([\d.]+)/.exec(timing)?.[1]),
+          userSeconds: Number(
+            (process.platform === "darwin"
+              ? /^user\s+([\d.]+)/m
+              : /User time \(seconds\):\s+([\d.]+)/
+            ).exec(timing)?.[1],
+          ),
+          systemSeconds: Number(
+            (process.platform === "darwin"
+              ? /^sys\s+([\d.]+)/m
+              : /System time \(seconds\):\s+([\d.]+)/
+            ).exec(timing)?.[1],
+          ),
           midxBytes: (await fs.stat(indexPath)).size,
           lookups,
         },

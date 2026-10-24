@@ -300,10 +300,7 @@ async function consolidatePacks(
   let objectFormat: string | undefined;
   for (const promisor of [true, false]) {
     const candidates = packs.filter((pack) => pack.promisor === promisor);
-    if (candidates.length < 16) {
-      continue;
-    }
-    const selected = [];
+    const batch = [];
     let bytes = 0;
     let indexBytes = 0;
     for (const pack of candidates) {
@@ -313,17 +310,23 @@ async function consolidatePacks(
       if (
         bytes + pack.size > PACK_BATCH_BYTES ||
         indexBytes + pack.indexBytes > PACK_BATCH_INDEX_BYTES ||
-        selected.length >= PACK_BATCH_COUNT
+        batch.length >= PACK_BATCH_COUNT
       ) {
         break;
       }
-      selected.push(pack.name);
+      batch.push(pack);
       bytes += pack.size;
       indexBytes += pack.indexBytes;
     }
-    if (selected.length < 2) {
+    // Leave a dominant pack alone until the smaller inputs together reach its
+    // size; bounded batches can still make progress below a fixed pack count.
+    while (batch.length > 1 && bytes < 2 * batch.at(-1)!.size) {
+      bytes -= batch.pop()!.size;
+    }
+    if (batch.length < 2) {
       continue;
     }
+    const selected = batch.map((pack) => pack.name);
     // Validate only the packs this pass may retire, without walking refs or
     // missing partial-clone objects. The streaming writer does not check source CRCs.
     objectFormat ??= await requireGit(repoRoot, ["rev-parse", "--show-object-format"], options);

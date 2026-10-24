@@ -543,8 +543,8 @@ describe("worktree Git maintenance", () => {
     );
     await requireGit(repo, ["multi-pack-index", "verify"]);
     expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
-    // Small inventories wait for consolidation instead of rebuilding a full MIDX
-    // just to discover redundant copies.
+    // A tiny duplicate does not force rewriting its dominant pack or rebuilding
+    // a full MIDX just to discover redundant copies.
     const duplicate = await requireGit(repo, ["pack-objects", path.join(packDirectory, "pack")], {
       input: `${objects[1]}\n`,
     });
@@ -555,6 +555,42 @@ describe("worktree Git maintenance", () => {
     expect(afterDuplicate.filter((name) => name.endsWith(".promisor"))).toHaveLength(3);
     expect(await requireGit(repo, ["cat-file", "-t", objects[1]!])).toBe("blob");
     await requireGit(repo, ["multi-pack-index", "verify"]);
+  });
+
+  it("rolls up equal-sized small packs while leaving a dominant pack untouched", async () => {
+    const repo = await initRepo(tempDirs.make("worktree-geometric-packs-"));
+    const directory = path.join(repo, ".git", "objects", "pack");
+    const dominant = Buffer.alloc(4096);
+    for (let offset = 0; offset < dominant.length; offset += 4) {
+      dominant.writeUInt32BE(offset, offset);
+    }
+    const objects: string[] = [];
+    const packs: string[] = [];
+    for (const input of ["small-a", "small-b", dominant]) {
+      const object = await requireGit(repo, ["hash-object", "-w", "--stdin"], { input });
+      objects.push(object);
+      const hash = await requireGit(repo, ["pack-objects", path.join(directory, "pack")], {
+        input: `${object}\n`,
+      });
+      packs.push(path.join(directory, `pack-${hash}.pack`));
+    }
+    const sizes = await Promise.all(packs.map(async (name) => (await fs.stat(name)).size));
+    expect(sizes[2]).toBeGreaterThan(sizes[0]! + sizes[1]!);
+    await requireGit(repo, ["prune-packed"]);
+    await register(repo, "geometric-packs", { branch: "main" });
+    const progress = new WorktreeGcProgress();
+    await createWorktreeGitMaintenance(env)({ progress });
+    expect(progress.result.gitMaintenance).toMatchObject({
+      stage: "completed",
+      packsBefore: 3,
+      packsAfter: 2,
+    });
+    await fs.access(packs[2]!);
+    expect(
+      await requireGit(repo, ["cat-file", "--batch-check=%(objecttype)"], {
+        input: `${objects.join("\n")}\n`,
+      }),
+    ).toBe("blob\nblob\nblob");
   });
 
   it("retains a replacement that is already an input and a pack pinned during publication", async () => {
