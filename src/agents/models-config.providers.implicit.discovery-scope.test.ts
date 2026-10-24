@@ -37,7 +37,19 @@ const mocks = vi.hoisted(() => ({
   resolveRuntimePluginDiscoveryProviders: vi.fn(),
   runProviderCatalog: vi.fn(),
   runProviderStaticCatalog: vi.fn(),
+  warn: vi.fn(),
 }));
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      warn: mocks.warn,
+    }),
+  };
+});
 
 const BUNDLED_PLUGINS_DIR = fileURLToPath(new URL("../../extensions/", import.meta.url));
 
@@ -313,6 +325,17 @@ it.each(["timeout", "secret-unavailable"] as const)(
       await lateCatalog;
     }
     expect(outcomes).toEqual(expected);
+    if (failure === "timeout") {
+      expect(mocks.warn).toHaveBeenCalledWith(
+        "Provider catalog discovery failed; skipping unavailable catalog",
+        {
+          provider: "family",
+          phase: "provider-discovery",
+          reason: "timeout",
+          elapsedMs: expect.any(Number),
+        },
+      );
+    }
   },
 );
 
