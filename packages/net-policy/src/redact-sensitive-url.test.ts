@@ -53,6 +53,7 @@ it.each([
 });
 
 it.each([
+  "https://outer.example/proxy/%2A%2A%2A",
   "https://example.com/cb#keep%3Dvisible%26next%3Dsafe",
   "https://outer.example/cb?next=https%3A%2F%2Finner.example%2Fpath%3Fkeep%3Dvisible&keep=one&keep=two#https%3A%2F%2Ffragment.example%2Fpath%3Fok%3D1",
 ])("preserves safe URL bytes: %s", (value) => {

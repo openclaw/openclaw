@@ -176,7 +176,7 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     if (!ref) {
       throw new Error(`Missing download ref: ${trigger}`);
     }
-    const outputPath = path.join(rootDir, `${mode}-${trigger}.txt`);
+    const outputPath = path.join(rootDir, ` ${mode}-${trigger}.txt `);
     const options = {
       ...captureOptions({ cdpUrl, targetId }, rootDir, outputPath),
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: false, allowedHostnames: ["localhost"] },
@@ -389,7 +389,9 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     async ({ mode, allowed }) => {
       const download = await preparePolicyDownload(mode, allowed);
       if (allowed) {
-        await expect(fs.readFile((await download.pending).path)).resolves.toEqual(download.payload);
+        const result = await download.pending;
+        expect(result.path).toBe(download.outputPath);
+        await expect(fs.readFile(result.path)).resolves.toEqual(download.payload);
       } else {
         await expect(download.pending).rejects.toThrow(/blocked|private/i);
         await expect(fs.access(download.outputPath)).rejects.toMatchObject({ code: "ENOENT" });

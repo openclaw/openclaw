@@ -3209,7 +3209,6 @@
       "ui/src/e2e/assistant-panel-context.e2e.test.ts": 6,
       "ui/src/e2e/avatar-initial-emoji.e2e.test.ts": 4,
       "ui/src/e2e/background-work.real-gateway.e2e.test.ts": 39,
-      "ui/src/e2e/board-a2ui.e2e.test.ts": 9,
       "ui/src/e2e/board-fixture.e2e.test.ts": 83,
       "ui/src/e2e/board-mcp-app.e2e.test.ts": 13,
       "ui/src/e2e/board-split-transcript.e2e.test.ts": 13,

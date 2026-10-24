@@ -29,7 +29,10 @@ import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import { ExecProcessPreflightError } from "./bash-tools.exec-launch.js";
-import { EXEC_MANUAL_COLLECTION_FOLLOW_UP } from "./bash-tools.exec-output.js";
+import {
+  buildExecRuntimeErrorOutcome,
+  EXEC_MANUAL_COLLECTION_FOLLOW_UP,
+} from "./bash-tools.exec-output.js";
 import {
   assertSupportedExecParams,
   createExecRequestPreparation,
@@ -39,7 +42,6 @@ import {
   resolvePreparedExecEnvironment,
 } from "./bash-tools.exec-request-preparation.js";
 import {
-  buildExecRuntimeErrorOutcome,
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PENDING_MAX_OUTPUT,
   type ExecProcessHandle,

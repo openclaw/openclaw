@@ -141,47 +141,47 @@ function SessionGoalStatus(props: { goal: GatewaySessionRow["goal"] }) {
 function sessionDetailItems(
   row: GatewaySessionRow,
   updated: string,
-): Array<{ label: string; value: string }> {
-  const details: Array<{ label: string; value: string }> = [
-    { label: t("sessionsView.key"), value: row.key },
-    { label: t("sessionsView.kind"), value: resolveSessionDisplayKind(row) },
-    { label: t("sessionsView.updated"), value: updated },
-    { label: t("sessionsView.tokens"), value: formatSessionTokens(row) },
+): Array<{ key: string; value: string }> {
+  const details: Array<{ key: string; value: string }> = [
+    { key: "sessionsView.key", value: row.key },
+    { key: "sessionsView.kind", value: resolveSessionDisplayKind(row) },
+    { key: "sessionsView.updated", value: updated },
+    { key: "sessionsView.tokens", value: formatSessionTokens(row) },
   ];
-  const add = (label: string, value: string | null | undefined) => {
+  const add = (key: string, value: string | null | undefined) => {
     const normalized = normalizeOptionalString(value);
     if (normalized) {
-      details.push({ label, value: normalized });
+      details.push({ key, value: normalized });
     }
   };
-  add(t("sessionsView.group"), row.category);
-  add(t("sessionsView.status"), row.status);
+  add("sessionsView.group", row.category);
+  add("sessionsView.status", row.status);
   if (row.goal) {
-    details.push({ label: t("sessionsView.goal"), value: formatGoalDetail(row.goal) });
+    details.push({ key: "sessionsView.goal", value: formatGoalDetail(row.goal) });
   }
-  add(t("sessionsView.goalNote"), row.goal?.lastStatusNote);
-  add(t("sessionsView.model"), row.model);
-  add(t("sessionsView.provider"), row.modelProvider);
-  add(t("sessionsView.runtime"), formatAgentRuntimeLabel(row.agentRuntime));
-  add(t("sessionsView.runDuration"), formatRuntimeMs(row.runtimeMs));
-  add(t("sessionsView.surface"), row.surface);
-  add(t("sessionsView.subject"), row.subject);
-  add(t("sessionsView.room"), row.room);
-  add(t("sessionsView.space"), row.space);
-  add(t("sessionsView.sessionId"), row.sessionId);
+  add("sessionsView.goalNote", row.goal?.lastStatusNote);
+  add("sessionsView.model", row.model);
+  add("sessionsView.provider", row.modelProvider);
+  add("sessionsView.runtime", formatAgentRuntimeLabel(row.agentRuntime));
+  add("sessionsView.runDuration", formatRuntimeMs(row.runtimeMs));
+  add("sessionsView.surface", row.surface);
+  add("sessionsView.subject", row.subject);
+  add("sessionsView.room", row.room);
+  add("sessionsView.space", row.space);
+  add("sessionsView.sessionId", row.sessionId);
   if (row.archiveReason) {
     details.push({
-      label: t("sessionsView.archiveReason"),
+      key: "sessionsView.archiveReason",
       value: formatSessionArchiveReason(row.archiveReason),
     });
   }
-  for (const [label, value] of [
-    [t("sessionsView.activeRun"), row.hasActiveRun],
-    [t("sessionsView.archived"), row.archived],
-    [t("sessionsView.pinned"), row.pinned],
+  for (const [key, value] of [
+    ["sessionsView.activeRun", row.hasActiveRun],
+    ["sessionsView.archived", row.archived],
+    ["sessionsView.pinned", row.pinned],
   ] as const) {
     if (typeof value === "boolean") {
-      details.push({ label, value: value ? t("common.yes") : t("common.no") });
+      details.push({ key, value: value ? t("common.yes") : t("common.no") });
     }
   }
   return details;
@@ -528,12 +528,12 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
           </div>
 
           <div class="session-details-grid">
-            <For each={sessionDetailItems(row(), updated())}>
+            <For each={sessionDetailItems(row(), updated())} keyed={(item) => item.key}>
               {(item) => (
                 <div class="session-detail-stat">
-                  <div class="session-detail-stat__label">{item.label}</div>
-                  <openclaw-tooltip prop:content={item.value}>
-                    <div class="session-detail-stat__value">{item.value}</div>
+                  <div class="session-detail-stat__label">{t(item().key)}</div>
+                  <openclaw-tooltip prop:content={item().value}>
+                    <div class="session-detail-stat__value">{item().value}</div>
                   </openclaw-tooltip>
                 </div>
               )}

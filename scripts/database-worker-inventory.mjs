@@ -1196,9 +1196,20 @@ const reviewedOperations = new Map([
       },
       {
         tier: "T3",
-        operations: ["readSessionGenerationIdsForKeys", "deleteSqliteSessionStateRows"],
+        operations: ["deleteSqliteSessionStateRows"],
         evidence:
-          "Generation reads serve lifecycle planning, deletion planning, maintenance apply and Doctor canonical-repair aliases. Lifecycle/reclamation/purge native branches require worker or maintenance custody; deletion planning with expectedDatabaseIdentity is produced only by Doctor legacy repair. Physical deletion is private to materialized-state deletion, called by the same lifecycle/reclamation/purge kernels and worker or reclamation maintenance finalization.",
+          "Physical deletion is private to materialized-state deletion, called by lifecycle/reclamation/purge kernels and worker or reclamation maintenance finalization. Native branches require worker or maintenance custody.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-references.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readSessionGenerationIdsForKeys"],
+        evidence:
+          "Moved unchanged from lifecycle-state.ts. Generation reads serve lifecycle planning, deletion planning, maintenance apply and Doctor canonical-repair aliases. Native lifecycle/reclamation/purge branches require worker or maintenance custody; deletion planning with expectedDatabaseIdentity is produced only by Doctor legacy repair.",
       },
     ],
   ],

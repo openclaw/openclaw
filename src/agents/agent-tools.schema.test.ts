@@ -3,6 +3,7 @@ import { runAgentLoop, type AgentEvent, type StreamFn } from "openclaw/plugin-sd
 import { createAssistantMessageEventStream, validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { Type, type TSchema } from "typebox";
 import { assert, describe, expect, it, vi } from "vitest";
+import { createShowWidgetTool } from "../canvas/widget-tool.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -93,6 +94,24 @@ describe("direct process tool schema", () => {
       executionStarted: false,
       errorKind: "argument-validation",
     });
+  });
+});
+
+it("returns HTML migration guidance for a retired A2UI call before argument validation blocks execution", async () => {
+  const tool = createShowWidgetTool();
+  const execute = vi.spyOn(tool, "execute");
+  expect(tool.parameters).toHaveProperty("properties.kind.enum", ["html"]);
+  const { events } = await runToolCall(
+    tool,
+    { title: "Retired widget", kind: "a2ui", widget_code: "{}" },
+    "retired-widget",
+  );
+  expect(execute).not.toHaveBeenCalled();
+  expect(events.find((event) => event.type === "tool_execution_end")).toMatchObject({
+    executionStarted: false,
+    isError: true,
+    errorKind: "argument-validation",
+    result: { content: [{ type: "text", text: 'A2UI widgets were removed; use kind "html"' }] },
   });
 });
 

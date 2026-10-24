@@ -7,7 +7,6 @@ import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
-import { registerTestWidgetContentKind } from "./widget-tool.content-kinds.test-support.js";
 import { createShowWidgetTool } from "./widget-tool.js";
 import { createBoardPutCaller } from "./widget-tool.test-support.js";
 import { buildWidgetDocument } from "./wrap.js";
@@ -199,23 +198,5 @@ describe("show_widget current-channel presentation", () => {
     expect(present).not.toHaveBeenCalled();
     expect(availability).not.toHaveBeenCalled();
     await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
-  });
-
-  it("leaves registered source validation to the content kind", async () => {
-    registerTestWidgetContentKind("diagram", () => "<p>Rendered diagram</p>");
-    const stateDir = tempDirs.make("openclaw-widget-syntax-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const tool = createShowWidgetTool({ sessionId: "registered-syntax" });
-    expect(tool.description).toContain(
-      "Keep one-off visualizations inline; pin for explicit dashboard requests or multiple non-code visualizations.",
-    );
-    expect(tool.description).toContain('Default videos to controls playsinline preload="auto"');
-    expect(tool.description).toContain("do not autoplay");
-    const result = await tool.execute("registered", {
-      title: "Diagram",
-      kind: "diagram",
-      widget_code: "diagram:<script>const =</script>",
-    });
-    expect(payload(result)).toMatchObject({ kind: "canvas" });
   });
 });

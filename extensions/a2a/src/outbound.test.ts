@@ -1,11 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { withEnv, withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { sendA2aChannelText } from "./outbound.js";
 import type { A2aCoreConfig, A2aPeerConfig } from "./types.js";
+
+/** Both config guards reject deterministically before I/O; the queue must read them as terminal. */
+function expectPermanentPreDispatchRejection(failure: unknown, message: RegExp | string) {
+  expect(failure).toBeInstanceOf(PlatformMessageNotDispatchedError);
+  expect((failure as PlatformMessageNotDispatchedError).retryable).toBe(false);
+  expect((failure as Error).message).toMatch(message);
+}
 
 function createA2aOutboundConfig(
   peer: A2aPeerConfig = { token: "inbound-token", url: "https://hermes.example/a2a/v1" },
@@ -142,11 +150,15 @@ describe("A2A outbound channel delivery", () => {
     expect(result.messageId).toBe(request.params.message.messageId);
   });
 
-  it("rejects missing outbound peer URLs before making an HTTP request", async () => {
+  it("rejects missing outbound peer URLs as a permanent pre-dispatch rejection", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
     const cfg = createA2aOutboundConfig({ token: "inbound-token" });
 
-    await expect(send(cfg)).rejects.toThrow("peer hermes has no url configured for outbound A2A");
+    const failure = await send(cfg).catch((error: unknown) => error);
+    expectPermanentPreDispatchRejection(
+      failure,
+      "peer hermes has no url configured for outbound A2A",
+    );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -204,9 +216,10 @@ describe("A2A outbound channel delivery", () => {
         () => getRuntimeConfig({ pin: false }),
       );
 
-      await expect(sendA2aChannelText({ cfg, to: "a2a:hermes", text: "hello" })).rejects.toThrow(
-        /outboundToken reference did not resolve/,
+      const failure = await sendA2aChannelText({ cfg, to: "a2a:hermes", text: "hello" }).catch(
+        (error: unknown) => error,
       );
+      expectPermanentPreDispatchRejection(failure, /outboundToken reference did not resolve/);
       expect(ssrfRuntime.fetchWithSsrFGuard).not.toHaveBeenCalled();
     });
   });

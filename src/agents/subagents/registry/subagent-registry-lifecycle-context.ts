@@ -50,7 +50,10 @@ export type SubagentLifecycleOptions = {
 
 export interface SubagentLifecycleCommonContext {
   readonly options: SubagentLifecycleOptions;
-  runBackgroundWork<T>(entry: SubagentRunRecord, run: () => Promise<T>): Promise<T>;
+  runBackgroundWork<T>(
+    entry: SubagentRunRecord,
+    run: (releasePreparation: () => void) => Promise<T>,
+  ): Promise<T>;
   newerGenerationOwnsSession(entry: SubagentRunRecord): boolean;
   shouldSuppressSessionEffects(
     entry: SubagentRunRecord,
@@ -111,7 +114,7 @@ export interface SubagentLifecycleWakeContext extends SubagentLifecycleCommonCon
   resumeAncestorCleanup(settledEntry: SubagentRunRecord): void;
   runRequesterSettleWake(
     entry: SubagentRunRecord,
-    run: () => Promise<unknown>,
+    run: (releasePreparation: () => void) => Promise<unknown>,
     isCurrent: () => boolean,
   ): Promise<unknown>;
 }

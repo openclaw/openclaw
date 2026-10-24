@@ -176,11 +176,30 @@ describe("sessions_spawn visible work receipts", () => {
       countActiveRuns: () => 0,
     });
     const result = await withGatewayToolCallerIdentity(
-      { agentId: "main", sessionKey: key, operationalRunInstance: run },
-      () => tool.execute("public-spawn", { task: "inspect", visible: true }),
+      {
+        agentId: "main",
+        sessionKey: key,
+        operationalRunInstance: run,
+        requesterOrigin: { sessionKey: key, delegatedCreatorProfileId: "linked-human" },
+      },
+      () =>
+        tool.execute("public-spawn", {
+          task: "inspect",
+          visible: true,
+          requesterProfileId: "message-authored",
+        }),
     );
     expect(hoisted.inProcessCreationMock.mock.calls[0]?.[2]).toMatchObject({
       childSessionPublication: publication,
+      actor: {
+        type: "agent",
+        id: "main",
+        delegatedBy: {
+          type: "human",
+          source: "profile",
+          id: "linked-human",
+        },
+      },
     });
     expect(hoisted.inProcessCreationMock.mock.calls[0]?.[1]).not.toHaveProperty(
       "childSessionPublication",

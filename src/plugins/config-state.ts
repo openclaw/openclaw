@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Normalizes plugin config and resolves effective enablement, slots, and activation sources. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import {
   resolveMemorySlotDecisionShared,
   resolvePluginActivationStateShared,
@@ -60,7 +60,16 @@ export const normalizePluginsConfig = (
   if (preparedRuntimePluginsConfig && preparedRuntimePluginsConfig.source === config) {
     return preparedRuntimePluginsConfig.value;
   }
-  return createNormalizedPluginsConfig(config);
+  if (!config || !isDeeplyFrozenPlainData(config)) {
+    return createNormalizedPluginsConfig(config);
+  }
+  // Captured configs are frozen and cannot change in place, so they share one frozen policy.
+  let value = frozenPluginsConfigs.get(config);
+  if (!value) {
+    value = createSharedNormalizedPluginsConfig(config);
+    frozenPluginsConfigs.set(config, value);
+  }
+  return value;
 };
 
 export type ContextEngineOwnerMetadata = {
@@ -71,14 +80,15 @@ export type ContextEngineOwnerMetadata = {
 let preparedRuntimePluginsConfig:
   | { source: OpenClawConfig["plugins"]; value: NormalizedPluginsConfig }
   | undefined;
+const frozenPluginsConfigs = new WeakMap<
+  NonNullable<OpenClawConfig["plugins"]>,
+  NormalizedPluginsConfig
+>();
 
-/** Runtime config publication owns replacement, including same-object refreshes and teardown. */
-export function prepareRuntimePluginsConfig(config: OpenClawConfig | null): void {
-  if (!config) {
-    preparedRuntimePluginsConfig = undefined;
-    return;
-  }
-  const value = createNormalizedPluginsConfig(config.plugins);
+function createSharedNormalizedPluginsConfig(
+  config: OpenClawConfig["plugins"],
+): NormalizedPluginsConfig {
+  const value = createNormalizedPluginsConfig(config);
   for (const entry of Object.values(value.entries)) {
     // Plugin payloads retain their original owner; only normalized policy is shared and frozen.
     const { config: _config, ...policy } = entry;
@@ -89,7 +99,14 @@ export function prepareRuntimePluginsConfig(config: OpenClawConfig | null): void
   for (const field of [value.allow, value.deny, value.loadPaths, value.slots]) {
     Object.freeze(field);
   }
-  preparedRuntimePluginsConfig = { source: config.plugins, value: Object.freeze(value) };
+  return Object.freeze(value);
+}
+
+/** Runtime config publication owns replacement, including same-object refreshes and teardown. */
+export function prepareRuntimePluginsConfig(config: OpenClawConfig | null): void {
+  preparedRuntimePluginsConfig = config
+    ? { source: config.plugins, value: createSharedNormalizedPluginsConfig(config.plugins) }
+    : undefined;
 }
 
 /** Resolves the enabled plugin selected to own the context-engine slot. */

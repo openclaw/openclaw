@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { BrowserProfileUnavailableError } from "../errors.js";
 import { assertBrowserNavigationResultAllowed } from "../navigation-guard.js";
 import { DEFAULT_TRACE_DIR } from "../paths.js";
@@ -25,7 +28,7 @@ import { withBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { readRoutePositiveInteger } from "./route-numeric.js";
 import { registerBrowserTabRoutes } from "./tabs.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { toBoolean, toStringOrEmpty } from "./utils.js";
+import { toBoolean } from "./utils.js";
 
 function clampScreencastOption(value: unknown, min: number, max: number, fallback: number) {
   return typeof value === "number" && Number.isFinite(value)
@@ -207,7 +210,7 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
   });
 
   register("post", "/trace/stop", "trace stop", (input, _params, res) => {
-    const requestedPath = toStringOrEmpty(input.path);
+    const requestedPath = readNonBlankString(input.path) ?? "";
     return async (pw, { cdpUrl, targetId }) => {
       const tracePath = await resolveWritableOutputPathOrRespond({
         res,

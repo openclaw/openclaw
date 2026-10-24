@@ -8,7 +8,7 @@ These lessons came from the completed Lit → Solid 2 migration (October 2026). 
 - **Effect cleanup also runs for equal computed values.** A bridge props refresh can rerun `createEffect` even when its selected status is unchanged, canceling a timer without restarting it. Feed lifecycle effects through a `createMemo` when cleanup must follow value transitions; this kept the saved-status timer from hiding Apply indefinitely.
 - **Native `value` bindings rewrite on every rerun.** The compiled binding assigns `input.value` whenever its effect reruns, even with an equal value. Read through a spread props object, it reruns on every unrelated refresh and wipes uncommitted text; Settings lost a typed message width this way while hydrating. A `createMemo` of the owner value isolates its updates only when the binding effect has no other reactive attributes. The compiler can group `value` with validation attributes, so use the existing `liveValue` ref from `lib/reactive/live-value.ts` for commit-on-change drafts; its separate effect preserves typed text when validation changes. Key a DOM-owned input's lifetime to its logical step identity so consecutive steps with equal defaults still reset the draft.
 - **Publish related lifecycle facts together.** A retained Board app reactivated with the new `active` prop and the previous inactive visibility snapshot, briefly tearing down its iframe and losing drafts. Recheck visibility before publishing activity and consume both from the same lifecycle projection.
-- **Removed namespaces compile silently.** `on:click`, `attr:`, `bool:`, `classList`, and `use:` don't error; they become literal attributes or no-ops. Lint is the only guard.
+- **Removed namespaces compiled silently before rc.18.** `on:click`, `attr:`, `bool:`, `classList`, and `use:` became literal attributes or no-ops. rc.18 rejects native JSX uses; lint still guards spreads.
 - **Event names are case-sensitive.** Dashed custom events need the exact dash in their JSX handler name, or a `listen(...)` subscription.
 - **Async memos aren't cancellable.** They drop superseded results but get no `AbortSignal`. Transport cancellation needs an owned async-iterable adapter.
 - **Ref callbacks are unowned.** `onCleanup` inside one never runs. Set up behavior in the component body or an owned ref factory.
@@ -43,6 +43,20 @@ The [rc.16 changelogs](https://github.com/solidjs/solid/tree/b0ad1df505b835058a4
 - **Loading resets consume values.** Use `on={identity()}`; an accessor passed as `on` never reads its dependency. Refresh a derived store at its root, then read the nested value after settlement.
 - **Providers own subtree state.** The cheatsheet now recommends provider-created state for portable request isolation; module scope is shared by server requests. OpenClaw's plain TypeScript domain owners retain their existing authority and lifetime.
 - **Binding slots are removed.** `BindingSlot`, `SlotOutput`, `SlotError`, and the frames `bind` entry are gone. OpenClaw uses none of them; ordinary slots remain.
+
+### rc.18 upgrade
+
+The [rc.17 and rc.18 changelogs](https://github.com/solidjs/solid/tree/225014bf8757421a2ea0a9c6ddc148b965eed000/packages) refine these contracts:
+
+- **Cleanup failures do not interrupt teardown.** All sibling cleanups run; the first error is rethrown after disposal or the current flush completes. Do not depend on a throw preventing later cleanup.
+- **Rejected replacements retire the previous frame.** An async memo's committed run stays alive until its replacement lands, including rejection; an uncommitted superseded run is cleaned up immediately.
+- **Store adoption preserves moved rows.** Reconcile and derived-store adoption no longer alias slots when existing raw objects move or swap. Keep semantic keys where row identity is a product contract; do not add cloning workarounds.
+- **Effects do not compare computed values.** Cleanup and apply run whenever compute runs, even for equal answers. Put a memo at the dependency boundary when equality should suppress the effect.
+- **Native legacy JSX is rejected by the compiler.** `on:`, `oncapture:`, `attr:`, `bool:`, `use:`, and `classList` now fail compilation; spreads still require lint. A bare `prop:active` writes `true`.
+- **Input warnings identify lost drafts.** `UNCOMMITTED_INPUT_OVERWRITTEN` names a binding overwriting an uncommitted DOM edit. Use a draft signal, `liveValue`, or a native default; write rejected edits back in the handler instead of setting `equals: false`.
+- **Synchronous DOM events have their own dev phase.** Focus/click/dialog events triggered by an effect no longer inherit its strict-read or primitive-creation diagnostics. Keep actual effect callbacks within the existing ownership rules.
+- **`from` owns a latest-value subscription.** `createMemo(() => from(source))` closes a callback subscription, Observable, or AsyncIterable on supersession/disposal. Subscription values coalesce; ordered domain events must retain their direct subscription. Prefer returning `from` directly rather than consuming it after an `await`, where the owner is lost.
+- **Vite deduplicates production runtimes.** next.51 deduplicates the three runtime packages in builds as well as dev. It no longer supplies a default `jsdom` test environment; every DOM test configuration must select its environment explicitly.
 
 ## DOM ownership
 

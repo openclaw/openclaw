@@ -1,3 +1,4 @@
+import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import {
   captureWorktreeRegistryReadGuard,
   prepareWorktreeRegistryGuard,
@@ -242,14 +243,16 @@ async function runLocalWorkspaceProjection<T>(
     await import("../../agents/sandbox/local-workspace-quiescence.js");
   const quiescence =
     previous && !options.provision
-      ? await quiesceLocalWorkspace({
-          env: owner.env,
-          workspaceDir: previous.projection_path,
-          retained: parseLocalWorkspacePausedRuntimes(previous.paused_runtimes_json),
-          persist: (runtimes) =>
-            operations.rememberPaused(runtimes.length ? JSON.stringify(runtimes) : null),
-          assertCurrent,
-        })
+      ? await timeWorktreePreparationPhase("runtimeQuiesce", () =>
+          quiesceLocalWorkspace({
+            env: owner.env,
+            workspaceDir: previous.projection_path,
+            retained: parseLocalWorkspacePausedRuntimes(previous.paused_runtimes_json),
+            persist: (runtimes) =>
+              operations.rememberPaused(runtimes.length ? JSON.stringify(runtimes) : null),
+            assertCurrent,
+          }),
+        )
       : undefined;
   try {
     return await run(operations, quiescence);
@@ -261,7 +264,9 @@ async function runLocalWorkspaceProjection<T>(
       !retained.journal_json &&
       !(retained.pending_target && isLocalWorkspaceBaseRefreshRef(retained.pending_ref))
     ) {
-      await quiescence?.resume();
+      if (quiescence) {
+        await timeWorktreePreparationPhase("runtimeResume", () => quiescence.resume());
+      }
     }
   }
 }
