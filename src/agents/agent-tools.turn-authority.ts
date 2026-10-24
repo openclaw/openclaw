@@ -72,7 +72,11 @@ export function resolveTurnToolSurface(params: {
       scopedReads
         ? `On this automation-started turn, ${tool.name} runs only the ${CRON_SCOPED_READ_ACTIONS.join(", ")} actions. Other actions need the owner's authority, and this turn was not started by the owner. Do not retry them.`
         : ownerOnly
-          ? `${tool.name} needs the owner's authority, and this turn was not started by the owner. Do not retry ${tool.name}.`
+          ? `${tool.name} needs the owner's authority, and this turn was not started by the owner. ${
+              tool.requiredClientCaps?.length
+                ? `Ask the owner to request it again from the open Control UI with ${tool.requiredClientCaps.join(", ")}.`
+                : `Do not retry ${tool.name}.`
+            }`
           : `${tool.name} is outside the authority this completion turn carries from its requester. Do not retry ${tool.name}.`,
     );
     // Copying hook metadata also copies the availability binding; re-mark the denial
