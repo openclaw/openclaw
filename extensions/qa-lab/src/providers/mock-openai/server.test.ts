@@ -950,10 +950,12 @@ describe("qa mock openai server", () => {
       `Slack MPIM assistant-history seed check. Reply with only a marker in this exact format: ${seedMarker}_BOT_<NONCE>. ` +
       "Replace <NONCE> with 8 to 32 new uppercase letters or digits. " +
       "Do not include angle brackets, spaces, Markdown, or punctuation.";
-    const botReplyMarker = await openAiReply(server, userInputs(seedPrompt));
-    expect(botReplyMarker).toMatch(new RegExp(`^${seedMarker}_BOT_[A-Z0-9]+$`, "u"));
+    const read = (...input: Parameters<typeof userInputs>) =>
+      openAiReply(server, userInputs(...input));
+    const botReplyMarker = await read(seedPrompt);
+    const seedPattern = new RegExp(`^${seedMarker}_BOT_[A-Z0-9]+$`, "u");
+    expect(botReplyMarker).toMatch(seedPattern);
     const botNonce = botReplyMarker.slice(`${seedMarker}_BOT_`.length);
-    const expectedRecallMarker = `${recallMarker}_${botNonce}`;
     const recallPrompt = [
       "Slack MPIM assistant-history recall check.",
       `Recall the nonce from your immediately previous reply beginning with ${seedMarker}_BOT_.`,
@@ -961,62 +963,38 @@ describe("qa mock openai server", () => {
       `Otherwise reply with only: ${missingMarker}`,
     ].join(" ");
     expectExcludes(recallPrompt, botReplyMarker, botNonce);
-
-    expect(
-      await openAiReply(
-        server,
-        userInputs(
-          [
-            "[Thread history - for context]",
-            `[Slack Driver (user) Fri 2026-07-31 10:00 UTC] ${seedPrompt}`,
-            "[slack message id: 1.000000 channel: C123]",
-            "",
-            `[Slack OpenClaw (this assistant) (assistant) Fri 2026-07-31 10:01 UTC] ${botReplyMarker}`,
-            "[slack message id: 1.500000 channel: C123]",
-            "",
-            `[Slack Driver (user) Fri 2026-07-31 10:02 UTC] ${recallPrompt}`,
-          ].join("\n"),
-        ),
+    const history = (author: string, seed = "") =>
+      [
+        "[Thread history - for context]",
+        ...(seed
+          ? [
+              `[Slack Driver (user) Fri 2026-07-31 10:00 UTC] ${seed}`,
+              "[slack message id: 1.000000 channel: C123]",
+              "",
+            ]
+          : []),
+        `[Slack ${author} Fri 2026-07-31 ${seed ? "10:01" : "10:00"} UTC] ${botReplyMarker}`,
+        `[slack message id: ${seed ? "1.500000" : "1.000000"} channel: C123]`,
+        "",
+        `[Slack Driver (user) Fri 2026-07-31 10:02 UTC] ${recallPrompt}`,
+      ].join("\n");
+    await expect(read(history("OpenClaw (this assistant) (assistant)", seedPrompt))).resolves.toBe(
+      `${recallMarker}_${botNonce}`,
+    );
+    await expect(
+      read(
+        seedPrompt,
+        { role: "assistant", content: [{ type: "output_text", text: botReplyMarker }] },
+        recallPrompt,
       ),
-    ).toBe(expectedRecallMarker);
-
-    expect(
-      await openAiReply(
-        server,
-        userInputs(
-          seedPrompt,
-          {
-            role: "assistant",
-            content: [{ type: "output_text", text: botReplyMarker }],
-          },
-          recallPrompt,
-        ),
-      ),
-    ).toBe(missingMarker);
-
-    expect(
-      await openAiReply(
-        server,
-        userInputs(
-          [
-            "[Thread history - for context]",
-            `[Slack Alice (user) Fri 2026-07-31 10:00 UTC] ${botReplyMarker}`,
-            "[slack message id: 1.000000 channel: C123]",
-            "",
-            `[Slack Driver (user) Fri 2026-07-31 10:02 UTC] ${recallPrompt}`,
-          ].join("\n"),
-        ),
-      ),
-    ).toBe(missingMarker);
-
+    ).resolves.toBe(missingMarker);
+    await expect(read(history("Alice (user)"))).resolves.toBe(missingMarker);
     for (const prefix of [
       "Please remember this fact for later: ORBIT-22. ",
       "Reply exactly `SHADOWED-EXACT-REPLY`. ",
     ]) {
-      expect(await openAiReply(server, userInputs(prefix + seedPrompt))).toMatch(
-        new RegExp(`^${seedMarker}_BOT_[A-Z0-9]+$`, "u"),
-      );
-      expect(await openAiReply(server, userInputs(prefix + recallPrompt))).toBe(missingMarker);
+      await expect(read(prefix + seedPrompt)).resolves.toMatch(seedPattern);
+      await expect(read(prefix + recallPrompt)).resolves.toBe(missingMarker);
     }
   });
 
@@ -1102,72 +1080,39 @@ describe("qa mock openai server", () => {
 
   it("answers WhatsApp pending-history prompts only with injected prior group context", async () => {
     const server = await startMockServer();
-    const currentTriggerPrompt = [
+    const trigger = [
       "openclawqa pending history context check",
       WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER,
       `Return ${WHATSAPP_PENDING_HISTORY_OK_MARKER} only if prior group context contains the context-only sentinel.`,
     ].join(" ");
-
-    const historyContext = buildWhatsAppPendingHistoryContextFixture([
-      {
-        sender: "Alice",
-        timestamp: 1_786_000_000_000,
-        body: `quiet context ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER} ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}`,
-      },
-    ]);
-    expect(
-      await openAiReply(
-        server,
-        userInputs(
-          currentTriggerPrompt,
-          TEST_RUNTIME_CONTEXT_CARRIER.replace("runtime metadata", historyContext),
-        ),
-      ),
-    ).toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
-
-    expect(await openAiReply(server, currentTriggerPrompt)).not.toBe(
-      WHATSAPP_PENDING_HISTORY_OK_MARKER,
+    const prior = (body: string) =>
+      buildWhatsAppPendingHistoryContextFixture([
+        { sender: "Alice", timestamp: 1_786_000_000_000, body },
+      ]);
+    const history = prior(
+      `quiet context ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER} ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}`,
     );
-
-    expect(
-      await openAiReply(
-        server,
-        userInputs(
-          makeDeveloperInput(
-            buildWhatsAppPendingHistoryContextFixture([
-              {
-                sender: "Alice",
-                timestamp: 1_786_000_000_000,
-                body: "unrelated prior context",
-              },
-            ]),
-          ),
-          [
-            WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT,
-            `Current request: ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER}`,
-          ].join("\n"),
-        ),
+    const read = (...input: Parameters<typeof userInputs>) =>
+      openAiReply(server, userInputs(...input));
+    await expect(
+      read(trigger, TEST_RUNTIME_CONTEXT_CARRIER.replace("runtime metadata", history)),
+    ).resolves.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
+    for (const input of [
+      userInputs(trigger),
+      userInputs(
+        makeDeveloperInput(prior("unrelated prior context")),
+        `${WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT}\nCurrent request: ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER}`,
       ),
-    ).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
-
-    expect(
-      await openAiReply(
-        server,
-        userInputs(
-          `${WHATSAPP_PENDING_HISTORY_QUIET_MARKER} ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}`,
-          currentTriggerPrompt,
-        ),
+      userInputs(
+        `${WHATSAPP_PENDING_HISTORY_QUIET_MARKER} ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}`,
+        trigger,
       ),
-    ).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
-
-    expect(
-      await openAiReply(
-        server,
-        [historyContext, "openclawqa pending history context check without current trigger"].join(
-          "\n",
-        ),
-      ),
-    ).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
+      userInputs(`${history}\nopenclawqa pending history context check without current trigger`),
+    ]) {
+      await expect(openAiReply(server, input)).resolves.not.toBe(
+        WHATSAPP_PENDING_HISTORY_OK_MARKER,
+      );
+    }
   });
 
   it("uses the WhatsApp broadcast runtime agent id context for distinct markers", async () => {
@@ -2926,43 +2871,25 @@ describe("qa mock openai server", () => {
   });
 
   it("preserves whitespace Anthropic tool results without replay", async () => {
-    const content = "  ";
-    const isError = false;
-
     const server = await startMockServer();
     const callId = "toolu_empty_patch";
-    const response = await expectAnthropicMessages(server, {
+    const body = await expectAnthropicMessagesJson(server, {
       tools: [{ name: "apply_patch", input_schema: { type: "object", properties: {} } }],
       messages: [
         makeAnthropicUserText(
           "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
         ),
         anthropicCall("apply_patch", {}, callId),
-        {
-          role: "user",
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: callId,
-              content,
-              ...(isError ? { is_error: true } : {}),
-            },
-          ],
-        },
+        makeAnthropicToolResult(callId, "  "),
       ],
     });
-
-    const body = requireRecord(await response.json(), "Anthropic empty tool completion");
     expect(body.stop_reason).toBe("end_turn");
-    expect(requireArray(body.content, "Anthropic response content")).not.toEqual(
+    expect(body.content).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "tool_use" })]),
     );
-    const debug = requireRecord(
-      await fetch(`${server.baseUrl}/debug/last-request`).then((result) => result.json()),
-      "Anthropic empty tool debug request",
-    );
+    const debug = await readDebugRequest(server);
     expect(debug.toolOutputCallId).toBe(callId);
-    expect(debug.toolOutputStructuredError ?? false).toBe(isError);
+    expect(debug.toolOutputStructuredError ?? false).toBe(false);
     expect(debug).not.toHaveProperty("plannedToolName");
   });
 
@@ -2970,129 +2897,74 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
     const readCallIds: string[] = [];
     const scenarioPrompts: string[] = [];
-
-    const requestAnthropicStream = async (messages: unknown[]) => {
+    const stream = async (messages: unknown[]) => {
       const response = await expectAnthropicMessages(server, { stream: true, messages });
       expect(response.headers.get("content-type")).toContain("text/event-stream");
       return response.text();
     };
-
-    const readAnthropicToolCallId = (readStream: string) => {
-      const readEvents = readStream
-        .split("\n")
-        .filter((line) => line.startsWith("data: "))
-        .map((line) =>
-          requireRecord(JSON.parse(line.slice("data: ".length)) as unknown, "Anthropic SSE event"),
-        );
-      const readEvent = readEvents.find(
+    const readCall = async (prompt: string) => {
+      const events = sseEvents(await stream([makeAnthropicUserText(prompt)]));
+      const start = events.find(
         (event) =>
           event.type === "content_block_start" &&
-          requireRecord(event.content_block, "Anthropic content block").type === "tool_use",
+          requireRecord(event.content_block, "content block").type === "tool_use",
       );
-      const readTool = requireRecord(readEvent?.content_block, "Anthropic read tool call");
-      expect(readTool.name).toBe("read");
-      expect(readTool.input).toEqual({});
-      const readInputEvent = readEvents.find(
-        (event) => event.type === "content_block_delta" && event.index === readEvent?.index,
-      );
-      expect(requireRecord(readInputEvent?.delta, "Anthropic read tool input delta")).toEqual({
+      const tool = requireRecord(start?.content_block, "read tool");
+      expect(tool.name).toBe("read");
+      expect(tool.input).toEqual({});
+      expect(
+        events.find((event) => event.type === "content_block_delta" && event.index === start?.index)
+          ?.delta,
+      ).toEqual({
         type: "input_json_delta",
         partial_json: JSON.stringify({ path: "QA_KICKOFF_TASK.md" }),
       });
-      const callId = readTool.id;
-      if (typeof callId !== "string" || callId.length === 0) {
+      const id = tool.id;
+      if (typeof id !== "string" || id.length === 0) {
         throw new Error("Expected an Anthropic read tool call ID");
       }
-      readCallIds.push(callId);
-      return callId;
+      readCallIds.push(id);
+      return id;
     };
-
-    const buildReplayMessages = (
-      promptMessage: { role: "user"; content: Array<{ type: "text"; text: string }> },
-      callId: string,
-    ) => [
-      promptMessage,
-      {
-        role: "assistant" as const,
-        content: [
-          {
-            type: "tool_use" as const,
-            id: callId,
-            name: "read",
-            input: { path: "QA_KICKOFF_TASK.md" },
-          },
-        ],
-      },
-      makeAnthropicToolResult(callId, "QA kickoff task completed."),
-    ];
-
+    const replay = (prompt: string, id: string) =>
+      stream([
+        makeAnthropicUserText(prompt),
+        anthropicCall("read", { path: "QA_KICKOFF_TASK.md" }, id),
+        makeAnthropicToolResult(id, "QA kickoff task completed."),
+      ]);
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const scenarioPrompt = `${QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT} QA scenario run: direct-${attempt}`;
-      scenarioPrompts.push(scenarioPrompt);
-      const promptMessage = makeAnthropicUserText(scenarioPrompt);
-      const initialCallId = readAnthropicToolCallId(await requestAnthropicStream([promptMessage]));
-      const errorStream = await requestAnthropicStream(
-        buildReplayMessages(promptMessage, initialCallId),
-      );
+      const prompt = `${QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT} QA scenario run: direct-${attempt}`;
+      scenarioPrompts.push(prompt);
+      const initial = await readCall(prompt);
       expectIncludes(
-        errorStream,
+        await replay(prompt, initial),
         '"type":"thinking_delta"',
         '"type":"signature_delta"',
         '"signature":"qa_signed_thinking_block_91953"',
         "event: error",
         '"type":"api_error"',
       );
-
-      const retryCallId = readAnthropicToolCallId(await requestAnthropicStream([promptMessage]));
-      expect(retryCallId).not.toBe(initialCallId);
-      const recoveryStream = await requestAnthropicStream(
-        buildReplayMessages(promptMessage, retryCallId),
-      );
-      expectIncludes(
-        recoveryStream,
-        "event: message_stop",
-        "ANTHROPIC-THINKING-ERROR-RECOVERED-OK",
-      );
-      expect(recoveryStream).not.toContain("event: error");
+      const retry = await readCall(prompt);
+      expect(retry).not.toBe(initial);
+      const recovered = await replay(prompt, retry);
+      expectIncludes(recovered, "event: message_stop", "ANTHROPIC-THINKING-ERROR-RECOVERED-OK");
+      expect(recovered).not.toContain("event: error");
     }
-
     expect(new Set(readCallIds).size).toBe(4);
-    const debugRequests = requireArray(
-      await getJson(server, "/debug/requests"),
-      "Anthropic debug requests",
-    ).map((request) => requireRecord(request, "Anthropic debug request"));
-    expect(debugRequests).toHaveLength(8);
-    expect(debugRequests.every((request) => request.providerVariant === "anthropic")).toBe(true);
-    expect(debugRequests.map((request) => request.plannedToolCallId)).toEqual([
-      readCallIds[0],
-      undefined,
-      readCallIds[1],
-      undefined,
-      readCallIds[2],
-      undefined,
-      readCallIds[3],
-      undefined,
-    ]);
-    expect(debugRequests.map((request) => request.toolOutputCallId)).toEqual([
-      undefined,
-      readCallIds[0],
-      undefined,
-      readCallIds[1],
-      undefined,
-      readCallIds[2],
-      undefined,
-      readCallIds[3],
-    ]);
-    expect(debugRequests.map((request) => request.prompt)).toEqual([
-      scenarioPrompts[0],
-      scenarioPrompts[0],
-      scenarioPrompts[0],
-      scenarioPrompts[0],
-      scenarioPrompts[1],
-      scenarioPrompts[1],
-      scenarioPrompts[1],
-      scenarioPrompts[1],
-    ]);
+    const requests = requireArray(await getJson(server, "/debug/requests"), "debug requests").map(
+      (request) => requireRecord(request, "debug request"),
+    );
+    expect(requests).toHaveLength(8);
+    expect(requests.every((request) => request.providerVariant === "anthropic")).toBe(true);
+    expect(requests.map((request) => request.plannedToolCallId)).toEqual(
+      readCallIds.flatMap((id) => [id, undefined]),
+    );
+    expect(requests.map((request) => request.toolOutputCallId)).toEqual(
+      readCallIds.flatMap((id) => [undefined, id]),
+    );
+    expect(requests.map((request) => request.prompt)).toEqual(
+      scenarioPrompts.flatMap((prompt) => Array.from({ length: 4 }, () => prompt)),
+    );
   });
 
   it.each([
@@ -3253,71 +3125,38 @@ describe("qa mock openai server", () => {
   });
 
   it("scripts settled continuation after a side-effecting write with settled exhaustion", async () => {
-    const completedScenario = "exhaustion" as const;
-
     const server = await startMockServer();
-    const historyInput = await completeSideEffectScenario(server, completedScenario);
-
-    const toolPlan = await streamOpenAiText(server, [
-      ...historyInput,
-      makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
-    ]);
-    expect(toolPlan).toContain('"name":"write"');
-
-    const toolOutput = {
-      type: "function_call_output" as const,
-      output: "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
-    };
-    expect(
-      await openAiReply(server, [
-        ...historyInput,
-        makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
-        toolOutput,
-      ]),
-    ).toBe("");
-
-    expect(
-      await openAiReply(server, [
-        ...historyInput,
-        makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
-        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
-        toolOutput,
-      ]),
-    ).toBe("TELEGRAM-EMPTY-WRITE-RECOVERED-OK");
-
-    expect(
-      await openAiReply(server, [
-        ...historyInput,
-        makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
-        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
-      ]),
-    ).toBe("TELEGRAM-EMPTY-WRITE-RECOVERED-OK");
-
-    expect(
-      await openAiReply(
-        server,
-        userInputs(
-          [
-            "Empty response after write recovery QA check: write once, then respond with exact marker: `CRON-EMPTY-WRITE-RECOVERED-OK`.",
-            "This is an unattended scheduled run. If nothing needs doing, reply exactly HEARTBEAT_OK.",
-          ].join("\n\n"),
-          `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION}\nRead HEARTBEAT.md if it exists.`,
-          toolOutput,
-        ),
+    const history = await completeSideEffectScenario(server, "exhaustion");
+    const recovery = makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT);
+    const continuation = makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    const output = makeToolOutput(
+      "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
+    );
+    await expect(streamOpenAiText(server, [...history, recovery])).resolves.toContain(
+      '"name":"write"',
+    );
+    const read = (...input: Parameters<typeof userInputs>) =>
+      openAiReply(server, userInputs(...input));
+    await expect(read(...history, recovery, output)).resolves.toBe("");
+    await expect(read(...history, recovery, continuation, output)).resolves.toBe(
+      "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
+    );
+    await expect(read(...history, recovery, continuation)).resolves.toBe(
+      "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
+    );
+    await expect(
+      read(
+        [
+          "Empty response after write recovery QA check: write once, then respond with exact marker: `CRON-EMPTY-WRITE-RECOVERED-OK`.",
+          "This is an unattended scheduled run. If nothing needs doing, reply exactly HEARTBEAT_OK.",
+        ].join("\n\n"),
+        `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION}\nRead HEARTBEAT.md if it exists.`,
+        output,
       ),
-    ).toBe("CRON-EMPTY-WRITE-RECOVERED-OK");
-
-    expect(
-      await openAiReply(
-        server,
-        userInputs(
-          QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT,
-          QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
-          toolOutput,
-          "Read HEARTBEAT.md if it exists.",
-        ),
-      ),
-    ).toBe("HEARTBEAT_OK");
+    ).resolves.toBe("CRON-EMPTY-WRITE-RECOVERED-OK");
+    await expect(
+      read(recovery, continuation, output, "Read HEARTBEAT.md if it exists."),
+    ).resolves.toBe("HEARTBEAT_OK");
   });
 
   it("reports a failed Code Mode read honestly through ordinary continuation", async () => {
