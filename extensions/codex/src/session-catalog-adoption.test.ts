@@ -460,6 +460,9 @@ it("does not join concurrent local continues across explicit agent owners", asyn
     f.continue({ agentId: "beta", api, config: runtimeConfig }),
   ]);
 
+  if (!alpha || !beta) {
+    throw new Error("Expected both agent-owned sessions to be created");
+  }
   expect(alpha.sessionKey).toMatch(/^agent:alpha:harness:codex:supervision:/);
   expect(beta.sessionKey).toMatch(/^agent:beta:harness:codex:supervision:/);
   expect(alpha.sessionKey).not.toBe(beta.sessionKey);

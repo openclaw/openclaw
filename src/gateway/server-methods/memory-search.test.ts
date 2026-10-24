@@ -22,7 +22,10 @@ import {
 } from "../../plugin-state/plugin-state-store.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
-import type { RegisteredMemorySearchManager } from "../../plugins/registry-contribution-types.js";
+import type {
+  MemoryPluginRuntime,
+  RegisteredMemorySearchManager,
+} from "../../plugins/registry-contribution-types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createOpenClawTestState,
@@ -49,10 +52,11 @@ import { memorySearchHandlers } from "./memory-search.js";
 
 let testState: OpenClawTestState;
 let testConfig: OpenClawConfig;
-type MemoryRuntimeModule = typeof import("../../../extensions/memory-core/runtime-api.js");
-const { createMemoryRuntime: createCliMemoryRuntime } = await vi.importActual<MemoryRuntimeModule>(
-  "../../../extensions/memory-core/runtime-api.js",
-);
+const { createMemoryRuntime: createCliMemoryRuntime } = await vi.importActual<{
+  createMemoryRuntime: (host: object) => {
+    searchForCli: NonNullable<MemoryPluginRuntime["searchForCli"]>;
+  };
+}>("../../../extensions/memory-core/runtime-api.js");
 const searchForCli = createCliMemoryRuntime({}).searchForCli;
 
 function createConfig(workspaceDir: string): OpenClawConfig {
