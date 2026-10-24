@@ -260,10 +260,13 @@ startup message and detached process-group ownership for older worker bundles.
 
 Windows node hosts record when the native Job launcher contains a worker tree
 with kill-on-close ownership. If that node host dies, Windows terminates the Job;
-after restart, the node can interrupt the recorded launch and release its slot.
+after restart, recovery waits until the recorded supervisor and worker are gone,
+checking their PIDs and process creation times. It then allows one second for
+the remaining Job members to exit before interrupting the launch and releasing
+its slot. A descendant that broke away from the Job or is unusually slow to die
+could briefly overlap the next turn; this is an accepted recovery tradeoff.
 Older receipts and launches without the native helper retain conservative cleanup
-checks. A descendant explicitly created with `CREATE_BREAKAWAY_FROM_JOB` is outside
-this guarantee.
+checks.
 
 Installed node hosts package the POSIX launch helpers separately to reduce
 per-turn startup work. Update and restart the node host to receive this
