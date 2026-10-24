@@ -17,6 +17,11 @@ import { isDeliveredCurrentSourceReply } from "../src/infra/outbound/source-repl
 import { createTestPluginRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
 
 // Discord API v10 GuildPublicThread channel type.
 const guildPublicThreadType = 11;
@@ -193,19 +198,13 @@ async function createFixture() {
     request.resume();
     transport.onRequest?.();
     const reply = routes.get(path);
-    response.writeHead(reply?.status ?? (reply ? 200 : 404), {
-      "content-type": "application/json",
-    });
-    response.end(JSON.stringify(reply?.body ?? { message: `Unexpected fixture route: ${path}` }));
+    respondJson(
+      response,
+      reply?.body ?? { message: `Unexpected fixture route: ${path}` },
+      reply?.status ?? (reply ? 200 : 404),
+    );
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected loopback TCP address");
-  }
-  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const baseUrl = await listenLoopback(server);
   const realFetch = globalThis.fetch.bind(globalThis);
   vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
@@ -267,10 +266,7 @@ async function createFixture() {
         conversationReadOrigin: "delegated",
         toolContext: context.toolContext,
       }),
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
+    close: () => closeHttpServer(server),
   };
 }
 
@@ -289,6 +285,10 @@ describe("registered Discord metadata reads", () => {
       params: { ...fixture.dmContext.params, target, to: target },
       ...overrides,
     });
+  const expectRead = (path: string) => {
+    expect(fixture.requests).toContainEqual(getRequest(path));
+    expect(fixture.requests.every(({ method }) => method === "GET")).toBe(true);
+  };
   const setChannels = (policy: NonNullable<DiscordConfig["guilds"]>[string]["channels"]) => {
     fixture.discord.guilds = { [guildId]: { channels: policy } };
   };
@@ -327,10 +327,9 @@ describe("registered Discord metadata reads", () => {
         threads: [allowedThread],
         members: [{ id: allowedThreadId }],
       });
-      expect(fixture.requests).toContainEqual(getRequest(activeThreadsPath));
+      expectRead(activeThreadsPath);
       expect(fixture.requests).not.toContainEqual(getRequest(`/channels/${allowedThreadId}`));
       expect(fixture.requests).not.toContainEqual(getRequest(`/channels/${deniedThreadId}`));
-      expect(fixture.requests.every((request) => request.method === "GET")).toBe(true);
     },
   );
 
@@ -455,8 +454,7 @@ describe("registered Discord metadata reads", () => {
       expect(
         (await prepareExternalMessageActionTargetForResolution(context)).assertReadAuthorityCurrent,
       ).toBeTypeOf("function");
-      expect(fixture.requests).toContainEqual({ method: "GET", path: read.path });
-      expect(fixture.requests.every((request) => request.method === "GET")).toBe(true);
+      expectRead(read.path);
     },
   );
 
@@ -500,8 +498,7 @@ describe("registered Discord metadata reads", () => {
       kind: "action",
       payload: { ok: true, permissions: { channelId: sibling } },
     });
-    expect(fixture.requests).toContainEqual({ method: "GET", path: "/users/%40me" });
-    expect(fixture.requests.every((request) => request.method === "GET")).toBe(true);
+    expectRead("/users/%40me");
   });
 
   it.each([

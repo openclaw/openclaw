@@ -2,9 +2,6 @@ import { createServer } from "node:http";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { msteamsPlugin } from "../extensions/msteams/api.js";
-import { createOperationalRunInstanceRef } from "../src/agents/admitted-run-context.js";
-import { wrapToolWithGatewayCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
-import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
 import type { ChannelThreadingToolContext } from "../src/channels/plugins/types.public.js";
 import {
@@ -14,27 +11,15 @@ import {
 import { registerMessageCommands } from "../src/cli/program/register.message.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
-import {
-  mintMessageActionTurnCapability,
-  resolveMessageActionTurnCapability,
-  revokeMessageActionTurnCapability,
-} from "../src/gateway/message-action-turn-capability.js";
 import { sendHandlers } from "../src/gateway/server-methods/send.js";
-import type { GatewayClient, GatewayRequestContext } from "../src/gateway/server-methods/types.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-  validateAgentRunDelegatedAuthority,
-} from "../src/infra/agent-run-registry.js";
+import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
-import { createPluginRegistry } from "../src/plugins/registry.js";
+import { createTestPluginRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
 import {
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../src/plugins/runtime.js";
-import type { PluginRuntime } from "../src/plugins/runtime/types.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
 import { defaultRuntime } from "../src/runtime.js";
 import {
@@ -42,6 +27,7 @@ import {
   listenLoopback,
   respondJson,
 } from "./helpers/gateway-integration-fixtures.js";
+import { createMessageReadAuthority } from "./message-read-authority.test-support.js";
 
 const graph = vi.hoisted(() => ({
   endpoint: undefined as { origin: string; signal: AbortSignal } | undefined,
@@ -151,11 +137,7 @@ async function createFixture(
       },
     },
   };
-  const owner = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
+  const owner = createTestPluginRegistry();
   const record = createPluginRecord({
     id: "msteams",
     origin,
@@ -169,8 +151,6 @@ async function createFixture(
   setRuntimeConfigSnapshot(cfg, cfg);
 
   const sessionKey = "agent:main:msteams:channel:origin";
-  const operationalRunInstance = createOperationalRunInstanceRef(`teams-target-${++sequence}`);
-  const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   const toolContext: ChannelThreadingToolContext | undefined =
     currentContext === "none"
       ? undefined
@@ -187,36 +167,17 @@ async function createFixture(
           }),
           currentChannelProvider: "msteams",
         };
-  const capabilityParams = { agentId: "main", runId: operationalRunInstance.runId, sessionKey };
-  const turnCapability = mintMessageActionTurnCapability({
-    ...capabilityParams,
-    requesterAccountId: "default",
+  const authority = createMessageReadAuthority({
+    runId: `teams-target-${++sequence}`,
+    sessionKey,
     requesterSenderId: requesterId,
-    toolContext,
+    toolContext: toolContext ?? {},
+    gatewayContext: "resolved",
   });
-  const messageActionContext = resolveMessageActionTurnCapability({
-    ...capabilityParams,
-    token: turnCapability,
-  });
-  if (!messageActionContext) {
-    throw new Error("Expected an admitted Teams turn");
-  }
-  const client = {
-    internal: {
-      agentRuntimeIdentity: {
-        kind: "agentRuntime",
-        agentId: "main",
-        sessionKey,
-        operationalRunInstance,
-        delegatedAuthority: { kind: "local", ...delegatedAuthority },
-        messageActionContext: { ...messageActionContext, turnCapability },
-      },
-    },
-  } as GatewayClient;
   const context = {
     dedupe: new Map(),
     getRuntimeConfig: () => cfg,
-    validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+    validateAgentRuntimeApprovalAuthority: authority.validate,
   } as GatewayRequestContext;
   const requests: GraphRequest[] = [];
   const controller = new AbortController();
@@ -227,58 +188,44 @@ async function createFixture(
     from: messageSender,
     createdDateTime: messageCreatedAt,
   });
+  const routes = new Map<string, unknown>();
+  for (const destination of [current, other]) {
+    const teamPath = `/v1.0/teams/${destination.teamId}`;
+    const channelPath = `${teamPath}/channels/${destination.channelId}`;
+    routes.set(`${teamPath}/members`, {
+      value: [
+        {
+          userId: memberId,
+          displayName: "Member",
+          email: "member@example.test",
+          roles: destination.roles,
+        },
+      ],
+    });
+    routes.set(channelPath, { id: destination.channelId, membershipType: "standard" });
+    routes.set(`${channelPath}/messages`, {
+      value: Array.from({ length: searchMatches }, (_, index) =>
+        graphMessage(
+          destination,
+          index ? `${destination.messageId}-${index}` : destination.messageId,
+        ),
+      ),
+    });
+    routes.set(`${channelPath}/messages/${destination.messageId}`, graphMessage(destination));
+  }
   const server = createServer((request, response) => {
     const path = decodeURIComponent(new URL(request.url ?? "/", "http://fixture.invalid").pathname);
     requests.push({ method: request.method, path, authorization: request.headers.authorization });
     request.resume();
-    const destination = [current, other].find((candidate) =>
-      path.startsWith(`/v1.0/teams/${candidate.teamId}/`),
+    respondJson(
+      response,
+      routes.get(path) ?? { error: { message: "Unexpected Graph fixture route" } },
+      routes.has(path) ? 200 : 404,
     );
-    let body: unknown;
-    if (destination && path === `/v1.0/teams/${destination.teamId}/members`) {
-      body = {
-        value: [
-          {
-            userId: memberId,
-            displayName: "Member",
-            email: "member@example.test",
-            roles: destination.roles,
-          },
-        ],
-      };
-    } else if (
-      destination &&
-      path === `/v1.0/teams/${destination.teamId}/channels/${destination.channelId}`
-    ) {
-      body = { id: destination.channelId, membershipType: "standard" };
-    } else if (
-      destination &&
-      path === `/v1.0/teams/${destination.teamId}/channels/${destination.channelId}/messages`
-    ) {
-      body = {
-        value: Array.from({ length: searchMatches }, (_, index) =>
-          graphMessage(
-            destination,
-            index ? `${destination.messageId}-${index}` : destination.messageId,
-          ),
-        ),
-      };
-    } else if (
-      destination &&
-      path ===
-        `/v1.0/teams/${destination.teamId}/channels/${destination.channelId}/messages/${destination.messageId}`
-    ) {
-      body = graphMessage(destination);
-    } else {
-      response.statusCode = 404;
-      body = { error: { message: "Unexpected Graph fixture route" } };
-    }
-    respondJson(response, body, response.statusCode);
   });
   cleanups.push(async () => {
     controller.abort(new Error("Teams fixture closed"));
-    revokeMessageActionTurnCapability(turnCapability);
-    releaseAgentRunDelegatedAuthority(delegatedAuthority);
+    authority.dispose();
     server.closeAllConnections();
     await Promise.allSettled(pending);
     await closeHttpServer(server);
@@ -286,21 +233,7 @@ async function createFixture(
     graph.endpoint = undefined;
   });
   graph.endpoint = { origin: await listenLoopback(server), signal: controller.signal };
-  const tool = wrapToolWithGatewayCallerIdentity(
-    createMessageTool({
-      ...capabilityParams,
-      ...toolContext,
-      agentSessionKey: sessionKey,
-      agentAccountId: "default",
-      messageActionTurnCapability: turnCapability,
-      config: cfg,
-    }),
-    {
-      ...capabilityParams,
-      operationalRunInstance,
-      receiptAuthority: () => validateAgentRunDelegatedAuthority(delegatedAuthority),
-    },
-  );
+  const tool = authority.createTool(cfg);
   function retain<T>(operation: () => Promise<T>): Promise<T> {
     const result = Promise.resolve().then(() => {
       controller.signal.throwIfAborted();
@@ -316,6 +249,10 @@ async function createFixture(
 
   return {
     requests,
+    expectNoGraphRequests() {
+      expect(requests).toEqual([]);
+      expect(graph.acquireToken).not.toHaveBeenCalled();
+    },
     invoke(route: Route, action: Action, params: Record<string, unknown> = {}) {
       return retain(async () => {
         const actionParams = { ...inputFor(action), ...params };
@@ -341,7 +278,7 @@ async function createFixture(
           },
           respond,
           context,
-          client,
+          client: authority.client,
           req: { type: "req", id: `teams-rpc-${sequence}`, method: "message.action" },
           isWebchatConnect: () => false,
           signal: controller.signal,
@@ -554,8 +491,7 @@ describe("Teams message CLI", () => {
         "search",
       ),
     ).rejects.toThrow("limit must be a positive integer");
-    expect(fixture.requests).toEqual([]);
-    expect(graph.acquireToken).not.toHaveBeenCalled();
+    fixture.expectNoGraphRequests();
   });
 });
 
@@ -592,8 +528,7 @@ describe.each(["tool", "gateway"] as const)("Teams %s read target selection", (r
       await expect(fixture.invoke(route, action)).resolves.toEqual({
         error: `${action === "search" ? "Search" : "member-info"} requires a target (to).`,
       });
-      expect(fixture.requests).toEqual([]);
-      expect(graph.acquireToken).not.toHaveBeenCalled();
+      fixture.expectNoGraphRequests();
     });
 
     it.each([
@@ -609,8 +544,7 @@ describe.each(["tool", "gateway"] as const)("Teams %s read target selection", (r
       async ({ channelId }) => {
         const fixture = await createFixture();
         await expect(fixture.invoke(route, action, { channelId })).rejects.toThrow(/not allowed/i);
-        expect(fixture.requests).toEqual([]);
-        expect(graph.acquireToken).not.toHaveBeenCalled();
+        fixture.expectNoGraphRequests();
       },
     );
   });
@@ -623,8 +557,7 @@ describe.each(["tool", "gateway"] as const)("Teams %s read target selection", (r
     await expect(
       fixture.invoke(route, "member-info", { channelId: otherChat, userId: requesterId }),
     ).rejects.toThrow(/is not a member of this conversation/i);
-    expect(fixture.requests).toEqual([]);
-    expect(graph.acquireToken).not.toHaveBeenCalled();
+    fixture.expectNoGraphRequests();
   });
 });
 

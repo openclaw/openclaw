@@ -399,25 +399,31 @@ describe("installTestEnv", () => {
     );
   });
 
-  it.each(["OPENCLAW_HOME", "OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"])(
-    "clears and restores %s for normal isolated test runs",
-    (key) => {
-      const realHome = createTempHome();
-      const callerPath = path.join(realHome, "caller-override");
-      setTestEnvValue("HOME", realHome);
-      setTestEnvValue("USERPROFILE", realHome);
-      setTestEnvValue(key, callerPath);
+  it.each([
+    ["OPENCLAW_HOME", "live-aware"],
+    ["OPENCLAW_AGENT_DIR", "live-aware"],
+    ["PI_CODING_AGENT_DIR", "live-aware"],
+    ["TWILIO_ACCOUNT_SID", "hermetic"],
+    ["TWILIO_AUTH_TOKEN", "hermetic"],
+    ["TWILIO_PHONE_NUMBER", "hermetic"],
+    ["TWILIO_SMS_FROM", "hermetic"],
+    ["TWILIO_MESSAGING_SERVICE_SID", "hermetic"],
+  ] as const)("clears and restores %s for normal isolated test runs", (key, mode) => {
+    const realHome = createTempHome();
+    const callerPath = path.join(realHome, "caller-override");
+    setTestEnvValue("HOME", realHome);
+    setTestEnvValue("USERPROFILE", realHome);
+    setTestEnvValue(key, callerPath);
 
-      const testEnv = install();
+    const testEnv = install({ mode });
 
-      expect(testEnv.tempHome).not.toBe(realHome);
-      expect(process.env[key]).toBeUndefined();
-      setTestEnvValue(key, path.join(testEnv.tempHome, "explicit-override"));
+    expect(testEnv.tempHome).not.toBe(realHome);
+    expect(process.env[key]).toBeUndefined();
+    setTestEnvValue(key, path.join(testEnv.tempHome, "explicit-override"));
 
-      testEnv.cleanup();
-      expect(process.env[key]).toBe(callerPath);
-    },
-  );
+    testEnv.cleanup();
+    expect(process.env[key]).toBe(callerPath);
+  });
 
   it.each([
     ["explicit", "tool-cache", "xdg", "local", "tool-cache"],
@@ -467,22 +473,6 @@ describe("installTestEnv", () => {
       );
     },
   );
-
-  it.each([
-    "TWILIO_ACCOUNT_SID",
-    "TWILIO_AUTH_TOKEN",
-    "TWILIO_PHONE_NUMBER",
-    "TWILIO_SMS_FROM",
-    "TWILIO_MESSAGING_SERVICE_SID",
-  ])("isolates and restores the SMS activation variable %s", (key) => {
-    setTestEnvValue(key, "test-channel-value");
-
-    const testEnv = install({ mode: "hermetic" });
-
-    expect(process.env[key]).toBeUndefined();
-    testEnv.cleanup();
-    expect(process.env[key]).toBe("test-channel-value");
-  });
 
   it.each(["live-aware", "hermetic"] as const)(
     "clears counted Git config together and restores it in non-live %s mode",
