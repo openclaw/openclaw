@@ -13,7 +13,7 @@ export function meetAudioCaptureScript(params: MeetingBrowserAudioCaptureRequest
       const expectedUrl = ${JSON.stringify(normalizeMeetUrlForReuse(params.meetingUrl))};
       const currentUrl = new URL(location.href);
       return Boolean(expectedUrl && window.__openclawMeetAudioSession === sessionId &&
-        currentUrl.origin + currentUrl.pathname.toLowerCase().replace(/[/]$/, "") === expectedUrl &&
+        currentUrl.origin + currentUrl.pathname.toLowerCase().replace(/^[/]meet[/]/, "/").replace(/[/]$/, "") === expectedUrl &&
         [...document.querySelectorAll("button")].some((button) =>
           /leave call/i.test(button.getAttribute("aria-label") || button.textContent || "")));
     `,
@@ -410,7 +410,7 @@ export function meetLeaveScript(meetingUrl: string) {
   let currentMeetingUrl;
   try {
     const currentUrl = new URL(location.href);
-    currentMeetingUrl = currentUrl.origin + currentUrl.pathname.toLowerCase().replace(/\\/$/, "");
+    currentMeetingUrl = currentUrl.origin + currentUrl.pathname.toLowerCase().replace(/^[/]meet[/]/, "/").replace(/\\/$/, "");
   } catch {
     return JSON.stringify({ departed: false });
   }

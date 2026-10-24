@@ -272,6 +272,9 @@ describe("google-meet node host bridge sessions", () => {
         createdAt: expect.any(String),
       },
     ]);
+    expect(
+      await invokeNodeHostJson({ ...listParams, url: "https://meet.google.com/meet/abc-defg-hij" }),
+    ).toEqual(activeList);
     if (children[1]) {
       finishMockChild(children[1], 0, null);
     }
