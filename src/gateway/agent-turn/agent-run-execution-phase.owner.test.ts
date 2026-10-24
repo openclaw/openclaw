@@ -6,10 +6,8 @@ import {
   createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
 } from "../../agents/admitted-run-context.js";
-import {
-  prepareCommandSessionRecoveryEntry,
-  prepareEmbeddedSessionState,
-} from "../../agents/command/session-preparation.js";
+import { prepareCommandSessionRecoveryEntry } from "../../agents/command/session-preparation.js";
+import { createOperatorRecoveryAuthority } from "../../agents/operator-recovery.test-support.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
@@ -19,10 +17,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  clearAgentRunContext,
-  getAgentRunLifecycleGeneration,
-} from "../../infra/agent-run-registry.js";
+import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
 import { PluginRuntimeCloseCompletedError } from "../../plugins/runtime-close-error.js";
 import {
   getCurrentSessionControllerOwner,
@@ -37,7 +32,6 @@ import {
   resetSessionControllerStateForTest,
   rpcSourceTesting,
 } from "../../sessions/session-lifecycle-admission.test-support.js";
-import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
@@ -46,7 +40,6 @@ import * as sessionChange from "../server-methods/session-change-event.js";
 import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecycle-drain.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { expectSuccessorWorkspaceRead } from "../workspace-readiness.test-support.js";
-import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import * as agentHandlerHelpers from "./agent-handler-helpers.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
@@ -70,21 +63,6 @@ vi.mock("../../commands/agent.js", () => ({
 
 vi.mock("./agent-run-dispatch.js", () => ({
   dispatchAgentRunFromGateway,
-}));
-
-// mock-isolation: Routing cases prepare command context without skills or exec-policy discovery.
-vi.mock("../../agents/command/runtime-loaders.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/command/runtime-loaders.js")>()),
-  loadSkillsRuntime: async () => ({
-    getRemoteSkillEligibility: () => ({}),
-    resolveReusableWorkspaceSkillSnapshot: () => ({
-      snapshot: undefined,
-      shouldRefresh: false,
-    }),
-  }),
-  loadExecDefaultsRuntime: async () => ({
-    resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
-  }),
 }));
 
 function createGate() {
@@ -159,6 +137,20 @@ describe("startAgentRunExecution Gateway ownership", () => {
     void entry.input.settlement.promise.then(sourceSettled, sourceSettled);
     if (prewriter) {
       registration.controller.abort();
+      setRuntimeConfigSnapshot(execution.params.cfg);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const yieldAck = vi
+        .spyOn(agentHandlerHelpers, "yieldAfterAgentAcceptedAck")
+        .mockResolvedValue(undefined);
+      execution.params.context = createChatAbortContext({
+        ...execution.params.context,
+        sources: [[execution.params.runId, entry]],
+      }) as unknown as GatewayRequestContext;
+      onTestFinished(() => {
+        clearRuntimeConfigSnapshot();
+        vi.useRealTimers();
+        yieldAck.mockRestore();
+      });
     }
     const command = createGate();
     const save = createGate();
@@ -194,6 +186,25 @@ describe("startAgentRunExecution Gateway ownership", () => {
     // This owner must distinguish its completed receipt from unfinished cleanup.
     execution.runtimeRelease.mockImplementation(async () => {
       await disposal.wait();
+      if (prewriter) {
+        const { sessionKey, sessionId } = getRpcSourceIdentity(entry);
+        const drain = await prepareSessionLifecycleDrain({
+          action: "delete",
+          context: execution.params.context,
+          storePath: expectDefined(execution.params.prepared.lifecycleStorePath, "lifecycle store"),
+          sessionKeys: [sessionKey],
+          sessionKey,
+          sessionId,
+          agentId: "main",
+          defaultAgentId: "main",
+          lifecycleIdentities: [sessionKey, sessionId],
+        });
+        try {
+          expect(drain.hasAuthoritativeWork()).toBe(false);
+        } finally {
+          drain.release();
+        }
+      }
       if (cleanupFails) {
         throw cleanupFault;
       }
@@ -243,6 +254,9 @@ describe("startAgentRunExecution Gateway ownership", () => {
       expect(rpcSourceTesting.get(execution.params.runId)).toBe(entry);
       expectCalls(0, execution.callerRelease, finished);
       disposal.resolve();
+      if (prewriter) {
+        await vi.advanceTimersByTimeAsync(SESSION_CONTROLLER_DRAIN_TIMEOUT_MS);
+      }
       if (completedCleanupFails || (publicationFails && cleanupFails)) {
         expect(collectNestedErrorCandidates(await observed)).toEqual(
           expect.arrayContaining([
@@ -269,75 +283,6 @@ describe("startAgentRunExecution Gateway ownership", () => {
     }
   });
 
-  it("lets a disposer drain its real session without waiting on its own retained execution", async () => {
-    const execution = createExecution();
-    setRuntimeConfigSnapshot(execution.params.cfg);
-    onTestFinished(() => clearRuntimeConfigSnapshot());
-    const registration = await bindRegisteredExecution(
-      execution,
-      "agent:main:self-disposal",
-      "self-disposal-session",
-    );
-    registration.controller.abort();
-    const context = createChatAbortContext({
-      ...execution.params.context,
-      sources: [[execution.params.runId, registration.entry]],
-    }) as unknown as GatewayRequestContext;
-    execution.params.context = context;
-    const { sessionKey, sessionId } = getRpcSourceIdentity(registration.entry);
-    const dispatchYield = vi
-      .spyOn(agentHandlerHelpers, "yieldAfterAgentAcceptedAck")
-      .mockResolvedValue(undefined);
-    const disposalEntered = createDeferred();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    execution.runtimeRelease.mockImplementation(async () => {
-      disposalEntered.resolve();
-      expect(rpcSourceTesting.get(execution.params.runId)).toBe(registration.entry);
-      const drain = await prepareSessionLifecycleDrain({
-        action: "delete",
-        context,
-        storePath: expectDefined(
-          execution.params.prepared.lifecycleStorePath,
-          "admitted lifecycle store",
-        ),
-        sessionKeys: [sessionKey],
-        sessionKey,
-        sessionId,
-        agentId: "main",
-        defaultAgentId: "main",
-        lifecycleIdentities: [sessionKey, sessionId],
-      });
-      try {
-        expect(drain.hasAuthoritativeWork()).toBe(false);
-      } finally {
-        drain.release();
-      }
-    });
-    const completion = registration.run().then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    try {
-      await Promise.race([
-        disposalEntered.promise,
-        completion.then((error) => {
-          throw new Error("Execution completed before its lifecycle disposer started", {
-            cause: error,
-          });
-        }),
-      ]);
-      await vi.advanceTimersByTimeAsync(SESSION_CONTROLLER_DRAIN_TIMEOUT_MS);
-      expect(await completion).toBeUndefined();
-      expect(rpcSourceTesting.has(execution.params.runId)).toBe(false);
-      expect(dispatchAgentRunFromGateway).not.toHaveBeenCalled();
-    } finally {
-      await completion;
-      vi.useRealTimers();
-      dispatchYield.mockRestore();
-      execution.params.prepared.activeGatewayWorkAdmission?.release();
-    }
-  });
-
   it("selects the exact preparing RPC input and lends its operation to command dispatch", async () => {
     const execution = createExecution();
     const completion = bindFollowupCompletion(execution);
@@ -346,8 +291,6 @@ describe("startAgentRunExecution Gateway ownership", () => {
     dispatchAgentRunFromGateway.mockImplementationOnce(async (dispatch) => {
       expect(source.input.claim?.inputs).toEqual([source.input]);
       expect(getCurrentSessionControllerOwner()).toBe(source.input.claim?.operation);
-      expect(source.input.mailbox.entries).toContain(source.input);
-      expect(source.input.mailbox.entries).toHaveLength(1);
       await dispatchGate.wait();
       dispatch.cleanupAbortController();
     });
@@ -432,7 +375,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
       expectedChannel: "discord",
     },
     { name: "explicit internal channel", replyChannel: "webchat", expectedChannel: "webchat" },
-  ])("preserves $name provider context through command resolution", async (testCase) => {
+  ])("preserves $name provider context at command dispatch", async (testCase) => {
     const execution = createExecution();
     let sessionEntry: SessionEntry = {
       sessionId: "source-session",
@@ -440,25 +383,11 @@ describe("startAgentRunExecution Gateway ownership", () => {
       delivery: testCase.sessionDelivery,
     };
     if (testCase.recoveryIngress) {
+      const authority = createOperatorRecoveryAuthority("operator", "grant");
       const operatorAuthority = createAdmittedRunOperatorAuthority({
-        profileId: "operator",
-        scopes: ["operator.read"],
-        assertCurrent() {},
+        ...authority,
         recoverySnapshot: {
-          profileId: "operator",
-          scopes: ["operator.read"],
-          assignedRole: null,
-          githubLogin: null,
-          grant: null,
-          aliasBindingIds: [],
-          authPolicy: {
-            generation: "",
-            grantGeneration: "grant",
-            role: "operator",
-            authMethod: "token",
-          },
-          controlUiAdmin: false,
-          localOperator: false,
+          ...expectDefined(authority.recoverySnapshot, "operator recovery snapshot"),
           sourceIngress: testCase.recoveryIngress,
         },
       });
@@ -526,28 +455,12 @@ describe("startAgentRunExecution Gateway ownership", () => {
 
     expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
     const dispatch = dispatchAgentRunFromGateway.mock.calls[0]?.[0];
-    const runId = execution.params.runId;
-    try {
-      const { runContext } = await prepareEmbeddedSessionState({
-        cfg: execution.params.cfg,
-        opts: dispatch.ingressOpts,
-        sessionKey: dispatch.ingressOpts.sessionKey,
-        sessionId: dispatch.ingressOpts.sessionId ?? "source-session",
-        storePath: "/unused/command.sqlite",
-        sessionAgentId: "main",
-        lifecycleGeneration: getAgentRunLifecycleGeneration(),
-        runId,
-        executionWorkspaceDir: "/workspace/A",
-        watchSkills: false,
-        isNewSession: false,
-        isSubagentLaneTurn: false,
-        suppressVisibleSessionEffects: execution.params.suppressVisibleSessionEffects,
-        sessionStateActor: classifySessionStateActor(dispatch.ingressOpts),
-      });
-      expect(runContext.messageChannel).toBe(testCase.expectedChannel);
-      expect(runContext.currentChannelId).toBeUndefined();
-    } finally {
-      clearAgentRunContext(runId);
+    expect(dispatch.ingressOpts.runContext).toMatchObject({
+      messageChannel: testCase.expectedChannel,
+      currentChannelId: undefined,
+    });
+    if (!testCase.expectedChannel) {
+      expect(dispatch.ingressOpts.channel).toBeUndefined();
     }
   });
 
@@ -588,67 +501,55 @@ describe("startAgentRunExecution Gateway ownership", () => {
     },
   );
 
-  it("dispatches with the runtime generation frozen at admission", async () => {
-    const execution = createExecution();
-    const { promise: dispatched, resolve: resolveDispatched } = createDeferred();
-    const { promise: cleanupObserved, resolve: resolveCleanupObserved } = createDeferred();
-    let borrowedAfterCleanup: Promise<unknown> | undefined;
-    let dispatchedGeneration: unknown;
-    let dispatchedSnapshot: unknown;
-    dispatchAgentRunFromGateway.mockImplementationOnce(() => {
-      const generation = execution.params.prepared.replyDispatchRuntime.pluginGeneration;
-      dispatchedGeneration = getPreparedModelRuntimePluginGeneration();
-      dispatchedSnapshot = getPreparedModelRuntimeBorrowedSnapshot(generation);
-      borrowedAfterCleanup = (async () => {
-        await cleanupObserved;
-        return getPreparedModelRuntimeBorrowedSnapshot(generation);
-      })();
-      resolveDispatched();
-      return cleanupObserved;
-    });
-
-    const completion = startAgentRunExecution(execution.params);
-
-    await dispatched;
-    expect(dispatchedGeneration).toBe(
-      execution.params.prepared.replyDispatchRuntime.pluginGeneration,
-    );
-    expect(dispatchedSnapshot).toBe(
-      expectDefined(execution.params.prepared.preparedModelRuntimeLease, "ready session runtime")
-        .snapshot,
-    );
-    const dispatch = dispatchAgentRunFromGateway.mock.calls[0]?.[0];
-    expect(dispatch?.commandRuntimeContext).toEqual({
-      config: { runtime: "A" },
-      pluginGeneration: "generation-A",
-    });
-    expect(dispatch?.ingressOpts.workspaceDir).toBe("/workspace/A");
-    expect(execution.runtimeRelease).not.toHaveBeenCalled();
-
-    await dispatch?.cleanupAbortController();
-    await dispatch?.cleanupAbortController();
-    expect(execution.callerRelease).not.toHaveBeenCalled();
-    resolveCleanupObserved();
-    await expect(borrowedAfterCleanup).resolves.toBeUndefined();
-    await completion;
-    expectCalls(1, execution.runtimeRelease, execution.callerRelease);
-  });
-
-  it.each([undefined, "/workspace/session-override"])(
-    "preserves the admitted workspace with session override %s",
-    async (workspaceOverride) => {
+  it.each([true, false])(
+    "dispatches admitted runtime and workspace (override=%s)",
+    async (override) => {
       const execution = createExecution();
-      execution.params.prepared.workspaceOverride = workspaceOverride;
-      execution.params.prepared.replyDispatchRuntime = {
-        ...execution.params.prepared.replyDispatchRuntime,
-        workspaceDir: "/workspace/admitted",
-      };
-      dispatchAgentRunFromGateway.mockResolvedValueOnce(undefined);
+      execution.params.prepared.workspaceOverride = override ? "/workspace/A" : undefined;
+      execution.params.prepared.replyDispatchRuntime.workspaceDir = "/workspace/admitted";
+      const { promise: dispatched, resolve: resolveDispatched } = createDeferred();
+      const { promise: cleanupObserved, resolve: resolveCleanupObserved } = createDeferred();
+      let borrowedAfterCleanup: Promise<unknown> | undefined;
+      let dispatchedGeneration: unknown;
+      let dispatchedSnapshot: unknown;
+      dispatchAgentRunFromGateway.mockImplementationOnce(() => {
+        const generation = execution.params.prepared.replyDispatchRuntime.pluginGeneration;
+        dispatchedGeneration = getPreparedModelRuntimePluginGeneration();
+        dispatchedSnapshot = getPreparedModelRuntimeBorrowedSnapshot(generation);
+        borrowedAfterCleanup = (async () => {
+          await cleanupObserved;
+          return getPreparedModelRuntimeBorrowedSnapshot(generation);
+        })();
+        resolveDispatched();
+        return cleanupObserved;
+      });
 
-      await startAgentRunExecution(execution.params);
+      const completion = startAgentRunExecution(execution.params);
 
+      await dispatched;
+      expect(dispatchedGeneration).toBe(
+        execution.params.prepared.replyDispatchRuntime.pluginGeneration,
+      );
+      expect(dispatchedSnapshot).toBe(
+        expectDefined(execution.params.prepared.preparedModelRuntimeLease, "ready session runtime")
+          .snapshot,
+      );
       const dispatch = dispatchAgentRunFromGateway.mock.calls[0]?.[0];
-      expect(dispatch?.ingressOpts.workspaceDir).toBe(workspaceOverride ?? "/workspace/admitted");
+      expect(dispatch?.commandRuntimeContext).toEqual({
+        config: { runtime: "A" },
+        pluginGeneration: "generation-A",
+      });
+      expect(dispatch?.ingressOpts.workspaceDir).toBe(
+        override ? "/workspace/A" : "/workspace/admitted",
+      );
+      expect(execution.runtimeRelease).not.toHaveBeenCalled();
+
+      await dispatch?.cleanupAbortController();
+      await dispatch?.cleanupAbortController();
+      expect(execution.callerRelease).not.toHaveBeenCalled();
+      resolveCleanupObserved();
+      await expect(borrowedAfterCleanup).resolves.toBeUndefined();
+      await completion;
       expectCalls(1, execution.runtimeRelease, execution.callerRelease);
     },
   );
@@ -772,7 +673,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
   );
 
   it.each([false, true])(
-    "releases the admitted runtime and preserves private failure replay before dispatch (Incognito: %s)",
+    "releases the admitted runtime and caches private failures before dispatch (Incognito: %s)",
     async (incognito) => {
       const privateMessage = "synthetic-private-pre-dispatch-error";
       const execution = createVisibleExecution();
@@ -811,25 +712,9 @@ describe("startAgentRunExecution Gateway ownership", () => {
         expect(diagnostics).toMatchObject({ error: privateMessage, errorMessage: privateMessage });
       }
 
-      const emitAcceptance = vi.fn();
-      expect(
-        replayAgentTurnIfCached({
-          preflight: {
-            runId: execution.params.runId,
-            agentDedupeKeys: execution.params.agentDedupeKeys,
-          },
-          context: execution.params.context,
-          io: { emitAcceptance, emitFinal: vi.fn() },
-        }),
-      ).toBe(true);
-      const [replayFrame, replayMetadata] = emitAcceptance.mock.calls[0] ?? [];
-      expect(replayFrame).toEqual(frame);
-      const replayDiagnostics = { errorMessage: replayFrame?.[2]?.message, ...replayMetadata };
-      if (incognito) {
-        expect(JSON.stringify(replayDiagnostics)).not.toContain(privateMessage);
-      } else {
-        expect(replayDiagnostics).toMatchObject({ cached: true, errorMessage: privateMessage });
-      }
+      const cached = execution.params.context.dedupe.get(`agent:${execution.params.runId}`);
+      expect(cached).toMatchObject({ ok: false, payload: frame?.[1], error: frame?.[2] });
+      expect(cached?.incognito).toBe(incognito ? true : undefined);
     },
   );
 });

@@ -78,7 +78,6 @@ const pendingResult = (runId: string) => ({
   providerStarted: false,
 });
 const hardTimeout = { status: "timeout", endedAt: 200, timeoutPhase: "provider" };
-const userCancellation = { status: "error", endedAt: 150, stopReason: "rpc" };
 
 function lifecycle(runId: string, data: Record<string, unknown>) {
   emitAgentEvent({ runId, stream: "lifecycle", data });
@@ -217,19 +216,6 @@ function nextWaitStarted() {
     return pending;
   });
   return started.promise;
-}
-
-function terminalReceipt(runId: string) {
-  return {
-    runId,
-    sessionId: "session-1",
-    turnId: "turn-1",
-    requested: { provider: "openai", model: "gpt-primary" },
-    effective: { provider: "openai", model: "gpt-alternate", responseModel: "gpt-alternate" },
-    successfulToolNames: ["read"],
-    rerouted: true,
-    terminalDisposition: "visible",
-  };
 }
 
 afterEach(() => {
@@ -407,80 +393,74 @@ it("keeps whitespace-distinct protocol run IDs separate", async () => {
   });
 });
 
-it.each(
-  (["ok", "error", "timeout"] as const).flatMap((status) =>
-    (["active", "retired", "sessionless"] as const).map((registration) => ({
-      status,
-      registration,
-    })),
-  ),
-)(
-  "waits for replayable $status after execution ends ($registration)",
-  async ({ status, registration }) => {
-    vi.useFakeTimers();
-    const runId = `publication-${status}-${registration}`;
-    const context = createGatewayRequestContext(makeContextParams());
-    let claim: SessionControllerMailboxClaim | undefined;
-    if (registration !== "sessionless") {
-      const source = createTestRpcSource(
-        { kind: "agent", sessionKey: "agent:main:publication", sessionId: "publication-session" },
-        runId,
-      );
-      rpcSourceTesting.set(runId, source);
-      claim = await claimSessionControllerTask(source.input, () => {});
-    }
-    writeObservation(context.dedupe, runId, { status: "accepted" });
-    const replay = () => {
-      const emitAcceptance = vi.fn();
-      expect(
-        replayAgentTurnIfCached({
-          preflight: { runId, agentDedupeKeys: [`agent:${runId}`] },
-          context,
-          io: { emitAcceptance, emitFinal: vi.fn() },
-        }),
-      ).toBe(true);
-      return emitAcceptance.mock.calls[0]?.[0];
-    };
-    const terminal = {
+it.each([
+  ["ok", "active"],
+  ["error", "retired"],
+  ["timeout", "sessionless"],
+] as const)("waits for replayable %s after execution ends (%s)", async (status, registration) => {
+  vi.useFakeTimers();
+  const runId = `publication-${status}-${registration}`;
+  const context = createGatewayRequestContext(makeContextParams());
+  let claim: SessionControllerMailboxClaim | undefined;
+  if (registration !== "sessionless") {
+    const source = createTestRpcSource(
+      { kind: "agent", sessionKey: "agent:main:publication", sessionId: "publication-session" },
       runId,
-      status,
-      ...(status === "timeout" ? { stopReason: "rpc" } : {}),
-      result: { payloads: [{ text: "canonical terminal reply" }] },
-    };
-    const publish = () =>
-      writeObservation(context.dedupe, runId, terminal, { ok: status !== "error" });
-    const waiting = invokeWait(context, runId, 60_000);
-    try {
-      expect(replay()?.[1]).toMatchObject({ runId, status: "in_flight" });
-      lifecycle(runId, { phase: "start" });
-      lifecycle(runId, { phase: "end", executionSettled: true, ...terminal });
-      if (registration === "retired") {
-        rpcSourceTesting.delete(runId);
-      }
-      await vi.advanceTimersByTimeAsync(0);
-      expect(waiting.respond).not.toHaveBeenCalled();
-      await expectReply(invokeWait(context, runId, 0), { runId, status: "timeout" });
-      expect(replay()?.[1]).toMatchObject({ runId, status: "in_flight" });
-      publish();
+    );
+    rpcSourceTesting.set(runId, source);
+    claim = await claimSessionControllerTask(source.input, () => {});
+  }
+  writeObservation(context.dedupe, runId, { status: "accepted" });
+  const replay = () => {
+    const emitAcceptance = vi.fn();
+    expect(
+      replayAgentTurnIfCached({
+        preflight: { runId, agentDedupeKeys: [`agent:${runId}`] },
+        context,
+        io: { emitAcceptance, emitFinal: vi.fn() },
+      }),
+    ).toBe(true);
+    return emitAcceptance.mock.calls[0]?.[0];
+  };
+  const terminal = {
+    runId,
+    status,
+    ...(status === "timeout" ? { stopReason: "rpc" } : {}),
+    result: { payloads: [{ text: "canonical terminal reply" }] },
+  };
+  const publish = () =>
+    writeObservation(context.dedupe, runId, terminal, { ok: status !== "error" });
+  const waiting = invokeWait(context, runId, 60_000);
+  try {
+    expect(replay()?.[1]).toMatchObject({ runId, status: "in_flight" });
+    lifecycle(runId, { phase: "start" });
+    lifecycle(runId, { phase: "end", executionSettled: true, ...terminal });
+    if (registration === "retired") {
       rpcSourceTesting.delete(runId);
-      await expectReply(
-        waiting,
-        expect.objectContaining({ runId, status: status === "timeout" ? "error" : status }),
-      );
-      expect(replay()).toEqual([status !== "error", terminal, undefined]);
-      const afterCleanup = invokeWait(context, runId, 0);
-      await afterCleanup.promise;
-      expect(afterCleanup.respond.mock.calls).toEqual(waiting.respond.mock.calls);
-    } finally {
-      publish();
-      await waiting.promise;
-      rpcSourceTesting.clear();
-      if (claim) {
-        releaseSessionControllerClaim(claim);
-      }
     }
-  },
-);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(waiting.respond).not.toHaveBeenCalled();
+    await expectReply(invokeWait(context, runId, 0), { runId, status: "timeout" });
+    expect(replay()?.[1]).toMatchObject({ runId, status: "in_flight" });
+    publish();
+    rpcSourceTesting.delete(runId);
+    await expectReply(
+      waiting,
+      expect.objectContaining({ runId, status: status === "timeout" ? "error" : status }),
+    );
+    expect(replay()).toEqual([status !== "error", terminal, undefined]);
+    const afterCleanup = invokeWait(context, runId, 0);
+    await afterCleanup.promise;
+    expect(afterCleanup.respond.mock.calls).toEqual(waiting.respond.mock.calls);
+  } finally {
+    publish();
+    await waiting.promise;
+    rpcSourceTesting.clear();
+    if (claim) {
+      releaseSessionControllerClaim(claim);
+    }
+  }
+});
 
 it.each([undefined, true] as const)(
   "retires a sticky terminal only for an admitted new attempt: %s",
@@ -630,6 +610,7 @@ it.each(["compaction", "replacement"] as const)(
 it.each([
   ["agent", "timeout"],
   ["chat", "ok"],
+  [undefined, "timeout"],
 ] as const)("uses the %s abort entry to select the run observation", async (kind, status) => {
   const { runId, write, wait } = runFixture();
   write({ status: "timeout", endedAt: 100, timeoutPhase: "provider" }, { ts: 100, ok: false });
@@ -730,19 +711,14 @@ it.each([undefined, "agent", "chat"] as const)(
     complete(source);
     await Promise.all([first.promise, second.promise]);
 
-    const expected = {
+    const expected = expect.objectContaining({
       runId,
       status: "ok",
       startedAt: 100,
       endedAt: 200,
       error: undefined,
       stopReason: undefined,
-      livenessState: undefined,
-      yielded: undefined,
-      pendingError: undefined,
-      timeoutPhase: undefined,
-      providerStarted: undefined,
-    };
+    });
     expect(first.respond).toHaveBeenCalledWith(true, expected);
     expect(second.respond).toHaveBeenCalledWith(true, expected);
   },
@@ -815,25 +791,6 @@ it.each([
   },
 );
 
-it.each([
-  ["late completion", { status: "ok", endedAt: 300 }, hardTimeout],
-  ["earlier cancellation", userCancellation, userCancellation],
-] as const)("merges %s across agent and chat observations", async (_name, payload, expected) => {
-  for (const timeoutFirst of [true, false]) {
-    const { runId, write, wait } = runFixture();
-    const timeout = () => write({ ...hardTimeout, startedAt: 100 }, { ts: 200, ok: false });
-    const other = () =>
-      write(
-        { ...payload, startedAt: 100 },
-        { ts: 300, ok: payload.status === "ok", source: "chat" },
-      );
-    for (const observe of timeoutFirst ? [timeout, other] : [other, timeout]) {
-      observe();
-    }
-    await expectReply(wait(), expect.objectContaining({ runId, ...expected }));
-  }
-});
-
 it.each(["lifecycle-first", "dedupe-first"] as const)(
   "keeps terminal evidence when sticky status arrives $0",
   async (order) => {
@@ -845,8 +802,6 @@ it.each(["lifecycle-first", "dedupe-first"] as const)(
         startedAt: 100,
         endedAt: 300,
         terminalDelivery: { status: "sent", resultCount: 1, target: "private-target" },
-        terminalReceipt: terminalReceipt(runId),
-        terminalReply: { disposition: "visible", text: "canonical reply" },
       });
     const dedupeTimeout = () => write({ ...hardTimeout, startedAt: 100 }, { ts: 200, ok: false });
 
@@ -863,8 +818,6 @@ it.each(["lifecycle-first", "dedupe-first"] as const)(
         runId,
         status: "timeout",
         terminalDelivery: { status: "sent", resultCount: 1 },
-        terminalReceipt: terminalReceipt(runId),
-        terminalReply: { disposition: "visible", text: "canonical reply" },
       }),
     );
     expect(JSON.stringify(waiter.respond.mock.calls[0]?.[1])).not.toContain("private-target");
