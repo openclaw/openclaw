@@ -143,8 +143,12 @@ function isoFromUnix(raw: unknown): string | undefined {
 
 function cleanMessageText(value: string): string {
   const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
+  // Only a serialized part object is metadata, not prose that mentions these words or pasted JSON.
+  if (
+    !trimmed.startsWith("{") ||
+    !(trimmed.includes("content_type") || trimmed.includes("asset_pointer"))
+  ) {
+    return trimmed;
   }
   if (
     (trimmed.includes("asset_pointer") ||
@@ -155,11 +159,7 @@ function cleanMessageText(value: string): string {
   ) {
     return "";
   }
-  if (
-    trimmed.startsWith("{") &&
-    trimmed.length > 80 &&
-    (trimmed.includes(":") || trimmed.includes("content_type"))
-  ) {
+  if (trimmed.length > 80) {
     const textMatch = trimmed.match(/["']text["']\s*:\s*(["'])(.+?)\1/s);
     return textMatch?.[2] ? normalizeWhitespace(textMatch[2]) : "";
   }
