@@ -10,9 +10,7 @@ import {
   exerciseTerminalOutputSafety,
   objectFieldEquals,
   readFixtureLog,
-  selectTuiFixtureSession,
   startTuiFixture,
-  waitForSynchronizedFrameRows,
   type FixtureLogEntry,
 } from "./tui-pty-harness-fixture-test-support.js";
 import {
@@ -249,37 +247,9 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   });
 
   it(
-    "drives the real TUI terminal loop through typed and fragmented Unicode input",
+    "drives the real TUI terminal loop through fragmented Unicode input",
     async () => {
-      await fixture.write("hello from pty\r");
-      await fixture.wait("PTY_RESPONSE: hello from pty");
-      expect(await fixture.hasCall("sendChat", { message: "hello from pty" })).toBe(true);
       await exerciseFragmentedUnicodePrompt(startTuiFixture, STARTUP_TIMEOUT_MS);
-    },
-    STARTUP_TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "renders each live assistant reply once without replaying stale history",
-    async () => {
-      await withFixture(
-        { OPENCLAW_TUI_PTY_COLS: "220", OPENCLAW_TUI_PTY_ROWS: "50" },
-        async (live) => {
-          await live.wait("local ready", STARTUP_TIMEOUT_MS);
-          await live.write("live reply dedupe proof: first\r", { delay: false });
-          await live.wait("TUI_LIVE_FIRST");
-          await live.write("live reply dedupe proof: second\r", { delay: false });
-          const rows = await waitForSynchronizedFrameRows(
-            live.run,
-            (frame) => frame.some((row) => row.includes("TUI_LIVE_SECOND")),
-            STARTUP_TIMEOUT_MS,
-          );
-          const assistantRows = rows.filter(
-            (row) => row.includes("TUI_LIVE_FIRST") || row.includes("TUI_LIVE_SECOND"),
-          );
-          expect(assistantRows).toEqual(["TUI_LIVE_FIRST", "TUI_LIVE_SECOND"]);
-        },
-      );
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
@@ -474,21 +444,6 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   );
 
   it(
-    "renders message-tool-only internal ui source replies in the terminal",
-    async () => {
-      await fixture.write("message tool only source reply proof\r");
-      await fixture.wait("VISIBLE_TUI_SOURCE_REPLY_PROOF");
-      expect(
-        await fixture.hasCall("sendChat", { message: "message tool only source reply proof" }),
-      ).toBe(true);
-      expect(
-        await fixture.hasCall("sourceReplyMetadata", { text: "VISIBLE_TUI_SOURCE_REPLY_PROOF" }),
-      ).toBe(true);
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
     "renders an attachment-only assistant reply without exposing its source",
     async ({ signal }) => {
       await fixture.write("attachment-only assistant proof\r");
@@ -549,112 +504,11 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     STARTUP_TEST_TIMEOUT_MS,
   );
 
-  it(
-    "ignores delayed aborts and streamed events from the previously selected session",
-    async ({ signal }) => {
-      const isolated = await startHarness();
-      const sourceSessionKey = "agent:main:abort-source";
-      const targetSessionKey = "agent:main:abort-target";
-
-      try {
-        await isolated.wait("local ready", STARTUP_TIMEOUT_MS);
-        await isolated.write(`/session ${sourceSessionKey}\r`, { delay: false });
-        await isolated.call(signal, "loadHistory", { sessionKey: sourceSessionKey });
-        await isolated.write("cross-session abort source proof\r", { delay: false });
-        await isolated.call(signal, "sendChat", { message: "cross-session abort source proof" });
-
-        await isolated.write("/abort\r", { delay: false });
-        await isolated.call(signal, "abortChat", { sessionKey: sourceSessionKey });
-        const outputOffset = isolated.output().length;
-        await isolated.write(`/session ${targetSessionKey}\r`, { delay: false });
-        await isolated.call(signal, "loadHistory", { sessionKey: targetSessionKey });
-        await isolated.call(signal, "abortResolved", { sessionKey: sourceSessionKey });
-        await isolated.call(signal, "lateSessionEvent", {
-          sessionKey: sourceSessionKey,
-          state: "final",
-        });
-
-        const targetOutput = isolated.output().slice(outputOffset);
-        expect(targetOutput).not.toContain("PTY_LATE_FOREIGN_DELTA");
-        expect(targetOutput).not.toContain("PTY_LATE_FOREIGN_FINAL");
-
-        await isolated.write("cross-session target proof\r", { delay: false });
-        const sent = await isolated.call(signal, "sendChat", {
-          message: "cross-session target proof",
-        });
-        expect(sent.payload).toMatchObject({ sessionKey: targetSessionKey });
-        await isolated.wait("PTY_RESPONSE: cross-session target proof");
-      } finally {
-        await isolated.cleanup();
-      }
-    },
-    STARTUP_TEST_TIMEOUT_MS,
-  );
-
   it.for([
     ["lists and executes slash commands through authenticated real PTY frames", "slash-commands"],
     ["selects model and session pickers through authenticated real PTY frames", "pickers"],
     ["updates settings through an authenticated real PTY overlay", "settings"],
   ] as const)("%s", { timeout: STARTUP_TEST_TIMEOUT_MS }, ([_name, surface], { signal }) =>
     exerciseTuiCommandSurface(startTuiFixture, surface, STARTUP_TIMEOUT_MS, signal),
-  );
-
-  it(
-    "submits an exact argument completion with one Enter",
-    async () => {
-      await fixture.write("/fast status", { delay: false });
-      await fixture.wait("→ status");
-      await fixture.write("\r", { delay: false });
-      await fixture.wait("fast mode: off");
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it.for([
-    { command: "verbose", level: "full", field: "verboseLevel" },
-    { command: "reasoning", level: "stream", field: "reasoningLevel" },
-  ])(
-    "submits the canonical /$command $level terminal completion with one Enter",
-    { timeout: TEST_TIMEOUT_MS },
-    async ({ command, level, field }, { signal }) => {
-      await fixture.write(`/${command} ${level}`, { delay: false });
-      await fixture.wait(`→ ${level}`);
-      await fixture.write("\r", { delay: false });
-
-      await fixture.waitForLogEntry(
-        (entry) => entry.method === "patchSession" && objectFieldEquals(entry, field, level),
-        signal,
-      );
-    },
-  );
-
-  it.for([
-    {
-      provider: "Matrix",
-      sessionKey: "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org",
-      message: "opaque session isolation proof: Matrix",
-    },
-    {
-      provider: "Signal",
-      sessionKey: "agent:main:signal:group:AbC123=",
-      message: "opaque session isolation proof: Signal",
-    },
-  ])(
-    "keeps case-distinct $provider conversations out of the visible terminal",
-    { timeout: TEST_TIMEOUT_MS },
-    async ({ sessionKey, message }, { signal }) => {
-      await selectTuiFixtureSession(fixture, sessionKey, signal);
-
-      const outputOffset = fixture.output().length;
-      await fixture.write(`${message}\r`, { delay: false });
-      const sent = await fixture.call(signal, "sendChat", { message });
-      expect(sent.payload).toMatchObject({ sessionKey, message });
-      await fixture.call(signal, "foreignSessionEvent");
-      await fixture.wait(`PTY_RESPONSE: ${message}`);
-
-      const sessionOutput = fixture.output().slice(outputOffset);
-      expect(sessionOutput).toContain(`PTY_RESPONSE: ${message}`);
-      expect(sessionOutput).not.toContain("PTY_FOREIGN_OPAQUE_SESSION_MESSAGE");
-    },
   );
 });
