@@ -16,35 +16,54 @@ vi.mock("../channels/plugins/index.js", () => ({
   getLoadedChannelPlugin: getChannelPluginMock,
 }));
 
-function readResultPayload(payload: unknown) {
+type ActionResult = Extract<MessageActionResult, { kind: "action" }>;
+type SendResult = Extract<MessageActionResult, { kind: "send" }>;
+type BroadcastResult = Extract<MessageActionResult, { kind: "broadcast" }>;
+
+function actionResult(
+  action: ActionResult["action"],
+  payload: unknown,
+  channel = "matrix",
+): ActionResult {
   return {
-    kind: "action" as const,
-    channel: "matrix" as const,
-    action: "read" as const,
-    handledBy: "plugin" as const,
+    kind: "action",
+    channel,
+    action,
+    handledBy: "plugin",
     payload,
     dryRun: false,
   };
 }
+const readResultPayload = (payload: unknown) => actionResult("read", payload);
+const pinsResultPayload = (payload: unknown) => actionResult("list-pins", payload);
+const searchResultPayload = (payload: unknown) => actionResult("search", payload, "discord");
 
-function pinsResultPayload(payload: unknown) {
+function sendResult(
+  send: SendResult["sendResult"],
+  overrides: Partial<SendResult> = {},
+): SendResult {
   return {
-    kind: "action" as const,
-    channel: "matrix" as const,
-    action: "list-pins" as const,
-    handledBy: "plugin" as const,
-    payload,
+    kind: "send",
+    action: "send",
+    channel: "directchat",
+    to: "room-1",
+    handledBy: "core",
+    payload: {},
     dryRun: false,
+    sendResult: send,
+    ...overrides,
   };
 }
-
-function searchResultPayload(payload: unknown) {
+function broadcastResult(
+  results: BroadcastResult["payload"]["results"],
+  channel = "directchat",
+): BroadcastResult {
   return {
-    kind: "action" as const,
-    channel: "discord" as const,
-    action: "search" as const,
-    handledBy: "plugin" as const,
-    payload,
+    kind: "broadcast",
+    action: "broadcast",
+    channel,
+    handledBy: "core",
+    payload: { results },
     dryRun: false,
   };
 }
@@ -123,14 +142,7 @@ describe("formatMessageCliText displayLimit", () => {
         name: `reaction-${String(index).padStart(2, "0")}`,
         count: index + 1,
       }));
-      const result = {
-        kind: "action",
-        channel: "matrix",
-        action: "reactions",
-        handledBy: "plugin",
-        payload: { reactions },
-        dryRun: false,
-      } satisfies MessageActionResult;
+      const result = actionResult("reactions", { reactions });
 
       const output = textJoined(formatMessageCliText(result, { displayLimit }));
 
@@ -193,16 +205,9 @@ describe("formatMessageCliText reaction labels", () => {
   it.each([{ field: "name", reaction: { name: label, emoji: "unused-emoji", key: "unused-key" } }])(
     "renders the preferred $field label as plain text without changing the payload",
     ({ reaction }) => {
-      const result = {
-        kind: "action",
-        channel: "matrix",
-        action: "reactions",
-        handledBy: "plugin",
-        payload: {
-          reactions: [{ ...reaction, count: 2, users: ["\u001b[31malice\u001b[0m", "bob\tother"] }],
-        },
-        dryRun: false,
-      } satisfies MessageActionResult;
+      const result = actionResult("reactions", {
+        reactions: [{ ...reaction, count: 2, users: ["\u001b[31malice\u001b[0m", "bob\tother"] }],
+      });
       const payload = structuredClone(result.payload);
       const output = textJoined(formatMessageCliText(result));
       expect(result.payload).toEqual(payload);
@@ -288,33 +293,27 @@ describe("formatMessageCliText send results", () => {
     "formats core $via send results for '$channel'",
     ({ via, channel, result, expected }) => {
       expect(
-        formatMessageCliText({
-          kind: "send",
-          action: "send",
-          channel: "alpha",
-          to: "c1",
-          handledBy: "core",
-          payload: {},
-          dryRun: false,
-          sendResult: { channel, to: "c1", via, mediaUrl: null, result },
-        }),
+        formatMessageCliText(
+          sendResult(
+            { channel, to: "c1", via, mediaUrl: null, result },
+            {
+              channel: "alpha",
+              to: "c1",
+            },
+          ),
+        ),
       ).toEqual([expected]);
     },
   );
 
   it("prefers and trims a direct plugin payload message ID", () => {
-    const result = {
-      kind: "send",
-      action: "send",
-      channel: "directchat",
-      to: "room-1",
+    const result = sendResult(undefined, {
       handledBy: "plugin",
       payload: {
         messageId: " direct-id ",
         result: { messageId: "nested-id" },
       },
-      dryRun: false,
-    } satisfies MessageActionResult;
+    });
 
     expect(formatMessageCliText(result)).toEqual([
       "✅ Sent via Direct Chat. Message ID: direct-id",
@@ -322,24 +321,15 @@ describe("formatMessageCliText send results", () => {
   });
 
   it("reports a partial delivery failure without claiming success", () => {
-    const result = {
-      kind: "send",
-      action: "send",
+    const result = sendResult({
       channel: "directchat",
       to: "room-1",
-      handledBy: "core",
-      payload: {},
-      dryRun: false,
-      sendResult: {
-        channel: "directchat",
-        to: "room-1",
-        via: "direct",
-        mediaUrl: null,
-        deliveryStatus: "partial_failed",
-        error: "second attachment rejected",
-        result: { channel: "directchat", messageId: "first-part-1" },
-      },
-    } satisfies MessageActionResult;
+      via: "direct",
+      mediaUrl: null,
+      deliveryStatus: "partial_failed",
+      error: "second attachment rejected",
+      result: { channel: "directchat", messageId: "first-part-1" },
+    });
     const output = textJoined(formatMessageCliText(result));
     expect(output).toContain("second attachment rejected");
     expect(output).not.toContain("✅ Sent");
@@ -349,12 +339,9 @@ describe("formatMessageCliText send results", () => {
 
 describe("formatMessageCliText payload scalars", () => {
   it("preserves generic object primitive summaries", () => {
-    const result = {
-      kind: "action",
-      channel: "directchat",
-      action: "channel-info",
-      handledBy: "plugin",
-      payload: {
+    const result = actionResult(
+      "channel-info",
+      {
         undef: undefined,
         nil: null,
         array: [1, 2],
@@ -366,8 +353,8 @@ describe("formatMessageCliText payload scalars", () => {
         number: -3,
         boolean: false,
       },
-      dryRun: false,
-    } satisfies MessageActionResult;
+      "directchat",
+    );
 
     const output = textJoined(formatMessageCliText(result));
     for (const expected of [
@@ -390,15 +377,15 @@ describe("formatMessageCliText provider-reported failures", () => {
   it.each([
     ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, "Poll rejected"],
   ] as const)("reports %s without claiming success", (_name, action, payload, expected) => {
-    const result = {
-      kind: action === "poll" ? action : "action",
+    const result: MessageActionResult = {
+      kind: "poll",
       channel: "telegram",
       action,
       to: "123",
       handledBy: "plugin",
       payload,
       dryRun: false,
-    } as MessageActionResult;
+    };
 
     const output = textJoined(formatMessageCliText(result));
 
@@ -451,35 +438,26 @@ describe("formatMessageCliText poll results", () => {
 
 describe("formatMessageCliText broadcast results", () => {
   it("reports aggregate failure while preserving every target row", () => {
-    const result = {
-      kind: "broadcast",
-      action: "broadcast",
-      channel: "directchat",
-      handledBy: "core",
-      payload: {
-        results: [
-          ...Array.from({ length: 51 }, (_, index) => ({
-            channel: "directchat" as const,
-            to: `room-ok-${index}`,
-            ok: true as const,
-          })),
-          {
-            channel: "directchat",
-            to: "room-suppressed",
-            ok: false,
-            error: "Broadcast send suppressed: cancelled_by_message_sending_hook.",
-          },
-          {
-            channel: "directchat",
-            to: "room-partial",
-            ok: false,
-            error: "second payload failed",
-            sentBeforeError: true,
-          },
-        ],
+    const result = broadcastResult([
+      ...Array.from({ length: 51 }, (_, index) => ({
+        channel: "directchat" as const,
+        to: `room-ok-${index}`,
+        ok: true as const,
+      })),
+      {
+        channel: "directchat",
+        to: "room-suppressed",
+        ok: false,
+        error: "Broadcast send suppressed: cancelled_by_message_sending_hook.",
       },
-      dryRun: false,
-    } satisfies MessageActionResult;
+      {
+        channel: "directchat",
+        to: "room-partial",
+        ok: false,
+        error: "second payload failed",
+        sentBeforeError: true,
+      },
+    ]);
 
     const output = textJoined(formatMessageCliText(result));
 
@@ -499,15 +477,8 @@ describe("formatMessageCliText delivery and action terminal safety", () => {
   const hostile = "\u001b[2J\u001b[31mPWNED";
 
   it("strips control sequences from a failed send error and its message id", () => {
-    const result = {
-      kind: "send",
-      action: "send",
-      channel: "mattermost",
-      to: "channel:testchan",
-      handledBy: "core",
-      payload: {},
-      dryRun: false,
-      sendResult: {
+    const result = sendResult(
+      {
         channel: "mattermost",
         to: "channel:testchan",
         via: "direct",
@@ -516,7 +487,8 @@ describe("formatMessageCliText delivery and action terminal safety", () => {
         error: `Mattermost API 400 Bad Request: ${hostile}`,
         result: { messageId: hostile },
       },
-    } satisfies MessageActionResult;
+      { channel: "mattermost", to: "channel:testchan" },
+    );
 
     const output = textJoined(formatMessageCliText(result));
 
@@ -525,23 +497,17 @@ describe("formatMessageCliText delivery and action terminal safety", () => {
   });
 
   it("strips control sequences from a broadcast error column", () => {
-    const result = {
-      kind: "broadcast",
-      action: "broadcast",
-      channel: "mattermost",
-      handledBy: "core",
-      payload: {
-        results: [
-          {
-            channel: "mattermost" as const,
-            to: "channel:testchan",
-            ok: false,
-            error: `Mattermost API 400 Bad Request: ${hostile}`,
-          },
-        ],
-      },
-      dryRun: false,
-    } satisfies MessageActionResult;
+    const result = broadcastResult(
+      [
+        {
+          channel: "mattermost",
+          to: "channel:testchan",
+          ok: false,
+          error: `Mattermost API 400 Bad Request: ${hostile}`,
+        },
+      ],
+      "mattermost",
+    );
 
     const output = textJoined(formatMessageCliText(result));
 
@@ -550,24 +516,10 @@ describe("formatMessageCliText delivery and action terminal safety", () => {
   });
 
   it("strips control sequences from reaction payload text", () => {
-    const added = {
-      kind: "action",
-      action: "react",
-      channel: "matrix",
-      handledBy: "plugin",
-      payload: { ok: true, added: hostile },
-      dryRun: false,
-    } satisfies MessageActionResult;
+    const added = actionResult("react", { ok: true, added: hostile });
     expect(textJoined(formatMessageCliText(added))).toBe("✅ Reaction added: PWNED");
 
-    const removed = {
-      kind: "action",
-      action: "react",
-      channel: "matrix",
-      handledBy: "plugin",
-      payload: { ok: true, removed: [hostile, "👍"] },
-      dryRun: false,
-    } satisfies MessageActionResult;
+    const removed = actionResult("react", { ok: true, removed: [hostile, "👍"] });
     const removedOutput = textJoined(formatMessageCliText(removed));
     expect(removedOutput).not.toContain("\u001b");
     expect(removedOutput).toContain("PWNED");
@@ -576,14 +528,7 @@ describe("formatMessageCliText delivery and action terminal safety", () => {
   it.each([{ threadId: hostile, ok: true }, hostile])(
     "strips controls from fallback payload %j",
     (payload) => {
-      const result = {
-        kind: "action",
-        action: "thread-create",
-        channel: "matrix",
-        handledBy: "plugin",
-        payload,
-        dryRun: false,
-      } satisfies MessageActionResult;
+      const result = actionResult("thread-create", payload);
 
       const output = textJoined(formatMessageCliText(result));
 

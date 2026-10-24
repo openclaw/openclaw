@@ -439,43 +439,25 @@ export function registerLegacyHeartbeatDriverTests() {
               jobs: [monitor],
             });
             await closeOpenClawStateDatabaseAsync();
-            const legacy = new DatabaseSync(databasePath);
-            try {
-              const row = legacy
-                .prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?")
-                .get(monitor.id);
-              const definition = JSON.parse(String(row?.job_json));
-              definition.payload = { kind: "heartbeat" };
-              legacy
-                .prepare(
-                  "UPDATE cron_jobs SET payload_kind = 'heartbeat', job_json = ? WHERE job_id = ?",
-                )
-                .run(JSON.stringify(definition), monitor.id);
-            } finally {
-              legacy.close();
-            }
+            using legacy = new DatabaseSync(databasePath);
+            const row = legacy
+              .prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?")
+              .get(monitor.id);
+            const definition = JSON.parse(String(row?.job_json));
+            definition.payload = { kind: "heartbeat" };
+            legacy
+              .prepare(
+                "UPDATE cron_jobs SET payload_kind = 'heartbeat', job_json = ? WHERE job_id = ?",
+              )
+              .run(JSON.stringify(definition), monitor.id);
           } else {
             await closeOpenClawStateDatabaseAsync();
           }
-          const originalJobs = (() => {
-            const originalDatabase = new DatabaseSync(databasePath, { readOnly: true });
-            try {
-              return originalDatabase
-                .prepare("SELECT * FROM cron_jobs ORDER BY store_key, sort_order, job_id")
-                .all();
-            } finally {
-              originalDatabase.close();
-            }
-          })();
+          const jobsQuery = "SELECT * FROM cron_jobs ORDER BY store_key, sort_order, job_id";
+          const [originalJobs] = queryAgent(databasePath, [jobsQuery]);
           const result = await runBuiltRuntime(
             runtimeRoot,
-            disableUpdatedPackageCompileCacheEnv({
-              ...process.env,
-              NODE_ENV: undefined,
-              VITEST: undefined,
-              VITEST_POOL_ID: undefined,
-              VITEST_WORKER_ID: undefined,
-            }),
+            childEnv({}),
             [
               "doctor",
               ...(repair ? ["--fix"] : []),
@@ -509,12 +491,9 @@ export function registerLegacyHeartbeatDriverTests() {
           } else {
             expect(fs.readFileSync(`${state.configPath}.bak`, "utf8")).toBe(original);
           }
-          const db = new DatabaseSync(databasePath, { readOnly: true });
-          try {
-            const jobs = db
-              .prepare("SELECT job_json FROM cron_jobs")
-              .all()
-              .map((row) => JSON.parse(String(row.job_json)));
+          {
+            const [rows] = queryAgent(databasePath, ["SELECT job_json FROM cron_jobs"]);
+            const jobs = rows!.map((row) => JSON.parse(String(row.job_json)));
             expect(jobs).toContainEqual(
               expect.objectContaining({
                 agentId: "main",
@@ -540,8 +519,6 @@ export function registerLegacyHeartbeatDriverTests() {
                   : {}),
               }),
             );
-          } finally {
-            db.close();
           }
           const databaseBackups = fs
             .readdirSync(path.dirname(databasePath))
@@ -552,21 +529,12 @@ export function registerLegacyHeartbeatDriverTests() {
             );
           expect(databaseBackups.length).toBeGreaterThan(0);
           for (const name of databaseBackups) {
-            const backup = new DatabaseSync(path.join(path.dirname(databasePath), name), {
-              readOnly: true,
-            });
-            try {
-              expect(backup.prepare("PRAGMA integrity_check").all()).toEqual([
-                { integrity_check: "ok" },
-              ]);
-              expect(
-                backup
-                  .prepare("SELECT * FROM cron_jobs ORDER BY store_key, sort_order, job_id")
-                  .all(),
-              ).toEqual(originalJobs);
-            } finally {
-              backup.close();
-            }
+            const [integrity, jobs] = queryAgent(path.join(path.dirname(databasePath), name), [
+              "PRAGMA integrity_check",
+              jobsQuery,
+            ]);
+            expect(integrity).toEqual([{ integrity_check: "ok" }]);
+            expect(jobs).toEqual(originalJobs);
           }
         },
       );

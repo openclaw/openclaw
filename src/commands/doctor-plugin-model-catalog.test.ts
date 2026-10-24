@@ -56,6 +56,25 @@ function writeLegacyCatalog(agentDir: string, pluginId: string, contents: string
   return sourcePath;
 }
 
+function seedCatalogs(agentDir: string, catalogs: Record<string, string>) {
+  return replacePersistedPluginModelCatalogs({
+    agentDir,
+    pluginCatalogWrites: Object.fromEntries(
+      Object.entries(catalogs).map(([id, contents]) => [
+        encodePluginModelCatalogRelativePath(id),
+        contents,
+      ]),
+    ),
+  });
+}
+
+function overwriteCatalog(agentDir: string, pluginId: string, contents: string) {
+  using database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+  database
+    .prepare("UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?")
+    .run(contents, "plugin-model-catalog-v1", pluginId);
+}
+
 function prompter(shouldRepair: boolean): DoctorPrompter {
   return {
     confirmAutoFix: vi.fn(async () => shouldRepair),
@@ -115,13 +134,7 @@ describe("doctor generated plugin model catalog migration", () => {
   it("detects SQLite-only catalogs without repairing them", async () => {
     const agentDir = createAgentDir();
     const validSibling = generatedCatalog("anthropic");
-    await replacePersistedPluginModelCatalogs({
-      agentDir,
-      pluginCatalogWrites: {
-        [encodePluginModelCatalogRelativePath("zai")]: generatedCatalog("zai"),
-        [encodePluginModelCatalogRelativePath("anthropic")]: validSibling,
-      },
-    });
+    await seedCatalogs(agentDir, { zai: generatedCatalog("zai"), anthropic: validSibling });
     const malformed = JSON.stringify({
       generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
       providers: {
@@ -132,16 +145,7 @@ describe("doctor generated plugin model catalog migration", () => {
         },
       },
     });
-    const database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
-    try {
-      database
-        .prepare(
-          "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
-        )
-        .run(malformed, "plugin-model-catalog-v1", "zai");
-    } finally {
-      database.close();
-    }
+    overwriteCatalog(agentDir, "zai", malformed);
     const before = loadPersistedPluginModelCatalogsReadOnly(agentDir);
     const siblingBefore = readCatalogCacheRow(agentDir, "anthropic");
     const malformedBefore = readCatalogCacheRow(agentDir, "zai");
@@ -159,12 +163,9 @@ describe("doctor generated plugin model catalog migration", () => {
 
   it("repairs only partial retained costs and persists the repair across reopening", async () => {
     const agentDir = createAgentDir();
-    await replacePersistedPluginModelCatalogs({
-      agentDir,
-      pluginCatalogWrites: {
-        [encodePluginModelCatalogRelativePath("ollama")]: generatedCatalog("ollama"),
-        [encodePluginModelCatalogRelativePath("anthropic")]: generatedCatalog("anthropic"),
-      },
+    await seedCatalogs(agentDir, {
+      ollama: generatedCatalog("ollama"),
+      anthropic: generatedCatalog("anthropic"),
     });
     await closeOpenClawAgentDatabasesAsync(agentDir);
     const partial = {
@@ -190,16 +191,7 @@ describe("doctor generated plugin model catalog migration", () => {
       generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
       providers: { ollama: provider },
     });
-    const database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
-    try {
-      database
-        .prepare(
-          "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
-        )
-        .run(retained, "plugin-model-catalog-v1", "ollama");
-    } finally {
-      database.close();
-    }
+    overwriteCatalog(agentDir, "ollama", retained);
     const before = readCatalogCacheRow(agentDir, "ollama");
     const sibling = readCatalogCacheRow(agentDir, "anthropic");
     await maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir], false));
@@ -239,12 +231,8 @@ describe("doctor generated plugin model catalog migration", () => {
 
   it("does not report a repair when SQLite rejects the planned update", async () => {
     const agentDir = createAgentDir();
-    const relativePath = encodePluginModelCatalogRelativePath("nvidia");
     const refreshed = generatedCatalog("nvidia", "concurrently-refreshed-provider-test-key");
-    await replacePersistedPluginModelCatalogs({
-      agentDir,
-      pluginCatalogWrites: { [relativePath]: refreshed },
-    });
+    await seedCatalogs(agentDir, { nvidia: refreshed });
     const malformed = JSON.stringify({
       generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
       providers: {
@@ -296,12 +284,7 @@ describe("doctor generated plugin model catalog migration", () => {
   it("retires an orphaned recovery credential only on Doctor fix", async () => {
     const agentDir = createAgentDir();
     const contents = generatedCatalog("zai", "interrupted-released-provider-test-key");
-    await replacePersistedPluginModelCatalogs({
-      agentDir,
-      pluginCatalogWrites: {
-        [encodePluginModelCatalogRelativePath("zai")]: contents,
-      },
-    });
+    await seedCatalogs(agentDir, { zai: contents });
     const database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
     try {
       database
@@ -474,18 +457,15 @@ describe.each(["JSON", "JSONC"])(
 
     async function seedAgent(rootProviders: Record<string, unknown>) {
       const agentDir = createAgentDir();
-      await replacePersistedPluginModelCatalogs({
-        agentDir,
-        pluginCatalogWrites: {
-          [encodePluginModelCatalogRelativePath("anthropic")]: `${JSON.stringify(
-            {
-              generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-              providers: { anthropic: anthropicBlock },
-            },
-            null,
-            2,
-          )}\n`,
-        },
+      await seedCatalogs(agentDir, {
+        anthropic: `${JSON.stringify(
+          {
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: { anthropic: anthropicBlock },
+          },
+          null,
+          2,
+        )}\n`,
       });
       const json = JSON.stringify({ providers: rootProviders }, null, 2);
       const rootRaw =
