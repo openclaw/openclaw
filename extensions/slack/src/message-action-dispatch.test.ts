@@ -467,7 +467,7 @@ describe("Slack action adapter", () => {
   );
 
   it.each([
-    { name: "Slack markdown rendering", text: `${"&".repeat(801)}${"x".repeat(2_200)}` },
+    { name: "native entity bytes", text: `${"&amp;".repeat(801)}${"x".repeat(2_200)}` },
     { name: "UTF-8 expansion", text: "😀".repeat(1_501) },
   ])("rejects presentation fallback edits that overflow after $name", async ({ text }) => {
     await expect(
