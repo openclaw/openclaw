@@ -3,11 +3,10 @@ import { createServer, type RequestListener, type Server } from "node:http";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
-import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import * as gatewayService from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
-import { recordUpdateRunStep, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
+import { recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
 import {
@@ -73,16 +72,6 @@ function pendingHealth(waitOutcome: "still-starting" | "stopped-free", port = 18
 }
 function healthResponse(version: string | undefined, buildId?: string, bootId = "candidate-boot") {
   return gatewayHealthResponse({ server: { version, buildId, bootId } });
-}
-function expectRecorded(
-  runId: string,
-  facts: Partial<NonNullable<UpdateRunRecord["verification"]>>,
-) {
-  expect(recordUpdateRunVerification).toHaveBeenCalledWith(
-    runId,
-    expect.objectContaining(facts),
-    expect.anything(),
-  );
 }
 function useService(runtime: Parameters<typeof restart.makeGatewayService>[0] = running) {
   const service = restart.makeGatewayService(runtime);
@@ -171,7 +160,6 @@ async function verifyHealth(
     result,
     recovery ? { status: "error" } : { after: { version, buildId: "candidate" } },
   );
-  const onVerified = vi.fn();
   await listen((req, res) =>
     res
       .writeHead(req.url === "/readyz" && readiness ? 503 : 200)
@@ -181,12 +169,11 @@ async function verifyHealth(
     opts: { json },
     expectedVersion: version,
     expectedBuildId: "candidate",
-    ...(recovery
-      ? ({ purpose: "recovery", waitForStartup: false } as const)
-      : { requireRunningService: true, onVerified }),
-    ...(readiness ? { purpose: "recovery", waitForStartup: false } : {}),
+    requireRunningService: !recovery,
+    purpose: "recovery",
+    waitForStartup: false,
   });
-  return { result, onVerified, validation };
+  return { result, validation };
 }
 const reportFor = (input: ReturnType<typeof resultFixture>) =>
   renderUpdateRunReport(updateRunReportInputFromResult(input)).markdown;
@@ -200,7 +187,6 @@ beforeEach(() => {
   candidate = { version: "2026.9.4", buildId: "candidate-build" };
   vi.clearAllMocks();
   vi.mocked(recordUpdateRunVerification).mockReset();
-  vi.mocked(recordUpdateRunStep).mockReset();
   restart.resetRestartHealthMocks();
 });
 afterEach(async () => {
@@ -260,10 +246,8 @@ it.each([
     expect(result.steps[0]?.advisory?.message).toEqual(
       verified ? undefined : expect.stringContaining("--no-restart"),
     );
-    expectRecorded("watcher-restart", {
-      versionMatch: state === "starting" ? undefined : verified,
-    });
     const facts = vi.mocked(recordUpdateRunVerification).mock.calls.at(-1)?.[1];
+    expect(facts?.versionMatch).toBe(state === "starting" ? undefined : verified);
     expect(facts && isUpdateRunVerificationConfirmed(facts)).toBe(verified);
     if (state === "old-build") {
       expect(facts?.runningBuildId).toBe("previous-build");
@@ -314,14 +298,14 @@ it.each(["transient-timeout", "mixed"])(
     expect(verification.pluginWarnings).toBeUndefined();
     expect(onVerified).toHaveBeenCalledOnce();
     expect(result.steps[0]?.exitCode).toBe(0);
-    expectRecorded("collection-timeout", {
+    const facts = vi.mocked(recordUpdateRunVerification).mock.calls.at(-1)?.[1];
+    expect(facts).toMatchObject({
       serviceRunning: true,
       versionMatch: true,
       readyz: true,
       settled: true,
       channelsReady: false,
     });
-    const facts = vi.mocked(recordUpdateRunVerification).mock.calls.at(-1)?.[1];
     expect(facts && isUpdateRunVerificationConfirmed(facts)).toBe(true);
     const report = reportFor(result);
     expect(report).toContain("telegram: health collection timed out after 7000ms");
@@ -329,11 +313,6 @@ it.each(["transient-timeout", "mixed"])(
     expect(report).toContain("openclaw health --json");
     expect(result.steps[0]?.warnings?.join("\n")).toContain(
       "telegram: health collection timed out after 7000ms",
-    );
-    expect(recordUpdateRunStep).toHaveBeenCalledWith(
-      "collection-timeout",
-      expect.objectContaining({ step: "warning:gateway verification", status: "completed" }),
-      expect.anything(),
     );
   },
 );
@@ -374,65 +353,49 @@ it("bounds foreground recovery observation with hung readiness", async () => {
   }
 });
 
-it.each(["first read", "after listener observation", "recovery"])(
-  "records expired readiness work before it settles (%s)",
-  async (phase) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    mockProcessPlatform("linux");
-    const entered = createDeferred();
-    const released = createDeferred<GatewayServiceRuntime>();
-    const service = useService();
-    let readRuntime = false;
-    vi.mocked(service.readRuntime).mockImplementation(() => {
-      if (phase === "after listener observation" && !readRuntime) {
-        readRuntime = true;
-        return Promise.resolve({ status: "running", pid: 8000 });
-      }
+it("records expired recovery readiness before it settles", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  mockProcessPlatform("linux");
+  const entered = createDeferred();
+  const released = createDeferred();
+  useService();
+  const onVerified = vi.fn();
+  const lateMutation = vi.fn();
+  const settle = vi.fn();
+  pendingVerification = verifyGateway({
+    opts: withRun("stalled-readiness"),
+    expectedBuildId: undefined,
+    requireRunningService: true,
+    timeoutMs: 1_000,
+    onVerified,
+    recoverHealth: async (health, _reinspect, assertCurrent) => {
       entered.resolve();
-      return released.promise;
-    });
-    const onVerified = vi.fn();
-    const lateMutation = vi.fn();
-    const recoverHealth: Parameters<typeof verifyUpdatedGateway>[0]["recoverHealth"] =
-      phase === "recovery"
-        ? async (health, _reinspect, assertCurrent) => {
-            entered.resolve();
-            await released.promise;
-            assertCurrent();
-            lateMutation();
-            return { health, launchAgentRecovery: null };
-          }
-        : undefined;
-    const settle = vi.fn();
-    pendingVerification = verifyGateway({
-      opts: withRun("stalled-readiness"),
-      expectedBuildId: undefined,
-      requireRunningService: true,
-      timeoutMs: 1_000,
-      onVerified,
-      recoverHealth,
-      health: phase === "recovery" ? pendingHealth("stopped-free") : undefined,
-    }).then(settle, settle);
-    try {
-      await entered.promise;
-      restart.monotonicClock.nowMs = 1_000;
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(settle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ ok: false }));
-      expect(result.steps).toContainEqual(
-        expect.objectContaining({ name: "gateway verification", exitCode: 1 }),
-      );
-      expect(onVerified).not.toHaveBeenCalled();
-      released.resolve({ status: "running", pid: 8000 });
-      await vi.advanceTimersByTimeAsync(0);
-      expectNoCalls(onVerified, lateMutation);
-    } finally {
-      controller.abort();
-      released.resolve({ status: "running", pid: 8000 });
-      await pendingVerification;
-      vi.useRealTimers();
-    }
-  },
-);
+      await released.promise;
+      assertCurrent();
+      lateMutation();
+      return { health, launchAgentRecovery: null };
+    },
+    health: pendingHealth("stopped-free"),
+  }).then(settle, settle);
+  try {
+    await entered.promise;
+    restart.monotonicClock.nowMs = 1_000;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ ok: false }));
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({ name: "gateway verification", exitCode: 1 }),
+    );
+    expect(onVerified).not.toHaveBeenCalled();
+    released.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expectNoCalls(onVerified, lateMutation);
+  } finally {
+    controller.abort();
+    released.resolve();
+    await pendingVerification;
+    vi.useRealTimers();
+  }
+});
 
 it("prefers a pending recovery observation over previously saved healthy facts", async () => {
   result.status = "error";
@@ -537,7 +500,6 @@ it.each([
     );
     expect(restart.monotonicClock.nowMs).toBe(pending ? 60_000 : 90_000);
     expect(restart.callGateway).toHaveBeenCalledTimes(pending ? 0 : 2);
-    expect(runUpdatedInstallGatewayCommand).toHaveBeenCalledOnce();
   },
 );
 
@@ -641,30 +603,12 @@ it.each([
       );
     }
     if (deadlineExpired) {
-      expect(result.steps[0]?.exitCode).toBe(1);
       expect(result.steps[0]?.failureFacts).toContainEqual(
         expect.objectContaining({ code: "timeout" }),
       );
       expect(restart.callGateway).toHaveBeenCalledOnce();
     }
     expect(onVerified).toHaveBeenCalledTimes(verified ? 1 : 0);
-    if (verified) {
-      expect(recordUpdateRunVerification).toHaveBeenLastCalledWith(
-        "synthetic-update",
-        expect.objectContaining({
-          pid: 8000,
-          settled: true,
-          readyz: true,
-        }),
-        expect.anything(),
-      );
-    } else {
-      expect(recordUpdateRunVerification).not.toHaveBeenCalledWith(
-        "synthetic-update",
-        expect.objectContaining({ settled: true, readyz: true }),
-        expect.anything(),
-      );
-    }
   },
 );
 

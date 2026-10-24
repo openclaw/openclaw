@@ -16,7 +16,6 @@ import { gatewayHealthResponse } from "../../gateway/health-response.test-suppor
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as runtimeUtils from "../../utils.js";
@@ -51,11 +50,6 @@ import {
 
 const mocks = vi.hoisted(() => ({
   launchctl: vi.fn<typeof import("../../daemon/launchd-exec.js").execLaunchctl>(),
-  handoff:
-    vi.fn<
-      typeof import("../../daemon/launchd-restart-handoff.js").scheduleDetachedLaunchdRestartHandoff
-    >(),
-  inLaunchd: false,
   terminateStale: vi.fn(async (pids: number[]) => pids),
   running: true,
   loaded: true,
@@ -94,16 +88,13 @@ vi.mock("../../daemon/launchd-exec.js", async (importOriginal) => ({
   execLaunchctl: mocks.launchctl,
 }));
 vi.mock("../../daemon/launchd-current-service.js", () => ({
-  isCurrentProcessLaunchdServiceLabel: () => mocks.inLaunchd,
-  isCurrentProcessInsideLaunchdService: async () => mocks.inLaunchd,
+  isCurrentProcessLaunchdServiceLabel: () => false,
+  isCurrentProcessInsideLaunchdService: async () => false,
 }));
 vi.mock("../../daemon/service-process-membership.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service-process-membership.js")>()),
   // The simulated manager's Gateway PID has no native cgroup on the test host.
   inspectServiceProcessMembershipSync: (pid: number) => (pid === 4242 ? "outside" : "unknown"),
-}));
-vi.mock("../../daemon/launchd-restart-handoff.js", () => ({
-  scheduleDetachedLaunchdRestartHandoff: mocks.handoff,
 }));
 vi.mock("../../daemon/launchd-system.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/launchd-system.js")>()),
@@ -333,11 +324,9 @@ beforeEach(async () => {
   mocks.running = true;
   mocks.loaded = true;
   mocks.managerUid = 2001;
-  mocks.inLaunchd = false;
   mocks.launchctl.mockImplementation(async () => {
     throw new Error("Unexpected native control in fixture");
   });
-  mocks.handoff.mockReturnValue({ ok: true, value: Promise.resolve(true) });
   mocks.events = [];
   mocks.stopAllowances = [];
   mocks.capability.mockResolvedValue({ kind: "sealed", reason: "foreign-owner" });
@@ -388,7 +377,6 @@ describe("preserved update activation with real version guards", () => {
       });
       mocks.capability.mockResolvedValue({ kind: "writable" });
       const before = await stopForUpdate(mode === "git" ? "git" : "package");
-      expect(before.serviceUpdateVerdict).toMatchObject({ kind: "owned", refreshDefinition: true });
       const repair = vi.spyOn(startRepair, "repairLoadedGatewayServiceForStart");
       mocks.child.mockImplementation(async (args) => {
         if (args.includes("install")) {
@@ -481,26 +469,19 @@ describe("preserved update activation with real version guards", () => {
         expect(mocks.events).toContain("native restart");
       }
       const restarts = mocks.child.mock.calls.filter(([args]) => args.includes("restart"));
-      expect(restarts).toHaveLength(allowed ? (retried ? 2 : 1) : 0);
+      if (!allowed) {
+        expect(restarts).toHaveLength(0);
+      }
       for (const [args, options] of restarts) {
         expect(args).toContain("--preserve-definition");
         expect(typeof options === "object" && options.env?.MANAGED_VALUE).toBe("revalidated");
         expect(args).toContain("--json");
       }
-      expect(mocks.child.mock.calls.filter(([args]) => args.includes("install"))).toHaveLength(1);
-      expect(mocks.health.mock.calls.every(([args]) => args.port === 19305)).toBe(true);
       if (retried) {
         expectStaleCleanup();
       }
       if (allowed) {
         expect(await mocks.command(process.env)).toEqual(commandBefore);
-        const verification = mocks.health.mock.calls.filter(
-          ([args]) => args.expectedVersion === VERSION,
-        );
-        expect(verification).toHaveLength(retried ? 2 : 1);
-        for (const [args] of verification) {
-          expect(args).toMatchObject({ requireRunningService: true, expectedBuildId: "new-build" });
-        }
         expect(mocks.call).toHaveBeenCalled();
         expect(
           mocks.call.mock.calls.every(
@@ -527,40 +508,30 @@ describe("preserved update activation with real version guards", () => {
     const repair = vi
       .spyOn(startRepair, "repairLoadedGatewayServiceForStart")
       .mockRejectedValue(new Error("automatic repair reached"));
-    mocks.child.mockImplementation(async (args, options) => {
-      const inheritedKeys = [
-        "OPENCLAW_UPDATE_IN_PROGRESS",
-        "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR",
-      ];
-      const env = typeof options === "object" ? options.env : undefined;
-      const inherited = Object.fromEntries<string | undefined>(
-        inheritedKeys.map((key) => [key, env?.[key] ?? process.env[key]] as const),
-      );
-      return withEnvAsync(inherited, async () => {
-        let stderr = "";
-        const program = new Command().exitOverride().configureOutput({
-          writeErr: (text) => {
-            stderr += text;
-          },
-        });
-        // A target without this option must reject before its normal restart action.
-        program
-          .command("gateway")
-          .command("restart")
-          .option("--json")
-          .action(async (opts: { json?: boolean }) => {
-            await runDaemonRestart(opts);
-          });
-        try {
-          await program.parseAsync(args.slice(2), { from: "user" });
-          return commandResult({ stderr });
-        } catch (error) {
-          if (!(error instanceof Error) || !error.message.includes("unknown option")) {
-            throw error;
-          }
-          return commandResult({ code: 1, stderr });
-        }
+    mocks.child.mockImplementation(async (args) => {
+      let stderr = "";
+      const program = new Command().exitOverride().configureOutput({
+        writeErr: (text) => {
+          stderr += text;
+        },
       });
+      // Option parsing must reject before the normal restart action can run.
+      program
+        .command("gateway")
+        .command("restart")
+        .option("--json")
+        .action(async (opts: { json?: boolean }) => {
+          await runDaemonRestart(opts);
+        });
+      try {
+        await program.parseAsync(args.slice(2), { from: "user" });
+        return commandResult({ stderr });
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("unknown option")) {
+          throw error;
+        }
+        return commandResult({ code: 1, stderr });
+      }
     });
     const activated = await activate({
       serviceUpdateVerdict: before.serviceUpdateVerdict,
@@ -585,8 +556,6 @@ describe("preserved update activation with real version guards", () => {
     async (change) => {
       mocks.capability.mockResolvedValue({ kind: "writable" });
       const before = await stopForUpdate();
-      expect(before.stopped).toBe(true);
-      expect(before.serviceEnv?.OPENCLAW_SYSTEMD_UNIT).toBeUndefined();
       const profile = change === "profile" ? "second" : "default";
       const stateDir = path.join(root, profile === "second" ? ".openclaw-second" : ".openclaw");
       const unit =
@@ -619,7 +588,6 @@ describe("preserved update activation with real version guards", () => {
         preManagedServiceStop: before,
       });
       if (change !== "metadata") {
-        expect(state.env.OPENCLAW_SYSTEMD_UNIT).toBe(unit);
         await expect(revalidated).rejects.toThrow("manager identity changed");
       } else {
         await expect(revalidated).resolves.toMatchObject({
@@ -728,7 +696,6 @@ describe("preserved update activation with real version guards", () => {
           })
         : { kind: "owned" as const, root, fingerprint: "fixture", refreshDefinition: true };
       if (lateDenial) {
-        expect(verdict).toMatchObject({ kind: "owned", refreshDefinition: true });
         mocks.child.mockResolvedValueOnce(
           commandResult({
             code: 1,

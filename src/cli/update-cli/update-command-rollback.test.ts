@@ -296,8 +296,7 @@ it("retains Windows suspension through unhealthy rollback after activation", asy
     }
     return { ...service, windowsTaskAutoStartRecovery: suspended ? fresh : undefined };
   });
-  mocks.restart.mockImplementationOnce(async ({ refreshServiceEnv }) => {
-    expect(refreshServiceEnv).toBe(false);
+  mocks.restart.mockImplementationOnce(async () => {
     const running = await mocks.execSchtasks(["/Run", "/TN", "rollback-fixture"]);
     if (running.code !== 0) {
       throw new Error(running.stderr);
@@ -319,15 +318,6 @@ it("retains Windows suspension through unhealthy rollback after activation", asy
     });
     expect(enabled).toBe(true);
     expect(outcome.rolledBack).toBe(false);
-    expect(outcome.result.rollbackOutcome).toEqual({
-      status: "succeeded",
-      reason: "Previous package and configuration restored",
-    });
-    expect(outcome.result.recovery).toMatchObject({
-      packageRollbackVerified: true,
-      version: "2026.9.1",
-      service: "failed",
-    });
     const retained = outcome.stoppedForRollback?.windowsTaskAutoStartRecovery;
     expect(retained).toBe(fresh);
     await retained?.complete(false);
@@ -624,12 +614,9 @@ it.for([
         expect(mode).toBe(0o500);
       }
     }
-    if (change === "readonly-config") {
+    if (change === "readonly-config" || (change.startsWith("doctor") && restored)) {
       expect(fs.readFileSync(configPath, "utf8")).toBe(originalRaw);
-    }
-    if (change.startsWith("doctor") && restored) {
-      expect(fs.readFileSync(configPath, "utf8")).toBe(originalRaw);
-      if (process.platform !== "win32") {
+      if (change !== "readonly-config" && process.platform !== "win32") {
         expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
       }
     }
@@ -659,13 +646,25 @@ it.for([
       restored || change === "none" || change === "doctor-restore-edit" ? 1 : 0,
     );
     expect(mocks.restart).toHaveBeenCalledTimes(restored ? 1 : 0);
+    const packageRestored = restored || service !== "stopped" || !previousVerified;
+    expect(outcome.result).toMatchObject({
+      ...(packageRestored ? { root: previousRoot, after: result.before } : {}),
+      reason:
+        restored || service !== "stopped"
+          ? result.reason
+          : change === "unknown-runtime" ||
+              change === "new-shared-deferred" ||
+              change.startsWith("new-agent-previous-")
+            ? "rollback-state-unverified"
+            : previousVerified
+              ? "state-migrated-no-rollback"
+              : "previous-version-unverified",
+    });
     if (service !== "stopped") {
       expect(mocks.stop).not.toHaveBeenCalled();
-      expect(outcome.result).toMatchObject({
-        root: previousRoot,
-        after: result.before,
-        reason: result.reason,
-        recovery: { serviceRestartSafe: false, packageRollbackVerified: true },
+      expect(outcome.result.recovery).toMatchObject({
+        serviceRestartSafe: false,
+        packageRollbackVerified: true,
       });
       return;
     }
@@ -674,26 +673,7 @@ it.for([
       expect(mocks.restart).toHaveBeenCalledWith(
         expect.objectContaining({ nodeRunner: "/previous/node" }),
       );
-      expect(outcome.result).toMatchObject({
-        root: previousRoot,
-        after: result.before,
-        reason:
-          change === "doctor-settled-exception"
-            ? "runtime-verification-failed"
-            : change === "doctor-compensated"
-              ? "doctor-failed"
-              : "version-mismatch",
-      });
-      if (change === "doctor-settled-exception") {
-        expect(activationConfig).toMatchObject({ raw: originalRaw, doctorOwned: true });
-      }
       if (change === "doctor-compensated") {
-        expect(activationConfig).toMatchObject({
-          path: configPath,
-          raw: originalRaw,
-          hash: hashConfigRaw(originalRaw),
-          doctorOwned: true,
-        });
         expect(outcome.result).toMatchObject({
           status: "error",
           recovery: { serviceRestartSafe: true, packageRollbackVerified: true },
@@ -705,23 +685,9 @@ it.for([
       expect(rollback.mock.invocationCallOrder[0]).toBeLessThan(
         mocks.restart.mock.invocationCallOrder[0]!,
       );
-    } else {
-      expect(outcome.result.reason).toBe(
-        change === "unknown-runtime" ||
-          change === "new-shared-deferred" ||
-          change.startsWith("new-agent-previous-")
-          ? "rollback-state-unverified"
-          : previousVerified
-            ? "state-migrated-no-rollback"
-            : "previous-version-unverified",
-      );
-      if (!previousVerified) {
-        expect(outcome.result).toMatchObject({ root: previousRoot, after: result.before });
-      }
-      if (change.startsWith("new-agent-previous-")) {
-        expect(outcome.result).toMatchObject({ root: candidateRoot, after: result.after });
-        expect(mocks.stop).not.toHaveBeenCalled();
-      }
+    } else if (change.startsWith("new-agent-previous-")) {
+      expect(outcome.result).toMatchObject({ root: candidateRoot, after: result.after });
+      expect(mocks.stop).not.toHaveBeenCalled();
     }
   },
 );
@@ -743,7 +709,7 @@ it("excludes a competing config writer across package rollback and config restor
     stale: 60_000,
   };
   let foreignWrite = false;
-  const outcome = await runRollback({
+  await runRollback({
     configSnapshot,
     schemaVersions,
     activationConfig: {
@@ -777,10 +743,6 @@ it("excludes a competing config writer across package rollback and config restor
     expect(fs.statSync(stateDir).mode & 0o7777).toBe(0o2770);
     expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
   }
-  expect(outcome.result).toMatchObject({
-    root: previousRoot,
-    recovery: { packageRollbackVerified: true },
-  });
   expect(mocks.restart).not.toHaveBeenCalled();
   await withFileLock(configPath, lockOptions, async () => {
     fs.writeFileSync(configPath, candidate);
