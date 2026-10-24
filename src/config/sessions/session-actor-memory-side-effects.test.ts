@@ -274,6 +274,7 @@ describe("memory session side-data consumers", () => {
     const store = outbox(scope, binding);
     const abandoned = await turn("abandoned");
     await store.enqueueIntent({ ...filter, admission: abandoned.admission });
+    expect(await store.listPendingSessions({ ...filter, limit: 16 })).toEqual([]);
     expect(await store.prepareRun({ ...filter, sessionId: scope.sessionId })).toMatchObject({
       pending: false,
       admitted: false,
@@ -285,10 +286,19 @@ describe("memory session side-data consumers", () => {
       await store.enqueueIntent({ ...filter, admission: boundary.admission });
       await store.acceptIntent({ ...filter, boundary });
     }
+    expect(await store.listPendingSessions({ ...filter, limit: 16 })).toEqual([]);
+    await store.publishClosedTurn({
+      ...filter,
+      boundary: second,
+      maxEvents: 10,
+      maxBytes: 100_000,
+    });
+    expect(await store.listPendingSessions({ ...filter, limit: 16 })).toEqual([]);
     expect(await store.prepareRun({ ...filter, sessionId: scope.sessionId })).toMatchObject({
       pending: true,
       admitted: false,
     });
+    expect(await store.listPendingSessions({ ...filter, limit: 16 })).toEqual([scope.sessionId]);
     const calls: string[] = [];
     const engine = contextEngine(async (input) => {
       calls.push(input.advancementKey);

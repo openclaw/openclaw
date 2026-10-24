@@ -37,11 +37,19 @@ export function readSessionActorMemoryOutbox(
 ) {
   const rows = pendingRows(context, query.input);
   switch (query.type) {
-    case "session.outbox.listPendingSessions":
-      return [...new Set(rows.map(([, row]) => row.sessionId))].slice(
-        0,
-        Math.max(0, query.input.limit),
-      );
+    case "session.outbox.listPendingSessions": {
+      const heads = new Map<string, SessionActorMemoryOutboxRow>();
+      for (const [, row] of rows) {
+        // Match the durable owner: later ready turns cannot pass an unresolved head.
+        if (!heads.has(row.sessionId)) {
+          heads.set(row.sessionId, row);
+        }
+      }
+      return [...heads.values()]
+        .filter((row) => row.payload.state === "ready")
+        .slice(0, Math.max(0, query.input.limit))
+        .map((row) => row.sessionId);
+    }
     case "session.outbox.readNextPending": {
       const first = rows[0];
       return (
