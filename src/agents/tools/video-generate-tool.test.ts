@@ -452,10 +452,6 @@ describe("createVideoGenerateTool", () => {
     const name = "saved-lobster.mp4";
     taskExecutorMocks.createOperation.mockReturnValue({
       taskId: "task-123",
-      requesterSessionKey: "agent:main:discord:direct:123",
-      task: "friendly lobster surfing",
-      status: "running",
-      createdAt: Date.now(),
     });
     const wakeSpy = wakeCompletion();
     const savedId = "saved-lobster---a1b2c3d4-e5f6-4789-abcd-ef1234567890.mp4";

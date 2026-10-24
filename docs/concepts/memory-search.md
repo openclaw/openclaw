@@ -129,6 +129,11 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 
 To move off Ollama, [llmman](/providers/llmman#advanced-configuration) serves the same `/api/embed`, so `provider: "ollama"` only needs a new `remote.baseUrl`.
 
+For models that require a query prefix, set
+[`memory.search.queryInstruction`](/reference/memory-config#query-instructions),
+for example `"search_query: "` for a Nomic model served under a generic alias.
+It changes query text only and does not require rebuilding the document index.
+
 ## How search works
 
 OpenClaw runs two retrieval paths in parallel and merges the results:

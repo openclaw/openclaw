@@ -1,8 +1,12 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 
-/** Capture native filename selection without resolving image-owned JavaScript at runtime. */
-export function createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths }) {
+/**
+ * Capture native filename selection without resolving image-owned JavaScript at runtime.
+ * @param {{runtimeRoot: string, embeddedPaths: Record<string, string>,
+ *   pluginLoader?: {specifier: string, modulePath: string}}} options
+ */
+export function createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths, pluginLoader }) {
   const nativeRequire = createRequire(path.join(runtimeRoot, "package.json"));
   const requests = new Set();
   for (const entry of Object.keys(embeddedPaths)) {
@@ -77,6 +81,28 @@ export function createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths }) {
       }
     });
   };
-})();\n`,
+})();
+${
+  pluginLoader
+    ? `if (globalThis.__openclawStandaloneBuildInfo.mode !== "aot") {
+// Keep the external edge literal: a computed require loses the complete builtin surface.
+globalThis.openclawStandaloneLoadJitiFactory = (() => {
+  let installed = false;
+  return () => {
+    if (!installed) {
+      const previous = Module._resolveFilename;
+      Module._resolveFilename = function (specifier, ...args) {
+        return specifier === ${JSON.stringify(pluginLoader.specifier)}
+          ? path.join(root, ${JSON.stringify(pluginLoader.modulePath)})
+          : previous.call(this, specifier, ...args);
+      };
+      installed = true;
+    }
+    return createRequire(import.meta.url)(${JSON.stringify(pluginLoader.specifier)}).createJiti;
+  };
+})();
+}\n`
+    : ""
+}`,
   };
 }

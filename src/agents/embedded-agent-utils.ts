@@ -9,6 +9,7 @@ import {
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
 import { assistantVisibleTextFilters } from "../shared/text/assistant-visible-text.js";
+import { findNativeToolMarkerTextBlocks } from "../shared/text/native-tool-marker.js";
 import {
   applyTextFilters,
   createTextProjection,
@@ -77,6 +78,11 @@ function prepareEmbeddedAssistantTextForPhase(
   requestedPhase: AssistantPhase,
   prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
 ): () => string {
+  // Replacement callbacks own their text; source snapshots project inside their callback.
+  const nativeToolMarkerBlocks =
+    requestedPhase === "final_answer" && !prepareText
+      ? findNativeToolMarkerTextBlocks(msg)
+      : undefined;
   const prepareRender = (selectedPhase: AssistantPhase | undefined, renderText: () => string) => {
     const errorContext = msg.stopReason === "error";
     return () => {
@@ -169,7 +175,9 @@ function prepareEmbeddedAssistantTextForPhase(
   }
   return prepareRender(selectedPhase, () =>
     groupedParts
-      .map(({ text, phase }) => sanitizeAssistantText(text, phase))
+      .map(({ text, phase, contentIndex }) =>
+        nativeToolMarkerBlocks?.has(contentIndex) ? "" : sanitizeAssistantText(text, phase),
+      )
       .filter((text) => text.trim())
       .join("\n")
       .trimEnd(),

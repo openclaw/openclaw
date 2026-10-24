@@ -33,6 +33,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import type { OperatorScope } from "../operator-scopes.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
@@ -202,12 +203,7 @@ it("retains committed suggestion visibility through a tentative role relaxation"
       }
       const respond = vi.fn();
       await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: phase,
-          method: "session.suggestions.list",
-          params: { sessionKey },
-        },
+        req: gatewayRequest(phase, "session.suggestions.list", { sessionKey }),
         client: requestClient,
         context: requestContext,
         respond,

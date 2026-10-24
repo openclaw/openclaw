@@ -7,7 +7,10 @@ import { SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH } from "./config-hash.js";
 import { SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
 import { createSandboxContainerTestHarness } from "./docker.create.test-helpers.js";
 import { collectDockerFlagValues } from "./test-args.js";
-import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
+import {
+  ensureReadOnlyWorkspaceSkillMountSources,
+  SANDBOX_MOUNT_FORMAT_VERSION,
+} from "./workspace-mounts.js";
 
 describe("ensureSandboxContainer recreation and managed mounts", () => {
   const harness = createSandboxContainerTestHarness();
@@ -471,6 +474,117 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
       "/host/second:/workspace:z",
     );
   });
+
+  it.each([
+    { scenario: "Docker restart", backendId: "docker", replace: true },
+    { scenario: "Podman restart", backendId: "podman", replace: true },
+    { scenario: "current Gateway use", backendId: "docker", replace: false },
+    { scenario: "writable root", backendId: "docker", replace: false },
+    { scenario: "user source change", backendId: "docker", replace: false },
+    { scenario: "persistent custody", backendId: "docker", replace: false },
+    { scenario: "restricted dispatch", backendId: "docker", replace: false },
+    { scenario: "image volume", backendId: "docker", replace: false },
+    { scenario: "writable skill bind", backendId: "docker", replace: false },
+    { scenario: "user read-only skill bind", backendId: "docker", replace: false },
+  ] as const)(
+    "handles protected skill mount upgrades with $scenario",
+    async ({ scenario, backendId, replace }) => {
+      const workspaceDir = fs.realpathSync(tempDirs.make("openclaw-skill-upgrade-"));
+      fs.writeFileSync(path.join(workspaceDir, "work.txt"), "saved work");
+      const cfg = createSandboxConfig([], [], "none");
+      cfg.backend = backendId;
+      if (scenario === "user read-only skill bind") {
+        cfg.docker.binds = [`${workspaceDir}/previous:/workspace/skills:ro`];
+      }
+      const params = {
+        ...containerParams(cfg, workspaceDir),
+        requireCurrentConfig: scenario === "restricted dispatch",
+        ...(backendId === "podman" ? { engine: harness.PODMAN_SANDBOX_ENGINE } : {}),
+      };
+      prepareCreation(true);
+      await harness.ensureSandboxContainer(params);
+      spawnState.mounts = JSON.stringify([
+        {
+          Type: "bind",
+          Source: scenario === "user source change" ? `${workspaceDir}/previous` : workspaceDir,
+          Destination: "/workspace",
+          RW: true,
+        },
+        ...(scenario === "image volume"
+          ? [{ Type: "volume", Source: "/volume", Destination: "/data", RW: true }]
+          : []),
+        ...(scenario === "writable skill bind"
+          ? [
+              {
+                Type: "bind",
+                Source: `${workspaceDir}/skills`,
+                Destination: "/workspace/skills",
+                RW: true,
+              },
+            ]
+          : []),
+        ...(scenario === "user read-only skill bind"
+          ? [
+              {
+                Type: "bind",
+                Source: `${workspaceDir}/previous`,
+                Destination: "/workspace/skills",
+                RW: false,
+              },
+            ]
+          : []),
+      ]);
+      spawnState.readOnlyRoot = scenario !== "writable root";
+      recordContainer(cfg, {
+        backendId,
+        ...(backendId === "podman" ? { backendTarget: { key: "local", globalArgs: [] } } : {}),
+        lastUsedAtMs: Date.now() - 2_000,
+        configHash: spawnState.labelHash,
+      });
+      // The old release omitted absent roots; the upgrade prepares them before admission.
+      await ensureReadOnlyWorkspaceSkillMountSources({
+        ...params,
+        workdir: cfg.docker.workdir,
+        workspaceAccess: cfg.workspaceAccess,
+      });
+      const startedAt = vi
+        .spyOn(performance, "timeOrigin", "get")
+        .mockReturnValue(Date.now() - (scenario === "current Gateway use" ? 60_000 : 100));
+      const persistent =
+        scenario === "persistent custody"
+          ? vi
+              .spyOn(await import("./persistent-exec.js"), "hasSandboxPersistentExecCustody")
+              .mockResolvedValue(true)
+          : undefined;
+      spawnState.calls.length = 0;
+      try {
+        if (!replace) {
+          await expect(harness.ensureSandboxContainer(params)).rejects.toThrow(
+            scenario === "restricted dispatch"
+              ? "restricted dispatch requires"
+              : "Sandbox mounts changed",
+          );
+          expectNoMutation();
+          return;
+        }
+        await expect(harness.ensureSandboxContainer(params)).resolves.toMatchObject({
+          currentConfig: true,
+        });
+      } finally {
+        startedAt.mockRestore();
+        persistent?.mockRestore();
+      }
+      expect(calls("rm")).toHaveLength(1);
+      expect(collectDockerFlagValues(calls("create")[0]!.args, "-v")).toEqual(
+        expect.arrayContaining([
+          `${workspaceDir}:/workspace:z`,
+          `${workspaceDir}/skills:/workspace/skills:ro,z`,
+          `${workspaceDir}/.agents/skills:/workspace/.agents/skills:ro,z`,
+        ]),
+      );
+      expect(fs.readFileSync(path.join(workspaceDir, "work.txt"), "utf8")).toBe("saved work");
+    },
+  );
 
   it("preserves hot Podman tmpfs removal and replaces it only after stopping", async () => {
     const workspaceDir = tempDirs.make("openclaw-tmpfs-lifecycle-");

@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { describe, expect, it, vi } from "vitest";
 import type { CodeModeExecutorContinuation } from "./code-mode-executor-types.js";
 import { runCodeModeExecutor } from "./code-mode-executor.js";
@@ -9,7 +10,7 @@ vi.mock("../../cli-invocation.mjs", async (importOriginal) => ({
 }));
 
 const config = {
-  timeoutMs: 1_000,
+  timeoutMs: 7_000,
   memoryLimitBytes: 64 * 1024 * 1024,
   maxOutputBytes: 65_536,
   maxSnapshotBytes: 10 * 1024 * 1024,
@@ -22,24 +23,21 @@ const completed = {
 };
 
 describe("Code Mode in the embedded AOT profile", () => {
-  it("reports runtime_unavailable before starting a Node cell", async () => {
+  it("executes a Node cell and returns its result", async () => {
     const result = await runCodeModeExecutor(
       {
         kind: "exec",
         source: "return 42;",
-        executionTimeoutMs: 300,
+        executionTimeoutMs: 5_000,
         config,
         catalog: [],
         namespaces: [],
       },
-      { executor: "node", timeoutMs: 1_000 },
+      { executor: "node", timeoutMs: 7_000 },
     );
     expect(result).toMatchObject({
-      status: "failed",
-      code: "runtime_unavailable",
-      failurePhase: "host",
-      bridgeDispatchStarted: false,
-      error: expect.stringContaining("Node/Bun installation or a JIT/bytecode standalone"),
+      status: "completed",
+      value: { kind: "complete", json: "42" },
     });
   });
 
@@ -54,16 +52,11 @@ describe("Code Mode in the embedded AOT profile", () => {
       };
       const result = await runCodeModeExecutor(
         { kind: "resume", continuation, config, settledRequests: [] },
-        { executor: executor === "node" ? "quickjs" : "node", timeoutMs: 1_000 },
+        { executor: executor === "node" ? "quickjs" : "node", timeoutMs: 7_000 },
       );
-      if (executor === "node") {
-        expect(result).toMatchObject({ status: "failed", code: "runtime_unavailable" });
-        expect(continuation.resume).not.toHaveBeenCalled();
-        expect(continuation.dispose).toHaveBeenCalledOnce();
-      } else {
-        expect(result).toEqual(completed);
-        expect(continuation.resume).toHaveBeenCalledOnce();
-      }
+      expect(result).toEqual(completed);
+      expect(continuation.resume).toHaveBeenCalledOnce();
+      expect(continuation.dispose).not.toHaveBeenCalled();
     },
   );
 });

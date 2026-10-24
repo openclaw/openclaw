@@ -125,6 +125,9 @@ permanently exhaustive.
 
 Events with no interested subscriber or tracing exporter are discarded before
 payload enrichment and queuing; they are not buffered for future subscribers.
+Queued events capture their payloads when emitted, so later producer changes do
+not change delivery. Listeners share immutable plain-data snapshots; opaque
+values such as maps and typed arrays retain separate listener copies.
 
 `agent.commentary` records completed preambles, not text deltas. It carries the
 original agent-event sequence and timestamp and attaches to the active harness

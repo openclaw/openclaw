@@ -36,23 +36,25 @@ describe("QA scenario execution in the embedded AOT profile", () => {
     expect((await runValue({ answer: 42 })).vars.result).toEqual({ answer: 42 });
   });
 
-  it("admits declared modules but rejects late imports through declarative actions", async () => {
+  it("loads declared modules and diagnoses missing late imports", async () => {
     const imported = await runActions([
       { call: "qaImport", args: ["./errors.js"], saveAs: "module" },
     ]);
     expect(imported.vars.module).toHaveProperty("QaSuiteScenarioSkipError");
     await expect(
       runActions([{ call: "qaImport", args: ["/fetched/scenario.mjs"] }]),
-    ).rejects.toThrow(/QA scenario source import requires the dynamic-execution runtime profile/);
+    ).rejects.toThrow(/not available in this AOT build.*rebuild.*JIT/s);
   });
 
-  it.each([
-    { expr: "21 * 2" },
-    { lambda: { expr: "21 * 2" } },
-    { lambda: { expr: "21 * 2", async: true } },
-  ])("reports the required host before evaluating %j", async (value) => {
-    await expect(runValue(value)).rejects.toThrow(
-      /QA scenario (expression evaluation|lambda creation) requires the dynamic-execution runtime profile.*Node\/Bun/,
-    );
+  it("evaluates expressions", async () => {
+    expect((await runValue({ expr: "21 * 2" })).vars.result).toBe(42);
+  });
+
+  it.each([false, true])("executes a lambda (async=%s)", async (async) => {
+    const { vars } = await runValue({ lambda: { params: ["n"], expr: "n * 2", async } });
+    expect(typeof vars.result).toBe("function");
+    if (typeof vars.result === "function") {
+      expect(await vars.result(21)).toBe(42);
+    }
   });
 });

@@ -21,25 +21,29 @@ vi.mock("../../plugins/memory-state.js", async (importOriginal) => ({
   getMemoryLearnContribution,
 }));
 
-const DEFAULT_TEST_MODELS: NonNullable<OpenClawConfig["models"]> = {
-  providers: {
-    openai: {
-      baseUrl: "https://api.openai.com/v1",
-      models: [
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          reasoning: true,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128_000,
-          maxTokens: 16_384,
-          compat: { supportsTools: true },
-        },
-      ],
+function createLearnModels(supportsTools: boolean): NonNullable<OpenClawConfig["models"]> {
+  return {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        models: [
+          {
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128_000,
+            maxTokens: 16_384,
+            compat: { supportsTools },
+          },
+        ],
+      },
     },
-  },
-};
+  };
+}
+
+const DEFAULT_TEST_MODELS = createLearnModels(true);
 
 function buildLearnParams(
   commandBodyNormalized: string,
@@ -162,25 +166,7 @@ describe("learn command", () => {
 
   it("replies without continuing when the selected model disables tools", async () => {
     const params = buildLearnParams("/learn", {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            models: [
-              {
-                id: "gpt-5.5",
-                name: "GPT-5.5",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128_000,
-                maxTokens: 16_384,
-                compat: { supportsTools: false },
-              },
-            ],
-          },
-        },
-      },
+      models: createLearnModels(false),
     });
 
     const result = await handleLearnCommand(params, true);

@@ -1,6 +1,5 @@
 import { vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { observeMediaGenerationSettlement } from "../media-generation-activity.observer.test-support.js";
 import {
   admitMediaHandle,
@@ -12,28 +11,6 @@ import type { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts
 import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.full-catalog.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
 import type { imageGenerationTaskLifecycle } from "./media-generate-background.js";
-
-export function phase() {
-  const entered = createDeferredCore();
-  const released = createDeferredCore();
-  return {
-    entered: entered.promise,
-    release: () => released.resolve(),
-    pause: async () => {
-      entered.resolve();
-      await released.promise;
-    },
-  };
-}
-
-export function waitForPhase(entered: Promise<unknown>, work: Promise<unknown>) {
-  return Promise.race([
-    entered,
-    work.then(() => {
-      throw new Error("Media work settled before the expected phase");
-    }),
-  ]);
-}
 
 export function reset() {
   vi.restoreAllMocks();
