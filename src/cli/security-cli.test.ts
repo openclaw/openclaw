@@ -43,7 +43,7 @@ vi.mock("../security/audit.js", () => ({
 }));
 
 vi.mock("../security/fix.js", () => ({
-  fixSecurityFootguns: () => mocks.fixSecurityFootguns(),
+  fixSecurityFootguns: (opts?: unknown) => mocks.fixSecurityFootguns(opts),
 }));
 
 // mock-isolation: Audit fixtures resolve secrets locally without connecting to a live Gateway.
@@ -77,7 +77,14 @@ describe("security CLI", () => {
     fixSecurityFootguns.mockReset();
     resolveCommandSecretRefsViaGateway.mockReset();
     getSecurityAuditCommandSecretTargetIds.mockClear();
-    fixSecurityFootguns.mockResolvedValue({ changes: [], actions: [], errors: [] });
+    fixSecurityFootguns.mockResolvedValue({
+      dryRun: false,
+      configWritten: false,
+      wouldWriteConfig: false,
+      changes: [],
+      actions: [],
+      errors: [],
+    });
     const config = { gateway: { mode: "local" } };
     loadConfig.mockReturnValue(config);
     resolveCommandSecretRefsViaGateway.mockResolvedValue({
@@ -196,4 +203,32 @@ describe("security CLI", () => {
       expect(runSecurityAuditCore).not.toHaveBeenCalled();
     },
   );
+  it("rejects --dry-run without --fix", async () => {
+    await expect(run("--dry-run", "--json")).rejects.toThrow(/pass --fix/i);
+    expect(fixSecurityFootguns).not.toHaveBeenCalled();
+    expect(runSecurityAuditCore).not.toHaveBeenCalled();
+  });
+
+  it("forwards dryRun to the fixer when --fix --dry-run is set", async () => {
+    fixSecurityFootguns.mockResolvedValueOnce({
+      ok: true,
+      dryRun: true,
+      configWritten: false,
+      wouldWriteConfig: true,
+      changes: ["channels.telegram.groupPolicy=open -> allowlist"],
+      actions: [],
+      errors: [],
+    });
+
+    await run("--fix", "--dry-run", "--json");
+
+    expect(fixSecurityFootguns).toHaveBeenCalledWith({ dryRun: true });
+    const payload = JSON.parse(String(runtimeLogs.at(-1)));
+    expect(payload.fix).toMatchObject({
+      dryRun: true,
+      wouldWriteConfig: true,
+      configWritten: false,
+      changes: ["channels.telegram.groupPolicy=open -> allowlist"],
+    });
+  });
 });

@@ -22,9 +22,11 @@ type SecurityFixAction = {
 
 type SecurityFixResult = {
   ok: boolean;
+  dryRun: boolean;
   stateDir: string;
   configPath: string;
   configWritten: boolean;
+  wouldWriteConfig: boolean;
   changes: string[];
   actions: SecurityFixAction[];
   errors: string[];
@@ -39,6 +41,7 @@ type SecurityPermissionTarget = {
 async function applyPermissionFix(
   target: SecurityPermissionTarget,
   env: NodeJS.ProcessEnv,
+  dryRun = false,
 ): Promise<SecurityFixAction> {
   const action: SecurityFixAction =
     process.platform === "win32"
@@ -67,7 +70,9 @@ async function applyPermissionFix(
       if (modeBits(st.mode) === target.mode) {
         return { ...action, skipped: "already" };
       }
-      await fs.chmod(target.path, target.mode);
+      if (!dryRun) {
+        await fs.chmod(target.path, target.mode);
+      }
     } else {
       const cmd = createIcaclsResetCommand(target.path, {
         isDir: st.isDirectory(),
@@ -76,8 +81,10 @@ async function applyPermissionFix(
       if (!cmd) {
         return { ...action, skipped: "missing-user" };
       }
-      await runExec(cmd.command, cmd.args);
       action.command = cmd.display;
+      if (!dryRun) {
+        await runExec(cmd.command, cmd.args);
+      }
     }
     return { ...action, ok: true };
   } catch (err) {
@@ -244,8 +251,10 @@ export async function fixSecurityFootguns(opts?: {
   stateDir?: string;
   configPath?: string;
   channelPlugins?: ChannelPlugin[];
+  dryRun?: boolean;
 }): Promise<SecurityFixResult> {
   const env = opts?.env ?? process.env;
+  const dryRun = Boolean(opts?.dryRun);
   const stateDir = opts?.stateDir ?? resolveStateDir(env);
   const configPath = opts?.configPath ?? resolveConfigPath(env, stateDir);
   const actions: SecurityFixAction[] = [];
@@ -258,6 +267,7 @@ export async function fixSecurityFootguns(opts?: {
   }
 
   let configWritten = false;
+  let wouldWriteConfig = false;
   let changes: string[] = [];
   if (snap.valid) {
     const fixed = await applySecurityFixConfigMutations({
@@ -266,8 +276,9 @@ export async function fixSecurityFootguns(opts?: {
       channelPlugins: opts?.channelPlugins,
     });
     changes = fixed.changes;
+    wouldWriteConfig = changes.length > 0;
 
-    if (changes.length > 0) {
+    if (changes.length > 0 && !dryRun) {
       try {
         await replaceConfigFile({
           nextConfig: fixed.cfg,
@@ -303,14 +314,16 @@ export async function fixSecurityFootguns(opts?: {
     return [] as SecurityPermissionTarget[];
   });
   for (const target of permissionTargets) {
-    actions.push(await applyPermissionFix(target, env));
+    actions.push(await applyPermissionFix(target, env, dryRun));
   }
 
   return {
     ok: errors.length === 0,
+    dryRun,
     stateDir,
     configPath,
     configWritten,
+    wouldWriteConfig,
     changes,
     actions,
     errors,

@@ -17,6 +17,7 @@ openclaw security audit --deep --password <password>
 openclaw security audit --deep --token <token>
 openclaw security audit --auth password --password <password>
 openclaw security audit --fix
+openclaw security audit --fix --dry-run
 openclaw security audit --json
 ```
 
@@ -128,6 +129,14 @@ With `--fix --json`, output includes both fix actions and the final report:
 openclaw security audit --fix --json | jq '{fix: .fix.ok, summary: .report.summary}'
 ```
 
+`--fix --dry-run --json` returns the same shape with `fix.dryRun: true`, `fix.wouldWriteConfig`, planned `changes` / `actions`, and `configWritten: false` (no disk mutation):
+
+```bash
+openclaw security audit --fix --dry-run --json | jq '{dryRun: .fix.dryRun, wouldWriteConfig: .fix.wouldWriteConfig, changes: .fix.changes}'
+```
+
+`--dry-run` requires `--fix`. Without `--fix`, the command fails with a clear error (plain `security audit` remains report-only).
+
 If remediation fails unexpectedly, the command exits with status 1 before running the audit. With `--json`, it emits the standard [CLI JSON failure envelope](/cli#json-failures). Run `openclaw security audit` separately to inspect the current state.
 
 ## What `--fix` changes
@@ -139,6 +148,10 @@ Applies safe, fixed repairs:
 - tightens permissions for state/config and common sensitive files (`credentials/*.json`, legacy `auth-profiles.json`, `openclaw-agent.sqlite`, and legacy session artifacts)
 - also tightens config include files referenced from `openclaw.json`
 - uses `chmod` on POSIX hosts and `icacls` resets on Windows
+
+### `--fix --dry-run`
+
+Preview the same planned config mutations and permission actions **without** calling `replaceConfigFile`, `chmod`, or `icacls`. Config bytes, mtimes, and file modes stay unchanged. Windows previews still show the intended `icacls` reset command without executing it. Exit 0 on a successful preview even when changes would be applied; invalid config still fails non-zero like live `--fix`.
 
 `--fix` does **not**:
 

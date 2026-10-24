@@ -18,6 +18,7 @@ type SecurityAuditOptions = {
   json?: boolean;
   deep?: boolean;
   fix?: boolean;
+  dryRun?: boolean;
   auth?: string;
   token?: string;
   password?: string;
@@ -46,6 +47,10 @@ export function registerSecurityCli(program: Command) {
             "Audit a runtime-only password-mode Gateway secret.",
           ],
           ["openclaw security audit --fix", "Apply safe remediations and file-permission fixes."],
+          [
+            "openclaw security audit --fix --dry-run",
+            "Preview safe remediations without writing config or changing permissions.",
+          ],
           ["openclaw security audit --json", "Output machine-readable JSON."],
         ])}\n${formatDocsHelp("/cli/security")}`,
     );
@@ -61,6 +66,7 @@ export function registerSecurityCli(program: Command) {
     .option("--token <token>", "Use explicit gateway token for deep check auth")
     .option("--password <password>", "Use explicit gateway password for deep check auth")
     .option("--fix", "Apply safe fixes (tighten defaults + chmod state/config)", false)
+    .option("--dry-run", "With --fix, preview planned remediations without mutating disk", false)
     .option("--json", "Print JSON", false)
     .action(async (opts: SecurityAuditOptions) => {
       const rawAuthMode = normalizeOptionalLowercaseString(opts.auth);
@@ -90,7 +96,14 @@ export function registerSecurityCli(program: Command) {
       const auditGatewayAuthOverride = authMode
         ? { mode: authMode, ...(token ? { token } : {}), ...(password ? { password } : {}) }
         : undefined;
-      const fixResult = opts.fix ? await fixSecurityFootguns() : null;
+      if (opts.dryRun && !opts.fix) {
+        throw new Error(
+          "Invalid --dry-run: pass --fix to preview safe remediations (or omit --dry-run for report-only audit).",
+        );
+      }
+      const fixResult = opts.fix
+        ? await fixSecurityFootguns({ dryRun: Boolean(opts.dryRun) })
+        : null;
 
       const sourceConfig = await captureRuntimeConfigAsyncReader()();
       const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
@@ -145,16 +158,23 @@ export function registerSecurityCli(program: Command) {
       }
 
       if (fixResult) {
-        lines.push(muted(`Fix: ${formatCliCommand("openclaw security audit --fix")}`));
+        const dryRun = Boolean(fixResult.dryRun);
+        lines.push(
+          muted(
+            dryRun
+              ? `Fix preview: ${formatCliCommand("openclaw security audit --fix --dry-run")}`
+              : `Fix: ${formatCliCommand("openclaw security audit --fix")}`,
+          ),
+        );
         if (
           fixResult.errors.length === 0 &&
           fixResult.changes.length === 0 &&
           fixResult.actions.every((a) => !a.ok)
         ) {
-          lines.push(muted("Fixes: no changes applied"));
+          lines.push(muted(dryRun ? "Fixes: no changes planned" : "Fixes: no changes applied"));
         } else {
           lines.push("");
-          lines.push(heading("FIX"));
+          lines.push(heading(dryRun ? "FIX (dry-run)" : "FIX"));
           for (const change of fixResult.changes) {
             lines.push(muted(`  ${shortenHomeInString(change)}`));
           }
@@ -164,7 +184,7 @@ export function registerSecurityCli(program: Command) {
                 ? `chmod ${action.mode.toString(8).padStart(3, "0")} ${shortenHomePath(action.path)}`
                 : shortenHomeInString(action.command);
             if (action.ok) {
-              lines.push(muted(`  ${command}`));
+              lines.push(muted(dryRun ? `  would ${command}` : `  ${command}`));
             } else if (action.skipped) {
               lines.push(muted(`  skip ${command} (${action.skipped})`));
             } else if (action.error) {
