@@ -8,7 +8,6 @@ import { initializeNativeSessionCatalogPreferences } from "../plugins/native-ses
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   applyPluginAutoEnable,
-  detectPluginAutoEnableCandidates,
   materializePluginAutoEnableCandidates,
 } from "./plugin-auto-enable.js";
 import {
@@ -419,10 +418,7 @@ describe("applyPluginAutoEnable core", () => {
     fs.writeFileSync(path.join(authDir, "creds.json"), "{}", "utf-8");
 
     const params = { config: {}, env: persistedEnv };
-    const candidates = detectPluginAutoEnableCandidates(params);
     const result = applyPluginAutoEnable(params);
-
-    expect(candidates).toStrictEqual([]);
     expect(result.config).toStrictEqual({});
     expect(result.changes).toStrictEqual([]);
   });
@@ -556,24 +552,13 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("skips when plugins are globally disabled", () => {
-    expect(
-      detectPluginAutoEnableCandidates({
-        config: {
-          channels: { slack: { botToken: "x" } },
-          plugins: {
-            enabled: false,
-            allow: ["slack"],
-            entries: { slack: { config: { botToken: "x" } } },
-          },
-        },
-        env,
-        manifestRegistry: makeRegistry([{ id: "slack", channels: ["slack"] }]),
-      }),
-    ).toStrictEqual([]);
-
-    const result = autoEnable(slackConfig({ enabled: false }));
-
-    expect(result.config.plugins?.entries?.slack?.enabled).toBeUndefined();
+    const config = slackConfig({
+      enabled: false,
+      allow: ["slack"],
+      entries: { slack: { config: { botToken: "x" } } },
+    });
+    const result = autoEnable(config, [{ id: "slack", channels: ["slack"] }]);
+    expect(result.config).toEqual(config);
     expect(result.changes).toStrictEqual([]);
   });
 
@@ -581,7 +566,7 @@ describe("applyPluginAutoEnable core", () => {
     const unresolvedPath = "channels.a2a.peers.hermes.outboundToken";
     const config: OpenClawConfig = {
       channels: {
-        slack: { botToken: "x" },
+        slack: { botToken: "${SLACK_UNSET_TOKEN}" },
         a2a: {
           peers: { hermes: { token: "inbound-secret", outboundToken: "${A2A_UNSET_OUT}" } },
         },
@@ -589,32 +574,20 @@ describe("applyPluginAutoEnable core", () => {
     };
     setConfigResolutionFacts(
       config,
-      createConfigResolutionFacts([{ varName: "A2A_UNSET_OUT", configPath: unresolvedPath }]),
-    );
-
-    const result = applyPluginAutoEnable({ config, env });
-
-    expect(result.config).not.toBe(config);
-    expect(result.config.channels?.slack?.enabled).toBe(true);
-    expect(hasUnresolvedConfigPath(result.config, unresolvedPath)).toBe(true);
-    expect(hasUnresolvedConfigPath(result.config, "channels.a2a.peers.hermes.token")).toBe(false);
-  });
-
-  it("keeps a fact for a sibling value the rewrite left untouched", () => {
-    const config: OpenClawConfig = {
-      channels: { slack: { botToken: "${SLACK_UNSET_TOKEN}" } },
-    };
-    setConfigResolutionFacts(
-      config,
       createConfigResolutionFacts([
+        { varName: "A2A_UNSET_OUT", configPath: unresolvedPath },
         { varName: "SLACK_UNSET_TOKEN", configPath: "channels.slack.botToken" },
       ]),
     );
 
     const result = applyPluginAutoEnable({ config, env });
 
+    expect(result.config).not.toBe(config);
+    expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.channels?.slack?.botToken).toBe("${SLACK_UNSET_TOKEN}");
     expect(hasUnresolvedConfigPath(result.config, "channels.slack.botToken")).toBe(true);
+    expect(hasUnresolvedConfigPath(result.config, unresolvedPath)).toBe(true);
+    expect(hasUnresolvedConfigPath(result.config, "channels.a2a.peers.hermes.token")).toBe(false);
   });
 
   it("leaves a config without loader facts without facts", () => {

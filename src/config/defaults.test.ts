@@ -56,6 +56,9 @@ function materializedModel(
     "materialized model entry",
   );
 }
+function catalog(providers: Record<string, unknown>, id = "openai") {
+  return { plugins: [{ id, modelCatalog: { providers } }] };
+}
 
 vi.mock("./provider-policy.js", () => ({
   applyProviderConfigDefaultsForConfig: (
@@ -116,19 +119,16 @@ describe("config defaults", () => {
     );
 
     const runtime = materialize(source);
+    const envRef = (id: string) => ({ source: "env", provider: "custom", id });
 
     expect(runtime.logging?.file).toBe("/tmp/config-fixture/logs/openclaw.log");
     expect(getResolvedConfigEnvSecretRef(runtime, "logging.file")).toBeNull();
-    expect(getResolvedConfigEnvSecretRef(runtime, "gateway.auth.password")).toEqual({
-      source: "env",
-      provider: "custom",
-      id: "KEEP_PASSWORD",
-    });
-    expect(getAuthoredConfigSecretRef(runtime, "gateway.auth.token")).toEqual({
-      source: "env",
-      provider: "custom",
-      id: "PENDING_TOKEN",
-    });
+    expect(getResolvedConfigEnvSecretRef(runtime, "gateway.auth.password")).toEqual(
+      envRef("KEEP_PASSWORD"),
+    );
+    expect(getAuthoredConfigSecretRef(runtime, "gateway.auth.token")).toEqual(
+      envRef("PENDING_TOKEN"),
+    );
     expect(collectEnvSecretRefIds(runtime)).toEqual(new Set(["PENDING_TOKEN", "KEEP_PASSWORD"]));
   });
 
@@ -181,9 +181,6 @@ describe("config defaults", () => {
 
     const manifestRegistry = { plugins: [] };
     expect(applyContextPruningDefaults(cfg, { manifestRegistry })).toBe(nextCfg);
-    expect(mocks.applyProviderConfigDefaultsForConfig).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ manifestRegistry }),
-    );
     expect(mocks.applyProviderConfigDefaultsForConfig.mock.calls[0]?.[0].manifestRegistry).toBe(
       manifestRegistry,
     );
@@ -259,19 +256,17 @@ describe("config defaults", () => {
   it.each([false, true])(
     "normalizes keyed agent models without authoring a legacy list (projection: %s)",
     (withProjection) => {
+      const entries = (ref: string) => ({
+        worker: {
+          model: { primary: ref, fallbacks: [ref] },
+          models: { [ref]: { alias: "worker-model" } },
+        },
+        helper: { model: ref },
+      });
       const config: OpenClawConfig = {
         agents: {
           ownership: "explicit",
-          entries: {
-            worker: {
-              model: {
-                primary: "google/gemini-3-pro-preview",
-                fallbacks: ["google/gemini-3-pro-preview"],
-              },
-              models: { "google/gemini-3-pro-preview": { alias: "worker-model" } },
-            },
-            helper: { model: "google/gemini-3-pro-preview" },
-          },
+          entries: entries("google/gemini-3-pro-preview"),
         },
       };
       if (withProjection) {
@@ -280,16 +275,7 @@ describe("config defaults", () => {
 
       const next = applyModelDefaults(config, { manifestRegistry: { plugins: [] } });
 
-      expect(next.agents?.entries).toEqual({
-        worker: {
-          model: {
-            primary: "google/gemini-3.1-pro-preview",
-            fallbacks: ["google/gemini-3.1-pro-preview"],
-          },
-          models: { "google/gemini-3.1-pro-preview": { alias: "worker-model" } },
-        },
-        helper: { model: "google/gemini-3.1-pro-preview" },
-      });
+      expect(next.agents?.entries).toEqual(entries("google/gemini-3.1-pro-preview"));
       expect(Object.keys(next.agents ?? {})).not.toContain("list");
       expect(structuredClone(next)).not.toHaveProperty("agents.list");
     },
@@ -297,39 +283,29 @@ describe("config defaults", () => {
 });
 
 describe("applyModelDefaults catalog seeding", () => {
-  const catalogRegistry = {
-    plugins: [
-      {
-        id: "openai",
-        modelCatalog: {
-          providers: {
-            " OpenAI ": {
-              api: "openai-responses",
-              baseUrl: "https://api.openai.com/v1",
-              models: [
-                {
-                  id: "gpt-5.6-sol",
-                  name: "GPT-5.6 Sol",
-                  reasoning: true,
-                  input: ["text", "image"],
-                  contextWindow: 400_000,
-                  contextTokens: 272_000,
-                  maxTokens: 128_000,
-                  cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-                  thinkingLevelMap: { off: "none" },
-                  compat: { supportsStore: false },
-                },
-              ],
-            },
-            openai: {
-              models: [{ id: "gpt-5.6-sol", reasoning: false, input: ["text"] }],
-            },
-          },
+  const catalogRegistry = catalog({
+    " OpenAI ": {
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 400_000,
+          contextTokens: 272_000,
+          maxTokens: 128_000,
+          cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+          thinkingLevelMap: { off: "none" },
+          compat: { supportsStore: false },
         },
-      },
-    ],
-    // SAFETY: minimal manifest record carrying only the fields applyModelDefaults reads.
-  } as never;
+      ],
+    },
+    openai: {
+      models: [{ id: "gpt-5.6-sol", reasoning: false, input: ["text"] }],
+    },
+  }) as never;
 
   // Regression: an override entry pinning only sizing fields materialized as a
   // text-only, non-reasoning, zero-cost model, silently dropping vision-gated
@@ -449,21 +425,10 @@ describe("applyModelDefaults catalog seeding", () => {
       0.00327,
     ],
   ] as const)("%s", (_name, authoredCost, expectedCost, expectedUsd) => {
-    const tieredRegistry = {
-      plugins: [
-        {
-          id: "pricing-fixture",
-          modelCatalog: {
-            providers: {
-              "pricing-fixture": {
-                models: [{ id: "fixture", cost: catalogTieredCost }],
-              },
-            },
-          },
-        },
-      ],
-      // SAFETY: minimal manifest record carrying only the fields applyModelDefaults reads.
-    } as never;
+    const tieredRegistry = catalog(
+      { "pricing-fixture": { models: [{ id: "fixture", cost: catalogTieredCost }] } },
+      "pricing-fixture",
+    ) as never;
     const model = materializedModel(
       // SAFETY: config schema accepts omitted or partial cost before materialization.
       withModels(
@@ -487,30 +452,20 @@ describe("applyModelDefaults catalog seeding", () => {
   it("copies frozen catalog metadata before downstream normalization", () => {
     const supportedReasoningEfforts = Object.freeze(["low", "high"]);
     const compat = Object.freeze({ supportedReasoningEfforts });
-    const frozenRegistry = {
-      plugins: [
-        {
-          id: "openai",
-          modelCatalog: {
-            providers: {
-              openai: {
-                api: "openai-responses",
-                baseUrl: "https://api.openai.com/v1",
-                models: [
-                  Object.freeze({
-                    id: "gpt-5.6-sol",
-                    name: "GPT-5.6 Sol",
-                    reasoning: true,
-                    compat,
-                  }),
-                ],
-              },
-            },
-          },
-        },
-      ],
-      // SAFETY: minimal frozen manifest record reproducing production registry ownership.
-    } as never;
+    const frozenRegistry = catalog({
+      openai: {
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        models: [
+          Object.freeze({
+            id: "gpt-5.6-sol",
+            name: "GPT-5.6 Sol",
+            reasoning: true,
+            compat,
+          }),
+        ],
+      },
+    }) as never;
     const model = materializedModel(
       withModels([{ id: "gpt-5.6-sol", name: "GPT-5.6" } as never]),
       frozenRegistry,

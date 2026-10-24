@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -30,6 +30,11 @@ function invalid(result: ReturnType<typeof validateConfigObjectRaw>) {
 }
 
 const accepts = (config: unknown) => OpenClawSchema.safeParse(config).success;
+function validated(config: unknown, raw = false) {
+  const result = (raw ? validateConfigObjectRaw : validateConfigObject)(config);
+  assert(result.ok);
+  return result.config;
+}
 const pluginEntry = (entry: Record<string, unknown>) => ({
   plugins: { entries: { "voice-call": entry } },
 });
@@ -69,15 +74,9 @@ it.each([
 
 describe("model provider localService config", () => {
   it("revalidates materialized bundled provider overlays", () => {
-    const first = validateConfigObjectRaw(providerOverlay("google"));
-
-    expect(first.ok).toBe(true);
-    if (!first.ok) {
-      throw new Error("expected bundled provider overlay to pass initial validation");
-    }
-    expect(first.config.models?.providers?.google?.baseUrl).toBe("");
-    expect(first.config.models?.providers?.google?.models).toEqual([]);
-    expect(validateConfigObjectRaw(first.config).ok).toBe(true);
+    const first = validated(providerOverlay("google"), true);
+    expect(first.models?.providers?.google).toMatchObject({ baseUrl: "", models: [] });
+    expect(validateConfigObjectRaw(first).ok).toBe(true);
   });
 
   it("accepts on-demand local provider service settings", () => {
@@ -110,9 +109,10 @@ describe("model provider localService config", () => {
   });
 });
 
-it("accessGroups config: rejects unknown access group membership modes", () => {
-  expect(
-    accepts({
+it.each([
+  [
+    "unknown access group membership",
+    {
       accessGroups: {
         maintainers: {
           type: "discord.channelAudience",
@@ -121,8 +121,43 @@ it("accessGroups config: rejects unknown access group membership modes", () => {
           membership: "roleMember",
         },
       },
+    },
+  ],
+  [
+    "non-boolean external embed permission",
+    { gateway: { controlUi: { allowExternalEmbedUrls: "yes" } } },
+  ],
+  ["unsupported embed sandbox", { gateway: { controlUi: { embedSandbox: "yolo" } } }],
+  [
+    "non-boolean prompt injection",
+    pluginEntry({ hooks: { allowPromptInjection: "no", allowConversationAccess: true } }),
+  ],
+  [
+    "non-boolean conversation access",
+    pluginEntry({ hooks: { allowPromptInjection: false, allowConversationAccess: "yes" } }),
+  ],
+  [
+    "invalid trusted subagent overrides",
+    pluginEntry({ subagent: { allowModelOverride: "yes", allowedModels: [1] } }),
+  ],
+  [
+    "invalid trusted llm overrides",
+    pluginEntry({
+      llm: {
+        allowModelOverride: "yes",
+        allowedModels: [1],
+        allowedCompletionModels: [1],
+        allowAuthProfileOverride: "yes",
+        allowAgentIdOverride: "yes",
+      },
     }),
-  ).toBe(false);
+  ],
+  [
+    "unknown cron webhook SSRF policy fields",
+    { cron: { webhookSsrfPolicy: { allowEverything: true } } },
+  ],
+])("rejects %s", (_name, config) => {
+  expect(accepts(config)).toBe(false);
 });
 
 it.each([
@@ -156,29 +191,6 @@ describe("models.catalogRefresh", () => {
   });
 });
 
-describe("gateway.controlUi embed policy", () => {
-  it("rejects non-boolean external URL permissions", () => {
-    expect(accepts({ gateway: { controlUi: { allowExternalEmbedUrls: "yes" } } })).toBe(false);
-  });
-
-  it("rejects unsupported values", () => {
-    expect(accepts({ gateway: { controlUi: { embedSandbox: "yolo" } } })).toBe(false);
-  });
-});
-
-it.each([
-  {
-    name: "prompt injection",
-    hooks: { allowPromptInjection: "no", allowConversationAccess: true },
-  },
-  {
-    name: "conversation access",
-    hooks: { allowPromptInjection: false, allowConversationAccess: "yes" },
-  },
-])("rejects non-boolean $name values", ({ hooks }) => {
-  expect(accepts(pluginEntry({ hooks }))).toBe(false);
-});
-
 describe("mcp.apps.enabled", () => {
   const acceptsApps = (apps: unknown) => accepts({ mcp: { apps } });
   it("accepts only a bare HTTP(S) sandbox origin", () => {
@@ -199,32 +211,6 @@ describe("mcp.apps.enabled", () => {
       expect(acceptsApps({ sandboxOrigin })).toBe(false);
     }
   });
-});
-
-it("plugins.entries.*.subagent: rejects invalid trusted subagent override settings", () => {
-  expect(
-    accepts(
-      pluginEntry({
-        subagent: { allowModelOverride: "yes", allowedModels: [1] },
-      }),
-    ),
-  ).toBe(false);
-});
-
-it("plugins.entries.*.llm: rejects invalid trusted llm override settings", () => {
-  expect(
-    accepts(
-      pluginEntry({
-        llm: {
-          allowModelOverride: "yes",
-          allowedModels: [1],
-          allowedCompletionModels: [1],
-          allowAuthProfileOverride: "yes",
-          allowAgentIdOverride: "yes",
-        },
-      }),
-    ),
-  ).toBe(false);
 });
 
 it("web search provider config: accepts kimi provider and config", () => {
@@ -281,54 +267,34 @@ describe("gateway.remote.edgeAuth", () => {
 
 describe("config identity/materialization regressions", () => {
   it("preserves empty responsePrefix when identity is present", () => {
-    const identity = { name: "Samantha", theme: "helpful sloth", emoji: "🦥" };
-    const res = validateConfigObject({
-      agents: { entries: { main: { identity } } },
+    const config = validated({
+      agents: {
+        entries: { main: { identity: { name: "Samantha", theme: "helpful sloth", emoji: "🦥" } } },
+      },
       channels: { whatsapp: { responsePrefix: "" } },
     });
-
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.whatsapp?.responsePrefix).toBe("");
-    }
+    expect(config.channels?.whatsapp?.responsePrefix).toBe("");
   });
 
   it("accepts blank model provider apiKey values", () => {
-    const res = validateConfigObjectRaw(
+    const config = validated(
       providerConfig(
         "minimax",
         {
           baseUrl: "https://api.minimax.io/anthropic",
           apiKey: "",
           api: "anthropic-messages",
-          models: [
-            modelDefinition("MiniMax-M2.7", {
-              name: "MiniMax M2.7",
-              reasoning: false,
-              contextWindow: 200000,
-            }),
-          ],
+          models: [modelDefinition("MiniMax-M2.7")],
         },
         "merge",
       ),
+      true,
     );
-
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.models?.providers?.minimax?.baseUrl).toBe(
-        "https://api.minimax.io/anthropic",
-      );
-      expect(res.config.models?.providers?.minimax?.apiKey).toBe("");
-    }
+    expect(config.models?.providers?.minimax).toMatchObject({
+      baseUrl: "https://api.minimax.io/anthropic",
+      apiKey: "",
+    });
   });
-});
-
-it("cron webhook schema: rejects unknown cron webhook SSRF policy fields", () => {
-  const res = OpenClawSchema.safeParse({
-    cron: { webhookSsrfPolicy: { allowEverything: true } },
-  });
-
-  expect(res.success).toBe(false);
 });
 
 describe("broadcast", () => {
@@ -435,16 +401,13 @@ describe("config paths", () => {
 describe("config strict validation", () => {
   it("accepts documented agents.entries.<id>.params overrides", () => {
     const params = { cacheRetention: "none", temperature: 0.4, maxTokens: 8192 };
-    const res = validateConfigObject({
+    const config = validated({
       agents: {
         entries: { main: { model: "anthropic/claude-opus-4-6", params: { ...params } } },
       },
     });
 
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.agents?.entries?.main?.params).toEqual(params);
-    }
+    expect(config.agents?.entries?.main?.params).toEqual(params);
   });
 
   it("rejects top-level memorySearch without read-time auto-migration", async () => {
