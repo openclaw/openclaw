@@ -7,6 +7,7 @@ import {
   createSourceRuntime,
   runIsolatedModuleScript,
 } from "../../commands/doctor-config-preflight.process.test-support.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const runtimeParent = fs.realpathSync(tempDirs.make("openclaw-selection-runtime-"));
@@ -20,8 +21,8 @@ beforeEach(() => {
 
 function stateManifest(root: string): Record<string, string> {
   return Object.fromEntries(
-    fs
-      .readdirSync(root, { recursive: true, withFileTypes: true })
+    listDirectoryTreeStrictSync(root)
+      .map((walkEntry) => walkEntry.dirent)
       .filter((entry) => entry.isFile())
       .map((entry) => {
         const filename = path.join(entry.parentPath, entry.name);

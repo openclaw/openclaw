@@ -47,6 +47,7 @@ it("packages a runnable generator closure through the published file policy", ()
     "package.json",
     ...entrypoints,
     "scripts/runtime-postbuild-shared.mjs",
+    "src/infra/directory-walk.ts",
     "scripts/lib/direct-run.mjs",
   ]) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });

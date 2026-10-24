@@ -1,5 +1,5 @@
-import "../test-utils/prepare-compiled-subprocesses.js";
 import { createHash } from "node:crypto";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,6 +11,7 @@ import { registerMaintenanceCommands } from "../cli/program/register.maintenance
 import { getRuntimeConfig } from "../config/io.runtime.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
 import type { HealthCheck } from "../flows/health-checks.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { ExitError } from "../runtime.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-open.js";
@@ -47,8 +48,8 @@ afterEach(() => {
 });
 
 function snapshotSqliteFiles(stateDir: string) {
-  return fs
-    .readdirSync(stateDir, { recursive: true, encoding: "utf8" })
+  return listDirectoryTreeStrictSync(stateDir)
+    .map((walkEntry) => walkEntry.relativePath)
     .filter((relative) => /\.sqlite(?:-(?:wal|shm|journal))?$/u.test(relative))
     .toSorted()
     .map((relative) => {

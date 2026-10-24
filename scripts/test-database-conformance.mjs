@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.ts";
 import {
   assignPostgresConformanceShards,
   createPostgresConformanceEstimator,
@@ -60,7 +61,10 @@ let targets = explicitTargets
       "extensions/matrix/src/matrix/account-state.postgres.test.ts",
       "extensions/team-reports/src/postgres-store.test.ts",
       "src/infra/postgres-sync",
-      ...readdirSync(new URL("../src/infra/database-engine/", import.meta.url), { recursive: true })
+      ...listDirectoryTreeStrictSync(
+        fileURLToPath(new URL("../src/infra/database-engine/", import.meta.url)),
+      )
+        .map((walkEntry) => walkEntry.relativePath)
         .filter((file) => file.endsWith(".test.ts"))
         .map((file) => `src/infra/database-engine/${file.replaceAll("\\", "/")}`)
         .toSorted(),

@@ -6,6 +6,7 @@ import { createAgentTeam } from "../agents/agent-team.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { defaultRuntime } from "../runtime.js";
 import { publishAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
@@ -115,7 +116,7 @@ it("rejects unfinished role adoption without workspace or config changes", async
   await fs.rm(path.join(workspace, "SOUL.md"));
   await fs.rm(path.join(workspace, "IDENTITY.md"));
   const readWorkspace = async () => {
-    const entries = await fs.readdir(workspace, { recursive: true, withFileTypes: true });
+    const entries = (await listDirectoryTreeStrict(workspace)).map((walkEntry) => walkEntry.dirent);
     return Promise.all(
       entries
         .filter((entry) => entry.isFile())

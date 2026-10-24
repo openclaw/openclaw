@@ -32,6 +32,7 @@ import { resolveRunnerMatrix } from "../../scripts/lib/cross-os-release-checks/c
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
@@ -15807,7 +15808,8 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     // turns a content move into a failure.
     const ciDocs = [
       readFileSync("docs/ci.md", "utf8"),
-      ...readdirSync("docs/ci", { encoding: "utf8", recursive: true })
+      ...listDirectoryTreeStrictSync("docs/ci")
+        .map((walkEntry) => walkEntry.relativePath)
         .filter((name) => name.endsWith(".md"))
         .toSorted()
         .map((name) => readFileSync(`docs/ci/${name}`, "utf8")),

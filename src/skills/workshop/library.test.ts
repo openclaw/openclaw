@@ -99,6 +99,8 @@ it("reports unreadable skill files instead of returning an incomplete inventory"
 it("skips directories without SKILL.md but still lists hand-edited broken frontmatter", async () => {
   await fs.mkdir(skillPath("missing"), { recursive: true });
   await seed("broken", "---\nname: [\n---\n");
+  await fs.symlink(skillPath("broken"), skillPath("broken", "loop"), "dir");
+  await fs.symlink(skillPath("broken", "SKILL.md"), skillPath("broken", "linked.md"), "file");
 
   expect(await listWorkshopSkills({}, "main")).toMatchObject([
     { name: "broken", description: "", files: ["SKILL.md"] },
@@ -205,6 +207,18 @@ it("refuses invalid or unsafe writes with actionable errors and leaves files unt
   );
   await refuses(write("SKILL.md", "no frontmatter"), /must contain "name: deploy"/);
   expect(await readLive("deploy")).toBe(skill("deploy", "run it\nrun it"));
+  expect(await versions()).toEqual([]);
+});
+
+it("refuses support writes into dependency directories before creating files or versions", async () => {
+  await create("Visible procedure");
+  for (const file of ["scripts/node_modules/x.js", "references/cache/node_modules/x.md"]) {
+    await refuses(write(file, "hidden content"), /node_modules.*not a skill support directory/);
+    await expect(fs.stat(skillPath("deploy", ...file.split("/")))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  }
+  expect((await view()).files).toEqual(["SKILL.md"]);
   expect(await versions()).toEqual([]);
 });
 
@@ -419,4 +433,23 @@ describe("archiveUnusedWorkshopSkills", () => {
       expect(await liveNames()).toEqual(["stale"]);
     },
   );
+});
+
+it("prunes hidden and dependency directories before inventory budgets are consumed", async () => {
+  await seed("deploy", skill("deploy", "Visible procedure"));
+  await fs.mkdir(skillPath("deploy", "references"));
+  await fs.writeFile(skillPath("deploy", "references", "kept.md"), "support");
+  for (const ignored of [".git", ".venv", "node_modules"]) {
+    const tooDeep = skillPath("deploy", ignored, ...Array(65).fill("nested"));
+    await fs.mkdir(tooDeep, { recursive: true });
+    await fs.writeFile(path.join(tooDeep, "ignored.md"), "not skill content");
+  }
+  expect(await listWorkshopSkills({}, "main")).toMatchObject([
+    {
+      name: "deploy",
+      files: ["SKILL.md", "references/kept.md"],
+      sizeBytes: Buffer.byteLength(skill("deploy", "Visible procedure")) + 7,
+    },
+  ]);
+  expect((await view()).files).toEqual(["SKILL.md", "references/kept.md"]);
 });

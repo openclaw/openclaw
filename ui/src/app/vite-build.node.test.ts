@@ -8,6 +8,10 @@ import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { build, createLogger, type InlineConfig, type Plugin } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  listDirectoryTreeStrict,
+  listDirectoryTreeStrictSync,
+} from "../../../src/infra/directory-walk.js";
 import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
 import { controlUiPluginDistributionsPlugin } from "../../config/control-ui-plugin-distributions.ts";
 import controlUiViteConfig from "../../vite.config.ts";
@@ -322,10 +326,9 @@ it("reports completed compression work before build completion at a bounded cade
     if (!message.includes("Control UI precompression")) {
       return;
     }
-    const emitted = fsSync.readdirSync(path.join(outDir, "assets"), {
-      encoding: "utf8",
-      recursive: true,
-    });
+    const emitted = listDirectoryTreeStrictSync(path.join(outDir, "assets")).map(
+      (walkEntry) => walkEntry.relativePath,
+    );
     activity.push({
       message,
       elapsed: clockMs,
@@ -355,10 +358,9 @@ it("reports completed compression work before build completion at a bounded cade
 
   await build(config);
 
-  const emitted = await fs.readdir(path.join(outDir, "assets"), {
-    encoding: "utf8",
-    recursive: true,
-  });
+  const emitted = (await listDirectoryTreeStrict(path.join(outDir, "assets"))).map(
+    (walkEntry) => walkEntry.relativePath,
+  );
   const sidecars = emitted.filter((name) => /\.(br|gz)$/u.test(name));
   const completed = new Set(sidecars.map((name) => name.slice(0, -3))).size;
   expect(completed).toBeGreaterThan(4);

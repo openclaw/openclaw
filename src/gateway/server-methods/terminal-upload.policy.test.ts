@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { stageTerminalUpload } from "../../infra/terminal-file-upload.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -94,7 +95,7 @@ it.each(["queued", "before-write"])("rechecks upload policy at %s", async (phase
     expect.soft(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(disabled));
     const writes = vi.mocked(fs.writeFile).mock.calls;
     expect.soft(writes.filter(([target]) => isClientFile(target))).toEqual([]);
-    const files = await fs.readdir(root, { recursive: true });
+    const files = (await listDirectoryTreeStrict(root)).map((walkEntry) => walkEntry.relativePath);
     expect.soft(files.filter((file) => file.endsWith("client.bin"))).toEqual([]);
     if (agent) {
       expect(await fs.readFile((await agent).path)).toEqual(Buffer.from([4, 5, 6]));

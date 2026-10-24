@@ -14,6 +14,7 @@ import { localOnboardingStateKey } from "../../state/local-onboarding-state-shar
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import { startRuntimePty, type PtyRun } from "../../tui/tui-pty-test-support.js";
+import { listDirectoryTreeStrict } from "../directory-walk.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -144,9 +145,9 @@ for (const engine of ["sqlite", "postgres"] as const) {
               `synthetic warning\n${initialConfig}`,
             );
             expect(
-              (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
-                file.endsWith(".sqlite"),
-              ),
+              (await listDirectoryTreeStrict(stateDir))
+                .map((walkEntry) => walkEntry.relativePath)
+                .filter((file) => file.endsWith(".sqlite")),
             ).toEqual([]);
           };
           try {
@@ -200,7 +201,8 @@ for (const engine of ["sqlite", "postgres"] as const) {
               expect(await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8")).not.toBe("");
             }
 
-            const databases = (await fs.readdir(stateDir, { recursive: true }))
+            const databases = (await listDirectoryTreeStrict(stateDir))
+              .map((walkEntry) => walkEntry.relativePath)
               .filter((file) => file.endsWith(".sqlite"))
               .map((file) => path.join(stateDir, file));
             expect(databases.length).toBeGreaterThan(0);

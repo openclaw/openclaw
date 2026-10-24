@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -29,7 +30,9 @@ function mediaFixture(
   const stageAttachments = vi.fn<NonNullable<WorkerTunnelHandle["stageAttachments"]>>(
     async (request) => {
       expect(request.isAuthorized()).toBe(true);
-      for (const name of await fs.readdir(request.localPath, { recursive: true })) {
+      for (const name of (await listDirectoryTreeStrict(request.localPath)).map(
+        (walkEntry) => walkEntry.relativePath,
+      )) {
         const source = path.join(request.localPath, name);
         if (path.basename(name) !== ".gitignore" && (await fs.stat(source)).isFile()) {
           staged.push(await fs.readFile(source));

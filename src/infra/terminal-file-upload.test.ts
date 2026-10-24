@@ -8,6 +8,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
 import { ensureTerminalUploadCleanup, stageTerminalUpload } from "./terminal-file-upload.js";
 
 vi.mock("node:os", { spy: true });
@@ -54,7 +55,7 @@ async function createUploads(root: string, sizes: number[] | number, bytes = 0) 
 }
 
 async function uploadLock(root: string) {
-  const entries = await fs.readdir(root, { recursive: true, withFileTypes: true });
+  const entries = (await listDirectoryTreeStrict(root)).map((walkEntry) => walkEntry.dirent);
   const locks = entries.filter(
     (entry) => entry.isDirectory() && entry.name === "terminal-upload-lock",
   );

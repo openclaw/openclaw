@@ -17,6 +17,7 @@ import {
 } from "../../scripts/ui.mts";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../../src/gateway/control-ui-root-assets.js";
 import { inspectControlUiRootAssets } from "../../src/infra/control-ui-assets.js";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { mergeProcessEnv } from "../../src/infra/process-env.js";
 import { isPidDefinitelyDead } from "../../src/shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -577,8 +578,8 @@ require("node:module").syncBuiltinESMExports();
     expect(inspectControlUiRootAssets(output, buildId).kind).toBe(seedSiblings ? "ready" : "stale");
     const expected = buildFiles(seedSiblings ? buildId : "stale-runtime");
     expect(
-      fs
-        .readdirSync(output, { recursive: true, encoding: "utf8" })
+      listDirectoryTreeStrictSync(output)
+        .map((walkEntry) => walkEntry.relativePath)
         .toSorted((left, right) => left.localeCompare(right)),
     ).toEqual(["assets", ...Object.keys(expected)].map((file) => path.normalize(file)).toSorted());
     for (const [file, bytes] of Object.entries(expected)) {
@@ -594,8 +595,8 @@ require("node:module").syncBuiltinESMExports();
       if (process.platform !== "win32") {
         const published = [
           output,
-          ...fs
-            .readdirSync(output, { recursive: true, encoding: "utf8" })
+          ...listDirectoryTreeStrictSync(output)
+            .map((walkEntry) => walkEntry.relativePath)
             .map((entry) => path.join(output, entry)),
         ];
         for (const entry of published) {

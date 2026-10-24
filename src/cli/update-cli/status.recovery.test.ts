@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { updateStatusCommand as updateStatus } from "./status.js";
 // Prepare the lazy production graph during collection, not inside the first test timeout.
 import "../../infra/update-recovery-backup-status.js";
@@ -216,7 +217,9 @@ it.each([
     await fs.link(partialPath, path.join(directory, "manifest.json"));
   }
   const retained = new Map<string, Buffer>();
-  for (const name of await fs.readdir(directory, { recursive: true })) {
+  for (const name of (await listDirectoryTreeStrict(directory)).map(
+    (walkEntry) => walkEntry.relativePath,
+  )) {
     const pathname = path.join(directory, name);
     if ((await fs.lstat(pathname)).isFile()) {
       retained.set(name, await fs.readFile(pathname));

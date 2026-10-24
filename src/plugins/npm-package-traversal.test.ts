@@ -111,6 +111,7 @@ for (const [owner, read, empty] of [
         fs.mkdirSync(scope, { recursive: true });
         const readdir = fs.promises.readdir;
         vi.spyOn(fs.promises, "readdir").mockImplementationOnce(async (dir, options) => {
+          // oxlint-disable-next-line openclaw-boundaries/no-recursive-readdir -- Transparent fault-injection spy; the production caller owns these nonrecursive options.
           const entries = await readdir(dir, options);
           fs.rmdirSync(scope);
           if (kind === "file") {

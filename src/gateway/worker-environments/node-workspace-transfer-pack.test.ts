@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
@@ -80,9 +81,9 @@ async function createGitTransfer() {
       return fetchPack(token, captured.manifestRef);
     },
     packs: async () =>
-      (await fs.readdir(temporaryRoot, { recursive: true })).filter((name) =>
-        name.endsWith(".pack"),
-      ),
+      (await listDirectoryTreeStrict(temporaryRoot))
+        .map((walkEntry) => walkEntry.relativePath)
+        .filter((name) => name.endsWith(".pack")),
   };
 }
 

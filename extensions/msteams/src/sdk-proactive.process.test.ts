@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { listDirectoryTreeStrictSync } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveTestNodeExecPath } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 
@@ -15,8 +16,8 @@ it("keeps SDK root exports intact when quoted behavior is the first SDK access",
     { cwd: process.cwd() },
   );
   const outDir = path.join(process.cwd(), "extensions/msteams/dist");
-  const proactiveArtifact = fs
-    .readdirSync(outDir, { recursive: true, encoding: "utf8" })
+  const proactiveArtifact = listDirectoryTreeStrictSync(outDir)
+    .map((walkEntry) => walkEntry.relativePath)
     .filter((entry) => entry.endsWith(".cjs"))
     .map((entry) => path.join(outDir, entry))
     .find((entry) =>
