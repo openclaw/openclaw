@@ -86,6 +86,20 @@ describe("Claude CLI user input adapter", () => {
     });
   });
 
+  it("shortens an over-long option description instead of denying every question", async () => {
+    const requestUserInput = answered("Unit tests");
+    const long = "x".repeat(2_000);
+    const payload = {
+      questions: [question({ options: [...options("A"), { label: "B", description: long }] })],
+    };
+
+    const result = await ask(authorizerFor(requestUserInput), payload);
+
+    const [asked] = requestUserInput.mock.calls[0]![0].questions;
+    expect(asked!.options![1]).toEqual({ label: "B", description: `${"x".repeat(1_023)}\u2026` });
+    expect(result).toMatchObject({ behavior: "allow" });
+  });
+
   it("returns actionable denial guidance when the operator skips", async () => {
     const authorizer = authorizerFor(async () => ({
       status: "cancelled",
