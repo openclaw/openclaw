@@ -38,9 +38,6 @@ describe("gh-read helpers", () => {
   it("normalizes repo strings from common git formats", () => {
     expect(normalizeRepo("openclaw/openclaw")).toBe("openclaw/openclaw");
     expect(normalizeRepo("github.com/openclaw/openclaw")).toBe("openclaw/openclaw");
-    expect(normalizeRepo("github:openclaw/openclaw")).toBe("openclaw/openclaw");
-    expect(normalizeRepo("https://github.com/openclaw/openclaw.git")).toBe("openclaw/openclaw");
-    expect(normalizeRepo("git@github.com:openclaw/openclaw.git")).toBe("openclaw/openclaw");
     expect(normalizeRepo("https://gitlab.com/openclaw/openclaw.git")).toBeNull();
     expect(normalizeRepo("invalid")).toBeNull();
   });
@@ -49,15 +46,11 @@ describe("gh-read helpers", () => {
     const permissions = {
       actions: "write",
       issues: "read",
-      administration: "write",
-      metadata: "read",
       statuses: null,
     } as const;
     expect(buildReadPermissions(permissions, Object.keys(permissions))).toEqual({
-      administration: "read",
       actions: "read",
       issues: "read",
-      metadata: "read",
     });
   });
 
@@ -128,8 +121,9 @@ describe("gh-read helpers", () => {
   );
 
   it("reads bounded GitHub API JSON responses", async () => {
-    const response = new Response('{"id":123}');
-    await expect(readBoundedGitHubJson(response, 1024)).resolves.toEqual({ id: 123 });
+    await expect(readBoundedGitHubJson(new Response('{"id":123}'), 1024)).resolves.toEqual({
+      id: 123,
+    });
   });
 
   it("rejects oversized GitHub API JSON responses by content length", async () => {

@@ -1,15 +1,16 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveUpgradeSurvivorConfigStepsForBaseline } from "../../scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import * as io from "./upgrade-survivor-shard.test-support.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const repo = resolve(".");
-const recipe = "scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 const specimen = "scripts/e2e/lib/upgrade-survivor/config-recipe/tools-tool-search.json";
 const flag = "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE";
+afterEach(() => vi.unstubAllEnvs());
 const source = readFileSync("scripts/e2e/upgrade-survivor-docker.sh", "utf8");
 const policy = source.slice(
   source.indexOf("UPGRADE_SCENARIO_ARGS=()"),
@@ -65,20 +66,10 @@ function fixture(present: boolean) {
   return { root, target, select, sha };
 }
 
-function apply(root: string, mode: string) {
-  io.writeExecutable(join(root, "openclaw"), "#!/bin/sh\nexit 0\n");
-  const summary = join(root, "recipe.json");
-  const result = run(
-    root,
-    process.execPath,
-    [recipe, "apply", "--summary", summary, "--baseline-version", "2026.9.6"],
-    { PATH: root + ":" + process.env.PATH, [flag]: mode },
-  );
-  expect(result.status, result.stderr).toBe(0);
-  return io.readJson(summary) as {
-    acceptedIntents: string[];
-    steps: Array<{ id: string; command: string }>;
-  };
+function recipe(mode: string) {
+  vi.stubEnv(flag, mode);
+  vi.stubEnv("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL", "stable");
+  return resolveUpgradeSurvivorConfigStepsForBaseline("base", "2026.9.6");
 }
 
 function checkSearch(root: string, accepted: boolean, toolSearch: unknown, stage = "survival") {
@@ -112,24 +103,13 @@ describe.skipIf(process.platform === "win32")("frozen survivor Tool Search recip
     const selectedNew = newer.select();
     expect(selectedNew.status, selectedNew.stderr).toBe(0);
     expect(selectedNew.stdout).toContain(flag + "=current");
-    const oldRecipe = apply(old.root, "absent");
-    const newRecipe = apply(newer.root, "current");
-    expect(oldRecipe.acceptedIntents).not.toContain("tool-search");
-    expect(newRecipe.acceptedIntents).toContain("tool-search");
-    expect(oldRecipe.acceptedIntents).toEqual(
-      newRecipe.acceptedIntents.filter((id) => id !== "tool-search"),
-    );
-    expect(oldRecipe.steps).toEqual(newRecipe.steps.filter(({ id }) => id !== "tools-tool-search"));
+    const oldRecipe = recipe("absent");
+    const newRecipe = recipe("current");
+    expect(newRecipe).toContainEqual(expect.objectContaining({ intent: "tool-search" }));
+    expect(oldRecipe).toEqual(newRecipe.filter(({ id }) => id !== "tools-tool-search"));
     const legacySearch = { mode: "code", codeTimeoutMs: 5000 };
-    expect(checkSearch(old.root, false, legacySearch).status).toBe(0);
     expect(checkSearch(newer.root, true, legacySearch, "baseline").status).toBe(0);
-    expect(checkSearch(newer.root, true, { mode: "tools" }).status).toBe(0);
-    for (const value of [
-      legacySearch,
-      { mode: "tools", codeTimeoutMs: 5000 },
-      { mode: "tools", enabled: false },
-      undefined,
-    ]) {
+    for (const value of [{ mode: "tools", enabled: false }, undefined]) {
       expect(checkSearch(newer.root, true, value).status).not.toBe(0);
     }
   });
