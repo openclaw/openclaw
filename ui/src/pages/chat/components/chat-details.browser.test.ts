@@ -308,6 +308,8 @@ describe("chat Details presentation", () => {
       ".chat-environment__branch-controls button.chat-pr__diff",
     )!;
     const branchLabel = panel.querySelector(".chat-environment__branch-name")!;
+    // The scroll owner applies its initial gutter measurement before the first paint.
+    await new Promise(requestAnimationFrame);
     expect(navigation.getAttribute("aria-label")).toBe("Show session changes");
     expect(navigation.textContent).toContain("+3");
     expect(navigation.textContent).toContain("−1");

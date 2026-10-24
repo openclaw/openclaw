@@ -109,6 +109,9 @@ const { values } = parseArgs({
     "stream-start-allocations": { type: "boolean", default: false },
     "active-work-diagnostics": { type: "boolean", default: false },
     scenario: { type: "string", default: "transcript-broadcast" },
+    "startup-temperature": { type: "string", default: "warm" },
+    "startup-targets": { type: "string" },
+    "startup-source-preload": { type: "string" },
     revision: { type: "string" },
     operations: { type: "string" },
     "warmup-operations": { type: "string" },
@@ -209,6 +212,7 @@ if (
     "reconnect",
     "subscribe",
     "chat.send",
+    "chat.startup",
     "transcript-broadcast",
     "attempt-retention",
     "session-idle-retention",
@@ -220,9 +224,30 @@ if (
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, sessions.describe, sessions.patch, sessions.cleanup, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, plugins.reload, plugin.scope, cron.list, or board.get",
+    "--scenario must be sessions.list, sessions.describe, sessions.patch, sessions.cleanup, connect, reconnect, subscribe, chat.send, chat.startup, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, plugins.reload, plugin.scope, cron.list, or board.get",
   );
 }
+const startupTemperature = values["startup-temperature"];
+if (!["warm", "cold"].includes(startupTemperature)) {
+  throw new Error("--startup-temperature must be warm or cold");
+}
+if (scenario !== "chat.startup" && (values["startup-targets"] || startupTemperature !== "warm")) {
+  throw new Error("Startup workload options require --scenario chat.startup");
+}
+if (
+  values["startup-source-preload"] &&
+  (scenario !== "chat.startup" || path.resolve(values.entry) !== path.resolve("src/entry.ts"))
+) {
+  throw new Error("--startup-source-preload requires --scenario chat.startup --entry src/entry.ts");
+}
+const startupSourcePreload = values["startup-source-preload"]
+  ? {
+      path: realpathSync(path.resolve(values["startup-source-preload"])),
+      sha256: createHash("sha256")
+        .update(readFileSync(values["startup-source-preload"]))
+        .digest("hex"),
+    }
+  : undefined;
 const retentionScenario = scenario === "attempt-retention";
 if (values["list-filter-churn"] && scenario !== "sessions.list") {
   throw new Error("--list-filter-churn requires --scenario sessions.list");
@@ -805,6 +830,72 @@ if (values["attempt-setup-image"] && coldBaseRefs.length < coldSessionRounds * r
   );
 }
 const fixtureSessionCount = typeof fixture.sessionCount === "number" ? fixture.sessionCount : 0;
+type StartupTarget = {
+  sessionKey: string;
+  shortId?: string;
+  minimumMessages?: number;
+  minimumPendingInputs?: number;
+  requireMetadata?: boolean;
+};
+const startupTargets: StartupTarget[] = [];
+if (scenario === "chat.startup") {
+  const rawTargets: unknown = values["startup-targets"]
+    ? JSON.parse(readFileSync(values["startup-targets"], "utf8"))
+    : Array.isArray(fixture.chatStartupTargets)
+      ? fixture.chatStartupTargets.slice(
+          0,
+          startupTemperature === "cold" ? operations * rounds : runCount,
+        )
+      : Array.from(
+          { length: startupTemperature === "cold" ? operations * rounds : runCount },
+          (_, index) => ({ sessionKey: `agent:main:team-shape-session-${index}` }),
+        );
+  if (!Array.isArray(rawTargets) || rawTargets.length === 0) {
+    throw new Error(
+      "--startup-targets must contain a nonempty array of prepared synthetic targets",
+    );
+  }
+  for (const target of rawTargets) {
+    if (
+      !isRecord(target) ||
+      typeof target.sessionKey !== "string" ||
+      !target.sessionKey.startsWith("agent:main:") ||
+      (target.requireMetadata !== undefined && typeof target.requireMetadata !== "boolean") ||
+      (target.shortId !== undefined &&
+        (typeof target.shortId !== "string" || !/^[a-f0-9]{8,32}$/i.test(target.shortId))) ||
+      [target.minimumMessages, target.minimumPendingInputs].some(
+        (count) => count !== undefined && (!Number.isSafeInteger(count) || Number(count) < 0),
+      )
+    ) {
+      throw new Error(
+        "Invalid startup target: expected a main-agent key and optional read assertions",
+      );
+    }
+    startupTargets.push({
+      sessionKey: target.sessionKey,
+      requireMetadata: target.requireMetadata === true,
+      ...(typeof target.shortId === "string" ? { shortId: target.shortId } : {}),
+      ...(target.minimumMessages !== undefined
+        ? { minimumMessages: Number(target.minimumMessages) }
+        : {}),
+      ...(target.minimumPendingInputs !== undefined
+        ? { minimumPendingInputs: Number(target.minimumPendingInputs) }
+        : {}),
+    });
+  }
+  if (!values["startup-targets"] && startupTargets.length > fixtureSessionCount) {
+    throw new Error("chat.startup needs more retained fixture sessions; regenerate the fixture");
+  }
+  if (
+    startupTemperature === "cold" &&
+    (startupTargets.length < operations * rounds ||
+      new Set(startupTargets.map((target) => target.sessionKey)).size !== startupTargets.length)
+  ) {
+    throw new Error(
+      "Cold chat.startup requires one distinct untouched target per measured operation",
+    );
+  }
+}
 const patchKeys =
   scenario === "sessions.patch"
     ? Array.from({ length: fixtureSessionCount }, (_, index) => index)
@@ -920,6 +1011,9 @@ if (values["active-work-diagnostics"]) {
   cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
   cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
 }
+if (scenario === "chat.startup") {
+  cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
+}
 if (soakScenario) {
   cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
   if (cfg.plugins.allow?.length) {
@@ -962,6 +1056,21 @@ const githubOptionsObservations: Array<{
   login: string;
 }> = [];
 const dashboardPreload = path.join(output, "dashboard-preload.mjs");
+const startupObserverPreload = path.join(output, "startup-observer-preload.mjs");
+if (scenario === "chat.startup") {
+  writeFileSync(
+    startupObserverPreload,
+    `import { channel } from "node:diagnostics_channel";
+import { onTrustedInternalDiagnosticEvent } from ${JSON.stringify(new URL("../../src/infra/diagnostic-events.ts", import.meta.url).href)};
+const stages = channel("openclaw.gateway.request.stages");
+onTrustedInternalDiagnosticEvent((event) => {
+  if (event.type === "diagnostic.phase.completed" && event.name.startsWith("chat.startup.") && stages.hasSubscribers) {
+    stages.publish({ operation: event.name, durationMs: event.durationMs });
+  }
+}, { include: ["diagnostic.phase.completed"] });
+`,
+  );
+}
 if (values["dashboard-rpc"]) {
   for (const id of ["github", "workboard"]) {
     cfg.plugins.entries[id] = { enabled: true };
@@ -4168,6 +4277,8 @@ try {
       "./scripts/tsx.mjs",
       ...(configCaptureSource ? ["--import", configCaptureSourcePreload] : []),
       ...(authoritySourcePreload ? ["--import", authoritySourcePreload.path] : []),
+      ...(startupSourcePreload ? ["--import", startupSourcePreload.path] : []),
+      ...(scenario === "chat.startup" ? ["--import", startupObserverPreload] : []),
       ...(values["authority-counts"] ? ["--import", authorityPreload] : []),
       ...(values["config-capture-counts"] ? ["--import", configCapturePreload] : []),
       "--import",
@@ -4479,6 +4590,38 @@ try {
     { excludeSystem: true, excludeCron: true },
   ];
   let listChurnSequence = 0;
+  const readStartup = async (
+    client: ReturnType<typeof createGatewayWsClient>,
+    target: StartupTarget,
+  ) => {
+    const result = await rpc(client, "chat.startup", {
+      ...(target.shortId ? { shortId: target.shortId } : { sessionKey: target.sessionKey }),
+      agentId: "main",
+      limit,
+      maxBytes: 256 * 1024,
+    });
+    if (
+      !isRecord(result) ||
+      result.sessionKey !== target.sessionKey ||
+      typeof result.sessionId !== "string" ||
+      !Array.isArray(result.messages) ||
+      result.messages.length < (target.minimumMessages ?? 0) ||
+      !isRecord(result.pendingInputs) ||
+      !Array.isArray(result.pendingInputs.items) ||
+      result.pendingInputs.items.length < (target.minimumPendingInputs ?? 0) ||
+      !isRecord(result.sessionInfo) ||
+      (target.requireMetadata &&
+        (!isRecord(result.metadata) || !Array.isArray(result.metadata.commands))) ||
+      (target.shortId &&
+        (!isRecord(result.resolution) ||
+          result.resolution.ok !== true ||
+          result.resolution.key !== target.sessionKey))
+    ) {
+      throw new Error(
+        `chat.startup did not return the prepared synthetic target: ${target.sessionKey}`,
+      );
+    }
+  };
   const runScenario = async (measuredRound?: number, operationCount = operations) => {
     if (idleScenario) {
       idleTurnCohorts = [];
@@ -4566,6 +4709,14 @@ try {
                   : result,
                 method,
               );
+            } else if (scenario === "chat.startup") {
+              const target =
+                startupTemperature === "cold"
+                  ? measuredRound === undefined
+                    ? { sessionKey: parentKey }
+                    : startupTargets[measuredRound * operations + offset + index]!
+                  : startupTargets[(offset + index) % startupTargets.length]!;
+              await readStartup(workerClient, target);
             } else if (scenario === "sessions.describe") {
               const result = await rpc(workerClient, "sessions.describe", {
                 key: parentKey,
@@ -4693,6 +4844,11 @@ try {
     return undefined;
   };
   const warmupStartedAt = performance.now();
+  if (scenario === "chat.startup" && startupTemperature === "warm") {
+    for (const target of startupTargets) {
+      await readStartup(sender, target);
+    }
+  }
   // Equal warmup work keeps paired runs at the same retained-history boundary.
   const warmupRoundCount = soakScenario ? Math.max(1, Math.ceil(warmupMs / roundIntervalMs)) : 1;
   for (let round = 0; round < warmupRoundCount; round++) {
@@ -5932,6 +6088,17 @@ try {
     output,
     ...(values["worker-retained-heap"] ? { workerHeapEvidence } : {}),
     scenario,
+    ...(scenario === "chat.startup"
+      ? {
+          startup: {
+            temperature: startupTemperature,
+            targets: startupTargets,
+            sourcePreload: startupSourcePreload,
+            scope:
+              "cold means first chat.startup for each retained session in this Gateway; filesystem and agent database may already be warm",
+          },
+        }
+      : {}),
     verifyHistoryReplay,
     revision: values.revision ?? null,
     operationsPerRound: turnScenario ? sessionCount : operations,

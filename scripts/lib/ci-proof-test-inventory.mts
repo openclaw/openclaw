@@ -2609,7 +2609,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server-methods/chat-send-steering-custody.test.ts",
   "src/gateway/server-methods/chat-send-synthetic-repair.integration.test.ts",
   "src/gateway/server-methods/chat-send-user-turn.test.ts",
-  "src/gateway/server-methods/chat-startup-requester.test.ts",
   "src/gateway/server-methods/chat-startup-short-reference.test.ts",
   "src/gateway/server-methods/chat-webchat-acp-binding.test.ts",
   "src/gateway/server-methods/chat-webchat-acp-lifecycle.test.ts",

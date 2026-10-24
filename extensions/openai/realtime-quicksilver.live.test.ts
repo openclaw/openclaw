@@ -6,6 +6,7 @@ import {
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "openclaw/plugin-sdk/realtime-voice";
 import type { Page } from "playwright";
 import { describe, expect, it } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
@@ -117,18 +118,7 @@ async function resolveLiveOAuthProfile(): Promise<
 }
 
 async function listen(server: Server): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.removeListener("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Live realtime broker did not bind a TCP port");
-  }
-  return `http://127.0.0.1:${address.port}`;
+  return `http://127.0.0.1:${await listenOnLoopback(server)}`;
 }
 
 async function closeServer(server: Server): Promise<void> {

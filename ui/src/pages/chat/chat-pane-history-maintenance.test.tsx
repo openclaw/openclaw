@@ -33,6 +33,15 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     transcriptDomState.measuredRowHeight = 120;
     // Startup frames and the scroll idle debounce must share the controlled clock.
     vi.useFakeTimers();
+    let maximum = 800;
+    const nativeScrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight")!;
+    // Both the pane and the explicit thread mount need their real scroll range
+    // before the initial intersection can decide whether this is a short page.
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
+      return this.classList.contains("chat-thread")
+        ? maximum + 600
+        : nativeScrollHeight.get!.call(this);
+    });
     const context = createInitializationContext();
     context.config.subscribe = () => () => {};
     const pane = createRenderTestChatPane();
@@ -67,7 +76,6 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     flush();
     const transcript = props.transcript;
     const container = expectDefined(transcript.scrollElement, "mounted transcript scrollport");
-    let maximum = 800;
     Object.defineProperties(container, {
       clientHeight: { configurable: true, value: 600 },
       scrollHeight: { configurable: true, get: () => maximum + 600 },
