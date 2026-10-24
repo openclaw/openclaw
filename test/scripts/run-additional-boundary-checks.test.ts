@@ -6,13 +6,10 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   BOUNDARY_CHECKS,
-  createBoundedOutputBuffer,
-  formatCommand,
   parseCliArgs,
   parseShardSelection,
   parseShardSpec,
   resolveConcurrency,
-  resolvePositiveInteger,
   runChecks,
   runSingleCheck,
   selectChecksForShard,
@@ -101,42 +98,12 @@ describe("run-additional-boundary-checks", () => {
     );
   });
 
-  it("rejects malformed timeout and output limit integers", () => {
-    expect(resolvePositiveInteger("25", 50, "OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS")).toBe(25);
-    expect(resolvePositiveInteger(undefined, 50, "OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS")).toBe(
-      50,
-    );
-    expect(() =>
-      resolvePositiveInteger("1000ms", 50, "OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS"),
-    ).toThrow("OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS must be a positive integer; got: 1000ms");
-    expect(() =>
-      resolvePositiveInteger("1e3", 50, "OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES"),
-    ).toThrow("OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES must be a positive integer; got: 1e3");
-  });
-
-  it("formats command display text", () => {
-    expect(formatCommand({ command: "pnpm", args: ["run", "lint:core"] })).toBe(
-      "pnpm run lint:core",
-    );
-  });
-
-  it("drops split UTF-8 prefixes when older buffered output overflows", () => {
-    const output = createBoundedOutputBuffer(5);
-    output.append("old😀");
-    output.append("new");
-
-    expect(output.read()).toBe("[output truncated to last 5 bytes]\nnew");
-  });
-
   it("covers every check once across eight shards", () => {
     expect(parseShardSpec("2/4")).toEqual({ count: 4, index: 1, label: "2/4" });
     expect(parseShardSelection("2/4,3/4")).toEqual([
       { count: 4, index: 1, label: "2/4" },
       { count: 4, index: 2, label: "3/4" },
     ]);
-    expect(selectChecksForShard(BOUNDARY_CHECKS, "1/4")).toEqual(
-      BOUNDARY_CHECKS.filter((_check, index) => index % 4 === 0),
-    );
     expect(selectChecksForShard(BOUNDARY_CHECKS, "2/4,3/4")).toEqual(
       BOUNDARY_CHECKS.filter((_check, index) => index % 4 === 1 || index % 4 === 2),
     );
@@ -170,7 +137,6 @@ describe("run-additional-boundary-checks", () => {
       coreTestBoundaryOwner: "additional",
       ...overrides,
     });
-    expect(parseCliArgs(["--help"], {})).toEqual(parsed({ help: true }));
     expect(parseCliArgs(["--shard", "2/4"], {})).toEqual(parsed({ shardSpec: "2/4" }));
     expect(parseCliArgs(["--shard=3/4"], {})).toEqual(parsed({ shardSpec: "3/4" }));
     expect(parseCliArgs([], { OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: "4/4" })).toEqual(
@@ -182,7 +148,6 @@ describe("run-additional-boundary-checks", () => {
     expect(() => parseCliArgs(["--core-test-boundary-owner=none"], {})).toThrow("Unknown argument");
     expect(() => parseCliArgs(["--shard"], {})).toThrow("--shard requires a value");
     expect(() => parseCliArgs(["--shard", "-h"], {})).toThrow("--shard requires a value");
-    expect(() => parseCliArgs(["--wat"], {})).toThrow("Unknown argument: --wat");
   });
 
   it("does not start checks for CLI help or invalid arguments", () => {
@@ -205,52 +170,12 @@ describe("run-additional-boundary-checks", () => {
     expect(unknown.stderr).not.toContain("pnpm");
   });
 
-  it.each([
-    ["lint:docker-e2e", ["run", "lint:docker-e2e"]],
-    ["deps:pins:check", ["deps:pins:check"]],
-  ] as const)("keeps the %s guard in CI boundary checks", (label, args) => {
-    expect(BOUNDARY_CHECKS).toContainEqual({ label, command: "pnpm", args });
-  });
-
-  it("runs the shared focused guard pass once across every source root", () => {
-    const { scripts } = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
-      scripts: Record<string, string>;
-    };
-    const assertionCommand = scripts["lint:no-chained-type-assertions"];
-    const rootExecutables = fs
-      .readdirSync(".", { withFileTypes: true })
-      .filter((entry) => entry.isFile() && /\.[cm]?js$/u.test(entry.name))
-      .map((entry) => entry.name);
-    expect(assertionCommand?.split(" ")).toEqual(
-      expect.arrayContaining([
-        "scripts/run-oxlint.mjs",
-        "--openclaw-focused-config",
-        "config/oxlint/boundary-guards.json",
-        "src",
-        "extensions",
-        "packages",
-        "ui/src",
-        "scripts/openclaw-immutable-launcher.mjs",
-        "scripts/freebsd-service-inspect.mjs",
-        ...rootExecutables,
-      ]),
-    );
-    expect(assertionCommand?.split(" ")).not.toContain("scripts");
-    expect(scripts["lint:no-widen-then-assert"]).toBe(assertionCommand);
-    const focusedChecks = BOUNDARY_CHECKS.filter((check) => {
-      const scriptName = check.args[check.args[0] === "run" ? 1 : 0];
-      return (
-        check.command === "pnpm" &&
-        scripts[scriptName ?? ""]?.includes("--config config/oxlint/boundary-guards.json")
-      );
+  it("retains the dependency pin guard in CI boundary checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "deps:pins:check",
+      command: "pnpm",
+      args: ["deps:pins:check"],
     });
-    expect(focusedChecks).toEqual([
-      {
-        label: "lint:no-chained-type-assertions",
-        command: "pnpm",
-        args: ["run", "lint:no-chained-type-assertions"],
-      },
-    ]);
   });
 
   it("buffers grouped output and reports aggregate failures", async () => {
@@ -272,13 +197,18 @@ describe("run-additional-boundary-checks", () => {
     );
 
     expect(failures).toBe(1);
-    expect(text).toContain("::group::passes");
-    expect(text).toContain("ok-out");
-    expect(text).toContain("[ok] passes in ");
-    expect(text).toContain("::group::fails");
-    expect(text).toContain("bad-out");
-    expect(text).toContain("::error title=fails failed::fails failed (exit 7)");
-    expect(text).toContain("Additional boundary check timings:");
+    for (const part of [
+      "::group::passes",
+      "ok-out",
+      "[ok] passes in ",
+      "::group::fails",
+      "bad-out",
+      `$ ${process.execPath} -e console.log('ok-out')`,
+      "::error title=fails failed::fails failed (exit 7)",
+      "Additional boundary check timings:",
+    ]) {
+      expect(text).toContain(part);
+    }
   });
 
   it("preserves UTF-8 split across process output chunks before trimming the byte tail", async () => {

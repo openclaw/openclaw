@@ -25,6 +25,53 @@ const gitOwner = wrapper.slice(
   wrapper.indexOf("\nEOF_WRAPPER_GIT\n}") + "\nEOF_WRAPPER_GIT\n}".length,
 );
 
+type MergeFixture = ReturnType<typeof fixture>;
+
+function publishCurrentWorkflow(f: MergeFixture, parent: string, source: string) {
+  const directory = join(f.root, "selected-source");
+  const current = sourceCommit(f, parent, directory, true);
+  f.git(["push", "-q", "origin", `${current}:refs/heads/main`]);
+  f.git(["fetch", "-q", "origin", "main"]);
+  f.workflowSource(source, directory);
+  // Qualify the canonical product source without allowing public Git transport.
+  f.git([
+    "config",
+    "--add",
+    `url.file://${f.remote}.insteadOf`,
+    "https://github.com/openclaw/openclaw",
+  ]);
+  f.git(["remote", "set-url", "origin", "https://github.com/openclaw/openclaw"]);
+  return { directory, current };
+}
+
+function recoverCurrent(f: MergeFixture, outcome: string, replacement = "", admin = false) {
+  return f.run(
+    false,
+    f.repo,
+    "squash",
+    outcome,
+    replacement,
+    "",
+    "",
+    "",
+    false,
+    "",
+    false,
+    admin ? f.path : "",
+    admin,
+    "",
+    "",
+    true,
+  );
+}
+
+function expectBinding(f: MergeFixture, binding: string, outcome?: string) {
+  expect(f.git(["rev-parse", bindingRef])).toBe(binding);
+  if (outcome) {
+    expect(f.git(["rev-parse", outcomeRef])).toBe(outcome);
+  }
+}
+
 function sourceCommit(
   f: ReturnType<typeof fixture>,
   parent: string,
@@ -84,20 +131,8 @@ const cancelled = reuseCompletedSetup((confirmed = true) => {
   const binding = f.git(["rev-parse", bindingRef]);
   const replacement = f.replacePreparedHead();
   const main = f.git(["--git-dir=" + f.remote, "rev-parse", "main"]);
-  const directory = join(f.root, "selected-source");
-  const current = sourceCommit(f, main, directory, true);
-  f.git(["push", "-q", "origin", `${current}:refs/heads/main`]);
-  f.git(["fetch", "-q", "origin", "main"]);
-  f.workflowSource(source, directory);
+  const { directory } = publishCurrentWorkflow(f, main, source);
   configureMerge(f, { mode: "success", pr: { mergeStateStatus: "CLEAN" } });
-  // Keep Git transport private while qualifying the configured product source.
-  f.git([
-    "config",
-    "--add",
-    `url.file://${f.remote}.insteadOf`,
-    "https://github.com/openclaw/openclaw",
-  ]);
-  f.git(["remote", "set-url", "origin", "https://github.com/openclaw/openclaw"]);
   return { f, outcome, binding, replacement, original, source, directory };
 });
 
@@ -133,43 +168,14 @@ const rejectedAdmin = reuseCompletedSetup(() => {
   expect(f.record()).toMatchObject({ route: "admin", accepted: false, phase: "intent" });
   f.recover();
   const binding = f.git(["rev-parse", bindingRef]);
-  const directory = join(f.root, "selected-source");
-  const current = sourceCommit(f, source, directory, true);
-  f.git(["push", "-q", "origin", `${current}:refs/heads/main`]);
-  f.git(["fetch", "-q", "origin", "main"]);
-  f.workflowSource(source, directory);
+  const { directory, current } = publishCurrentWorkflow(f, source, source);
   f.useScripts(join(directory, "scripts"));
-  f.git([
-    "config",
-    "--add",
-    `url.file://${f.remote}.insteadOf`,
-    "https://github.com/openclaw/openclaw",
-  ]);
-  f.git(["remote", "set-url", "origin", "https://github.com/openclaw/openclaw"]);
   configureMerge(f, { restMergeRefusal: "", comment: "lost" });
   return { f, outcome, binding, source, current };
 });
 
 function recoverAdmin(setup: ReturnType<typeof rejectedAdmin>) {
-  const { f, outcome } = setup;
-  return f.run(
-    false,
-    f.repo,
-    "squash",
-    outcome,
-    "",
-    "",
-    "",
-    "",
-    false,
-    "",
-    false,
-    f.path,
-    true,
-    "",
-    "",
-    true,
-  );
+  return recoverCurrent(setup.f, setup.outcome, "", true);
 }
 
 describePosix("current-main recovery of a retained workflow", () => {
@@ -215,8 +221,7 @@ describePosix("current-main recovery of a retained workflow", () => {
     const unconfirmed = invoke(args.filter((arg) => arg !== "--confirmed-operator-admin"));
     expect(unconfirmed.status).toBe(2);
     expect(unconfirmed.stderr).toContain("--current-workflow requires confirmed merge-recover");
-    expect(f.git(["rev-parse", outcomeRef])).toBe(outcome);
-    expect(f.git(["rev-parse", bindingRef])).toBe(binding);
+    expectBinding(f, binding, outcome);
   });
 
   it("explicitly selects current workflow for qualified same-head admin rejection recovery", () => {
@@ -233,7 +238,7 @@ describePosix("current-main recovery of a retained workflow", () => {
       recovery: { outcome, providerRejection: { kind: "github-base-modified-405" } },
     });
     expect(f.record().recovery).not.toHaveProperty("replacementHead");
-    expect(f.git(["rev-parse", bindingRef])).toBe(binding);
+    expectBinding(f, binding);
     expectAncestors(f, [outcome, binding, source, current], outcomeRef);
     expectCapturedFiles(f, captures, outcomeRef);
   });
@@ -273,8 +278,7 @@ describePosix("current-main recovery of a retained workflow", () => {
               ? /writer must be an active organization admin/
               : /security|guard/i,
       );
-      expect(f.git(["rev-parse", outcomeRef])).toBe(outcome);
-      expect(f.git(["rev-parse", bindingRef])).toBe(binding);
+      expectBinding(f, binding, outcome);
       expect(f.state().pr.mergeCommit).toBeNull();
     },
   );
@@ -290,24 +294,7 @@ describePosix("current-main recovery of a retained workflow", () => {
     // Lost comment acknowledgement leaves ordinary reconciliation meaningful.
     configureMerge(f, { comment: "lost" });
     f.useScripts(join(directory, "scripts"));
-    const recovery = f.run(
-      false,
-      f.repo,
-      "squash",
-      outcome,
-      replacement,
-      "",
-      "",
-      "",
-      false,
-      "",
-      false,
-      "",
-      false,
-      "",
-      "",
-      true,
-    );
+    const recovery = recoverCurrent(f, outcome, replacement);
     expectExit(recovery, 1);
     const successor = f.git(["rev-parse", outcomeRef]);
     expect(f.record(), recovery.output).toMatchObject({
@@ -316,14 +303,14 @@ describePosix("current-main recovery of a retained workflow", () => {
       recovery: { outcome, replacementHead: replacement },
       workflowRecovery: { binding, from: source, to: main },
     });
-    expect(f.git(["rev-parse", bindingRef])).toBe(binding);
+    expectBinding(f, binding);
     expectAncestors(f, [original, outcome, binding, source, main], outcomeRef);
     expectCapturedFiles(f, captures, outcomeRef);
     f.recover();
     expectExit(f.run(), 0);
     expect(f.record()).toMatchObject({ phase: "commented" });
     expect(f.state()).toMatchObject({ mutations: 2, cancellations: 1, posts: 1 });
-    expect(f.git(["rev-parse", bindingRef])).toBe(binding);
+    expectBinding(f, binding);
     expect(f.git(["merge-base", "--is-ancestor", successor, outcomeRef])).toBe("");
   });
 
@@ -350,24 +337,7 @@ describePosix("current-main recovery of a retained workflow", () => {
       }
       writeFileSync(hook, commands);
       f.workflowAfterHold(hook);
-      const result = f.run(
-        false,
-        f.repo,
-        "squash",
-        outcome,
-        replacement,
-        "",
-        "",
-        "",
-        false,
-        "",
-        false,
-        "",
-        false,
-        "",
-        "",
-        true,
-      );
+      const result = recoverCurrent(f, outcome, replacement);
       expectExit(result, 1);
       expect(result.output).toMatch(
         fault === "source"
@@ -376,8 +346,7 @@ describePosix("current-main recovery of a retained workflow", () => {
             ? /outcome changed/
             : /head|prepared/i,
       );
-      expect(f.git(["rev-parse", bindingRef])).toBe(binding);
-      expect(f.git(["rev-parse", outcomeRef])).toBe(fault === "outcome" ? original : outcome);
+      expectBinding(f, binding, fault === "outcome" ? original : outcome);
       expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
     },
   );
@@ -407,8 +376,7 @@ describePosix("current-main recovery of a retained workflow", () => {
     }
     const result = selection(setup, selectedOutcome, head);
     expect(result.status, result.stdout + result.stderr).not.toBe(0);
-    expect(f.git(["rev-parse", outcomeRef])).toBe(outcome);
-    expect(f.git(["rev-parse", bindingRef])).toBe(binding);
+    expectBinding(f, binding, outcome);
     expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
   });
 

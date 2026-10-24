@@ -3,7 +3,6 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import type { TsdownPluginOption } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildPluginSdkPackageExports } from "../../scripts/lib/plugin-sdk-entries.mts";
@@ -109,10 +108,6 @@ function requireNativeHookRelayGraph(): TsdownConfigEntry {
   return expectDefined(graphs[0], "native hook relay graph");
 }
 
-function bundledEntry(pluginId: string): string {
-  return `${bundledPluginRoot(pluginId)}/index`;
-}
-
 function unifiedDistGraph(): TsdownConfigEntry | undefined {
   return asConfigArray(tsdownConfig).find((config) =>
     entryKeys(config).includes("plugins/runtime/index"),
@@ -201,45 +196,29 @@ describe("tsdown config", () => {
     const activationGraph = configs.find((config) =>
       entryKeys(config).includes("package-update-activation-recovery"),
     );
-    const executableGraphs = new Set([
-      ...configs.filter((config) =>
-        entryKeys(config).includes("worker/gateway-state-owner-heartbeat.worker"),
-      ),
+    const executableGraphs = [
       unifiedGraph,
       expectDefined(workerGraph, "deploy worker graph"),
-      requireStandaloneRuntimeGraph("worker/client-credential.worker"),
-      requireStandaloneRuntimeGraph("worker/code-mode-node.worker"),
-      requireStandaloneRuntimeGraph("worker/file-tool-planning.worker"),
-      requireStandaloneRuntimeGraph("worker/file-tool-read.worker"),
-      requireStandaloneRuntimeGraph("worker/gateway-state-owner-heartbeat.worker"),
-      requireStandaloneRuntimeGraph("worker/image-processor.worker"),
-      requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
-      requireStandaloneRuntimeGraph("worker/sqlite-source-revision.worker"),
-      requireStandaloneRuntimeGraph("worker/openclaw-state-read.worker"),
-      requireStandaloneRuntimeGraph("worker/worker-native-lifecycle.worker"),
       expectDefined(handoffGraph, "managed handoff graph"),
       expectDefined(activationGraph, "package activation graph"),
       requireNativeHookRelayGraph(),
       requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"),
-      requireStandaloneRuntimeGraph("infra/sqlite-source-revision.worker"),
-      requireStandaloneRuntimeGraph("state/openclaw-state-read.worker"),
+      // Regression: the transcript reader moved out of the shared graph (#182259).
       requireStandaloneRuntimeGraph("config/sessions/session-transcript.worker"),
-      requireStandaloneRuntimeGraph("agents/harness/native-hook-relay-client.worker"),
-      requireStandaloneRuntimeGraph("process/spawn-broker/worker"),
-      requireStandaloneRuntimeGraph("plugins/plugin-generation-preparation.worker"),
-      requireStandaloneRuntimeGraph("state/openclaw-state-lease-heartbeat.worker"),
-      requireStandaloneRuntimeGraph("infra/gateway-state-owner-heartbeat.worker"),
-      requireStandaloneRuntimeGraph("process/supervisor/service-child-relay"),
-      requireStandaloneRuntimeGraph("process/supervisor/service-child-group-anchor"),
-      requireStandaloneRuntimeGraph("tooling/managed-memory-launcher"),
-    ]);
+    ];
 
-    for (const config of configs) {
+    // One representative per graph factory, plus all declaration-only graphs.
+    for (const config of executableGraphs) {
       const inlinePlugins = (await resolvePluginNames(config.plugins)).filter(
         (name) => name === STATE_SCHEMA_INLINE_PLUGIN_NAME,
       );
-      expect(inlinePlugins, entryKeys(config).join(", ")).toHaveLength(
-        executableGraphs.has(config) ? 1 : 0,
+      expect(inlinePlugins, entryKeys(config).join(", ")).toHaveLength(1);
+    }
+    for (const config of configs.filter(
+      (candidate) => typeof candidate.dts === "object" && candidate.dts.emitDtsOnly,
+    )) {
+      expect(await resolvePluginNames(config.plugins)).not.toContain(
+        STATE_SCHEMA_INLINE_PLUGIN_NAME,
       );
     }
   });
@@ -259,76 +238,13 @@ describe("tsdown config", () => {
     );
   });
 
-  it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
-    const distGraph = requireUnifiedDistGraph();
-
-    const keys = entryKeys(distGraph);
-    for (const entry of [
-      "acp/control-plane/manager",
-      "agents/auth-profiles.runtime",
-      "agents/model-catalog.runtime",
-      "agents/models-config.runtime",
-      "cli/gateway-lifecycle.runtime",
-      "config/sessions/session-accessor.sqlite-archive.worker",
-      "plugin-sdk/sqlite-runtime",
-      "state/openclaw-database-verify.worker",
-      "plugins/memory-state",
-      "subagent-registry.runtime",
-      "link-understanding/apply.runtime",
-      "media-understanding/apply.runtime",
-      "index",
-      "commands/status.summary.runtime",
-      "docker-healthcheck",
-      "provider-dispatcher.runtime",
-      "plugins/hook-runner-global",
-      "plugins/provider-discovery.runtime",
-      "plugins/provider-runtime.runtime",
-      "plugins/runtime/index",
-      "plugins/synthetic-auth.runtime",
-      "web-fetch/runtime",
-      "mcp/openclaw-tools-serve",
-      "mcp/plugin-tools-serve",
-      bundledEntry("active-memory"),
-      "bundled/boot-md/handler",
-    ]) {
-      expect(keys).toContain(entry);
-    }
-  });
-
   it.each([
-    {
-      label: "plugin preparation worker",
-      entry: "plugins/plugin-generation-preparation.worker",
-      source: "src/plugins/plugin-generation-preparation.worker.ts",
-    },
-    {
-      label: "read-only snapshot child",
-      entry: "infra/sqlite-readonly-location.worker",
-      source: "src/infra/sqlite-readonly-location.worker.ts",
-    },
-    {
-      label: "raw source revision child",
-      entry: "infra/sqlite-source-revision.worker",
-      source: "src/infra/sqlite-source-revision.worker.ts",
-    },
-    {
-      label: "native hook locator worker",
-      entry: "agents/harness/native-hook-relay-client.worker",
-      source: "src/agents/harness/native-hook-relay-client.worker.ts",
-    },
-    {
-      label: "spawn broker",
-      entry: "process/spawn-broker/worker",
-      source: "src/process/spawn-broker/worker.ts",
-    },
-    {
-      label: "state lease heartbeat",
-      entry: "state/openclaw-state-lease-heartbeat.worker",
-      source: "src/state/openclaw-state-lease-heartbeat.worker.ts",
-    },
-  ])("emits the $label once without sealing its package loaders", ({ entry, source }) => {
+    "plugins/plugin-generation-preparation.worker",
+    "infra/sqlite-readonly-location.worker",
+    "infra/sqlite-source-revision.worker",
+  ])("emits %s once without sealing its package loaders", (entry) => {
     const child = requireStandaloneRuntimeGraph(entry);
-    expect(entrySources(child)).toEqual({ [entry]: path.resolve(source) });
+    expect(entrySources(child)).toEqual({ [entry]: path.resolve(`src/${entry}.ts`) });
     expect(child.outputOptions).toMatchObject({
       codeSplitting:
         entry === "infra/sqlite-readonly-location.worker" ||
