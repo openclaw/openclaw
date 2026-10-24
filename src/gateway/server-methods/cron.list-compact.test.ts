@@ -27,8 +27,14 @@ it("lists compact attention facts without automation definitions", async () => {
         nextRunAtMs: 1_788_591_095_278,
         lastRunAtMs: 1_788_587_495_278,
         runningAtMs: 0,
+        lastTriggerEvalAtMs: 1_788_587_495_500,
         autoDisabled,
         lastStatus: "error",
+        lastMeaningfulResult: {
+          outcome: "blocked",
+          summary: "Awaiting approval.",
+          atMs: 1_788_587_495_000,
+        },
       },
     });
     vi.spyOn(context.cron, "getDefaultAgentId").mockReturnValue("main");
@@ -65,8 +71,14 @@ it("lists compact attention facts without automation definitions", async () => {
             agentId: "ops",
             updatedAtMs: 1_788_587_495_278,
             runningAtMs: 0,
+            lastTriggerEvalAtMs: 1_788_587_495_500,
             autoDisabled,
             lastRunStatus: "error",
+            lastMeaningfulResult: {
+              outcome: "blocked",
+              summary: "Awaiting approval.",
+              atMs: 1_788_587_495_000,
+            },
             nextRunAtMs: 1_788_591_095_278,
             nextRunAt: "2026-09-05T06:51:35.278Z",
             lastRunAtMs: 1_788_587_495_278,

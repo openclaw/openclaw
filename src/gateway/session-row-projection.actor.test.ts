@@ -101,6 +101,35 @@ it("reuses actor row facts after metadata writes and refreshes Board presence af
   );
 });
 
+it("publishes terminal actor recency before another run begins", async () => {
+  await withActorRow("actor-terminal-recency", async (actor, entry, scope) => {
+    using _ = rowFixture.holdForeground();
+    using projection = await actorProjection(scope);
+    const { query, reads } = projection;
+    await projection.ensureMaterialized();
+    expect(projection.snapshot(query).row?.updatedAt).toBe(1);
+    const outcome = await actor.completeTurn(
+      {
+        commandId: "visible-result",
+        phaseId: "terminal",
+        bookkeeping: {
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision ?? null,
+          writerRunId: undefined,
+          expectedState: buildRestartRecoveryExpectedState(entry),
+          lifecycle: { updatedAt: 2 },
+        },
+      },
+      authority,
+    );
+    expect(outcome.kind).toBe("committed");
+    expect(actor.snapshot(authority)?.entry?.updatedAt).toBe(2);
+    await projection.ensureMaterialized();
+    expect(projection.snapshot(query).row?.updatedAt).toBe(2);
+    expect(reads).toEqual([]);
+  });
+});
+
 it("publishes user and assistant actor previews without background reads or losing the replica", async () => {
   await withActorRow("actor-preview", async (actor, entry, scope) => {
     const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");

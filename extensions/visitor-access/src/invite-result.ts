@@ -34,42 +34,6 @@ function utcMinute(epochMs: number): string {
   return `${new Date(epochMs).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
-/** Plain text an inviter can paste to the visitor. Contains no grant IDs or credentials. */
-function formatInvitationText({
-  target,
-  githubLogin,
-  inviterLabel,
-  signInUrl,
-  expiresAt,
-  note,
-}: {
-  target: VisitorTarget;
-  githubLogin?: string;
-  inviterLabel?: string;
-  signInUrl?: string;
-  expiresAt: number | null;
-  note?: string;
-}): string {
-  const inviter = inviterLabel?.replace(/\s+/gu, " ").trim();
-  const identity =
-    typeof target === "string"
-      ? `the email ${target}`
-      : githubLogin
-        ? `your GitHub account @${githubLogin}`
-        : `the GitHub account with ID ${target}`;
-  const message = note?.trim();
-  return [
-    inviter ? `${inviter} invited you to OpenClaw.` : "You're invited to OpenClaw.",
-    signInUrl
-      ? `Sign in at ${signInUrl} with ${identity}.`
-      : `Ask ${inviter ?? "the person who invited you"} for the OpenClaw sign-in address, then sign in with ${identity}.`,
-    expiresAt === null
-      ? "Your access does not expire."
-      : `Your access expires on ${utcMinute(expiresAt)}.`,
-    ...(message ? ["", `Note from ${inviter ?? "your inviter"}:`, message] : []),
-  ].join("\n");
-}
-
 /** Tool result for a committed invite or renewal; the note appears only in the invitation text. */
 export function visitorInviteResult({
   renewed,
@@ -94,14 +58,24 @@ export function visitorInviteResult({
         ? `@${githubLogin} (${target})`
         : target;
   const noteStored = Boolean(grant.note?.trim());
-  const invitationText = formatInvitationText({
-    target,
-    githubLogin,
-    inviterLabel: grant.invitedBy?.label,
-    signInUrl,
-    expiresAt,
-    note: grant.note,
-  });
+  const inviter = grant.invitedBy?.label?.replace(/\s+/gu, " ").trim();
+  const invitationIdentity =
+    typeof target === "string"
+      ? `the email ${target}`
+      : githubLogin
+        ? `your GitHub account @${githubLogin}`
+        : `the GitHub account with ID ${target}`;
+  const message = grant.note?.trim();
+  const invitationText = [
+    inviter ? `${inviter} invited you to OpenClaw.` : "You're invited to OpenClaw.",
+    signInUrl
+      ? `Sign in at ${signInUrl} with ${invitationIdentity}.`
+      : `Ask ${inviter ?? "the person who invited you"} for the OpenClaw sign-in address, then sign in with ${invitationIdentity}.`,
+    expiresAt === null
+      ? "Your access does not expire."
+      : `Your access expires on ${utcMinute(expiresAt)}.`,
+    ...(message ? ["", `Note from ${inviter ?? "your inviter"}:`, message] : []),
+  ].join("\n");
   const identity = typeof target === "number" ? "this GitHub account" : "this email";
   const signIn = signInUrl
     ? `Sign in at ${signInUrl} using Team's existing login with ${identity}. The link itself does not grant access.`

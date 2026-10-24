@@ -35,6 +35,7 @@ import { createDiagnosticEmbeddedRunOwner } from "../logging/diagnostic-run-acti
 import { getSessionControllerOperation } from "../sessions/session-controller.js";
 import * as messageInjection from "../sessions/session-controller.message-injection.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import {
   agentCommandMock,
   connectOk,
@@ -67,13 +68,7 @@ let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGate
 installGatewayTestHooks({
   scope: "suite",
   setup: async () => {
-    const module = await import("./server-kernel.js");
-    const create = module.createGatewayKernel;
-    const capture = vi.spyOn(module, "createGatewayKernel").mockImplementation(async (...args) => {
-      kernel = await create(...args);
-      return kernel;
-    });
-    try {
+    kernel = await captureGatewayKernel(async () => {
       testState.gatewayControlUi = { allowedOrigins: [browserOrigin] };
       harness = await startServerWithClient(gatewayToken, {
         controlUiEnabled: true,
@@ -86,9 +81,7 @@ installGatewayTestHooks({
         client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
         scopes: ["operator.read", "operator.write", "operator.admin"],
       });
-    } finally {
-      capture.mockRestore();
-    }
+    });
   },
   cleanup: async () => {
     harness?.ws.close();

@@ -15,6 +15,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
 import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
@@ -680,14 +681,8 @@ afterEach(() => {
 });
 
 it("dismisses only confirmations owned by the disconnected pane", () => {
-  const frameCallbacks: FrameRequestCallback[] = [];
-  vi.stubGlobal(
-    "requestAnimationFrame",
-    vi.fn((callback: FrameRequestCallback) => {
-      frameCallbacks.push(callback);
-      return frameCallbacks.length;
-    }),
-  );
+  const { frames: frameCallbacks, request } = createFrameQueue();
+  vi.stubGlobal("requestAnimationFrame", vi.fn(request));
   const listeners = [watchCapture(document, "click"), watchCapture(window, "keydown")];
   const { pane } = barePane();
   window.localStorage.removeItem(SKIP_REWIND_CONFIRM_PREFERENCE);

@@ -1,6 +1,7 @@
 /** Tests ACP server startup readiness, Gateway bootstrap, and shutdown wiring. */
 import { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 
 type GatewayClientCallbacks = {
@@ -499,10 +500,7 @@ describe("serveAcpGateway startup", () => {
     });
 
     it("waits for Gateway transport teardown before closing the shared state database", async () => {
-      let resolveStop!: () => void;
-      const stopPromise = new Promise<void>((resolve) => {
-        resolveStop = resolve;
-      });
+      const { promise: stopPromise, resolve: resolveStop } = createDeferred();
       mockState.gatewayStopDeferred = { resolve: resolveStop, promise: stopPromise };
 
       const servePromise = serveAcpGateway({});

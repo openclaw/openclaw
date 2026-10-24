@@ -740,7 +740,6 @@ extensions/sms/src/status.ts	1
 extensions/sms/src/twilio.ts	1
 extensions/synology-chat/src/accounts.ts	1
 extensions/synology-chat/src/client.ts	1
-extensions/synology-chat/src/inbound-event.ts	1
 extensions/synology-chat/src/outbound-media.ts	1
 extensions/synology-chat/src/setup-surface.ts	3
 extensions/synology-chat/src/test-http-utils.ts	6
@@ -2183,7 +2182,7 @@ src/plugins/runtime.ts	1
 src/plugins/runtime/channel-runtime-contexts.ts	1
 src/plugins/runtime/runtime-agent.ts	1
 src/plugins/runtime/runtime-llm-isolated.ts	2
-src/plugins/schema-validator.ts	5
+src/plugins/schema-validator.ts	4
 src/plugins/session-catalog-history-import.ts	1
 src/plugins/setup-registry.ts	2
 src/plugins/slots.ts	1

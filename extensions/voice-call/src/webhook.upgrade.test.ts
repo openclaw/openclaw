@@ -14,6 +14,7 @@ import { TwilioProvider } from "./providers/twilio.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 import { RealtimeCallHandler } from "./webhook/realtime-handler.js";
+import { makeRequest } from "./webhook/realtime-handler.lifecycle.test-helpers.js";
 import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 
 vi.mock("./realtime-transcription.runtime.js", () => ({
@@ -231,14 +232,6 @@ describe("VoiceCallWebhookServer shutdown lifecycle", () => {
     expect(stopped).toBe(true);
   });
 });
-
-function makeRequest(url: string, host = "gateway.ts.net"): http.IncomingMessage {
-  const req = new http.IncomingMessage(null as never);
-  req.url = url;
-  req.method = "POST";
-  req.headers = host ? { host } : {};
-  return req;
-}
 
 function rejectedUpgradeHarness() {
   const config = normalizeVoiceCallConfig({ realtime: { enabled: true } });

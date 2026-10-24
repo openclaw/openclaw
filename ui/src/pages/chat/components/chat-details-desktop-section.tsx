@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { onSettled } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
@@ -157,6 +157,8 @@ export function createDetailsDesktopReveal(
 
 /** Desktop section chrome; the caller owns the choice and the leaf owns its data. */
 export function ChatDetailsDesktopSection(props: ChatDetailsDesktopSectionProps) {
+  // Closed sections need only their heading; retain content after its first reveal.
+  const [contentMounted] = createSignal((previous = false) => previous || props.expanded);
   const reveal = createDetailsDesktopReveal(() => [
     props.expanded,
     props.presented,
@@ -191,7 +193,9 @@ export function ChatDetailsDesktopSection(props: ChatDetailsDesktopSectionProps)
         inert={!props.expanded || !props.presented}
         aria-hidden={props.expanded ? "false" : "true"}
       >
-        <div ref={reveal.content}>{props.children}</div>
+        <div ref={reveal.content}>
+          <Show when={contentMounted()}>{props.children}</Show>
+        </div>
       </div>
     </details>
   );

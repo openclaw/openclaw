@@ -146,3 +146,11 @@ Chat boot is 1,274,888 B (+91 B); New Session is 771,094 B (+206 B). The
 Cached widgets keep their normal shell and learned height before admission;
 their active content and controls wait. Dashboard board-and-transcript restoration
 keeps its existing simultaneous timing, while ordinary chat yields for the composer.
+
+After integrating current main to resolve the startup-baseline conflict, the
+combined production artifact measures 281,702 B startup gzip (7 JavaScript
+requests and 1 CSS request), 1,271,675 B chat boot, and 767,609 B New Session.
+The startup baseline records that measured value: +403 B against incoming main’s
+281,299 B baseline. This retains the shared-clock CPU improvement alongside the
+earlier transcript display. UI types and the strict comparison against the built
+original base pass. The timing pairs above predate this main integration.

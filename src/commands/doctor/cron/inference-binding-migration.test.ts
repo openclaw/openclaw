@@ -15,6 +15,7 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../../../config
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronJobConfigRevision } from "../../../cron/config-revision.js";
 import { captureCronInferenceBinding } from "../../../cron/inference-binding.runtime.js";
+import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import { loadCronJobsStore, saveCronJobsStore } from "../../../cron/store.js";
 import * as receipts from "../../../cron/store/run-receipt-store.test-support.js";
 import type { CronStoredJob } from "../../../cron/types.js";
@@ -146,8 +147,54 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
       model: "openai/gpt-5.5@openai:default",
     });
     expect(binding).toBeDefined();
+    const pinned: CronStoredJob = {
+      ...legacyJob("pinned", "openai/gpt-5.5"),
+      sessionKey: "agent:main:upgrade",
+      sessionTarget: "session:agent:main:upgrade",
+      owner: { agentId: "main", sessionKey: "agent:main:upgrade", accountId: "default" },
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:upgrade",
+        ownerAccountId: "default",
+      },
+    };
+    pinned.operatorSource = {
+      executionRevision: resolveCronOperatorExecutionRevision(pinned),
+      source: {
+        version: 1,
+        agentId: "main",
+        sessionKey: "agent:main:upgrade",
+        sessionId: "upgrade-session",
+        lifecycleRevision: "upgrade-lifecycle",
+        sourceRunId: "original-turn",
+        snapshot: {
+          profileId: "synthetic-owner",
+          scopes: ["operator.admin"],
+          assignedRole: null,
+          githubLogin: null,
+          grant: null,
+          aliasBindingIds: [],
+          authPolicy: {
+            generation: "",
+            grantGeneration: "synthetic-generation",
+            role: "operator",
+            authMethod: "token",
+          },
+          controlUiAdmin: true,
+          localOperator: false,
+          sourceIngress: "control-ui",
+        },
+      },
+    };
+    const stale: CronStoredJob = {
+      ...pinned,
+      id: "stale-source",
+      operatorSource: { ...pinned.operatorSource, executionRevision: "stale-revision" },
+    };
     const jobs = [
-      legacyJob("pinned", "openai/gpt-5.5"),
+      pinned,
+      stale,
       legacyJob("inherited"),
       { ...legacyJob("bound"), inferenceBinding: binding },
     ];
@@ -193,8 +240,28 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
     });
     expect(repaired).toEqual(
       jobs.map((job) =>
-        Object.assign({}, job, { inferenceBinding: job.inferenceBinding ?? adopted }),
+        Object.assign({}, job, {
+          inferenceBinding: job.inferenceBinding ?? adopted,
+          ...(job === pinned
+            ? {
+                operatorSource: {
+                  source: pinned.operatorSource!.source,
+                  executionRevision: resolveCronOperatorExecutionRevision(repaired[0]!),
+                },
+              }
+            : {}),
+        }),
       ),
+    );
+    expect(repaired[0]!.operatorSource!.executionRevision).not.toBe(
+      pinned.operatorSource.executionRevision,
+    );
+    expect(repaired[0]!.operatorSource!.executionRevision).toBe(
+      resolveCronOperatorExecutionRevision(repaired[0]!),
+    );
+    expect(repaired[1]!.operatorSource).toEqual(stale.operatorSource);
+    expect(repaired[1]!.operatorSource!.executionRevision).not.toBe(
+      resolveCronOperatorExecutionRevision(repaired[1]!),
     );
     expect((await readJobs(inactivePath))[0]).toMatchObject({
       ...inactive,

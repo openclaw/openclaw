@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Show, onSettled, createMemo, createSignal, merge } from "solid-js";
+import { Show, onSettled, createMemo, createSignal, lazy, merge } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { SessionGitDiff } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -9,18 +9,22 @@ import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-detail
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
-import { ChatBranchActions } from "./chat-branch-actions.tsx";
 import {
   animateDetailsDesktopEntrance,
   ChatDetailsDesktopSection,
 } from "./chat-details-desktop-section.tsx";
 import "./chat-details-environment-desktop.css";
 import type { ChatDetailsEnvironmentDesktopProps } from "./chat-details-types.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ChatPanePlacement, createChatMachinePresentation } from "./chat-pane-placement.tsx";
 import { retainedPublication, showWorkRow } from "./chat-pull-requests.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
+
+const ChatBranchActions = lazy(() => import("./chat-branch-actions.tsx"), {
+  export: "ChatBranchActions",
+});
 
 export function EnvironmentAction(props: {
   presented: boolean;
@@ -262,14 +266,16 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
                       </Show>
                       <Show when={work()}>
                         {(value) => (
-                          <ChatBranchActions
-                            branch={value().branch}
-                            branchName={branchName() ?? t("chat.pullRequests.publishPr")}
-                            status={value().status}
-                            publication={value().publication}
-                            presented={props.presented && expanded()}
-                            onDismiss={value().onDismissBranch}
-                          />
+                          <ChatLazyBoundary>
+                            <ChatBranchActions
+                              branch={value().branch}
+                              branchName={branchName() ?? t("chat.pullRequests.publishPr")}
+                              status={value().status}
+                              publication={value().publication}
+                              presented={props.presented && expanded()}
+                              onDismiss={value().onDismissBranch}
+                            />
+                          </ChatLazyBoundary>
                         )}
                       </Show>
                     </div>

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281367,
-  "reason": "Earlier scoped warm transcript with dashboard alias candidate: final artifact 281367 B gzip, unchanged requests; 20-pair remote visible median 509.3 to 304.7 ms.",
+  "startupJsGzipBytes": 281702,
+  "reason": "Combined warm transcript and shared visible clocks: measured 281702 B after integrating main. Warm transcript remote median improved from 509.3 to 304.7 ms; shared clocks retain their separately measured CPU win. Startup requests remain 7 JS and 1 CSS; accept the sub-0.5 KB change against main.",
   "updatedAt": "2026-10-24"
 }

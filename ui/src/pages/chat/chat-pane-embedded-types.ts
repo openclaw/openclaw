@@ -14,13 +14,13 @@ import type { ControlUiRegistration } from "../../plugins/control-ui-capability.
 import type { PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import type { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
 import type {
+  ChatSessionCompanionModelSelection,
   ChatSessionCompanionThread,
   ChatSessionCompanionTurn,
 } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view-frame.ts";
 import type { ChatContextPanelProps } from "./components/chat-context-panel.tsx";
-import type { ChatModelControlsProps } from "./components/chat-model-controls.tsx";
 import type { SessionWorkspaceState } from "./components/chat-session-workspace-types.ts";
 import type {
   SessionDiffProps,
@@ -100,7 +100,7 @@ export type SidebarPanelDefinitionParams = {
   activeRunId: string | null;
   pullRequests: ControlUiSessionPullRequest[];
   companion: ChatSessionCompanionThread;
-  companionModelControls?: ChatModelControlsProps;
+  onCompanionModelSelect?: (patch: ChatSessionCompanionModelSelection) => void;
   companionPresented: PresentationValue;
   companionFocusRequest: (() => boolean) | undefined;
   onCompanionSubmit: (question: string | ChatSessionCompanionTurn) => void;

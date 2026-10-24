@@ -12,6 +12,7 @@ import { GatewayConnectionWork } from "../../server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import { gatewayTestTextTransport } from "../connection-transport.test-support.js";
+import { createGatewaySnapshotFixture } from "../health-state.test-support.js";
 import { createAdmissionHandler } from "./message-handler.admission.test-support.js";
 
 const { loadConfigMock, upsertPresenceMock } = vi.hoisted(() => ({
@@ -31,19 +32,9 @@ vi.mock("../../../infra/system-presence.js", () => ({
   upsertPresence: upsertPresenceMock,
   listSystemPresence: vi.fn(() => []),
 }));
-vi.mock("../health-state.js", () => ({
-  buildGatewaySnapshot: vi.fn(() => ({
-    presence: [],
-    health: {},
-    stateVersion: { presence: 1, health: 1 },
-    uptimeMs: 1,
-    sessionDefaults: {
-      defaultAgentId: "main",
-      mainKey: "main",
-      mainSessionKey: "main",
-      scope: "per-sender",
-    },
-  })),
+vi.mock("../health-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../health-state.js")>()),
+  buildGatewaySnapshot: vi.fn(() => createGatewaySnapshotFixture()),
   getHealthCache: vi.fn(() => null),
   getHealthVersion: vi.fn(() => 1),
 }));

@@ -82,6 +82,35 @@ function createLazyMemoryTool(params: {
   };
 }
 
+const StandingIntentSchema = {
+  type: "object",
+  properties: {
+    action: { type: "string", enum: ["create", "list", "cancel"] },
+    id: { type: "string" },
+    description: { type: "string" },
+    triggerKeywords: { type: "array", items: { type: "string" } },
+    scope: {
+      type: "string",
+      enum: ["conversation", "channel", "anywhere"],
+      default: "channel",
+    },
+    senderScope: {
+      type: "string",
+      enum: ["sender", "anyone"],
+      default: "sender",
+    },
+    expiresAt: { type: "string" },
+    maxFires: { type: "integer", minimum: 1 },
+    cooldownSeconds: { type: "integer", minimum: 0 },
+    status: {
+      type: "string",
+      enum: ["pending", "armed", "fired", "done", "cancelled", "expired"],
+    },
+  },
+  required: ["action"],
+  additionalProperties: false,
+};
+
 function createLazyStandingIntentTool(
   ctx: OpenClawPluginToolContext,
   reportUnavailable: (reason: string) => void,
@@ -104,34 +133,7 @@ function createLazyStandingIntentTool(
     name: "intent",
     description:
       "Create, list, or explicitly cancel event-conditioned standing intents. A created intent is armed; the system injects the reminder automatically when it triggers. Do not deliver it early or cancel it unless the user asks. Use scheduled tasks for time-based reminders.",
-    parameters: {
-      type: "object",
-      properties: {
-        action: { type: "string", enum: ["create", "list", "cancel"] },
-        id: { type: "string" },
-        description: { type: "string" },
-        triggerKeywords: { type: "array", items: { type: "string" } },
-        scope: {
-          type: "string",
-          enum: ["conversation", "channel", "anywhere"],
-          default: "channel",
-        },
-        senderScope: {
-          type: "string",
-          enum: ["sender", "anyone"],
-          default: "sender",
-        },
-        expiresAt: { type: "string" },
-        maxFires: { type: "integer", minimum: 1 },
-        cooldownSeconds: { type: "integer", minimum: 0 },
-        status: {
-          type: "string",
-          enum: ["pending", "armed", "fired", "done", "cancelled", "expired"],
-        },
-      },
-      required: ["action"],
-      additionalProperties: false,
-    },
+    parameters: StandingIntentSchema,
     prepareArguments: (args) => {
       const params = asToolParamsRecord(args);
       return {

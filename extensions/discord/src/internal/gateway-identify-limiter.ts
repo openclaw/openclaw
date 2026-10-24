@@ -10,8 +10,7 @@ class GatewayIdentifyLimiter {
     this.nextAllowedAt = Math.max(now, nextAllowedAt) + IDENTIFY_WINDOW_MS;
     if (waitMs > 0) {
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, waitMs);
-        timer.unref?.();
+        setTimeout(resolve, waitMs).unref();
       });
     }
   }

@@ -36,6 +36,7 @@ export function cronRunLogEntryFromEvent(
     error: event.error,
     errorReason,
     summary: event.summary,
+    result: event.result,
     diagnostics: event.diagnostics,
     delivered: event.delivered,
     deliveryStatus: event.deliveryStatus,

@@ -24,6 +24,7 @@ import { getRuntimeConfig, writeConfigFile } from "../config/config.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
 import { isMissingPathError } from "../infra/errors.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import {
   agentCommandMock,
@@ -46,17 +47,9 @@ let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGate
 installGatewayTestHooks({
   scope: "suite",
   setup: async () => {
-    const module = await import("./server-kernel.js");
-    const create = module.createGatewayKernel;
-    const capture = vi.spyOn(module, "createGatewayKernel").mockImplementation(async (...args) => {
-      kernel = await create(...args);
-      return kernel;
-    });
-    try {
+    kernel = await captureGatewayKernel(async () => {
       harness = await startGatewayServerHarness();
-    } finally {
-      capture.mockRestore();
-    }
+    });
   },
   cleanup: () => harness?.close(),
 });

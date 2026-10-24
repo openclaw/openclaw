@@ -110,12 +110,11 @@ describe("non-duplex node-host plugin cancellation", () => {
   it.each(["success", "failure", "cancellation", "supersession", "different-error"] as const)(
     "settles pending asynchronous plugin listener delivery before result (%s)",
     async (outcome) => {
-      let resolveListener!: () => void;
-      let rejectListener!: (error: Error) => void;
-      const listenerCompleted = new Promise<void>((resolve, reject) => {
-        resolveListener = resolve;
-        rejectListener = reject;
-      });
+      const {
+        promise: listenerCompleted,
+        resolve: resolveListener,
+        reject: rejectListener,
+      } = createDeferred();
       const controller = new AbortController();
       let currentInvocation = true;
       let framedFailure: Error | undefined;

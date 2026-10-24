@@ -297,15 +297,11 @@ function formatCallLabel(name: string, args: Record<string, unknown>): string {
     : label;
 }
 
-function serializeConversationEntries(messages: Message[]): {
-  entries: string[];
-  /** Tool-result entries rendered with the call that produced them, for sampled input. */
-  labeledResults: Map<number, string>;
-  /** User-message entries, which carry the asks, decisions and corrections. */
-  userEntries: number[];
-} {
+function serializeConversationEntries(messages: Message[]) {
   const parts: string[] = [];
+  /** Tool-result entries rendered with the call that produced them, for sampled input. */
   const labeledResults = new Map<number, string>();
+  /** User-message entries, which carry the asks, decisions and corrections. */
   const userEntries: number[] = [];
   // Providers may repeat a call ID; each result claims the oldest unanswered call with it.
   const callLabels = createToolCallOccurrenceQueue<string>();

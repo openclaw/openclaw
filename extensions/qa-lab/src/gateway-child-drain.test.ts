@@ -2,6 +2,7 @@ import { ChildProcess } from "node:child_process";
 import type { WriteStream } from "node:fs";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackPromiseFulfillment as tracked } from "../../test-support/async-gate.test-support.js";
 import { QaGatewayChildLifecycle } from "./gateway-child-lifecycle.js";
 
 const teardown = vi.hoisted(() => ({
@@ -68,16 +69,6 @@ function fixture(kind: "gateway" | "cli" = "gateway") {
 }
 
 const stoppedResult = { process: "confirmed-stopped", errors: [] };
-function tracked<T>(promise: Promise<T>) {
-  const result = {
-    done: false,
-    promise: promise.then((value) => {
-      result.done = true;
-      return value;
-    }),
-  };
-  return result;
-}
 async function beforeClose(
   f: ReturnType<typeof fixture>,
   pending: Promise<unknown>,
@@ -110,7 +101,7 @@ describe("QA Gateway owned child drain", () => {
       await beforeClose(f, stopping.promise, async () => {
         await vi.advanceTimersByTimeAsync(0);
         before = {
-          stopped: stopping.done,
+          stopped: stopping.settled,
           logEnded: f.log.writableEnded,
           removed: teardown.remove.mock.calls.length > 0,
         };
@@ -130,10 +121,10 @@ describe("QA Gateway owned child drain", () => {
     const stopping = tracked(f.lifetime.stopProcess(f.owned));
     await beforeClose(f, stopping.promise, async () => {
       await vi.advanceTimersByTimeAsync(0);
-      expect(stopping.done).toBe(false);
+      expect(stopping.settled).toBe(false);
       expect(f.owned.stopResult).toBeUndefined();
     });
-    expect(stopping.done).toBe(true);
+    expect(stopping.settled).toBe(true);
     expect(f.owned.stopResult).toEqual(stoppedResult);
     expect(teardown.stopTree).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
@@ -157,7 +148,7 @@ describe("QA Gateway owned child drain", () => {
     const stopping = tracked(lifetime.stop());
     try {
       await vi.advanceTimersByTimeAsync(0);
-      expect(stopping.done).toBe(false);
+      expect(stopping.settled).toBe(false);
     } finally {
       child.emit("close", -1, null);
       await stopping.promise;
@@ -171,7 +162,7 @@ describe("QA Gateway owned child drain", () => {
     const stopping = tracked(f.lifetime.stop());
     await beforeClose(f, stopping.promise, async () => {
       await vi.advanceTimersByTimeAsync(999);
-      expect(stopping.done).toBe(false);
+      expect(stopping.settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       expect(await stopping.promise).toEqual({
         process: "unconfirmed",
@@ -222,7 +213,7 @@ describe("QA Gateway owned child drain", () => {
     await beforeClose(f, stopping.promise, async () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(treeStopped).toBe(true);
-      expect(stopping.done).toBe(false);
+      expect(stopping.settled).toBe(false);
     });
     await operation;
     expect(await stopping.promise).toEqual(stoppedResult);

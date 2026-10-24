@@ -57,6 +57,7 @@ import {
   readRawChatCompletionStream,
 } from "./http-stream.test-support.js";
 import { registerOpenAiHttpSamplingTests } from "./openai-http.sampling.test-support.js";
+import { browserProxyAuth } from "./server.auth.test-helpers.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommandMock,
@@ -3224,14 +3225,7 @@ describe("OpenAI-compatible HTTP API (e2e) with independent Gateways", () => {
       async () => {
         let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
         const previousGatewayAuth = testState.gatewayAuth;
-        const trustedProxyAuth = {
-          mode: "trusted-proxy" as const,
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            requiredHeaders: ["x-forwarded-proto"],
-            allowLoopback: true,
-          },
-        };
+        const trustedProxyAuth = browserProxyAuth();
         testState.gatewayAuth = trustedProxyAuth;
         try {
           await writeGatewayConfig({
