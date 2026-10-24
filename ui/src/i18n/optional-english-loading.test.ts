@@ -43,6 +43,40 @@ it("keeps a cold roster metadata failure readable before its view catalog loads"
   }
 });
 
+it("keeps organization menus lazy while cold session controls retain readable copy", async () => {
+  const { en, manager } = await loadI18n();
+  const sessionsView = en.sessionsView;
+  await manager.setLocale("de");
+  await import("../components/app-sidebar-catalog-menu.tsx");
+  await import("../components/session-menu-access.ts");
+  await import("../pages/chat/chat-pane-native-session-actions.ts");
+  await import("../pages/chat/chat-pane-placement.ts");
+  await import("../lib/sessions/session-menu-navigation.ts");
+  const { formatSessionArchiveReason } = await import("../lib/sessions/session-archive-reason.ts");
+
+  expect(manager.t("sessionsView.renameGroupTitle")).toBe("sessionsView.renameGroupTitle");
+  expect(manager.t("sessionsView.pinRootSessionsOnly")).toBe(
+    "Only root sessions can be pinned; pin the parent session instead.",
+  );
+  expect(manager.t("sessionsView.stopCloudWorkerConfirm", { session: "Example" })).toBe(
+    'Stop the cloud worker for "Example"?',
+  );
+  expect(manager.t("sessionsView.deleteSessionStale", { session: "Example" })).toBe(
+    'Gateway connection replaced before "Example" was deleted. Try again.',
+  );
+  expect(formatSessionArchiveReason("restart-recovery")).toBe(
+    "Archived when a replacement session was recovered",
+  );
+
+  await import("../components/session-menu-actions.ts");
+  expect(manager.t("sessionsView.renameGroupTitle", { group: "Example" })).toBe(
+    'Rename group "Example"',
+  );
+  expect(en.sessionsView).toBe(sessionsView);
+  expect(manager.t("common.health")).toBe("Gesundheit");
+  expect(manager.getLocale()).toBe("de");
+});
+
 it("loads Details copy through its lazy view while preserving the active locale and namespace", async () => {
   const { en, manager } = await loadI18n({
     common: { health: "Gesundheit" },

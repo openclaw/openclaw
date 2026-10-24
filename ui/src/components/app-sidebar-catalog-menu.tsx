@@ -2,8 +2,8 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Owns catalog-row menu state, actions, focus anchor, and rendering for AppSidebar.
 import { Show, type Component } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
+import { registerSessionControlsEnglish } from "../i18n/locales/en-session-controls.ts";
 import { registerSessionNavigationEnglish } from "../i18n/locales/en-session-navigation.ts";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
@@ -20,7 +20,7 @@ import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts"
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 
 registerEnglishCatalog(registerSessionNavigationEnglish);
-registerEnglishCatalog(registerSessionOrganizationEnglish);
+registerEnglishCatalog(registerSessionControlsEnglish);
 
 type SidebarCatalogSessionMenuState = CatalogSessionMenuRequest & { x: number; y: number };
 

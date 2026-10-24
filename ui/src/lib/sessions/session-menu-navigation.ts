@@ -4,7 +4,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
-import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+import { registerSessionControlsEnglish } from "../../i18n/locales/en-session-controls.ts";
 import type { ChatHistoryResult } from "../../pages/chat/chat-history-snapshot.ts";
 import { buildChatMarkdown } from "../../pages/chat/export.ts";
 import { nativeHistoryMessageIdentity } from "../chat/history-message-identity.ts";
@@ -20,7 +20,7 @@ import {
 } from "./route-navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
 
-registerSessionOrganizationEnglish();
+registerSessionControlsEnglish();
 
 type SessionNavigationActionKind =
   | "copy-session-id"

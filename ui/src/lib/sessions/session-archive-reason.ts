@@ -1,8 +1,8 @@
 import type { SessionEntryArchiveReason } from "../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../i18n/index.ts";
-import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+import { registerSessionControlsEnglish } from "../../i18n/locales/en-session-controls.ts";
 
-registerSessionOrganizationEnglish();
+registerSessionControlsEnglish();
 
 const ARCHIVE_REASON_LABELS = {
   manual: "sessionsView.archiveReasonManual",

@@ -1,4 +1,5 @@
 import type { TranslationMap } from "../lib/types.ts";
+import { registerSessionControlsEnglish } from "./en-session-controls.ts";
 import { en } from "./en.ts";
 
 // The ordered source retains hot labels by reference; menu and management copy loads on use.
@@ -51,12 +52,15 @@ const enSessionOrganization = {
     ownedBy: en.sessionsView.ownedBy,
     archivedBy: en.sessionsView.archivedBy,
     archiveReason: "Archive reason",
-    archiveReasonManual: "Archived manually",
-    archiveReasonAgeRetention: "Automatically archived by age retention",
+    archiveReasonManual: registerSessionControlsEnglish.catalog.sessionsView.archiveReasonManual,
+    archiveReasonAgeRetention:
+      registerSessionControlsEnglish.catalog.sessionsView.archiveReasonAgeRetention,
     archiveReasonActiveSessionCap:
-      "Automatically archived because the active-session limit was reached",
-    archiveReasonStaleDashboard: "Automatically archived after dashboard inactivity",
-    archiveReasonRestartRecovery: "Archived when a replacement session was recovered",
+      registerSessionControlsEnglish.catalog.sessionsView.archiveReasonActiveSessionCap,
+    archiveReasonStaleDashboard:
+      registerSessionControlsEnglish.catalog.sessionsView.archiveReasonStaleDashboard,
+    archiveReasonRestartRecovery:
+      registerSessionControlsEnglish.catalog.sessionsView.archiveReasonRestartRecovery,
     viewingNow: en.sessionsView.viewingNow,
     owners: en.sessionsView.owners,
     allOwners: en.sessionsView.allOwners,
@@ -234,7 +238,7 @@ const enSessionOrganization = {
     customIconHintNoShortcut: "Paste an emoji or SVG.",
     removeIcon: "Remove icon",
     pinSession: en.sessionsView.pinSession,
-    pinRootSessionsOnly: "Only root sessions can be pinned; pin the parent session instead.",
+    pinRootSessionsOnly: registerSessionControlsEnglish.catalog.sessionsView.pinRootSessionsOnly,
     unpinSession: en.sessionsView.unpinSession,
     markUnread: "Mark as unread",
     markRead: "Mark as read",
@@ -252,9 +256,10 @@ const enSessionOrganization = {
     splitBelow: "Split below",
     workspaceEditors: "Workspace · editor",
     resetAppearance: "Reset to default",
-    copyTranscriptChanged: "Conversation changed while copying. Try again.",
-    openWindowBlocked: "Allow pop-ups for this site, then try again.",
-    splitUnavailable: "Open a conversation on a wide screen to use split view.",
+    copyTranscriptChanged:
+      registerSessionControlsEnglish.catalog.sessionsView.copyTranscriptChanged,
+    openWindowBlocked: registerSessionControlsEnglish.catalog.sessionsView.openWindowBlocked,
+    splitUnavailable: registerSessionControlsEnglish.catalog.sessionsView.splitUnavailable,
     openPullRequest: "Open PR",
     openInEditorMenu: "Open in",
     archiveSession: en.sessionsView.archiveSession,
@@ -279,8 +284,10 @@ const enSessionOrganization = {
     sessionNameInUse: "A session with this name already exists.",
     newGroupMoveSkipped:
       "Group created, but the move was skipped because the list changed. Move from the row menu.",
-    stopCloudWorkerConfirm: 'Stop the cloud worker for "{session}"?',
-    stopCloudWorkerConfirmAction: "Stop worker",
+    stopCloudWorkerConfirm:
+      registerSessionControlsEnglish.catalog.sessionsView.stopCloudWorkerConfirm,
+    stopCloudWorkerConfirmAction:
+      registerSessionControlsEnglish.catalog.sessionsView.stopCloudWorkerConfirmAction,
     stopCloudWorkerStale:
       'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
     deleteSessionConfirm:
@@ -322,16 +329,16 @@ const enSessionOrganization = {
       "The active turn will be interrupted. Partial output is not replayed; send the next turn again after the move.",
     moveSessionAction: "Move session",
     moveSessionCatalogFailed: "Could not load available destinations.",
-    moveSessionFailed: "Move failed",
+    moveSessionFailed: registerSessionControlsEnglish.catalog.sessionsView.moveSessionFailed,
     moveSessionGatewayTarget: "Gateway",
     movingSession: "Moving to {target}…",
     movingSessionGeneric: "Moving session…",
-    stopCloudWorker: "Stop cloud worker…",
+    stopCloudWorker: registerSessionControlsEnglish.catalog.sessionsView.stopCloudWorker,
     initialTurnPausedByWorkerStop:
       "Worker stop requested. Review the initial message before retrying.",
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
-    deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
+    deleteSessionStale: registerSessionControlsEnglish.catalog.sessionsView.deleteSessionStale,
     deleteSessionIdentityMissing: en.sessionsView.deleteSessionIdentityMissing,
     deleteSessionsStale:
       "Gateway connection replaced before {count} sessions were deleted. Try again.",
