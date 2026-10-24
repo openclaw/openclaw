@@ -350,6 +350,10 @@ the preview opens a nested file only when a complete workspace search finds exac
 one matching filename. Ambiguous or incomplete searches keep the missing-file error;
 use an explicit path to select the intended file.
 
+Opening a file collapses the file tree to make room for its preview. Use **Toggle
+file tree** to browse another file, or **Show in Files** to reveal the current file
+in its folder with the **All** filter.
+
 If the **Files** panel shows a listing error, select **Retry** to load the current
 folder or search again. This keeps the session and query in place; access checks
 still apply, and a failed retry displays its error.
