@@ -1196,9 +1196,20 @@ const reviewedOperations = new Map([
       },
       {
         tier: "T3",
-        operations: ["readSessionGenerationIdsForKeys", "deleteSqliteSessionStateRows"],
+        operations: ["deleteSqliteSessionStateRows"],
         evidence:
-          "Generation reads serve lifecycle planning, deletion planning, maintenance apply and Doctor canonical-repair aliases. Lifecycle/reclamation/purge native branches require worker or maintenance custody; deletion planning with expectedDatabaseIdentity is produced only by Doctor legacy repair. Physical deletion is private to materialized-state deletion, called by the same lifecycle/reclamation/purge kernels and worker or reclamation maintenance finalization.",
+          "Physical deletion is private to materialized-state deletion, called by lifecycle/reclamation/purge kernels and worker or reclamation maintenance finalization. Native branches require worker or maintenance custody.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-references.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readSessionGenerationIdsForKeys"],
+        evidence:
+          "Moved unchanged from lifecycle-state.ts. Generation reads serve lifecycle planning, deletion planning, maintenance apply and Doctor canonical-repair aliases. Native lifecycle/reclamation/purge branches require worker or maintenance custody; deletion planning with expectedDatabaseIdentity is produced only by Doctor legacy repair.",
       },
     ],
   ],
@@ -1533,6 +1544,28 @@ const reviewedOperations = new Map([
         operations: ["recoverManagedUpdateLeaseJournal.read"],
         evidence:
           "Explicit update recover CLI -> recoverImmutableUpdate -> withImmutableUpdateOwner({ recover: true }) only; ordinary lease and Gateway readers never call this cold-journal admission",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-claim-repair-copy.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["copySessionClaimForRepair"],
+        evidence:
+          "Extracted from legacy-main-session-migration-operations.ts:copyClaimCrossStore. Its only callers are processIdenticalClaims after doctor-fix admission and doctor-relative-session-store.ts under exclusive Doctor maintenance; detect mode returns before copying. Source claims are rechecked inside the destination write transaction.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-delivery-repair.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["copySessionDeliveriesForRepair", "readSessionDeliveryRepairInventory"],
+        evidence:
+          "Copy extracted from the reviewed copySqliteSessionOwnedStateForRepair operation in canonical-repair.ts; its other caller is Doctor-only copySessionClaimForRepair. Inventory is called only by doctor-relative-session-store-preservation.ts for offline pre-copy verification and completion fingerprints. No Gateway runtime caller.",
       },
     ],
   ],

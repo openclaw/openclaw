@@ -31,23 +31,13 @@ export type FeishuDriveCommentCard = {
 };
 
 export class FeishuReplyCommentError extends Error {
-  httpStatus?: number;
   feishuCode?: number | string;
-  feishuMsg?: string;
   feishuLogId?: string;
 
-  constructor(params: {
-    message: string;
-    httpStatus?: number;
-    feishuCode?: number | string;
-    feishuMsg?: string;
-    feishuLogId?: string;
-  }) {
+  constructor(params: { message: string; feishuCode?: number | string; feishuLogId?: string }) {
     super(params.message);
     this.name = "FeishuReplyCommentError";
-    this.httpStatus = params.httpStatus;
     this.feishuCode = params.feishuCode;
-    this.feishuMsg = params.feishuMsg;
     this.feishuLogId = params.feishuLogId;
   }
 }
@@ -179,12 +169,6 @@ export async function requestFeishuApi<T>(
 type ParsedCommentDocumentRef = {
   fileType?: CommentFileType;
   fileToken?: string;
-};
-
-type ParsedCommentMention = {
-  userId: string;
-  displayText: string;
-  isBotMention: boolean;
 };
 
 type ParsedCommentLinkedDocumentKind =
@@ -334,7 +318,11 @@ export function parseCommentContentElements(params: {
   const elements = Array.isArray(params.elements) ? params.elements : [];
   const plainTextParts: string[] = [];
   const semanticTextParts: string[] = [];
-  const mentions: ParsedCommentMention[] = [];
+  const mentions: {
+    userId: string;
+    displayText: string;
+    isBotMention: boolean;
+  }[] = [];
   const linkedDocuments: ParsedCommentLinkedDocument[] = [];
   const botIds = new Set(normalizeTrimmedStringList(Array.from(params.botOpenIds ?? [])));
   const linkedDocumentKeys = new Set<string>();

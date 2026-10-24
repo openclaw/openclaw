@@ -386,13 +386,27 @@ export class ComposedGatewayHarness {
       admissionDeadlineMs: 5_000,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
     });
+    const transcript = new WorkerTranscriptCommitClient(connection, {
+      runEpoch: admission.ownerEpoch,
+      baseLeafId: assignment.transcript.baseLeafId,
+      initialSeq: assignment.transcript.nextSeq,
+    });
     return {
       connection,
-      transcript: new WorkerTranscriptCommitClient(connection, {
-        runEpoch: admission.ownerEpoch,
-        baseLeafId: assignment.transcript.baseLeafId,
-        initialSeq: assignment.transcript.nextSeq,
-      }),
+      async start() {
+        await connection.start();
+        const response = await connection.rpc.request("turn-admission", {
+          runEpoch: admission.ownerEpoch,
+          systemPrompt: assignment.systemPrompt ?? "",
+          prompt: typeof assignment.prompt === "string" ? assignment.prompt : "fault injection",
+          messages: [],
+        });
+        if (!response.ok || response.payload.outcome !== "allow") {
+          throw new Error("Fault fixture input admission rejected");
+        }
+        transcript.admitInput(response.payload.baseLeafId);
+      },
+      transcript,
       live: new WorkerLiveEventClient(connection, {
         runEpoch: admission.ownerEpoch,
         initialAckedSeq: assignment.liveEvents.ackedSeq,

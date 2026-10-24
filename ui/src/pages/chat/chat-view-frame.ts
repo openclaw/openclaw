@@ -13,7 +13,6 @@ import type {
   ChatQueueItem,
   ChatSelectionSource,
 } from "../../lib/chat/chat-types.ts";
-import { t } from "../../lib/reactive/i18n.ts";
 import { isSessionRunVisuallyActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -259,11 +258,8 @@ export function createChatViewFrame(
     queuedMessageAction: props.placementStartup?.initialTurn
       ? {
           id: props.placementStartup.initialTurn.id,
-          label:
-            props.placementStartup.action === "check-delivery"
-              ? t("chat.queue.checkDelivery")
-              : undefined,
           onAction: props.connected ? props.onRetrySessionPlacementStartup : undefined,
+          onDiscard: props.onDiscardSessionPlacementStartup,
         }
       : undefined,
     onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,

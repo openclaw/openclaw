@@ -314,10 +314,11 @@
   height: 20px;
 }
 
-/* Match the inset drawing and stroke of the sibling check and clock SVGs. */
+/* Keep the spinner and pending circle aligned with the other inset glyphs. */
 .task-progress-details
   :is(.session-progress-card__current-marker, .session-progress-card__step-marker)
-  > .session-run-spinner {
+  > .session-run-spinner,
+.task-progress-details .session-progress-card__step-marker[data-status="pending"] > svg {
   width: calc(var(--session-progress-marker-size) - 2px);
   height: calc(var(--session-progress-marker-size) - 2px);
   border-width: 1px;
@@ -518,18 +519,6 @@
   border-block-start: 1px solid var(--border);
 }
 
-.task-progress-details__empty {
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-  color: var(--muted);
-  text-align: center;
-}
-
-.task-progress-details__empty p {
-  margin: 0;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .task-progress-details__refresh[data-pending="true"] svg {
     animation: none;
@@ -546,4 +535,9 @@
   > .chat-mobile-details-page__body {
   padding: 16px 16px calc(88px + env(safe-area-inset-bottom));
   scroll-padding-bottom: calc(88px + env(safe-area-inset-bottom));
+
+  &:has(> .task-progress-details--mobile > openclaw-panel-empty-state) {
+    padding-block-start: 0;
+    padding-inline: 0;
+  }
 }

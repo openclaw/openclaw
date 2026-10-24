@@ -8,6 +8,7 @@ import {
   type ToolCall,
 } from "openclaw/plugin-sdk/llm";
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import {
   buildGuardedModelFetch,
   buildAssistantMessage,
@@ -16,6 +17,7 @@ import {
   notifyProviderHttpResponse,
   parseTerminalToolCallArguments,
   iterateSseFrames,
+  mergeTransportHeaders,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -278,13 +280,17 @@ export function createRadiusStreamFn(): StreamFunction<string, RadiusStreamOptio
         });
         response = await guardedFetch(`${model.baseUrl.replace(/\/+$/u, "")}/messages`, {
           method: "POST",
-          headers: {
-            authorization: `Bearer ${options.apiKey}`,
-            accept: "text/event-stream",
-            "content-type": "application/json",
-            ...model.headers,
-            ...options.headers,
-          },
+          headers: omitNullRequestHeaders(
+            mergeTransportHeaders(
+              {
+                authorization: `Bearer ${options.apiKey}`,
+                accept: "text/event-stream",
+                "content-type": "application/json",
+              },
+              model.headers,
+              options.headers,
+            ),
+          ),
           body: JSON.stringify(payload),
           signal: options.signal,
         });

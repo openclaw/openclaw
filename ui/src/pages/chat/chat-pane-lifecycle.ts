@@ -25,6 +25,7 @@ import * as chatAvatars from "./chat-avatar.ts";
 import { CHAT_ROUTE_READY_EVENT } from "./chat-history-events.ts";
 import { retireInitialChatSnapshot } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import {
   type ChatAttachmentGatewayOwner,
   ChatPaneComposerHandoff,
@@ -510,8 +511,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         const state = this.state;
         if (state) {
           // Admit each accepted initial turn before waking followers parked behind recovery.
-          admitChatSubmission(state, getChatPendingInputs(state)?.page.items);
+          const admitted = admitChatSubmission(state, getChatPendingInputs(state)?.page.items);
           if (!parseCatalogSessionKey(state.sessionKey)) {
+            // A replay ACK may refer to collected input already outside the loaded user rows.
+            if (admitted) {
+              void loadChatHistory(state);
+            }
             void resumeStoredChatOutboxes(state);
           }
         }
@@ -638,8 +643,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       gateway: this.context.gateway.snapshot,
       isConnected: () => this.isConnected,
       isPresented: () => this.presented && this.visuallyPresented,
-      commit: (layout, automaticResource) =>
-        this.commitSidebarLayout(layout, { persist: false, automaticResource }),
+      commit: (layout, options) => this.commitSidebarLayout(layout, { ...options, persist: false }),
     });
     if (this.state) {
       const layout = this.initializeBrowserSidebarLayout(this.state.sidebarLayout);

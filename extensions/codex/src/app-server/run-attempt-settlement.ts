@@ -5,11 +5,11 @@ import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
 import { readCodexRetainedBackgroundCommands } from "./native-process-authority.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 
 export async function beginCodexAttemptSettlement(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   notifications: CodexAttemptNotificationController,
   activeTurn: CodexAttemptActiveTurn,

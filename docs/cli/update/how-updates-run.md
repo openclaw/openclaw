@@ -51,6 +51,9 @@ consumes the shared deadline, so it cannot extend the update's overall budget.
 These checks belong to the installed updater; a candidate cannot change an
 older updater's already-running readiness wait.
 
+On Windows, Doctor restoration uses the same cold-start readiness allowance as
+Gateway start and restart, including when Doctor runs as part of update repair.
+
 Before replacing the same installation, the updater observes the incumbent Gateway once. Failed
 readiness produces a warning and prevents automatic rollback from restarting it;
 the updater does not wait for the incumbent to recover before replacing it.

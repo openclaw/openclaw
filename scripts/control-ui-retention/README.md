@@ -4,6 +4,26 @@ Run against an already built production renderer. This is an opt-in memory
 workload, not part of routine UI tests. Playwright runs on Node; the application
 uses the production Solid runtime, native clocks, and synthetic Gateway data.
 
+The bounded dependency probe does not need an application build. It bundles the
+installed runtime in production, development, and observe modes and uses a fresh
+Chromium document for each, so the first-select retention cannot hide behind a
+warm runtime. Run only this file with:
+
+```sh
+OPENCLAW_VITEST_RUNTIME=node node scripts/run-vitest.mjs run --config scripts/control-ui-retention/vitest.config.ts --configLoader runner scripts/control-ui-retention/dependency-retention.test.ts --maxWorkers=1
+```
+
+The Node override is required for Playwright. After disposing the rendered
+select, two explicit collections must release both it and its form; a separate
+unowned object checks that collection actually ran.
+The second probe disposes an unobserved pending computation with no subsequent
+reactive work. Its payload and root must collect while the scheduler is idle. The
+third probe rejects an async source while idle, then disposes an unobserved reader
+in a second root. Status propagation can queue that reader without a staged flag;
+its payload and root must still collect while the source root remains live. An
+explicit `flush()` is a no-op when no work is scheduled. A separate regression
+requires a rejected async replacement to clean up its previous committed frame.
+
 ```sh
 pnpm ui:build
 OPENCLAW_VITEST_RUNTIME=node node scripts/run-vitest.mjs run --config scripts/control-ui-retention/vitest.config.ts --configLoader runner --maxWorkers=1
@@ -33,7 +53,7 @@ nodes and shallow bytes, live/disposed Solid owners, global event listeners by
 event type, and active timer/interval IDs. The timer probe retains IDs only.
 Before each GC the mock's request log is cleared and its count recorded; it must
 not masquerade as product retention. Heap measurements still include other
-mock/probe state. Owner counts use the installed rc.16 production object shape;
+mock/probe state. Owner counts use the installed rc.18 production object shape;
 unknown flags are reported, never silently counted as live. These metrics are
 report-only until repeated evidence supports a stable budget.
 

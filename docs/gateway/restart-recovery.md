@@ -24,7 +24,9 @@ Explicit session Stop/cancel remains terminal. The crash-loop breaker, recovery
 retry budgets, current-authority checks, and archived/reset exclusions still apply.
 Before accepting another message, the Gateway retires leftover recovery records
 whose runs are all recorded terminal and have no remaining execution or delivery
-owner. This lets a stopped conversation continue without resetting its history.
+owner. For a killed conversation, it also releases unfinished fences after checking
+that no run or session work remains active and no final delivery is pending. This
+lets a stopped conversation continue without resetting its history.
 Cron owns recovery of interrupted scheduled turns. An enabled, unchanged,
 time-scheduled agent job interrupted before delivery gets one fresh retry after
 startup, including one-shot jobs. Its original run remains recorded as interrupted.
@@ -53,6 +55,10 @@ An accepted child continuation, including a child created with `sessions_spawn`
 or an interrupted child resumed with `sessions_send`,
 keeps the restored operator's current identity and permission checks independently
 of the parent's recovery claim. Completing the parent does not cancel that child.
+A fresh authenticated human follow-up in a completed task session retains its own
+recovery source. After a restart, the child recovery owner resumes that follow-up
+from its saved history without another user message or reuse of the original
+parent turn's grant.
 Provider retries reuse the child's retained authority, including when session tools
 are prepared again after a transient provider error.
 Explicitly stopping the parent still cancels its children. Revoking the operator,
@@ -1204,6 +1210,12 @@ its recovery ownership together with its delivery claim, so the next agent turn
 can proceed. The notice and terminal deduplication evidence survive another
 restart; completed work is not replayed.
 
+A recovery continuation for a legacy saved final without a delivery intent or
+queue owner may fail terminally. In that case, recovery preserves the saved
+reply in the local transcript as delivery-unconfirmed and retires its pending
+marker. Later Gateway boots do not replay that failed continuation. An interrupted
+continuation or a newer pending delivery keeps its own recovery ownership.
+
 Message-tool-only replies use a second durable correlation. Before a terminal
 same-conversation send reaches the channel, the gateway records an unresolved
 delivery intent on the exact session and source turn. A confirmed provider
@@ -1411,6 +1423,17 @@ parent ownership still matches. Older or stale records remain ordinary completio
 history; they cannot add new instructions to continue those child sessions.
 Current reset already revokes its live saved wakes. Recorded outcomes and historical
 child metadata are retained.
+
+If a restart interrupts a running requester batch wake, its replay includes the
+same restart-interruption guidance as other recovered turns: uncertain tool
+outcomes must be verified before repeating actions. The notice belongs to that
+turn's input, for both embedded and Codex runtimes. The original accepted settle
+content and replay identity stay unchanged; normal batch wakes receive no notice.
+The accepted input owns this recovery fact, including when a crash leaves a
+committed prompt without a terminal processing receipt. The requester's visible
+session status can still describe its earlier yielded turn, so it does not decide
+whether the replay needs the notice. Codex may assign the replay a new native turn
+identity; the existing hidden transcript input keeps its inter-session provenance.
 
 On upgrade, unfinished runs with the typed Gateway-restart interruption resume
 through the same startup path. Already-settled interruption outcomes are not

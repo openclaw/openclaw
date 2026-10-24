@@ -327,9 +327,6 @@ export function ContextNotice(props: ContextNoticeProps) {
     return context ? { "--ctx-color": context.color, "--ctx-bg": context.bg } : undefined;
   };
   const dashOffset = () => RING_CIRCUMFERENCE * (1 - (model()?.pct ?? 0) / 100);
-  const providerCosts = createMemo(() =>
-    model() ? latestProviderCostStats(props.messages) : null,
-  );
   // Plan-billed sessions hide dollar estimates: subscription usage is bounded
   // by the plan windows below, and per-token math would misread as real spend.
   // Billing mode is provider-level: session rows do not record which auth
@@ -340,20 +337,24 @@ export function ContextNotice(props: ContextNoticeProps) {
   const usageHref = () => `${normalizeBasePath(props.providerUsage?.basePath ?? "")}/usage`;
   const formatStat = (value: number | null) =>
     value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);
-  const costTitle = () => {
-    const costs = providerCosts();
-    return costs
-      ? (["input", "output", "cacheRead", "cacheWrite"] as const)
-          .filter((key) => costs[key] !== undefined && costs[key]! > 0)
-          .map((key) => `${t(`usage.breakdown.${key}`)} ${formatContextCost(costs[key]!)}`)
-          .join(" · ") || undefined
-      : undefined;
-  };
   return (
     <Show when={Boolean(model() || currentGroup())}>
       {(_visible) => {
         const [open, setOpen] = createSignal(false);
         const [visited, setVisited] = createSignal(false);
+        const providerCosts = createMemo(
+          () => (open() && model() ? latestProviderCostStats(props.messages) : null),
+          { lazy: true },
+        );
+        const costTitle = () => {
+          const costs = providerCosts();
+          return costs
+            ? (["input", "output", "cacheRead", "cacheWrite"] as const)
+                .filter((key) => costs[key] !== undefined && costs[key]! > 0)
+                .map((key) => `${t(`usage.breakdown.${key}`)} ${formatContextCost(costs[key]!)}`)
+                .join(" · ") || undefined
+            : undefined;
+        };
         const pickerRef = createChatPickerOverlay((details) => {
           setOpen(details.open);
           if (details.open) {

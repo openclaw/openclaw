@@ -612,6 +612,12 @@ export abstract class ChatPaneStateOwner {
       this.context.placementStartup.retry(sessionKey);
     }
   };
+  protected readonly discardSessionPlacementStartup = () => {
+    const sessionKey = this.state?.sessionKey;
+    if (sessionKey) {
+      this.context.placementStartup.discard(sessionKey);
+    }
+  };
   protected headerRenameInitialValue = "";
   protected headerCopiedTimer: number | null = null;
   protected composerPrefillAttentionTimer: number | null = null;

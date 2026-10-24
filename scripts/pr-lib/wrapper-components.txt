@@ -40,10 +40,13 @@ packages/gateway-protocol/src/schema/since.ts
 packages/gateway-protocol/src/schema/user-profile-constants.ts
 packages/gateway-protocol/src/schema/worker-admission.ts
 packages/gateway-protocol/src/schema/worker-computer.ts
+packages/gateway-protocol/src/schema/worker-exec-approval.ts
 packages/gateway-protocol/src/schema/worker-gateway-tool.ts
+packages/gateway-protocol/src/schema/worker-inference.ts
 packages/gateway-protocol/src/schema/worker-protocol-constants.ts
 packages/gateway-protocol/src/schema/worker-protocol-primitives.ts
 packages/gateway-protocol/src/schema/worker-session-tools.ts
+packages/gateway-protocol/src/schema/worker-turn-admission.ts
 packages/gateway-protocol/src/schema/worktrees.ts
 packages/gateway-protocol/src/secret-ref-contract.ts
 packages/gateway-protocol/src/session-agent-status.ts
@@ -64,6 +67,7 @@ packages/llm-core/src/usage-cost.ts
 packages/llm-core/src/utils/assistant-message-events.ts
 packages/llm-core/src/utils/diagnostics.ts
 packages/llm-core/src/utils/event-stream.ts
+packages/llm-core/src/utils/request-headers.ts
 packages/llm-core/src/validation.ts
 packages/media-core/src/constants.ts
 packages/media-core/src/file-name.ts
@@ -250,6 +254,7 @@ scripts/watch-pr-ci.mjs
 scripts/watch-pr-ci.mts
 scripts/windows-cmd-helpers.mjs
 src/acp/event-ledger-bytes.ts
+src/agents/agent-activity-delegation.ts
 src/agents/agent-bundle-mcp-names.ts
 src/agents/agent-create-error.ts
 src/agents/agent-delete-session-store-safety.kernel.ts
@@ -996,6 +1001,7 @@ src/infra/gateway-supervision.ts
 src/infra/git-commit.ts
 src/infra/git-content-budget.ts
 src/infra/git-exec.ts
+src/infra/git-maintenance-env.ts
 src/infra/git-network-retry.ts
 src/infra/git-operation-timing.ts
 src/infra/git-operation.worker.ts
@@ -1050,7 +1056,6 @@ src/infra/net/undici-family-policy.ts
 src/infra/net/undici-global-dispatcher.ts
 src/infra/net/undici-runtime.ts
 src/infra/node-compile-cache-env.ts
-src/infra/node-options.ts
 src/infra/node-runner-inventory.ts
 src/infra/node-runtime-executable.ts
 src/infra/node-sqlite.ts
@@ -1093,10 +1098,12 @@ src/infra/restart-stale-pids.ts
 src/infra/retry-attempt-errors.ts
 src/infra/retry.ts
 src/infra/root-walk.ts
+src/infra/runtime-capabilities.ts
 src/infra/runtime-dependency-ownership.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-manifest.ts
 src/infra/runtime-process-url.ts
+src/infra/runtime-profile.ts
 src/infra/runtime-worker-generation.ts
 src/infra/runtime-worker-url.ts
 src/infra/safe-cwd.ts
@@ -1315,6 +1322,7 @@ src/infra/worker-native-lifecycle.worker.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-task-port.ts
 src/infra/worker-pool-sizing.ts
+src/infra/worker-postgres-bridge-census.ts
 src/infra/worker-request-diagnostics.ts
 src/infra/worker-request-kind.ts
 src/infra/worker-task-capacity.ts
@@ -1553,7 +1561,6 @@ src/plugins/provider-thinking.ts
 src/plugins/registry-runtime-binding.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
-src/plugins/plugin-bundled-reload.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-state-operation-module-loader.ts
 src/plugins/plugin-state-operation-source.ts
@@ -1926,6 +1933,7 @@ src/state/openclaw-agent-transcript-payload-migration.ts
 src/state/openclaw-agent-write-layout-migration.ts
 src/state/openclaw-agent-index-retirement-migration.ts
 src/state/openclaw-agent-vector-decoder-migration.ts
+src/state/openclaw-agent-vector-search-migration.ts
 src/state/openclaw-agent-write-admission.ts
 src/state/openclaw-agent-write-admission-state.ts
 src/state/openclaw-database-preflight-agent-scheduler.ts
@@ -1994,6 +2002,7 @@ src/state/openclaw-state-db-startup-checkpoint.ts
 src/state/openclaw-state-db-table-retirements.ts
 src/state/openclaw-state-db-task-delivery-recovery.ts
 src/state/openclaw-state-db-transaction.ts
+src/state/openclaw-state-postgres-admission.ts
 src/state/openclaw-state-postgres-snapshot-context.ts
 src/state/openclaw-state-postgres-snapshot.ts
 src/state/openclaw-state-schema-retired.ts
@@ -2047,6 +2056,7 @@ src/state/openclaw-state-read-pool.ts
 src/state/openclaw-state-read-request.ts
 src/state/openclaw-state-read-scope.ts
 src/state/openclaw-state-read-snapshot-source.ts
+src/state/openclaw-state-read-stream.ts
 src/state/openclaw-state-read-worker.ts
 src/state/openclaw-state-read.worker.ts
 src/state/openclaw-state-schema-compatibility.ts
@@ -2355,6 +2365,7 @@ packages/gateway-protocol/src/schema/users.ts
 packages/gateway-protocol/src/schema/wizard.ts
 packages/markdown-core/src/fences.ts
 packages/markdown-core/src/image-code-retention.ts
+packages/markdown-core/src/list-code-retention.ts
 packages/markdown-core/src/reference-definition-retention.ts
 packages/markdown-core/src/reasoning-tag-parser.ts
 packages/markdown-core/src/reasoning-tags.ts
@@ -2561,6 +2572,7 @@ packages/markdown-core/package.json
 src/state/openclaw-agent-db-worker-admission.ts
 src/config/sessions/legacy-compaction-history.ts
 src/config/sessions/session-accessor.sqlite-references.ts
+src/config/sessions/session-accessor.sqlite-reference-projection.ts
 src/config/sessions/session-actor-memory-conversation-owner.ts
 src/config/sessions/session-actor-memory-lifecycle-artifacts.ts
 src/config/sessions/session-actor-memory-message-rewrite.ts

@@ -29,7 +29,10 @@ import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import { ExecProcessPreflightError } from "./bash-tools.exec-launch.js";
-import { EXEC_MANUAL_COLLECTION_FOLLOW_UP } from "./bash-tools.exec-output.js";
+import {
+  buildExecRuntimeErrorOutcome,
+  EXEC_MANUAL_COLLECTION_FOLLOW_UP,
+} from "./bash-tools.exec-output.js";
 import {
   assertSupportedExecParams,
   createExecRequestPreparation,
@@ -39,7 +42,6 @@ import {
   resolvePreparedExecEnvironment,
 } from "./bash-tools.exec-request-preparation.js";
 import {
-  buildExecRuntimeErrorOutcome,
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PENDING_MAX_OUTPUT,
   type ExecProcessHandle,
@@ -200,6 +202,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     finalizeBeforeToolCallParams: requestPreparation.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal, onUpdate) => {
       signal?.throwIfAborted();
+      const approvalTransport = defaults?.createApprovalTransport?.(toolCallId, signal);
       const assertSourceActive = captureAgentToolSourceExecutionGuard(signal);
       assertSupportedExecParams(args);
       // Capture settings and cancellation per execution; unused reviewers must not load model runtime.
@@ -440,6 +443,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         });
 
         const hostApprovalParams = () => ({
+          approvalTransport,
           command: params.command,
           toolCallId,
           env,
@@ -576,6 +580,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           onUpdate,
           beforeSpawn: gatewayApproval?.revalidateBeforeExecution,
           assertCurrent: gatewayApproval?.assertCurrent,
+          approvalTransport,
           initiateSpawn: gatewayApproval?.initiateSpawn,
           releaseSpawn: gatewayApproval?.releaseSpawn,
           onSettledBeforeNotify: () => {

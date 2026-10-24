@@ -372,6 +372,7 @@ it("preserves bottom-up directory membership and canonical output across input o
       includePaths: new Set(paths),
       preserveDirectories: new Set(["preserved"]),
     });
+  const opened = vi.spyOn(fs, "opendir");
   const first = await capture(included);
   const reversed = await capture(included.toReversed());
   expect(first.manifest.directories).toEqual(["mixed", "mixed/child", "preserved"]);
@@ -381,6 +382,12 @@ it("preserves bottom-up directory membership and canonical output across input o
     "älg.txt",
   ]);
   expect(reversed).toEqual(first);
+  expect(opened.mock.calls.map(([directory]) => path.relative(root, String(directory)))).toEqual([
+    "cache/nested",
+    "cache",
+    "cache/nested",
+    "cache",
+  ]);
 });
 
 it("reserves aggregate inventory bytes even when every file hits the hash memo", async () => {

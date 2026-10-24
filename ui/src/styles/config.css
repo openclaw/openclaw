@@ -367,73 +367,83 @@
   --theme-chip-accent-2: #5fd7e8;
 }
 
-:root[data-theme-mode="light"] :is(.settings-theme-card--claw, .settings-accent-theme--claw) {
-  --theme-chip-bg: #faf9f7;
-  --theme-chip-accent: #bd4531;
-  --theme-chip-accent-2: #0d9488;
-}
+:root[data-theme-mode="light"] {
+  .settings-theme-card--claw,
+  .settings-accent-theme--claw {
+    --theme-chip-bg: #faf9f7;
+    --theme-chip-accent: #bd4531;
+    --theme-chip-accent-2: #0d9488;
+  }
 
-:root[data-theme-mode="light"] :is(.settings-theme-card--knot, .settings-accent-theme--knot) {
-  --theme-chip-bg: #f9f9fb;
-  --theme-chip-accent: #c41e30;
-  --theme-chip-accent-2: #5a626e;
-}
+  .settings-theme-card--knot,
+  .settings-accent-theme--knot {
+    --theme-chip-bg: #f9f9fb;
+    --theme-chip-accent: #c41e30;
+    --theme-chip-accent-2: #5a626e;
+  }
 
-:root[data-theme-mode="light"] :is(.settings-theme-card--dash, .settings-accent-theme--dash) {
-  --theme-chip-bg: #f7f2ec;
-  --theme-chip-accent: #8a512c;
-  --theme-chip-accent-2: #7d6027;
-}
+  .settings-theme-card--dash,
+  .settings-accent-theme--dash {
+    --theme-chip-bg: #f7f2ec;
+    --theme-chip-accent: #8a512c;
+    --theme-chip-accent-2: #7d6027;
+  }
 
-:root[data-theme-mode="light"]
-  :is(.settings-theme-card--absolutely, .settings-accent-theme--absolutely) {
-  --theme-chip-bg: #faf9f5;
-  --theme-chip-accent: #a8452a;
-  --theme-chip-accent-2: #8a6a44;
-}
+  .settings-theme-card--absolutely,
+  .settings-accent-theme--absolutely {
+    --theme-chip-bg: #faf9f5;
+    --theme-chip-accent: #a8452a;
+    --theme-chip-accent-2: #8a6a44;
+  }
 
-:root[data-theme-mode="light"] :is(.settings-theme-card--tide, .settings-accent-theme--tide) {
-  --theme-chip-bg: #f7f9fb;
-  --theme-chip-accent: #1f6f8f;
-  --theme-chip-accent-2: #3d6d88;
-}
+  .settings-theme-card--tide,
+  .settings-accent-theme--tide {
+    --theme-chip-bg: #f7f9fb;
+    --theme-chip-accent: #1f6f8f;
+    --theme-chip-accent-2: #3d6d88;
+  }
 
-:root[data-theme-mode="light"] :is(.settings-theme-card--beacon, .settings-accent-theme--beacon) {
-  --theme-chip-bg: #ffffff;
-  --theme-chip-accent: #6e4a00;
-  --theme-chip-accent-2: #09428d;
-}
+  .settings-theme-card--beacon,
+  .settings-accent-theme--beacon {
+    --theme-chip-bg: #ffffff;
+    --theme-chip-accent: #6e4a00;
+    --theme-chip-accent-2: #09428d;
+  }
 
-:root[data-theme-mode="light"]
-  :is(.settings-theme-card--phosphor, .settings-accent-theme--phosphor) {
-  --theme-chip-bg: #f4f7f4;
-  --theme-chip-accent: #10693a;
-  --theme-chip-accent-2: #2f6b47;
-}
+  .settings-theme-card--phosphor,
+  .settings-accent-theme--phosphor {
+    --theme-chip-bg: #f4f7f4;
+    --theme-chip-accent: #10693a;
+    --theme-chip-accent-2: #2f6b47;
+  }
 
-:root[data-theme-mode="light"] :is(.settings-theme-card--crt, .settings-accent-theme--crt) {
-  --theme-chip-bg: #f5f5f4;
-  --theme-chip-accent: #1f1f1f;
-  --theme-chip-accent-2: #7a5d10;
-}
+  .settings-theme-card--crt,
+  .settings-accent-theme--crt {
+    --theme-chip-bg: #f5f5f4;
+    --theme-chip-accent: #1f1f1f;
+    --theme-chip-accent-2: #7a5d10;
+  }
 
-:root[data-theme-mode="light"]
-  :is(.settings-theme-card--manuscript, .settings-accent-theme--manuscript) {
-  --theme-chip-bg: #f6f1e4;
-  --theme-chip-accent: #31549b;
-  --theme-chip-accent-2: #7d6118;
-}
+  .settings-theme-card--manuscript,
+  .settings-accent-theme--manuscript {
+    --theme-chip-bg: #f6f1e4;
+    --theme-chip-accent: #31549b;
+    --theme-chip-accent-2: #7d6118;
+  }
 
-:root[data-theme-mode="light"] :is(.settings-theme-card--rose, .settings-accent-theme--rose) {
-  --theme-chip-bg: #faf4ed;
-  --theme-chip-accent: #9c4f66;
-  --theme-chip-accent-2: #286983;
-}
+  .settings-theme-card--rose,
+  .settings-accent-theme--rose {
+    --theme-chip-bg: #faf4ed;
+    --theme-chip-accent: #9c4f66;
+    --theme-chip-accent-2: #286983;
+  }
 
-:root[data-theme-mode="light"] :is(.settings-theme-card--miami, .settings-accent-theme--miami) {
-  --theme-chip-bg: #f7f3f6;
-  --theme-chip-accent: #b0246f;
-  --theme-chip-accent-2: #0f6f7d;
+  .settings-theme-card--miami,
+  .settings-accent-theme--miami {
+    --theme-chip-bg: #f7f3f6;
+    --theme-chip-accent: #b0246f;
+    --theme-chip-accent-2: #0f6f7d;
+  }
 }
 /* stylelint-enable color-no-hex */
 

@@ -808,7 +808,7 @@ describe("createOpenAIThinkingLevelWrapper", () => {
 describe("createOpenAIAttributionHeadersWrapper", () => {
   it("routes native Codex traffic through the OpenClaw transport so attribution survives OpenClaw defaults", () => {
     let codexCalls = 0;
-    let capturedHeaders: Record<string, string> | undefined;
+    let capturedHeaders: Model["headers"];
     const codexTransport: StreamFn = (model, context, options) => {
       codexCalls += 1;
       capturedHeaders = options?.headers;
@@ -843,7 +843,7 @@ describe("createOpenAIAttributionHeadersWrapper", () => {
     let capturedOptions:
       | {
           apiKey?: string;
-          headers?: Record<string, string>;
+          headers?: Model["headers"];
         }
       | undefined;
     const upstream: StreamFn = (model, context, options) => {

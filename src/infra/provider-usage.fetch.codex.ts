@@ -1,4 +1,5 @@
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
@@ -55,7 +56,7 @@ export async function fetchCodexUsage(
   const parsed = await fetchUsageJson({
     provider: "openai",
     url: "https://chatgpt.com/backend-api/wham/usage",
-    init: { method: "GET", headers },
+    init: { method: "GET", headers: omitNullRequestHeaders(headers) },
     timeoutMs,
     fetchFn,
     tokenExpiredStatuses: [401, 403],

@@ -3,6 +3,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import type {
   AssistantMessage,
+  ModelRequestHeaders,
   TextContent,
   ThinkingContent,
   ToolCall,
@@ -14,9 +15,11 @@ import { asNonNegativeFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth-markers";
 import { readProviderResponseErrorText } from "openclaw/plugin-sdk/provider-http";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import {
   buildAssistantMessage as buildStreamAssistantMessage,
   createEmptyTransportUsage,
+  mergeTransportHeaders,
   createPlainTextToolCallCompatWrapper,
   createProviderWaitObserver,
   failTransportStream,
@@ -378,15 +381,6 @@ export function buildAssistantMessage(
   return message;
 }
 
-function resolveOllamaModelHeaders(model: {
-  headers?: unknown;
-}): Record<string, string> | undefined {
-  if (!model.headers || typeof model.headers !== "object" || Array.isArray(model.headers)) {
-    return undefined;
-  }
-  return model.headers as Record<string, string>;
-}
-
 function resolveOllamaRequestTimeoutMs(
   model: object,
   options: { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
@@ -407,7 +401,7 @@ type OllamaStreamOptions = NonNullable<Parameters<StreamFn>[2]> & {
 
 function createRawOllamaStreamFn(
   baseUrl: string,
-  defaultHeaders?: Record<string, string>,
+  defaultHeaders?: ModelRequestHeaders,
   localService?: OllamaLocalService,
 ): StreamFn {
   const chatUrl = resolveOllamaChatUrl(baseUrl);
@@ -486,11 +480,14 @@ function createRawOllamaStreamFn(
         });
         const replacement = await options?.onPayload?.(body, model);
         const requestBody = replacement === undefined ? body : replacement;
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-          ...defaultHeaders,
-          ...options?.headers,
-        };
+        const headers =
+          omitNullRequestHeaders(
+            mergeTransportHeaders(
+              { "Content-Type": "application/json" },
+              defaultHeaders,
+              options?.headers,
+            ),
+          ) ?? {};
         if (
           options?.apiKey &&
           (!headers.Authorization || !isNonSecretApiKeyMarker(options.apiKey))
@@ -865,7 +862,7 @@ function createRawOllamaStreamFn(
 
 export function createOllamaStreamFn(
   baseUrl: string,
-  defaultHeaders?: Record<string, string>,
+  defaultHeaders?: ModelRequestHeaders,
 ): StreamFn {
   return wrapOllamaToolNames(
     createPlainTextToolCallCompatWrapper(createRawOllamaStreamFn(baseUrl, defaultHeaders)),
@@ -873,7 +870,7 @@ export function createOllamaStreamFn(
 }
 
 export function createConfiguredOllamaStreamFn(params: {
-  model: { baseUrl?: string; headers?: unknown };
+  model: Pick<Partial<ProviderRuntimeModel>, "baseUrl" | "headers">;
   localService?: OllamaLocalService;
   providerBaseUrl?: string;
 }): StreamFn {
@@ -886,7 +883,7 @@ export function createConfiguredOllamaStreamFn(params: {
     createPlainTextToolCallCompatWrapper(
       createRawOllamaStreamFn(
         baseUrl,
-        resolveOllamaModelHeaders(params.model),
+        params.model.headers,
         params.providerBaseUrl?.trim() || !modelBaseUrl ? params.localService : undefined,
       ),
     ),

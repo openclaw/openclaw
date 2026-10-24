@@ -19,6 +19,7 @@ import {
   ChatDetailsMobileControls,
   type ChatDetailsMobilePage,
 } from "./components/chat-details-mobile-content.tsx";
+import { createDetailsProcessesPresentation } from "./components/chat-details-processes-presentation.ts";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { chatPullRequestId, retainedPublication } from "./components/chat-pull-requests.ts";
 import { syncSessionPanelInputs, useSessionPanel } from "./components/chat-session-panel.tsx";
@@ -110,13 +111,24 @@ function MobileHostContent(
         },
       )
     : () => undefined;
+  const detailsProcesses = createDetailsProcessesPresentation(() => ({
+    sessionKey: props.details.sessionKey,
+    agentId: props.details.currentAgentId ?? "main",
+    rows: processes()?.snapshot.rows ?? [],
+  }));
   const processData = createMemo(() => {
     const data = processes();
     if (!data) {
       return undefined;
     }
-    const { rows, error, errorKind, loading } = data.snapshot;
-    return { rows, error, errorKind, loading, refresh: () => data.refresh() };
+    const { error, errorKind, loading } = data.snapshot;
+    return {
+      rows: detailsProcesses.rows(),
+      error,
+      errorKind,
+      loading,
+      refresh: () => data.refresh(),
+    };
   });
   const route = () => props.host.destination.page?.details;
   const activePeople = createMemo(() =>

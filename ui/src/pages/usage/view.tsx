@@ -32,8 +32,6 @@ import { SessionsCard } from "./view-sessions-card.tsx";
 
 registerEnglishCatalog(registerUsageEnglish);
 
-type ProviderUsageSnapshot = ProviderUsageSummary["providers"][number];
-
 function DateInput(props: { value: string; label: string; onChange: (value: string) => void }) {
   return (
     <input
@@ -48,7 +46,7 @@ function DateInput(props: { value: string; label: string; onChange: (value: stri
 }
 
 function renderProviderUsage(
-  providers: ProviderUsageSnapshot[],
+  providers: ProviderUsageSummary["providers"][number][],
   unavailable: boolean,
   stalled: boolean,
 ) {

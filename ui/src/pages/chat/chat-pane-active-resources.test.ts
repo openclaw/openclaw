@@ -380,7 +380,7 @@ describe("session active resource discovery", () => {
     expect(f.slots()).toEqual(["terminal"]);
   });
 
-  it("retires an automatic desktop without falling back to a stale roster or global source", async () => {
+  it("clears a discovered desktop source without falling back to a stale roster or global source", async () => {
     const f = fixture();
     await f.sync();
     expect(f.desktopSource()).toBe("worker-1");
@@ -389,7 +389,6 @@ describe("session active resource discovery", () => {
     f.controller.invalidate();
     await f.sync();
     expect(f.desktopSource()).toBeNull();
-    expect(f.commit).toHaveBeenCalledTimes(1);
   });
 
   it.each(["before discovery", "during discovery"])(

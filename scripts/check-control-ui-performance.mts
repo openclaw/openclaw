@@ -7,10 +7,14 @@ import {
   CONTROL_UI_ROUTE_PRELOAD_ATTRIBUTE,
   selectControlUiRoutePreloads,
 } from "../src/gateway/control-ui-route-preloads.ts";
+import { extractControlUiStartupAssetPaths } from "../ui/config/control-ui-startup-assets.ts";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
+import {
+  MERMAID_RENDERER_ASSET,
+  controlUiLocaleAssetIdentity,
+} from "./lib/control-ui-optional-assets.ts";
 import { isRecord } from "./lib/record-shared.mjs";
-import { escapeRegExp } from "./lib/regexp.mjs";
 
 const KIB = 1024;
 const STARTUP_JS_BASELINE_RATCHET_BYTES = 4096;
@@ -29,24 +33,7 @@ const CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES = 64;
 const CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES = 45 * KIB;
 // Immediate Home and diagnostic frames approved in #147574, including shared header styles.
 const CONTROL_UI_CSS_GZIP_GROWTH_BYTES = 1.5 * KIB;
-// The opaque Mermaid sandbox loads one self-contained classic script only when
-// a diagram is viewed. Keep its size visible without relaxing ordinary chunks.
-const MERMAID_RENDERER_ASSET = /^assets\/mermaid\.min-[\w-]+\.js$/u;
 const MERMAID_RENDERER_GZIP_BYTES = 960 * KIB;
-// Locale catalogs are named Vite chunks loaded only after a language selection.
-// Keep one combined cap for base and on-demand config hints in every locale.
-const CONTROL_UI_LOCALE_ASSET_PATTERNS = CONTROL_UI_LOCALE_ENTRIES.flatMap(({ locale }) => [
-  {
-    locale,
-    kind: "base" as const,
-    pattern: new RegExp(`^assets/${escapeRegExp(locale)}-[^/]+\\.js$`, "u"),
-  },
-  {
-    locale,
-    kind: "configHints" as const,
-    pattern: new RegExp(`^assets/locale-config-hints-${escapeRegExp(locale)}-[^/]+\\.js$`, "u"),
-  },
-]);
 const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should
@@ -59,10 +46,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Narrow sidebar imports and regroup Chat: matched 061f226 1,273,518 to 1,269,796 B.
-  // New Session 768,995 to 763,699 B; preserve each surface's relative headroom.
-  chatBootJsGzipBytes: 1_359_682,
-  newBootJsGzipBytes: 799_114,
+  // Measured after deferring suggestion rows and person-card content.
+  chatBootJsGzipBytes: 1_275_713,
+  newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -78,48 +64,20 @@ const controlUiPerformanceBudgets = {
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
-function controlUiAssetPathFromUrl(value: string): string | null {
-  const normalized = value.split(/[?#]/u, 1)[0]?.replace(/\\/gu, "/") ?? "";
-  const markerIndex = normalized.lastIndexOf("assets/");
-  if (markerIndex === -1) {
-    return null;
-  }
-  const assetPath = normalized.slice(markerIndex);
-  if (assetPath.includes("../") || !/\.(?:css|js)$/u.test(assetPath)) {
-    return null;
-  }
-  return assetPath;
-}
-
-export function extractControlUiStartupAssetPaths(html: string): string[] {
-  const assets = new Set<string>();
-  for (const tag of html.matchAll(/<(?:link|script)\b[^>]*>/giu)) {
-    const attribute = tag[0].match(/\s(?:href|src)\s*=\s*["']([^"']+)["']/iu);
-    const assetPath = attribute?.[1] ? controlUiAssetPathFromUrl(attribute[1]) : null;
-    if (assetPath) {
-      assets.add(assetPath);
-    }
-  }
-  return [...assets].toSorted((left, right) => left.localeCompare(right));
-}
-
 function readAssetMetrics(assetsDir: string, entry: fs.Dirent) {
   const file = `assets/${entry.name}`;
   const sourcePath = path.join(assetsDir, entry.name);
   const gzipPath = `${sourcePath}.gz`;
   const brotliPath = `${sourcePath}.br`;
-  for (const sidecarPath of [gzipPath, brotliPath]) {
-    if (!fs.existsSync(sidecarPath)) {
-      throw new Error(`Control UI performance check missing ${path.basename(sidecarPath)}`);
-    }
-  }
+  const rawBytes = fs.statSync(sourcePath).size;
   const type = entry.name.endsWith(".js") ? "js" : "css";
   return {
     file,
     type,
-    rawBytes: fs.statSync(sourcePath).size,
-    gzipBytes: fs.statSync(gzipPath).size,
-    brotliBytes: fs.statSync(brotliPath).size,
+    rawBytes,
+    // The Gateway serves identity when a requested compression sidecar is absent.
+    gzipBytes: fs.statSync(gzipPath, { throwIfNoEntry: false })?.size ?? rawBytes,
+    brotliBytes: fs.statSync(brotliPath, { throwIfNoEntry: false })?.size ?? rawBytes,
   };
 }
 
@@ -139,13 +97,6 @@ function largestAsset(assets: Array<ReturnType<typeof readAssetMetrics>>) {
   return assets.toSorted(
     (left, right) => right.gzipBytes - left.gzipBytes || left.file.localeCompare(right.file),
   )[0]!;
-}
-
-function controlUiLocaleAssetIdentity(
-  file: string,
-): { locale: string; kind: "base" | "configHints" } | null {
-  const match = CONTROL_UI_LOCALE_ASSET_PATTERNS.find(({ pattern }) => pattern.test(file));
-  return match ? { locale: match.locale, kind: match.kind } : null;
 }
 
 function collectControlUiLocaleAssetGroups(assets: Array<ReturnType<typeof readAssetMetrics>>) {
@@ -499,7 +450,7 @@ export function formatControlUiPerformanceReport(
   );
   const lines = [
     "Control UI performance:",
-    `  measurement: shipped gzip sidecars; Node ${process.version}`,
+    `  measurement: shipped sidecars with identity fallback; Node ${process.version}`,
     `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(startupJsLimits.enforcementLimit)} gzip / ${startupJsLimits.enforcementLimit} B)`,
   ];
   if (startupBudgetBaseline) {

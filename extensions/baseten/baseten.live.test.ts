@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
+import { createSolidPngBuffer, createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
@@ -306,14 +306,7 @@ describeLive("Baseten plugin live", () => {
                 arguments: { value: "replay" },
               },
             ],
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsageFixture(),
             stopReason: "toolUse",
             timestamp: Date.now() - 2,
           } as AssistantMessage,

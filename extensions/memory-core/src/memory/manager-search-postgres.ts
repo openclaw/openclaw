@@ -123,6 +123,10 @@ export async function searchPostgresMemoryVector(
       value !== null &&
       "dist" in value &&
       typeof value.dist === "number",
+    candidates: ({ match, distance, limit }) =>
+      query.candidateIds && query.candidateIds.length <= limit
+        ? undefined
+        : scoped().select("v.id").where(match).orderBy(distance).orderBy("v.id").limit(limit),
     query: ({ match, distance }) =>
       scoped()
         .select([
@@ -135,7 +139,7 @@ export async function searchPostgresMemoryVector(
           distance.as("dist"),
         ])
         .where(match)
-        .orderBy(distance)
+        .orderBy("dist")
         .orderBy("c.id")
         .limit(query.limit),
   });
@@ -174,7 +178,7 @@ function bodyStatement(
   if (query.sourceFilter.excludedSessionPaths?.length) {
     selected = selected.where(sessionExclusion(query.sourceFilter.excludedSessionPaths));
   }
-  return selected.orderBy(rank, "desc").orderBy("id").limit(query.limit);
+  return selected.orderBy("rank", "desc").orderBy("id").limit(query.limit);
 }
 
 function projectBodyRows(
@@ -380,11 +384,18 @@ function searchIndependentBranches(database: EngineConnection, query: MemoryKeyw
     statements.map((statement) => sql`(${statement})`),
     sql` UNION ALL `,
   )})`;
+  const fallback = bodyStatement(database, query.body, true);
+  // Relax the body query only if every primary branch is empty in this snapshot.
+  const matches = fallback
+    ? sql<KeywordBranchRow>`(WITH primary_matches AS MATERIALIZED ${union}
+        SELECT * FROM primary_matches
+        UNION ALL (${fallback.where(sql<boolean>`NOT EXISTS (SELECT 1 FROM primary_matches)`)}))`
+    : union;
   const rows = statements.length
     ? executeSqliteQuerySync<KeywordBranchRow>(
         database,
         getNodeSqliteKysely<SearchDatabase>(database)
-          .selectFrom(union.as("matches"))
+          .selectFrom(matches.as("matches"))
           .selectAll()
           .orderBy("branch")
           .orderBy(sql`CASE WHEN branch = 1 THEN specificity ELSE rank END`, "desc")
@@ -424,7 +435,7 @@ export async function searchPostgresMemoryKeyword(
     path: { rows: PathResult[]; error?: string };
   };
   try {
-    result = searchIndependentBranches(database, query);
+    return searchIndependentBranches(database, query);
   } catch {
     // Recover independent results and errors if only one branch is unavailable.
     result = {

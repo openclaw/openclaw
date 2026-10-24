@@ -176,12 +176,18 @@ request allowance. The aggregate serialized-byte bound still applies.
 Small `sessions.messages.subscribe` requests without approval replay and
 `sessions.messages.unsubscribe` requests have separate bounded waiting capacity,
 including a per-connection limit. All requests share the same yielding budget.
-Roster subscriptions, catalog reads, and message subscriptions with approval
+Roster subscriptions requesting a snapshot, catalog reads, and message subscriptions with approval
 replay share four preparation slots. A slot remains occupied until its request
 settles, and each start yields to ready socket I/O. A request waiting for a
 preparation slot stays in the bounded queue while eligible requests start:
-`chat.history` and `sessions.list` reads can pass waiting preparations, as can
-ordinary requests on other connections. Other starts preserve FIFO order within
+Event-only `sessions.subscribe` calls do not reserve preparation slots. A waiting
+`models.list` read still needs a preparation slot, but does not block later
+requests on its connection. Snapshot and approval subscriptions keep their
+ordering barrier for later mutations and unsubscribe requests.
+Independent reads such as `chat.history`, `sessions.list`, `sessions.resolve`,
+`sessions.describe`, `board.get`, `users.list`, `agents.list`, `agent.identity.get`,
+`plugins.controlUi.list`, and `workboard.boards.list` can pass waiting preparations,
+as can ordinary requests on other connections. Other starts preserve FIFO order within
 each connection, including subscriptions and their later unsubscribe requests.
 WebSocket handshakes bypass the request queue, so reconnecting tabs cannot start
 an unbounded replay wave ahead of other clients' handshakes.
@@ -229,6 +235,9 @@ HTTP scope failures mirror the `MISSING_SCOPE` object under `error.details` and
 use HTTP status `403`.
 
 Side-effecting methods require idempotency keys (see schema).
+For `chat.send`, reconnect retries preserve the original submission key;
+recorded user messages and input receipts prevent duplicate dispatch even after
+cache expiry or restart. See [chat submission idempotency](/gateway/protocol/rpc-session-control).
 
 ### Profile binding
 

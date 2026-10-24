@@ -207,6 +207,7 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
     resolution: "send" | "queue" | "edit" | "dismiss",
   ) => Promise<void>;
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
+  onSessionDeleted: ChatPaneRuntime["onSessionDeleted"];
   paneId: string;
   sessionKey: string;
   performUpdate: () => void;

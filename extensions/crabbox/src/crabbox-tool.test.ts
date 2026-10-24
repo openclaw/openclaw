@@ -57,6 +57,7 @@ function fixture(toolContext = context) {
       subscribeSessionChanges: unexpected,
       readSessionFacts: unexpected,
       withSessionFacts: unexpected,
+      appendAgentMessage: unexpected,
       openPluginPanel: unexpected,
     },
   });

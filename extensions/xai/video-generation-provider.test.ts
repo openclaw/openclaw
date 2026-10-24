@@ -218,7 +218,7 @@ describe("xai video generation provider", () => {
     resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => ({
       baseUrl: params.baseUrl ?? params.defaultBaseUrl,
       allowPrivateNetwork: true,
-      headers: new Headers(params.defaultHeaders),
+      headers: new Headers(omitNullRequestHeaders(params.defaultHeaders)),
       dispatcherPolicy: dispatcherPolicy as never,
     }));
     mockXaiVideoTask();
@@ -390,3 +390,4 @@ describe("xai video generation provider", () => {
     );
   });
 });
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

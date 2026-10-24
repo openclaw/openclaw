@@ -1,5 +1,6 @@
 import type { AssistantMessage, ProviderReplayState } from "@openclaw/llm-core";
 import { expect, it } from "vitest";
+import { createZeroUsage } from "../../../../ai/src/usage.test-support.js";
 import type { AgentMessage } from "../../types.js";
 import { findCutPoint } from "../compaction/compaction.js";
 import { convertToLlm } from "../messages.js";
@@ -47,12 +48,10 @@ function assistant(
     provider: "test-provider",
     model: "test-model",
     usage: {
+      ...createZeroUsage(),
       input: 1,
       output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
       totalTokens: 2,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "stop",
     timestamp: Date.parse(timestamp),

@@ -4,6 +4,7 @@ import { runOutsideOperatorToolGatewayAuthority } from "../gateway/operator-tool
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import { waitForDiagnosticEventsDrained } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -390,7 +391,8 @@ async function startPreparedPluginServices({
         `plugin service cleanup completed; restarting deferred reload (plugin=${entry.pluginId}, service=${entry.id})`,
       );
     }
-    await startService(entry.registration, config);
+    // Config-only restarts need the same startup budget and cleanup custody as replacement candidates.
+    await startService(entry.registration, config, undefined, true);
   };
   owner.resumeReload = (entry) => {
     // Follow current ownership and serialize with newer reloads; stop clears the pending intent.
@@ -488,11 +490,17 @@ async function startPreparedPluginServices({
     const { service, id } = entry;
     const record = registry.plugins.find((plugin) => plugin.id === entry.pluginId);
     const instance = record && getPluginInstance(record);
+    // Standalone work keeps its host bindings, but never borrows a caller's reusable readers.
+    const runInServiceContext =
+      instance?.lifecycle.runInBackgroundContext ??
+      (<T>(run: () => T) => readOnlyWorkerScope.exit(run));
     // Native service receivers retain their brands; registration owns their invocation scope.
-    const runServiceCleanup = <T>(run: () => T): T =>
-      withPluginRetentionOwner({ serviceId: id }, () =>
-        instance ? instance.runCleanup(run) : runPluginCleanup(service, run),
-      );
+    const runServiceCleanup = <T>(run: () => T): T => {
+      const cleanup = () => withPluginRetentionOwner({ serviceId: id }, run);
+      return instance
+        ? instance.runCleanup(() => runInServiceContext(cleanup))
+        : runPluginCleanup(service, cleanup);
+    };
     const traceName = `sidecars.plugin-services.${encodeStartupTraceSegment(entry.pluginId)}.${encodeStartupTraceSegment(entry.id)}`;
     const lease = createPluginRuntimeCapabilityLease("plugin service");
     const gatewayEvents = createPluginServiceGatewayEvents({
@@ -503,12 +511,16 @@ async function startPreparedPluginServices({
     const { health, revoke } = createPluginServiceHealthReporter(entry);
     lease.retain(revoke);
     const runtime = getPluginRegistryRuntime(registry);
-    const scheduling = createPluginServiceScheduler(
-      scheduler,
-      createPluginServiceSchedulerRunner({ registry, record, instance, lease }),
+    const scheduling = runInServiceContext(() =>
+      createPluginServiceScheduler(
+        scheduler,
+        createPluginServiceSchedulerRunner({ registry, record, instance, lease }),
+      ),
     );
     const resolveGatewayContext = runtime ? getGatewayContextResolver(runtime) : undefined;
-    const runServiceStart = createScheduledGatewayRunner(resolveGatewayContext);
+    const runServiceStart = runInServiceContext(() =>
+      createScheduledGatewayRunner(resolveGatewayContext),
+    );
     const { getCron, mcpEvents } = createPluginServiceAutomationCapabilities({
       pluginId: entry.pluginId,
       lease,

@@ -248,27 +248,6 @@ openclaw-browser-panel {
   .bp-btn:hover {
     background: color-mix(in srgb, var(--text) 10%, transparent);
   }
-  .bp-empty-action {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-2);
-    min-height: var(--rail-header-action-size);
-    padding: 6px 12px;
-    border-radius: var(--radius-full);
-    background: var(--bg-hover);
-    font-size: var(--font-size-sm);
-    line-height: 18px;
-  }
-  .bp-empty-action > svg {
-    width: var(--rail-header-action-glyph-size);
-    height: var(--rail-header-action-glyph-size);
-    flex: none;
-  }
-  .bp-empty-action:focus-visible {
-    outline: var(--control-ui-focus-ring);
-    outline-offset: var(--control-ui-focus-ring-offset);
-  }
   .bp-btn--primary {
     border-color: var(--accent);
     color: var(--accent);

@@ -149,10 +149,7 @@ function RootEntry(props: {
       <span class="chat-details-mobile-root__copy">
         <span
           ref={createTextOverflow(() => props.entry.label)}
-          class={[
-            "chat-details-mobile-root__label",
-            { "chat-details-mobile-root__label--note": props.entry.truncateDescription },
-          ]}
+          class="chat-details-mobile-root__label"
         >
           {props.entry.label}
         </span>

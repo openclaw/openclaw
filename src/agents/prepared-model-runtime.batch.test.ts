@@ -13,6 +13,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as inlineProviderModels from "./embedded-agent-runner/model.inline-provider.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
+import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import * as configuredModels from "./model-selection-shared.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
@@ -26,6 +27,7 @@ import {
 } from "./prepared-model-runtime.js";
 import { getPreparedModelRuntimeStartupStatus } from "./prepared-model-runtime.startup-status.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-fleet-batch" });
 const { mocks } = fixture;
@@ -335,15 +337,9 @@ describe("prepared fleet batches", () => {
           fixture: {
             api: "openai-completions",
             baseUrl: "https://fixture.invalid/v1",
-            models: ["first", "second"].map((id) => ({
-              id,
-              name: id,
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 32_000,
-              maxTokens: 4096,
-            })),
+            models: ["first", "second"].map((id) =>
+              modelDefinition(id, { reasoning: false, contextWindow: 32_000, maxTokens: 4096 }),
+            ),
           },
         },
       },
@@ -362,18 +358,14 @@ describe("prepared fleet batches", () => {
           (candidate) => candidate.id === modelId,
         );
         return model
-          ? {
+          ? makeProviderModelFixture({
               id: model.id,
               name: model.name,
               provider,
               api: "openai-responses",
               baseUrl: `https://${workspace}.fixture.invalid/v1`,
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: 32_000,
-              maxTokens: 4096,
-            }
+            })
           : undefined;
       };
     });

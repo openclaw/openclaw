@@ -126,7 +126,7 @@ export function hasBrowserNodeHostWork(): boolean {
 function collectBrowserProxyPaths(payload: unknown): string[] {
   const paths = new Set<string>();
   visitBrowserProxyFilePaths(payload, (filePath) => {
-    paths.add(filePath.trim());
+    paths.add(filePath);
     assertBrowserProxyFileCountWithinLimit(paths.size);
   });
   return [...paths];

@@ -8,6 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/decisions";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { hasCredentials, providerBaseUrl, type RuntimeConfig } from "./config.js";
@@ -83,7 +84,9 @@ function bindHostedFacts(inference: Inference, id: string, config: RuntimeConfig
     },
   });
   const hosted = effectiveBaseUrl(config) === hostedBaseUrl;
-  const contextHeader = new Headers(effectiveHeaders).get("TypeSafe-Danger-Zone-Long-Context");
+  const contextHeader = new Headers(omitNullRequestHeaders(effectiveHeaders)).get(
+    "TypeSafe-Danger-Zone-Long-Context",
+  );
   if (hosted && contextHeader !== "true" && contextHeader !== "unavailable") {
     return inference;
   }
@@ -267,7 +270,8 @@ export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): 
         ? {
             ...original.providerConfig,
             baseUrl: context.model.baseUrl ?? original.providerConfig.baseUrl,
-            headers: context.model.headers ?? original.providerConfig.headers,
+            headers:
+              omitNullRequestHeaders(context.model.headers) ?? original.providerConfig.headers,
           }
         : undefined;
       const prepared: RuntimeConfig = {

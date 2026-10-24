@@ -16,6 +16,7 @@ import {
 } from "../../tts/provider-registry.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { resolvePreparedTtsProvider } from "../../tts/tts-provider-resolution.js";
+import { updateTtsPrefsAsync } from "../../tts/tts-settings-write-worker.js";
 import { resolveTtsPersonaList, resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
 import {
   isTtsProviderConfiguredAsync,
@@ -24,9 +25,6 @@ import {
   resolveTtsConfig,
   resolveTtsPrefsPathAsync,
   resolveTtsProviderOrder,
-  setTtsEnabled,
-  setTtsPersona,
-  setTtsProvider,
   synthesizeSpeech,
   textToSpeech,
 } from "../../tts/tts.js";
@@ -66,7 +64,9 @@ function setTtsEnabledHandler(enabled: boolean): GatewayRequestHandler {
   return async ({ respond, context }) => {
     await respondUnavailableOnThrow(respond, async () => {
       const config = resolveTtsConfig(context.getRuntimeConfig());
-      setTtsEnabled(await resolveTtsPrefsPathAsync(config), enabled);
+      await updateTtsPrefsAsync(await resolveTtsPrefsPathAsync(config), {
+        auto: enabled ? "always" : "off",
+      });
       respond(true, { enabled });
     });
   };
@@ -242,7 +242,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       const config = resolveTtsConfig(cfg);
       const prefsPath = await resolveTtsPrefsPathAsync(config);
-      setTtsProvider(prefsPath, provider);
+      await updateTtsPrefsAsync(prefsPath, { provider });
       respond(true, { provider });
     });
   },
@@ -259,7 +259,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const config = resolveTtsConfig(cfg);
       const prefsPath = await resolveTtsPrefsPathAsync(config);
       if (!rawPersona || ["off", "none", "default"].includes(rawPersona.toLowerCase())) {
-        setTtsPersona(prefsPath, null);
+        await updateTtsPrefsAsync(prefsPath, { persona: null });
         respond(true, { persona: null });
         return;
       }
@@ -276,7 +276,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       }
       // Persist only the canonical configured id; labels/aliases stay in config
       // so preference files remain stable across copy changes.
-      setTtsPersona(prefsPath, persona.id);
+      await updateTtsPrefsAsync(prefsPath, { persona: persona.id });
       respond(true, { persona: persona.id });
     });
   },

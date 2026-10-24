@@ -38,6 +38,31 @@ it("aggregates captured work with bounded memory and drops content-bearing field
   } finally {
     result = finish();
   }
+  expect(result.runtime).toMatchObject({
+    node: process.versions.node,
+    v8: process.versions.v8,
+    platform: process.platform,
+    arch: process.arch,
+  });
+  expect(result.processUptimeSeconds.before).toBeGreaterThanOrEqual(0);
+  expect(result.processUptimeSeconds.after).toBeGreaterThanOrEqual(
+    result.processUptimeSeconds.before,
+  );
+  for (const spaces of [result.heapSpaces.before, result.heapSpaces.after]) {
+    expect(spaces.some((space) => space.space_name === "new_space")).toBe(true);
+    for (const space of spaces) {
+      expect(space.space_name).not.toBe("");
+      for (const bytes of [
+        space.space_size,
+        space.space_used_size,
+        space.space_available_size,
+        space.physical_space_size,
+      ]) {
+        expect(Number.isSafeInteger(bytes)).toBe(true);
+        expect(bytes).toBeGreaterThanOrEqual(0);
+      }
+    }
+  }
   expect(result.groups).toHaveLength(256);
   expect(result.droppedEvents).toBe(46);
   expect(result.collectionErrors).toBe(0);

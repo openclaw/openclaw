@@ -4,7 +4,8 @@ import { fromMarkdown, type Extension, type Handle } from "mdast-util-from-markd
 import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
 import { gfmTable } from "micromark-extension-gfm-table";
 import { hasUnresolvedImageCode } from "./image-code-retention.js";
-import { findUnsettledDefinitionStarts } from "./reference-definition-retention.js";
+import { findListItemRetentionStart } from "./list-code-retention.js";
+import { findReferenceDefinitionRetention } from "./reference-definition-retention.js";
 import { retainTableParagraph } from "./table-code-retention.js";
 
 export type ReasoningTagTextDelta =
@@ -387,10 +388,9 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
   const regions: MarkdownCodeRegion[] = [];
   const textSpans: Array<[number, number]> = [];
   const definitions: Array<{ identifier: string; start: number; end: number }> = [];
-  const unsettledDefinitionStarts: number[] = [];
   let unresolvedImageCodeStart: number | undefined;
   const blocks = tree.children ?? [];
-  let retainStart = blocks.at(-1)?.position?.start?.offset ?? text.length;
+  let retainStart = findListItemRetentionStart(text, blocks);
   for (let index = 0; index < blocks.length; index += 1) {
     const block = expectDefined(blocks[index], "Markdown block");
     const next = blocks[index + 1]?.position?.start;
@@ -500,10 +500,9 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
       retainStart = Math.min(retainStart, blockStart);
     }
   }
-  if (definitions.length) {
-    unsettledDefinitionStarts.push(...findUnsettledDefinitionStarts(text, definitions));
-    retainStart = Math.min(retainStart, ...unsettledDefinitionStarts);
-  }
+  const { unsettledDefinitionStarts, retainStart: referenceStart } =
+    findReferenceDefinitionRetention(text, definitions);
+  retainStart = findListItemRetentionStart(text, blocks, Math.min(retainStart, referenceStart));
   regions.sort((left, right) => left.start - right.start);
   return {
     regions,

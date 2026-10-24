@@ -184,7 +184,7 @@ describe("command-path-policy", () => {
       networkProxy: "bypass",
     });
     expectResolvedPolicy(["plugins update"], { hideBanner: true });
-    expectResolvedPolicy(["plugins list"], {
+    expectResolvedPolicy(["plugins list", "plugins lint"], {
       configGuard: "skip",
       ensureCliPath: false,
       networkProxy: "bypass",

@@ -128,6 +128,19 @@ describe("resolveApplicationStartupSettings", () => {
 
 describe("gateway settings and layout persistence", () => {
   installSettingsStorageLifecycle();
+
+  it("retains Details process dismissals in the existing Gateway settings across other writes", () => {
+    const first = "wss://process-a.example";
+    const second = "wss://process-b.example";
+    const dismissals = { '["viewer","main","agent:main:review"]': ["process-1"] };
+    patchSettings({ gatewayUrl: first, detailsDismissedProcesses: dismissals });
+    patchSettings({ gatewayUrl: second, themeMode: "light" });
+    expect(loadSettings(second).detailsDismissedProcesses).toBeUndefined();
+    expect(loadSettings(first).detailsDismissedProcesses).toEqual(dismissals);
+    patchSettings({ gatewayUrl: first, navWidth: 300 });
+    expect(loadSettings(first).detailsDismissedProcesses).toEqual(dismissals);
+  });
+
   beforeEach(() => {
     setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
     vi.stubGlobal("matchMedia", (media: string): MediaQueryList => ({

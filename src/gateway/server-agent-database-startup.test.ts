@@ -947,12 +947,12 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
     );
     expect(publishedGenerations).toEqual(openedGenerations);
     expect(warnings).toHaveBeenCalledWith(
-      "Skipped openclaw-agent.sqlite: database is not a configured target; run openclaw doctor to inspect retained data.",
+      `Skipped ${leftover} (agent unowned): database is not a configured target; run openclaw doctor to inspect retained data.`,
     );
     for (const [index, pathname] of stalePaths.entries()) {
       expect(fs.readFileSync(pathname)).toEqual(staleBytes[index]);
       expect(warnings).toHaveBeenCalledWith(
-        `Skipped ${path.basename(pathname)}: database is not a configured target; run openclaw doctor to inspect retained data.`,
+        `Skipped ${pathname} (agent ${agentIds[index]}): database is not a configured target; run openclaw doctor to inspect retained data.`,
       );
     }
     for (const agentId of agentIds) {

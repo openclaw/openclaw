@@ -424,6 +424,8 @@ tool profile must allow all native shell and filesystem capabilities: `coding`
 and `full` do, while `messaging` and `minimal` disable the native surface. Agent
 and provider profile overrides and explicit tool restrictions still apply.
 
+Codex-native file edits remain limited to the turn cwd; linked worktrees need OpenClaw file tools or a managed worktree (`worktree: true`).
+
 Selecting a managed GitHub Identity also uses OpenClaw's host-owned tools instead
 of native Code Mode. The same exec owner used by the built-in runtime binds the
 selected profile at child launch, preserves approval and caller lifetime checks,
@@ -508,6 +510,27 @@ matching completion or source closure, including when the sandbox exec-server
 is disabled. Idle conversation eviction does not interrupt that work.
 The existing unknown-outcome audit diagnostic remains; cancellation and a
 command with no confirmed live owner retain their failure handling.
+
+### Intentional yield and native interruption markers
+
+`sessions_yield` pauses the OpenClaw run while it waits for a follow-up event.
+OpenClaw returns the dynamic tool result, then uses `turn/interrupt` to stop the
+native Codex turn. The current app-server protocol has no client-requested normal
+completion: `turn/completed` is a server notification, `turn/interrupt` accepts
+only thread and turn IDs, and `DynamicToolCallResponse` carries only content and
+success. Returning that tool result alone allows another model step; OpenClaw's
+internal terminal-tool flag cannot finish the native turn through the protocol.
+
+As a result, Codex can persist a `<turn_aborted>` marker saying the user
+interrupted the previous turn even when the agent intentionally yielded.
+OpenClaw preserves native history and adds explicit yield context to the saved
+continuation: the pause was agent-requested, and a native interruption marker for
+that yield does not mean the user requested Stop or canceled the task. Work
+continues when the expected follow-up arrives. Avoiding this native marker needs
+an upstream completion or per-interrupt reason contract; OpenClaw does not
+disable interruption guidance globally or rewrite the native rollout.
+
+### Stop and cancellation
 
 Stopping an active Codex run interrupts its turn. After a parent yields to native
 children, Stop waits for its admitted descendants to reach real terminal events

@@ -523,7 +523,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       pluginPanels: this.context.plugins.registrations("panels"),
       isPluginPanelPresented: (slot) => slotPresentation(slot, "active"),
     });
-    const setPanelOpen = (open: boolean) => this.setChatSidePanelOpen(open, savedLayout);
     const nativeCallbacks: SidebarRegionCallbacks = {
       newTab: {
         open: (options) => state.updateSidebarLayout(openSidebarNewTab(savedLayout, options)),
@@ -534,11 +533,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
         },
         finishCloseAll: () => {
           const next = finishSidebarCloseAll(state.sidebarLayout);
-          if (!next) {
-            return false;
+          if (next) {
+            state.updateSidebarLayout(next);
           }
-          state.updateSidebarLayout(next);
-          return true;
+          return Boolean(next);
         },
       },
       activatePanel: (panelId) => {
@@ -564,7 +562,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
         state.updateSidebarLayout(setSidebarDock(savedLayout, dock), { geometryOnly: true }),
       closeSlot: (slot) => {
         if (slot === "conversation") {
-          setPanelOpen(false);
+          this.setChatSidePanelOpen(false, savedLayout);
           return;
         }
         if (slot === "discussion") {
@@ -576,7 +574,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       reorderPanel: (panelId, targetPanelId, placement) =>
         state.updateSidebarLayout(reorderPanel(savedLayout, panelId, targetPanelId, placement)),
       resizePanel: (columnId, size) => this.commitSidebarPanelResize(savedLayout, columnId, size),
-      setOpen: setPanelOpen,
+      setOpen: (open) => this.setChatSidePanelOpen(open, savedLayout),
     };
     const updateMobileCatalogLayout = (next: SidebarLayout) => {
       // Catalog navigation changes selection, not the retained desktop expansion.
@@ -664,9 +662,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
     }
     const avatar = resolveAssistantDisplayAvatar(chatProps);
     const region = renderSidebarRegion({
-      onPanelReady: () => {
-        this.flushPendingPanelToggles();
-      },
+      onPanelReady: () => this.flushPendingPanelToggles(),
       mobileScrollFades: this.mobileScrollFades,
       onRegionElementRef: (element) => {
         this.sidebarRegionElement = element;

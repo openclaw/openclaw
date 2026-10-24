@@ -889,7 +889,10 @@ in-flight indexing started under the previous grant.
 In OpenClaw Code Mode, use `await skills.search(query, limit)` and
 `await skills.read(name)`. These calls dispatch through the same tools and
 policies. The read returns a string with the same location context and complete
-instructions. `await skills.list(offset)` returns up to 20 directory entries;
+instructions. Cloud worker turns use the Gateway's admitted skill catalog for
+search and reads, with the same turn-lifetime checks. If a request fails, the
+Code Mode bridge reports a bounded, redacted cause.
+`await skills.list(offset)` returns up to 20 directory entries;
 the default offset is 0. Codex receives the OpenClaw tools through its dynamic
 tool surface; these are distinct from Codex's native skill-resource tools.
 Codex refuses a skill read that exceeds the turn's dynamic-tool output budget

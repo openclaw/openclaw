@@ -1,10 +1,16 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { bindWorkerToolPreparation } from "../agents/harness/host-private-capabilities.js";
+import {
+  bindWorkerToolPreparation,
+  isToolAuthorityReadCaptureActive,
+} from "../agents/harness/host-private-capabilities.js";
 import { bindPreparedToolAuthority } from "../agents/harness/tool-authority-preparation.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { withMessageInjectionAdmission } from "../auto-reply/reply/message-injection-authority.js";
-import { prepareReplyToolAuthority } from "../auto-reply/reply/reply-tool-authority.js";
+import {
+  prepareReplyRunToolAuthority,
+  prepareReplyToolAuthority,
+} from "../auto-reply/reply/reply-tool-authority.js";
 import {
   createQueueTestRun,
   toolAuthorityOverlay,
@@ -40,6 +46,8 @@ it.each([
   "retained predecessor",
   "retained predecessor pending",
   "retained predecessor without source",
+  "retained predecessor without observation",
+  "claim added after empty observation",
   "claim replaced before preparation",
   "claim replaced before preparation without source",
   "claim replaced after preparation",
@@ -70,6 +78,7 @@ it.each([
   "replaced backend",
   "saved settings after preparation",
   "activity after preparation",
+  "delivery closed before final submission",
 ] as const)("joins the selected execution with current admission checks: %s", async (change) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const key = `agent:main:join-${change.replaceAll(" ", "-")}`;
@@ -146,15 +155,10 @@ it.each([
           throw new Error("Expected direct execution owner");
         }
         await operation.bindToolAuthoritySnapshotAsync(
-          prepareReplyToolAuthority({
-            ...run,
-            executionSelection: change.startsWith("missing selection")
-              ? undefined
-              : captureReplyExecutionSelection({
-                  run: run.run,
-                  sessionEntry: entry,
-                }),
-          }),
+          change.startsWith("missing selection") ||
+            change === "retained predecessor without observation"
+            ? prepareReplyToolAuthority(run)
+            : prepareReplyRunToolAuthority(run, entry),
         );
         const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
         const delivered = vi.fn();
@@ -202,7 +206,9 @@ it.each([
             },
           },
         };
-        const unchangedLegacy = change.startsWith("missing selection");
+        const unchangedLegacy =
+          change.startsWith("missing selection") ||
+          change === "retained predecessor without observation";
         if (unchangedLegacy) {
           incoming.run.traceAuthorized = run.run.traceAuthorized;
           incoming.run.elevatedLevel = run.run.elevatedLevel;
@@ -297,7 +303,10 @@ it.each([
             scopes: ["operator.read"],
           });
         }
-        if (change.startsWith("claim replaced before preparation")) {
+        if (
+          change.startsWith("claim replaced before preparation") ||
+          change === "claim added after empty observation"
+        ) {
           currentEntry = {
             ...entry,
             restartRecoveryDeliveryRunId: "later-source",
@@ -313,24 +322,25 @@ it.each([
           allowCollaborativeSteering: _collaboration,
           ...caller
         } = toolAuthorityOverlay(incoming);
+        const delivery = prepareSteeringDelivery({
+          agentId: "main",
+          storePath,
+          sessionKey: key,
+          sessionId: entry.sessionId,
+          sourceTurnId: change.endsWith("without source") ? undefined : "current-execution",
+          entry: currentEntry,
+          assertCurrent: assertSource,
+        });
         const joined = await prepareReplyMessageJoin({
           followupRun: incoming,
           operation,
           target,
           assertCurrent: assertSource,
+          delivery,
           continuation: {
             kind: "continuation",
             caller,
             config: incoming.run.config,
-            delivery: prepareSteeringDelivery({
-              agentId: "main",
-              storePath,
-              sessionKey: key,
-              sessionId: entry.sessionId,
-              sourceTurnId: change.endsWith("without source") ? undefined : "current-execution",
-              entry: currentEntry,
-              assertCurrent: assertSource,
-            }),
             selectedRoute: { provider: incoming.run.provider, model: incoming.run.model },
             fallbackAvailability: { kind: "none_configured", source: "inherited" },
             executionSelection:
@@ -347,6 +357,7 @@ it.each([
           "resolved defaults",
           "retained predecessor",
           "retained predecessor without source",
+          "retained predecessor without observation",
           "claim replaced after preparation",
           "claim replaced after preparation without source",
           "legacy automatic profile",
@@ -361,8 +372,12 @@ it.each([
           "replaced backend",
           "saved settings after preparation",
           "activity after preparation",
+          "delivery closed before final submission",
         ].includes(change);
         expect(joined.kind).toBe(allowed ? "prepared" : "deferred");
+        if (change === "claim added after empty observation") {
+          expect(joined).toMatchObject({ kind: "deferred", reason: "reply-owner-ended" });
+        }
         assertFrozenParticipants();
         if (joined.kind !== "prepared") {
           expect(delivered).not.toHaveBeenCalled();
@@ -428,19 +443,37 @@ it.each([
             toolAuthorityPreparation: bindPreparedToolAuthority(
               bindWorkerToolPreparation({
                 authorityKind: "source-bound" as const,
-                assertCurrent: () => {
-                  joined.toolAuthority.read();
-                },
+                assertCurrent:
+                  change === "delivery closed before final submission"
+                    ? assertSource
+                    : () => {
+                        joined.toolAuthority.read();
+                      },
                 compatAssertCurrent: () => {
                   joined.toolAuthority.read();
                 },
-                prepareCurrent: joined.prepareCurrent,
+                prepareCurrent:
+                  change === "delivery closed before final submission" ||
+                  change === "retained predecessor without observation"
+                    ? async () => {
+                        await joined.prepareCurrent();
+                        if (change === "delivery closed before final submission") {
+                          if (isToolAuthorityReadCaptureActive()) {
+                            delivery.release();
+                          }
+                        } else {
+                          await delivery.prepareCurrent();
+                        }
+                      }
+                    : joined.prepareCurrent,
               }),
             ),
           });
           const outcome = await attempt.outcome;
           const rejected =
             change === "replaced backend" ||
+            change === "delivery closed before final submission" ||
+            change === "retained predecessor without observation" ||
             change === "saved settings after preparation" ||
             change.startsWith("claim replaced after preparation");
           expect(outcome.status).toBe(rejected ? "rejected" : "accepted");

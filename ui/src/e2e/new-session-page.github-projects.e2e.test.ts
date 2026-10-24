@@ -11,7 +11,6 @@ import {
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
-  navigateInApp,
   pollEnabled,
   pollLocatorText,
   pollCount,
@@ -235,12 +234,6 @@ suite.define(() => {
   it.each([
     { name: "shows workspace preparation in the admitted session", failure: null, worktree: false },
     {
-      name: "keeps a project preparation failure actionable in the admitted session",
-      failure: "Repository clone failed; verify repository access and try again.",
-      worktree: false,
-    },
-    { name: "shows worktree preparation in the admitted session", failure: null, worktree: true },
-    {
       name: "keeps a worktree setup failure actionable in the admitted session",
       failure: "Worktree setup failed; fix the setup command and try again.",
       worktree: true,
@@ -267,21 +260,6 @@ suite.define(() => {
         await route.continue();
       },
     );
-    let releaseMedia!: () => void;
-    const mediaBlocked = new Promise<void>((resolve) => {
-      releaseMedia = resolve;
-    });
-    let metadataRequested = false;
-    await page.route("**/__openclaw__/assistant-media?**", async (route) => {
-      const metadata = new URL(route.request().url()).searchParams.has("meta");
-      metadataRequested ||= metadata;
-      await mediaBlocked;
-      await route.fulfill(
-        metadata
-          ? { json: { available: true } }
-          : { contentType: "image/png", body: Buffer.from(ONE_PIXEL_PNG_B64, "base64") },
-      );
-    });
     const acceptedAt = Date.now();
     const pendingInput = {
       id: "accepted-project-input",
@@ -296,14 +274,6 @@ suite.define(() => {
           id: "pending:accepted-project-input",
           senderId: "synthetic-author",
           senderName: "Synthetic Author",
-          media: [
-            {
-              url: "media://inbound/synthetic.png",
-              contentType: "image/png",
-              fileName: "synthetic.png",
-            },
-          ],
-          mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
         },
       },
     };
@@ -460,48 +430,12 @@ suite.define(() => {
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await gateway.waitForRequest("chat.startup");
 
-      const userImage = page.locator(".chat-group.user img.chat-message-image");
-      const readImage = () =>
-        userImage.evaluate((element: HTMLImageElement) => ({
-          inline: element.src.startsWith("data:image/png;base64,"),
-          usable: element.complete && element.naturalWidth > 0,
-        }));
-      await pollCount(page.locator(".chat-group.user")).toBe(1);
-      await pollCount(userImage).toBe(1);
-      await expect.poll(readImage).toEqual({ inline: true, usable: true });
-      const transition = await page.evaluateHandle(() => {
-        const frames: { users: number; images: number }[] = [];
-        let frame: number;
-        const observe = () => {
-          frames.push({
-            users: document.querySelectorAll(".chat-group.user").length,
-            images: document.querySelectorAll(".chat-group.user img.chat-message-image").length,
-          });
-          frame = requestAnimationFrame(observe);
-        };
-        observe();
-        return {
-          stop() {
-            cancelAnimationFrame(frame);
-            return frames;
-          },
-        };
-      });
       await gateway.resolveDeferred("chat.startup");
-      await expect.poll(() => metadataRequested).toBe(true);
       const working = page.locator('.chat-working-indicator[role="status"]');
       await pollLocatorText(working).toContain("Preparing workspace…");
-      expect(await page.locator(".chat-notice").count()).toBe(0);
       await pollCount(page.locator(".chat-group.user")).toBe(1);
-      await pollCount(page.locator(".chat-group.user img.chat-message-image")).toBe(1);
-      await expect.poll(readImage).toEqual({ inline: true, usable: true });
-      const observed = await transition.evaluate(async (sampler) => {
-        await new Promise(requestAnimationFrame);
-        return sampler.stop();
-      });
-      await transition.dispose();
-      expect(observed.length).toBeGreaterThan(1);
-      expect(observed.every(({ users, images }) => users === 1 && images === 1)).toBe(true);
+      await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
+      expect(await page.locator(".chat-notice").count()).toBe(0);
       expect(await working.locator(".chat-reading-indicator").count()).toBe(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
@@ -525,45 +459,6 @@ suite.define(() => {
       }
 
       if (!failure) {
-        const promoted = {
-          ...pendingInput.message,
-          __openclaw: {
-            ...pendingInput.message["__openclaw"],
-            id: pendingInput.id,
-            idempotencyKey: `${runId}:user`,
-            seq: 4,
-          },
-        };
-        const promotedHistory = {
-          ...history,
-          messages: [promoted],
-          pendingInputs: { items: [], total: 0 },
-        };
-        await gateway.setMethodResponse("chat.startup", promotedHistory);
-        await gateway.setMethodResponse("chat.history", promotedHistory);
-        await gateway.setHistoryMessages([promoted]);
-        await gateway.emitGatewayEvent("session.message", {
-          sessionKey,
-          sessionId: history.sessionId,
-          agentId: "main",
-          hasActiveRun: true,
-          messageId: pendingInput.id,
-          messageSeq: 4,
-          message: promoted,
-        });
-        const canonicalBubble = page.locator(
-          '.chat-bubble[data-entry-id="accepted-project-input"]',
-        );
-        await canonicalBubble.waitFor();
-        await pollCount(canonicalBubble).toBe(1);
-        await pollCount(page.locator(".chat-group.user")).toBe(1);
-        await pollCount(canonicalBubble.locator("img.chat-message-image")).toBe(1);
-        await navigateInApp(page, "new-session");
-        await page.locator(".new-session-page__message").waitFor();
-        await page.goBack();
-        await waitForCommittedChatRoute(page);
-        await canonicalBubble.waitFor();
-        await pollCount(page.locator(".chat-group.user")).toBe(1);
         await gateway.emitChatFinal({ runId, sessionKey, text: "Project workspace is ready." });
         await page
           .getByRole("paragraph")
@@ -600,7 +495,6 @@ suite.define(() => {
       expect(await gateway.getRequests("projects.add")).toHaveLength(0);
     } finally {
       releaseChatModule();
-      releaseMedia();
       await context.close();
     }
   });

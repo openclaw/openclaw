@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { expect, it } from "vitest";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -93,6 +94,7 @@ suite.define(() => {
             await expect
               .poll(() => ring.getAttribute("aria-label"))
               .toContain(`${fresh ? "" : "~"}${percent}%`);
+            await waitForControlUiProofSurface(ring, [ring]);
             const ringBounds = await ring.boundingBox();
             expect(ringBounds).not.toBeNull();
             // Capture after painting so session events cannot pass on stale SVG pixels.

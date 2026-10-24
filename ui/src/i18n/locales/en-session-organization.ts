@@ -297,6 +297,8 @@ const enSessionOrganization = {
     archiveSessionNestedOther:
       '"{session}" has {count} directly nested sessions. If you archive only this session, those nested sessions move to the top level.',
     archiveThisSession: "Archive only this session",
+    archiveSessionNestedOffline:
+      'Archive only "{session}"? Its directly nested sessions move to the top level. Reconnect to archive the complete subtree.',
     archiveAllSessions: "Archive all ({count})",
     moveToTopLevel: en.sessionsView.moveToTopLevel,
     archiveTreeRootRequired:
@@ -329,8 +331,10 @@ const enSessionOrganization = {
       "Worker stop requested. Review the initial message before retrying.",
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
-    deleteSessionStale: en.sessionsView.deleteSessionStale,
-    deleteSessionsStale: en.sessionsView.deleteSessionsStale,
+    deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
+    deleteSessionIdentityMissing: en.sessionsView.deleteSessionIdentityMissing,
+    deleteSessionsStale:
+      "Gateway connection replaced before {count} sessions were deleted. Try again.",
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",

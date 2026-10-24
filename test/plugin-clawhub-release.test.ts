@@ -488,6 +488,19 @@ describe("plugin-clawhub-publish.sh", () => {
       const markerPath = join(repoDir, "clawhub-invoked");
       const outputDir = join(repoDir, "clawhub-artifacts");
       writeClawHubPackStub(binDir, markerPath);
+      // Release jobs run trusted tooling from an older candidate; its tsconfig
+      // paths must not redirect tooling workspace imports to candidate source.
+      writeFileSync(join(repoDir, "stale-record-coerce.ts"), "export {};\n");
+      writeFileSync(
+        join(repoDir, "tsconfig.json"),
+        JSON.stringify({
+          compilerOptions: {
+            paths: {
+              "@openclaw/normalization-core/record-coerce": ["./stale-record-coerce.ts"],
+            },
+          },
+        }),
+      );
       const output = execFileSync(
         "bash",
         publishArgs(mode),

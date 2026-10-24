@@ -25,10 +25,6 @@ import {
   readCronStateCommandInDatabase,
 } from "../cron/store/read-command.js";
 import {
-  readSharedGitHubPublicationRequestInDatabase,
-  readSharedRepositoryGitHubPublicationInDatabase,
-} from "../gateway/github-publication-shared-read.kernel.js";
-import {
   readGitHubPublicationRequest,
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
 } from "../gateway/github-publication-store.worker.js";
@@ -109,7 +105,6 @@ import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import { readMcpOAuthStateCommand } from "./openclaw-state-read-mcp-oauth.js";
 import type { RegisteredStateReadCommand } from "./openclaw-state-read-operation-registry.js";
 import { readSessionRowsSharedFacts } from "./openclaw-state-read-session-rows.worker.js";
-import { readStateStream } from "./openclaw-state-read-stream.js";
 import type { OpenClawStateReadRequest } from "./openclaw-state-read.types.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import { readUserBackgroundCommand } from "./user-background.kernel.js";
@@ -118,7 +113,7 @@ import { readUserPreferences, selectUserPreferenceValues } from "./user-preferen
 import { readUserProfileCommand } from "./user-profile-read.worker.js";
 import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
 
-export { prepareAcpSessionMetadataRead, loadSubagentSessionListRunsFromSqlite, readStateStream };
+export { prepareAcpSessionMetadataRead, loadSubagentSessionListRunsFromSqlite };
 
 /** Non-metadata query owners load only when the shared worker receives one of their commands. */
 export function readOpenClawStateDatabaseCommand(
@@ -403,15 +398,6 @@ export function readOpenClawStateDatabaseCommand(
     return {
       type: command.type,
       lifecycle: readGitHubPublicationSessionLifecycle(command, db),
-    };
-  }
-  if (command.type === "githubPublication.sharedObservation") {
-    const { session, selector, entry } = command.input;
-    return {
-      type: command.type,
-      row:
-        readSharedRepositoryGitHubPublicationInDatabase(db, session, selector, entry) ??
-        readSharedGitHubPublicationRequestInDatabase(db, session, selector, entry),
     };
   }
   if (command.type === "githubPublication.request") {

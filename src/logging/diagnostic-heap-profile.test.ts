@@ -93,6 +93,15 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+it("reports an unavailable inspector method as unsupported heap sampling", async () => {
+  native.post.mockRejectedValue(
+    new Error("Inspector error -32601: 'HeapProfiler.enable' wasn't found"),
+  );
+  expect(await capture()).toMatchObject({ status: "unavailable", reason: "unsupported" });
+  const { collectRuntimeCapabilities } = await import("../infra/runtime-capabilities.js");
+  expect(collectRuntimeCapabilities().capabilities.heapSampling.state).toBe("unavailable");
+});
+
 describe("diagnostic heap profile owner", () => {
   it("preserves the sanitized bytes of a recorded synthetic native profile", async () => {
     const { sanitizeDiagnosticHeapProfile } = await import("./diagnostic-heap-profile.js");
@@ -189,6 +198,22 @@ describe("diagnostic heap profile owner", () => {
     ];
     const locations: [Partial<ReturnType<typeof frame>>, string][] = [
       [{ scriptId: "0", url: "", lineNumber: -1 }, "[native]"],
+      ...[
+        "(V8 API)",
+        "(GC)",
+        "(PARSER)",
+        "(COMPILER)",
+        "(BYTECODE_COMPILER)",
+        "(EXTERNAL)",
+        "(LOGGING)",
+        "(IDLE_EXTERNAL)",
+        "(IDLE)",
+        "(JS)",
+        "(deopt)",
+      ].map((functionName): [Partial<ReturnType<typeof frame>>, string] => [
+        { functionName, scriptId: "0", url: "", lineNumber: -1 },
+        functionName,
+      ]),
       [{ scriptId: "0", url: "", lineNumber: 0 }, "[redacted]"],
       [{ scriptId: "2", url: "", lineNumber: -1 }, "[redacted]"],
       [{ scriptId: "0", url: "/private/user/secret.js", lineNumber: -1 }, "[redacted]"],

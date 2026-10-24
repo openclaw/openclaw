@@ -23,7 +23,6 @@ function expectRedactedDetails(error: DiscordError, safe?: string) {
   const details = JSON.stringify({
     message: error.message,
     rawBody: error.rawBody,
-    rawError: error.rawError,
   });
   expect(details).not.toContain(token);
   expect(details).not.toContain(`Bot ${token}`);
@@ -112,17 +111,15 @@ describe("Discord REST error redaction", () => {
         retryAfter: 0.25,
         discordCode: 20_028,
         scope: "user",
-        bucket: expect.stringMatching(/^sha256:[a-f0-9]{32}$/),
       });
 
       const { scheduler } = client as unknown as { scheduler: { buckets: Map<string, unknown> } };
       const bucketCount = scheduler.buckets.size;
       expect(bucketCount).toBeGreaterThan(0);
-      const repeatedRateError = await captureError(
-        client.get(webhookRateLimitPath),
-        RateLimitError,
+      expect([...scheduler.buckets.keys()]).toEqual(
+        expect.arrayContaining([expect.stringMatching(/sha256:[a-f0-9]{32}/)]),
       );
-      expect(repeatedRateError.bucket).toBe(rateLimitError.bucket);
+      await captureError(client.get(webhookRateLimitPath), RateLimitError);
       expect(scheduler.buckets.size).toBe(bucketCount);
       expect(JSON.stringify([...scheduler.buckets])).not.toContain(token);
 
@@ -131,7 +128,6 @@ describe("Discord REST error redaction", () => {
         RateLimitError,
       );
       const reflectedHeaderDetails = JSON.stringify({
-        bucket: reflectedRateLimitError.bucket,
         scope: reflectedRateLimitError.scope,
         scheduler: [...scheduler.buckets],
       });

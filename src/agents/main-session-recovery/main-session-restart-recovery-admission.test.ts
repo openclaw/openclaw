@@ -437,6 +437,8 @@ describe("startup recovery admission", () => {
         sessionKey: "agent:main:subagent:child",
         sessionId: "child-session",
         spawnDepth: 1,
+        mainRestartRecovery: undefined,
+        restartRecoveryDeliveryRunId: "registry-child-run",
       });
       const info = vi.spyOn(mainSessionRecoveryLog, "info");
       const executionWait = createDeferred();

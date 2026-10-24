@@ -92,7 +92,6 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 import { ChatWelcome } from "./components/chat-welcome.tsx";
-import { saveChatSessionScrollPosition } from "./scroll.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 import {
   workspaceConflictPathForDisplay,
@@ -334,111 +333,6 @@ describe("chat typing status", () => {
 });
 
 describe("chat run error", () => {
-  it("keeps Check delivery reachable when exact history deduplicates the retained bubble", () => {
-    vi.mocked(chatThread.buildCachedChatItems).mockRestore();
-    const onRetrySessionPlacementStartup = vi.fn();
-    const container = renderChatView({
-      canSend: false,
-      messages: [
-        {
-          role: "user",
-          content: "original prompt",
-          __openclaw: { idempotencyKey: "initial:user" },
-        },
-      ],
-      placementStartup: {
-        sessionKey: "main",
-        targetKind: "profile",
-        phase: "failed",
-        startedAt: 1,
-        retryable: true,
-        action: "check-delivery",
-        initialTurn: {
-          id: "initial",
-          sendRunId: "initial",
-          text: "original prompt",
-          createdAt: 1,
-          sendAttempts: 1,
-          sendState: "unconfirmed",
-        },
-      },
-      onRetrySessionPlacementStartup,
-    });
-    expect(container.querySelectorAll(".chat-group.user")).toHaveLength(1);
-    expect(container.querySelector(".chat-send-status__retry")).toBeNull();
-    const action = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".chat-error button"),
-    ).find((button) => button.textContent?.trim() === "Check delivery");
-    expect(action).toBeDefined();
-    action?.click();
-    expect(onRetrySessionPlacementStartup).toHaveBeenCalledOnce();
-  });
-
-  it.each(["retry", "check-delivery"] as const)(
-    "keeps the retained initial turn's %s action usable while ordinary sending is held",
-    (action) => {
-      vi.mocked(chatThread.buildCachedChatItems).mockRestore();
-      const onRetrySessionPlacementStartup = vi.fn();
-      const onQueueRetry = vi.fn();
-      const paneId = `startup-${action}`;
-      saveChatSessionScrollPosition(paneId, "main", { scrollTop: 0, anchorToEnd: false });
-      const container = renderChatView({
-        transcript: createTestTranscript(paneId),
-        canSend: false,
-        messages: [
-          { role: "user", content: "[System] Gateway restarted", timestamp: 3 },
-          { role: "assistant", content: "Worker recovery is pending", timestamp: 4 },
-        ],
-        queue: [
-          {
-            id: "ordinary",
-            text: "later draft",
-            createdAt: 2,
-            sendAttempts: 1,
-            sendState: "failed",
-          },
-        ],
-        placementStartup: {
-          sessionKey: "agent:main:startup",
-          targetKind: "profile",
-          phase: "failed",
-          startedAt: 1,
-          retryable: true,
-          action,
-          error: "Retained initial turn",
-          initialTurn: {
-            id: "initial",
-            sendRunId: "initial",
-            text: "original prompt",
-            createdAt: 1,
-            sendAttempts: 1,
-            sendState: action === "retry" ? "failed" : "unconfirmed",
-          },
-        },
-        onRetrySessionPlacementStartup,
-        onQueueRetry,
-      });
-      expect(container.querySelector(".chat-thread")?.textContent).toContain("original prompt");
-      expect(container.querySelector(".chat-thread")?.textContent).toContain("later draft");
-      const transcript = container.querySelector(".chat-thread")?.textContent ?? "";
-      expect(transcript.indexOf("original prompt")).toBeLessThan(
-        transcript.indexOf("Gateway restarted"),
-      );
-      expect(transcript.indexOf("Worker recovery is pending")).toBeLessThan(
-        transcript.indexOf("later draft"),
-      );
-      const buttons = container.querySelectorAll<HTMLButtonElement>(".chat-send-status__retry");
-      expect(buttons).toHaveLength(1);
-      expect(buttons[0]?.textContent?.trim()).toBe(action === "retry" ? "Retry" : "Check delivery");
-      buttons[0]?.click();
-      expect(onRetrySessionPlacementStartup).toHaveBeenCalledOnce();
-      expect(onQueueRetry).not.toHaveBeenCalled();
-      expect(container.querySelector(".chat-error")?.textContent).toContain(
-        action === "retry" ? "Retained initial turn" : "without resending it or starting a worker",
-      );
-    },
-  );
-
   it.each(["run", "request"])(
     "strips only the decorative prefix from a %s error display and copies the raw diagnostic",
     async (source) => {
@@ -800,7 +694,7 @@ describe("retained input navigation", () => {
     expect(historyState.chatMessages).toEqual([]);
   });
 
-  it("hides the retained queue copy represented by pending custody without hiding an identical new send", () => {
+  it("hides the retained queue copy represented by pending custody without hiding an identical new send", async () => {
     const historyState = makeChatHost({ currentSessionId: "retained-input-session" });
     const message = {
       role: "user",
@@ -837,6 +731,9 @@ describe("retained input navigation", () => {
       onQueueMove,
     });
 
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".chat-queue__item")).toHaveLength(2),
+    );
     const rows = container.querySelectorAll(".chat-queue__item");
     expect([...rows].map((row) => row.getAttribute("data-chat-queue-item"))).toEqual([
       "before",

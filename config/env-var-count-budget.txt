@@ -18,4 +18,5 @@
 # OPENCLAW_DISABLE_CRON_HOST_EXECUTION (#177855) controls Gateway-local automation host execution.
 # OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS (#177855) controls Gateway-local terminals.
 # OPENCLAW_DEVICE_NAME_PREFIX was removed with unread Matrix device-health projections (#178345).
-461
+# Retiring A2UI removes its four renderer build environment names.
+457

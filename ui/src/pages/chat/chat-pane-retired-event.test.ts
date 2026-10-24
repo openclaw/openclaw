@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -62,7 +61,7 @@ it.each([
       },
     ];
     const runId = "persisted-successor-input";
-    let consumed = false;
+    let acknowledgeReplay = false;
     const history = vi.fn<GatewayRequestHandler>((_method, raw): ChatHistoryResult => {
       const params = asOptionalRecord(raw);
       const row = params?.sessionKey === successor.key ? successor : foreground;
@@ -70,17 +69,20 @@ it.each([
         messages: row === successor ? successorTranscript : [],
         sessionId: row.sessionId,
         sessionInfo: row,
-        ...(row === successor && consumed
-          ? { inputReceipts: [{ runId, state: "consumed", consumedByEventId: "persisted-user" }] }
-          : {}),
       };
+    });
+    const send = vi.fn<GatewayRequestHandler>(() => {
+      if (!acknowledgeReplay) {
+        throw new Error("gateway closed");
+      }
+      return { status: "ok", runId, messageSeq: 1 };
     });
     const fixture = createMountedPanes([foreground, successor], "main", undefined, {
       "chat.history": history,
+      "chat.send": send,
       "chat.startup": history,
     });
     const { sessions, mount, emitGatewayEvent } = fixture;
-    const request = vi.spyOn(expectDefined(fixture.state.client, "connected client"), "request");
     const resume = vi.spyOn(chatSendActions, "resumeStoredChatOutboxes");
     await sessions.refresh({ agentId: "main", force: true });
     const visiblePane = mount(foreground.key);
@@ -117,19 +119,20 @@ it.each([
         input,
       ),
     ).toBe("admitted");
-    // Settle startup/admission recovery first: an active successor without a receipt stays queued.
+    // An interrupted replay retains the original input until the Gateway acknowledges it.
     await chatSendActions.resumeStoredChatOutboxes(visiblePane.state);
     expect(listStoredChatOutboxes(visiblePane.state)).toEqual([
       expect.objectContaining({
         sessionKey: successor.key,
-        queue: [expect.objectContaining(input)],
+        queue: [expect.objectContaining({ ...input, sendAttempts: 2 })],
       }),
     ]);
     const messagesBefore = state.chatMessages;
-    for (const mock of [history, request, resume]) {
+    expect(send).toHaveBeenCalledTimes(1);
+    for (const mock of [history, resume, send]) {
       mock.mockClear();
     }
-    consumed = true;
+    acknowledgeReplay = true;
 
     emitGatewayEvent(event, {
       sessionKey: successor.key,
@@ -164,25 +167,24 @@ it.each([
         payload: expect.objectContaining({ sessionKey: successor.key }),
       }),
     );
-    // A background history refresh must not hide a transient stale append or reset.
+    // Recovery must not hide a transient stale append or reset.
     expect(state.chatMessages).toBe(messagesBefore);
     expectCurrentSession();
     await Promise.all(
       resume.mock.results.flatMap((result) => (result.type === "return" ? [result.value] : [])),
     );
     expect(listStoredChatOutboxes(visiblePane.state)).toEqual([]);
-    const recoveryCalls = history.mock.calls.filter(([, raw]) => {
-      const ids = asOptionalRecord(raw)?.inputRunIds;
-      return Array.isArray(ids) && ids.includes(runId);
-    });
-    expect(recoveryCalls).toEqual([
-      [
-        "chat.history",
-        { sessionKey: successor.key, inputRunIds: [runId], limit: 1000, toolResultMaxChars: 2_000 },
-        { timeoutMs: 30_000 },
-      ],
-    ]);
-    expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    expect(send).toHaveBeenCalledExactlyOnceWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: successor.key,
+        sessionId: successor.sessionId,
+        message: input.text,
+        idempotencyKey: runId,
+      }),
+      expect.anything(),
+    );
+    expect(history).not.toHaveBeenCalled();
     expectCurrentSession();
     expect(visiblePane.state.chatMessages).toEqual([]);
   },

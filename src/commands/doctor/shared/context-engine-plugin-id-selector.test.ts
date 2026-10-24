@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { findContextEnginePluginIdSelector } from "./context-engine-plugin-id-selector.js";
 
 function plugin(
@@ -8,20 +9,15 @@ function plugin(
   contextEngineIds?: string[],
   kind: PluginManifestRecord["kind"] = "context-engine",
 ): PluginManifestRecord {
-  return {
+  return createPluginManifestRecordFixture({
     id,
     kind,
     ...(contextEngineIds ? { contextEngineIds } : {}),
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
     origin: "global",
     rootDir: `/plugins/${id}`,
     source: `/plugins/${id}`,
     manifestPath: `/plugins/${id}/openclaw.plugin.json`,
-  };
+  });
 }
 
 function config(contextEngine: string, plugins: OpenClawConfig["plugins"] = {}): OpenClawConfig {

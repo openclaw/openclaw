@@ -3,7 +3,6 @@
 exports[`config tier coverage > keeps the curated common leaf set reviewable 1`] = `
 [
   "acp.allowedAgents.*",
-  "agents.defaults.compaction.memoryFlush.model",
   "agents.defaults.compaction.model",
   "agents.defaults.elevatedDefault",
   "agents.defaults.embeddedAgent.projectSettingsPolicy",

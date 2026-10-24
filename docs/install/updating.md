@@ -39,6 +39,11 @@ are reported by the scheduler without restarting the Gateway.
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
 
+Private Doctor and post-core workers validate command fields before entering maintenance.
+The delegated executor admits its grant data separately and still checks live process and
+installation ownership before effects. Callbacks and live deadline objects stay in the
+initiating process; only serializable options cross the migrated-update handoff.
+
 Stopped update and Doctor database snapshots tolerate concurrent read-only SQLite
 probes. The transient `-shm` WAL index is rebuilt privately, never copied or used
 to detect durable changes. Empty WAL files created by readers count as absent.
@@ -46,6 +51,13 @@ Changes to the main database, WAL data, or rollback journal still refuse the
 stopped backup and identify the changed file. This repair must
 be present in the runtime performing the snapshot, including the candidate worker
 when the installed updater delegates capture to it.
+
+Candidate Doctor also accepts an empty WAL index appearing or disappearing
+between an older updater's capture and migration admission, provided the database
+identity and committed contents still match and the index contains no write
+evidence. This preserves the installed updater's original fingerprint format.
+Changed committed data or write evidence still refuses migration and automatic
+restoration. The candidate must contain this repair.
 
 Update snapshots and database backups accept a database whose only integrity
 findings are `malformed inverted index` reports on canonical, schema-validated
@@ -66,6 +78,13 @@ On macOS, reinstall and uninstall reconcile the launchd registration by service
 label even if its plist was deleted. Reinstall warns when the previous definition
 is missing; an existing plist and its private environment files remain backed up
 for rollback if activation fails.
+
+When an updater stops a macOS LaunchAgent, it waits for both launchd's process
+and the verified serving Gateway child to exit before continuing. An unloaded
+job or a closed listener does not prove that the child has released its agent
+databases. Pending process cleanup produces a warning and shares the existing
+bounded stop deadline; other processes using the state still receive Doctor's
+maintenance refusal. The updater performing the stop must contain this fix.
 
 Candidate state workers drop advisory progress when stderr is temporarily full.
 Dropped writes do not consume the legacy progress budget, so reporting resumes
@@ -176,6 +195,10 @@ If the retained verifier cannot authenticate to the restarted Gateway, it stops
 retrying that rejection. Local HTTP readiness and runtime version/build identity
 can verify activation instead, with an RPC authentication warning recorded in
 the update result. This does not change Gateway authentication or pairing.
+The retained verifier runs the previous package, so an update that changes the
+Gateway protocol version, in either direction, gets the same HTTP identity check
+with an RPC protocol warning instead of waiting for an RPC handshake that cannot
+succeed.
 
 Channel outages are warnings once the expected Gateway build is running and its
 core readiness is verified. Detailed `/readyz` responses report `coreReady`

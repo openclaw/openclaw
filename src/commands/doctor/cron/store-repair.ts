@@ -8,7 +8,10 @@ import type { CronInferenceBinding } from "../../../cron/inference-binding.js";
 import { noteCronJobsStoreCommit } from "../../../cron/store.js";
 import { resolveCronJobGrantDefinitionRevision } from "../../../cron/store/job-config-codec.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
-import { inspectCronJobsReadOnly } from "../../../cron/store/read-only.js";
+import {
+  inspectCronJobsReadOnly,
+  readCronJobOwnerRowsReadOnly,
+} from "../../../cron/store/read-only.js";
 import {
   deleteCronJobRowInDatabase,
   loadCronRows,
@@ -29,6 +32,7 @@ import type {
   PluginDoctorCronJob,
 } from "../../../plugins/doctor-contract-module.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { isStatePostgres } from "../../../state/openclaw-state-db-engine.js";
 import { withMaintenanceOpenClawStateDatabaseReadOnly } from "../../../state/openclaw-state-db-readonly-reuse.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
@@ -39,6 +43,9 @@ import { inspectCronOwnerRowsForDoctor, inspectCronRowsForDoctor } from "./store
 type DoctorCronScope = { env: NodeJS.ProcessEnv };
 
 export async function inspectCronJobOwnersForDoctor(scope: DoctorCronScope, storePath: string) {
+  if (isStatePostgres()) {
+    return await readCronJobOwnerRowsReadOnly(storePath, scope.env);
+  }
   return (
     (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
       ({ db }) => inspectCronOwnerRowsForDoctor(db, cronStoreKey(storePath)),

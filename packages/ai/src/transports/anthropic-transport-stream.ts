@@ -1,4 +1,9 @@
-import type { Model, StreamFn } from "@openclaw/llm-core";
+import {
+  omitNullRequestHeaders,
+  type Model,
+  type ModelRequestHeaders,
+  type StreamFn,
+} from "@openclaw/llm-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -203,7 +208,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         const copilot = model.provider === "github-copilot";
         const bearerAuth = copilot || usesFoundryBearerAuth(resolveModelHeaderSentinels(model));
         const isOAuthToken = !bearerAuth && isAnthropicOAuthApiKey(apiKey);
-        let defaultHeaders: Record<string, string> | undefined;
+        let defaultHeaders: ModelRequestHeaders | undefined;
         let claudeCodeVersion: string | undefined;
         let directApiKeyBetaHeader: string | undefined;
         if (bearerAuth) {
@@ -259,7 +264,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             );
             // Binding controls are verified only on direct API-key requests, not OAuth or proxies.
             directApiKeyBetaHeader = isDirectAnthropicModel(model)
-              ? (new Headers(defaultHeaders).get("anthropic-beta") ?? "")
+              ? (new Headers(omitNullRequestHeaders(defaultHeaders)).get("anthropic-beta") ?? "")
               : undefined;
           }
         }
@@ -273,15 +278,17 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           directApiKeyBetaHeader,
           request: async (body, requestHeaders) => {
             const headers = new Headers(
-              mergeTransportHeaders(
-                {
-                  "content-type": "application/json",
-                  "anthropic-version": "2023-06-01",
-                  ...(bearerAuth || isOAuthToken
-                    ? { authorization: `Bearer ${apiKey}` }
-                    : { "x-api-key": apiKey }),
-                },
-                defaultHeaders,
+              omitNullRequestHeaders(
+                mergeTransportHeaders(
+                  {
+                    "content-type": "application/json",
+                    "anthropic-version": "2023-06-01",
+                    ...(bearerAuth || isOAuthToken
+                      ? { authorization: `Bearer ${apiKey}` }
+                      : { "x-api-key": apiKey }),
+                  },
+                  defaultHeaders,
+                ),
               ),
             );
             for (const [name, value] of Object.entries(requestHeaders ?? {})) {

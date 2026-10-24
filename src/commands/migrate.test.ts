@@ -124,12 +124,9 @@ function setInteractive() {
 function authPlan(status: MigrationPlan["items"][number]["status"] = "skipped"): MigrationPlan {
   return plan({
     summary: {
-      total: 1,
+      ...plan().summary,
       planned: status === "planned" ? 1 : 0,
-      migrated: 0,
       skipped: status === "skipped" ? 1 : 0,
-      conflicts: 0,
-      errors: 0,
       sensitive: 1,
     },
     items: [
@@ -147,30 +144,18 @@ function authPlan(status: MigrationPlan["items"][number]["status"] = "skipped"):
 
 function codexSkillPlan(overrides: Partial<MigrationPlan> = {}): MigrationPlan {
   const items: MigrationPlan["items"] = [
-    {
-      id: "skill:alpha",
+    ...[
+      ["alpha", "Codex skill"],
+      ["beta", "Personal AgentSkill"],
+    ].map<MigrationPlan["items"][number]>(([skillName, sourceLabel]) => ({
+      id: `skill:${skillName}`,
       kind: "skill",
       action: "copy",
       status: "planned",
-      source: "/tmp/codex/skills/alpha",
-      target: "/tmp/openclaw/workspace/skills/alpha",
-      details: {
-        skillName: "alpha",
-        sourceLabel: "Codex skill",
-      },
-    },
-    {
-      id: "skill:beta",
-      kind: "skill",
-      action: "copy",
-      status: "planned",
-      source: "/tmp/codex/skills/beta",
-      target: "/tmp/openclaw/workspace/skills/beta",
-      details: {
-        skillName: "beta",
-        sourceLabel: "Personal AgentSkill",
-      },
-    },
+      source: `/tmp/codex/skills/${skillName}`,
+      target: `/tmp/openclaw/workspace/skills/${skillName}`,
+      details: { skillName, sourceLabel },
+    })),
     {
       id: "archive:config.toml",
       kind: "archive",
@@ -188,29 +173,19 @@ function codexSkillPlan(overrides: Partial<MigrationPlan> = {}): MigrationPlan {
 }
 
 function codexPluginPlan(overrides: Partial<MigrationPlan> = {}): MigrationPlan {
+  const pluginNames = ["google-calendar", "gmail"];
   const items: MigrationPlan["items"] = [
-    {
-      id: "plugin:google-calendar",
+    ...pluginNames.map<MigrationPlan["items"][number]>((pluginName) => ({
+      id: `plugin:${pluginName}`,
       kind: "plugin",
       action: "install",
       status: "planned",
       details: {
-        configKey: "google-calendar",
+        configKey: pluginName,
         marketplaceName: "openai-curated",
-        pluginName: "google-calendar",
+        pluginName,
       },
-    },
-    {
-      id: "plugin:gmail",
-      kind: "plugin",
-      action: "install",
-      status: "planned",
-      details: {
-        configKey: "gmail",
-        marketplaceName: "openai-curated",
-        pluginName: "gmail",
-      },
-    },
+    })),
     {
       id: "config:codex-plugins",
       kind: "config",
@@ -223,18 +198,16 @@ function codexPluginPlan(overrides: Partial<MigrationPlan> = {}): MigrationPlan 
             codexPlugins: {
               enabled: true,
               allow_destructive_actions: true,
-              plugins: {
-                "google-calendar": {
-                  enabled: true,
-                  marketplaceName: "openai-curated",
-                  pluginName: "google-calendar",
-                },
-                gmail: {
-                  enabled: true,
-                  marketplaceName: "openai-curated",
-                  pluginName: "gmail",
-                },
-              },
+              plugins: Object.fromEntries(
+                pluginNames.map((pluginName) => [
+                  pluginName,
+                  {
+                    enabled: true,
+                    marketplaceName: "openai-curated",
+                    pluginName,
+                  },
+                ]),
+              ),
             },
           },
         },
@@ -701,20 +674,9 @@ describe("migrateApplyCommand", () => {
   });
 
   it("leaves conflicting Codex skills unchecked by default", async () => {
-    Object.defineProperty(process.stdin, "isTTY", {
-      configurable: true,
-      value: true,
-    });
+    setInteractive();
     const planned = codexSkillPlan({
-      summary: {
-        total: 3,
-        planned: 2,
-        migrated: 0,
-        skipped: 0,
-        conflicts: 1,
-        errors: 0,
-        sensitive: 0,
-      },
+      summary: { ...plan().summary, total: 3, planned: 2, conflicts: 1 },
       items: [
         {
           id: "skill:alpha",
@@ -826,15 +788,7 @@ describe("migrateApplyCommand", () => {
   it("does not create a backup or apply when the preflight plan has conflicts", async () => {
     mocks.provider.plan.mockResolvedValue(
       plan({
-        summary: {
-          total: 1,
-          planned: 0,
-          migrated: 0,
-          skipped: 0,
-          conflicts: 1,
-          errors: 0,
-          sensitive: 0,
-        },
+        summary: { ...plan().summary, planned: 0, conflicts: 1 },
         items: [
           {
             id: "workspace:SOUL.md",

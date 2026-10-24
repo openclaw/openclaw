@@ -33,17 +33,31 @@ export function buildTranscriptFollowupRun(
       ...base.run,
       inputProvenance: { kind: "internal_system", sourceTool: params.sourceTool },
       suppressNextUserMessagePersistence: true,
-      // The source grant cannot authorize a replacement turn. Keep a personal-only
-      // expired grant so Workshop cannot fall back to wider workspace authoring.
-      skillLibraryAuthoring: base.run.skillLibraryAuthoring && {
-        target: "personal",
-        defaultTarget: "personal",
-        multipleProfiles: base.run.skillLibraryAuthoring.multipleProfiles,
-        bind: () => {},
-        invoke: async () => {
-          throw new SkillLibraryError("AUTHORITY_EXPIRED", params.expiredSkillAuthoringMessage);
-        },
-      },
+      skillLibraryAuthoring: expireSkillLibraryAuthoring(
+        base.run.skillLibraryAuthoring,
+        params.expiredSkillAuthoringMessage,
+      ),
     },
   };
+}
+
+/**
+ * The source grant cannot authorize a replacement turn. Keep a personal-only
+ * expired grant so Workshop cannot fall back to wider workspace authoring.
+ */
+export function expireSkillLibraryAuthoring(
+  grant: FollowupRun["run"]["skillLibraryAuthoring"],
+  message: string,
+): FollowupRun["run"]["skillLibraryAuthoring"] {
+  return (
+    grant && {
+      target: "personal",
+      defaultTarget: "personal",
+      multipleProfiles: grant.multipleProfiles,
+      bind: () => {},
+      invoke: async () => {
+        throw new SkillLibraryError("AUTHORITY_EXPIRED", message);
+      },
+    }
+  );
 }

@@ -1,4 +1,8 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
+import {
+  isGatewayRestartUnavailableError,
+  isGatewaySuspendUnavailableError,
+} from "../../../../packages/gateway-protocol/src/restart-unavailable.ts";
 import { GatewayPayloadLimitError, GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
@@ -29,14 +33,14 @@ import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { CHAT_OUTBOX_RETRY_DEFAULT_MS, retryableGatewayDelayMs } from "./chat-outbox-retry.ts";
 import { chatProviderReviewRow, holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import { readQueuedMessageById, updateQueuedMessage } from "./chat-queue.ts";
+import { isActiveLeafChangedError } from "./chat-send-ack.ts";
 import { restoreRejectedChatDelivery } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import { isActiveLeafChangedError, resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
+import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import {
   chatSendHoldReason,
   surfaceChatDeliveryFailure,
   OFFLINE_QUEUE_STORAGE_ERROR,
-  UNCONFIRMED_CHAT_SEND_ERROR,
 } from "./chat-send-support.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -52,9 +56,11 @@ import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 registerChatMessageMetadataEnglish();
 
 export function reconnectSafeQueuedSendState(
-  host: Pick<ChatHost, "client" | "connected">,
+  host: Pick<ChatHost, "client" | "connected" | "gatewayWorkPaused">,
 ): "waiting-idle" | "waiting-reconnect" {
-  return host.connected && host.client ? "waiting-idle" : "waiting-reconnect";
+  return host.connected && host.client && !host.gatewayWorkPaused
+    ? "waiting-idle"
+    : "waiting-reconnect";
 }
 
 export function resolveQueuedChatLeaf(
@@ -157,7 +163,7 @@ export function finishChatDeliveryAdmission(
   if (!current) {
     return "failed";
   }
-  if (current.sendState === "held" || (current.sendState === "unconfirmed" && !current.sendRunId)) {
+  if (current.sendState === "held") {
     return "pending";
   }
   if (isExpiredIncognitoSession(host, route)) {
@@ -181,6 +187,7 @@ export function finishChatDeliveryAdmission(
     ) ||
     (options?.routingSessionKey && !routeVisible(current.agentId)) ||
     (!sendsDuringActiveRun &&
+      !current.sendAttempts &&
       routeVisible(current.agentId) &&
       (isChatBusy(host) || hasDirectSessionRun(host)))
   ) {
@@ -201,6 +208,7 @@ export function canSendVolatileQueueItem(
 ): boolean {
   return (
     host.connected &&
+    !host.gatewayWorkPaused &&
     Boolean(host.client) &&
     !host.chatLoading &&
     !isInitialChatHistoryUnavailable(host) &&
@@ -220,7 +228,7 @@ export function finishScopedChatSending(host: ChatHost, scope: StoredChatOutboxS
   host.chatSending = false;
 }
 
-/** Settle transport failures without turning an unconfirmed send into a fresh attempt. */
+/** Keep ambiguous transport outcomes pending under their original admission key. */
 export function settleQueuedChatSendFailure(
   host: ChatHost,
   queued: ChatQueueItem,
@@ -254,23 +262,18 @@ export function settleQueuedChatSendFailure(
     return "failed";
   }
   if (err instanceof GatewayProtocolRequestTimeoutError && err.requestSent) {
-    // The server may have accepted the input. Preserve its ID and retry payload;
-    // the existing outbox drain can read receipts, never passively resend it.
+    // Admission deduplicates recorded input. Reconnect can resend this exact key.
     finishScopedChatSending(host, scope);
     // A live receipt or another pane can retire this row before the ACK deadline.
     // Missing custody is not a failed storage write, and must not resurrect it.
     if (!readQueuedMessageById(host, id)) {
       return "pending";
     }
-    const retained = setState("unconfirmed", UNCONFIRMED_CHAT_SEND_ERROR);
-    surfaceChatDeliveryFailure(
-      host,
-      sessionKey,
-      prepared.agentId,
-      retained ? UNCONFIRMED_CHAT_SEND_ERROR : OFFLINE_QUEUE_STORAGE_ERROR,
-      { inline: Boolean(retained && !prepared.localCommandName) },
-    );
-    if (retained && storageMode === "durable") {
+    const retained = setState("waiting-reconnect");
+    if (!retained) {
+      reportFailure(OFFLINE_QUEUE_STORAGE_ERROR);
+    }
+    if (retained) {
       scheduleRetry(CHAT_OUTBOX_RETRY_DEFAULT_MS);
     }
     return "pending";
@@ -294,22 +297,29 @@ export function settleQueuedChatSendFailure(
         }
       : {};
     if (storageMode === "memory") {
-      const restore = safelyRejected && restoreRejectedChatDelivery(host, prepared, options);
+      const restore = failedBeforeTransport && restoreRejectedChatDelivery(host, prepared, options);
       if (!restore) {
-        updateQueuedSendItem(host, storageMode, id, (item) => ({
+        const waiting = updateQueuedSendItem(host, storageMode, id, (item) => ({
           ...item,
           ...rollbackAttempt,
-          sendError: safelyRejected ? error : UNCONFIRMED_CHAT_SEND_ERROR,
-          sendState: safelyRejected ? "failed" : "unconfirmed",
+          sendError: undefined,
+          sendState: "waiting-reconnect",
         }));
+        if (waiting && retryDelayMs !== null) {
+          scheduleRetry(retryDelayMs);
+        }
       }
-      reportFailure(restore ? error : OFFLINE_QUEUE_STORAGE_ERROR);
+      if (restore) {
+        reportFailure(error);
+      }
       return restore ? "failed" : "pending";
     }
+    const awaitingGateway =
+      isGatewayRestartUnavailableError(err) || isGatewaySuspendUnavailableError(err);
     const waiting = updateQueuedMessage(host, id, (item) => ({
       ...item,
       ...rollbackAttempt,
-      sendError: error,
+      sendError: awaitingGateway ? undefined : error,
       sendState: "waiting-reconnect",
     }));
     if (!waiting) {
@@ -324,7 +334,7 @@ export function settleQueuedChatSendFailure(
       reportFailure(OFFLINE_QUEUE_STORAGE_ERROR);
       return restore ? "failed" : "pending";
     }
-    if (visibleSessionMatches(host, sessionKey, prepared.agentId)) {
+    if (!awaitingGateway && visibleSessionMatches(host, sessionKey, prepared.agentId)) {
       setChatError(
         host,
         retryDelayMs === null
@@ -369,10 +379,7 @@ export async function settleDeliverySettings(
   let current = pendingSettings ? readQueuedMessageById(host, item.id) : item;
 
   while (pendingSettings && !consumed.has(pendingSettings)) {
-    if (
-      current?.sendState === "held" ||
-      (current?.sendState === "unconfirmed" && !current.sendRunId)
-    ) {
+    if (current?.sendState === "held") {
       return "pending";
     }
     if (current?.sendState !== "waiting-model") {
@@ -387,10 +394,7 @@ export async function settleDeliverySettings(
     if (!current) {
       return "failed";
     }
-    if (
-      current.sendState === "held" ||
-      (current.sendState === "unconfirmed" && !current.sendRunId)
-    ) {
+    if (current.sendState === "held") {
       return "pending";
     }
     if (!ready) {
@@ -464,13 +468,6 @@ export async function prepareQueuedChatPayload(
     return "failed";
   }
   const hydrated = { ...queued, ...payload.update };
-  if (
-    hydrated.attachmentPayload?.key !== queued.attachmentPayload?.key &&
-    hydrated.sendState === "unconfirmed"
-  ) {
-    updateQueuedMessage(host, id, () => hydrated);
-    return "pending";
-  }
   if (
     (!queued.attachmentPayload || queued.attachmentStorageError) &&
     !updateQueuedMessage(host, id, () => hydrated)
