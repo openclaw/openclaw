@@ -119,6 +119,23 @@ export function listAgentIds(cfg: AgentRosterConfig): string[] {
   return [...new Set(agents.map((entry) => normalizeAgentId(entry?.id)))];
 }
 
+/** Tests cron membership without projecting the configured roster. */
+export function hasAgentId(cfg: AgentRosterConfig, agentId: string): boolean {
+  const roster = readAgentRosterProperty(cfg);
+  const value = roster?.value;
+  // Keep both normalization passes and inspect every legacy id, including malformed tails.
+  const matches = (id: string | undefined) => normalizeAgentId(normalizeAgentId(id)) === agentId;
+  return roster?.kind === "entries" && isRecord(value)
+    ? Object.keys(value).some((id) => matches(id) && isRecord(value[id]))
+    : roster?.kind === "list" && Array.isArray(value)
+      ? value.reduce(
+          (found, entry) =>
+            entry !== null && typeof entry === "object" ? matches(entry.id) || found : found,
+          false,
+        )
+      : !roster && agentId === LEGACY_IMPLICIT_AGENT_ID;
+}
+
 /** Lists ACP harness ids and ACP-runtime roster agents named by config; native agents are excluded. */
 export function resolveConfiguredAcpHarnessIds(cfg: OpenClawConfig): Set<string> {
   const ids = new Set<string>();

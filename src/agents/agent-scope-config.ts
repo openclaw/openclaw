@@ -32,6 +32,7 @@ import {
 import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
 
 export {
+  hasAgentId,
   hasAgentRosterProperty,
   listAgentEntries,
   listAgentEntriesWithSource,

@@ -1,9 +1,8 @@
-import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
+import { hasAgentId, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging/logger.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { CronService } from "./service.js";
 import { resolveCronJobsStorePathAsync } from "./store.js";
 
@@ -26,11 +25,7 @@ export async function withLocalAgentCronJobsRemoved<T>(
     ),
     defaultAgentId: tryResolveAmbientOwnerAgentId(cfg),
     resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(getRuntimeConfig()),
-    isAgentAvailable: (id, facts) =>
-      !facts.deletionBlocked &&
-      listAgentIds(getRuntimeConfig()).some(
-        (configuredId) => normalizeAgentId(configuredId) === id,
-      ),
+    isAgentAvailable: (id, facts) => !facts.deletionBlocked && hasAgentId(getRuntimeConfig(), id),
     enqueueSystemEvent: () => false,
     runIsolatedAgentJob: async () => {
       throw new Error("Cron execution is unavailable in local service context.");

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -40,6 +41,7 @@ type GatewayCronContextTestHarness = {
   withCronService: (
     cfg: OpenClawConfig,
     run: (state: CronFixture) => void | Promise<void>,
+    overrides?: Pick<Parameters<typeof buildGatewayCronService>[0], "env">,
   ) => Promise<void>;
   finishedEvent: (jobId?: string) => Record<string, unknown> | undefined;
   legacyEventMocks: {
@@ -81,6 +83,39 @@ export function registerGatewayCronContextTests({
   runCronSessionTurnMock,
   enqueueSessionEventMock,
 }: GatewayCronContextTestHarness) {
+  it("checks current cron availability without resolving the fixed state path again", async () => {
+    const cfg = createCronConfig("server-cron-availability", { cron: { enabled: false } });
+    cfg.agents = { entries: { main: {}, ops: {} } };
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    const readStateDir = vi.fn(() => stateDir);
+    const env = {
+      get OPENCLAW_STATE_DIR() {
+        return readStateDir();
+      },
+    };
+    await withCronService(
+      cfg,
+      async (state) => {
+        const available = expectDefined(
+          getCronState(state).deps.isAgentAvailable,
+          "cron availability",
+        );
+        readStateDir.mockClear();
+        for (let check = 0; check < 100; check++) {
+          expect(available("ops", { deletionBlocked: false })).toBe(true);
+        }
+        expect(readStateDir).not.toHaveBeenCalled();
+        expect(available("ops", { deletionBlocked: true })).toBe(false);
+        delete cfg.agents!.entries!.ops;
+        expect(available("ops", { deletionBlocked: false })).toBe(false);
+        loadConfigMock.mockReturnValue({ agents: { entries: { replacement: {} } } });
+        expect(available("replacement", { deletionBlocked: false })).toBe(true);
+        expect(available("main", { deletionBlocked: false })).toBe(false);
+      },
+      { env },
+    );
+  });
+
   const createBroker = useSpawnBrokerTestFixture(afterEach);
   function config(name: string) {
     const cfg = createCronConfig(name);

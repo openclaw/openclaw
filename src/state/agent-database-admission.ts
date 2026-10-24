@@ -278,14 +278,16 @@ export function hasAgentDatabaseAdmissions(options: AdmissionOptions = {}): bool
 }
 
 export function readAgentDatabaseAdmissionRefusal(
-  agentId: string,
+  id: string,
   options: AdmissionOptions = {},
 ): AgentDatabaseAdmissionRefusal | undefined {
-  return readSelectedAgentDatabaseAdmissionRefusal(
-    stateKey(options),
-    normalizeAgentId(agentId),
-    agentId,
-  );
+  return readSelectedAgentDatabaseAdmissionRefusal(stateKey(options), normalizeAgentId(id), id);
+}
+
+/** Bind only the state selector; refusals and preparation authority stay live. */
+export function createAgentDatabaseAdmissionRefusalReader(options: AdmissionOptions = {}) {
+  const key = stateKey(options);
+  return (id: string) => readSelectedAgentDatabaseAdmissionRefusal(key, normalizeAgentId(id), id);
 }
 
 function readSelectedAgentDatabaseAdmissionRefusal(

@@ -90,6 +90,55 @@ describe("agent roster resolution", () => {
     }
   });
 
+  it.each([
+    [{}, ["main"]],
+    [{ agents: { entries: {} } }, []],
+    [{ agents: { list: [] } }, []],
+    [{ agents: { entries: {}, list: [{ id: "ops" }] } }, []],
+    [{ agents: { entries: undefined, list: [{ id: " OPS " }] } }, ["ops"]],
+    [
+      { agents: { entries: { " OPS ": { id: "ignored" }, main: null, array: [], bad: 42 } } },
+      ["ops"],
+    ],
+    [
+      { agents: { list: [null, 42, "ignored", {}, [], { id: null }, { id: " OPS " }] } },
+      ["main", "ops"],
+    ],
+  ] as const)("checks cron membership across roster shapes: %j", (config, expected) => {
+    for (const id of ["main", "ops", "ignored", "array", "bad", " OPS "]) {
+      expect(agentRoster.hasAgentId(config, id)).toBe(
+        expected.some((expectedId) => expectedId === id),
+      );
+    }
+  });
+
+  it.each(['{"entries":null}', '{"entries":[]}', '{"list":{}}'])(
+    "does not restore the implicit agent for malformed explicit roster %s",
+    (rawAgents) => {
+      const config = JSON.parse(`{"agents":${rawAgents}}`) as Parameters<
+        typeof agentRoster.hasAgentId
+      >[0];
+      expect(agentRoster.hasAgentId(config, "main")).toBe(false);
+    },
+  );
+
+  it("preserves cron's second normalization after legacy truncation", () => {
+    const rawId = `_${"a".repeat(62)}-x`;
+    const expectedId = `_${"a".repeat(62)}`;
+    for (const config of [
+      { agents: { entries: { [rawId]: {} } } },
+      { agents: { list: [{ id: rawId }] } },
+    ]) {
+      expect(agentRoster.hasAgentId(config, expectedId)).toBe(true);
+      expect(agentRoster.hasAgentId(config, `${expectedId}-`)).toBe(false);
+    }
+  });
+
+  it("still rejects malformed legacy ids after an earlier membership match", () => {
+    const config = { agents: { list: [{ id: "ops" }, { id: 42 }] } };
+    expect(() => agentRoster.hasAgentId(config, "ops")).toThrow(TypeError);
+  });
+
   it("reads only enough own enumerable entries to distinguish a sole mutable agent", () => {
     const entries: Record<string, unknown> = Object.create({ inherited: {} });
     Object.defineProperty(entries, "hidden", { value: {} });
@@ -98,6 +147,10 @@ describe("agent roster resolution", () => {
     const tail = vi.fn(() => ({ name: "Tail" }));
     Object.defineProperty(entries, "tail", { enumerable: true, configurable: true, get: tail });
     const cfg = { agents: { ownership: "explicit" as const, entries } };
+    expect(agentRoster.hasAgentId(cfg, "ops")).toBe(true);
+    expect(agentRoster.hasAgentId(cfg, "inherited")).toBe(false);
+    expect(agentRoster.hasAgentId(cfg, "hidden")).toBe(false);
+    tail.mockClear();
     expect(trySoleAgent(cfg)).toBeUndefined();
     expect(tail).not.toHaveBeenCalled();
     expect(entriesWithSource(cfg)).toEqual([
@@ -127,6 +180,10 @@ describe("agent roster resolution", () => {
     const tail = vi.fn(() => ({ id: "tail" }));
     Object.defineProperty(list, 7, { configurable: true, get: tail });
     const cfg = { agents: { list } };
+    expect(agentRoster.hasAgentId(cfg, "inherited")).toBe(true);
+    expect(agentRoster.hasAgentId(cfg, "array")).toBe(true);
+    expect(agentRoster.hasAgentId(cfg, "main")).toBe(false);
+    tail.mockClear();
     expect(trySoleAgent(cfg)).toBeUndefined();
     expect(tail).not.toHaveBeenCalled();
     expect(entriesWithSource(cfg)).toEqual([
@@ -141,6 +198,9 @@ describe("agent roster resolution", () => {
     list.length = 4;
     delete prototype[2];
     expect(trySoleAgent(cfg)).toBe("ops");
+    expect(agentRoster.hasAgentId(cfg, "inherited")).toBe(false);
+    expect(agentRoster.hasAgentId(cfg, "array")).toBe(false);
+    expect(agentRoster.hasAgentId(cfg, "ops")).toBe(true);
   });
 
   it("fails closed with context when an ambient owner is ambiguous", () => {
@@ -265,6 +325,61 @@ describe("agent roster resolution", () => {
         clearRuntimeConfigSnapshot();
       }
     }
+  });
+
+  it("checks the current roster after in-place edits without republication", () => {
+    const previous = getRuntimeConfigSnapshot();
+    const config = twoAgents();
+    setRuntimeConfigSnapshot(config);
+    try {
+      expect(agentRoster.hasAgentId(config, "ops")).toBe(true);
+      // Populate the entry resolver's published index before mutating the same object.
+      expect(agentConfig(config, "ops")).toBeDefined();
+      delete config.agents!.entries!.ops;
+      expect(agentRoster.hasAgentId(config, "ops")).toBe(false);
+      config.agents!.entries!.research = {};
+      expect(agentRoster.hasAgentId(config, "research")).toBe(true);
+      config.agents!.entries = { replacement: {} };
+      expect(agentRoster.hasAgentId(config, "research")).toBe(false);
+      expect(agentRoster.hasAgentId(config, "replacement")).toBe(true);
+      const replacement = fleet({ entries: { other: {} } });
+      setRuntimeConfigSnapshot(replacement);
+      expect(agentRoster.hasAgentId(replacement, "other")).toBe(true);
+      expect(agentRoster.hasAgentId(replacement, "replacement")).toBe(false);
+    } finally {
+      if (previous) {
+        setRuntimeConfigSnapshot(previous);
+      } else {
+        clearRuntimeConfigSnapshot();
+      }
+    }
+  });
+
+  it("reads only matching roster entries without projecting their fields", () => {
+    const readName = vi.fn(() => "Synthetic agent");
+    const readEntry = vi.fn();
+    const entries: Record<string, { readonly name: string }> = {};
+    for (let index = 0; index < 100; index += 1) {
+      const entry = {
+        get name() {
+          return readName();
+        },
+      };
+      Object.defineProperty(entries, `agent-${index}`, {
+        enumerable: true,
+        get: () => {
+          readEntry();
+          return entry;
+        },
+      });
+    }
+    const config = { agents: { entries } };
+    for (let check = 0; check < 20; check += 1) {
+      expect(agentRoster.hasAgentId(config, "agent-99")).toBe(true);
+      expect(agentRoster.hasAgentId(config, "missing")).toBe(false);
+    }
+    expect(readEntry).toHaveBeenCalledTimes(20);
+    expect(readName).not.toHaveBeenCalled();
   });
 
   it("does not treat Doctor migration provenance as runtime ownership", () => {

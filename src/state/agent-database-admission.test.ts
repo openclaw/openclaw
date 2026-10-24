@@ -18,6 +18,7 @@ import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.
 import {
   AgentDatabaseAdmissionError,
   captureAgentDatabaseAdmission as captureAdmission,
+  createAgentDatabaseAdmissionRefusalReader as createRefusalReader,
   createAgentDatabaseInspectionRefusal as inspectionRefusal,
   evaluateAgentDatabaseAdmissions,
   preparePendingAgentDatabase as preparePending,
@@ -232,6 +233,8 @@ it("retains its selected agent and state while observing current refusal publica
   const env = makeEnv();
   const stateDir = env.OPENCLAW_STATE_DIR;
   const assertAdmitted = captureAdmission("  MAIN  ", { env });
+  const readBoundRefusal = createRefusalReader({ env });
+  expect(readBoundRefusal("main")).toBeUndefined();
   expect(assertAdmitted).not.toThrow();
   env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-other-admission-");
   const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -241,18 +244,22 @@ it("retains its selected agent and state while observing current refusal publica
     reason: "Original admission refused",
   });
   recordAdmissions([refusal], options);
+  expect(readBoundRefusal(" MAIN ")).toBe(refusal);
   expect(assertAdmitted).toThrow(expect.objectContaining({ refusal }));
   expect(readRefusal("main", { env })).toBeUndefined();
   const replacement = { ...refusal, reason: "Replacement admission refused" };
   recordAdmissions([replacement], options);
+  expect(readBoundRefusal("main")).toBe(replacement);
   expect(assertAdmitted).toThrow(expect.objectContaining({ refusal: replacement }));
   recordAdmissions([], options);
+  expect(readBoundRefusal("main")).toBeUndefined();
   expect(assertAdmitted).not.toThrow();
 });
 
 it("uses the current preparation scope and refuses an escaped scope after preparation ends", async () => {
   const env = makeEnv();
   const assertAdmitted = captureAdmission("main", { env });
+  const readBoundRefusal = createRefusalReader({ env });
   const refusal = inspectionRefusal({
     agentId: "main",
     paths: [],
@@ -261,14 +268,19 @@ it("uses the current preparation scope and refuses an escaped scope after prepar
   });
   recordAdmissions([refusal], { env });
   expect(assertAdmitted).toThrow(expect.objectContaining({ refusal }));
+  expect(readBoundRefusal("main")).toBe(refusal);
   let inPreparation = () => {};
+  let readInPreparation = () => readBoundRefusal("main");
   await preparePending(refusal, { env, assertCurrent() {} }, async () => {
     expect(assertAdmitted).not.toThrow();
+    expect(readBoundRefusal("main")).toBeUndefined();
     const runInScope = AsyncLocalStorage.snapshot();
     inPreparation = () => runInScope(assertAdmitted);
+    readInPreparation = () => runInScope(() => readBoundRefusal("main"));
   });
   expect(assertAdmitted).not.toThrow();
   expect(inPreparation).toThrow("Agent database preparation has ended: main");
+  expect(readInPreparation).toThrow("Agent database preparation has ended: main");
 });
 
 it("settles deferred startup admission after its discovery snapshot closes", async () => {

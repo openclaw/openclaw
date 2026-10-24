@@ -7,6 +7,20 @@ snapshot and run the streaming analyzer in aggregate-only mode with bounded host
 resources. It covers dominators, collections, duplicate strings, and session-key
 scaling without exporting snapshot payloads.
 
+## Cron availability
+
+`node --expose-gc --import ./scripts/tsx.mjs scripts/perf/cron-availability-measure.ts`
+compares the original availability callback with the prepared-state-path and direct
+roster membership owners. It uses five alternating samples per side, 20,000 checks
+per sample, and synthetic keyed/legacy rosters of 10, 100, and 500 agents, selecting
+the last agent. Inspector sampling includes objects collected by minor and major
+GC at a 4 KiB interval. Each result reports allocated bytes/check and allocation
+sample counts; a separate untraced loop reports nanoseconds/check as context.
+Run only on the approved benchmark host under its shared production guard.
+Acceptance: identical availability answers, no repeated state-path resolution or
+roster entry projection, and lower mean bytes/check at every roster size. These
+are owner-level allocation measurements, not whole-Gateway or GC/promotion gates.
+
 ## Private-array copies
 
 `node --expose-gc scripts/perf/private-array-copies-measure.mjs <baseline-root> <candidate-root>`

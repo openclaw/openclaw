@@ -1,6 +1,6 @@
 import { captureSessionMcpRuntimeRetirement } from "../agents/agent-bundle-mcp-manager-api.js";
 import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
-import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { hasAgentId, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { abortAndDrainEmbeddedAgentRunByRunId } from "../agents/embedded-agent-runner/runs.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
@@ -45,11 +45,10 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
-import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { createAgentDatabaseAdmissionRefusalReader } from "../state/agent-database-admission.js";
 import {
   createCronExitWatchers,
   type CronExitWatcherHandlers,
@@ -132,6 +131,7 @@ export function buildGatewayCronService(params: {
     params.resolvePluginRegistry,
   );
   const { storePath, env = process.env } = params;
+  const readAdmissionRefusal = createAgentDatabaseAdmissionRefusalReader({ env });
   const cronEnabled =
     env.OPENCLAW_SKIP_CRON !== "1" && (params.cfg.cron?.enabled ?? DEFAULT_CRON_ENABLED);
   const hostExecutionDisabled = isTruthyEnvValue(env.OPENCLAW_DISABLE_CRON_HOST_EXECUTION);
@@ -422,8 +422,8 @@ export function buildGatewayCronService(params: {
     },
     isAgentAvailable: (agentId, facts) =>
       !facts.deletionBlocked &&
-      !readAgentDatabaseAdmissionRefusal(agentId, { env }) &&
-      listAgentIds(getRuntimeConfig()).some((id) => normalizeAgentId(id) === agentId),
+      !readAdmissionRefusal(agentId) &&
+      hasAgentId(getRuntimeConfig(), agentId),
     resolveSessionStorePath,
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => enqueueCronSystemEvent(text, opts, resolveCronTarget(opts)),
