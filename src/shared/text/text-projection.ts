@@ -433,7 +433,8 @@ function collapseDuplicateParagraphs(text: string): string {
 
 function createDuplicateParagraphProjector(protectCode = true): TextProjector {
   let active = false;
-  let trailingNewline = false;
+  let activationTail = "";
+  let separator = "\n\n";
   let text = "";
   let completed = "";
   let lastNormalized: string | null = null;
@@ -449,12 +450,15 @@ function createDuplicateParagraphProjector(protectCode = true): TextProjector {
   return (input) => {
     let appended = input.delta ?? input.text;
     if (!active) {
-      active = (trailingNewline && appended.startsWith("\n")) || appended.includes("\n\n");
-      trailingNewline = appended ? appended.endsWith("\n") : trailingNewline;
-      if (!active) {
+      const boundary = /\r?\n\r?\n/.exec(activationTail + appended);
+      // Keep the overlap of a four-character CRLF boundary split across appends.
+      activationTail = (activationTail + appended).slice(-3);
+      if (!boundary) {
         text = input.text;
         return input;
       }
+      active = true;
+      separator = boundary[0];
       appended = input.text;
     }
     let completedParagraph = false;
@@ -471,7 +475,7 @@ function createDuplicateParagraphProjector(protectCode = true): TextProjector {
           } else if (equal && normalizedLength === lastNormalized?.length) {
             hasDuplicate = true;
           } else {
-            completed += (completed ? "\n\n" : "") + paragraph;
+            completed += (completed ? separator : "") + paragraph;
             lastNormalized = paragraph.replace(/\s+/g, " ");
           }
           paragraph = "";
@@ -484,7 +488,10 @@ function createDuplicateParagraphProjector(protectCode = true): TextProjector {
         newlines += part[0].length;
         continue;
       }
-      newlines = 0;
+      // A CR between LF tokens can be the first half of a split CRLF.
+      if (part[0] !== "\r") {
+        newlines = 0;
+      }
       const raw = paragraph ? part[0] : part[0].trimStart();
       const content = raw.trimEnd();
       if (!content) {
@@ -494,14 +501,14 @@ function createDuplicateParagraphProjector(protectCode = true): TextProjector {
       const piece = pending + content;
       pending = raw.slice(content.length);
       if (!paragraph) {
-        const empty = "\n\n".repeat(pendingEmpty);
+        const empty = separator.repeat(pendingEmpty);
         if (pendingEmpty) {
           completed += empty;
           pendingEmpty = 0;
           lastNormalized = "";
           equal = false;
         }
-        added += completed ? empty + "\n\n" : "";
+        added += completed ? empty + separator : "";
       }
       paragraph += piece;
       added += piece;
@@ -528,7 +535,7 @@ function createDuplicateParagraphProjector(protectCode = true): TextProjector {
         delta === null
           ? protectCode
             ? collapseDuplicateParagraphs(input.text)
-            : completed + (paragraph && !duplicate ? (completed ? "\n\n" : "") + paragraph : "")
+            : completed + (paragraph && !duplicate ? (completed ? separator : "") + paragraph : "")
           : text + delta;
     } else {
       text = input.text;
