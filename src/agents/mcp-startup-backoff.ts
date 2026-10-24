@@ -1,12 +1,13 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { redactMcpDiagnosticError } from "./mcp-error.js";
+import { isMcpServiceAvailabilityError, redactMcpDiagnosticError } from "./mcp-error.js";
 
 type StartupState = {
   owner: AbortSignal;
   delayMs: number;
   retryAfterMs: number;
   message: string;
+  errorCode?: "mcp-service-unavailable";
   pending?: Promise<void>;
 };
 
@@ -18,6 +19,7 @@ const startups = resolveGlobalSingleton(
 
 export class McpStartupBackoffError extends Error {
   readonly retryAfterMs: number;
+  readonly errorCode?: "mcp-service-unavailable";
 
   constructor(
     state: StartupState,
@@ -34,6 +36,7 @@ export class McpStartupBackoffError extends Error {
       `${state.message}; server unavailable; retry after ${new Date(retryAfterMs).toISOString()}. Check server reachability or reload MCP after fixing it.`,
     );
     this.retryAfterMs = retryAfterMs;
+    this.errorCode = state.errorCode;
   }
 }
 
@@ -62,6 +65,7 @@ export async function connectWithMcpStartupBackoff(
   signal: AbortSignal,
   connect: () => Promise<void>,
   recoveryRetryMs: number,
+  transportType: "stdio" | "sse" | "streamable-http",
 ): Promise<void> {
   // Serialize startup, not transport ownership: healthy sessions still connect independently.
   while (startups.get(key)?.pending) {
@@ -98,6 +102,9 @@ export async function connectWithMcpStartupBackoff(
     state.delayMs = Math.min(state.delayMs * 2, 600_000);
     state.retryAfterMs = Date.now() + state.delayMs;
     state.message = redactMcpDiagnosticError(error);
+    state.errorCode = isMcpServiceAvailabilityError(error, transportType)
+      ? "mcp-service-unavailable"
+      : undefined;
     throw new McpStartupBackoffError(state, true, signal, recoveryRetryMs);
   } finally {
     state.pending = undefined;

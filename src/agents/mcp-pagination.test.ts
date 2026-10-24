@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { collectMcpPaginatedItems } from "./mcp-pagination.js";
+import { collectMcpPaginatedItems, McpPaginationTimeoutError } from "./mcp-pagination.js";
 
 const limits = {
   timeoutMs: 1_000,
@@ -121,10 +121,11 @@ describe("collectMcpPaginatedItems", () => {
           setTimeout(() => reject(new Error("nested request timed out")), requestTimeoutMs);
         }),
     });
-    const rejected = expect(listing).rejects.toThrow("MCP resource listing timed out after 50ms");
+    const rejected = expect(listing).rejects.toBeInstanceOf(McpPaginationTimeoutError);
 
     await vi.advanceTimersByTimeAsync(50);
     await rejected;
+    await expect(listing).rejects.toThrow("MCP resource listing timed out after 50ms");
   });
 
   it("rejects a final page when synchronous processing crosses the deadline", async () => {

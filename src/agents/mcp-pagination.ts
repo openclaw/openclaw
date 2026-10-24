@@ -3,6 +3,13 @@ import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
+/** The collector's own deadline, distinct from invalid or incomplete server pages. */
+export class McpPaginationTimeoutError extends Error {
+  constructor(label: string, timeoutMs: number) {
+    super(`${label} timed out after ${timeoutMs}ms`);
+  }
+}
+
 type McpPaginationPage<T> = {
   items: readonly T[];
   nextCursor?: string;
@@ -62,7 +69,7 @@ export async function collectMcpPaginatedItems<T>(
     throw abortError(signal, params.label);
   }
   const deadlineAtMs = performance.now() + timeoutMs;
-  const timeoutError = new Error(`${params.label} timed out after ${timeoutMs}ms`);
+  const timeoutError = new McpPaginationTimeoutError(params.label, timeoutMs);
   const deadlineTimer = setTimeout(() => deadlineController.abort(timeoutError), timeoutMs);
   deadlineTimer.unref?.();
   const assertActive = () => {

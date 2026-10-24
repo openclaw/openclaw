@@ -29,6 +29,7 @@ let initializes = 0;
 let remoteToolName = "probe";
 let reachable = false;
 let invalidListing = false;
+let unavailableListing = false;
 let listToolsGate: Promise<void> | undefined;
 
 beforeEach(() => {
@@ -39,6 +40,7 @@ beforeEach(() => {
   remoteToolName = "probe";
   reachable = false;
   invalidListing = false;
+  unavailableListing = false;
   listToolsGate = undefined;
   warn.mockClear();
   resolveTransport.mockImplementation((serverName: string) => {
@@ -71,6 +73,9 @@ beforeEach(() => {
           }
           if (message.method === "tools/list" && serverName === "remote") {
             await listToolsGate;
+            if (unavailableListing) {
+              return new Response(null, { status: 503 });
+            }
           }
           return new Response(
             JSON.stringify({
@@ -143,8 +148,12 @@ async function discover(runtime: SessionMcpRuntime) {
 
 it("bounds the first connection and never waits for known-failed retries", async () => {
   const runtime = makeRuntime();
-  expect((await discover(runtime)).waitedMs).toBe(30_000);
-  expect((await discover(makeRuntime())).waitedMs).toBe(0);
+  const first = await discover(runtime);
+  expect(first.waitedMs).toBe(30_000);
+  expect(first.catalog.diagnostics?.[0]?.errorCode).toBe("mcp-service-unavailable");
+  const inherited = await discover(makeRuntime());
+  expect(inherited.waitedMs).toBe(0);
+  expect(inherited.catalog.diagnostics?.[0]?.errorCode).toBe("mcp-service-unavailable");
   await vi.advanceTimersByTimeAsync(4_999);
   expect((await discover(runtime)).waitedMs).toBe(0);
   expect(initializes).toBe(1);
@@ -213,6 +222,7 @@ it("retries failed listings in the background without stalling healthy siblings"
   const failed = await runtime.getCatalog();
   expect(failed.tools.map((tool) => tool.toolName)).toEqual(["healthy_tool"]);
   expect(failed.diagnostics?.[0]?.serverName).toBe("remote");
+  expect(failed.diagnostics?.[0]?.errorCode).toBeUndefined();
 
   invalidListing = false;
   const listing = Promise.withResolvers<void>();
@@ -249,6 +259,30 @@ it("refreshes a connected session while a sibling with the same startup key is u
   expect(refreshed.diagnostics).toBeUndefined();
   expect(initializes).toBe(2);
   expect(before.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
+});
+
+it("retains the last good catalog with typed availability until refresh recovers", async () => {
+  reachable = true;
+  const runtime = makeRuntime();
+  const before = await runtime.getCatalog();
+  expect(before.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
+
+  unavailableListing = true;
+  transports[0]!.onmessage?.({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+  await vi.advanceTimersByTimeAsync(0);
+  const failed = await runtime.getCatalog();
+  expect(failed.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
+  expect(failed.diagnostics?.[0]?.errorCode).toBe("mcp-service-unavailable");
+  expect(before.diagnostics).toBeUndefined();
+
+  unavailableListing = false;
+  await vi.advanceTimersByTimeAsync(5_000);
+  await runtime.getCatalog();
+  await vi.advanceTimersByTimeAsync(0);
+  const recovered = await runtime.getCatalog();
+  expect(recovered.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
+  expect(recovered.diagnostics).toBeUndefined();
+  expect(failed.diagnostics?.[0]?.errorCode).toBe("mcp-service-unavailable");
 });
 
 it("clears inherited failure cooldowns when the live runtime is explicitly reloaded", async () => {

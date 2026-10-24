@@ -20,7 +20,7 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { DoctorToolSchemaOptions } from "./doctor-tool-schema-frames.js";
-import type { HealthFinding } from "./health-checks.js";
+import { HEALTH_FINDING_SEVERITY_RANK, type HealthFinding } from "./health-checks.js";
 
 function bundleMcpRuntimeFailureFinding(
   error: unknown,
@@ -40,14 +40,17 @@ function bundleMcpRuntimeFailureFinding(
 }
 
 function bundleMcpRuntimeDiagnosticFinding(diagnostic: McpToolCatalogDiagnostic): HealthFinding {
+  const serviceUnavailable = diagnostic.errorCode === "mcp-service-unavailable";
   return {
     checkId: "core/doctor/runtime-tool-schemas",
-    severity: "error",
+    severity: serviceUnavailable ? "warning" : "error",
+    ...(serviceUnavailable ? { errorCode: diagnostic.errorCode } : {}),
     message: `Configured MCP server "${diagnostic.serverName}" could not expose runtime tools for schema validation.`,
     path: `mcp.servers.${diagnostic.serverName}`,
     requirement: diagnostic.message,
-    fixHint:
-      "Fix or disable the offending MCP server, then rerun doctor before relying on assistant tool startup.",
+    fixHint: serviceUnavailable
+      ? "Check the MCP service connection and authentication, then rerun doctor when the service is available."
+      : "Fix or disable the offending MCP server, then rerun doctor before relying on assistant tool startup.",
   };
 }
 
@@ -186,7 +189,24 @@ export async function collectRuntimeToolSchemaFindings(
   const deferredServers = new Set<string>();
   const bundleRuntimeByContext = new Map<string, BundleMcpToolRuntime>();
   const bundleRuntimeLoadErrorsByContext = new Map<string, HealthFinding>();
-  const reportedBundleRuntimeDiagnostics = new Set<string>();
+  const reportedBundleRuntimeDiagnostics = new Map<
+    string,
+    { index: number; finding: HealthFinding }
+  >();
+  const reportBundleRuntimeDiagnostic = (serverName: string, finding: HealthFinding) => {
+    const previous = reportedBundleRuntimeDiagnostics.get(serverName);
+    if (
+      previous &&
+      HEALTH_FINDING_SEVERITY_RANK[previous.finding.severity] >=
+        HEALTH_FINDING_SEVERITY_RANK[finding.severity]
+    ) {
+      return;
+    }
+    // Keep one finding per server, without hiding a stronger result from another catalog.
+    const index = previous?.index ?? findings.length;
+    findings[index] = finding;
+    reportedBundleRuntimeDiagnostics.set(serverName, { index, finding });
+  };
   const reportedBundleRuntimeLoadErrors = new Set<string>();
   const reportedRequesterScopedServers = new Set<string>();
   let inspection:
@@ -314,11 +334,8 @@ export async function collectRuntimeToolSchemaFindings(
             launchSummary: "OAuth inspection deferred",
             message: "OAuth refresh requires durable credential ownership",
           };
-          if (
-            !reportedBundleRuntimeDiagnostics.has(serverName) &&
-            shouldReportBundleMcpRuntimeDiagnostic({ cfg, agentId, modelRef, diagnostic })
-          ) {
-            findings.push({
+          if (shouldReportBundleMcpRuntimeDiagnostic({ cfg, agentId, modelRef, diagnostic })) {
+            reportBundleRuntimeDiagnostic(serverName, {
               checkId: "core/doctor/runtime-tool-schemas",
               severity: "info",
               message: `Configured MCP server "${serverName}" was not checked during read-only inspection because OAuth may rotate external credentials.`,
@@ -326,7 +343,6 @@ export async function collectRuntimeToolSchemaFindings(
               fixHint:
                 "For configured servers, run `openclaw mcp probe <name>` against the serving configuration. Validate plugin-provided or agent-local MCP servers from an authenticated serving-agent turn so refreshed credentials persist with their owner.",
             });
-            reportedBundleRuntimeDiagnostics.add(serverName);
           }
         }
         const staticMcpConfig = loadSessionMcpConfig({
@@ -376,11 +392,10 @@ export async function collectRuntimeToolSchemaFindings(
             shouldReportBundleMcpRuntimeDiagnostic({ cfg, agentId, modelRef, diagnostic }),
           );
           for (const diagnostic of policyActiveDiagnostics) {
-            if (reportedBundleRuntimeDiagnostics.has(diagnostic.serverName)) {
-              continue;
-            }
-            findings.push(bundleMcpRuntimeDiagnosticFinding(diagnostic));
-            reportedBundleRuntimeDiagnostics.add(diagnostic.serverName);
+            reportBundleRuntimeDiagnostic(
+              diagnostic.serverName,
+              bundleMcpRuntimeDiagnosticFinding(diagnostic),
+            );
           }
           findings.push(
             ...(await (async (): Promise<readonly HealthFinding[]> => {
