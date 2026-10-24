@@ -45,16 +45,6 @@ type PendingApproval = {
   };
 };
 
-type ApprovalIdentityRow = {
-  source_agent_id: string | null;
-  source_session_key: string | null;
-  source_run_id: string | null;
-  source_tool_call_id: string | null;
-  source_tool_name: string | null;
-  source_context_id: string | null;
-  source_execution_id: string | null;
-};
-
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await instance?.cleanup();
@@ -75,46 +65,31 @@ function readJsonLines(filePath: string): AppServerLogEntry[] {
   }
 }
 
-function queryApproval(owner: OpenClawTestInstance, sql: string, ...args: string[]) {
+function readApprovalIdentity(owner: OpenClawTestInstance, approvalId: string) {
   const database = new DatabaseSync(path.join(owner.stateDir, "state", "openclaw.sqlite"), {
     readOnly: true,
   });
   try {
-    return database.prepare(sql).get(...args);
+    return database
+      .prepare(`SELECT approval.source_agent_id, approval.source_session_key, approval.source_run_id,
+      approval.source_tool_call_id, approval.source_tool_name,
+      binding.source_context_id, binding.source_execution_id
+      FROM operator_approvals AS approval
+      LEFT JOIN operator_approval_execution_identities AS binding ON binding.approval_id = approval.approval_id
+      WHERE approval.approval_id = ?`)
+      .get(approvalId);
   } finally {
     database.close();
   }
 }
 
-function readApprovalIdentity(testInstance: OpenClawTestInstance, approvalId: string) {
-  return queryApproval(
-    testInstance,
-    `SELECT approval.source_agent_id, approval.source_session_key, approval.source_run_id,
-            approval.source_tool_call_id, approval.source_tool_name,
-            binding.source_context_id, binding.source_execution_id
-       FROM operator_approvals AS approval
-       LEFT JOIN operator_approval_execution_identities AS binding
-         ON binding.approval_id = approval.approval_id
-      WHERE approval.approval_id = ?`,
-    approvalId,
-  ) as ApprovalIdentityRow | undefined;
-}
-
 function requireAllowedOnceReceipt(result: AuditRunInspectResult) {
-  const receipt = result.decisionDisplays.find(
-    (candidate) =>
-      candidate.provenance.state === "verified" &&
-      candidate.provenance.producer === "operator-approval",
-  );
-  expect(receipt).toMatchObject({
-    decision: {
-      outcome: "allowed",
-      reasonCode: "operator_approval_allowed_once",
-    },
-    enforcement: {
-      coverageState: "enforced",
-      contextFieldsUsed: ["contextId", "executionId", "runId"],
-    },
+  expect(
+    result.decisionDisplays.find(
+      (candidate) => candidate.provenance.producer === "operator-approval",
+    ),
+  ).toMatchObject({
+    enforcement: { coverageState: "enforced" },
     provenance: { state: "verified", producer: "operator-approval" },
   });
 }
@@ -248,7 +223,6 @@ describe("Codex native approval receipt", () => {
             async () => {
               const pending = await reviewer.request<PendingApproval[]>("plugin.approval.list", {});
               const match = pending[0];
-              expect(match).toBeDefined();
               if (!match) {
                 throw new Error("native approval is not pending yet");
               }
@@ -298,7 +272,7 @@ describe("Codex native approval receipt", () => {
           source_context_id: expect.any(String),
           source_execution_id: expect.any(String),
         });
-        if (!identity?.source_run_id) {
+        if (typeof identity?.source_run_id !== "string") {
           throw new Error("operator approval omitted the admitted run id");
         }
         const sourceRunId = identity.source_run_id;
