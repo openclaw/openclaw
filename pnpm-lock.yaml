@@ -385,8 +385,8 @@ importers:
         specifier: 1.2.11
         version: 1.2.11(supports-color@10.2.2)
       npm:
-        specifier: 12.2.1
-        version: 12.2.1
+        specifier: 12.2.0
+        version: 12.2.0
       openai:
         specifier: 7.35.0
         version: 7.35.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)
@@ -3105,8 +3105,8 @@ importers:
         specifier: 2.0.0-rc.16
         version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
       '@tanstack/virtual-core':
-        specifier: 3.19.6
-        version: 3.19.6
+        specifier: 3.19.2
+        version: 3.19.2
       '@zag-js/menu':
         specifier: 2.0.0-next.3
         version: 2.0.0-next.3
@@ -6304,8 +6304,8 @@ packages:
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
-  '@tanstack/virtual-core@3.19.6':
-    resolution: {integrity: sha512-CsTW892z23gy7IyxYTTorVu1uZWB+0N349rSMgKz4rFLPpLza7F7TpcCKeI5iUAwYQCt8QUlOU67J+KXCxtpGw==}
+  '@tanstack/virtual-core@3.19.2':
+    resolution: {integrity: sha512-Ch+e8t097FdTfuihfRwBMqz/OfRZKHOH/C213dbM1lXDZ8bv6r330Bcc9k9XCrP6NkoMYy0/ZCHcddOAPihW4w==}
 
   '@testing-library/dom@10.4.2':
     resolution: {integrity: sha512-yzr2S9HyAIdhz2/6qHgbs665Q7PKVcDF05vsOlHPxG1mo36gKVesdYVeDLnXgfjJ03CrKRk08knc6+E/9m8v2Q==}
@@ -9470,8 +9470,8 @@ packages:
     resolution: {integrity: sha512-9qny7Z9DsQU8Ou39ERsPU4OZQlSTP47ShQzuKZ6PRXpYLtIFgl/DEBYEXKlvcEa+9tHVcK8CF81Y2V72qaZhWA==}
     engines: {node: '>=18'}
 
-  npm@12.2.1:
-    resolution: {integrity: sha512-bKCmFRVT/BB+YPEYbZwQ1XUI3N5t4xKSpU1MxOjo7z3iWzKBJ0ZXRC1xFdEN+TC7N5TdywaBzf2dMXGJq/e2PQ==}
+  npm@12.2.0:
+    resolution: {integrity: sha512-ZsJjKpTnlmSXOLLXiU1xDCzC4Wlok4IwZmh/aw2KUuXytU7q6qMv/cUT7MoeSf95Slwuw/lRXYefGzGCspHPNQ==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
     hasBin: true
     bundledDependencies:
@@ -14415,7 +14415,7 @@ snapshots:
 
   '@standard-schema/spec@1.1.0': {}
 
-  '@tanstack/virtual-core@3.19.6': {}
+  '@tanstack/virtual-core@3.19.2': {}
 
   '@testing-library/dom@10.4.2':
     dependencies:
@@ -18039,7 +18039,7 @@ snapshots:
       path-key: 4.0.0
       unicorn-magic: 0.3.0
 
-  npm@12.2.1: {}
+  npm@12.2.0: {}
 
   nth-check@3.0.1:
     dependencies:
