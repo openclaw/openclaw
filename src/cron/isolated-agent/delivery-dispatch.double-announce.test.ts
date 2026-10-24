@@ -294,6 +294,7 @@ describe("dispatchCronDelivery", () => {
     deliverOutboundPayloads,
     appendAssistantMessageToSessionTranscript,
     expectDeliveryCall,
+    outboundSend: send,
   });
 
   it("suppresses incomplete descendant output while settlement is queued", async () => {
@@ -1265,63 +1266,6 @@ describe("dispatchCronDelivery", () => {
       ),
     });
   });
-
-  it.each([
-    {
-      name: "normalized execution destination",
-      executionKey: "telegram:group:-100123:topic:42",
-      destinationThread: "42",
-    },
-    {
-      name: "different destination thread",
-      executionKey: "agent:main:telegram:group:-100123:topic:42",
-      destinationThread: "43",
-    },
-  ])(
-    "leaves destination history to outbound delivery for $name",
-    async ({ executionKey, destinationThread }) => {
-      const params = makeBaseParams({
-        synthesizedText: "Persistent session report",
-        sessionTarget: `session:${executionKey}`,
-      });
-      params.agentSessionKey = executionKey;
-      params.sourceSessionKey = "agent:main:telegram:group:-100123:topic:42";
-      params.sourceSessionGeneration = {
-        sessionId: "execution-session-id",
-        lifecycleRevision: "execution-lifecycle-revision",
-      };
-      const destinationKey = `agent:main:telegram:group:-100123:topic:${destinationThread}`;
-      const sessionRoute = {
-        sessionKey: destinationKey,
-        baseSessionKey: "agent:main:telegram:group:-100123",
-        peer: { kind: "group" as const, id: "-100123" },
-        chatType: "group" as const,
-        from: "telegram:-100123",
-        to: "-100123",
-        threadId: destinationThread,
-      };
-      params.resolvedDelivery = makeResolvedDelivery({
-        to: "-100123",
-        threadId: destinationThread,
-        sessionRoute,
-      });
-
-      expectDelivered(await dispatchCronDelivery(params));
-      expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
-      expectDeliveryCall(0, {
-        channel: "telegram",
-        to: "-100123",
-        threadId: destinationThread,
-        payloads: [{ text: "Persistent session report" }],
-      });
-      // Outbound skips the execution's own conversation and records any other destination.
-      expect(send.mock.calls[0]?.[0]).toMatchObject({
-        transcriptRoute: sessionRoute,
-      });
-      expect(commitBackgroundResultToSessionMock).not.toHaveBeenCalled();
-      expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([
     ["literal skip token", "ANNOUNCE_SKIP", false, true],

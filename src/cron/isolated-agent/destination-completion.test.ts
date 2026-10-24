@@ -336,8 +336,10 @@ it.each(["persistent", "threaded", "stable", "tool-delivered", "cross-agent"] as
         },
       );
       if (mode === "persistent") {
+        // The persistent run executes in the destination conversation's own generation.
         await replaceSessionEntry(destination, {
           sessionId: destination.sessionId,
+          lifecycleRevision: params.lifecycleRevision,
           updatedAt: 1,
         });
       }

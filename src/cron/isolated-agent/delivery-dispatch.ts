@@ -1,5 +1,6 @@
 /** Finalize one run result and delegate confirmed external conversation writes to outbound. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -10,6 +11,7 @@ import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../r
 import { normalizeCronRunErrorText } from "../service/execution-errors.js";
 import type { CronResolvedDeliveryState } from "../types.js";
 import {
+  deliveredToPersistentExecution,
   logCronDeliveryWarn,
   resolveDescendantSubagentFollowup,
   resolveDirectCronDeliveryGeneration,
@@ -105,6 +107,33 @@ export async function dispatchCronDelivery(
       diagnostics,
     };
   };
+  // Commits the settled result into a persistent execution conversation; returns an error.
+  const commitExecutionResult = async (
+    payloads: ReplyPayload[],
+    sessionKey = params.agentSessionKey,
+  ) => {
+    const committed = await (
+      await conversationResult.load()
+    ).commitCronConversationResult({
+      config: params.cfgWithAgentDefaults,
+      agentId: params.agentId,
+      jobId: params.job.id,
+      runStartedAt: params.runStartedAt,
+      conversation: {
+        sessionKey,
+        sessionId: params.sessionId,
+        lifecycleRevision: params.lifecycleRevision,
+      },
+      payloads,
+      signal: params.abortSignal,
+      deliveryAttemptFence: params.deliveryAttemptFence,
+    });
+    if (!committed.ok) {
+      return committed.reason;
+    }
+    diagnostics = mergeCronRunDiagnostics(diagnostics, committed.diagnostics);
+    return undefined;
+  };
   const failTarget = (error: string) => {
     const detail = params.sourceDeliveryOutcome.unverifiedMessageToolDelivery
       ? error +
@@ -163,26 +192,10 @@ export async function dispatchCronDelivery(
         synthesizedText,
       });
       if (normalized.kind === "deliver") {
-        const committed = await (
-          await conversationResult.load()
-        ).commitCronConversationResult({
-          config: params.cfgWithAgentDefaults,
-          agentId: params.agentId,
-          jobId: params.job.id,
-          runStartedAt: params.runStartedAt,
-          conversation: {
-            sessionKey: params.agentSessionKey,
-            sessionId: params.sessionId,
-            lifecycleRevision: params.lifecycleRevision,
-          },
-          payloads: normalized.payload,
-          signal: params.abortSignal,
-          deliveryAttemptFence: params.deliveryAttemptFence,
-        });
-        if (!committed.ok) {
-          return finish({ kind: "error", error: committed.reason });
+        const error = await commitExecutionResult(normalized.payload);
+        if (error) {
+          return finish({ kind: "error", error });
         }
-        diagnostics = mergeCronRunDiagnostics(diagnostics, committed.diagnostics);
       }
     }
     return finish();
@@ -407,6 +420,24 @@ export async function dispatchCronDelivery(
     }
   }
   if (params.resolvedDelivery.ok || sentByTool) {
+    // Outbound skips the execution's own conversation; a persistent session still keeps
+    // the settled result there once its notification was confirmed.
+    const executionRouteKey = sentByTool
+      ? undefined
+      : deliveredToPersistentExecution(params, state.status);
+    if (executionRouteKey) {
+      const error = await commitExecutionResult(deliveryPayloads, executionRouteKey);
+      if (error) {
+        diagnostics = mergeCronRunDiagnostics(
+          diagnostics,
+          createCronRunDiagnosticsFromError(
+            "delivery",
+            `result was delivered but was not added to the conversation: ${error}`,
+            { severity: "warn" },
+          ),
+        );
+      }
+    }
     return finish();
   }
   const executionOwnsResult =
