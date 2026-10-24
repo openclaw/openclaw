@@ -195,6 +195,11 @@ export class SidebarSessionProjection {
     const presentation = [
       host.navigationView,
       railRows.map(({ children: _children, ...row }) => row),
+      // Off-page group descriptors must admit repaint even when the roster tree is unchanged.
+      sessionsVisible &&
+        (context?.navigation.snapshot.personalSessionGroups ?? []).map((group) =>
+          group.sessionKeys.map((key) => zone.sessionRows.get(key)),
+        ),
       host.connected,
       this.helloPresentation.readRevision(
         () => [context?.gateway.snapshot.hello, context?.gateway.snapshot.pluginCapabilities],

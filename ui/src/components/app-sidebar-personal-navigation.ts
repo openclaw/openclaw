@@ -31,7 +31,10 @@ type PersonalNavigationHost = {
   readonly sidebarEntries: readonly string[];
   readonly sessionOwnerFilterId: string | null;
   readonly sessionDataContext:
-    | Pick<ApplicationContext, "sessions" | "gateway" | "plugins" | "connectionBootstrap">
+    | Pick<
+        ApplicationContext,
+        "sessions" | "gateway" | "plugins" | "connectionBootstrap" | "navigation"
+      >
     | undefined;
   readonly navigationCatalog: { readonly dashboards: SessionListSnapshot | null };
   getRouteSessionKey(): string;
@@ -192,20 +195,32 @@ export function createSidebarPinnedSessions(
   return { synchronize, seed, get };
 }
 
+/** Saved group membership is a reference, never authority to reveal a session. */
+export function resolvePersonalSidebarSession(host: PersonalNavigationHost, key: string) {
+  const loaded = host.findSidebarSessionByKey(key);
+  const snapshot = loaded
+    ? undefined
+    : (host.navigationCatalog.dashboards?.result?.sessions.find((row) => row.key === key) ??
+      host.pinnedSessions.get(key));
+  return (
+    loaded ?? (snapshot ? host.getSessionNavigationState().toSidebarSession(snapshot) : undefined)
+  );
+}
+
 export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarRecentSession[]) {
-  const pins = (host.sidebarSnapshot ? [] : host.sidebarEntries).flatMap((value) => {
-    const entry = parseSidebarEntry(value);
-    if (entry?.type !== "session") {
-      return [];
-    }
-    const loaded = host.findSidebarSessionByKey(entry.key);
-    const snapshot = loaded
-      ? undefined
-      : (host.navigationCatalog.dashboards?.result?.sessions.find((row) => row.key === entry.key) ??
-        host.pinnedSessions.get(entry.key));
-    const row =
-      loaded ??
-      (snapshot ? host.getSessionNavigationState().toSidebarSession(snapshot) : undefined);
+  const keys = host.sidebarSnapshot
+    ? []
+    : [
+        ...host.sidebarEntries.flatMap((value) => {
+          const entry = parseSidebarEntry(value);
+          return entry?.type === "session" ? [entry.key] : [];
+        }),
+        ...(host.sessionDataContext?.navigation.snapshot.personalSessionGroups ?? []).flatMap(
+          (group) => group.sessionKeys,
+        ),
+      ];
+  const pins = [...new Set(keys)].flatMap((key) => {
+    const row = resolvePersonalSidebarSession(host, key);
     return row ? [row] : [];
   });
   return buildReconciledSidebarZone({
@@ -293,13 +308,13 @@ export function sidebarVisibleRowsInOrder(
       sessions: Pick<ApplicationContext["sessions"], "archiveVisibility">;
     };
   },
+  personalGroupRows: readonly SidebarRecentSession[] = [],
 ): SidebarRecentSession[] {
-  return host.collapsedSessionSections.has("pinned")
-    ? visibleRows
-    : [
-        ...sidebarPinnedSessionRows(zone, (key) =>
-          host.sessionDataContext?.sessions.archiveVisibility(key),
-        ),
-        ...visibleRows,
-      ];
+  const pins = host.collapsedSessionSections.has("pinned")
+    ? []
+    : sidebarPinnedSessionRows(zone, (key) =>
+        host.sessionDataContext?.sessions.archiveVisibility(key),
+      );
+  // Keep appearances until the clicked range is resolved; batch targets deduplicate later.
+  return [...personalGroupRows, ...pins, ...visibleRows];
 }

@@ -431,6 +431,20 @@ export function buildReconciledSidebarZone(input: {
   return live;
 }
 
+/** Multiple visible placements share one batch target and live-data owner. */
+export function distinctSidebarSessionRows(
+  rows: readonly SidebarRecentSession[],
+): SidebarRecentSession[] {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    if (seen.has(row.key)) {
+      return false;
+    }
+    seen.add(row.key);
+    return true;
+  });
+}
+
 /** Menus read selection synchronously; the sidebar projection owns publication and parking. */
 export function createSidebarSessionSelection(
   readRows: () => readonly SidebarRecentSession[],
@@ -442,7 +456,7 @@ export function createSidebarSessionSelection(
     get selectedKeys() {
       return selectedKeys;
     },
-    toggle(key: string) {
+    toggle(key: string, selectionKey = key) {
       const next = new Set(selectedKeys);
       if (next.has(key)) {
         next.delete(key);
@@ -450,17 +464,18 @@ export function createSidebarSessionSelection(
         next.add(key);
       }
       selectedKeys = next;
-      anchor = next.has(key) ? key : null;
+      anchor = next.has(key) ? selectionKey : null;
       publish();
     },
-    extend(key: string) {
+    extend(key: string, selectionKey = key) {
       const rows = readRows();
-      anchor ??= rows.find((row) => row.visuallyActive || row.active)?.key ?? key;
-      const anchorIndex = rows.findIndex((row) => row.key === anchor);
-      const targetIndex = rows.findIndex((row) => row.key === key);
+      const active = rows.find((row) => row.visuallyActive || row.active);
+      anchor ??= active?.selectionKey ?? active?.key ?? selectionKey;
+      const anchorIndex = rows.findIndex((row) => (row.selectionKey ?? row.key) === anchor);
+      const targetIndex = rows.findIndex((row) => (row.selectionKey ?? row.key) === selectionKey);
       if (anchorIndex === -1 || targetIndex === -1) {
         selectedKeys = new Set([key]);
-        anchor = key;
+        anchor = selectionKey;
       } else {
         const [start, end] =
           anchorIndex <= targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
@@ -468,8 +483,8 @@ export function createSidebarSessionSelection(
       }
       publish();
     },
-    clear(this: void) {
-      anchor = null;
+    clear(this: void, selectionKey: string | null = null) {
+      anchor = selectionKey;
       if (selectedKeys.size > 0) {
         selectedKeys = new Set();
         publish();

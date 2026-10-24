@@ -4,6 +4,25 @@ import { en } from "./en.ts";
 // The ordered source retains hot labels by reference; menu and management copy loads on use.
 const enSessionOrganization = {
   sessionsView: {
+    personalGroups: "Personal groups",
+    personalGroupNew: "New personal group",
+    personalGroupEdit: "Edit personal group",
+    personalGroupName: "Group name",
+    personalGroupHint: "Only your layout changes. Sessions and shared groups stay unchanged.",
+    personalGroupEmpty: "Drag sessions here or choose Edit group to add them.",
+    personalGroupSessions: "Sessions",
+    personalGroupSearch: "Search available sessions",
+    personalGroupNoMatches: "No matching sessions in the loaded list.",
+    personalGroupOptions: "Options for personal group {group}",
+    personalGroupEditMenu: "Edit group",
+    personalGroupMoveUp: "Move up",
+    personalGroupMoveDown: "Move down",
+    personalGroupRemove: "Remove personal group",
+    personalGroupRemoved: "Personal group removed. Sessions are unchanged.",
+    personalGroupUnavailable: "Connection changed. Reopen the group to edit it.",
+    personalGroupChanged: "This group changed. Reopen it before saving your edits.",
+    personalGroupCapacity:
+      "Personal groups are full. Remove a group or some sessions before adding more.",
     pullRequestCount: en.sessionsView.pullRequestCount,
     advanced: "Advanced",
     searchGroups: "Search groups",
