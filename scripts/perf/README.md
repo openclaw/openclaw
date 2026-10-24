@@ -5313,3 +5313,34 @@ loads include TypeScript tooling. Workspace/source/revision correctness and
 retirement are covered by the catalog worker heap integration test. Analyze
 snapshots with the [retention runbook](heap-retention-runbook.md); preserve the
 campaign's host, disk, and production-safety restrictions.
+
+## Worker placement preservation reads
+
+`placement-preservation-measure.ts` measures the production preservation-read
+owner with a synthetic retained replica inventory. By default each of 20,000
+operations prepares a read and captures it twice, with 10,000 replica entries and
+64 protected placements. It does not exercise SQLite, Gateway RPCs, or a model.
+Pair it with the `sessions.cleanup` Gateway workload above, using a Team-shaped
+fixture with `--local-placements`, to establish captures and replica sizes through
+real maintenance. Keep fixture generation and build preparation outside timing.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs \
+  scripts/perf/placement-preservation-measure.ts \
+  --mode timing --output /path/to/timing.json
+```
+
+Use `--mode counts --operations 1 --warmup 0` for replica entries visited, and
+`--mode allocation` for sampled allocation including objects collected by minor
+and major GC. Counts instrument the replica iterator and must not supply timing
+claims. Allocation and untraced timing are separate passes. `--protected 0`
+measures the common all-local inventory. `--captures` selects the count established
+by the Gateway probe. `--owner-source /absolute/path/placement-read-authority.base.ts`
+selects a preserved source beside the original module so relative imports resolve.
+
+Run concurrent baseline/candidate pairs under the campaign quiet lock and guard,
+pass the same future `--start-at` epoch milliseconds, and swap the interleaved CPU
+sets in pair two. The output reports input/output hashes, visited entries, CPU per
+operation, allocation per operation, latency sample counts, per-kind GC counts,
+totals and maxima, and event-loop sample counts and tails. A warmup collection
+precedes measurement; no collections are forced within the measured interval.
