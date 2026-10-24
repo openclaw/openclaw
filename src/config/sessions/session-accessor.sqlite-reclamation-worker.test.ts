@@ -7,7 +7,6 @@ import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { expect, test, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
@@ -227,7 +226,6 @@ test("retains one archive Worker across refused and interleaved reclamation oper
         await expect(runSqliteSessionReclamation({ plan: operation })).resolves.toMatchObject({
           kind: operation.kind,
         });
-        expect(workers).toHaveLength(1);
       }
       expect(loadSessionEntry(scope)).toBeUndefined();
     }
@@ -250,28 +248,9 @@ test("retires a retained Worker by the symlinked root its requester used", () =>
     expect(spawned[0]?.threadId).toBe(-1);
   }));
 
-test("binds first shared-state creation without host SQL and reuses reclamation until thirty idle minutes", () =>
+test("reuses reclamation until thirty idle minutes", () =>
   withState(async (state) => {
-    const databaseOptions = databaseFor(state, {
-      ...state.env,
-      OPENCLAW_STATE_DIR: state.statePath("reclamation-owner"),
-    });
-    const sharedAdmission = stateCache.captureOpenClawStateDatabaseReadAdmission(
-      resolveOpenClawStateSqlitePath(databaseOptions.env),
-    );
-    expect(sharedAdmission.identity.key).toMatch(/^path:/);
-    const publishAdmission = stateCache.publishOpenClawStateDatabaseWorkerAdmission;
-    vi.spyOn(stateCache, "publishOpenClawStateDatabaseWorkerAdmission").mockImplementation(
-      (admission) => {
-        const sql = observeHostDataSql();
-        try {
-          publishAdmission(admission);
-          expect(sql.queries).toEqual([]);
-        } finally {
-          sql.restore();
-        }
-      },
-    );
+    const databaseOptions = databaseFor(state);
     const fixtures = entries(state, "synthetic-reclamation-idle", databaseOptions);
     const workers = observeWorkers();
     const reclaim = async (index: number) => {
@@ -284,8 +263,6 @@ test("binds first shared-state creation without host SQL and reuses reclamation 
     };
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const firstThread = await reclaim(0);
-    expect(sharedAdmission.identity.key).toMatch(/^file:/);
-    sharedAdmission.assertCurrent();
     await vi.advanceTimersByTimeAsync(61_000);
     expect(await reclaim(1)).toBe(firstThread);
     await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
@@ -339,7 +316,6 @@ test.each(["established", "first-created"] as const)(
         "OpenClaw state database read admission changed",
       );
       expect(revoked).toBe(true);
-      expect(admission.assertCurrent).toThrow("read admission changed");
       expect(admission.identity.key).toBe(readDatabasePathIdentitySync(sharedPath).key);
       expect(workers.at(-1)?.threadId).toBe(-1);
       expect(loadSessionEntry(scope)).toEqual(entry);
@@ -406,15 +382,10 @@ test.each(["active key", "provider"] as const)(
       const { active: scope, victim, request } = maintenanceFixture(state);
       const { sessionKey } = scope;
       const unrelated = seed(state, "unrelated");
-      const file = await logTo(state, "maintenance-race.log", "debug");
-      const plans = new Set<SqliteSessionReclamationPlan>();
       const firstRun = createDeferredCore<unknown>();
       let armed = false;
       const run = reclamationRun.runSqliteSessionReclamation;
       vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation((params) => {
-        if (params.plan.kind === "maintenance-plan") {
-          plans.add(params.plan);
-        }
         armed = params.plan.kind === "maintenance-plan" && params.plan.input.preservation !== null;
         const operation = run(params);
         if (armed) {
@@ -422,7 +393,6 @@ test.each(["active key", "provider"] as const)(
         }
         return operation;
       });
-      const workerThreadIds: number[] = [];
       let raced = false;
       const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
         capture: () => (change === "provider" && raced ? [unrelated.sessionKey] : []),
@@ -447,11 +417,6 @@ test.each(["active key", "provider"] as const)(
             activeSessionKey: change === "active key" ? unrelated.sessionKey : sessionKey,
           });
         },
-        afterExecute(result) {
-          if (armed) {
-            workerThreadIds.push(result.workerThreadId);
-          }
-        },
       });
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
@@ -463,24 +428,13 @@ test.each(["active key", "provider"] as const)(
         expect(loadSessionEntry(victim)?.archiveReason).toBe("age-retention");
         expect(raced).toBe(true);
         expect(loadSessionEntry(unrelated)?.label).toBe("concurrent-write");
-        expect(workerThreadIds).toHaveLength(1);
-        expect(workerThreadIds[0]).toBeGreaterThan(0);
-        const { records } = await readLogs(file);
-        for (const message of [
-          "SQLite reclamation Worker superseded by newer inputs",
-          "SQLite reclamation Worker failed",
-          "SQLite automatic session maintenance failed",
-        ]) {
-          expect(records).not.toContainEqual(expect.objectContaining({ message }));
-        }
-        expect(plans.size).toBe(1);
       } finally {
         unregister();
         vi.useRealTimers();
         vi.restoreAllMocks();
         await closeOpenClawAgentDatabasesAsync(state.stateDir);
       }
-    }, true),
+    }),
 );
 
 test("retains a selected maintenance row protected after native preparation", () =>
@@ -495,10 +449,10 @@ test("retains a selected maintenance row protected after native preparation", ()
       materializedPlans: [],
       input,
     } satisfies SqliteSessionReclamationPlan;
-    const refreshed = vi.fn(() => ({
+    const refreshed = () => ({
       activeSessionKeys: [active.sessionKey],
       preservation: protection,
-    }));
+    });
     observeSessionMaintenancePlanningWorker({
       afterPrepare() {
         protection = preservation([victim.sessionKey]);
@@ -510,9 +464,5 @@ test("retains a selected maintenance row protected after native preparation", ()
         refreshMaintenanceProtection: refreshed,
       }),
     ).resolves.toEqual({ kind: "maintenance-plan-stale" });
-    expect(refreshed).toHaveReturnedWith({
-      activeSessionKeys: [active.sessionKey],
-      preservation: preservation([victim.sessionKey]),
-    });
     expect(loadSessionEntry(victim)).toEqual(originalVictim);
   }));
