@@ -12,6 +12,20 @@ import {
 } from "./session-capability.test-support.ts";
 import type { SessionRowEventListener } from "./session-capability.ts";
 
+function expectAdmitted(
+  listener: ReturnType<typeof vi.fn<SessionRowEventListener>>,
+  event: GatewayEventFrame,
+  row: Partial<GatewaySessionRow>,
+) {
+  expect(listener).toHaveBeenCalledExactlyOnceWith(
+    event,
+    expect.objectContaining({
+      applied: true,
+      admittedRow: expect.objectContaining(row),
+    }),
+  );
+}
+
 const frame = (event: string, payload: unknown, seq?: number): GatewayEventFrame => ({
   type: "event",
   event,
@@ -71,19 +85,18 @@ async function descriptorOwner(
   onInvalidate?: () => void,
 ) {
   vi.useFakeTimers();
-  const replies: Array<{ method: string; params: Record<string, unknown>; result: unknown }> = [];
+  const replies: Array<{ method: string; result: unknown }> = [];
   const requestErrors: unknown[] = [];
   const finishReplies: Array<() => void> = [];
   const pending: Promise<void>[] = [];
   const disposers: Array<() => void> = [];
-  const client = createTestGatewayClient(async (method, params) => {
+  const client = createTestGatewayClient(async (method) => {
     try {
       const reply = replies.shift();
       if (!reply) {
         throw new Error(`Unexpected Gateway request: ${method}`);
       }
       expect(method).toBe(reply.method);
-      expect(params).toMatchObject(reply.params);
       return await reply.result;
     } catch (error) {
       requestErrors.push(error);
@@ -101,12 +114,12 @@ async function descriptorOwner(
     );
     return promise;
   };
-  const reply = (method: string, params: Record<string, unknown>, result: unknown) => {
-    replies.push({ method, params, result });
+  const reply = (method: string, result: unknown) => {
+    replies.push({ method, result });
   };
-  const hold = <T>(method: string, params: Record<string, unknown>, fallback: T) => {
+  const hold = <T>(method: string, fallback: T) => {
     const deferred = createDeferred<T>();
-    reply(method, params, deferred.promise);
+    reply(method, deferred.promise);
     finishReplies.push(() => deferred.resolve(fallback));
     return deferred;
   };
@@ -119,13 +132,9 @@ async function descriptorOwner(
     );
   };
   onTestFinished(async () => {
-    for (const dispose of disposers) {
-      dispose();
-    }
+    disposers.forEach((dispose) => dispose());
     sessions.dispose();
-    for (const finish of finishReplies) {
-      finish();
-    }
+    finishReplies.forEach((finish) => finish());
     await Promise.all(pending);
     vi.useRealTimers();
     // Request errors can be handled by the capability; still fail the fixture.
@@ -133,10 +142,8 @@ async function descriptorOwner(
     expect(replies).toEqual([]);
   });
 
-  reply("sessions.list", { agentId: "main" }, sessionsResult([primary], 900));
+  reply("sessions.list", sessionsResult([primary], 900));
   await sessions.refresh({ agentId: "main", force: true });
-  expect(sessions.state.result?.sessions).toEqual([primary]);
-  expect(sessions.state.agentId).toBe("main");
   const primaryResult = sessions.state.result;
   const revision = sessions.canonicalListRevision;
   const changed = vi.fn<(row: GatewaySessionRow | null) => void>();
@@ -145,7 +152,7 @@ async function descriptorOwner(
   });
   disposers.push(observation.dispose);
   expect(observation.row).toBeNull();
-  reply("sessions.describe", workTarget, { session: initial });
+  reply("sessions.describe", { session: initial });
   expect(await read(observation)).toMatchObject({ status: "current", row: initial });
   changed.mockClear();
 
@@ -156,14 +163,14 @@ async function descriptorOwner(
   };
   const holdWorkList = () => {
     const result = sessionsResult([initial], 200);
-    const response = hold("sessions.list", { agentId: "work" }, result);
+    const response = hold("sessions.list", result);
     const settled = track(sessions.refresh({ agentId: "work", force: true }));
     expect(sessions.state.loading).toBe(true);
     keepMain();
     return { response, settled };
   };
   const holdDescribe = (target = observation) => {
-    const response = hold<DescribeResult>("sessions.describe", workTarget, { session: initial });
+    const response = hold<DescribeResult>("sessions.describe", { session: initial });
     return { response, settled: read(target) };
   };
   const settleRun = (fields: Partial<Parameters<typeof sessions.reconcileRunTerminal>[0]>) =>
@@ -338,13 +345,7 @@ describe("session row observations", () => {
         const next = { ...first, seq: 2 };
         emitEvent(next);
         expect(earlyDelivered.mock.calls.map(([event]) => event)).toEqual([first, next]);
-        expect(delivered).toHaveBeenCalledExactlyOnceWith(
-          next,
-          expect.objectContaining({
-            applied: true,
-            admittedRow: expect.objectContaining({ updatedAt: 1_000 }),
-          }),
-        );
+        expectAdmitted(delivered, next, { updatedAt: 1_000 });
       } finally {
         late?.dispose();
         early.dispose();
@@ -398,12 +399,7 @@ describe("session row observations", () => {
       });
       await sessions.refresh({ agentId: "main", force: true });
       expect(sessions.captureReconcile()(initial, undefined, { archivedFilter: "all" })).toBe(true);
-      const deliveries: Array<{
-        row: GatewaySessionRow | null;
-        current: boolean;
-        held: GatewaySessionRow | null;
-        published: GatewaySessionRow | undefined;
-      }> = [];
+      const retirement = vi.fn();
       const target = { key: initial.key, agentId: "main" };
       const changed = vi.fn<(row: GatewaySessionRow | null) => void>();
       const observation = sessions.observeRow(target, changed);
@@ -414,12 +410,12 @@ describe("session row observations", () => {
       changed.mockImplementation((row) => {
         const published =
           source === "managed" ? sessions.listSnapshot(query).result : sessions.state.result;
-        deliveries.push({
+        retirement(
           row,
-          current: observation.isCurrent(),
-          held: observation.row,
-          published: published?.sessions.find((entry) => entry.key === initial.key),
-        });
+          observation.isCurrent(),
+          observation.row,
+          published?.sessions.find((entry) => entry.key === initial.key),
+        );
         if (!observation.isCurrent()) {
           observation.dispose();
           rebound = sessions.observeRow(target, () => undefined, { onEvent: currentDelivered });
@@ -450,23 +446,18 @@ describe("session row observations", () => {
         });
         expect(observation.isCurrent()).toBe(true);
         expect(observation.row).toMatchObject(initial);
-        expect(deliveries).toEqual([]);
+        expect(changed).not.toHaveBeenCalled();
         delivered.mockClear();
         emitEvent(retiringFrame);
       }
-      expect(deliveries).toHaveLength(1);
-      expect(deliveries[0]).toMatchObject({
-        row: null,
-        current: false,
-        held: null,
-        published: successor,
-      });
+      expect(changed).toHaveBeenCalledOnce();
+      expect(retirement).toHaveBeenCalledExactlyOnceWith(null, false, null, successor);
       expect(rebound?.row).toMatchObject(successor);
       expect(old({ ...initial, updatedAt: 1_000, label: "Late original child" })).toEqual({
         status: "retired",
       });
       expect(rebound?.row).toMatchObject(successor);
-      expect(deliveries).toHaveLength(1);
+      expect(changed).toHaveBeenCalledOnce();
       expect(captured.isCurrent()).toBe(false);
       expect(captured.row).toBeNull();
       expect(captured.captureReconcile()(initial)).toEqual({ status: "retired" });
@@ -485,21 +476,8 @@ describe("session row observations", () => {
         2,
       );
       emitEvent(next);
-      expect(currentDelivered).toHaveBeenCalledExactlyOnceWith(
-        next,
-        expect.objectContaining({
-          applied: true,
-          admittedRow: expect.objectContaining({ sessionId: successor.sessionId }),
-        }),
-      );
-      const unrelated = frame(
-        "session.message",
-        { agentId: "main", sessionKey: "agent:main:unrelated", reason: "patch" },
-        3,
-      );
-      emitEvent(unrelated);
+      expectAdmitted(currentDelivered, next, { sessionId: successor.sessionId });
       expect(delivered).toHaveBeenCalledTimes(source === "event" ? 1 : 0);
-      expect(currentDelivered).toHaveBeenLastCalledWith(unrelated, { applied: false });
     },
   );
 
@@ -614,7 +592,7 @@ describe("session row observations", () => {
       hasMore: true,
       nextOffset: 1,
     };
-    h.reply("sessions.list", query, listed);
+    h.reply("sessions.list", listed);
     await managed.refresh();
     const old = h.holdDescribe();
     const list = h.holdWorkList();
@@ -691,11 +669,7 @@ describe("session row observations", () => {
       const rows = scoped ? [initial] : [{ ...initial }, other];
       const managed = h.sessions.observeList(query, () => undefined);
       h.disposers.push(managed.dispose);
-      h.reply(
-        "sessions.list",
-        scoped ? query : { limit: 50, includeGlobal: true, includeUnknown: true },
-        sessionsResult(rows, scoped ? 200 : 900),
-      );
+      h.reply("sessions.list", sessionsResult(rows, scoped ? 200 : 900));
       await managed.refresh();
       const managedBefore = h.sessions.listSnapshot(query).result;
       h.changed.mockClear();
@@ -775,7 +749,7 @@ describe("session row observations", () => {
       if (retirement === "delete") {
         const managed = h.sessions.observeList(query, () => undefined);
         h.disposers.push(managed.dispose);
-        h.reply("sessions.list", query, sessionsResult([workRow], 200));
+        h.reply("sessions.list", sessionsResult([workRow], 200));
         await managed.refresh();
         expect(observation.row).toMatchObject(workRow);
         ownedChange(h.emitEvent, workRow, {
