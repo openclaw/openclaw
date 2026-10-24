@@ -1,4 +1,6 @@
 // Adapted from Hermes Agent; see THIRD_PARTY_NOTICES.md for the pinned source and MIT license.
+const MIXTURE_DOMINANT_FRACTION = 0.85;
+const MIXTURE_DISTINCT_FRACTION = 0.95;
 const FIRST_CHECK_CHARS = 16_000;
 const TAIL_CHARS = 64_000;
 const WINDOW_CHARS = 60;
@@ -7,11 +9,13 @@ const MIN_REPEATS = 5;
 function isRepetitionDominated(text: string): boolean {
   const counts = new Map<string, number>();
   let lineCount = 0;
+  let lineTotalChars = 0;
   for (const line of text.split(/\r\n|[\r\n]/)) {
     const normalized = line.trim();
     if (normalized) {
       counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
       lineCount++;
+      lineTotalChars += normalized.length;
     }
   }
   // Similar prefixes in distinct records are not a loop, even when their windows repeat.
@@ -20,12 +24,30 @@ function isRepetitionDominated(text: string): boolean {
   }
   const dominantChars = text.length / 2;
   let repeatedLineChars = 0;
+  let mixtureRepeatedChars = 0;
+  let repeatedDistinctLines = 0;
   for (const [line, count] of counts) {
     if (count >= MIN_REPEATS) {
       repeatedLineChars = Math.max(repeatedLineChars, line.length * count);
+      mixtureRepeatedChars += line.length * count;
+      repeatedDistinctLines++;
     }
   }
   if (repeatedLineChars >= dominantChars) {
+    return true;
+  }
+  // An irregular loop cycles several short lines in varying order, so no single
+  // line, window, or exact period covers half the tail; collectively the
+  // repeated lines cover nearly all non-newline content, and essentially every
+  // distinct line is part of the cycle (#182834). Structured records share
+  // template lines, but their distinct one-off content lines keep the distinct
+  // share well below this bound, so markup-heavy output and categorical rows
+  // with headers stay delivered. Line chars, not raw length, form the coverage
+  // denominator so CRLF-heavy short-line loops are not under-counted.
+  if (
+    mixtureRepeatedChars >= lineTotalChars * MIXTURE_DOMINANT_FRACTION &&
+    repeatedDistinctLines >= counts.size * MIXTURE_DISTINCT_FRACTION
+  ) {
     return true;
   }
 

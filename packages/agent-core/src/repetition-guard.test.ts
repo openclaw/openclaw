@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { RepetitionWatch } from "./repetition-guard.js";
 import {
+  irregularLineMixture,
   recordedPhraseLoop,
   recordedVariedLoopTail,
   variedRows,
@@ -48,6 +49,20 @@ describe("RepetitionWatch", () => {
       .join("")
       .slice(0, 12_000);
     expect(firstStop(unique + " Done, I will output it.".repeat(170))).toBeUndefined();
+  });
+
+  it.each([1, 32, 1024])(
+    "stops an irregular mixture of repeated short lines by 128k (%i-char chunks)",
+    (width) => {
+      const mixture = irregularLineMixture(6000);
+      const stop = firstStop(mixture, width);
+      expect(stop).not.toBeUndefined();
+      expect(stop ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(128_000);
+    },
+  );
+
+  it("keeps distinct numbered rows through the mixture signal", () => {
+    expect(firstStop(variedRows.repeat(4))).toBeUndefined();
   });
 
   it("eventually detects a loop after a long varied prefix", () => {

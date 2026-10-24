@@ -173,3 +173,35 @@ export const distinctRecordOutputs = [
     ).join("\n")}`,
   },
 ];
+
+/** Deterministic irregular mixture mirroring the #182834 runaway reply: many
+ * distinct short lines cycle in varying order, so no single line, window, or
+ * exact period covers half the tail. */
+export function irregularLineMixture(lineCount: number): string {
+  const lines = [
+    "Let me do it now.",
+    "Let me write the response.",
+    "Let me write it now.",
+    "Let me try again.",
+    "I will do it now.",
+    "Writing it now.",
+    "Let me continue.",
+    "Trying again now.",
+    "Let me get started.",
+    "Working on it now.",
+  ];
+  // xorshift keeps every line cycling frequently (the field loop repeated each
+  // of its 23 lines 200-400 times), while the order stays irregular.
+  let state = 42;
+  const out: string[] = [];
+  for (let index = 0; index < lineCount; index++) {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    const line = lines[Math.abs(state) % lines.length];
+    if (line) {
+      out.push(line);
+    }
+  }
+  return out.join("\n");
+}
