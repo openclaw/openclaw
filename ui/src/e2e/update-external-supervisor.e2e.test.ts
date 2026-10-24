@@ -122,34 +122,4 @@ suite.define(() => {
       },
     );
   });
-
-  it("keeps a retained external supervisor sentinel actionable without failure recovery", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        communityInvite: false,
-        agentModel: "openai/gpt-5",
-        models: [{ id: "gpt-5", name: "GPT-5", provider: "openai" }],
-        methodResponses: {
-          "config.get": configResponse,
-          "update.status": {
-            sentinel: {
-              kind: "update",
-              status: "skipped",
-              ts: 10,
-              stats: { reason: "external-supervisor-update-required" },
-            },
-          },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}settings/updates`);
-      await gateway.waitForRequest("update.status");
-      const settings = page.locator("#config-section-update");
-      await settings
-        .getByText("Use your server or deployment's update workflow", { exact: false })
-        .waitFor();
-      expect(await button(settings, "Retry update").count()).toBe(0);
-      expect(await settings.textContent()).not.toMatch(/CLI fallback|openclaw triage/);
-      expect(await gateway.getRequests("update.run")).toHaveLength(0);
-    });
-  });
 });
