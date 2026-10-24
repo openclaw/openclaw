@@ -28,6 +28,7 @@ import type {
   SessionTranscriptEventRow,
   SessionTranscriptStats,
   TranscriptEvent,
+  TranscriptEventReadOptions,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
@@ -498,11 +499,7 @@ export function readTranscriptEventAtSeqInTransaction(
 export function prepareTranscriptEventReadQuery(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
-  options: {
-    beforeEventSeq?: number;
-    afterEventSeq?: number;
-    maxEventBytes?: number;
-  } = {},
+  options: Omit<TranscriptEventReadOptions, "projection"> = {},
 ) {
   assertTranscriptEventReadBudget(database, sessionId, options);
   return getSessionKysely(database.db)
@@ -519,13 +516,18 @@ export function prepareTranscriptEventReadQuery(
 export function loadTranscriptEventsFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
-  options: {
-    beforeEventSeq?: number;
-    afterEventSeq?: number;
-    projection?: "reset-boundary";
-    maxEventBytes?: number;
-  } = {},
+  options: TranscriptEventReadOptions = {},
 ): TranscriptEvent[] {
+  return readTranscriptEventsFromDatabase(database, sessionId, Array.from, options);
+}
+
+/** Consume synchronously: the iterator must not outlive its fenced native snapshot. */
+export function readTranscriptEventsFromDatabase<T>(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+  consume: (events: Iterable<TranscriptEvent>) => T,
+  options: TranscriptEventReadOptions = {},
+): T {
   return readHotSessionTranscriptSnapshot(database, sessionId, "events", () => {
     const rows = iterateSqliteQuerySync(
       database.db,
@@ -537,11 +539,16 @@ export function loadTranscriptEventsFromDatabase(
         ])
         .orderBy("seq", "asc"),
     );
-    // Array.from closes the iterator on parse failure; no live cursor escapes a fenced read.
-    return Array.from(rows, (row) => {
-      const event: TranscriptEvent = JSON.parse(row.event_json);
-      return event;
-    });
+    const events = (function* () {
+      for (const row of rows) {
+        yield JSON.parse(row.event_json) as TranscriptEvent;
+      }
+    })();
+    try {
+      return consume(events);
+    } finally {
+      events.return();
+    }
   });
 }
 
