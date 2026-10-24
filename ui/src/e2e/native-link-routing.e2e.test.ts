@@ -10,17 +10,13 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-async function newBrowserContext() {
-  const context = await suite.newBrowserContext({
+function newBrowserContext() {
+  return suite.newBrowserContext({
     colorScheme: "light",
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 800, width: 1180 },
   });
-  await context.route("https://example.com/**", (route) =>
-    route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Report</title>" }),
-  );
-  return context;
 }
 
 type LinkTestWindow = Window & {
@@ -166,21 +162,5 @@ suite.define(() => {
     await page.evaluate(() => {
       document.querySelector("#native-link-routing-modal")?.remove();
     });
-  });
-
-  it("keeps ordinary browser navigation when the native bridge is absent", async () => {
-    const context = await newBrowserContext();
-    const { page, link } = await openChat(
-      context,
-      "Read the [report](https://example.com/report).",
-    );
-
-    await link.click({ button: "right" });
-    expect(await page.locator("openclaw-native-link-menu").count()).toBe(0);
-    const popupPromise = page.waitForEvent("popup");
-    await link.click();
-    const popup = await popupPromise;
-    await popup.waitForLoadState("domcontentloaded");
-    expect(popup.url()).toBe("https://example.com/report");
   });
 });

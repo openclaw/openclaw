@@ -3282,7 +3282,6 @@
       "ui/src/e2e/chat-emoji.e2e.test.ts": 8,
       "ui/src/e2e/chat-error-details.e2e.test.ts": 13,
       "ui/src/e2e/chat-export-attribution.e2e.test.ts": 5,
-      "ui/src/e2e/chat-external-pending-input.e2e.test.ts": 3,
       "ui/src/e2e/chat-file-copy-retirement.e2e.test.ts": 15,
       "ui/src/e2e/chat-file-editor-recovery.e2e.test.ts": 11,
       "ui/src/e2e/chat-file-links.e2e.test.ts": 32,

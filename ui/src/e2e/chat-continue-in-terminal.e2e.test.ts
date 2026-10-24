@@ -25,37 +25,25 @@ const basePath = new URL("/nested/$&;=()+,![]{}'`/%25PATH%25", "http://localhost
 const agentId = "runner";
 const sessionKey = `agent:${agentId}:main-'"$&;|<>^()%![]{}\\\`-%PATH%`;
 
-const sessionsListResponse = () => ({
-  owners: [
-    { type: "human" as const, id: "profile-ada", label: "Ada" },
-    { type: "human" as const, id: "profile-bob", label: "Bob" },
-  ],
-  ...chatSessionListResponse([
+const sessionsListResponse = () =>
+  chatSessionListResponse([
     {
       agentId,
       key: sessionKey,
       kind: "direct",
       label: "Terminal continuation",
       sessionId: "session-terminal-continuation",
-      owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
       updatedAt: Date.now(),
     },
-  ]),
-});
+  ]);
 
 async function openTerminalSession(page: Page) {
   const gateway = await installMockGateway(page, {
     basePath,
-    featureMethods: [
-      "chat.startup",
-      "sessions.assignOwner",
-      "sessions.groups.put",
-      "sessions.patch",
-    ],
+    featureMethods: ["chat.startup"],
     historyMessages: [],
     methodResponses: { "sessions.list": sessionsListResponse() },
     operatorScopes: ["operator.read", "operator.write"],
-    presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
     sessionKey,
   });
   await page.goto(
