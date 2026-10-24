@@ -128,15 +128,7 @@ it.each([
   ["OPENCLAW_VITEST_MAX_WORKERS", "8x"],
   ["OPENCLAW_TEST_WORKERS", "1e0"],
 ] as const)("rejects malformed explicit worker limit %s", (key, value) => {
-  expect(() =>
-    resolveLocalVitestScheduling(
-      { [key]: value },
-      hostInfo({
-        cpuCount: 10,
-        totalMemoryBytes: 24 * GiB,
-        freeMemoryBytes: 12 * GiB,
-      }),
-      "threads",
-    ),
-  ).toThrow(`${key} must be a positive integer; got: ${value}`);
+  expect(() => resolveLocalVitestScheduling({ [key]: value }, hostInfo({}), "threads")).toThrow(
+    `${key} must be a positive integer; got: ${value}`,
+  );
 });

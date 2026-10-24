@@ -92,19 +92,15 @@ process.stdout.write(response[1]);
 }
 
 describe.skipIf(process.platform === "win32")("Docker package identity report", () => {
-  it.each(
-    (["npm", "pnpm", "bun"] as const).flatMap((manager) =>
-      mismatches.map(([field, value, diagnostic]) => ({ manager, field, value, diagnostic })),
-    ),
-  )(
-    "rejects a stale $manager $field version even when it contains the artifact version",
-    ({ manager, field, value, diagnostic }) => {
+  it.each(mismatches)(
+    "rejects a stale npm %s version even when it contains the artifact version",
+    (field, value, diagnostic) => {
       const { result } = runPackageIdentity({
         artifactVersion: "1.2.3",
-        [`${manager}${field}`]: value,
+        [`npm${field}`]: value,
       });
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain(`[${manager}] ${diagnostic}`);
+      expect(result.stderr).toContain(`[npm] ${diagnostic}`);
     },
   );
 

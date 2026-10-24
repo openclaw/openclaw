@@ -15,6 +15,12 @@ function localRunner(execPath: string, npmPath: string, options: NpmRunnerParams
     ...options,
   });
 }
+const expectedCommand = (command: string, args: string[] = [], extra = {}) => ({
+  command,
+  args,
+  shell: false,
+  ...extra,
+});
 
 describe("resolveNpmRunner", () => {
   it("runs bundled npm under the default Bun runtime without PATH Node", () => {
@@ -25,16 +31,13 @@ describe("resolveNpmRunner", () => {
         env: { PATH: "" },
         npmArgs: ["pack", "space & literal"],
       }),
-    ).toEqual({
-      command: process.execPath,
-      args: [
-        path.join(path.dirname(packageJsonPath), "bin", "npm-cli.js"),
-        "pack",
-        "space & literal",
-      ],
-      packageJsonPath,
-      shell: false,
-    });
+    ).toEqual(
+      expectedCommand(
+        process.execPath,
+        [path.join(path.dirname(packageJsonPath), "bin", "npm-cli.js"), "pack", "space & literal"],
+        { packageJsonPath },
+      ),
+    );
   });
 
   it.each([
@@ -50,12 +53,11 @@ describe("resolveNpmRunner", () => {
     (platform, execPath, relative, args) => {
       const paths = platform === "win32" ? path.win32 : path.posix;
       const npmPath = paths.resolve(paths.dirname(execPath), relative);
-      expect(localRunner(execPath, npmPath, { platform, npmArgs: [...args] })).toEqual({
-        command: execPath,
-        args: [npmPath, ...args],
-        packageJsonPath: paths.resolve(npmPath, "../../package.json"),
-        shell: false,
-      });
+      expect(localRunner(execPath, npmPath, { platform, npmArgs: [...args] })).toEqual(
+        expectedCommand(execPath, [npmPath, ...args], {
+          packageJsonPath: paths.resolve(npmPath, "../../package.json"),
+        }),
+      );
     },
   );
 
@@ -63,12 +65,10 @@ describe("resolveNpmRunner", () => {
     const execPath = "C:\\nodejs\\node.exe";
     const expectedNpmExePath = path.win32.resolve(path.win32.dirname(execPath), "npm.exe");
 
-    const runner = localRunner(execPath, expectedNpmExePath, { npmArgs: ["install", "--silent"] });
-    expect(runner).toEqual({
-      command: expectedNpmExePath,
-      args: ["install", "--silent"],
-      shell: false,
-    });
+    const args = ["install", "--silent"];
+    expect(localRunner(execPath, expectedNpmExePath, { npmArgs: args })).toEqual(
+      expectedCommand(expectedNpmExePath, args),
+    );
   });
 
   it.each([
@@ -91,12 +91,11 @@ describe("resolveNpmRunner", () => {
         npmArgs: ["install", argument],
       });
 
-      expect(runner).toEqual({
-        command: "C:\\Windows\\System32\\cmd.exe",
-        args: ["/d", "/s", "/c", commandLine],
-        shell: false,
-        windowsVerbatimArguments: true,
-      });
+      expect(runner).toEqual(
+        expectedCommand("C:\\Windows\\System32\\cmd.exe", ["/d", "/s", "/c", commandLine], {
+          windowsVerbatimArguments: true,
+        }),
+      );
     },
   );
 
@@ -123,12 +122,7 @@ describe("resolveNpmRunner", () => {
         existsSync: () => false,
         platform: "linux",
       }),
-    ).toEqual({
-      command: "npm",
-      args: [],
-      shell: false,
-      env: { PATH: `/tmp${path.delimiter}/usr/bin:/bin` },
-    });
+    ).toEqual(expectedCommand("npm", [], { env: { PATH: `/tmp${path.delimiter}/usr/bin:/bin` } }));
   });
 
   it("fails closed on Windows when no toolchain-local npm CLI exists", () => {

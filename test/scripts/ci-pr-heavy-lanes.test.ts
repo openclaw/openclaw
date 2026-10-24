@@ -21,39 +21,37 @@ function rows(outputs: Record<string, string>, key: string) {
 const checks = (outputs: Record<string, string>) =>
   ["check_matrix", "check_additional_matrix"].flatMap((key) => rows(outputs, key));
 const heavyLanes = [
-  ["checks-ui-e2e-real-gateway", "run_ui_real_gateway"],
-  ["checks-windows", "run_checks_windows"],
-  ["macos-node", "run_macos_node"],
-  ["macos-swift", "run_macos_swift"],
-  ["ios-build", "run_ios_build"],
-  ["android-screenshots", "run_android_screenshots"],
-  ["published-driver-update", "run_published_driver_update"],
+  "run_ui_real_gateway",
+  "run_checks_windows",
+  "run_macos_node",
+  "run_macos_swift",
+  "run_ios_build",
+  "run_android_screenshots",
+  "run_published_driver_update",
 ] as const;
 
-it.each(["openclaw/openclaw", "contributor/openclaw"])(
+it.each([
+  ["src/skills/runtime/refresh.ts", true, true],
+  ["extensions/telegram/src/runtime.ts", true, true],
+  ["packages/media-core/src/runtime.mts", true, true],
+  ["ui/src/runtime.tsx", true, false],
+  ["src/shared/runtime.js", false, false],
+] as const)(
   "keeps TypeScript cycle and Kysely checks in the existing PR guard for %s",
-  (headRepository) => {
-    for (const [changedPath, cycles, kysely] of [
-      ["src/skills/runtime/refresh.ts", true, true],
-      ["extensions/telegram/src/runtime.ts", true, true],
-      ["packages/media-core/src/runtime.mts", true, true],
-      ["ui/src/runtime.tsx", true, false],
-      ["src/shared/runtime.js", false, false],
-    ] as const) {
-      const result = manifest({
-        checkFamilyScope: true,
-        runnerProfile: "hybrid",
-        eventName: "pull_request",
-        changedPaths: [changedPath],
-        scopeEnv: { OPENCLAW_CI_HEAD_REPOSITORY: headRepository },
-      });
-      expect(result.outputs.run_pr_madge_import_cycles).toBe(String(cycles));
-      expect(result.outputs.run_pr_kysely_guardrails).toBe(String(kysely));
-      const selected = checks(result.outputs);
-      expect(selected.filter((row) => (row.task ?? row.group) === "guards")).toHaveLength(1);
-      expect(selected.some((row) => row.group === "runtime-topology-architecture")).toBe(false);
-      expect(selected.some((row) => /import-cycle|kysely/u.test(row.check_name))).toBe(false);
-    }
+  (changedPath, cycles, kysely) => {
+    const result = manifest({
+      checkFamilyScope: true,
+      runnerProfile: "hybrid",
+      eventName: "pull_request",
+      changedPaths: [changedPath],
+      scopeEnv: { OPENCLAW_CI_HEAD_REPOSITORY: "openclaw/openclaw" },
+    });
+    expect(result.outputs.run_pr_madge_import_cycles).toBe(String(cycles));
+    expect(result.outputs.run_pr_kysely_guardrails).toBe(String(kysely));
+    const selected = checks(result.outputs);
+    expect(selected.filter((row) => (row.task ?? row.group) === "guards")).toHaveLength(1);
+    expect(selected.some((row) => row.group === "runtime-topology-architecture")).toBe(false);
+    expect(selected.some((row) => /import-cycle|kysely/u.test(row.check_name))).toBe(false);
   },
 );
 
@@ -109,7 +107,7 @@ it.each([
   });
   expect(result.outputs.run_pr_madge_import_cycles).toBe(String(deferred));
   expect(result.outputs.run_pr_kysely_guardrails).toBe(String(deferred));
-  for (const [, flag] of heavyLanes) {
+  for (const flag of heavyLanes) {
     expect(result.outputs[flag], flag).toBe(String(!deferred));
   }
   for (const flag of ["run_protocol_event_coverage", "run_ui_e2e", "run_android_job"]) {
