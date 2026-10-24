@@ -199,31 +199,23 @@ async function createPreparedRelease(
     if (endpoint.includes("/compare/")) {
       return { status: "identical" };
     }
-    if (endpoint.endsWith("/actions/jobs/7")) {
-      return job;
-    }
-    const architectureJob = architectureJobs.find((candidate) =>
+    const producerJob = [job, ...architectureJobs].find((candidate) =>
       endpoint.endsWith(`/actions/jobs/${candidate.id}`),
     );
-    if (architectureJob) {
-      return architectureJob;
+    if (producerJob) {
+      return producerJob;
     }
     if (endpoint.includes("/jobs?")) {
       const attempt = Number(endpoint.match(/\/attempts\/([0-9]+)\//u)?.[1]);
-      const attemptJobs = architectureJobs.filter((candidate) => candidate.run_attempt === attempt);
       const jobs = [
-        ...(job.run_attempt === attempt ? [job] : []),
-        ...attemptJobs,
+        ...[job, ...architectureJobs].filter((candidate) => candidate.run_attempt === attempt),
         {
           ...job,
           id: 8,
           check_run_url: `https://api.github.com/repos/${repository}/check-runs/8`,
         },
       ];
-      return {
-        jobs,
-        total_count: jobs.length,
-      };
+      return { jobs, total_count: jobs.length };
     }
     if (endpoint.endsWith(`/actions/runs/${runId}/attempts/${runAttempt}`)) {
       return attemptRun;
