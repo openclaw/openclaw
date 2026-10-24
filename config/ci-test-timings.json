@@ -3596,7 +3596,6 @@
       "ui/src/e2e/model-setup-cancel.e2e.test.ts": 14,
       "ui/src/e2e/model-setup-codex-sign-in.e2e.test.ts": 5,
       "ui/src/e2e/model-setup-explicit.e2e.test.ts": 20,
-      "ui/src/e2e/model-setup-llamacpp.e2e.test.ts": 3,
       "ui/src/e2e/model-setup-lmstudio.e2e.test.ts": 4,
       "ui/src/e2e/model-setup-reconnect.e2e.test.ts": 12,
       "ui/src/e2e/model-setup-recovery.e2e.test.ts": 8,

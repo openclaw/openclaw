@@ -1292,11 +1292,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/components/modal-dialog.tsx", "ui/src/pages/model-setup/model-setup-page.ts"],
   ),
   pageWatch(
-    "ui/src/e2e/model-setup-llamacpp.e2e.test.ts",
-    ["config", "model-providers", "model-setup"],
-    ["ui/src/components/modal-dialog.tsx", "ui/src/components/select-picker.ts"],
-  ),
-  pageWatch(
     "ui/src/e2e/model-setup-lmstudio.e2e.test.ts",
     ["config", "model-providers", "model-setup"],
     ["ui/src/components/modal-dialog.tsx", "ui/src/components/select-picker.ts"],
