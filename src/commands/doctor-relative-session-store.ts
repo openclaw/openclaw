@@ -6,8 +6,8 @@ import {
   claimFullyCopied,
   claimsMatch,
   readClaim,
-  restoreColdSessionClaims,
 } from "../config/sessions/legacy-main-session-migration-claims.js";
+import { restoreColdSessionClaims } from "../config/sessions/legacy-main-session-migration-restore.js";
 import type {
   PhysicalStore,
   SessionClaim,
