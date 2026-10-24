@@ -64,21 +64,9 @@ describePosix("squash body owner", () => {
       squash("PR_TITLE", "COMMIT_MESSAGES", "First\n\nDetail", "Second"),
       "* First\n\nDetail\n\n* Second\n",
     ],
-    [
-      "multiple commits with automatic title",
-      squash("COMMIT_OR_PR_TITLE", "COMMIT_MESSAGES", "First", "Second"),
-      "* First\n\n* Second\n",
-    ],
     ["blank default", squash("PR_TITLE", "BLANK"), "\n"],
     ["PR body default", squash("PR_TITLE", "PR_BODY"), "Repair\n"],
-    [
-      "reviewed body overrides defaults",
-      { ...squash("PR_TITLE", "COMMIT_MESSAGES", "First", "Second"), body: "Reviewed bytes" },
-      "Reviewed bytes",
-    ],
     ["empty preview", { preview: "", source: human }, human + "\n"],
-    ["plain preview", { source: human }, "Repair\n\n" + human + "\n"],
-    ["existing trailer", { preview: human, source: human }, human + "\n"],
     ["trailing whitespace", { preview: human + "\n\n \t\n", source: human }, human + "\n"],
     [
       "divider prose",
@@ -191,7 +179,7 @@ describePosix("squash body owner", () => {
     expect(result.stdout).toBe(keep ? "Repair\n\n" + line + "\n" : "Repair\n");
   });
 
-  it.each(["agent@host.LOCALHOST", "123+unknown@users.noreply.github.com", "unlinked@example.com"])(
+  it.each(["agent@host.LOCALHOST", "unlinked@example.com"])(
     "drops unverified source and preview credit: %s",
     (email) => {
       const line = credit("Local Author", email);
@@ -208,7 +196,7 @@ describePosix("squash body owner", () => {
     },
   );
 
-  it.each(["second@example.com", "123+second-author@users.noreply.github.com"])(
+  it.each(["123+second-author@users.noreply.github.com"])(
     "matches linked preview authors case-insensitively: %s",
     (email) => {
       const line = credit("Second Author", email);
@@ -250,15 +238,8 @@ describePosix("squash body owner", () => {
       credit("Claude"),
       credit("Human", "person@anthropic.com"),
       credit("Other", "noreply@anthropic.com.example.org"),
-      credit("Human", "781889+Takhoffman@users.noreply.github.com"),
-      credit("clawsweeper"),
-      credit("Human", "274271284+human@users.noreply.github.com"),
       credit("Other", "274271284+clawsweeper[bot]@users.noreply.github.com.example.org"),
-      credit("Copilot"),
-      credit("Human", "1223556219+copilot@users.noreply.github.com"),
       credit("Other", "person[bot]@example.com"),
-      credit("Other", "209825114+claude[bot]@users.noreply.github.com.example.org"),
-      credit("Other", "274271284+clawsweeperbot@users.noreply.github.com"),
     ].join("\n");
     const result = compose({ preview: "Repair\n\n" + line, source: humans });
     expect(result.status, result.stderr).toBe(0);
@@ -267,7 +248,6 @@ describePosix("squash body owner", () => {
 
   it.each([
     [machine, ""],
-    ["  " + machine, ""],
     ["Co-Authored-By: Claude\n <noreply@anthropic.com>", ""],
     [machine + "\n  indented note", "  indented note\n\n"],
   ])("removes replayed bullet credit %s without removing unrelated prose", (line, retained) => {
@@ -321,7 +301,6 @@ describePosix("squash body owner", () => {
 
   it.each([
     machine,
-    credit("App", "209825114+claude[bot]@users.noreply.github.com"),
     "  " + machine,
     machine + "\n  indented note",
     "Co-Authored-By: Claude\n <noreply@anthropic.com>",

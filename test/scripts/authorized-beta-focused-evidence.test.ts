@@ -174,10 +174,7 @@ function focusedEvidence(
   };
 }
 
-function runFocusedValidatorLogProbe(
-  outcome: "flagged" | "legacy" | "unrelated",
-  skippedHistoricalChild = false,
-) {
+function runFocusedValidatorLogProbe(outcome: "legacy" | "unrelated") {
   const { policy, root } = fixturePolicy();
   const trustedRoot = tempDirs.make("authorized-beta-focused-job-log-");
   const validatorPath = stageValidatorClosure(trustedRoot);
@@ -329,7 +326,7 @@ function runFocusedValidatorLogProbe(
       { key: "pluginPrerelease", selected: true, runId: historical.pluginRunId },
       { key: "releaseChecks", selected: true, runId: historical.releaseChecksRunId },
       { key: "productPerformance", selected: true, runId: historical.performanceRunId },
-      ...(skippedHistoricalChild ? [{ key: "npmTelegram", selected: false, runId: "" }] : []),
+      { key: "npmTelegram", selected: false, runId: "" },
     ],
   };
   const evidence = focusedEvidence(policy, producer);
@@ -665,19 +662,13 @@ describe("authorized beta focused evidence", () => {
     );
   });
 
-  it("accepts skipped historical release-plan children without run identities", () => {
-    const { result } = runFocusedValidatorLogProbe("flagged", true);
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("authorized beta focused evidence verified");
-  });
-
   it.each([
     { outcome: "legacy" as const, description: "retries once for the exact legacy gh flag error" },
     {
       outcome: "unrelated" as const,
       description: "propagates unrelated gh errors without retrying",
     },
-  ])("$description", ({ outcome }) => {
+  ])("$description with skipped historical children", ({ outcome }) => {
     const { calls, policy, result } = runFocusedValidatorLogProbe(outcome);
     const ciLogArgs = [
       "api",
