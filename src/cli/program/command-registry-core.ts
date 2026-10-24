@@ -35,6 +35,10 @@ const coreEntrySpecs: readonly (readonly [
     async (program) => (await import("./register.backup.js")).registerBackupCommand(program),
   ],
   [
+    ["presence"],
+    async (program) => (await import("./register.presence.js")).registerPresenceCommand(program),
+  ],
+  [
     ["database"],
     async (program) => (await import("./register.database.js")).registerDatabaseCommand(program),
   ],

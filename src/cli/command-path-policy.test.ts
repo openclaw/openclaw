@@ -183,6 +183,12 @@ describe("command-path-policy", () => {
       ownsProtocolStdout: true,
       networkProxy: "bypass",
     });
+    expectResolvedPolicy(["presence", "presence query"], {
+      configGuard: "skip",
+      loadPlugins: "never",
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    });
     expectResolvedPolicy(["plugins update"], { hideBanner: true });
     expectResolvedPolicy(["plugins list", "plugins lint"], {
       configGuard: "skip",
