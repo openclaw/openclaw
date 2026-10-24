@@ -1,13 +1,14 @@
 // Production-bundle navigation benchmark. Native HTTP cache, clocks, rendering and input.
 // Example: node --import ./scripts/tsx.mjs scripts/bench-control-ui-navigation.ts \
 //   --bundle-dir <base> --compare-bundle-dir <head> --pairs 10 --output <proof-dir>
-// --aa compares the base with itself. --trace adds profiler overhead; do not mix timing cells.
+// --trace adds timeline capture and exact input-to-ready thread CPU; no sampling profiler.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type CDPSession, type Locator, type Page } from "playwright";
 import { selectControlUiRoutePreloads } from "../src/gateway/control-ui-route-preloads.ts";
 import { createEmptyCostUsageTotals } from "../src/infra/session-cost-usage-totals.ts";
@@ -25,16 +26,88 @@ import {
   startBuiltControlUiE2eServer,
   waitForControlUiRoute,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
-import { mapColdLoadCpuProfile, summarizeCpuProfile } from "./lib/control-ui-cold-load-trace.ts";
 import { createInteractionFixture } from "./lib/control-ui-interaction-scenarios.ts";
-import {
-  clipInteractionCpuProfile,
-  summarizeInteractionTrace,
-} from "./lib/control-ui-interaction-trace.ts";
+import { summarizeInteractionTrace } from "./lib/control-ui-interaction-trace.ts";
 import {
   emulateNavigationWorkerNetwork,
   type NavigationWorkerRequest,
 } from "./lib/control-ui-navigation-network.ts";
+
+function summarizeMarkedThreadCpu(rawEvents: readonly unknown[]) {
+  const records = rawEvents.map(asRecord).filter((event) => event !== null && event !== undefined);
+  const boundary = (name: string) => {
+    const matches = records.filter((event) => event.name === name);
+    if (matches.length !== 1) {
+      throw new Error(`Thread CPU needs exactly one marker: ${name}`);
+    }
+    const mark = matches[0]!;
+    const { ts, tts, pid, tid } = mark;
+    if (
+      typeof ts !== "number" ||
+      !Number.isFinite(ts) ||
+      typeof tts !== "number" ||
+      !Number.isFinite(tts) ||
+      typeof pid !== "number" ||
+      !Number.isFinite(pid) ||
+      typeof tid !== "number" ||
+      !Number.isFinite(tid)
+    ) {
+      throw new Error(`Thread CPU marker lacks finite ts/tts/pid/tid: ${name}`);
+    }
+    return { ts, tts, pid, tid };
+  };
+  const start = boundary("navigation:start");
+  const end = boundary("navigation:end");
+  if (start.pid !== end.pid || start.tid !== end.tid || end.ts <= start.ts || end.tts < start.tts) {
+    throw new Error("Thread CPU markers must be ordered on the same renderer thread");
+  }
+  const captured = records.flatMap((event) => {
+    if (event.pid !== start.pid || event.tid !== start.tid) {
+      return [];
+    }
+    const { ts, tts, dur, tdur } = event;
+    if (
+      typeof ts !== "number" ||
+      !Number.isFinite(ts) ||
+      typeof tts !== "number" ||
+      !Number.isFinite(tts)
+    ) {
+      return [];
+    }
+    const wallDuration = typeof dur === "number" && Number.isFinite(dur) && dur >= 0 ? dur : 0;
+    const cpuDuration = typeof tdur === "number" && Number.isFinite(tdur) && tdur >= 0 ? tdur : 0;
+    return [
+      { wallUs: ts, cpuUs: tts },
+      { wallUs: ts + wallDuration, cpuUs: tts + cpuDuration },
+    ];
+  });
+  const bounds = captured.reduce(
+    (region, point) => ({
+      firstCpuUs: Math.min(region.firstCpuUs, point.cpuUs),
+      lastCpuUs: Math.max(region.lastCpuUs, point.cpuUs),
+      firstWallUs: Math.min(region.firstWallUs, point.wallUs),
+      lastWallUs: Math.max(region.lastWallUs, point.wallUs),
+    }),
+    { firstCpuUs: Infinity, lastCpuUs: -Infinity, firstWallUs: Infinity, lastWallUs: -Infinity },
+  );
+  const { firstCpuUs, lastCpuUs, firstWallUs, lastWallUs } = bounds;
+  if (firstCpuUs > start.tts || lastCpuUs < end.tts) {
+    throw new Error("Captured thread CPU does not contain the marked interval");
+  }
+  return {
+    rendererPid: start.pid,
+    rendererTid: start.tid,
+    start,
+    end,
+    threadCpuMs: (end.tts - start.tts) / 1000,
+    capturedBeforeCpuMs: (start.tts - firstCpuUs) / 1000,
+    capturedAfterCpuMs: (lastCpuUs - end.tts) / 1000,
+    capturedTotalCpuMs: (lastCpuUs - firstCpuUs) / 1000,
+    capturedBeforeWallMs: (start.ts - firstWallUs) / 1000,
+    capturedAfterWallMs: (lastWallUs - end.ts) / 1000,
+    note: "Captured pre/post regions include benchmark setup/actionability and observation; only navigation markers bound product input-to-ready. CPU is a thread-clock difference, not nested event-duration sums.",
+  };
+}
 
 const { values } = parseArgs({
   options: {
@@ -157,6 +230,11 @@ if (
 const output = createControlUiE2eArtifactDir("navigation", values.output);
 const metricNames = [
   "wallMs",
+  "threadCpuMs",
+  "traceScriptWallMs",
+  "traceTaskWallMs",
+  "capturedBeforeCpuMs",
+  "capturedAfterCpuMs",
   "scriptMs",
   "taskMs",
   "layoutMs",
@@ -196,6 +274,11 @@ type Result = {
   status: "passed" | "failed";
   artifact: string;
   wallMs?: number;
+  threadCpuMs?: number;
+  traceScriptWallMs?: number;
+  traceTaskWallMs?: number;
+  capturedBeforeCpuMs?: number;
+  capturedAfterCpuMs?: number;
   scriptMs?: number;
   taskMs?: number;
   layoutMs?: number;
@@ -380,7 +463,7 @@ try {
         intent: values.intent,
         intentMs,
         collection: values.trace
-          ? "CDP metrics + trace + 1ms profiler (overhead included)"
+          ? "CDP metrics + timeline trace + exact input-to-ready thread CPU (no sampling Profiler)"
           : "untraced CDP metrics",
         fixture: { sessions: 1000, messagesPerSession: 400, models: 1000, cronJobs: 500 },
         readiness:
@@ -566,7 +649,6 @@ try {
           const beforeRpc = boot ? {} : await rpcCounts(page);
           const traceEvents: unknown[] = [];
           const collectTrace = ({ value }: { value: unknown[] }) => traceEvents.push(...value);
-          let profiling = false;
           let tracing = false;
           try {
             workerNetwork.assertHealthy();
@@ -577,10 +659,6 @@ try {
                 transferMode: "ReportEvents",
               });
               tracing = true;
-              await cdp.send("Profiler.enable");
-              await cdp.send("Profiler.setSamplingInterval", { interval: 1000 });
-              await cdp.send("Profiler.start");
-              profiling = true;
             }
             if (!boot) {
               await page.evaluate(
@@ -675,45 +753,6 @@ try {
           } catch (error) {
             row.error = String(error);
           } finally {
-            if (profiling) {
-              const { profile: cpuProfile } = await cdp.send("Profiler.stop");
-              await writeFile(
-                path.join(output, `${artifact}.cpuprofile`),
-                JSON.stringify(cpuProfile),
-              );
-              if (!boot && row.status === "passed") {
-                const done = new Promise<void>((resolve) => {
-                  cdp.once("Tracing.tracingComplete", () => resolve());
-                });
-                await cdp.send("Tracing.end");
-                await done;
-                tracing = false;
-                const trace = summarizeInteractionTrace(traceEvents, {
-                  start: "navigation:start",
-                  end: "navigation:end",
-                });
-                const mapped = await mapColdLoadCpuProfile(
-                  clipInteractionCpuProfile(cpuProfile, trace.startUs, trace.endUs),
-                  {
-                    assetBaseUrl: new URL("assets/", slot.server.baseUrl).href,
-                    assetDirectory: path.join(slot.directory, "assets"),
-                  },
-                );
-                await writeFile(
-                  path.join(output, `${artifact}.hotspots.json`),
-                  JSON.stringify(
-                    {
-                      trace,
-                      mappedFrames: mapped.mappedFrames,
-                      unmappedFrames: mapped.unmappedFrames,
-                      ...summarizeCpuProfile(mapped.profile, { includeTables: true }),
-                    },
-                    null,
-                    2,
-                  ),
-                );
-              }
-            }
             if (tracing) {
               const done = new Promise<void>((resolve) => {
                 cdp.once("Tracing.tracingComplete", () => resolve());
@@ -726,6 +765,24 @@ try {
               await writeFile(
                 path.join(output, `${artifact}.trace.json`),
                 JSON.stringify({ traceEvents }),
+              );
+            }
+            if (values.trace && !boot && row.status === "passed") {
+              const trace = summarizeInteractionTrace(traceEvents, {
+                start: "navigation:start",
+                end: "navigation:end",
+              });
+              const cpu = summarizeMarkedThreadCpu(traceEvents);
+              Object.assign(row, {
+                threadCpuMs: cpu.threadCpuMs,
+                traceScriptWallMs: trace.scriptMs,
+                traceTaskWallMs: trace.busyMs,
+                capturedBeforeCpuMs: cpu.capturedBeforeCpuMs,
+                capturedAfterCpuMs: cpu.capturedAfterCpuMs,
+              });
+              await writeFile(
+                path.join(output, `${artifact}.marked-cpu.json`),
+                JSON.stringify({ trace, cpu }, null, 2),
               );
             }
             row.assets = [...assets.values()].filter((asset) => !initialIds.has(asset.requestId));
