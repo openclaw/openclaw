@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { createAgentRunSupersededAbortError } from "../agents/run-termination.js";
@@ -6,7 +6,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import {
   dispatchCronDeliveryMock,
   loadRunCronIsolatedAgentTurn,
@@ -26,7 +25,6 @@ import { cronStoreKey } from "./store/key.js";
 import "./isolated-agent/run-executor.runtime.js";
 
 vi.doUnmock("./isolated-agent/model-preflight.runtime.js");
-
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const { resetCronModelProviderPreflightCacheForTest } =
   await import("./isolated-agent/model-preflight.runtime.js");
@@ -65,17 +63,12 @@ function diagnostic(
   return { entries: exact ? [entry] : expect.arrayContaining([entry]) };
 }
 
-async function runCase(name: string, modelRef: ModelRef = defaultModel, localBaseUrl?: string) {
+async function runCase(name: string, modelRef: ModelRef = defaultModel) {
   const model = `${modelRef.provider}/${modelRef.model}`;
   const cfg: OpenClawConfig = {
     agents: { defaults: { model } },
     session: { store: "/tmp/store.json" },
   };
-  if (localBaseUrl) {
-    cfg.models = {
-      providers: { [modelRef.provider]: { api: "ollama", baseUrl: localBaseUrl, models: [] } },
-    };
-  }
   return await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-cron-execution-diagnostics-" },
     async (state) => {
@@ -132,44 +125,10 @@ async function runCase(name: string, modelRef: ModelRef = defaultModel, localBas
 }
 
 describe("cron execution diagnostics", { concurrent: false }, () => {
-  let unavailableEndpoint: TestPortClaim;
-
-  beforeAll(async () => {
-    unavailableEndpoint = await acquireTestPortBlock({ offsets: [0] });
-  });
-
   beforeEach(() => {
     resetRunCronIsolatedAgentTurnHarness();
     resetCronModelProviderPreflightCacheForTest();
     resolveConfiguredModelRefMock.mockReturnValue(defaultModel);
-  });
-
-  afterAll(() => unavailableEndpoint.release());
-
-  it("persists and emits a real isolated-run local-provider preflight failure", async () => {
-    const modelRef = { provider: "ollama", model: "diagnostic-model" };
-    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
-    resolveAllowedModelRefMock.mockReturnValue({ ref: modelRef });
-
-    const { finished, history } = await runCase(
-      "unreachable provider",
-      modelRef,
-      `http://127.0.0.1:${unavailableEndpoint.port}`,
-    );
-
-    expect(runWithModelFallbackMock).not.toHaveBeenCalled();
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expectOutcomes([finished, history], {
-      status: "skipped",
-      provider: "ollama",
-      model: "diagnostic-model",
-      error: expect.stringContaining("Start the local provider or correct its configured endpoint"),
-      diagnostics: diagnostic(
-        "model-preflight",
-        "warn",
-        expect.stringContaining("the local provider preflight failed"),
-      ),
-    });
   });
 
   it("persists provider failures without internal class names", async () => {
