@@ -13,6 +13,8 @@ export function SensitiveInput(props: {
   revealed: boolean;
   placeholder?: string;
   disabled?: boolean;
+  autofocus?: boolean;
+  onAutofocusRef?: (element: HTMLElement) => void;
   invalid?: boolean;
   describedBy?: string;
   label?: string;
@@ -60,6 +62,8 @@ export function SensitiveInput(props: {
         spellcheck="false"
         placeholder={props.placeholder ?? ""}
         value={value()}
+        autofocus={props.autofocus}
+        ref={(element) => props.onAutofocusRef?.(element)}
         disabled={props.disabled}
         aria-invalid={props.invalid ? "true" : undefined}
         aria-describedby={props.describedBy}

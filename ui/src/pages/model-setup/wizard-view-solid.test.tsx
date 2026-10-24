@@ -67,9 +67,12 @@ it("keeps the wizard draft mounted while typing and presenting a pending save", 
     (button) => button.textContent?.trim() === "Cancel",
   );
   expect(cancel?.disabled).toBe(false);
+  cancel?.focus();
+  expect(document.activeElement).toBe(cancel);
   setSaving(false);
   flush();
   expect(input.disabled).toBe(false);
+  expect(document.activeElement).toBe(input);
 
   input.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   expect(answer).toHaveBeenCalledExactlyOnceWith("initial typed");

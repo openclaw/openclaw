@@ -237,6 +237,8 @@ function Answer(props: WizardStepControlsProps & { label: string; onClick?: () =
 function TextForm(props: WizardStepControlsProps) {
   // Channel drafts stay in the input until submit; unrelated refreshes must not overwrite them.
   const value = createMemo(() => (typeof props.value === "string" ? props.value : ""));
+  const bindValue = liveValue(value);
+  const focusText = props.presentation === "model-setup";
   return (
     <form
       class="wizard-step__form"
@@ -271,7 +273,13 @@ function TextForm(props: WizardStepControlsProps) {
             type={props.step.sensitive ? "password" : "text"}
             autocomplete={props.step.sensitive ? "off" : "on"}
             placeholder={props.step.placeholder ?? ""}
-            ref={liveValue(value)}
+            ref={(element) => {
+              bindValue(element);
+              if (focusText) {
+                props.onAutofocusRef?.(element);
+              }
+            }}
+            autofocus={focusText}
             disabled={props.busy}
             aria-invalid={props.validationErrorId ? "true" : undefined}
             aria-describedby={props.validationErrorId}
@@ -289,6 +297,8 @@ function TextForm(props: WizardStepControlsProps) {
           value={value()}
           revealed={props.sensitiveRevealed === true}
           placeholder={props.step.placeholder}
+          autofocus={focusText}
+          onAutofocusRef={focusText ? props.onAutofocusRef : undefined}
           disabled={props.busy}
           invalid={Boolean(props.validationErrorId)}
           describedBy={props.validationErrorId}

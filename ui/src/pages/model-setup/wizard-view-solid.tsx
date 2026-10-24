@@ -48,7 +48,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   createPendingFocus(
     () =>
       props.state.phase === "step"
-        ? props.state.step.id
+        ? `${props.state.step.id}:${props.busy || props.state.busy ? "busy" : "ready"}:${props.state.validationError ?? ""}`
         : `${displayPhase()}:${Boolean(props.doneAction)}`,
     {
       requested: () => true,
