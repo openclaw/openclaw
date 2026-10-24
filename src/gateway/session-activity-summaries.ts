@@ -393,6 +393,8 @@ export function createSessionActivitySummaries(deps: {
             const result = await defaultCompleteModel({
               ...prepared,
               purpose: "session-activity-summary",
+              sessionId: state.sessionId,
+              sessionKey: state.key,
               config: deps.getConfig(),
               systemPrompt: SYSTEM_PROMPT,
               prompt: JSON.stringify({
