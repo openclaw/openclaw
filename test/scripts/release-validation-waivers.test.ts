@@ -58,16 +58,13 @@ function grant(jobName = LIVE_JOB, childRole = ROLE) {
 
 async function observe(
   jobs: Job[],
-  {
-    targetVersion = VERSION,
-    role = ROLE,
-    logs = { "2": LIVE_FAILURE_LOG },
-  }: { targetVersion?: string; role?: string; logs?: Record<string, string> } = {},
+  role = ROLE,
+  logs: Record<string, string> = { "2": LIVE_FAILURE_LOG },
 ) {
   vi.stubEnv("GITHUB_REPOSITORY", "openclaw/openclaw");
   const planned = child(role, { workflow: "openclaw-release-checks.yml" });
   return readChild(planned, undefined, undefined, {
-    targetVersion,
+    targetVersion: VERSION,
     readRun: async () =>
       githubRun(planned, {
         conclusion: "failure",
@@ -89,8 +86,8 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function classify(observed: Awaited<ReturnType<typeof observe>>, targetVersion = VERSION) {
-  return classifyReleaseSnapshot({ children: [observed], targetVersion });
+function classify(observed: Awaited<ReturnType<typeof observe>>) {
+  return classifyReleaseSnapshot({ children: [observed], targetVersion: VERSION });
 }
 
 describe("checked-in release-tooling waivers", () => {
@@ -105,7 +102,7 @@ describe("checked-in release-tooling waivers", () => {
         }),
         job("Run Windows-node main E2E / Setup, connect, and invoke candidate gateway", 4),
       ],
-      { role: "releaseChecksCandidate" },
+      "releaseChecksCandidate",
     );
     expect(observed.errors).toEqual([]);
     expect(terminalPolicyPass(observed, VERSION)).toBe(true);
@@ -157,7 +154,7 @@ describe("checked-in release-tooling waivers", () => {
     },
   ])("does not excuse $name", async ({ log = LIVE_FAILURE_LOG, summary = aggregate(), error }) => {
     grant();
-    const observed = await observe([job(LIVE_JOB, 1), summary], { logs: { "2": log } });
+    const observed = await observe([job(LIVE_JOB, 1), summary], ROLE, { "2": log });
     expect(observed.errors).toEqual([
       expect.objectContaining({ message: expect.stringContaining(error) }),
     ]);
@@ -183,12 +180,10 @@ describe("checked-in release-tooling waivers", () => {
           aggregate(PACKAGE_AGGREGATE, 3),
           job("Run package acceptance / Package integrity", 4, { conclusion: integrityConclusion }),
         ],
+        "releaseChecksCandidate",
         {
-          role: "releaseChecksCandidate",
-          logs: {
-            "2": "::error::package_acceptance_release_checks ended with failure\n",
-            "3": "::error::package_telegram ended with failure\n",
-          },
+          "2": "::error::package_acceptance_release_checks ended with failure\n",
+          "3": "::error::package_telegram ended with failure\n",
         },
       );
       expect(observed.errors).toEqual([]);

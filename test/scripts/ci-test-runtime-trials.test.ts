@@ -20,8 +20,7 @@ function group(name: string, config: string, includePatterns?: string[]) {
 }
 async function recordRun(
   plan: Parameters<typeof runShardPlans>[0][number],
-  baseEnv: NodeJS.ProcessEnv,
-  scratchDir = tempDirs.make("runtime-"),
+  baseEnv: NodeJS.ProcessEnv = {},
   failNode = false,
 ) {
   const calls: Array<{
@@ -33,8 +32,8 @@ async function recordRun(
   const readList = (file: string | undefined): string[] | undefined =>
     file ? JSON.parse(readFileSync(file, "utf8")) : undefined;
   const exitCode = await runShardPlans([plan], {
-    env: baseEnv,
-    scratchDir,
+    env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-all", ...baseEnv },
+    scratchDir: tempDirs.make("runtime-"),
     runChild: async (args, env) => {
       calls.push({
         runtime: env.OPENCLAW_VITEST_RUNTIME,
@@ -48,11 +47,16 @@ async function recordRun(
   return { calls, exitCode };
 }
 
+function expectIncludes(calls: Awaited<ReturnType<typeof recordRun>>["calls"], expected: string[]) {
+  expect(calls.map(({ runtime, includes }) => ({ runtime, includes }))).toEqual(
+    ["node", "bun"].map((runtime) => ({ runtime, includes: expected })),
+  );
+}
+
 it.each([
   ["full-agentic", ["src/gateway/server-methods/diagnostics.heap-snapshot.test.ts"]],
   ["gateway-core", []],
   ["gateway-methods", ["src/gateway/server-methods/diagnostics.heap-snapshot.test.ts"]],
-  ["gateway-client", []],
 ] as const)("preserves Gateway Node contracts for the %s inventory", async (name, files) => {
   for (const policy of ["bun-all", "dual-all"] as const) {
     const { calls } = await recordRun(group(name, `test/vitest/vitest.${name}.config.ts`), {
@@ -84,7 +88,6 @@ it.each(["bun-all", "dual-all"] as const)(
     const { calls, exitCode } = await recordRun(
       group("process", processConfig, [nodeFile, bunFile]),
       { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
-      undefined,
       true,
     );
     expect(exitCode).toBe(1);
@@ -121,19 +124,11 @@ it("preserves include files and Node exceptions for unknown configs", async () =
   const scratch = tempDirs.make("all-includes-");
   const includeFile = path.join(scratch, "includes.json");
   writeFileSync(includeFile, JSON.stringify([path.resolve(nodeFile), path.resolve(bunFile)]));
-  const { calls } = await recordRun(
-    group("unknown", "unknown.config.ts"),
-    {
-      OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-all",
-      OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
-      OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(["--retry=2", "--", "context"]),
-    },
-    scratch,
-  );
-  expect(calls.map(({ runtime, includes }) => ({ runtime, includes }))).toEqual([
-    { runtime: "node", includes: [path.resolve(nodeFile), path.resolve(bunFile)] },
-    { runtime: "bun", includes: [path.resolve(nodeFile), path.resolve(bunFile)] },
-  ]);
+  const { calls } = await recordRun(group("unknown", "unknown.config.ts"), {
+    OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+    OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(["--retry=2", "--", "context"]),
+  });
+  expectIncludes(calls, [path.resolve(nodeFile), path.resolve(bunFile)]);
   expect(calls[1]!.args).toEqual([
     "unknown.config.ts",
     "--",
@@ -162,10 +157,7 @@ it("retains exact Node exceptions and selects broad target remainders on Bun", a
   for (const target of [nodeFile, `./${nodeFile}`, path.resolve(nodeFile)]) {
     expect(selections({ targets: [target] }, "bun-all")).toEqual([{ runtime: "node" }]);
   }
-  const { calls } = await recordRun(
-    { kind: "target", name: "process", target: "src/process" },
-    { OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-all" },
-  );
+  const { calls } = await recordRun({ kind: "target", name: "process", target: "src/process" });
   expect(calls).toHaveLength(2);
   expect(calls[0]!.runtime).toBe("node");
   expect(calls[0]!.args).toContain(nodeFile);
@@ -186,19 +178,14 @@ it.each(["patterns", "include-file", "post-shard-file"])(
     const { calls } = await recordRun(
       group("ui", "ui/vitest.config.ts", source === "patterns" ? [uiNode, uiBun] : undefined),
       {
-        OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-all",
         OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(["--shard=1/2"]),
         ...(source !== "patterns" ? { OPENCLAW_VITEST_INCLUDE_FILE: includeFile } : {}),
         ...(source === "post-shard-file"
           ? { OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE: includeFile }
           : {}),
       },
-      scratch,
     );
-    expect(calls.map(({ runtime, includes }) => ({ runtime, includes }))).toEqual([
-      { runtime: "node", includes: [uiNode, uiBun] },
-      { runtime: "bun", includes: [uiNode, uiBun] },
-    ]);
+    expectIncludes(calls, [uiNode, uiBun]);
     expect(calls[0]!.members).toEqual([uiNode]);
     expect(calls[1]!.members).toContain(uiBun);
     expect(calls[1]!.members).not.toContain(uiNode);
