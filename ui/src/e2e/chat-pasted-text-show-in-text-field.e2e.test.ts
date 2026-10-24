@@ -289,12 +289,12 @@ suite.define(() => {
                 restoreLegacy ? "readwrite" : "readonly",
               );
               const store = transaction.objectStore("composerDrafts");
-              const request = store.getAll() as IDBRequest<
+              const request: IDBRequest<
                 Array<{
                   scopeKey: string;
                   attachments: Array<{ fileName: string; origin?: string }>;
                 }>
-              >;
+              > = store.getAll();
               let savedFileName: string | undefined;
               once(request, "success", () => {
                 const draft = request.result.find((record) => record.scopeKey === storedScopeKey);
@@ -315,12 +315,11 @@ suite.define(() => {
                   ? resolve(savedFileName)
                   : reject(new Error("Missing persisted attachment")),
               );
-              once(transaction, "abort", () =>
-                reject(transaction.error ?? new Error("Draft fixture transaction aborted")),
-              );
-              once(transaction, "error", () =>
-                reject(transaction.error ?? new Error("Draft fixture transaction failed")),
-              );
+              for (const event of ["abort", "error"]) {
+                once(transaction, event, () =>
+                  reject(transaction.error ?? new Error("Draft fixture transaction failed")),
+                );
+              }
             });
           } finally {
             database.close();
