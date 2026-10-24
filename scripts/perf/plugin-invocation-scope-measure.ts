@@ -15,6 +15,7 @@ import {
 import { mock } from "node:test";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
 import type { ContextEngineFactoryResources } from "../../src/context-engine/registry.resources.js";
 import type { ContextEngine } from "../../src/context-engine/types.js";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
@@ -251,8 +252,7 @@ try {
   inspection = await acquirePluginRegistryForInspection({ config, throwOnLoadError: true });
   registry = inspection.registry;
   assert.equal(registry.plugins.filter((record) => record.status === "loaded").length, pluginCount);
-  const registration = registry.contextEngines.get("invocation-0");
-  assert(registration);
+  const registration = expectDefined(registry.contextEngines.get("invocation-0"), "fixture engine");
   const selectedRecord = registry.plugins.find((record) => record.id === "invocation-0");
   assert(selectedRecord);
   const instance = getPluginInstance(selectedRecord);
