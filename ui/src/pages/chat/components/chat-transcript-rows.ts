@@ -6,6 +6,7 @@ import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
 import { StreamGroup, UnplacedSubagentWait } from "./chat-message-stream-view.tsx";
 import { RealtimeTalkConversation } from "./chat-realtime-controls.tsx";
 import { TranscriptWorkPreviews } from "./chat-transcript-content.tsx";
+import { TurnRecapRow } from "./chat-working-indicator.tsx";
 
 export const nativeRows = {
   "system-events": lazy(() => import("./chat-system-events.tsx"), { export: "ChatSystemEvents" }),
@@ -19,7 +20,7 @@ export const nativeRows = {
   notice: lazy(() => import("./chat-divider.tsx"), { export: "ChatNotice" }),
   "work-previews": TranscriptWorkPreviews,
   realtime: RealtimeTalkConversation,
-  recap: lazy(() => import("./chat-working-indicator.tsx"), { export: "TurnRecapRow" }),
+  recap: TurnRecapRow,
   typing: lazy(() => import("./chat-typing-indicator.tsx"), { export: "ChatTypingIndicator" }),
 };
 
