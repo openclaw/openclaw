@@ -67,7 +67,7 @@ export function repairLegacyDashboardChatTypes(params: {
     const verb = params.apply ? "Recorded" : "Would record";
     note(
       [
-        `- ${verb} ${sessionKeys.length} dashboard chat(s) as direct chats so linked automations can use owner-private memory:`,
+        `- ${verb} ${sessionKeys.length} dashboard chat(s) as direct chats so their linked automations can use memory:`,
         ...sessionKeys.map((key) => `  - ${key}`),
         ...(params.apply ? [] : ['- Run "openclaw doctor --fix" to record them.']),
       ].join("\n"),
