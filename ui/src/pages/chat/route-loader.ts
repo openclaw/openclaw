@@ -10,6 +10,7 @@ import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
 } from "../../lib/sessions/catalog-key.ts";
+import { resolveHomeSession } from "../../lib/sessions/home-session.ts";
 import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import {
   findUiSessionRow,
@@ -348,6 +349,24 @@ export async function loadChatRoute(
       await waitForGatewayClient(context.gateway, signal);
     }
     const sessionKey = mainSessionKey(context, target);
+    const homeSnapshot = context.gateway.snapshot;
+    if (homeSnapshot.hello?.auth?.sessionCap === "none") {
+      const available = await resolveHomeSession(homeSnapshot, {
+        sessionKey,
+        agentId: target.agentId,
+        mainKey: configuredMainKey(context),
+      });
+      signal.throwIfAborted();
+      if (
+        context.gateway.snapshot.client !== homeSnapshot.client ||
+        context.gateway.snapshot.hello !== homeSnapshot.hello
+      ) {
+        throw new Error("The Gateway connection changed while resolving Home.");
+      }
+      if (!available) {
+        return { kind: "unavailable-home", agentId: target.agentId, face };
+      }
+    }
     if (preferenceDerived) {
       const resolution = await resolveReference(sessionKey);
       if (resolution?.kind === "unique") {

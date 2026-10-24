@@ -11,6 +11,7 @@ import {
   SESSION_FACE_PREFERENCE_PARAM,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { loadChatRoute } from "./route-loader.ts";
 import { loadRoute, routeLocation as locationFor } from "./route-loading.test-support.ts";
 import {
@@ -46,6 +47,60 @@ function pendingContext() {
   return { ...fixture, pending };
 }
 describe("gateway-backed session route resolution", () => {
+  it.each(["main", "research"])(
+    "recovers an inaccessible %s Home without mounting chat",
+    async (agentId) => {
+      const { context, request } = contextFor(
+        new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "No session found",
+        }),
+      );
+      const hello = gatewayHelloForMethods(["sessions.resolve"], ["operator.sessions.write"]);
+      hello.auth!.sessionCap = "none";
+      context.gateway.snapshot.hello = hello;
+      await expect(loadRoute(context, "/chat/" + agentId)).resolves.toMatchObject({
+        kind: "unavailable-home",
+        agentId,
+        face: "chat",
+      });
+      expect(request).toHaveBeenCalledExactlyOnceWith("sessions.resolve", {
+        key: "agent:" + agentId + ":main",
+        agentId,
+        allowMissing: true,
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "preserves Gateway-confirmed Home access (visible: %s)",
+    async (visible) => {
+      const { context } = contextFor(
+        visible
+          ? { ok: true, key: "agent:research:workspace", agentId: "research" }
+          : { ok: false },
+        [],
+        { mainKey: "workspace" },
+      );
+      const hello = gatewayHelloForMethods(["sessions.resolve"], ["operator.sessions.write"]);
+      hello.auth!.sessionCap = "none";
+      context.gateway.snapshot.hello = hello;
+      await expect(loadRoute(context, "/chat/research")).resolves.toMatchObject(
+        visible
+          ? { kind: "session", sessionKey: "agent:research:workspace" }
+          : { kind: "unavailable-home", agentId: "research" },
+      );
+    },
+  );
+
+  it("does not turn a transient Home lookup failure into authoritative absence", async () => {
+    const error = new GatewayRequestError({ code: "UNAVAILABLE", message: "Gateway warming" });
+    const { context } = contextFor(error);
+    const hello = gatewayHelloForMethods(["sessions.resolve"], ["operator.sessions.write"]);
+    hello.auth!.sessionCap = "none";
+    context.gateway.snapshot.hello = hello;
+    await expect(loadRoute(context, "/chat/research")).rejects.toBe(error);
+  });
   it("resolves a non-default agent's canonical global face from its scoped row", async () => {
     const globalRow = row({ key: "global", kind: "global", boardFace: "dashboard" });
     const { context, list, request } = contextFor({ ok: true, ...globalRow, agentId: "research" });
