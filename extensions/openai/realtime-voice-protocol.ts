@@ -20,6 +20,7 @@ import {
   parsePlaybackMarkSequence,
   type OpenAIRealtimeUserMessageOptions,
   type OpenAIRealtimeVoiceBridgeConfig,
+  type RealtimeEvent,
 } from "./realtime-voice-session-policy.js";
 
 export abstract class OpenAIRealtimeProtocol {
@@ -313,6 +314,22 @@ export abstract class OpenAIRealtimeProtocol {
     }
     // The sink can request replacement generation when cleared; trim its history first.
     this.config.onClearAudio("barge-in");
+  }
+
+  protected emitTranscript(
+    role: "user" | "assistant",
+    text: string,
+    isFinal: boolean,
+    event: RealtimeEvent,
+  ): void {
+    if (!event.item_id && !event.response_id) {
+      this.config.onTranscript?.(role, text, isFinal);
+      return;
+    }
+    this.config.onTranscript?.(role, text, isFinal, {
+      ...(event.item_id ? { itemId: event.item_id } : {}),
+      ...(event.response_id ? { responseId: event.response_id } : {}),
+    });
   }
 
   protected requestResponseCreate(options?: OpenAIRealtimeUserMessageOptions): void {
