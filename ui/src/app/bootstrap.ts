@@ -67,7 +67,7 @@ import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import { startGatewayPageActivation } from "./gateway-page-activation.ts";
 import { startGatewayPresenceActivity } from "./gateway-presence-activity.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
-import { GuestWelcome } from "./guest-welcome.ts";
+import { createGuestWelcome } from "./guest-welcome-handle.ts";
 import { startLinkReaderRouting } from "./link-reader-routing.ts";
 import { startMcpAppRouting } from "./mcp-app-link-routing.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
@@ -532,12 +532,12 @@ export function bootstrapApplication(): ApplicationRuntime {
     navigateWithMode(routeId, options, "push");
   const plugins = new ControlUiPluginRuntime(() => context);
   const guestWelcome = startsApplicationRouter
-    ? new GuestWelcome({
+    ? createGuestWelcome({
         gateway,
         // Home is only the default landing the app resolved; explicit links are never replaced.
         isHomeLanding: async () =>
           firstRunDefaultLanding &&
-          isResolvedDefaultLanding(history.location(), await resolveInitialLocation(), basePath),
+          isResolvedDefaultLanding(resolveInitialLocation(), history, basePath),
         openSession: (sessionKey, agentId) =>
           openPreferredApplicationSession(context, sessionKey, agentId),
       })

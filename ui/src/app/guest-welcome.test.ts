@@ -2,8 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { GUEST_WELCOME_ENSURE_METHOD } from "./guest-welcome-handle.ts";
 import {
-  GUEST_WELCOME_ENSURE_METHOD,
   GUEST_WELCOME_PENDING_LIMIT_MS,
   GuestWelcome,
   type GuestWelcomeOptions,

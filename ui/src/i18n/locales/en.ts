@@ -559,11 +559,6 @@ const startupEnglish = {
         "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
     },
   },
-  guestWelcome: {
-    pending: "Setting up your welcome session…",
-    failed: "We couldn't set up your welcome session.",
-    retry: "Try again",
-  },
   agentStartup: {
     title: "Starting up",
     description: "The agent is getting ready. This view will load automatically.",

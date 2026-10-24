@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { RouteLocation } from "@openclaw/uirouter";
+import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
 import type {
   ModelCatalogTarget,
   SessionsResolveResult,
@@ -193,14 +193,19 @@ export function applicationRouteLocation(
   return location;
 }
 
-/** Whether the browser still shows the default landing, or the session startup restored for it. */
-export function isResolvedDefaultLanding(
-  current: RouteLocation,
-  resolved: RouteLocation,
+/**
+ * Whether the browser still shows the default landing, or the session startup
+ * restored for it, once that resolution settles. Navigation meanwhile wins.
+ */
+export async function isResolvedDefaultLanding(
+  resolved: Promise<RouteLocation>,
+  history: Pick<RouterHistory, "location">,
   basePath: string,
-): boolean {
+): Promise<boolean> {
+  const landing = await resolved;
+  const current = history.location();
   return (
-    isDefaultChatLanding(current, basePath, routeIdFromPath) || sameRouteLocation(current, resolved)
+    isDefaultChatLanding(current, basePath, routeIdFromPath) || sameRouteLocation(current, landing)
   );
 }
 

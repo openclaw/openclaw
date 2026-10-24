@@ -25,7 +25,7 @@ import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
-import type { GuestWelcome } from "./guest-welcome.ts";
+import type { GuestWelcomeHandle } from "./guest-welcome-handle.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import type { NativeDeviceSettingsCapability } from "./native-device-settings.ts";
@@ -147,7 +147,7 @@ export type ApplicationContext<TRouteId extends string = RouteId> = {
   readonly placementStartup: ApplicationPlacementStartup;
   readonly plugins: ControlUiPluginCapability;
   /** Visitor Access welcome-session setup for invited guests; app router documents only. */
-  readonly guestWelcome?: GuestWelcome;
+  readonly guestWelcome?: GuestWelcomeHandle;
   readonly assistantDock: AssistantDock;
   readonly overlays: ApplicationOverlays;
   readonly navigation: ApplicationNavigationPreferences;

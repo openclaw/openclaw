@@ -1,12 +1,11 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import { GUEST_WELCOME_ENSURE_METHOD } from "./guest-welcome-handle.ts";
 import { isRestrictedSessionGuest } from "./operator-access.ts";
-
-/** Visitor Access plugin method; its presence in hello is the only feature gate. */
-export const GUEST_WELCOME_ENSURE_METHOD = "visitor-access.welcome.ensure";
 
 type GuestWelcomeEnsureResult =
   | { status: "not_applicable" }
@@ -27,10 +26,10 @@ export const GUEST_WELCOME_PENDING_LIMIT_MS = 3 * 60_000;
 const VISITED_KEY_PREFIX = "openclaw.guestWelcome.visited.v1:";
 
 function parseEnsureResult(value: unknown): GuestWelcomeEnsureResult | null {
-  if (!value || typeof value !== "object") {
+  const result = asOptionalRecord(value);
+  if (!result) {
     return null;
   }
-  const result = value as Record<string, unknown>;
   switch (result.status) {
     case "not_applicable":
       return { status: "not_applicable" };

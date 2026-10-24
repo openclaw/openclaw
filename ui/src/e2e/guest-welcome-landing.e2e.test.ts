@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
-import { GUEST_WELCOME_ENSURE_METHOD } from "../app/guest-welcome.ts";
+import { GUEST_WELCOME_ENSURE_METHOD } from "../app/guest-welcome-handle.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import {
   controlUiSessionUrl,

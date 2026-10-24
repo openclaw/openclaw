@@ -181,8 +181,8 @@
   white-space: nowrap;
 }
 
-/* A guest welcome failure carries a sentence, a reason, and Try again; wrap on narrow panes. */
-.chat-guest-welcome-status .agent-chat__composer-status-band {
+/* Bands carrying a sentence, a reason and an action wrap on narrow panes. */
+.agent-chat__composer-status-band--wrap {
   white-space: normal;
 }
 

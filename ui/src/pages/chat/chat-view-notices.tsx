@@ -5,7 +5,7 @@ import type {
   SessionPlacementWorkerRuntimeInstall,
 } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
 import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
-import type { GuestWelcome } from "../../app/guest-welcome.ts";
+import type { GuestWelcomeHandle } from "../../app/guest-welcome-handle.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
@@ -39,7 +39,7 @@ export type ChatPlacementStartupNoticeProps = {
   placementStartup?: ApplicationPlacementStartupStatus | null;
   onRetrySessionPlacementStartup?: () => void;
   /** App-wide guest welcome setup, shown beside the composer of the route's chat. */
-  guestWelcome?: GuestWelcome;
+  guestWelcome?: GuestWelcomeHandle;
 };
 
 type ChatViewNoticesProps = {
