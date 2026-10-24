@@ -126,7 +126,9 @@ const appended = Array.from({ length: passes }, (_, index) => fixture(count + in
 await collect();
 const wait = Number(values["start-at"]) - Date.now();
 if (wait > 0) {
-  await new Promise((resolve) => setTimeout(resolve, wait));
+  await new Promise((resolve) => {
+    setTimeout(resolve, wait);
+  });
 }
 const inspector = values.measure === "allocation" ? new Session() : undefined;
 if (inspector) {
@@ -169,7 +171,7 @@ if (values.measure === "snapshot") {
 if (["cpu", "counts", "allocation"].includes(values.measure)) {
   for (const phase of ["warm", "append"] as const) {
     const workloads =
-      phase === "append" ? appended.map((message) => [...messages, message]) : undefined;
+      phase === "append" ? appended.map((message) => messages.concat(message)) : undefined;
     hashes = 0;
     bytes = 0;
     const gc: Array<{ kind: number; ms: number }> = [];
