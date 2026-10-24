@@ -469,8 +469,8 @@ it.each(["truncated history", "merged", "empty rate-limited", "withdrawn rate-li
   },
 );
 
-it.each(["session switch", "disconnect", "branch switch"] as const)(
-  "retires pane PR state on %s",
+it.each(["session switch", "offline session switch", "disconnect", "branch switch"] as const)(
+  "reconciles pane PR presentation on %s",
   async (change) => {
     const { pane, state, push, emitGatewayEvent, epoch, setPullRequestSummary } =
       createPullRequestPane();
@@ -488,7 +488,10 @@ it.each(["session switch", "disconnect", "branch switch"] as const)(
     if (change === "disconnect") {
       pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "reconnecting" });
     } else {
-      if (change === "session switch") {
+      if (change === "session switch" || change === "offline session switch") {
+        if (change === "offline session switch") {
+          pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "reconnecting" });
+        }
         state.sessionKey = "agent:main:current-2";
       } else {
         emitGatewayEvent("sessions.changed", {
@@ -500,8 +503,13 @@ it.each(["session switch", "disconnect", "branch switch"] as const)(
       pane.refreshSessionPullRequests();
       await Promise.resolve();
     }
-    expect(pane.sessionPullRequests).toEqual([]);
-    expect(pane.sessionPullRequestsBranch).toBeUndefined();
+    if (change === "disconnect") {
+      expect(pane.sessionPullRequests).toEqual([pullRequest(111532, "open")]);
+      expect(pane.sessionPullRequestsBranch).toMatchObject(branch);
+    } else {
+      expect(pane.sessionPullRequests).toEqual([]);
+      expect(pane.sessionPullRequestsBranch).toBeUndefined();
+    }
     if (change === "branch switch") {
       expect(setPullRequestSummary).toHaveBeenLastCalledWith(
         "agent:main:current",

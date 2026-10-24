@@ -69,13 +69,13 @@ const goalActionIcons = {
 type GoalPresentationProps = Pick<
   ChatGoalProps,
   "canAct" | "resumeRecovery" | "connected" | "onGoalAction" | "onGoalEdit"
-> & { goal: SessionGoal };
+> & { goal: SessionGoal; retainUnavailableActions?: boolean };
 
 /** Shared eligibility and callbacks; the parent supplies native write availability. */
 export function ChatGoalActions(props: GoalPresentationProps) {
   const visibleAction = (action: (typeof goalActions)[number]) =>
     !props.resumeRecovery &&
-    props.canAct &&
+    (props.canAct || props.retainUnavailableActions) &&
     Boolean(props.onGoalAction) &&
     (action === "edit"
       ? Boolean(props.onGoalEdit) && props.goal.status !== "complete"
@@ -106,7 +106,11 @@ export function ChatGoalActions(props: GoalPresentationProps) {
                   class={["agent-chat__goal-action", `agent-chat__goal-${action}`]}
                   type="button"
                   aria-label={t(`chat.goals.${action}`)}
+                  disabled={!props.canAct || props.connected === false}
                   onClick={() => {
+                    if (!props.canAct || props.connected === false) {
+                      return;
+                    }
                     if (action === "edit") {
                       props.onGoalEdit?.(props.goal);
                     } else {

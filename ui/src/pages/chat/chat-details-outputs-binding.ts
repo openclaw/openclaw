@@ -93,7 +93,7 @@ export function createDetailsOutputsBinding(
     stop,
     retain: () => {
       releaseArtifacts();
-      if (!current()) {
+      if (!current() || !state.connected) {
         return undefined;
       }
       const releaseDemand = retainSessionWorkspaceArtifacts(state, "assistant");
@@ -105,12 +105,12 @@ export function createDetailsOutputsBinding(
       };
     },
     onRetryArtifacts: () => {
-      if (current()) {
+      if (current() && state.connected) {
         void loadSessionWorkspaceArtifacts(state, true, "assistant");
       }
     },
     onOpenArtifact: (id: string) => {
-      if (!current()) {
+      if (!current() || !state.connected) {
         return;
       }
       // Consume the native reader operation without changing its draft/resource identity.
@@ -154,6 +154,7 @@ export function projectDetailsOutputs(
       artifacts: artifacts?.resolved ? artifacts.items : null,
       artifactRead: artifacts,
       artifactsError: artifacts?.error ?? null,
+      artifactsDisabled: !binding.connected,
       dashboard: !board.available
         ? null
         : binding.boardReady && board.provider.hasLoadedSnapshot

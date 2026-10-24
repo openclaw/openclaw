@@ -38,6 +38,7 @@ import type { AfterCommitEffect } from "./render-lifecycle.ts";
 import { handleAbortChat, replayPendingChatAbort } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -75,6 +76,32 @@ function reconnectPane(startup: ChatHistoryResult | Promise<ChatHistoryResult>) 
   return { request, client, ...createTestChatPane({ client }) };
 }
 
+function operationPane(phase: "start" | "end") {
+  const fixture = reconnectPane({ messages: [], sessionId: "operation-session" });
+  const { pane, state } = fixture;
+  pane.context.gateway.snapshot.selfUser = { id: "original-person" };
+  pane.applyGatewaySnapshot(pane.context.gateway.snapshot);
+  state.chatRunId = "operation-run";
+  handleAgentEvent(state, {
+    sessionKey: state.sessionKey,
+    runId: "operation-run",
+    seq: 1,
+    ts: 1,
+    stream: "item",
+    data: {
+      itemId: "operation",
+      toolCallId: "operation",
+      kind: "command",
+      name: "exec",
+      title: "Check the working tree",
+      phase,
+      status: phase === "start" ? "running" : "completed",
+    },
+  });
+  expect(state.toolStreamById.size).toBe(1);
+  return fixture;
+}
+
 function presentationPane() {
   const fixture = createTestChatPane({
     client: { request: vi.fn() } as unknown as GatewayBrowserClient,
@@ -101,7 +128,6 @@ function disconnect(pane: TestChatPane) {
   pane.applyGatewaySnapshot({
     ...pane.context.gateway.snapshot,
     phase: "reconnecting",
-    hello: null,
   });
 }
 
@@ -163,6 +189,49 @@ describe("chat pane connection lifecycle", () => {
       releaseDetails?.();
     }
   });
+
+  it.each(["reconnecting", "reload-required", "offline"] as const)(
+    "retains received operation facts without live authority while %s",
+    (phase) => {
+      const { pane, state, request } = operationPane("start");
+      request.mockClear();
+
+      const snapshot = { ...pane.context.gateway.snapshot, phase };
+      pane.applyGatewaySnapshot(snapshot);
+      expect(state.connected).toBe(false);
+      expect(state.toolStreamById.size).toBe(1);
+      expect(state.chatToolMessages).toEqual([
+        expect.objectContaining({ __openclawToolStreamLive: false }),
+      ]);
+      expect(state.knownAgentRunIds?.size).toBe(0);
+      expect(request).not.toHaveBeenCalled();
+
+      const retained = state.chatToolMessages;
+      pane.applyGatewaySnapshot(snapshot);
+      expect(state.chatToolMessages).toBe(retained);
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["person", "read access", "admission"] as const)(
+    "retires retained operation facts when %s changes on the same client",
+    (changed) => {
+      const { pane, state } = operationPane("end");
+      if (changed === "person") {
+        pane.context.gateway.snapshot.selfUser = { id: "replacement-person" };
+      } else {
+        disconnect(pane);
+        pane.context.gateway.snapshot.phase =
+          changed === "admission" ? "reload-required" : "connected";
+        pane.context.gateway.snapshot.hello =
+          changed === "admission" ? null : sessionMutationGatewayHello([]);
+      }
+      pane.applyGatewaySnapshot(pane.context.gateway.snapshot);
+      expect(state.toolStreamById.size).toBe(0);
+      expect(state.chatToolMessages).toEqual([]);
+      expect(state.activityEventSeqById?.size).toBe(0);
+    },
+  );
 
   it("adopts a persisted draft when recovery becomes ready without a transcript event", async () => {
     const text = "Saved draft from the previous tab";
@@ -274,7 +343,7 @@ describe("chat pane connection lifecycle", () => {
       await pane.refreshSessionSuggestions();
       expect(requestCalls(request, "session.suggestions.list")).toHaveLength(2);
 
-      pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting", hello: null });
+      pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting" });
       pane.applyGatewaySnapshot(connected);
       pane.applySessionsState(sessions.state);
       await pane.sessionSuggestionsRefreshPromise;
@@ -362,7 +431,7 @@ describe("chat pane connection lifecycle", () => {
       });
 
       if (transition === "reconnect") {
-        pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting", hello: null });
+        pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting" });
       } else if (transition === "pane disposal") {
         pane.disconnectedCallback();
       } else if (transition === "authenticated owner") {
@@ -804,7 +873,7 @@ describe("chat pane connection lifecycle", () => {
       assistantAgentId: "main",
     };
 
-    pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting" });
     state.sessionKey = sessionKey;
     state.chatRunId = "run-main";
     await handleAbortChat(state, { preserveDraft: true });

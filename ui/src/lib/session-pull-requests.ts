@@ -11,9 +11,10 @@ import {
   CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
 } from "../../../src/gateway/control-ui-contract.js";
 import { operatorScopeSatisfied } from "../../../src/shared/operator-scope-compat.js";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
-import { canCallGatewayMethod } from "./gateway-methods.ts";
+import { canCallGatewayMethod, canPresentGatewayMethod } from "./gateway-methods.ts";
 import { createGatewaySetSyncLifecycle } from "./gateway-set-sync-lifecycle.ts";
 import { primarySessionPullRequest } from "./session-pull-request-presentation.ts";
 import { readSessionChangedEvent } from "./sessions/reconcile.ts";
@@ -112,6 +113,14 @@ export function sessionPullRequestsForGateway(
   const canReadAllPullRequests = () =>
     operatorScopeSatisfied("operator.read", gateway.snapshot.hello?.auth?.scopes ?? []);
   let broadRead = canReadAllPullRequests();
+  let presentationScope = gatewayPresentationScope(gateway);
+  const canPresentPullRequests = () =>
+    gatewayPresentationScope(gateway) === presentationScope &&
+    canPresentGatewayMethod(
+      gateway.snapshot,
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      "operator.read",
+    );
 
   const notify = () => Array.from(listeners).forEach((listener) => listener());
 
@@ -126,12 +135,16 @@ export function sessionPullRequestsForGateway(
     }
   };
 
-  const clearSnapshotsAndWaiters = () => {
-    const hadSnapshots = snapshots.size > 0;
-    snapshots.clear();
+  const settleWaiters = () => {
     for (const key of waiters.keys()) {
       settle(key);
     }
+  };
+
+  const clearSnapshotsAndWaiters = () => {
+    const hadSnapshots = snapshots.size > 0;
+    snapshots.clear();
+    settleWaiters();
     if (hadSnapshots) {
       notify();
     }
@@ -226,25 +239,35 @@ export function sessionPullRequestsForGateway(
     retainRefreshIntent(watchedKeys());
     lifecycle.clearRequest();
     refreshing = null;
-    clearSnapshotsAndWaiters();
+    settleWaiters();
   };
 
   const handleGatewaySnapshot = (snapshot: ApplicationGateway["snapshot"]) => {
-    const changed = connection.transition(snapshot);
+    const connectionChanged = connection.transition(snapshot);
+    const nextScope = gatewayPresentationScope(gateway);
+    const presentationChanged = presentationScope !== nextScope;
+    presentationScope = nextScope;
     const nextBroadRead = canReadAllPullRequests();
     const readScopeChanged = broadRead !== nextBroadRead;
     broadRead = nextBroadRead;
-    if (changed || readScopeChanged) {
+    if (presentationChanged || readScopeChanged || !canPresentPullRequests()) {
+      clearSnapshotsAndWaiters();
+    }
+    const changed = connectionChanged || readScopeChanged || presentationChanged;
+    if (changed) {
       orderedWatchedKeys = undefined;
       retireConnection();
     }
-    if (changed || readScopeChanged || snapshot.hello !== lifecycle.requestHello) {
+    if (changed || snapshot.hello !== lifecycle.requestHello) {
       lifecycle.resetRetry();
       lifecycle.schedule();
     }
   };
 
   const handleGatewayEvent: Parameters<ApplicationGateway["subscribeEvents"]>[0] = (event) => {
+    if (!canReadPullRequests()) {
+      return;
+    }
     if (event.event === "agent" || event.event === "session.tool") {
       const payload = asNullableRecord(event.payload);
       const data = asNullableRecord(payload?.data);
@@ -387,7 +410,11 @@ export function sessionPullRequestsForGateway(
     if (!canReadPullRequests() || !client) {
       retainRefreshIntent(watchedKeys());
       lifecycle.clearRequest();
-      clearSnapshotsAndWaiters();
+      if (canPresentPullRequests()) {
+        settleWaiters();
+      } else {
+        clearSnapshotsAndWaiters();
+      }
       if (!isActive()) {
         lifecycle.detach();
       }
@@ -576,7 +603,7 @@ export function sessionPullRequestsForGateway(
       }
     },
     refresh,
-    get: (sessionKey) => (canReadPullRequests() ? snapshots.get(sessionKey) : undefined),
+    get: (sessionKey) => (canPresentPullRequests() ? snapshots.get(sessionKey) : undefined),
     subscribe: (listener) => {
       const wasActive = isActive();
       listeners.add(listener);

@@ -418,14 +418,32 @@ export function refreshSessionWorkspaceState(
 }
 
 /** Retire facts owned by one checkout without disturbing panel layout or retained drafts. */
-export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost) {
+export function retireSessionWorkspaceCheckout(
+  state: SessionWorkspaceHost,
+  options: { keepPresentation?: boolean } = {},
+) {
   const current = state.sessionWorkspaceState;
   if (!current || current.sessionKey !== state.sessionKey) {
     return;
   }
   clearSessionCheckoutSidebar(state);
   clearWorkspaceTimer(current);
-  state.sessionWorkspaceState = createSessionWorkspaceState(state);
+  const next = createSessionWorkspaceState(state);
+  if (options.keepPresentation && current.agentId === next.agentId) {
+    for (const key of ["artifacts", "assistantArtifacts"] as const) {
+      const artifacts = current[key];
+      if (artifacts?.resolved) {
+        next[key] = {
+          items: artifacts.items,
+          resolved: true,
+          loaded: false,
+          loading: false,
+          error: null,
+        };
+      }
+    }
+  }
+  state.sessionWorkspaceState = next;
   for (const [role, count] of artifactDemands.get(state) ?? []) {
     if (count > 0) {
       void loadSessionWorkspaceArtifacts(state, false, role === "assistant" ? role : undefined);

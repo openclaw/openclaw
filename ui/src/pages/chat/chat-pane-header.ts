@@ -1,5 +1,6 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
@@ -10,6 +11,7 @@ import { COMMAND_PALETTE_OPEN_EVENT } from "../../components/command-palette-con
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
@@ -86,7 +88,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     Partial<Record<HeaderMenuActionKind, string>>
   >();
   private readonly headerMachineNameMemo = new ChatPaneHeaderMemo<
-    (() => Promise<string | undefined>) | undefined
+    ((previous?: string) => Promise<string | undefined>) | undefined
   >();
   private readonly headerGroupsMemo = new ChatPaneHeaderMemo<string[]>();
   private readonly headerActivityMemo = new ChatPaneHeaderMemo<
@@ -426,39 +428,60 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       void this.switchToBranch(leafEntryId);
     };
     const runner = row?.placement?.state === "active" ? row.placement.runner : undefined;
+    const machineNameScope = JSON.stringify([
+      gatewayPresentationScope(this.context.gateway).key,
+      row?.key,
+      row?.sessionId,
+      runner?.deviceId,
+      row?.agentRuntime?.id,
+    ]);
+    const machineNameAccess = readSessionMethodAccess(this.context.gateway.snapshot, {
+      method: "environments.list",
+      requiredScope: "operator.read",
+    });
     const readMachineName = this.headerMachineNameMemo.read(
       [
         this.context.gateway.snapshot.client,
         this.connectionGeneration,
-        row?.key,
-        runner?.deviceId,
-        row?.agentRuntime?.id,
+        machineNameScope,
+        machineNameAccess.allowed,
+        Boolean(this.context.gateway.snapshot.hello),
       ],
       () =>
-        runner?.deviceId && this.context.gateway.snapshot.client
-          ? async () => {
+        runner?.deviceId &&
+        this.context.gateway.snapshot.client &&
+        this.context.gateway.snapshot.hello
+          ? async (previous?: string) => {
               const scope = this.captureConnectionScope();
-              if (
-                !scope ||
-                !readSessionMethodAccess(scope.context.gateway.snapshot, {
-                  method: "environments.list",
-                  requiredScope: "operator.read",
-                }).allowed
-              ) {
+              if (!scope) {
+                return previous;
+              }
+              if (!machineNameAccess.allowed) {
                 return undefined;
               }
               try {
                 const { requestPlaceCatalog } = await import("../new-session/cloud-target.ts");
+                if (!this.ownsHeaderOutcomeScope(scope)) {
+                  return previous;
+                }
+                if (
+                  !readSessionMethodAccess(scope.context.gateway.snapshot, {
+                    method: "environments.list",
+                    requiredScope: "operator.read",
+                  }).allowed
+                ) {
+                  return undefined;
+                }
                 const placeCatalog = await requestPlaceCatalog(scope.client, row?.agentRuntime?.id);
                 if (!this.ownsHeaderOutcomeScope(scope)) {
-                  return undefined;
+                  return previous;
                 }
                 return placeCatalog.environments.find(
                   (environment) => environment.id === `node:${runner.deviceId}`,
                 )?.label;
               } catch (error) {
                 this.publishHeaderError(error, scope.headerOutcomeOwner);
-                return undefined;
+                return isArchiveAccessDeniedError(error) ? undefined : previous;
               }
             }
           : undefined,
@@ -575,6 +598,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           ? sharing
           : undefined,
       publicAccessIndicator: this.narrow ? (sharing ?? undefined) : undefined,
+      machineNameScope,
       readMachineName,
       onMobilePlacementStop: row
         ? (name) => this.changeHeaderPlacement(row, "reclaim", undefined, name)

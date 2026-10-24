@@ -7,7 +7,6 @@ const enChatOutputs = {
     dashboard: en.outputs.dashboard,
     files: "Files",
     loading: "Loading outputs…",
-    updating: "Updating outputs…",
     loadingDashboard: "Loading dashboard…",
     emptyTitle: "No outputs yet",
     emptyDescription: "Files and dashboards from the session appear here.",

@@ -19,6 +19,7 @@ import {
   loadSessionWorkspaceDirectory,
   retainSessionWorkspaceArtifacts,
   refreshSessionWorkspaceState,
+  retireSessionWorkspaceCheckout,
 } from "./chat-session-workspace-state.ts";
 import {
   createSessionWorkspaceProps,
@@ -207,6 +208,50 @@ describe("workspace catalog demand", () => {
     await freshLoad;
     expect(getSessionWorkspace(state).artifacts?.items.map((item) => item.id)).toEqual(["fresh"]);
     expect(getSessionWorkspace(state).artifacts?.loaded).toBe(true);
+  });
+
+  it("retains resolved Outputs through reconnect while retiring old reads and accepting empty results", async () => {
+    const { state } = await fixture({ loadInitialListing: false });
+    const retained = {
+      id: "notes",
+      title: "Review notes.md",
+      type: "file",
+      download: { mode: "bytes" as const },
+    };
+    const old = createDeferred<{ artifacts: (typeof retained)[] }>();
+    const fresh = createDeferred<{ artifacts: (typeof retained)[] }>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ artifacts: [retained] })
+      .mockReturnValueOnce(old.promise)
+      .mockReturnValueOnce(fresh.promise);
+    state.client = createGatewayBrowserClientFixture({ request });
+    const release = retainSessionWorkspaceArtifacts(state, "assistant");
+    await loadSessionWorkspaceArtifacts(state, false, "assistant");
+    const staleRead = loadSessionWorkspaceArtifacts(state, true, "assistant");
+    state.connected = false;
+    state.connectionEpoch += 1;
+    retireSessionWorkspaceCheckout(state, { keepPresentation: true });
+    expect(getSessionWorkspace(state).assistantArtifacts?.items).toEqual([retained]);
+    expect(getSessionWorkspace(state).assistantArtifacts?.loading).toBe(false);
+    expect(request).toHaveBeenCalledTimes(2);
+
+    state.connected = true;
+    state.connectionEpoch += 1;
+    retireSessionWorkspaceCheckout(state, { keepPresentation: true });
+    const currentRead = loadSessionWorkspaceArtifacts(state, false, "assistant");
+    expect(request).toHaveBeenCalledTimes(3);
+    old.resolve({ artifacts: [{ ...retained, id: "stale" }] });
+    await staleRead;
+    expect(getSessionWorkspace(state).assistantArtifacts?.items).toEqual([retained]);
+    expect(getSessionWorkspace(state).assistantArtifacts?.loading).toBe(true);
+    fresh.resolve({ artifacts: [] });
+    await currentRead;
+    expect(getSessionWorkspace(state).assistantArtifacts?.items).toEqual([]);
+    release();
+    state.connectionEpoch += 1;
+    retireSessionWorkspaceCheckout(state);
+    expect(getSessionWorkspace(state).assistantArtifacts).toBeUndefined();
   });
 
   it("keeps assistant Outputs separate from Files and retains resolved data during refresh errors", async () => {

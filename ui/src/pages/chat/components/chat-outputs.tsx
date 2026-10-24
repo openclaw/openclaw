@@ -31,6 +31,7 @@ type ChatOutputsData = {
   artifacts: readonly ArtifactSummary[] | null;
   artifactRead?: SessionWorkspaceArtifacts;
   artifactsError: string | null;
+  artifactsDisabled?: boolean;
   /** undefined: not resolved; null: confirmed absent. Not one entry per widget. */
   dashboard: ChatOutputsDashboard | null | undefined;
   dashboardError: string | null;
@@ -101,6 +102,7 @@ function ArtifactRow(props: {
     <button
       type="button"
       class="chat-outputs__row"
+      disabled={props.outputs.artifactsDisabled}
       onClick={() => props.outputs.onOpenArtifact(props.artifact.id)}
     >
       <span class="chat-outputs__icon">{props.outputs.renderArtifactIcon(props.artifact)}</span>
@@ -135,6 +137,7 @@ function OutputReadStatus(props: {
   error: string | null;
   label: string;
   onRetry?: () => void;
+  disabled?: boolean;
 }) {
   return (
     <>
@@ -142,7 +145,11 @@ function OutputReadStatus(props: {
         <div class="chat-outputs__status" role="status">
           <span>{props.error}</span>
           <Show when={props.onRetry}>
-            <button type="button" disabled={props.pending} onClick={() => props.onRetry?.()}>
+            <button
+              type="button"
+              disabled={props.pending || props.disabled}
+              onClick={() => props.onRetry?.()}
+            >
               {t("common.retry")}
             </button>
           </Show>
@@ -159,10 +166,7 @@ function OutputReadStatus(props: {
 
 function ArtifactReadSlot(props: {
   outputs: ChatOutputsProps;
-  children: (
-    artifacts: Accessor<readonly ArtifactSummary[] | null>,
-    pending: Accessor<boolean>,
-  ) => JSX.Element;
+  children: (artifacts: Accessor<readonly ArtifactSummary[] | null>) => JSX.Element;
 }) {
   const result = createMemo(() => ({ pending: props.outputs.artifactRead?.readResult }), {
     equals: (previous, next) => previous.pending === next.pending,
@@ -187,14 +191,12 @@ function ArtifactReadSlot(props: {
       on={source()}
       fallback={<OutputReadStatus pending error={null} label={t("outputs.loading")} />}
     >
-      {props.children(
-        () => props.outputs.artifacts,
-        () => isPending(read),
-      )}
+      {props.children(() => props.outputs.artifacts)}
       <Errored
         fallback={(failure, reset) => (
           <OutputReadStatus
             pending={false}
+            disabled={props.outputs.artifactsDisabled}
             error={formatUiError(failure())}
             label=""
             onRetry={() => {
@@ -205,9 +207,9 @@ function ArtifactReadSlot(props: {
         )}
       >
         <OutputReadStatus
-          pending={isPending(read) || latest(read) === null}
+          pending={latest(read) === null}
           error={null}
-          label={latest(read) === null ? t("outputs.loading") : t("outputs.updating")}
+          label={t("outputs.loading")}
         />
       </Errored>
     </Loading>
@@ -315,7 +317,7 @@ export function ChatOutputsMobile(props: ChatOutputsProps) {
         )}
       </Show>
       <ArtifactReadSlot outputs={props}>
-        {(artifacts, pending) => (
+        {(artifacts) => (
           <>
             <Show when={artifacts()?.length}>
               <section class="chat-outputs__section" aria-label={t("outputs.files")}>
@@ -329,7 +331,6 @@ export function ChatOutputsMobile(props: ChatOutputsProps) {
             </Show>
             <Show
               when={
-                !pending() &&
                 artifacts()?.length === 0 &&
                 props.dashboard === null &&
                 !props.artifactsError &&

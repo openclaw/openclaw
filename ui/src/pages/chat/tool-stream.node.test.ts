@@ -73,6 +73,70 @@ afterAll(() => {
 
 afterEach(() => vi.useRealTimers());
 
+it("retains operation facts without callbacks or running cards during reconnect", () => {
+  useToolStreamFakeTimers();
+  const host = createHost({ chatRunId: "run-1" });
+  const command = (toolCallId: string) => ({ name: "exec", toolCallId });
+  const activity = (toolCallId: string, ended = false) => ({
+    ...command(toolCallId),
+    itemId: `item-${toolCallId}`,
+    kind: "command",
+    title: "Check the working tree",
+    phase: ended ? "end" : "start",
+    status: ended ? "completed" : "running",
+  });
+  emitEvent(host, "run-1", 1, "tool", { ...command("partial"), phase: "start", args: {} });
+  emitEvent(host, "run-1", 2, "tool", {
+    ...command("partial"),
+    phase: "update",
+    partialResult: "Error: a previous check failed; still working",
+  });
+  emitEvent(host, "run-1", 3, "tool", { ...command("running"), phase: "start", args: {} });
+  emitEvent(host, "run-1", 4, "item", activity("running"));
+  emitEvent(host, "run-1", 5, "item", activity("completed", true));
+  emitEvent(host, "run-1", 6, "lifecycle", { phase: "waiting-approval", approvalId: "approval" });
+  emitEvent(host, "run-1", 7, "tool", {
+    ...command("running"),
+    phase: "update",
+    partialResult: "Progress",
+  });
+  expect(host.toolStreamSyncTimer).not.toBeNull();
+
+  resetToolStream(host, { keepPresentation: true });
+  expect(vi.getTimerCount()).toBe(0);
+  expect(host.waitingApprovalStatuses?.size).toBe(0);
+  expect(host.knownAgentRunIds?.size).toBe(0);
+  const messages = () =>
+    coalesceToolActivityMessages([
+      messageItem("history", {
+        role: "assistant",
+        runId: "run-1",
+        content: [{ type: "toolCall", id: "running", name: "exec", arguments: {} }],
+      }),
+      ...host.chatToolMessages.map((message, index) => messageItem(`stream-${index}`, message)),
+    ]).flatMap((item) => (item.kind === "message" ? [item.message] : []));
+  const cards = () => messages().flatMap(extractToolCardsCached);
+  expect(summarizeToolGroup(messages().flatMap(readPreparedActivity))).toBe("2 commands");
+  expect(cards().map((card) => [card.callId, resolveToolCardOutcome(card, true)])).toEqual([
+    ["running", "unknown"],
+    ["partial", "unknown"],
+    ["completed", "succeeded"],
+  ]);
+  const suspendedMessages = host.chatToolMessages;
+  resetToolStream(host, { keepPresentation: true });
+  expect(host.chatToolMessages).toBe(suspendedMessages);
+  handleAgentEvent(host, agentEvent("run-1", 4, "item", activity("completed")), "history");
+  expect(summarizeToolGroup(messages().flatMap(readPreparedActivity))).toBe("2 commands");
+  expect(cards().find((card) => card.callId === "completed")?.activity?.status).toBe("completed");
+  emitEvent(host, "run-1", 8, "item", activity("running", true));
+  expect(cards().find((card) => card.callId === "running")?.activity?.status).toBe("completed");
+  expect(cards().find((card) => card.callId === "partial")?.live).toBe(false);
+  resetToolStream(host);
+  expect(host.chatToolMessages).toEqual([]);
+  expect(host.toolStreamOrder).toEqual([]);
+  expect(host.activityEventSeqById?.size).toBe(0);
+});
+
 it.each(["live", "history"] as const)(
   "anchors only first-observed live tools and commentary (%s)",
   (source) => {

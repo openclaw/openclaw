@@ -32,6 +32,7 @@ import {
 export type ChatDetailsGoalProps = {
   goal?: SessionGoal;
   sessionId?: string;
+  gatewayScope?: object;
   presented: boolean;
   connected: boolean;
   /** Native composer write availability, including admission and pending-operation guards. */
@@ -170,6 +171,28 @@ export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
     props.canAct &&
     Boolean(props.sessionId) &&
     !props.recovery;
+  // Retain only controls previously available to this same presentation during a blip.
+  const [actionsPresentation] = createSignal<{
+    scope: object | undefined;
+    identity: string;
+    available: boolean;
+  }>((previous) => {
+    const scope = props.gatewayScope;
+    const identity = goalIdentity();
+    return {
+      scope,
+      identity,
+      available:
+        (props.canAct && Boolean(props.sessionId) && !props.recovery) ||
+        (!props.connected &&
+          scope !== undefined &&
+          previous !== undefined &&
+          previous.scope === scope &&
+          previous.identity === identity &&
+          previous.available),
+    };
+  });
+  const retainUnavailableActions = () => !props.connected && actionsPresentation().available;
   const resumeRecovery = () =>
     props.goal &&
     props.recovery?.action === "resume" &&
@@ -296,7 +319,15 @@ export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
             <ChatGoalMetrics goal={props.goal!} live={props.presented} />
           </div>
         </Show>
-        <Show when={props.recovery || (props.goal && canAct() && props.onGoalAction)}>
+        <Show
+          when={
+            props.recovery ||
+            (props.goal &&
+              props.presented &&
+              (canAct() || retainUnavailableActions()) &&
+              props.onGoalAction)
+          }
+        >
           <div class="chat-details-goal__capsule chat-details-goal__actions">
             <Show when={resumeRecovery()?.pending}>
               <span
@@ -317,6 +348,7 @@ export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
               <ChatGoalActions
                 goal={props.goal!}
                 canAct={canAct()}
+                retainUnavailableActions={retainUnavailableActions()}
                 connected={props.connected && props.presented}
                 resumeRecovery={resumeRecovery()}
                 onGoalAction={props.onGoalAction}

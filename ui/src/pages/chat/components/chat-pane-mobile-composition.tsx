@@ -4,6 +4,7 @@ import {
   Loading,
   lazy,
   createMemo,
+  createDeferred,
   createSignal,
   merge,
   onSettled,
@@ -138,14 +139,13 @@ export function ChatPaneMobileComposition(props: {
   const sharing = () => props.header.mobileSharing;
   const emptyPlacement: ChatPanePlacementProps = { session: undefined };
   const readMachineName = createMemo(() => props.header.readMachineName);
+  const machineNameScope = createMemo(() => props.header.machineNameScope);
   const machineNameRead = createMemo(() => {
-    const read = readMachineName();
-    // A new request identity starts empty while Solid retires the previous result.
-    if (!read) {
-      return undefined;
-    }
-    const name = createMemo(read, { loadingValue: undefined });
-    return name;
+    machineNameScope();
+    // Revalidate within the same environment without discarding its last presented name.
+    return createDeferred<string | undefined>((previous) => readMachineName()?.(previous), {
+      loadingValue: undefined,
+    });
   });
   const machineName = () => machineNameRead()?.();
   const placement = merge(

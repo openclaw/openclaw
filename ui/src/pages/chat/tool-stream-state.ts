@@ -13,17 +13,37 @@ export function cancelToolStreamSync(host: Pick<ToolStreamState, "toolStreamSync
   }
 }
 
+/** Retire connection-owned activity state, optionally retaining received operation facts. */
 export function resetToolStream(
   host: ToolStreamState,
-  options?: { preserveStreamSegments?: boolean },
+  options?: { preserveStreamSegments?: boolean; keepPresentation?: boolean },
 ) {
+  let changed = host.toolStreamSyncTimer != null;
   cancelToolStreamSync(host);
-  host.toolStreamById.clear();
-  host.toolStreamOrder = [];
-  host.activityEventSeqById?.clear();
-  host.chatToolMessages = [];
-  if (!options?.preserveStreamSegments) {
-    host.chatStreamSegments = [];
+  if (options?.keepPresentation) {
+    for (const entry of host.toolStreamById.values()) {
+      if (entry.message["__openclawToolStreamLive"] !== false) {
+        entry.message = { ...entry.message, __openclawToolStreamLive: false };
+        changed = true;
+      }
+    }
+    if (changed) {
+      syncToolStreamMessages(host);
+    }
+    // Connection-owned waits and notices need re-admission; only operation receipts survive.
+    for (const identity of host.activityEventSeqById?.keys() ?? []) {
+      if (!identity.startsWith("tool:") && !identity.startsWith("item:")) {
+        host.activityEventSeqById?.delete(identity);
+      }
+    }
+  } else {
+    host.toolStreamById.clear();
+    host.toolStreamOrder = [];
+    host.activityEventSeqById?.clear();
+    host.chatToolMessages = [];
+    if (!options?.preserveStreamSegments) {
+      host.chatStreamSegments = [];
+    }
   }
   host.knownAgentRunIds?.clear();
   host.waitingApprovalStatuses?.clear();

@@ -429,13 +429,13 @@ describe("session pull request snapshot store", () => {
     expect(sessionGitHubRepository(undefined)).toBeNull();
   });
 
-  it("retires snapshots and resubscribes normally across a same-client reconnect", async () => {
+  it("retains presentation and resubscribes across a same-client reconnect", async () => {
     await watch([key]);
     emitReadySnapshot(harness, key, [{ number: 1, state: "open" }]);
     expect(store.get(key)?.pullRequests).toEqual([{ number: 1, state: "open" }]);
 
-    harness.setSnapshot({ ...harness.gateway.snapshot, phase: "reconnecting", hello: null });
-    expect(store.get(key)).toBeUndefined();
+    harness.setSnapshot({ ...harness.gateway.snapshot, phase: "reconnecting" });
+    expect(store.get(key)?.pullRequests).toEqual([{ number: 1, state: "open" }]);
 
     harness.setSnapshot({
       ...harness.gateway.snapshot,
@@ -445,8 +445,42 @@ describe("session pull request snapshot store", () => {
     await flushSync();
     expect(harness.request).toHaveBeenCalledTimes(2);
     expectSubscription(harness, [key]);
+    expect(store.get(key)?.pullRequests).toEqual([{ number: 1, state: "open" }]);
+    emitReadySnapshot(harness, key, []);
+    expect(store.get(key)?.pullRequests).toEqual([]);
     await unwatch();
   });
+
+  it.each(["account", "gateway", "access", "admission"] as const)(
+    "retires retained presentation after a %s change",
+    async (change) => {
+      harness.setSnapshot({ ...harness.gateway.snapshot, selfUser: { id: "original-person" } });
+      await watch([key]);
+      emitReadySnapshot(harness, key, [{ number: 1, state: "open" }]);
+      const connected = harness.gateway.snapshot;
+      harness.setSnapshot({ ...connected, phase: "reconnecting" });
+      expect(store.get(key)?.pullRequests).toHaveLength(1);
+      // A packet from the retired connection cannot become presentation.
+      emitReadySnapshot(harness, key, [{ number: 2, state: "open" }]);
+      expect(store.get(key)?.pullRequests).toEqual([{ number: 1, state: "open" }]);
+      if (change === "gateway") {
+        Object.defineProperty(harness.gateway, "connectionRevision", { value: 1 });
+      }
+      harness.setSnapshot({
+        ...connected,
+        phase: change === "admission" ? "reconnecting" : "connected",
+        hello:
+          change === "admission"
+            ? null
+            : change === "access"
+              ? createHello(["operator.approvals"])
+              : connected.hello,
+        selfUser: change === "account" ? { id: "different-person" } : connected.selfUser,
+      });
+      expect(store.get(key)).toBeUndefined();
+      await unwatch();
+    },
+  );
 
   it.each(["branch-switch", "rewind", "send"])(
     "invalidates matching snapshots only for structural events (%s)",
@@ -799,7 +833,7 @@ describe("session pull request snapshot store", () => {
     "settles a one-shot load when %s",
     async (transition) => {
       const disconnect = () =>
-        harness.setSnapshot({ ...harness.gateway.snapshot, phase: "reconnecting", hello: null });
+        harness.setSnapshot({ ...harness.gateway.snapshot, phase: "reconnecting" });
       if (transition === "disconnected") {
         disconnect();
       } else {

@@ -10,12 +10,17 @@ import type { SessionWorkspaceArtifacts } from "./chat-session-workspace-types.t
 it.each([false, true])(
   "retains the focused artifact row through refresh failure and retry (desktop=%s)",
   async (desktop) => {
+    const initial = Promise.withResolvers<void>();
+    const artifacts: SessionWorkspaceArtifacts["items"] = [
+      { id: "report", title: "Report.txt", type: "file", download: { mode: "bytes" } },
+    ];
     const owner: SessionWorkspaceArtifacts = {
-      items: [{ id: "report", title: "Report.txt", type: "file", download: { mode: "bytes" } }],
-      resolved: true,
-      loaded: true,
-      loading: false,
+      items: [],
+      resolved: false,
+      loaded: false,
+      loading: true,
       error: null,
+      readResult: initial.promise,
     };
     let complete = () => {};
     const retry = vi.fn(() => {
@@ -27,7 +32,7 @@ it.each([false, true])(
       draw();
     });
     const read = (): ChatDetailsOutputs => ({
-      artifacts: owner.items,
+      artifacts: owner.resolved ? owner.items : null,
       artifactRead: owner,
       artifactsError: owner.error,
       dashboard: null,
@@ -47,11 +52,24 @@ it.each([false, true])(
       desktop ? <ChatOutputsDesktop {...outputs()} /> : <ChatOutputsMobile {...outputs()} />,
     );
     onTestFinished(view.unmount);
+    if (desktop) {
+      expect(view.queryByRole("status")).toBeNull();
+    } else {
+      await waitForSolid(() =>
+        expect(view.getByRole("status").textContent).toContain("Loading outputs"),
+      );
+    }
+    owner.items = artifacts;
+    owner.resolved = true;
+    owner.loaded = true;
+    owner.loading = false;
+    initial.resolve();
+    draw();
     await waitForSolid(() => expect(view.getByRole("button", { name: "Report.txt" })).toBeTruthy());
     const row = view.getByRole("button", { name: "Report.txt" });
     row.focus();
     retry();
-    await waitForSolid(() => expect(view.getByRole("status").textContent).toContain("Updating"));
+    await waitForSolid(() => expect(view.queryByRole("status")).toBeNull());
     owner.loading = false;
     owner.error = "Files refresh failed";
     complete();

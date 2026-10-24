@@ -79,7 +79,9 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   mobilePeopleMentions?: ChatMobilePeopleMentions;
   onOpenDashboard?: (source: HTMLElement) => void;
   publicAccessIndicator?: ChatSessionSharingProps;
-  readMachineName?: () => Promise<string | undefined>;
+  /** Stable presentation identity; changing a request alone must not clear a known name. */
+  machineNameScope?: string;
+  readMachineName?: (previous?: string) => Promise<string | undefined>;
   onMobilePlacementStop?: (machineName?: string) => Promise<void>;
   onMobilePlacementMove?: (presentation: SessionPlacementPresentation) => Promise<void>;
   placementControl?: Parameters<typeof ChatPanePlacement>[0];

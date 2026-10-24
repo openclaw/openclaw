@@ -66,7 +66,19 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
 
   private readPullRequestSnapshot(): ControlUiSessionPullRequestSnapshot | undefined {
     const target = this.repository.target;
-    return target?.store.get(target.key);
+    const state = this.state;
+    if (
+      !target ||
+      !state ||
+      target.key !==
+        scopedSessionArtifactKey(
+          state.sessionKey,
+          scopedAgentParamsForSession(state, state.sessionKey).agentId ?? resolveChatAgentId(state),
+        )
+    ) {
+      return undefined;
+    }
+    return target.store.get(target.key);
   }
 
   protected get sessionPullRequests(): ControlUiSessionPullRequest[] {
@@ -136,17 +148,17 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       return false;
     }
     const scope = this.captureConnectionScope();
+    if (!scope) {
+      return false;
+    }
     if (
-      !scope ||
       !canCallGatewayMethod(
         scope.context.gateway.snapshot,
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "operator.read",
       )
     ) {
-      if (scope) {
-        sessionPullRequestsForGateway(scope.context.gateway).unwatch(this);
-      }
+      sessionPullRequestsForGateway(scope.context.gateway).unwatch(this);
       this.repository.target = null;
       this.previousRepository = null;
       return false;
@@ -230,9 +242,12 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     return refreshAdmitted;
   }
 
-  protected resetSessionPullRequests(): void {
+  protected resetSessionPullRequests(options: { keepPresentation?: boolean } = {}): void {
     if (this.state) {
       retirePullRequestRefreshes(this.state);
+    }
+    if (options.keepPresentation) {
+      return;
     }
     sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
     this.repository.target = null;
@@ -488,6 +503,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       : resolveSessionKey(sessionKey, this.context.gateway.snapshot.hello);
     if (!nextSessionKey) {
       return null;
+    }
+    if (state.sessionKey !== nextSessionKey) {
+      this.resetSessionPullRequests();
     }
     state.sessionKey = nextSessionKey;
     return nextSessionKey;

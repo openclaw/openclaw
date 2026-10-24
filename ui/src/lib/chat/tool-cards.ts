@@ -106,7 +106,7 @@ export function isToolCardSkipped(card: ToolCard): boolean {
   }
   const details = readRecord(card.details);
   return (
-    (card.live !== true || card.completed === true) &&
+    (card.completed === true || (card.completed !== false && card.live !== true)) &&
     details?.status === "skipped" &&
     details.deniedReason === "steering"
   );
@@ -120,7 +120,8 @@ export function isToolCardError(card: ToolCard): boolean {
     return card.activity.status === "failed";
   }
   // Progress can contain error-shaped text; only a result may imply failure.
-  const canInferFailure = card.live !== true || card.completed === true;
+  const canInferFailure =
+    card.completed === true || (card.completed !== false && card.live !== true);
   return card.isError ?? (canInferFailure && isToolErrorOutput(card.outputText));
 }
 
@@ -156,7 +157,10 @@ export function resolveToolCardOutcome(
   if (runActive === true && card.live === true && card.completed !== true) {
     return "running";
   }
-  if (card.completed === true || (card.live !== true && card.outputText !== undefined)) {
+  if (
+    card.completed === true ||
+    (card.completed !== false && card.live !== true && card.outputText !== undefined)
+  ) {
     return "succeeded";
   }
   return "unknown";
@@ -330,6 +334,7 @@ function extractToolCards(message: unknown): ToolCard[] {
     typeof m.tool_name === "string";
   const content = normalizeContent(m.content);
   const messageIsError = readToolErrorFlag(m);
+  const isToolStream = typeof m["__openclawToolStreamLive"] === "boolean";
   const isLiveToolStream = m["__openclawToolStreamLive"] === true;
   const liveDiffStat = readLiveDiffStat(m["__openclawToolStreamDiffStat"]);
   const cards: ToolCard[] = [];
@@ -396,9 +401,9 @@ function extractToolCards(message: unknown): ToolCard[] {
         args,
         inputText: serializeToolInput(args),
         ...(details !== undefined ? { details } : {}),
-        ...(isLiveToolStream
+        ...(isToolStream
           ? {
-              live: true,
+              live: isLiveToolStream,
               completed:
                 m["__openclawToolStreamResultReceived"] === true ||
                 m["__openclawToolStreamItemEnded"] === true,
@@ -436,7 +441,7 @@ function extractToolCards(message: unknown): ToolCard[] {
       // `update` output too; completion there is owned by the stream's
       // terminal markers (set at card creation), not block presence —
       // otherwise a running tool flips to "succeeded" mid-execution.
-      if (!isLiveToolStream) {
+      if (!isToolStream) {
         existing.completed = true;
       }
       Object.assign(existing, result, {

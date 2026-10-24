@@ -139,7 +139,7 @@ function readProjections(item: MessageItem, index: number): Projection[] {
     const raw = asRecord(block)!;
     const id = resolveToolBlockId(raw, message)!;
     const call = isToolCallContentType(raw.type);
-    const live = message["__openclawToolStreamLive"] === true;
+    const live = typeof message["__openclawToolStreamLive"] === "boolean";
     const card = prepared.get(raw) ?? extractToolBlockCardsCached(originalMessage, raw)[0];
     return {
       source,
@@ -268,7 +268,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     invocation.projections.push(projection);
     const kind = projection.call ? "call" : "result";
     invocation[kind] = preferProjection(invocation[kind], projection);
-    if (projection.source.message["__openclawToolStreamLive"] === true) {
+    if (typeof projection.source.message["__openclawToolStreamLive"] === "boolean") {
       invocation.live = projection.source.message;
     }
     if (projection.source.standalone) {
@@ -392,7 +392,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
         ...(transcript ? { messageId: transcript } : {}),
         ...(invocation.live
           ? {
-              __openclawToolStreamLive: true,
+              __openclawToolStreamLive: invocation.live["__openclawToolStreamLive"],
               __openclawToolStreamResultReceived: resultReceived,
               __openclawToolStreamItemEnded: itemEnded,
               __openclawToolStreamDiffStat: completed

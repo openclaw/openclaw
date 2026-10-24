@@ -61,6 +61,78 @@ it("reports failed edit-dialog preparation and permits a fresh attempt", async (
   }
 });
 
+it("keeps known goal actions disabled through a temporary disconnect", () => {
+  vi.useFakeTimers();
+  const [connected, setConnected] = createSignal(true);
+  const [presented, setPresented] = createSignal(true);
+  const [available, setAvailable] = createSignal(true);
+  const [scope, setScope] = createSignal<object | undefined>({});
+  const onAction = vi.fn();
+  const onSubmit = vi.fn(async () => true);
+  const view = mountSolid(() => (
+    <ChatDetailsGoal
+      goal={goal}
+      sessionId="session-original"
+      presented={presented()}
+      gatewayScope={scope()}
+      connected={connected()}
+      canAct={connected() && available()}
+      onGoalAction={onAction}
+      onGoalSubmit={onSubmit}
+    />
+  ));
+  try {
+    const pause = view.getByRole<HTMLButtonElement>("button", { name: "Pause goal" });
+    setConnected(false);
+    flush();
+    expect(view.container.textContent).toContain(goal.objective);
+    for (const name of ["Edit goal", "Pause goal", "Clear goal"]) {
+      const button = view.getByRole<HTMLButtonElement>("button", { name });
+      expect(button.disabled).toBe(true);
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    }
+    expect(onAction).not.toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
+    setConnected(true);
+    flush();
+    expect(view.getByRole("button", { name: "Pause goal" })).toBe(pause);
+    expect(pause.disabled).toBe(false);
+    pause.click();
+    expect(onAction).toHaveBeenCalledExactlyOnceWith(goal.id, "pause");
+    setPresented(false);
+    flush();
+    setConnected(false);
+    flush();
+    setPresented(true);
+    flush();
+    expect(view.getByRole<HTMLButtonElement>("button", { name: "Pause goal" }).disabled).toBe(true);
+    setConnected(true);
+    setAvailable(false);
+    flush();
+    expect(view.queryByRole("button", { name: "Pause goal" })).toBeNull();
+    setConnected(false);
+    flush();
+    expect(view.queryByRole("button", { name: "Pause goal" })).toBeNull();
+    setConnected(true);
+    setAvailable(true);
+    flush();
+    expect(view.getByRole("button", { name: "Pause goal" })).not.toBeNull();
+    setConnected(false);
+    setScope(undefined);
+    flush();
+    expect(view.queryByRole("button", { name: "Pause goal" })).toBeNull();
+    setConnected(true);
+    flush();
+    setConnected(false);
+    setScope({});
+    flush();
+    expect(view.queryByRole("button", { name: "Pause goal" })).toBeNull();
+  } finally {
+    view.unmount();
+    vi.useRealTimers();
+  }
+});
+
 it("retains the objective while hidden and keeps recovery available after the goal is removed", () => {
   vi.useFakeTimers();
   const [value, setValue] = createSignal<SessionGoal | undefined>(goal);

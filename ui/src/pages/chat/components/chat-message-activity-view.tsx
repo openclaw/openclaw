@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import { groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
@@ -45,6 +46,7 @@ function prepareActivityGroup(
     const prepared = readPreparedActivity(entry.message);
     if (
       opts.runActive &&
+      asOptionalRecord(entry.message)?.["__openclawToolStreamLive"] !== false &&
       opts.activityRunId &&
       (!opts.activityGroupKey || groups.some((group) => group.key === opts.activityGroupKey)) &&
       transcriptRunId(entry.message) === opts.activityRunId

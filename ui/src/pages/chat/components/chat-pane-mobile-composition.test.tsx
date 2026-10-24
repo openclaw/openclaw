@@ -21,31 +21,52 @@ function mountHeader(patch: Partial<ChatPaneHeaderProps> = {}) {
   return mountChatPaneHeader(containers, patch);
 }
 
-it("clears the device name while replacing its request and ignores retired results", async () => {
+it("revalidates the device name within its scope and clears it when the scope changes", async () => {
   const first = createDeferred<string | undefined>();
-  const obsolete = createDeferred<string | undefined>();
-  const current = createDeferred<string | undefined>();
+  const refresh = createDeferred<string | undefined>();
+  const retired = createDeferred<string | undefined>();
+  const latest = createDeferred<string | undefined>();
   const readFirst = vi.fn(() => first.promise);
-  const mounted = mountHeader({ session: offlineDeviceSession(), readMachineName: readFirst });
+  const mounted = mountHeader({
+    session: offlineDeviceSession(),
+    machineNameScope: "gateway:one/session:one/device:one",
+    readMachineName: readFirst,
+  });
   const name = () => mounted.container.querySelector(".chat-pane__device-name")?.textContent;
   expect(name()).toBeUndefined();
-  first.resolve("First device");
-  await waitForSolid(() => expect(name()).toBe("First device"));
+  first.resolve("Build device");
+  await waitForSolid(() => expect(name()).toBe("Build device"));
   const title = mounted.container.querySelector(".chat-pane__session-title");
   mounted.update({ title: "Updated session title" });
   expect(readFirst).toHaveBeenCalledOnce();
-  expect(name()).toBe("First device");
-  mounted.update({ readMachineName: () => obsolete.promise });
+  expect(name()).toBe("Build device");
+
+  mounted.update({ readMachineName: () => refresh.promise });
+  expect(name()).toBe("Build device");
+  refresh.resolve("Renamed device");
+  await waitForSolid(() => expect(name()).toBe("Renamed device"));
+
+  mounted.update({ readMachineName: () => retired.promise });
+  mounted.update({ readMachineName: () => latest.promise });
+  retired.resolve("Obsolete device name");
+  await retired.promise;
+  expect(name()).toBe("Renamed device");
+  latest.resolve(undefined);
+  await waitForSolid(() => expect(name()).toBeUndefined());
+
+  mounted.update({ readMachineName: () => first.promise });
+  await waitForSolid(() => expect(name()).toBe("Build device"));
+  const replacement = createDeferred<string | undefined>();
+  mounted.update({
+    machineNameScope: "gateway:two/session:one/device:one",
+    readMachineName: () => replacement.promise,
+  });
   expect(name()).toBeUndefined();
-  mounted.update({ readMachineName: () => current.promise });
-  obsolete.resolve("Retired device");
-  await obsolete.promise;
-  expect(name()).toBeUndefined();
-  current.resolve("Current device");
-  await waitForSolid(() => expect(name()).toBe("Current device"));
+  replacement.resolve("Other account device");
+  await waitForSolid(() => expect(name()).toBe("Other account device"));
   expect(mounted.container.querySelector(".chat-pane__session-title")).toBe(title);
   mounted.update({ readMachineName: undefined });
-  expect(name()).toBeUndefined();
+  await waitForSolid(() => expect(name()).toBeUndefined());
 });
 
 it("retains the People page and lookup across native host replacement and desktop parking", async () => {

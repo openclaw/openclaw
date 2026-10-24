@@ -336,11 +336,26 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       snapshot.client?.offlineRecoveryRetired === true ||
       (snapshot.phase === "connected" && !hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null));
     const metadataOwnerChanged = state.client !== snapshot.client || reactionOwnerChanged;
+    const detailsOwnerChanged =
+      draftOwnerChanged ||
+      !snapshot.hello ||
+      (snapshot.phase === "connected" &&
+        hasOperatorSelfReadAccess(state.hello?.auth ?? null) &&
+        !hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null));
     if (sourceChanged || metadataOwnerChanged) {
       retireChatMetadataRequests(state, { keepPresentation: !metadataOwnerChanged });
     }
-    if (sourceChanged) {
+    if (detailsOwnerChanged) {
+      resetToolStream(state);
+      this.headerPresentation.worktreePaths = new Map();
+      this.headerPresentation.branches = new Map();
+      this.headerPresentation.platform = null;
+    }
+    if (sourceChanged || detailsOwnerChanged) {
       this.retireDetailsOutputs();
+      this.resetSessionPullRequests({ keepPresentation: !detailsOwnerChanged });
+    }
+    if (sourceChanged) {
       this.resetSessionReadAcknowledgements();
       this.headerPresentation.continueInTerminalDialog = null;
       cancelChatScroll(state);
@@ -389,7 +404,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       state.chatSessionApprovalReplay = undefined;
       state.guardianNotices = [];
       state.providerPolicyNotice = null;
-      this.resetSessionPullRequests();
       this.resetOlderMessagesViewport();
       state.chatLoading = false;
     }
@@ -401,6 +415,15 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       retireChatModelSelectionOwnership(state);
       this.swarm.hydrator?.dispose();
       this.swarm.hydrator = null;
+    }
+    // Activity sequences belong to a Gateway boot; retained presentation does not.
+    const previousBootId = state.hello?.server?.bootId;
+    if (
+      sourceChanged &&
+      snapshot.phase === "connected" &&
+      (!previousBootId || previousBootId !== snapshot.hello?.server?.bootId)
+    ) {
+      state.activityEventSeqById?.clear();
     }
     state.client = snapshot.client;
     state.connected = snapshot.phase === "connected";
@@ -435,8 +458,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     }
     const resumedHistory =
       !wasConnected && state.connected ? resumePendingChatHistoryLoad(state) : undefined;
-    if (sourceChanged) {
-      retireSessionWorkspaceCheckout(state);
+    if (sourceChanged || detailsOwnerChanged) {
+      retireSessionWorkspaceCheckout(state, { keepPresentation: !detailsOwnerChanged });
     }
     const mediaAuthChanged = previousMediaAuthToken !== resolveControlUiAuthToken(state);
     if (sourceChanged || pairingOwnerChanged || mediaAuthChanged) {
@@ -517,7 +540,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.connectedClient = null;
       setQuestionPromptClient(this.questionPromptState, null);
       stopChatRealtimeTalk(state);
-      resetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
+      resetToolStream(state, {
+        preserveStreamSegments: state.chatRunId !== null,
+        keepPresentation: !detailsOwnerChanged,
+      });
       return;
     }
     this.refreshSwarmRoster();
@@ -555,9 +581,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       if (questionClient) {
         refreshPendingQuestionsWithRetry(this.questionPromptState, questionClient, clientIsCurrent);
       }
-      this.headerPresentation.worktreePaths = new Map();
-      this.headerPresentation.branches = new Map();
-      this.headerPresentation.platform = null;
       if (catalogRouteKey) {
         void this.loadHeaderPlatform(startupClient, startupGeneration);
         void this.loadCatalogSession(catalogRouteKey, false);
