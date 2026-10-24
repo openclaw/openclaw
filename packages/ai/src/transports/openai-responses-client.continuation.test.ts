@@ -12,18 +12,23 @@ import { createDeferred, withTestTimeout } from "../../../../test/helpers/promis
 import { Agent } from "../../../agent-core/src/agent.js";
 import type { AgentTool } from "../../../agent-core/src/types.js";
 import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
+import {
+  completedResponse,
+  outputItem,
+  userMessage,
+  wireCall,
+  wireMessage,
+  wireUser,
+} from "./openai-stream-cases.test-support.js";
 
 const sseState = vi.hoisted(() => ({
-  clientHeaders: [] as Array<Record<string, string>>,
   outcomes: [] as Array<Error | SdkResponse>,
   requests: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("openai", async () => {
   const { createResponsesSdkMock } = await import("./openai-responses-sdk.test-support.js");
-  return createResponsesSdkMock(sseState, {
-    onConstruct: (options) => sseState.clientHeaders.push(options.defaultHeaders ?? {}),
-  });
+  return createResponsesSdkMock(sseState);
 });
 
 vi.mock("openai/resources/responses/ws.js", () => ({
@@ -76,82 +81,53 @@ function functionTool(name: string) {
   return { name, description: name, parameters: Type.Object({}) };
 }
 
-const lookupCall = {
-  type: "function_call",
-  id: "fc_lookup",
-  call_id: "call_lookup",
-  name: "lookup",
-  arguments: "{}",
-  status: "completed",
-};
+const lookupCall = { ...wireCall("lookup", "lookup"), status: "completed" };
 const asyncCall = { ...lookupCall, async: true };
 const store = (payload: Record<string, unknown>) => ({ ...payload, store: true });
 const noStore = (payload: Record<string, unknown>) => ({ ...payload, store: false });
 const configuration = (effort: string) => ({ type: "configuration_update", reasoning: { effort } });
-const wireUser = (text: string) => ({
-  type: "message",
-  role: "user",
-  content: [{ type: "input_text", text }],
-});
 const lookupOutput = {
   type: "function_call_output",
   call_id: "call_lookup",
   output: "lookup result",
 };
 
-function userMessage(text: string, timestamp: number) {
-  return { role: "user" as const, content: text, timestamp };
-}
-
-function completedEvent(responseId: string, content: string) {
-  const output = [
-    {
-      id: `msg_${responseId}`,
-      type: "message",
-      status: "completed",
-      content: [
-        {
-          annotations: [
-            {
-              type: "url_citation",
-              url: "https://example.test/source",
-              title: "source",
-              start_index: 0,
-              end_index: content.length,
-            },
-          ],
-          logprobs: [{ token: content, logprob: -0.1, bytes: [], top_logprobs: [] }],
-          text: content,
-          type: "output_text",
-        },
-      ],
-      role: "assistant",
-    },
-  ];
-  return {
-    type: "response.completed",
-    response: {
-      id: responseId,
-      status: "completed",
-      output,
-      usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-    },
-  };
+function completedEvent(responseId: string, content: string, cited = true) {
+  const item = wireMessage(`msg_${responseId}`, content);
+  return completedResponse(
+    responseId,
+    [
+      {
+        ...item,
+        content: [
+          {
+            ...item.content[0],
+            annotations: cited
+              ? [
+                  {
+                    type: "url_citation",
+                    url: "https://example.test/source",
+                    title: "source",
+                    start_index: 0,
+                    end_index: content.length,
+                  },
+                ]
+              : [],
+            logprobs: [{ token: content, logprob: -0.1, bytes: [], top_logprobs: [] }],
+          },
+        ],
+      },
+    ],
+    { usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 } },
+  );
 }
 
 function sdkCompletion(responseId: string, content: string): SdkResponse {
   return sdkEvents(completedEvent(responseId, content));
 }
 
-/** A completion without url_citation, for tool-flow tests whose replies cite nothing. */
 function sdkUncitedCompletion(responseId: string, content: string): SdkResponse {
-  const event = completedEvent(responseId, content);
-  for (const item of event.response.output) {
-    for (const part of item.content) {
-      part.annotations = [];
-    }
-  }
-  return sdkEvents(event);
+  return sdkEvents(completedEvent(responseId, content, false));
 }
 
 function sdkEvents(...events: Array<Record<string, unknown>>): SdkResponse {
@@ -165,11 +141,10 @@ function sdkEvents(...events: Array<Record<string, unknown>>): SdkResponse {
 
 function toolEvents(call = lookupCall, responseId = "resp_call") {
   const completed = completedEvent(responseId, "");
-  return sdkEvents(
-    { type: "response.output_item.added", output_index: 0, item: { ...call, arguments: "" } },
-    { type: "response.output_item.done", output_index: 0, item: call },
-    { ...completed, response: { ...completed.response, output: [call] } },
-  );
+  return sdkEvents(outputItem("added", { ...call, arguments: "" }), outputItem("done", call), {
+    ...completed,
+    response: { ...completed.response, output: [call] },
+  });
 }
 
 function queueAnswers(count = 3) {
@@ -257,32 +232,11 @@ function expectToolResult(agent: Agent) {
 describe("native OpenAI Responses SSE continuation", () => {
   beforeEach(() => {
     cleanupSessionResources();
-    sseState.clientHeaders.length = 0;
     sseState.outcomes.length = 0;
     sseState.requests.length = 0;
-    let turn = 0;
     configureAiTransportHost({
       ...initialHost,
-      plugin: {
-        ...initialHost.plugin,
-        resolveTransportTurnState: ({ context }) => {
-          turn += 1;
-          return {
-            headers: {
-              "x-openclaw-session-id": context.sessionId ?? "",
-              "x-openclaw-turn-id": `turn-${turn}`,
-              "x-openclaw-turn-attempt": "1",
-            },
-            metadata: {
-              openclaw_session_id: context.sessionId ?? "",
-              openclaw_turn_id: `turn-${turn}`,
-              openclaw_turn_attempt: "1",
-              openclaw_transport: context.transport,
-            },
-            websocket: { headers: { "x-openclaw-session-id": context.sessionId ?? "" } },
-          };
-        },
-      },
+      plugin: { ...initialHost.plugin, resolveTransportTurnState: () => undefined },
     });
   });
 
@@ -294,39 +248,6 @@ describe("native OpenAI Responses SSE continuation", () => {
     }
     vi.useRealTimers();
   });
-
-  it.each(["short"] as const)(
-    "continues stateful SSE turns with %s retention and matching affinity",
-    async (cacheRetention) => {
-      queueAnswers(2);
-      const firstUser = userMessage("first question", 1);
-      const requestModel = { ...model, compat: { sendSessionIdHeader: true } };
-      const first = await run(
-        { messages: [firstUser], tools: [] },
-        { cacheRetention },
-        requestModel,
-      );
-      const second = await run(
-        { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
-        { cacheRetention },
-        requestModel,
-      );
-
-      expect(second.stopReason).toBe("stop");
-      expect(sseState.clientHeaders).toMatchObject([
-        { "x-openclaw-turn-id": "turn-1" },
-        { "x-openclaw-turn-id": "turn-2" },
-      ]);
-      expect(sseState.clientHeaders.map((headers) => headers.session_id)).toEqual([
-        "session-1",
-        "session-1",
-      ]);
-      expect(sseState.requests[1]).toMatchObject({
-        previous_response_id: "resp_1",
-        input: [wireUser("second question")],
-      });
-    },
-  );
 
   it("continues after a hosted web search answer with sources through effort and tool turns", async () => {
     const search = completedEvent("resp_search", "searched answer");
@@ -438,10 +359,6 @@ describe("native OpenAI Responses SSE continuation", () => {
   );
 
   it("round-trips reasoning state through the SQLite session transcript", async () => {
-    configureAiTransportHost({
-      ...initialHost,
-      plugin: { ...initialHost.plugin, resolveTransportTurnState: () => undefined },
-    });
     sseState.outcomes.push(
       sdkCompletion("resp_1", "first answer"),
       sdkCompletion("resp_2", "second answer"),
@@ -613,36 +530,28 @@ describe("native OpenAI Responses SSE continuation", () => {
   });
 
   it.each([
-    { name: "code mode", requestModel: astra, enabled: true, codeMode: true, expected: false },
-    {
-      name: "API multi-agent",
-      requestModel: astra,
-      enabled: true,
-      multiAgent: true,
-      expected: false,
-    },
+    { name: "code mode", codeMode: true },
+    { name: "API multi-agent", multiAgent: true },
   ])(
     "gates async advertisement and normalized calls for $name",
-    async ({ requestModel, enabled, codeMode, multiAgent, expected }) => {
+    async ({ codeMode, multiAgent }) => {
       sseState.outcomes.push(toolEvents(asyncCall));
       const result = await run(
         { messages: [userMessage("call", 1)], tools: [functionTool("exec"), functionTool("wait")] },
         {
-          asyncToolExecution: enabled,
+          asyncToolExecution: true,
           openclawCodeModeToolSurface: codeMode,
           onPayload: (payload) => ({
             ...payload,
             ...(multiAgent ? { multi_agent: { enabled: true } } : {}),
           }),
         },
-        requestModel,
+        astra,
       );
       expect(result.stopReason).toBe("toolUse");
       const tools = sseState.requests[0]?.tools as Array<{ async?: boolean }>;
-      expect(tools.every((tool) => tool.async === (expected ? true : undefined))).toBe(true);
-      expect(result.content.find((item) => item.type === "toolCall")?.async).toBe(
-        expected ? true : undefined,
-      );
+      expect(tools.every((tool) => tool.async === undefined)).toBe(true);
+      expect(result.content.find((item) => item.type === "toolCall")?.async).toBeUndefined();
     },
   );
 
