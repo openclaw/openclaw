@@ -660,6 +660,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
   try {
     await installSlackRuntimeForIdentity(installationIdentity);
     durableIngress.start();
+    opts.onDurableIngress?.(durableIngress);
     runtimeStarted = true;
     presenceMonitor?.start();
     if (slackMode === "http" && slackHttpHandler) {

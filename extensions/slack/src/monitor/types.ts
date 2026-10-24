@@ -59,6 +59,8 @@ export type MonitorSlackOpts = {
   slashCommand?: SlackSlashCommandConfig;
   /** Callback to update app-level channel account activity (e.g. lastEventAt). */
   setStatus?: (next: Record<string, unknown>) => void;
+  /** Test seam: the fixture waits until durable ingress is idle before delivering a message. */
+  onDurableIngress?: (ingress: { waitForIdle: () => Promise<void> }) => void;
 };
 
 type LooseSlackEvent<Event extends { type: string }> = Event extends unknown
