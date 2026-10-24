@@ -57,7 +57,7 @@ async function workload(root: string) {
     columns: Array.from({ length: 2 }, (_, column) => ({
       id: `c${column}`,
       paneWeights: [0.5, 0.5],
-      panes: Array.from({ length: 2 }, (_, row) => ({
+      panes: Array.from({ length: 2 }, (_pane, row) => ({
         id: `p${column * 2 + row}`,
         sessionKey: `agent:main:example-${column}-${row}`,
       })),
@@ -70,7 +70,9 @@ async function workload(root: string) {
       Array.from({ length: 100 }, (_, index) => [
         `agent-${index}`,
         {
-          allowlist: Array.from({ length: 100 }, (_, rule) => ({ pattern: `/synthetic/${rule}` })),
+          allowlist: Array.from({ length: 100 }, (_entry, rule) => ({
+            pattern: `/synthetic/${rule}`,
+          })),
         },
       ]),
     ),
@@ -126,7 +128,7 @@ const workloads = await Promise.all(roots.map(workload));
 const results = [];
 for (let index = 0; index < workloads[0]!.length; index++) {
   const cases = workloads.map((entries) => entries[index]!);
-  const samples = cases.map(() => [] as number[]);
+  const samples: number[][] = cases.map(() => []);
   const cloneCounts = cases.map((entry) => {
     const original = globalThis.structuredClone;
     let count = 0;
