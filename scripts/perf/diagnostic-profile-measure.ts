@@ -221,25 +221,24 @@ if (mode === "native-parse") {
         parseNativeCpuProfile(json);
       }
       const { profile } = await session.post("HeapProfiler.stopSampling");
-      const ownerIds = new Set<number>();
+      let sampledBytes = 0;
       const visit = (node: typeof profile.head, owned = false) => {
         const inOwner = owned || node.callFrame.functionName === "parseNativeCpuProfile";
         if (inOwner) {
-          ownerIds.add(node.id);
+          sampledBytes += node.selfSize;
         }
         for (const child of node.children) {
           visit(child, inOwner);
         }
       };
       visit(profile.head);
-      const ownerSamples = profile.samples.filter((sample) => ownerIds.has(sample.nodeId));
       reports.push({
         iteration,
         parses,
         nodeCount: nodes,
         inputBytes: Buffer.byteLength(json),
-        allocationSamples: ownerSamples.length,
-        sampledBytesPerParse: ownerSamples.reduce((sum, sample) => sum + sample.size, 0) / parses,
+        allocationSamples: profile.samples.length,
+        sampledBytesPerParse: sampledBytes / parses,
       });
     }
   } finally {
