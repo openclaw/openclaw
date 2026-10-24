@@ -1,6 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { projectChatFields } from "../chat-field-projection.ts";
 import { createMountedPanes } from "../chat-pane-mounted.test-support.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
@@ -12,33 +14,38 @@ import {
   saveChatSessionScrollPosition,
   type ChatScrollHost,
 } from "../scroll.ts";
-import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import type { ChatThreadProps } from "./chat-thread-interactions.ts";
+import { ChatThread } from "./chat-thread-view.tsx";
+import type { ChatTranscript } from "./chat-transcript-controller.ts";
+import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 
-// mock-isolation: Exercise runtime commit cadence without initializing the full pane renderer.
-vi.mock("../chat-pane-layout-view.tsx", () => import("../chat-pane-layout.test-support.tsx"));
+// mock-isolation: Keep the pane shell small while exercising the production transcript owner.
+vi.mock("../chat-pane-layout-view.tsx", async (importOriginal) => {
+  const { PaneLayout } = await importOriginal<typeof import("../chat-pane-layout-view.tsx")>();
+  const { createPaneLayoutFixture } = await import("../chat-pane-layout.test-support.tsx");
+  return createPaneLayoutFixture(PaneLayout);
+});
 
 class GeometryPane extends ChatPaneRuntime {
   session: ChatSessionVirtualizerHost | undefined;
-  readonly renderedRects: Array<{ width: number; height: number } | null> = [];
-  private rows: TranscriptRow[] = Array.from({ length: 100 }, (_, index) => ({
-    kind: "content",
-    key: `row-${index}`,
-    content: <div style="height: 120px">Row {index}</div>,
-  }));
+  fixtureStream: string | null = null;
+  private messages: unknown[] = [];
+  private rowHeight = 120;
 
   initialize(context: ApplicationContext, followEnd = false) {
+    projectChatFields(this, ["fixtureStream"]);
     this.context = context;
     this.paneId = "geometry-render";
     this.sessionKey = "agent:main:geometry-render";
-    if (followEnd) {
-      this.rows = this.rows.map((row, index) => ({
-        kind: "content",
-        key: row.key,
-        content: <div style="height: 360px">Row {index}</div>,
-      }));
-    }
+    this.rowHeight = followEnd ? 360 : 120;
+    this.messages = Array.from({ length: 100 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `Row ${index}`,
+      timestamp: index + 1,
+      __openclaw: { id: `geometry-row-${index}` },
+    }));
     saveChatSessionScrollPosition(this.paneId, this.sessionKey, {
       scrollTop: 0,
       anchorToEnd: followEnd,
@@ -50,28 +57,37 @@ class GeometryPane extends ChatPaneRuntime {
   }
 
   renderGeometry() {
-    const layout = this.transcript.renderSession(this.sessionKey, (session) => {
+    this.transcript.renderSession(this.sessionKey, (session) => {
       if (!(session instanceof ChatSessionVirtualizerHost)) {
         throw new Error("Expected the session virtualizer owner");
       }
       this.session = session;
-      const virtualizer = session["virtualizer"];
-      this.renderedRects.push(virtualizer.scrollRect && { ...virtualizer.scrollRect });
-      return {
-        contents: session.render(
-          this.rows,
-          (row) => (row.kind === "content" ? row.content : null),
-          null,
-          false,
-        ),
-        size: virtualizer.getTotalSize(),
-      };
     });
     return {
       layout: {
         component: GeometryLayout,
         props: {
-          ...layout,
+          transcript: this.transcript,
+          thread: {
+            paneId: this.paneId,
+            sessionKey: this.sessionKey,
+            selectedSession: undefined,
+            messages: this.messages,
+            toolMessages: [],
+            streamSegments: [],
+            stream: this.fixtureStream,
+            streamStartedAt: null,
+            loading: false,
+            queue: [],
+            showThinking: false,
+            showToolCalls: false,
+            sessions: null,
+            assistantName: "Assistant",
+            assistantAvatar: null,
+            onDraftChange: () => {},
+            onSend: () => {},
+          } satisfies ChatThreadProps,
+          rowHeight: this.rowHeight,
           scroll: this.scrollState,
         },
       },
@@ -83,26 +99,33 @@ class GeometryPane extends ChatPaneRuntime {
 }
 
 function GeometryLayout(props: {
-  contents: HTMLDivElement;
-  size: number;
+  transcript: ChatTranscript;
+  thread: ChatThreadProps;
+  rowHeight: number;
   scroll: Pick<
     ChatScrollHost,
     "chatReadingHistory" | "chatNewMessagesBelow" | "chatFollowLocked" | "chatUserNearBottom"
   >;
 }) {
   return (
-    <div class="chat-thread-viewport" style="height: 400px; flex: none; padding: 20px 0">
-      <div class="chat-thread" style="overflow-anchor: none">
-        {props.contents}
-        <output
-          data-reading-history={String(props.scroll.chatReadingHistory)}
-          data-new-messages-below={String(props.scroll.chatNewMessagesBelow)}
-          data-follow-locked={String(props.scroll.chatFollowLocked)}
-          data-near-bottom={String(props.scroll.chatUserNearBottom)}
-        >
-          {props.size}
-        </output>
-      </div>
+    <div
+      class="geometry-transcript-fixture"
+      style={{ "--geometry-row-height": `${props.rowHeight}px` }}
+    >
+      <style>{`
+        .geometry-transcript-fixture .chat-thread-viewport {
+          height: 400px; flex: none; padding: 20px 0;
+        }
+        .geometry-transcript-fixture .chat-thread { overflow-anchor: none; }
+        .geometry-transcript-fixture .chat-virtual-row { height: var(--geometry-row-height); }
+      `}</style>
+      <ChatThread props={props.thread} transcript={props.transcript} />
+      <output
+        data-reading-history={String(props.scroll.chatReadingHistory)}
+        data-new-messages-below={String(props.scroll.chatNewMessagesBelow)}
+        data-follow-locked={String(props.scroll.chatFollowLocked)}
+        data-near-bottom={String(props.scroll.chatUserNearBottom)}
+      />
     </div>
   );
 }
@@ -143,7 +166,13 @@ async function mountPane(followEnd = false) {
   await settleLayout();
   const session = expectDefined(pane.session, "mounted transcript session");
   const viewport = expectDefined(session.scrollElement, "mounted transcript viewport");
-  return { host: pane, session, viewport };
+  return {
+    host: pane,
+    session,
+    viewport,
+    slot: expectDefined(viewport.parentElement, "viewport slot"),
+    virtualizer: session["virtualizer"],
+  };
 }
 
 it("keeps the initial tail rows mounted while their estimated sizes settle", async () => {
@@ -169,12 +198,9 @@ it("keeps the initial tail rows mounted while their estimated sizes settle", asy
   observer.observe(document.body, { childList: true, subtree: true });
   try {
     const { host, viewport } = await mountPane(true);
-    const tail = expectDefined(
-      host.querySelector('[data-virtual-row-key="row-99"]'),
-      "last transcript row",
-    );
-    expect([...mounted.get("row-99")!]).toEqual([tail]);
-    expect(mounted.has("row-0")).toBe(false);
+    const tail = expectDefined(host.querySelector('[data-index="99"]'), "last transcript row");
+    expect([...mounted.get(tail.getAttribute("data-virtual-row-key")!)!]).toEqual([tail]);
+    expect([...mounted.keys()].some((key) => key.includes("geometry-row-0:"))).toBe(false);
     expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThanOrEqual(
       1,
     );
@@ -183,21 +209,52 @@ it("keeps the initial tail rows mounted while their estimated sizes settle", asy
   }
 });
 
-it("commits each settled pane width with its new transcript rect in exactly one render", async () => {
-  const { host, viewport } = await mountPane();
+it("commits each settled pane width without preparing the whole pane", async () => {
+  const { host, viewport, virtualizer } = await mountPane();
   const updates = vi.spyOn(host, "render");
   const counts: number[] = [];
   for (const width of [760, 720, 680, 740, 1001.5, 999.75]) {
     updates.mockClear();
-    host.renderedRects.length = 0;
     host.style.width = `${width}px`;
     await settleLayout();
     counts.push(updates.mock.calls.length);
-    expect.soft(host.renderedRects[0]).toEqual({ width: Math.round(width), height: 400 });
-    expect.soft(updates).toHaveBeenCalledTimes(1);
+    expect.soft(virtualizer.scrollRect).toEqual({ width: Math.round(width), height: 400 });
+    expect.soft(updates).not.toHaveBeenCalled();
     expect(viewport.getBoundingClientRect().width).toBe(width);
   }
   console.info(`Settled width render counts: ${counts.join(", ")}`);
+});
+
+it("reconciles the streaming end only when native row geometry changes", async () => {
+  const { host, viewport, virtualizer } = await mountPane(true);
+  host.fixtureStream = "Initial streaming text";
+  await settleLayout();
+  await expect.poll(() => virtualizer.isScrolling).toBe(false);
+  await settleLayout();
+  const tail = expectDefined(
+    host.querySelector<HTMLElement>(".chat-virtual-row:last-child"),
+    "streaming row",
+  );
+  const keys = () =>
+    [...host.querySelectorAll<HTMLElement>(".chat-virtual-row")].map(
+      (row) => row.dataset.virtualRowKey,
+    );
+  const initialKeys = keys();
+  const reconcile = vi.spyOn(TranscriptEndAnchor.prototype, "scheduleReconcile");
+  for (const text of ["First delta", "Second delta", "Third delta"]) {
+    host.fixtureStream = text;
+    await settleLayout();
+    expect(tail.textContent).toContain(text);
+  }
+  expect(reconcile).not.toHaveBeenCalled();
+
+  const before = viewport.scrollHeight;
+  tail.style.height = `${tail.getBoundingClientRect().height + 12}px`;
+  await settleLayout();
+  expect(viewport.scrollHeight).toBe(before + 12);
+  expect(reconcile).toHaveBeenCalled();
+  expect(keys()).toEqual(initialKeys);
+  expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThanOrEqual(1);
 });
 
 it("publishes reader policy and the tail indicator through the pane state", async () => {
@@ -237,21 +294,16 @@ it("publishes reader policy and the tail indicator through the pane state", asyn
 });
 
 it.each(["pending", "committed"] as const)(
-  "commits a non-sync measurement before paint with a %s pane update",
+  "commits a non-sync measurement before paint from a %s transcript update",
   async (phase) => {
-    const { host, session } = await mountPane();
-    const virtualizer = session["virtualizer"];
+    const { host, session, virtualizer } = await mountPane();
     const notification = vi.spyOn(virtualizer.options, "onChange");
     const updates = vi.spyOn(host, "render");
     const paint = vi.fn();
     const frame = requestAnimationFrame(paint);
     const measure = () => virtualizer.resizeItem(0, 180);
     if (phase === "committed") {
-      const commit = host.chatState.commitRender.bind(host.chatState);
-      vi.spyOn(host.chatState, "commitRender").mockImplementationOnce(() => {
-        commit();
-        measure();
-      });
+      session["renderer"].afterCommit(measure);
     }
     host.style.width = "780px";
     session.syncViewportGeometry();
@@ -261,12 +313,17 @@ it.each(["pending", "committed"] as const)(
     }
     try {
       await host.updateComplete;
-      if (phase === "committed") {
-        await host.updateComplete;
-      }
+      flush();
+      await Promise.resolve();
+      flush();
       expect(notification).toHaveBeenCalledExactlyOnceWith(virtualizer, false);
-      expect(updates).toHaveBeenCalledTimes(phase === "pending" ? 1 : 2);
-      expect(Number(host.querySelector("output")?.textContent)).toBeCloseTo(12060, 6);
+      expect(updates).not.toHaveBeenCalled();
+      expect(
+        Number.parseFloat(
+          expectDefined(host.querySelector<HTMLElement>(".chat-thread-inner"), "transcript sizer")
+            .style.height,
+        ),
+      ).toBeCloseTo(12060, 6);
       expect(paint).not.toHaveBeenCalled();
     } finally {
       cancelAnimationFrame(frame);
@@ -281,8 +338,7 @@ it.each([
 ])(
   "consumes the unscaled $boxSizing rect once at scale $scale",
   async ({ scale, boxSizing, width, height }) => {
-    const { host, session, viewport } = await mountPane();
-    const slot = expectDefined(viewport.parentElement, "viewport slot");
+    const { host, session, viewport, slot } = await mountPane();
     const observed: Array<{ width: number; height: number }> = [];
     const observer = new ResizeObserver(([entry]) => {
       const size = expectDefined(entry?.borderBoxSize[0], "viewport border box");
@@ -296,11 +352,11 @@ it.each([
       const rect = { width: Math.round(width), height: Math.round(height) };
       expect(session["virtualizer"].scrollRect).toEqual(rect);
       await host.updateComplete;
-      expect(updates).toHaveBeenCalledTimes(1);
+      expect(updates).not.toHaveBeenCalled();
       await settleLayout();
       expect(observed).toEqual([{ width, height }]);
       expect(session["virtualizer"].scrollRect).toEqual(rect);
-      expect(updates).toHaveBeenCalledTimes(1);
+      expect(updates).not.toHaveBeenCalled();
     } finally {
       observer.disconnect();
     }
@@ -308,9 +364,7 @@ it.each([
 );
 
 it("synchronizes padding changes even when the viewport's outer rect stays the same", async () => {
-  const { session, viewport } = await mountPane();
-  const slot = expectDefined(viewport.parentElement, "viewport slot");
-  const virtualizer = session["virtualizer"];
+  const { session, viewport, slot, virtualizer } = await mountPane();
   const rect = virtualizer.scrollRect;
   expect(virtualizer.options.scrollMargin).toBe(20);
   slot.style.paddingTop = "24px";
@@ -324,8 +378,7 @@ it("synchronizes padding changes even when the viewport's outer rect stays the s
 it.each(["border-box", "content-box"])(
   "syncs the unscaled %s viewport idempotently and publishes its native clamp once",
   async (boxSizing) => {
-    const { session, viewport } = await mountPane();
-    const slot = expectDefined(viewport.parentElement, "viewport slot");
+    const { session, viewport, slot } = await mountPane();
     viewport.scrollTop = viewport.scrollHeight;
     const before = viewport.scrollTop;
     const resized = vi.fn();
@@ -359,8 +412,7 @@ it.each(["border-box", "content-box"])(
 );
 
 it("retains measured viewport geometry while its slot is hidden", async () => {
-  const { session, viewport } = await mountPane();
-  const slot = expectDefined(viewport.parentElement, "viewport slot");
+  const { session, viewport, slot } = await mountPane();
   const before = viewport.style.cssText;
   const rect = session["virtualizer"].scrollRect;
   slot.style.display = "none";

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type {
@@ -28,6 +29,7 @@ class MockWebSocket extends EventEmitter {
       event: "connect.challenge",
       payload: { nonce: "synthetic-nonce", ts: 1_800_000_000_000 },
     });
+    return this;
   }
 
   receive(frame: unknown) {
@@ -62,6 +64,13 @@ function storageGate() {
   const deferred = createDeferred();
   releaseStorage.push(deferred.resolve);
   return deferred;
+}
+
+async function reconnectSocket() {
+  await vi.advanceTimersByTimeAsync(1_000);
+  const socket = MockWebSocket.instances[1];
+  assert(socket);
+  return socket.open();
 }
 
 function tokenStorage(initial: DeviceAuthTokenRecord | null = storedToken) {
@@ -156,7 +165,7 @@ function connect(
 const storedToken = { token: "synthetic-stored-token", scopes: ["operator.read"] };
 const hello = {
   type: "hello-ok",
-  protocol: 4,
+  protocol: PROTOCOL_VERSION,
   auth: { deviceToken: "synthetic-issued-token", role: "operator", scopes: ["operator.read"] },
 };
 
@@ -227,10 +236,7 @@ describe("GatewayClient host token storage", () => {
     socket.respond(hello);
     await vi.advanceTimersByTimeAsync(0);
     socket.close(1006, "transport retired");
-    await vi.advanceTimersByTimeAsync(1_000);
-    const replacement = MockWebSocket.instances[1];
-    assert(replacement);
-    replacement.open();
+    const replacement = await reconnectSocket();
     expect(replacement.send).not.toHaveBeenCalled();
     gate.resolve();
     await vi.advanceTimersByTimeAsync(0);
@@ -332,14 +338,12 @@ describe("GatewayClient host token storage", () => {
       const stopped =
         lifetime === "stopped" ? expect(client.stopAndWait()).rejects.toBe(failure) : undefined;
       permitStore.resolve();
-      await vi.advanceTimersByTimeAsync(reporter === "missing" ? 1_000 : 0);
       if (reporter === "missing") {
-        const replacement = MockWebSocket.instances[1];
-        assert(replacement);
-        replacement.open();
+        const replacement = await reconnectSocket();
         expect(replacement.send).toHaveBeenCalledOnce();
         await expect(client.stopAndWait()).rejects.toBe(failure);
       } else {
+        await vi.advanceTimersByTimeAsync(0);
         await stopped;
         if (reporter === "reported") {
           expect(onConnectError).toHaveBeenCalledExactlyOnceWith(failure);
@@ -392,10 +396,7 @@ describe("GatewayClient host token storage", () => {
       expect(onConnectError).toHaveBeenCalledOnce();
       expect(MockWebSocket.instances).toHaveLength(1);
     } else {
-      await vi.advanceTimersByTimeAsync(1_000);
-      const replacement = MockWebSocket.instances[1];
-      assert(replacement);
-      replacement.open();
+      const replacement = await reconnectSocket();
       expect(loadDeviceAuthToken).toHaveBeenCalledOnce();
       cleared.resolve();
       await vi.advanceTimersByTimeAsync(0);

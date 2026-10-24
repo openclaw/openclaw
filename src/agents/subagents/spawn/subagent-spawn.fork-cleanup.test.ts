@@ -38,26 +38,45 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   const completeCollectorLaunchCleanup = vi.fn();
   const prepareSubagentSpawn = vi.fn();
   const dispatch = vi.fn();
+  const scope = (sessionKey = parentKey) => ({
+    agentId: "main",
+    sessionKey,
+    storePath,
+  });
+  const read = (sessionKey = parentKey) => sessions.loadSessionEntry(scope(sessionKey));
+  const history = (sessionKey = parentKey, sessionId = parentId) =>
+    sessions.loadTranscriptEvents({ ...scope(sessionKey), sessionId });
+  const children = () => sessions.listSessionEntriesCore(scope());
+  const spawn = (params: Parameters<SpawnSubagent>[0]) =>
+    spawnSubagentDirect(params, { agentSessionKey: parentKey });
+  const parentScope = () => ({ ...scope(), sessionId: parentId });
+  const expectNotLaunched = () => {
+    expect(registerSubagentRun).not.toHaveBeenCalled();
+    expect(dispatch.mock.calls.some(([method]) => method === "agent")).toBe(false);
+  };
+  async function snapshotParent() {
+    const entry = sessions.loadSessionEntry(parentScope());
+    const transcript = await history();
+    return async () => {
+      expect(sessions.loadSessionEntry(parentScope())).toEqual(entry);
+      expect(await history()).toEqual(transcript);
+    };
+  }
+  function expectCopiedHistory(events: Awaited<ReturnType<typeof history>>) {
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.objectContaining({ content: "parent history" }),
+        }),
+      ]),
+    );
+  }
   const fork = vi.fn(async (input: unknown) => {
     const params = input as Parameters<ForkSession>[0];
     const result = await forkSession(params);
     if (result.status === "forked") {
       forkedEntry = result.sessionEntry;
-      // Establish that the real fork copied history before any injected failure.
-      expect(
-        await sessions.loadTranscriptEvents({
-          agentId: "main",
-          sessionId: result.sessionEntry.sessionId,
-          sessionKey: params.sessionKey,
-          storePath,
-        }),
-      ).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            message: expect.objectContaining({ content: "parent history" }),
-          }),
-        ]),
-      );
+      expectCopiedHistory(await history(params.sessionKey, result.sessionEntry.sessionId));
     }
     return result;
   });
@@ -94,11 +113,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         listBySession: () => [],
       }),
       loadSessionStoreMock: () =>
-        Object.fromEntries(
-          sessions
-            .listSessionEntriesCore({ agentId: "main", storePath })
-            .map(({ sessionKey, entry }) => [sessionKey, entry]),
-        ),
+        Object.fromEntries(children().map(({ sessionKey, entry }) => [sessionKey, entry])),
       get sessionStorePath() {
         return storePath;
       },
@@ -179,23 +194,17 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         }
         return result;
       });
-    await sessions.replaceSessionEntry(
-      { agentId: "main", sessionKey: parentKey, storePath },
-      {
-        sessionId: parentId,
-        lifecycleRevision: "parent-revision",
-        updatedAt: Date.now(),
-      },
-    );
+    await sessions.replaceSessionEntry(scope(), {
+      sessionId: parentId,
+      lifecycleRevision: "parent-revision",
+      updatedAt: Date.now(),
+    });
     // Seed a completed exchange so injected failures happen after a real history fork.
     for (const message of [
       { role: "user", content: "parent history" },
       { role: "assistant", content: "parent answer", stopReason: "stop" },
     ]) {
-      await sessions.appendTranscriptMessage(
-        { agentId: "main", sessionId: parentId, sessionKey: parentKey, storePath },
-        { message },
-      );
+      await sessions.appendTranscriptMessage({ ...scope(), sessionId: parentId }, { message });
     }
   });
 
@@ -216,9 +225,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     const selected = vi
       .spyOn(runtime, "resolveGatewaySessionStoreTargetInWorker")
       .mockImplementation(async (params) => {
-        const child = sessions
-          .listSessionEntriesCore({ agentId: "main", storePath })
-          .find(({ sessionKey }) => sessionKey !== parentKey);
+        const child = children().find(({ sessionKey }) => sessionKey !== parentKey);
         if (child && params.key === parentKey) {
           provisional = child;
           throw new Error("fork lookup source unavailable");
@@ -226,15 +233,10 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         return await resolveTarget(params);
       });
     try {
-      await spawnSubagentDirect(
-        { task: "inspect parent history", context: "fork" },
-        { agentSessionKey: parentKey },
-      ).catch(() => undefined);
+      await spawn({ task: "inspect parent history", context: "fork" }).catch(() => undefined);
 
       const created = expectDefined(provisional, "committed provisional child");
-      expect(
-        sessions.loadSessionEntry({ agentId: "main", sessionKey: created.sessionKey, storePath }),
-      ).toBeUndefined();
+      expect(read(created.sessionKey)).toBeUndefined();
       expect(dispatch).toHaveBeenCalledWith(
         "sessions.delete",
         expect.objectContaining({
@@ -245,29 +247,24 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         expect.anything(),
       );
       expect(fork).not.toHaveBeenCalled();
-      expect(registerSubagentRun).not.toHaveBeenCalled();
-      expect(dispatch.mock.calls.some(([method]) => method === "agent")).toBe(false);
-      expect(
-        sessions.loadSessionEntry({ agentId: "main", sessionKey: parentKey, storePath }),
-      ).toMatchObject({ sessionId: parentId, lifecycleRevision: "parent-revision" });
+      expectNotLaunched();
+      expect(read()).toMatchObject({ sessionId: parentId, lifecycleRevision: "parent-revision" });
     } finally {
       selected.mockRestore();
     }
   });
 
   it("refuses an oversized fork when its created child disappears before preparation", async () => {
-    await sessions.upsertSessionEntryCore(
-      { agentId: "main", sessionKey: parentKey, storePath },
-      { totalTokens: 150_000, totalTokensFresh: true, totalTokensVersion: 1 },
-    );
+    await sessions.upsertSessionEntryCore(scope(), {
+      totalTokens: 150_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    });
     let childSessionKey: string | undefined;
     fork.mockImplementationOnce(async (input: unknown) => {
       const params = input as Parameters<ForkSession>[0];
       childSessionKey = params.sessionKey;
-      const child = expectDefined(
-        sessions.loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath }),
-        "created child before fork preparation",
-      );
+      const child = expectDefined(read(childSessionKey), "created child before fork preparation");
       const deleted = await sessions.deleteSessionEntryLifecycle({
         agentId: "main",
         storePath,
@@ -280,45 +277,27 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       return await forkSession(params);
     });
 
-    const result = await spawnSubagentDirect(
-      { task: "inspect parent history", context: "fork" },
-      { agentSessionKey: parentKey },
-    );
+    const result = await spawn({ task: "inspect parent history", context: "fork" });
 
     expect(result).toMatchObject({
       status: "error",
       error: expect.stringContaining("could not fork the requester transcript"),
       childSessionKey: expectDefined(childSessionKey, "deleted child key"),
     });
-    expect(registerSubagentRun).not.toHaveBeenCalled();
-    expect(dispatch.mock.calls.some(([method]) => method === "agent")).toBe(false);
-    expect(sessions.listSessionEntriesCore({ agentId: "main", storePath })).toEqual([
-      expect.objectContaining({ sessionKey: parentKey }),
-    ]);
+    expectNotLaunched();
+    expect(children()).toEqual([expect.objectContaining({ sessionKey: parentKey })]);
   });
 
   it.each(["fork", "isolated"] as const)(
     "protects locked parent transcript ownership with context=%s",
     async (context) => {
       prepareSubagentSpawn.mockResolvedValue(undefined);
-      const parentScope = {
-        agentId: "main",
-        sessionId: parentId,
-        sessionKey: parentKey,
-        storePath,
-      };
-      await sessions.upsertSessionEntryCore(parentScope, { modelSelectionLocked: true });
-      const parentBefore = sessions.loadSessionEntry(parentScope);
-      const parentHistory = await sessions.loadTranscriptEvents(parentScope);
+      await sessions.upsertSessionEntryCore(parentScope(), { modelSelectionLocked: true });
+      const expectParentUnchanged = await snapshotParent();
 
-      const result = await spawnSubagentDirect(
-        { task: "do independent work", context },
-        { agentSessionKey: parentKey },
-      );
+      const result = await spawn({ task: "do independent work", context });
 
       if (context === "fork") {
-        // The locked harness owns both model and transcript lineage; hidden children
-        // must obey the same no-copy contract as whole-session creation.
         expect(result).toMatchObject({
           status: "error",
           error:
@@ -327,32 +306,17 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         expect(forkedEntry).toBeUndefined();
         expect(prepareSubagentSpawn).not.toHaveBeenCalled();
         expect(dispatch.mock.calls.some(([method]) => method === "agent")).toBe(false);
-        expect(
-          sessions
-            .listSessionEntriesCore({ agentId: "main", storePath })
-            .map(({ sessionKey }) => sessionKey),
-        ).toEqual([parentKey]);
+        expect(children().map(({ sessionKey }) => sessionKey)).toEqual([parentKey]);
       } else {
         expect(result.status).toBe("accepted");
         expect(fork).not.toHaveBeenCalled();
         const childSessionKey = expectDefined(result.childSessionKey, "isolated child key");
-        const child = expectDefined(
-          sessions.loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath }),
-          "isolated child entry",
-        );
+        const child = expectDefined(read(childSessionKey), "isolated child entry");
         expect(child.sessionId).not.toBe(parentId);
         expect(child.modelSelectionLocked).not.toBe(true);
-        expect(
-          await sessions.loadTranscriptEvents({
-            agentId: "main",
-            sessionId: child.sessionId,
-            sessionKey: childSessionKey,
-            storePath,
-          }),
-        ).toEqual([]);
+        expect(await history(childSessionKey, child.sessionId)).toEqual([]);
       }
-      expect(sessions.loadSessionEntry(parentScope)).toEqual(parentBefore);
-      expect(await sessions.loadTranscriptEvents(parentScope)).toEqual(parentHistory);
+      await expectParentUnchanged();
     },
   );
 
@@ -378,21 +342,14 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       startQueuedSubagentRun.mockResolvedValue(true);
       threadBindingAvailable = true;
       config.logging = { audit: { enabled: true, executionIdentity: true } };
-      const parentScope = {
-        agentId: "main",
-        sessionId: parentId,
-        sessionKey: parentKey,
-        storePath,
-      };
       if (parentTokens !== undefined) {
-        await sessions.upsertSessionEntryCore(parentScope, {
+        await sessions.upsertSessionEntryCore(parentScope(), {
           totalTokens: parentTokens,
           totalTokensFresh: true,
           totalTokensVersion: 1,
         });
       }
-      const parentBefore = sessions.loadSessionEntry(parentScope);
-      const parentHistory = await sessions.loadTranscriptEvents(parentScope);
+      const expectParentUnchanged = await snapshotParent();
       const work: ExecutionDecisionWork[] = [];
       const token = identityAdmission.createExecutionIdentityAdmissionToken("receipt-parent-run", {
         contextId: "receipt-parent-context",
@@ -430,31 +387,17 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
           (result.details as { childSessionKey?: string }).childSessionKey,
           "accepted child key",
         );
-        const child = expectDefined(
-          sessions.loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath }),
-          "accepted child entry",
-        );
+        const child = expectDefined(read(childSessionKey), "accepted child entry");
         expect(prepareSubagentSpawn).toHaveBeenCalledWith(
           expect.objectContaining({
             contextMode: preparedMode,
             childSessionKey,
           }),
         );
-        const childHistory = await sessions.loadTranscriptEvents({
-          agentId: "main",
-          sessionId: child.sessionId,
-          sessionKey: childSessionKey,
-          storePath,
-        });
+        const childHistory = await history(childSessionKey, child.sessionId);
         if (preparedMode === "fork") {
           expect(child.forkedFromParent).toBe(true);
-          expect(childHistory).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                message: expect.objectContaining({ content: "parent history" }),
-              }),
-            ]),
-          );
+          expectCopiedHistory(childHistory);
         } else {
           expect(forkedEntry).toBeUndefined();
           expect(childHistory).toEqual([]);
@@ -462,8 +405,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
             note: expect.stringContaining("Parent context is too large to fork"),
           });
         }
-        expect(sessions.loadSessionEntry(parentScope)).toEqual(parentBefore);
-        expect(await sessions.loadTranscriptEvents(parentScope)).toEqual(parentHistory);
+        await expectParentUnchanged();
         expect(JSON.stringify(result.details)).not.toContain("receipt-parent-context");
         expect(work).toHaveLength(1);
         expect(work[0]).toMatchObject({
@@ -492,33 +434,25 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       let successor: SessionEntry | undefined;
       let successorHistory: Awaited<ReturnType<typeof sessions.loadTranscriptEvents>> = [];
       const rollback = vi.fn();
-      const parentScope = {
-        agentId: "main",
-        sessionKey: parentKey,
-        sessionId: parentId,
-        storePath,
-      };
-      const parentBefore = sessions.loadSessionEntry(parentScope);
-      const parentHistory = await sessions.loadTranscriptEvents(parentScope);
+      const expectParentUnchanged = await snapshotParent();
       prepareSubagentSpawn.mockImplementation(
         async ({ childSessionKey }: { childSessionKey: string }) => {
-          // The existing fork fixture proves real copied history before this source closes.
           const entry = expectDefined(forkedEntry, "committed fork entry");
           childKey = childSessionKey;
           if (replacement !== "no replacement") {
-            const scope = { agentId: "main", sessionKey: childSessionKey, storePath };
-            await sessions.replaceSessionEntry(scope, {
+            const childScope = scope(childSessionKey);
+            await sessions.replaceSessionEntry(childScope, {
               ...entry,
               ...(replacement === "session id"
                 ? { sessionId: "replacement-session" }
                 : { lifecycleRevision: "replacement-revision" }),
             });
-            const current = expectDefined(sessions.loadSessionEntry(scope), "replacement entry");
-            const successorScope = { ...scope, sessionId: current.sessionId };
+            const current = expectDefined(read(childSessionKey), "replacement entry");
+            const successorScope = { ...childScope, sessionId: current.sessionId };
             await sessions.appendTranscriptMessage(successorScope, {
               message: { role: "user", content: "replacement work" },
             });
-            successor = sessions.loadSessionEntry(scope);
+            successor = read(childSessionKey);
             successorHistory = await sessions.loadTranscriptEvents(successorScope);
           }
           active = false;
@@ -536,8 +470,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         status: "error",
         error: "tool invocation authority is no longer active",
       });
-      expect(registerSubagentRun).not.toHaveBeenCalled();
-      expect(dispatch.mock.calls.some(([method]) => method === "agent")).toBe(false);
+      expectNotLaunched();
       expect(rollback).toHaveBeenCalledOnce();
       const childSessionKey = expectDefined(childKey, "prepared child key");
       const entry = expectDefined(forkedEntry, "committed fork entry");
@@ -550,19 +483,11 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         }),
         expect.anything(),
       );
-      expect(
-        sessions.loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath }),
-      ).toEqual(successor);
-      expect(
-        await sessions.loadTranscriptEvents({
-          agentId: "main",
-          sessionKey: childSessionKey,
-          sessionId: successor?.sessionId ?? entry.sessionId,
-          storePath,
-        }),
-      ).toEqual(successorHistory);
-      expect(sessions.loadSessionEntry(parentScope)).toEqual(parentBefore);
-      expect(await sessions.loadTranscriptEvents(parentScope)).toEqual(parentHistory);
+      expect(read(childSessionKey)).toEqual(successor);
+      expect(await history(childSessionKey, successor?.sessionId ?? entry.sessionId)).toEqual(
+        successorHistory,
+      );
+      await expectParentUnchanged();
     },
   );
 });

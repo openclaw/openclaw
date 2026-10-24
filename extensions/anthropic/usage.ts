@@ -126,27 +126,28 @@ export async function fetchAnthropicUsage(
         };
   }
   const daily = new Map<string, ReturnType<typeof createProviderUsageDailyAccumulator>>();
-  const getDaily = (startingAt: string) => {
+  const getDailyBucket = (rawBucket: unknown) => {
+    const bucket = asProviderUsageObject(rawBucket);
+    const startingAt = typeof bucket?.starting_at === "string" ? bucket.starting_at : undefined;
+    if (!startingAt || !Array.isArray(bucket?.results)) {
+      return undefined;
+    }
     const date = utcDay(startingAt);
     if (!date) {
       return undefined;
     }
     const current = daily.get(date) ?? createProviderUsageDailyAccumulator(date);
     daily.set(date, current);
-    return current;
+    return { accumulator: current, results: bucket.results };
   };
 
   for (const rawBucket of costs.data) {
-    const bucket = asProviderUsageObject(rawBucket);
-    const startingAt = typeof bucket?.starting_at === "string" ? bucket.starting_at : undefined;
-    if (!startingAt || !Array.isArray(bucket?.results)) {
+    const bucket = getDailyBucket(rawBucket);
+    if (!bucket) {
       continue;
     }
-    const accumulator = getDaily(startingAt);
-    if (!accumulator) {
-      continue;
-    }
-    for (const rawResult of bucket.results) {
+    const { accumulator, results } = bucket;
+    for (const rawResult of results) {
       const result = asProviderUsageObject(rawResult);
       const amount = (parseProviderUsageNumber(result?.amount) ?? 0) / 100;
       const category = resolveProviderUsageDisplayName(
@@ -159,16 +160,12 @@ export async function fetchAnthropicUsage(
   }
 
   for (const rawBucket of messages.data) {
-    const bucket = asProviderUsageObject(rawBucket);
-    const startingAt = typeof bucket?.starting_at === "string" ? bucket.starting_at : undefined;
-    if (!startingAt || !Array.isArray(bucket?.results)) {
+    const bucket = getDailyBucket(rawBucket);
+    if (!bucket) {
       continue;
     }
-    const accumulator = getDaily(startingAt);
-    if (!accumulator) {
-      continue;
-    }
-    for (const rawResult of bucket.results) {
+    const { accumulator, results } = bucket;
+    for (const rawResult of results) {
       const result = asProviderUsageObject(rawResult);
       if (!result) {
         continue;

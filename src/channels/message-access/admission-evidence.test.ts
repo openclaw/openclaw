@@ -1,8 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type {
-  GatewayContextResolver,
-  GatewayRequestContext,
-} from "../../gateway/server-methods/types.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import {
   buildChannelInboundEventContext,
   buildHostChannelInboundEventContext,
@@ -19,6 +16,11 @@ import {
   readChannelContextGatewayContextResolver,
   type ChannelAdmissionEvidence,
 } from "./admission-evidence.js";
+import {
+  createHostIngressFixture,
+  ingressInput as hostIngressInput,
+  ingressMessage,
+} from "./host-ingress.test-support.js";
 import type { ResolveStableChannelMessageIngressParams } from "./runtime-types.js";
 import { createHostChannelIngressRuntime, resolveStableChannelIngressPolicy } from "./runtime.js";
 
@@ -52,48 +54,29 @@ afterEach(() => {
 });
 
 function makeContext(senderId: string, messageId?: string) {
-  return {
-    channel: "test",
+  return ingressMessage("test", "agent:main:test:dm:dm-1", senderId, {
     accountId: "acct:primary",
-    ...(messageId ? { messageId } : {}),
+    messageId,
     from: "test:route:dm-1",
-    sender: { id: senderId },
-    conversation: { kind: "direct" as const, id: "dm-1" },
-    route: { agentId: "main", routeSessionKey: "agent:main:test:dm:dm-1" },
+    conversation: { kind: "direct", id: "dm-1" },
     reply: { to: "test:route:dm-1" },
-    message: { rawBody: "hello" },
-  };
+  });
 }
 function ingressInput(
   params: ReturnType<typeof makeContext>,
   overrides: Partial<ResolveStableChannelMessageIngressParams> = {},
 ): ResolveStableChannelMessageIngressParams {
-  return {
-    channelId: params.channel,
-    accountId: params.accountId,
-    subject: { stableId: params.sender.id },
-    conversation: params.conversation,
-    contextBinding: {
-      agentId: params.route.agentId,
-      sessionKey: params.route.routeSessionKey,
-      messageId: params.messageId,
-      inboundEventKind: "user_request",
-    },
-    dmPolicy: "open",
+  return hostIngressInput(params, {
+    groupPolicy: undefined,
+    allowFrom: undefined,
+    useDefaultPairingStore: undefined,
     ...overrides,
-  };
+  });
 }
 
 function createOwner(audit: ChannelAdmissionAudit, resolveGatewayContext?: GatewayContextResolver) {
-  const gateway = {
-    channelAdmissionAudit: audit,
-    getRuntimeConfig: () => ({}),
-  } as GatewayRequestContext;
-  return {
-    channelId: "test",
-    isLive: () => true,
-    resolveGatewayContext: resolveGatewayContext ?? (() => gateway),
-  };
+  const { owner } = createHostIngressFixture("test", {}, { channelAdmissionAudit: audit });
+  return resolveGatewayContext ? { ...owner, resolveGatewayContext } : owner;
 }
 
 async function buildAdmittedContext(
@@ -101,20 +84,14 @@ async function buildAdmittedContext(
   participantId: string,
   allowFrom = [participantId],
   resolveGatewayContext?: GatewayContextResolver,
-  authentication?: "verified" | "asserted" | "unverified" | "mutable",
 ) {
   const owner = createOwner(audit, resolveGatewayContext);
   const params = makeContext(participantId, "msg-1");
   const channelIngress = await createHostChannelIngressRuntime(owner).resolveStable(
     ingressInput(params, {
-      identity: authentication ? { authentication: "verified" } : undefined,
-      subject: {
-        stableId: participantId,
-        ...(authentication ? { authentication: { stableId: authentication } } : {}),
-      },
+      subject: { stableId: participantId },
       dmPolicy: "allowlist",
       groupPolicy: "allowlist",
-      ...(authentication ? { policy: { minIdentifierAuthentication: "unverified" } } : {}),
       allowFrom,
     }),
   );
@@ -131,6 +108,9 @@ async function evidenceFor(audit: ChannelAdmissionAudit, participantId: string) 
 
 function inspectChannelContext(context: object) {
   return consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(context));
+}
+function expectUnknown(evidence: ChannelAdmissionEvidence | undefined) {
+  expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject(unknownEvidence);
 }
 
 it("keeps Gateway routing instance-bound when audit collection is disabled", async () => {
@@ -157,7 +137,7 @@ it("carries the resolver participant to one run admission without route inferenc
 
   expect(consumed).toEqual(admittedEvidence("person:42"));
   expect([Object.isFrozen(consumed), Object.isFrozen(consumed.invoker)]).toEqual([true, true]);
-  expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject(unknownEvidence);
+  expectUnknown(evidence);
 });
 
 it("rejects implicit context custody transfer and forged private carriers", async () => {
@@ -181,23 +161,6 @@ it("rejects implicit context custody transfer and forged private carriers", asyn
   }
   expect(forgedResolver).not.toHaveBeenCalled();
   expect(inspectChannelContext(source)).toMatchObject({ ingressState: "present" });
-});
-
-it("carries only the redacted identifier-policy explanation through host-owned evidence", async () => {
-  const audit = createAudit();
-  const context = await buildAdmittedContext(
-    audit,
-    "private-person",
-    ["private-person"],
-    undefined,
-    "unverified",
-  );
-  const consumed = inspectChannelContext(context);
-
-  expect(consumed).toMatchObject({
-    ingressState: "present",
-    identifierAuthentication: "evaluated",
-  });
 });
 
 it("cannot bootstrap evidence through the public copy helper", () => {
@@ -283,18 +246,12 @@ it.each([
 
 it("reports same-participant collection while mixed participants fail closed", async () => {
   const audit = createAudit();
-  const first = await evidenceFor(audit, "c");
-  const same = await evidenceFor(audit, "c");
-  const tupleCollisionCandidate = await evidenceFor(audit, "b:c");
-
-  expect(consumeChannelAdmissionEvidence(combineChannelAdmissionEvidence([first, same]))).toEqual(
-    admittedEvidence("c"),
-  );
-  expect(
-    consumeChannelAdmissionEvidence(
-      combineChannelAdmissionEvidence([await evidenceFor(audit, "c"), tupleCollisionCandidate]),
-    ),
-  ).toMatchObject(unknownEvidence);
+  const combined = async (...participants: string[]) =>
+    combineChannelAdmissionEvidence(
+      await Promise.all(participants.map((id) => evidenceFor(audit, id))),
+    );
+  expect(consumeChannelAdmissionEvidence(await combined("c", "c"))).toEqual(admittedEvidence("c"));
+  expectUnknown(await combined("c", "b:c"));
 });
 
 it("keeps wildcard admission attribution-only because identity did not affect the outcome", async () => {
@@ -312,12 +269,8 @@ it("rejects forged and prior-lifecycle carriers and stays empty when collection 
   audit.close();
 
   const nextAudit = createAudit();
-  expect(consumeChannelAdmissionEvidence(stale)).toMatchObject(unknownEvidence);
-  expect(
-    consumeChannelAdmissionEvidence({
-      kind: "channel-admission-evidence",
-    } as ChannelAdmissionEvidence),
-  ).toMatchObject(unknownEvidence);
+  expectUnknown(stale);
+  expectUnknown({ kind: "channel-admission-evidence" } as ChannelAdmissionEvidence);
   expect(inspectChannelContext(await buildAdmittedContext(nextAudit, "person-1"))).toMatchObject({
     ingressState: "present",
   });
@@ -365,18 +318,16 @@ it("expires a carrier at the bounded retention edge", async () => {
   const audit = createAudit();
   const evidence = await evidenceFor(audit, "person-1");
   vi.setSystemTime(1_000 + 30 * 24 * 60 * 60_000 + 1);
-  expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject(unknownEvidence);
+  expectUnknown(evidence);
 });
 
 it("bounds aggregate fan-in and participant material", async () => {
   const audit = createAudit();
   const oversizedParticipant = await evidenceFor(audit, "x".repeat(4_097));
-  expect(consumeChannelAdmissionEvidence(oversizedParticipant)).toMatchObject(unknownEvidence);
+  expectUnknown(oversizedParticipant);
 
   const sources = await Promise.all(
     Array.from({ length: 17 }, async (_, index) => await evidenceFor(audit, `person-${index}`)),
   );
-  expect(consumeChannelAdmissionEvidence(combineChannelAdmissionEvidence(sources))).toMatchObject(
-    unknownEvidence,
-  );
+  expectUnknown(combineChannelAdmissionEvidence(sources));
 });

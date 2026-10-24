@@ -12,6 +12,7 @@ import { transferFollowupCohort } from "../completion/session-followup-cohort.js
 import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAgentId,
+  resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
@@ -20,6 +21,11 @@ import {
   subscribeSubagentRunChanges,
 } from "./subagent-registry-publication.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import {
+  needsSubagentActivation,
+  subagentSweepAt,
+  SubagentRunWorkIndex,
+} from "./subagent-registry-work-index.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentRunRuntimeKey,
@@ -42,7 +48,13 @@ function freezeValue(value: unknown): void {
   Object.freeze(value);
 }
 
-const immutableSessionListFacts = new WeakMap<SubagentRunRecord, SubagentRunReadRecord>();
+const immutableRunFacts = new WeakMap<
+  SubagentRunRecord,
+  {
+    sessionList: SubagentRunReadRecord;
+    childAuthority: ReturnType<typeof resolveSubagentChildAuthority>;
+  }
+>();
 const evictedSubagentRunPayloads = new WeakSet<SubagentRunRecord>();
 
 /** Finished rows retain topology and ownership; selected readers load their durable payload. */
@@ -102,15 +114,23 @@ export function restoreSubagentRunPayload(
 
 /** A row replacement owns a new projection; retired immutable rows release theirs through GC. */
 export function immutableSubagentRunSessionList(entry: SubagentRunRecord): SubagentRunReadRecord {
-  const prepared = immutableSessionListFacts.get(entry);
+  const prepared = immutableRunFacts.get(entry);
   if (prepared) {
-    return prepared;
+    return prepared.sessionList;
   }
   prepareGatewayContextBindingOwner(entry);
   freezeSubagentRunReadRecord(entry);
   const projection = freezeSubagentRunReadRecord(projectSubagentRunForSessionList(entry));
-  immutableSessionListFacts.set(entry, projection);
+  immutableRunFacts.set(entry, {
+    sessionList: projection,
+    childAuthority: resolveSubagentChildAuthority(entry),
+  });
   return projection;
+}
+
+/** Recorded identity is immutable; live session/custody checks still belong at the effect. */
+export function getRecordedSubagentChildAuthority(entry: SubagentRunRecord) {
+  return immutableRunFacts.get(entry)?.childAuthority ?? resolveSubagentChildAuthority(entry);
 }
 
 export function immutableSubagentRun(entry: SubagentRunRecord): SubagentRunRecord {
@@ -180,7 +200,6 @@ const childSessionCandidatesByKey = new SubagentRunIndex((entry) => entry.childS
 const runsByChildSessionOwner = new SubagentRunIndex(childSessionOwnerKey);
 const runsByRequesterSessionKey = new SubagentRunIndex((entry) => entry.requesterSessionKey);
 const runsByCollectorGroupKey = new SubagentRunIndex(collectorGroupKey);
-const activationRuns = new Map<string, SubagentRunRecord>();
 const runIndexes = [
   collectorsByChildSessionOwner,
   childSessionCandidatesByKey,
@@ -189,29 +208,13 @@ const runIndexes = [
   runsByCollectorGroupKey,
 ];
 
-function needsSubagentActivation(entry: SubagentRunRecord): boolean {
-  return (
-    entry.execution.status !== "terminal" ||
-    entry.cleanupCompletedAt === undefined ||
-    Boolean(
-      // Collectors retain their spawning turn for cancellation, without owing a requester wake.
-      (entry.requesterTurnRunId && entry.expectsCompletionMessage === true) ||
-      entry.requesterSettleWake ||
-      entry.pauseReason ||
-      entry.killIntent ||
-      entry.killReconciliation ||
-      entry.collectorLaunchCleanupPending ||
-      entry.execution.restartRecovery,
-    )
-  );
-}
-
 function childSessionOwnerKey(entry: {
   childSessionKey: string;
   childAgentId?: string;
 }): string | undefined {
   const owner = resolveSubagentChildAgentId(entry);
-  return owner ? JSON.stringify([owner, entry.childSessionKey]) : undefined;
+  // Process-local index keys need no JSON encoding; the owner length keeps arbitrary child keys injective.
+  return owner ? `${owner.length}:${owner}${entry.childSessionKey}` : undefined;
 }
 
 function collectorGroupKey(entry: SubagentRunRecord): string | undefined {
@@ -280,6 +283,7 @@ type CompletionCustody = {
 
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
   readLookup = new SubagentSessionReadLookup();
+  readonly workIndex = new SubagentRunWorkIndex();
   private readonly completionAuthorities = new Map<object, CompletionCustody>();
   // A tombstone rejects stale callbacks without retaining closed Gateway/source contexts.
   // True marks restart custody; false marks a live admitted source.
@@ -294,7 +298,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   }
 
   isCompletionAuthorityRetired(entry: SubagentRunRecord): boolean {
-    return this.retiredCompletionEntries.has(getSubagentRunRuntimeKey(this.currentValue(entry)));
+    return this.retiredCompletionEntries.has(getSubagentRunRuntimeKey(entry));
   }
 
   private currentValue(entry: SubagentRunRecord): SubagentRunRecord {
@@ -631,17 +635,13 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     for (const index of runIndexes) {
       index.update(runId, entry, "add");
     }
-    if (needsSubagentActivation(entry)) {
-      activationRuns.set(runId, entry);
-    } else {
-      activationRuns.delete(runId);
-    }
+    this.workIndex.set(runId, entry);
     return this;
   }
 
   override delete(runId: string): boolean {
     this.readLookup.set(runId, undefined);
-    activationRuns.delete(runId);
+    this.workIndex.delete(runId);
     const prev = this.get(runId);
     if (prev) {
       for (const index of runIndexes) {
@@ -667,19 +667,29 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     for (const index of runIndexes) {
       index.clear();
     }
-    activationRuns.clear();
+    this.workIndex.clear();
     publishSubagentRunChanges();
   }
 }
 
 export const subagentRuns = new SubagentRunMap();
 
+/** Publication owns eligibility; settled history joins only when its retention is due. */
+export function getSubagentSweepRuns(
+  runs: ReadonlyMap<string, SubagentRunRecord>,
+  now: number,
+): Iterable<SubagentRunRecord> {
+  return runs instanceof SubagentRunMap
+    ? runs.workIndex.sweepCandidates(now)
+    : [...runs.values()].filter((entry) => subagentSweepAt(entry) <= now);
+}
+
 /** Row publication owns membership; settled history remains available to readers and retention. */
 export function getSubagentActivationRuns(
   runs: ReadonlyMap<string, SubagentRunRecord>,
 ): Iterable<SubagentRunRecord> {
   return runs === subagentRuns
-    ? activationRuns.values()
+    ? subagentRuns.workIndex.activationRuns.values()
     : [...runs.values()].filter(needsSubagentActivation);
 }
 

@@ -2,6 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { typeCheckSources } from "../../../test/helpers/typescript.js";
+import { projectAgentHistoryActivity } from "../../infra/agent-activity-events.js";
+import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "../code-mode.js";
@@ -341,6 +343,8 @@ describe("agents_wait", () => {
     });
     failed.execution = {
       status: "terminal",
+      startedAt: 100,
+      endedAt: 175,
       outcome: { status: "error", error: "provider failed after tool output" },
     };
     failed.completion = { required: false, resultText: null, capturedAt: 10 };
@@ -356,11 +360,39 @@ describe("agents_wait", () => {
           structured: { partial: true },
           error: "provider failed after tool output",
           sessionKey: failed.childSessionKey,
+          groupId: "group",
+          runtimeMs: 75,
         },
       ],
       pending: ["pending"],
     });
     expect(isToolResultError(result)).toBe(false);
+    const activity = createNestedToolActivity({
+      runId: "owning-parent-run",
+      scopeId: "code-mode-scope",
+      afterEntryId: null,
+      startOrder: 0,
+      toolCallId: "wait-call",
+      toolName: "agents_wait",
+      input: { ids: ["failed", "pending"] },
+      result,
+      isError: false,
+      startedAt: 1,
+      timestamp: 2,
+    });
+    records.clear();
+    const persisted = JSON.stringify(activity);
+    const history = projectAgentHistoryActivity([
+      { messageId: "persisted-wait", message: JSON.parse(persisted) },
+    ]);
+    expect(history[0]?.items[0]?.delegation).toEqual([
+      {
+        runId: "failed",
+        childSessionKey: "agent:worker:subagent:failed",
+        runtimeMs: 75,
+        status: "failed",
+      },
+    ]);
   });
 
   it.each([-60_000, 60_000])(
@@ -770,11 +802,98 @@ describe("agents_wait", () => {
 
   it.each([
     { ids: [" ", "\t"], timeoutSeconds: 0, error: "at least one non-empty run id" },
+    { timeoutSeconds: 0, error: "array of run id strings" },
+    { ids: [7], timeoutSeconds: 0, error: "array of run id strings" },
+    { ids: "missing", timeoutSeconds: 0, error: "array of run id strings" },
+    { ids: 7, timeoutSeconds: 0, error: "array of run id strings" },
     {
       ids: Array.from({ length: 1_001 }, (_, index) => `run-${index}`),
       error: "at most 1000 ids",
     },
   ])("rejects invalid batches: $error", async ({ error, ...params }) => {
     await expect(createMainSessionWaitTool().execute("call", params)).rejects.toThrow(error);
+  });
+
+  function observeRead() {
+    const read = createDeferred();
+    registryEvents.read.mockImplementation(async (ids) => {
+      read.resolve();
+      return preparedRuns(() => selectRuns(records, ids));
+    });
+    return read.promise;
+  }
+
+  it.each(["cell", "nested"])(
+    "keeps sibling results owned with %s awaitResults until every completion arrives",
+    async (mode) => {
+      onTestFinished(resetCodeModeTestState);
+      const first = addRun("first-required", { status: "done" });
+      const second = addRun("second-required");
+      const read = observeRead();
+      const h = createCodeModeHarness();
+      applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, createMainSessionWaitTool()] });
+      const result = expectDefined(h.tools[0], "exec").execute("required-child-results", {
+        title: "Collect required child results",
+        awaitResults: mode === "cell",
+        code: `return await agents_wait({ids:["first-required", "second-required"]${mode === "nested" ? ", awaitResults: true" : ""}});`,
+      });
+      const complete = () => {
+        second.collectorCompletion = { status: "failed" };
+        publishChanges();
+      };
+      try {
+        await read;
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        await vi.advanceTimersByTimeAsync(60_000);
+        const pending = Symbol("pending");
+        expect(await Promise.race([result, Promise.resolve(pending)])).toBe(pending);
+        expect(registryEvents.read).toHaveBeenCalledOnce();
+        second.completion = { required: false, resultText: "child failure evidence" };
+        complete();
+        vi.useRealTimers();
+        expect((await result).details).toMatchObject({
+          status: "completed",
+          value: {
+            pending: [],
+            completed: [
+              { runId: first.runId, status: "done" },
+              { runId: second.runId, status: "failed", result: "child failure evidence" },
+            ],
+          },
+        });
+        expect(registryEvents.read).toHaveBeenCalledTimes(2);
+        expect(registryEvents.listeners.size).toBe(0);
+      } finally {
+        vi.useRealTimers();
+        complete();
+        await result;
+      }
+    },
+  );
+
+  it("cancels required collection without borrowing another requester's child", async () => {
+    const entry = addRun("foreign-required", undefined, {}, "agent:other:main");
+    const tool = createMainSessionWaitTool();
+    await expect(
+      tool.execute("foreign", { ids: [entry.runId], awaitResults: true }),
+    ).resolves.toMatchObject({
+      details: { success: false, errors: [{ runId: entry.runId, error: "not_owner" }] },
+    });
+    entry.swarmRequesterSessionKey = MAIN;
+    const read = observeRead();
+    const abort = new AbortController();
+    const result = tool.execute(
+      "required-abort",
+      { ids: [entry.runId], awaitResults: true },
+      abort.signal,
+    );
+    const rejected = expect(result).rejects.toThrow("agents_wait aborted");
+    await read;
+    abort.abort();
+    await rejected;
+    expect(registryEvents.listeners.size).toBe(0);
+    await expect(
+      tool.execute("ambiguous-wait", { ids: [entry.runId], awaitResults: true, timeoutSeconds: 1 }),
+    ).rejects.toThrow("cannot also specify");
   });
 });

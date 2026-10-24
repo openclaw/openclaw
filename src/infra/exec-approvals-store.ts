@@ -315,26 +315,15 @@ export async function readExecApprovalsPolicyReadOnlyAsync(
   }
 }
 
-type NativeExecApprovalsUpdate = {
-  baseHash?: string;
-  update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
-  assertCurrent?: () => void;
-};
-
 /** Doctor retains its synchronous native migration transaction. Runtime edits use the writer. */
 export function updateExecApprovalsForMaintenance(
-  params: NativeExecApprovalsUpdate,
-  options: OpenClawStateDatabaseOptions = {},
-): ExecApprovalsSnapshot | null {
+  update: (file: ExecApprovalsFile) => ExecApprovalsFile | null,
+): ExecApprovalsSnapshot {
   assertNoPendingLegacyExecApprovals();
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      params.assertCurrent?.();
       const current = snapshotFromExecApprovalsDatabase(db);
-      if (params.baseHash !== undefined && current.hash !== params.baseHash) {
-        return null;
-      }
-      const next = params.update(structuredClone(current.file));
+      const next = update(structuredClone(current.file));
       if (next === null) {
         return current;
       }
@@ -353,10 +342,9 @@ export function updateExecApprovalsForMaintenance(
         row: { raw_json: persistedRaw },
       });
       stageCronExecHostPolicyPublication(db, snapshot.file);
-      params.assertCurrent?.();
       return snapshot;
     },
-    options,
+    undefined,
     { operationLabel: "exec-approvals.update" },
   );
 }

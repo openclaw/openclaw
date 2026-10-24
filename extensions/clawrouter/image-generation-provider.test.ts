@@ -246,6 +246,22 @@ describe("registered ClawRouter image generation over HTTP", () => {
         log: { warn() {} },
       },
     );
+  // Generation can settle before the held response arrives (for example, its deadline expires during
+  // pre-dispatch work); surface that settlement instead of waiting for a response that never comes.
+  const awaitHeld = async (held: Promise<ServerResponse>, pending: Promise<unknown>) => {
+    const first = await Promise.race([
+      held,
+      pending.then(
+        () => undefined,
+        () => undefined,
+      ),
+    ]);
+    if (first) {
+      return first;
+    }
+    await pending;
+    return expect.fail("generation settled before the held response arrived");
+  };
 
   it("routes the registered native runtime through same-key catalog and returns decoded image bytes", async () => {
     const result = await generate({
@@ -564,7 +580,7 @@ describe("registered ClawRouter image generation over HTTP", () => {
       const controller = new AbortController();
       const pending = generate({ signal: controller.signal });
       const settled = pending.catch(() => undefined);
-      const response = await held;
+      const response = await awaitHeld(held, pending);
       const closed = once(response, "close");
       controller.abort(new Error("synthetic caller cancelled"));
       await expect(pending).rejects.toThrow(/abort|cancel/i);
@@ -578,6 +594,10 @@ describe("registered ClawRouter image generation over HTTP", () => {
   );
 
   it("times out and releases a held generation response without retry", async () => {
+    // Complete one ordinary generation so the 500ms budget below covers the held response, not
+    // first-use auth/catalog setup in a fresh worker.
+    await generate();
+    calls.length = 0;
     holdPath = "/v1/images/generations";
     let resolveHeld!: (response: ServerResponse) => void;
     const held = new Promise<ServerResponse>((resolve) => {
@@ -586,7 +606,7 @@ describe("registered ClawRouter image generation over HTTP", () => {
     onHeld = resolveHeld;
     const pending = generate({ timeoutMs: 500 });
     const settled = pending.catch(() => undefined);
-    const response = await held;
+    const response = await awaitHeld(held, pending);
     const closed = once(response, "close");
     await expect(pending).rejects.toThrow(/timeout|timed out|abort/i);
     await closed;

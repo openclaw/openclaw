@@ -88,6 +88,8 @@ export async function auditFullSuiteTestFileOwnership(): Promise<{
         !file.includes(".live.test.") &&
         !file.includes(".e2e.test.") &&
         !file.startsWith("test/fixtures/") &&
+        // Browser retention probes belong to their opt-in census config.
+        !file.startsWith("scripts/control-ui-retention/") &&
         file !== "src/gateway/gateway.test.ts",
     )
     .toSorted((left, right) => left.localeCompare(right));

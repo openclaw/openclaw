@@ -6,10 +6,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import type { AfterCommitEffect } from "./render-lifecycle.ts";
 
-function createSecondaryHydrationPane() {
+function createSecondaryHydrationPane(scopes = ["operator.admin"]) {
   const secondaryResponse = new Promise<never>(() => {});
   const request = vi.fn((_method: string, _params?: unknown) => secondaryResponse);
   const listBranches = vi.fn(() => secondaryResponse);
@@ -26,12 +27,16 @@ function createSecondaryHydrationPane() {
   });
   state.assistantAgentId = "main";
   state.sessionKey = "agent:work:current";
-  pane.context.gateway.snapshot.hello = gatewayHelloForMethods([
-    SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-    "session.discussion.info",
-    "sessions.patch",
-    "system.info",
-  ]);
+  pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+    [
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      "session.discussion.info",
+      "sessions.patch",
+      "system.info",
+      "sessions.companion.state",
+    ],
+    scopes,
+  );
   const commitEffects: AfterCommitEffect[] = [];
   const afterCommit = (effect: AfterCommitEffect) => {
     commitEffects.push(effect);
@@ -55,6 +60,22 @@ function createSecondaryHydrationPane() {
     const transcript = deferred<boolean>();
     pane.deferSessionHydrationUntilTranscript(state.sessionKey, transcript.promise);
     return async (committed = true) => {
+      if (committed) {
+        const client = state.client;
+        if (!client) {
+          throw new Error("Hydration fixture requires a connected client");
+        }
+        state.currentSessionId = "hydration-session";
+        setChatHistoryLoad(state, {
+          phase: "committed",
+          sessions: state.sessions,
+          client,
+          connectionEpoch: state.connectionEpoch,
+          sessionKey: state.sessionKey,
+          requestAgentId: undefined,
+          sessionInfo: { key: state.sessionKey, sessionId: state.currentSessionId, kind: "direct" },
+        });
+      }
       transcript.resolve(committed);
       await transcript.promise;
       await Promise.resolve();
@@ -83,6 +104,16 @@ function createSecondaryHydrationPane() {
 }
 
 afterEach(() => vi.restoreAllMocks());
+
+it("skips companion hydration for a session-only connection after transcript paint", async () => {
+  const f = createSecondaryHydrationPane(["operator.sessions.write"]);
+  await f.deferTranscript()();
+  f.commit();
+  await f.paintFrame();
+  await f.paintFrame();
+  expect(f.listBranches).toHaveBeenCalledOnce();
+  expect(f.request).not.toHaveBeenCalledWith("sessions.companion.state", expect.anything());
+});
 
 it.each([
   [false, true],

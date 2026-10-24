@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -148,10 +148,8 @@ export function readDelegatedToolPolicy(value: unknown): DelegatedToolPolicy | u
     typeof value.requesterSessionKey !== "string" ||
     !parseAgentSessionKey(value.requesterSessionKey) ||
     typeof value.targetAgentId !== "string" ||
-    !Array.isArray(value.deny) ||
-    value.deny.some((entry) => typeof entry !== "string") ||
-    !Array.isArray(value.requesterDeny) ||
-    value.requesterDeny.some((entry) => typeof entry !== "string") ||
+    !isStringArray(value.deny) ||
+    !isStringArray(value.requesterDeny) ||
     Object.keys(value).some(
       (key) => !["requesterSessionKey", "targetAgentId", "deny", "requesterDeny"].includes(key),
     )

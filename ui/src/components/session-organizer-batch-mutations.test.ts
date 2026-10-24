@@ -44,6 +44,26 @@ import {
 vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
 describe("patchSessionRows", () => {
+  it.each([true, false])(
+    "retires only a confirmed archive's personal pin (accepted: %s)",
+    async (accepted) => {
+      const h = createHarness();
+      const row = makeRow(1, { pinned: false });
+      const pin = "session:" + row.key;
+      const retained = ["session:agent:main:other", "session-rail:" + row.key, "route:usage"];
+      let entries = [pin, ...retained];
+      h.host.pruneSidebarSessionEntry = (key) => {
+        entries = entries.filter((entry) => entry !== "session:" + key);
+      };
+      if (!accepted) {
+        h.patch.mockRejectedValueOnce(new Error("archive rejected"));
+      }
+      const result = await patchSession(h.host, row, { archived: true }, h.scope);
+      expect(result).toBe(accepted ? "completed" : "failed");
+      expect(entries).toEqual(accepted ? retained : [pin, ...retained]);
+    },
+  );
+
   it.each(["move", "create"])(
     "preserves mixed group placement and target order for %s",
     async (action) => {
@@ -176,10 +196,9 @@ describe("patchSessionRows", () => {
       ]),
     );
     expect(archived).toEqual(rows);
-    expect(h.pruneSidebarSessionEntry.mock.calls.map(([key]) => key)).toEqual([
-      rows[0]!.key,
-      rows[100]!.key,
-    ]);
+    expect(h.pruneSidebarSessionEntry.mock.calls.map(([key]) => key)).toEqual(
+      rows.map((row) => row.key),
+    );
     expect(h.reconcileMutation).toHaveBeenCalledOnce();
   });
 
@@ -213,7 +232,7 @@ describe("patchSessionRows", () => {
       }),
       expect.anything(),
     );
-    expect(h.pruneSidebarSessionEntry).not.toHaveBeenCalled();
+    expect(h.pruneSidebarSessionEntry).toHaveBeenCalledExactlyOnceWith(rows[1]!.key);
     expectError(
       h,
       `${rows[0]!.key}: failed ${rows[0]!.key}; ${rows[2]!.key}: failed ${rows[2]!.key}`,

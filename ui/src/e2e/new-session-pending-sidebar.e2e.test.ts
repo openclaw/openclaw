@@ -184,4 +184,68 @@ suite.define(() => {
       );
     },
   );
+
+  it("keeps a group-targeted provisional row in that group through admission", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
+      async ({ page }) => {
+        const row = (key: string, label: string, updatedAt: number, category?: string) => ({
+          key,
+          sessionId: key.split(":").at(-1),
+          kind: "direct",
+          label,
+          updatedAt,
+          ...(category ? { category } : {}),
+        });
+        const sessions = [
+          row("agent:main:gateway", "Start clean gateway", 3, "Claws"),
+          row("agent:main:audit", "Audit model usage", 2, "ClawHub"),
+          row("agent:main:other", "Chat catch-up panel", 1),
+        ];
+        const gateway = await installMockGateway(page, {
+          sessionKey: "agent:main:other",
+          sessions,
+          sessionGroups: ["Claws", "ClawHub"],
+          featureMethods: [
+            "chat.startup",
+            "sessions.create",
+            "sessions.groups.list",
+            "sessions.groups.put",
+          ],
+        });
+        await page.goto(
+          new URL(controlUiSessionPath("agent:main:other"), suite.server.baseUrl).href,
+        );
+        const claws = page.locator('[data-session-section="category:Claws"]');
+        const existing = claws.locator('[data-session-key="agent:main:gateway"]');
+        await existing.waitFor();
+        // Same target as the group's New session action.
+        await navigateInApp(page, "new-session", "?agent=main&group=Claws");
+        await page.locator(".new-session-page__message").fill("Draft the next release notes");
+        await gateway.deferNext("sessions.create");
+        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        const create = await gateway.waitForRequest("sessions.create");
+        const params = create.params as { key: string; category?: string };
+        expect(params.category).toBe("Claws");
+
+        // The handoff occupies the created row's slot from its first frame: first in its group.
+        const provisional = page.locator(".sidebar-recent-session--creating");
+        await expect.poll(() => provisional.count()).toBe(1);
+        expect(await claws.locator(".sidebar-recent-session--creating").count()).toBe(1);
+        const top = (locator: typeof provisional) =>
+          locator.evaluate((element) => Math.round(element.getBoundingClientRect().top));
+        const provisionalTop = await top(provisional);
+        expect(provisionalTop).toBeLessThan(await top(existing));
+
+        await gateway.setSessionsListResponse({
+          sessions: [row(params.key, "Draft the next release notes", 4, "Claws"), ...sessions],
+        });
+        await gateway.resolveDeferred("sessions.create", { key: params.key });
+        const admitted = claws.locator(`[data-session-key="${params.key}"]`);
+        await admitted.waitFor();
+        await expect.poll(() => provisional.count()).toBe(0);
+        expect(await top(admitted)).toBe(provisionalTop);
+      },
+    );
+  });
 });

@@ -44,9 +44,7 @@ describe("Markdown hex colors", () => {
 
   it("keeps repository references as links and reader documents literal", () => {
     const fragment = htmlFragment(
-      toSanitizedMarkdownHtml("PR #178969, color #aabbcc.", {
-        githubRepo: { owner: "openclaw", repo: "openclaw" },
-      }),
+      toSanitizedMarkdownHtml("PR openclaw/openclaw#178969, color #aabbcc.", {}),
     );
     expect(fragment.querySelector("a")?.getAttribute("href")).toBe(
       "https://github.com/openclaw/openclaw/pull/178969",
@@ -57,6 +55,18 @@ describe("Markdown hex colors", () => {
     expect(
       swatches(htmlFragment(toSanitizedMarkdownHtml("#abc", { mode: "document" }))),
     ).toHaveLength(0);
+  });
+
+  it("keeps unresolved item references plain while preserving numeric colors", () => {
+    const source = "PR #126; issue **#1234**; pull request #123456; fixes #12345678; color #126.";
+    for (const fragment of [
+      htmlFragment(toSanitizedMarkdownHtml(source)),
+      htmlFragment(toStreamingMarkdownParts(source).join("")),
+    ]) {
+      expect(fragment.querySelector("a")).toBeNull();
+      expect(swatches(fragment).map((image) => image.parentElement?.textContent)).toEqual(["#126"]);
+      expect(fragment.textContent?.trim()).toBe(source.replaceAll("**", ""));
+    }
   });
 
   it("replaces partial streaming colors without retaining invalid prefixes", () => {

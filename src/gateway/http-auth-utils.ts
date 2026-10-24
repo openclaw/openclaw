@@ -427,12 +427,12 @@ export async function authorizeControlUiReadRequestOrReply(
 }
 
 /** Decides whether a session-byte route may serve bytes for one resolved session entry. */
-export type ControlUiSessionReadFilter = (
+type ControlUiSessionReadFilter = (
   sessionKey: string | undefined,
   entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">,
 ) => boolean;
 
-export type AuthorizedControlUiSessionOwnerReadRequest = AuthorizedControlUiReadRequest &
+type AuthorizedControlUiSessionOwnerReadRequest = AuthorizedControlUiReadRequest &
   GatewayHttpResponseAuthority & { canReadSession: ControlUiSessionReadFilter };
 
 /**

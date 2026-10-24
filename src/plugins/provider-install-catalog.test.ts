@@ -11,19 +11,7 @@ type InstalledPluginInstallRecordInfo =
   import("./installed-plugin-index.js").InstalledPluginInstallRecordInfo;
 type InstalledPluginIndexRecord = import("./installed-plugin-index.js").InstalledPluginIndexRecord;
 
-const loadPluginRegistrySnapshot = vi.hoisted(() =>
-  vi.fn<LoadPluginRegistrySnapshot>(() => ({
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  })),
-);
+const loadPluginRegistrySnapshot = vi.hoisted(() => vi.fn<LoadPluginRegistrySnapshot>());
 // mock-isolation: Pin installed metadata without consulting the operator plugin registry.
 vi.mock("./plugin-registry.js", () => ({ loadPluginRegistrySnapshot }));
 
@@ -134,15 +122,17 @@ function mockInstalled(
 }
 
 function mockAuthChoice(pluginId: string, choiceLabel: string) {
-  resolveManifestProviderAuthChoices.mockReturnValue([
-    {
-      pluginId,
-      providerId: pluginId,
-      methodId: "api-key",
-      choiceId: `${pluginId}-api-key`,
-      choiceLabel,
-    },
-  ]);
+  resolveManifestProviderAuthChoices.mockReturnValue([authChoice(pluginId, choiceLabel)]);
+}
+
+function authChoice(pluginId: string, choiceLabel: string) {
+  return {
+    pluginId,
+    providerId: pluginId,
+    methodId: "api-key",
+    choiceId: `${pluginId}-api-key`,
+    choiceLabel,
+  };
 }
 
 type OfficialEntry = ReturnType<ListOfficialExternalProviderCatalogEntries>[number];
@@ -188,38 +178,29 @@ describe("provider install catalog", () => {
   });
 
   it("merges manifest auth-choice metadata with registry install metadata", () => {
+    const npm = npmSource("@openclaw/openai", "1.2.3", "sha512-openai");
+    const local = { path: "extensions/openai" };
+    const choice = {
+      ...authChoice("openai", "OpenAI API key"),
+      groupId: "openai",
+      groupLabel: "OpenAI",
+    };
     mockInstalled([
       installedPlugin("openai", "bundled", {
         packageName: "@openclaw/openai",
         packageInstall: {
           defaultChoice: "npm",
-          npm: npmSource("@openclaw/openai", "1.2.3", "sha512-openai"),
-          local: { path: "extensions/openai" },
+          npm,
+          local,
           warnings: [],
         },
       }),
     ]);
-    resolveManifestProviderAuthChoices.mockReturnValue([
-      {
-        pluginId: "openai",
-        providerId: "openai",
-        methodId: "api-key",
-        choiceId: "openai-api-key",
-        choiceLabel: "OpenAI API key",
-        groupId: "openai",
-        groupLabel: "OpenAI",
-      },
-    ]);
+    resolveManifestProviderAuthChoices.mockReturnValue([choice]);
 
     expect(resolveProviderInstallCatalogEntries()).toEqual([
       {
-        pluginId: "openai",
-        providerId: "openai",
-        methodId: "api-key",
-        choiceId: "openai-api-key",
-        choiceLabel: "OpenAI API key",
-        groupId: "openai",
-        groupLabel: "OpenAI",
+        ...choice,
         label: "OpenAI",
         origin: "bundled",
         install: {
@@ -230,8 +211,8 @@ describe("provider install catalog", () => {
         },
         installSource: {
           defaultChoice: "npm",
-          npm: npmSource("@openclaw/openai", "1.2.3", "sha512-openai"),
-          local: { path: "extensions/openai" },
+          npm,
+          local,
           warnings: [],
         },
       },
@@ -254,42 +235,35 @@ describe("provider install catalog", () => {
       choice("first", "Alpha"),
     ]);
     listOfficialExternalProviderCatalogEntries.mockReturnValue([
-      {
-        name: "@openclaw/qwen-provider",
-        openclaw: {
-          plugin: { id: "qwen", label: "Qwen" },
-          install: { npmSpec: "@openclaw/qwen-provider" },
-          providers: [
+      officialProvider(
+        "qwen",
+        "Qwen",
+        {
+          id: "qwen",
+          name: "Qwen",
+          authChoices: [
+            { method: "api-key", choiceId: "same-official", choiceLabel: "Same" },
+            { method: "api-key", choiceId: "same-first", choiceLabel: "A shadow" },
             {
-              id: "qwen",
-              name: "Qwen",
-              authChoices: [
-                { method: "api-key", choiceId: "same-official", choiceLabel: "Same" },
-                { method: "api-key", choiceId: "same-first", choiceLabel: "A shadow" },
-                {
-                  method: "local",
-                  choiceId: "unavailable-local",
-                  choiceLabel: "Unavailable local model",
-                  platforms: [],
-                },
-              ],
+              method: "local",
+              choiceId: "unavailable-local",
+              choiceLabel: "Unavailable local model",
+              platforms: [],
             },
           ],
         },
-      },
+        { npmSpec: "@openclaw/qwen-provider" },
+      ),
     ]);
 
     expect(
-      resolveProviderInstallCatalogEntries().map(({ choiceId, pluginId }) => ({
-        choiceId,
-        pluginId,
-      })),
+      resolveProviderInstallCatalogEntries().map(({ choiceId, pluginId }) => [choiceId, pluginId]),
     ).toEqual([
-      { choiceId: "first", pluginId: "vllm" },
-      { choiceId: "same-first", pluginId: "vllm" },
-      { choiceId: "same-second", pluginId: "vllm" },
-      { choiceId: "same-official", pluginId: "qwen" },
-      { choiceId: "last", pluginId: "vllm" },
+      ["first", "vllm"],
+      ["same-first", "vllm"],
+      ["same-second", "vllm"],
+      ["same-official", "qwen"],
+      ["last", "vllm"],
     ]);
   });
 
@@ -395,6 +369,15 @@ describe("provider install catalog", () => {
   });
 
   it("surfaces official external provider install metadata when the provider plugin is not installed", () => {
+    const choice = {
+      choiceId: "codex",
+      choiceLabel: "Codex app-server",
+      choiceHint: "Use the Codex app-server runtime.",
+      groupId: "codex",
+      groupLabel: "Codex",
+      onboardingScopes: ["text-inference" as const],
+    };
+    const install = { npmSpec: "@openclaw/codex", defaultChoice: "npm" as const };
     listOfficialExternalProviderCatalogEntries.mockReturnValue([
       {
         name: "@openclaw/codex",
@@ -403,26 +386,9 @@ describe("provider install catalog", () => {
         openclaw: {
           plugin: { id: "codex", label: "Codex" },
           providers: [
-            {
-              id: "codex",
-              name: "Codex",
-              authChoices: [
-                {
-                  method: "app-server",
-                  choiceId: "codex",
-                  choiceLabel: "Codex app-server",
-                  choiceHint: "Use the Codex app-server runtime.",
-                  groupId: "codex",
-                  groupLabel: "Codex",
-                  onboardingScopes: ["text-inference"],
-                },
-              ],
-            },
+            { id: "codex", name: "Codex", authChoices: [{ method: "app-server", ...choice }] },
           ],
-          install: {
-            npmSpec: "@openclaw/codex",
-            defaultChoice: "npm",
-          },
+          install,
         },
       },
     ]);
@@ -431,18 +397,10 @@ describe("provider install catalog", () => {
       pluginId: "codex",
       providerId: "codex",
       methodId: "app-server",
-      choiceId: "codex",
-      choiceLabel: "Codex app-server",
-      choiceHint: "Use the Codex app-server runtime.",
-      groupId: "codex",
-      groupLabel: "Codex",
-      onboardingScopes: ["text-inference"],
+      ...choice,
       label: "Codex",
       origin: "bundled",
-      install: {
-        npmSpec: "@openclaw/codex",
-        defaultChoice: "npm",
-      },
+      install,
       installSource: {
         defaultChoice: "npm",
         npm: {

@@ -333,6 +333,7 @@ suite.define(() => {
     ).map((dataUrl) => dataUrl.split(",")[1]!);
     const sources = names.map((name) => "media://inbound/" + name + ".png");
     const mediaRequests: { source: string; variant: string | null; width: string | null }[] = [];
+    const metadataSources: string[] = [];
     const renditionSources = () =>
       mediaRequests.filter((request) => request.width === "1920").map((request) => request.source);
     await page.route("**/__openclaw__/assistant-media?**", async (route) => {
@@ -340,6 +341,7 @@ suite.define(() => {
       const index = sources.indexOf(url.searchParams.get("source") ?? "");
       expect(index).toBeGreaterThanOrEqual(0);
       if (url.searchParams.get("meta") === "1") {
+        metadataSources.push(sources[index]!);
         await route.fulfill({
           json: {
             available: true,
@@ -381,6 +383,7 @@ suite.define(() => {
     const trigger = exactButton(page, "Open image before.png");
     const lightbox = page.locator("openclaw-image-lightbox");
     const image = lightbox.locator(".image");
+    const protocol = await page.context().newCDPSession(page);
     for (const reloaded of [false, true]) {
       if (reloaded) {
         await page.reload();
@@ -397,9 +400,12 @@ suite.define(() => {
       expect(renditionSources()).toEqual(sources.slice(0, 2));
       await page.keyboard.press("ArrowRight");
       await polledAttribute(image, "alt").toBe("hover.png");
+      // Routing disables HTTP caching: an unretained neighbor would be fetched again.
+      await protocol.send("HeapProfiler.collectGarbage");
       await page.keyboard.press("ArrowLeft");
       await polledAttribute(image, "alt").toBe("after.png");
       expect(renditionSources()).toEqual(sources);
+      expect(metadataSources.toSorted()).toEqual(sources.toSorted());
       expect(mediaRequests.every((request) => request.variant === "thumbnail")).toBe(true);
       const requestedDownload = page.waitForEvent("download");
       await exactButton(lightbox, "Download image").click();
@@ -408,6 +414,7 @@ suite.define(() => {
         { source: sources[1], variant: null, width: null },
       ]);
       mediaRequests.length = 0;
+      metadataSources.length = 0;
       await page.keyboard.press("Escape");
       await expect.poll(() => lightbox.count()).toBe(0);
       await expectFocused(trigger);

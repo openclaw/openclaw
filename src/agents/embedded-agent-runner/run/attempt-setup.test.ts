@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { startChatSendDiagnostics } from "../../../gateway/server-methods/chat-send-diagnostics.js";
+import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import type { SandboxContext } from "../../sandbox/types.js";
@@ -79,6 +82,59 @@ describe("prepareEmbeddedAttemptSetup", () => {
     resolveProviderRuntimePluginHandle.mockReset();
     resolveSandboxContext.mockClear();
   });
+
+  it.each([false, true])(
+    "attributes the baseline wait separately from sandbox preparation (failure=%s)",
+    async (failBaseline) => {
+      let now = 0;
+      using _ = vi.spyOn(performance, "now").mockImplementation(() => now);
+      const info = vi.fn();
+      const diagnostics = startChatSendDiagnostics({ info });
+      diagnostics.acknowledge();
+      const failure = new Error("synthetic baseline failure");
+      resolveSandboxContext.mockImplementationOnce(async () => {
+        now += 25_000;
+        return null;
+      });
+      const preparation = withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+        prepareEmbeddedAttemptSetup({
+          model: attemptModel,
+          config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+          modelId: "gpt-5.4",
+          provider: "openai",
+          runId: "run-attribution",
+          sessionId: "session-attribution",
+          sessionKey: "agent:main:attribution",
+          thinkLevel: "high",
+          timeoutMs: 120_000,
+          workspaceDir: tempDirs.make("openclaw-setup-attribution-"),
+          awaitSessionDiffBaseline: async () => {
+            now += 50_000;
+            if (failBaseline) {
+              throw failure;
+            }
+          },
+        } as EmbeddedRunAttemptParams),
+      );
+      if (failBaseline) {
+        await expect(preparation).rejects.toBe(failure);
+      } else {
+        using workspace = await preparation;
+        expect(workspace.sandbox).toBeNull();
+      }
+      diagnostics.finish();
+      expect(info).toHaveBeenCalledOnce();
+      const message = info.mock.calls[0]?.[0] as string;
+      expect(message).toContain("detail.attempt.setup.workspace.baseline_wait=50000ms");
+      expect(message).toContain(
+        `detail.attempt.setup.workspace=${failBaseline ? 50_000 : 75_000}ms`,
+      );
+      if (!failBaseline) {
+        expect(message).toContain("detail.attempt.setup.workspace.sandbox=25000ms");
+      }
+      resolveSandboxContext.mockReset();
+    },
+  );
 
   it.each([undefined, "agent:main:policy"])(
     "prepares a detached global workspace with policy %s",

@@ -1,6 +1,4 @@
-import { once } from "node:events";
 import fs from "node:fs/promises";
-import http from "node:http";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -17,6 +15,11 @@ import { createCodexNativeTestState } from "./native-app-server.test-support.js"
 import { prepareCodexServerNotification } from "./protocol-validators.js";
 import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
+import {
+  listenForNativeResponses,
+  nativeAppServerOptions,
+  sendNativeResponse,
+} from "./thread-native.test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 vi.unmock("node:child_process");
@@ -47,7 +50,7 @@ it(
     const callId = "read-source";
     const requests: JsonObject[] = [];
     const failures: unknown[] = [];
-    const server = http.createServer((request, response) => {
+    const port = await listenForNativeResponses(context, (request, response) => {
       void (async () => {
         try {
           let body = "";
@@ -84,44 +87,13 @@ it(
                   id: "answer",
                   content: [{ type: "output_text", text: "Source received." }],
                 };
-          const events = [
-            { type: "response.created", response: { id: `response-${requests.length}` } },
-            { type: "response.output_item.done", item },
-            {
-              type: "response.completed",
-              response: {
-                id: `response-${requests.length}`,
-                usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-              },
-            },
-          ];
-          response.writeHead(200, { "Content-Type": "text/event-stream" });
-          response.end(
-            events
-              .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-              .join(""),
-          );
+          sendNativeResponse(response, `response-${requests.length}`, item);
         } catch (error) {
           failures.push(error);
           response.writeHead(500).end();
         }
       })();
     });
-    context.onTestFinished(async () => {
-      server.closeAllConnections();
-      if (server.listening) {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
-      }
-    });
-    const listening = once(server, "listening");
-    server.listen(0, "127.0.0.1");
-    await listening;
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Missing loopback provider address");
-    }
     await fs.writeFile(
       path.join(native.codexHome, "config.toml"),
       [
@@ -140,7 +112,7 @@ it(
         "feedback={enabled=false}",
         "[model_providers.output-fidelity-fixture]",
         'name="Synthetic output fidelity provider"',
-        `base_url="http://127.0.0.1:${address.port}/v1"`,
+        `base_url="http://127.0.0.1:${port}/v1"`,
         'wire_api="responses"',
         "requires_openai_auth=false",
         "supports_websockets=false",
@@ -148,22 +120,8 @@ it(
         "stream_max_retries=0",
       ].join("\n"),
     );
-    const childEnv = Object.fromEntries(
-      Object.entries(native.env).filter(
-        (entry): entry is [string, string] => entry[1] !== undefined,
-      ),
-    );
     const client = await createIsolatedCodexAppServerClient({
-      startOptions: {
-        transport: "stdio",
-        command: native.command,
-        commandSource: "config",
-        args: ["app-server"],
-        cwd: native.cwd,
-        headers: {},
-        env: childEnv,
-        clearEnv: Object.keys(process.env).filter((key) => !(key in childEnv)),
-      },
+      startOptions: nativeAppServerOptions(native).start,
       agentDir: path.join(root, "agent"),
       authProfileId: null,
       config: {},

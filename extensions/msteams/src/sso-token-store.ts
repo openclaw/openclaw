@@ -61,7 +61,7 @@ export function createMSTeamsSsoTokenStoreFs(params?: {
       await withMSTeamsSqliteMutationLock(namespace, async () => {
         await tokenStore.register(
           makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId),
-          toPluginJsonValue({ ...token }),
+          toPluginJsonValue(token),
         );
       });
     },

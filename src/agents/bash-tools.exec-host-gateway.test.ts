@@ -262,12 +262,9 @@ describe("processGatewayAllowlist", () => {
       segmentAllowlistEntries: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
       segmentSatisfiedBy: [],
     });
-    hasDurableExecApprovalMock.mockReset();
-    hasDurableExecApprovalMock.mockReturnValue(true);
-    hasExactCommandDurableExecApprovalMock.mockReset();
-    hasExactCommandDurableExecApprovalMock.mockReturnValue(false);
-    requiresExecApprovalMock.mockReset();
-    requiresExecApprovalMock.mockReturnValue(false);
+    hasDurableExecApprovalMock.mockReset().mockReturnValue(true);
+    hasExactCommandDurableExecApprovalMock.mockReset().mockReturnValue(false);
+    requiresExecApprovalMock.mockReset().mockReturnValue(false);
     buildEnforcedShellCommandMock.mockReset();
     buildEnforcedShellCommandMock.mockReturnValue({
       ok: false,
@@ -1180,6 +1177,9 @@ describe("processGatewayAllowlist", () => {
     expect(followupText).toContain("Diagnostics export created.");
     expect(followupText).toContain("Path: /tmp/openclaw-diagnostics.zip");
     expect(followupText).toContain("Contents (2 files):");
+    expect(followupText).toContain("Size: 1234 bytes");
+    expect(followupText).toContain("Privacy:\n- payload-free: yes\n- raw logs included: no");
+    expect(followupText).toContain("- Logs keep operational summaries.");
     expect(followupText).toContain("OpenAI Codex harness:");
     expect(followupText).toContain("Codex diagnostics sent to OpenAI servers:");
     expect(followupText).toContain("Codex thread id: `thread-1`");

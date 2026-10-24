@@ -1,3 +1,4 @@
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
@@ -16,9 +17,7 @@ const model = makeProviderModel("azure-openai-responses", "azure", "gpt-5.5", {
   contextWindow: 200000,
 });
 
-const context = {
-  messages: [{ role: "user", content: "hello", timestamp: 1 }],
-} satisfies Context;
+const context = { messages: [{ role: "user", content: "hello", timestamp: 1 }] } satisfies Context;
 
 const directModel = { ...model, provider: "azure-openai-responses" };
 
@@ -62,11 +61,9 @@ describe("azure-openai-responses", () => {
       azureApiVersion: "2026-07-01-preview",
       azureResourceName: "configured-resource",
     }).result();
-    const requestUrl = requests[0]?.url;
-
-    expect(requestUrl?.origin).toBe("https://configured-resource.openai.azure.com");
-    expect(requestUrl?.pathname).toBe("/openai/v1/responses");
-    expect(requestUrl?.searchParams.get("api-version")).toBe("2026-07-01-preview");
+    expect(requests[0]?.url.href).toBe(
+      "https://configured-resource.openai.azure.com/openai/v1/responses?api-version=2026-07-01-preview",
+    );
   });
 
   it("sends a case-insensitively resolved deployment name", async () => {
@@ -86,11 +83,25 @@ describe("azure-openai-responses", () => {
     );
   });
 
+  it("preserves the selected Code Mode tools at the shared Responses boundary", async () => {
+    const tools = ["exec", "wait", "computer"].map((name) => ({
+      name,
+      description: name,
+      parameters: Type.Object({}),
+    }));
+    await stream(
+      directModel,
+      { ...context, tools },
+      { apiKey: "synthetic-azure-key", openclawCodeModeToolSurface: true },
+    ).result();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.body).toMatchObject({
+      tools: ["computer", "exec", "wait"].map((name) => ({ type: "function", name })),
+    });
+  });
+
   it("disables response storage and clamps small output limits", async () => {
-    await streamSimple(model, context, {
-      apiKey: "test-api-key",
-      maxTokens: 1,
-    }).result();
+    await streamSimple(model, context, { apiKey: "test-api-key", maxTokens: 1 }).result();
     expect(requests[0]?.body).toMatchObject({ max_output_tokens: 16, store: false });
   });
 
@@ -110,8 +121,8 @@ describe("azure-openai-responses", () => {
         reasoning,
         temperature: 0.5,
       }).result();
-      expect(requests[0]?.body.reasoning?.effort).toBe(effort);
-      expect(requests[0]?.body.temperature).toBe(temperature);
+      const body = requests[0]?.body;
+      expect([body?.reasoning?.effort, body?.temperature]).toEqual([effort, temperature]);
     },
   );
 

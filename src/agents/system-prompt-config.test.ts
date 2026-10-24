@@ -82,8 +82,6 @@ function preparedOwner(
   );
   return {
     isCurrent: vi.fn(() => true),
-    modelCatalog: { entries, routeVariants: entries },
-    configuredRuntimeModels,
     configuredModelAliases,
     findConfiguredRuntimeModel: unexpectedRuntimeWork,
     createStores: vi.fn(unexpectedRuntimeWork),
@@ -102,6 +100,23 @@ function buildPrompt(config: OpenClawConfig, agentId = "main", sessionKey?: stri
 }
 
 describe("buildConfiguredAgentSystemPrompt", () => {
+  it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
+    "does not recommend disabled update or restart commands with tools $toolNames",
+    ({ toolNames }) => {
+      const params = { workspaceDir: "/tmp/openclaw", toolNames };
+      const disabled = buildConfiguredAgentSystemPrompt({
+        ...params,
+        config: { commands: { restart: false } },
+      });
+      expect(disabled).not.toContain("`/update`");
+      expect(disabled).not.toContain("`/restart`");
+      expect(disabled).toContain("openclaw update");
+      expect(disabled).toContain("Toggle /reasoning; /status shows when enabled.");
+      const enabled = buildConfiguredAgentSystemPrompt({ ...params, config: {} });
+      expect(enabled).toContain("`/update`");
+    },
+  );
+
   it.each(["minimal", "none"] as const)(
     "skips full-only preparation in %s mode and refreshes the next full prompt",
     (promptMode) => {
@@ -272,11 +287,6 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         expect(prompt).not.toContain(text);
       }
       expect(owner.configuredModelAliases).toEqual([{ provider, model, alias }]);
-      expect(owner.configuredRuntimeModels.map(({ modelId }) => modelId)).toEqual(modelIds);
-      if (modelIds.length === 0) {
-        expect(owner.configuredRuntimeModels).toEqual([]);
-        expect(owner.modelCatalog.entries).toEqual([]);
-      }
     },
   );
 

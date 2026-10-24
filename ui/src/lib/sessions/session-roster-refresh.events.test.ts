@@ -16,6 +16,7 @@ import {
   listParams,
   ownRoster,
   ownerCountsFixture,
+  rosterPage,
 } from "./session-roster-refresh.test-support.ts";
 
 function changed(payload: Record<string, unknown>) {
@@ -84,13 +85,7 @@ describe("session roster event traffic", () => {
       const ownerRows = queryParams.ownerFirst
         ? eligible.filter((row) => row.owner?.actor.id === viewer.id && !page.includes(row))
         : [];
-      const response = {
-        ...sessionsResult([...page, ...ownerRows], Date.now()),
-        totalCount: eligible.length,
-        hasMore: true,
-        nextOffset: 200,
-        limitApplied: 200,
-      } satisfies SessionsListResult;
+      const response = rosterPage([...page, ...ownerRows], eligible.length, 200, Date.now());
       reads[scope]++;
       bytes[scope] += new TextEncoder().encode(JSON.stringify(response)).byteLength;
       await delay(200);
@@ -233,28 +228,20 @@ describe("session roster event traffic", () => {
     async (personal) => {
       const viewer = { type: "profile", id: "profile-ada" } as const;
       const held = Array.from({ length: 200 }, (_, index) =>
-        session("main", 10_000 - index, {
-          key: `agent:main:held-${index}`,
-          sessionId: `held-${index}`,
+        makeRow(`held-${index}`, 10_000 - index, {
           isMain: false,
           participants: [{ identity: viewer }],
           hiddenFromInvolvingMe: false,
         }),
       );
-      const incoming = session("main", 15_000, {
+      const incoming = {
         ...held[0]!,
         key: "agent:main:incoming",
         sessionId: "incoming",
         updatedAt: 15_000,
-      });
+      };
       const promoted = { ...held[199]!, updatedAt: 20_000, unread: true, snapshotAt: 30_000 };
-      const page = (rows: GatewaySessionRow[]) => ({
-        ...sessionsResult(rows, 1),
-        totalCount: 201,
-        hasMore: true,
-        nextOffset: 200,
-        limitApplied: 200,
-      });
+      const page = (rows: GatewaySessionRow[]) => rosterPage(rows, 201, 200);
       const pending = createDeferred<SessionsListResult>();
       const request = vi.fn().mockResolvedValue(page([promoted, incoming, ...held.slice(0, 198)]));
       request.mockResolvedValueOnce(page(held));

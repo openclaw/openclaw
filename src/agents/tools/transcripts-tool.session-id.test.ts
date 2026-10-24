@@ -124,7 +124,9 @@ describe("transcripts bounded export names", () => {
     ).toEqual([note]);
     const artifacts = await store.materializeSessionArtifacts(entry!.selector, "all");
     expect(await fs.readFile(artifacts.summaryPath, "utf8")).toBe(markdown);
-    expect(JSON.parse(await fs.readFile(artifacts.summaryJsonPath, "utf8"))).toEqual(summary);
+    expect(
+      JSON.parse(await fs.readFile(path.join(artifacts.sessionDir, "summary.json"), "utf8")),
+    ).toEqual(summary);
     const reopened = openOpenClawStateDatabase(databaseOptions).db;
     const row = executeSqliteQuerySync(
       reopened,

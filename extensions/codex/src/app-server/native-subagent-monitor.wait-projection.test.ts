@@ -201,7 +201,7 @@ it.each([
 ] as const)(
   "consumes native receipts with parent %s, bound=%s, older settled=%s",
   async (status, bound, olderSettled) => {
-    const { client, runtime, monitor } = createMonitorFixture({ recoveryPollDelaysMs: [] });
+    const { client, runtime, monitor } = createMonitorFixture();
     const attempts = observeCompletionAttempts();
     const older = olderSettled ? await registerParent(monitor) : undefined;
     const parent = await registerParent(monitor);

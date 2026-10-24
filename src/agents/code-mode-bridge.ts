@@ -461,7 +461,7 @@ export async function runBridgeRequest(params: {
           .slice(offset, offset + 20)
           .map(({ name, description, location }) => ({
             name,
-            description: description.slice(0, 512),
+            description: truncateUtf16Safe(description, 512),
             location,
           }));
         break;

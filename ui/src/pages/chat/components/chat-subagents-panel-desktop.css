@@ -137,7 +137,7 @@
   border-radius: 50%;
   background: var(--bg);
   box-shadow: 0 0 0 2px var(--bg);
-  animation: subagents-desktop-spin 1.5s linear infinite;
+  animation: btn-spinner-spin 1.5s linear infinite;
 }
 
 .subagents-desktop__identity {
@@ -155,7 +155,7 @@
   overflow: hidden;
   font-weight: 500;
   line-height: 18px;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -277,12 +277,6 @@
   }
 }
 
-@keyframes subagents-desktop-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .subagents-desktop__spinner {
     animation: none;
@@ -292,4 +286,8 @@
 .subagents-desktop[hidden] .subagents-desktop__spinner,
 .subagents-desktop[hidden] .subagents-desktop__working {
   animation-play-state: paused;
+}
+
+.subagents-desktop__content:has(> openclaw-panel-empty-state) {
+  padding: 0;
 }

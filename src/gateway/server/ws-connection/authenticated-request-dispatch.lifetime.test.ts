@@ -1,5 +1,5 @@
-import "../../../test-utils/prepare-compiled-subprocesses.js";
 import { EventEmitter } from "node:events";
+import "../../../test-utils/prepare-compiled-subprocesses.js";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -61,13 +61,13 @@ describe("authenticated request completion", { concurrent: false }, () => {
         throw new Error("synthetic preparation failure");
       },
     }));
-    const { createDispatchTestHarness, createOperatorWsClient } =
+    const { createDispatchTestHarness, createOperatorWsClient, requestFrame } =
       await import("./authenticated-request-dispatch.test-support.js");
     const harness = createDispatchTestHarness();
     const client = createOperatorWsClient();
     const calls = Array.from({ length: 8 }, (_, index) =>
       harness.dispatcher.dispatch(
-        { type: "req", id: String(index), method: "sessions.subscribe", params: {} },
+        requestFrame(String(index), "sessions.subscribe", { limit: 100 }),
         client,
       ),
     );
@@ -88,7 +88,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
       const grant = new AbortController();
       const handleGatewayRequest = vi.fn(async () => {});
       mockDispatchStage(stage, gate.wait, handleGatewayRequest);
-      const { createDispatchTestHarness, createOperatorWsClient } =
+      const { createDispatchTestHarness, createOperatorWsClient, requestFrame } =
         await import("./authenticated-request-dispatch.test-support.js");
       const harness = createDispatchTestHarness();
       const client = createOperatorWsClient({ socket: new EventEmitter() });
@@ -99,17 +99,12 @@ describe("authenticated request completion", { concurrent: false }, () => {
         },
       };
       const dispatch = harness.dispatcher.dispatch(
-        { type: "req", id: "revoked", method: "test.lifetime", params: {} },
+        requestFrame("revoked", "test.lifetime"),
         client,
       );
-      try {
-        await gate.entered;
+      await gate.during(dispatch, () => {
         grant.abort(new Error("Access ended"));
-      } finally {
-        gate.release();
-        await dispatch;
-        gate.cleanup();
-      }
+      });
       expect(handleGatewayRequest).not.toHaveBeenCalled();
       expect([...harness.clients.authorityClients]).toEqual([]);
     },
@@ -166,7 +161,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
           isSyntheticGatewayCaller: () => false,
         }));
       }
-      const { createDispatchTestHarness, createOperatorWsClient } =
+      const { createDispatchTestHarness, createOperatorWsClient, dispatchProfile, requestFrame } =
         await import("./authenticated-request-dispatch.test-support.js");
       const harness = createDispatchTestHarness({
         extraHandlers: { "test.lifetime": handleGatewayRequest },
@@ -176,34 +171,28 @@ describe("authenticated request completion", { concurrent: false }, () => {
       if (stage === "profile authorization") {
         client.authenticatedGitHubIdentitySync = async () => {
           await gate.wait();
-          client.authenticatedUserProfile = {
-            profileId: "lifetime-profile",
+          client.authenticatedUserProfile = dispatchProfile("lifetime-profile", {
             displayName: "Lifetime fixture",
             avatarRevision: "lifetime-avatar",
-            hasAvatar: false,
-            updatedAt: 1,
-          };
+          });
           return { profileId: "lifetime-profile", updatedAt: 1 };
         };
       }
       const dispatch = harness.dispatcher
-        .dispatch({ type: "req", id: "held", method: "test.lifetime", params: {} }, client)
+        .dispatch(requestFrame("held", "test.lifetime"), client)
         .then(() => {
           dispatched = true;
           selection.OPENCLAW_STATE_DIR = restoredRoot;
         });
-      try {
-        await gate.entered;
-        await nextTurn();
-        expect.soft(dispatched, `${stage} is still executing`).toBe(false);
-        expect([...harness.clients.authorityClients]).toEqual([client]);
-      } finally {
-        // Join the handler independently: the broken dispatcher returns before it finishes.
-        gate.release();
-        await finished.promise;
-        await dispatch;
-        gate.cleanup();
-      }
+      await gate.during(
+        dispatch,
+        async () => {
+          await nextTurn();
+          expect.soft(dispatched, `${stage} is still executing`).toBe(false);
+          expect([...harness.clients.authorityClients]).toEqual([client]);
+        },
+        Promise.all([finished.promise, dispatch]),
+      );
       expect(selectedRoot).toBe(initialRoot);
       expect(dispatched).toBe(true);
       expect([...harness.clients.authorityClients]).toEqual([]);

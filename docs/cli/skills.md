@@ -107,6 +107,9 @@ stay aligned with the neighboring columns.
 JSON output preserves tabs and line endings in descriptions and paths as escaped
 characters.
 
+Human-readable `list`, `info`, and `check` output neutralizes terminal control
+sequences in installed skill metadata before styling.
+
 `info` resolves an exact skill name before a metadata key. Key, case-insensitive,
 and separator-normalized matches must identify one skill; ambiguous selectors
 fail instead of choosing discovery order.

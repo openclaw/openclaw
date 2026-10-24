@@ -504,10 +504,6 @@ vi.mock("../runtime.js", () => ({
   },
 }));
 
-vi.mock("../sessions/level-overrides.js", () => ({
-  applyVerboseOverride: vi.fn(),
-}));
-
 vi.mock("../sessions/model-overrides.js", () => ({
   applyModelOverrideToSessionEntry: (params: unknown) =>
     state.applyModelOverrideToSessionEntryMock(params),
@@ -907,14 +903,11 @@ function runBasicAgentCommand(overrides: Partial<Parameters<typeof agentCommand>
 }
 
 async function runSystemAgentCommand() {
-  await agentCommandFromSystem(
-    {
-      message: "boot",
-      sessionKey: "agent:main:boot",
-      deliver: false,
-    },
-    { boundary: "gateway.boot" },
-  );
+  await agentCommandFromSystem({
+    message: "boot",
+    sessionKey: "agent:main:boot",
+    deliver: false,
+  });
 }
 
 function runDiscordDelivery(overrides: Partial<Parameters<typeof agentCommand>[0]> = {}) {

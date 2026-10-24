@@ -1,15 +1,19 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+  pauseVirtualClock,
+} from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
+import { computedStyles } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectStyles } from "./style-contract.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Gateway retry feedback" });
 
 suite.define(() => {
-  it("outlines Retry and tracks real attempts through failure, automatic retry, and success", () =>
+  it.each([100, 140])("keeps automatic recovery stable at %i percent text scale", (textScale) =>
     suite.withPage(
       {
         viewport: { width: 1280, height: 900 },
@@ -17,13 +21,16 @@ suite.define(() => {
         reducedMotion: "no-preference",
       },
       async ({ page }) => {
+        await page.addInitScript(
+          ({ settingsKey, textScale: scale }) => {
+            localStorage.setItem(settingsKey, JSON.stringify({ textScale: scale }));
+          },
+          { settingsKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl), textScale },
+        );
         const gateway = await installMockGateway(page, {
           historyMessages: [
-            { role: "user", content: [{ type: "text", text: "Check the deployment checklist." }] },
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "The checklist is ready for review." }],
-            },
+            chatMessage("user", "Check the deployment checklist."),
+            chatMessage("assistant", "The checklist is ready for review."),
           ],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
@@ -35,66 +42,93 @@ suite.define(() => {
         await page.clock.runFor(2_001);
         await gateway.closeLatest(1006, "synthetic failed attempt");
         const status = page.locator(".sidebar-shell__footer .gateway-status");
-        const retry = status.getByRole("button", {
-          name: "Reconnecting… — Retry now",
-          exact: true,
+        const spinnerLocator = status.locator(".session-run-spinner");
+        const labelLocator = status.locator(".gateway-status__label");
+        await status.getByText("Reconnecting…", { exact: true }).waitFor();
+
+        expect(await status.getByRole("button").count()).toBe(0);
+        expect(await spinnerLocator.count()).toBe(1);
+        const stateBounds = await status.locator(".gateway-status__state").boundingBox();
+        await expectStyles(spinnerLocator, {
+          "border-top-color": (await computedStyles(labelLocator, ["color"])).color,
         });
-        await retry.waitFor({ state: "visible" });
-        const capture = async (name: string) => {
-          const frame = await takeControlUiScreenshotFrame(page, status, [status], {
-            elements: [page.locator(".sidebar-shell__footer")],
-            animations: "disabled",
-          });
-          await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
-        };
-        await capture("retry-idle");
-        expect(await retry.evaluate((button) => getComputedStyle(button).borderTopWidth)).toBe(
-          "1px",
+        const spinner = await spinnerLocator.elementHandle();
+        expect(await spinner!.evaluate((element) => getComputedStyle(element).animationName)).toBe(
+          "btn-spinner-spin",
         );
-        const background = await retry.evaluate(
-          (button) => getComputedStyle(button).backgroundColor,
-        );
-        await retry.hover();
-        expect(await retry.evaluate((button) => getComputedStyle(button).backgroundColor)).not.toBe(
-          background,
-        );
-        await page.mouse.move(700, 400);
-        await retry.focus();
-        expect(await retry.evaluate((button) => getComputedStyle(button).boxShadow)).not.toBe(
-          "none",
-        );
-        await capture("retry-focus");
+        const animation = await spinner!.evaluateHandle((element) => element.getAnimations()[0]!);
+        await animation.evaluate((current) => {
+          current.pause();
+          current.currentTime = 500;
+        });
         const count = await gateway.getSocketCount();
-        // Two clicks in one task also exercise the synchronous owner guard before Solid flushes.
-        await retry.evaluate((button: HTMLButtonElement) => {
-          button.click();
-          button.click();
-        });
-        await expect.poll(() => gateway.getSocketCount()).toBe(count + 1);
-        await expect.poll(() => retry.getAttribute("aria-busy")).toBe("true");
-        expect(await retry.isDisabled()).toBe(true);
-        const spinner = retry.locator(".gateway-status__spinner");
-        await spinner.waitFor({ state: "visible" });
-        expect(
-          await spinner.evaluate((element) => getComputedStyle(element).animationName),
-        ).not.toBe("none");
-        await capture("retry-pending");
+        // This is the second attempt: 1,600 ms backoff with up to 20% jitter.
+        await page.clock.runFor(2_000);
+        expect(await gateway.getSocketCount()).toBe(count + 1);
+        expect(await status.getByRole("button").count()).toBe(0);
+        expect(await status.locator(".gateway-status__state").boundingBox()).toEqual(stateBounds);
+        expect(await spinner!.evaluate((element) => element.isConnected)).toBe(true);
+        expect(await animation.evaluate((current) => current.currentTime)).toBe(500);
+        const aligned = async () => {
+          const icon = await status.locator(".gateway-status__icon").boundingBox();
+          const label = await labelLocator.boundingBox();
+          expect(Math.abs(icon!.y + icon!.height / 2 - label!.y - label!.height / 2)).toBeLessThan(
+            1,
+          );
+          expect(icon!.width).toBeCloseTo((12 * textScale) / 100, 1);
+        };
+        await aligned();
+
+        await animation.evaluate((current) => current.play());
+        await page.clock.resume();
+        const moving = async () => {
+          const before = await spinnerLocator.evaluate((element) => ({
+            time: Number(element.getAnimations()[0]!.currentTime),
+            transform: getComputedStyle(element).transform,
+          }));
+          // A full iteration can return to the same rotation; observe a distinct painted phase.
+          await expect
+            .poll(() =>
+              spinnerLocator.evaluate(async (element, previous) => {
+                await new Promise<void>((resolve) => {
+                  requestAnimationFrame(() => resolve());
+                });
+                const current = element.getAnimations()[0]!;
+                return {
+                  advanced: Number(current.currentTime) > previous.time,
+                  running: current.playState === "running",
+                  changed: getComputedStyle(element).transform !== previous.transform,
+                };
+              }, before),
+            )
+            .toEqual({ advanced: true, running: true, changed: true });
+        };
+        await moving();
+        await page.emulateMedia({ colorScheme: "light" });
+        await aligned();
+        // Read both colors in one frame after the asynchronous system-theme update.
+        await expect
+          .poll(() =>
+            status.evaluate((element) => ({
+              spinner: getComputedStyle(element.querySelector(".session-run-spinner")!)
+                .borderTopColor,
+              label: getComputedStyle(element.querySelector(".gateway-status__label")!).color,
+            })),
+          )
+          .toEqual({ spinner: "rgb(146, 64, 14)", label: "rgb(146, 64, 14)" });
+        await moving();
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+        await status.waitFor({ state: "visible" });
+        await aligned();
+        expect(await status.getByRole("button").count()).toBe(0);
         await page.emulateMedia({ reducedMotion: "reduce" });
-        expect(await spinner.evaluate((element) => getComputedStyle(element).animationName)).toBe(
-          "none",
-        );
-        await gateway.closeLatest(1006, "synthetic failed retry");
-        await expect.poll(() => retry.isDisabled()).toBe(false);
-        expect(await retry.getAttribute("aria-busy")).toBe("false");
-        expect(await spinner.count()).toBe(0);
-        // The transport spreads its initial 800 ms backoff by up to 20%.
-        await page.clock.runFor(1_000);
-        await expect.poll(() => retry.getAttribute("aria-busy")).toBe("true");
-        expect(await retry.isDisabled()).toBe(true);
+        await expectStyles(spinnerLocator, { "animation-name": "none" });
         await gateway.setOnline(true);
         await page.clock.resume();
         await waitForControlUiGatewayReady(page);
         await status.waitFor({ state: "detached" });
       },
-    ));
+    ),
+  );
 });

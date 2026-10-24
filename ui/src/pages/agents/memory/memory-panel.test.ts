@@ -1,22 +1,29 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { getByRole } from "@solidjs/testing-library";
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { registerListener } from "../../../../../src/shared/listeners.ts";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../../app/context.ts";
 import { ShellLayoutOwner } from "../../../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../../../app/shell-layout-traits-solid.tsx";
 import { showConfirmDialog } from "../../../components/confirm-dialog.ts";
-import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createAgentMemory, type AgentMemoryState } from "./memory-panel-state.ts";
-import { AgentMemoryView } from "./memory-panel-view.tsx";
+import {
+  click,
+  contextWithRequest,
+  createAgentTarget,
+  createPage,
+  requestFor,
+  DIARY,
+  diary,
+  emptyReply,
+  STATUS,
+} from "./memory-panel.test-support.ts";
 import { AgentMemoryPanel } from "./memory-panel.tsx";
 import { installDreamingViewTestTranslations } from "./view.test-helpers.ts";
 
@@ -30,122 +37,106 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function contextWithRequest(request: Parameters<typeof createTestGatewayClient>[0]) {
-  const { gateway, publish } = createApplicationGateway();
-  publish({
-    ...gateway.snapshot,
-    client: createTestGatewayClient(request),
-    phase: "connected",
-    hello: gatewayHelloForMethods(["config.patch"]),
-    sessionKey: "main",
-  });
-  const configListeners = new Set<() => void>();
-  const context = {
-    gateway,
-    agents: { state: { agentsList: null }, subscribe: () => () => {} },
-    runtimeConfig: {
-      state: { configForm: null, configSnapshot: null },
-      ensureLoaded: vi.fn(async () => undefined),
-      refresh: vi.fn(async () => undefined),
-      subscribe: (listener: () => void) => registerListener(configListeners, listener),
-    },
-  } as unknown as ApplicationContext;
-  return Object.assign(context, {
-    emit(patch: Partial<ApplicationGatewaySnapshot>) {
-      publish({ ...gateway.snapshot, ...patch });
-    },
-    setConfig(config: Record<string, unknown>) {
-      context.runtimeConfig.state.configForm = config;
-      context.runtimeConfig.state.configSnapshot = { config };
-      configListeners.forEach((listener) => listener());
-    },
-  });
-}
-
-const STATUS = "doctor.memory.status";
-const DIARY = "doctor.memory.dreamDiary";
 const REPAIR = "doctor.memory.repairDreamingArtifacts";
 const PREVIEW = ".dreams-diary__preview-panel";
+const CONFIRM_BUTTON = ".exec-approval-actions button:last-child";
 const PREVIEW_TEXT = ".dreams-diary__preview-pre";
-
-function requestFor(
-  replies: Record<string, () => unknown>,
-  fallback: (method: string) => unknown = emptyReply,
-) {
-  return vi.fn((method: string) => replies[method]?.() ?? fallback(method));
-}
 
 function memoryStatus(promotedToday: number, extra: Record<string, unknown> = {}) {
   return { dreaming: { enabled: true, promotedToday, ...extra } };
 }
 
-function diary(content: string) {
-  return { found: true, path: "DREAMS.md", content };
-}
-
 const emptyClient = () => createTestGatewayClient(vi.fn(emptyReply));
 
-const emptyReply = (method: string) =>
-  method === STATUS ? { dreaming: null } : { found: false, path: "DREAMS.md" };
-function createAgentTarget(initialAgentId: string | null) {
-  let agentId = initialAgentId;
-  const listeners = new Set<() => void>();
-  return {
-    read: () => agentId,
-    subscribe: (notify: () => void) => registerListener(listeners, notify),
-    set: (next: string | null) => {
-      agentId = next;
-      listeners.forEach((notify) => notify());
-    },
-    subscriberCount: () => listeners.size,
-  };
-}
+it.each([true, false])(
+  "exposes Dreaming switch state through cancellation (%s)",
+  async (enabled) => {
+    const page = await createPage({ [STATUS]: () => ({ dreaming: { enabled } }) });
+    page.context.setConfig({});
+    const toggle = getByRole<HTMLButtonElement>(page.container, "switch", { name: "Dreaming" });
+    await waitForSolid(() => expect(toggle.disabled).toBe(false));
+    expect(toggle.getAttribute("aria-checked")).toBe(String(enabled));
+    toggle.click();
+    flush();
+    expect(page.toggle.open).toBe(true);
+    expect(toggle.getAttribute("aria-checked")).toBe(String(enabled));
+    page.toggle.onCancel();
+    flush();
+    expect(page.toggle.open).toBe(false);
+    expect(toggle.getAttribute("aria-checked")).toBe(String(enabled));
+  },
+);
 
-async function createPage(
-  replies:
-    | Parameters<typeof createTestGatewayClient>[0]
-    | Record<string, () => unknown> = emptyReply,
-  agentId = "main",
-  hello = gatewayHelloForMethods(["config.patch"]),
-) {
-  const request = typeof replies === "function" ? vi.fn(replies) : requestFor(replies);
-  const context = contextWithRequest(request);
-  context.emit({ hello });
-  const agentTarget = createAgentTarget(agentId);
-  let state: AgentMemoryState;
-  const { container, unmount } = mountSolid(() => {
-    state = createAgentMemory(context, () => agentTarget);
-    return AgentMemoryView({ state });
-  });
-  await waitForSolid(() => expect(state.view().header.refreshLoading).toBe(false));
-  return {
-    get state() {
-      return state;
-    },
-    context,
-    request,
-    get dreaming() {
-      return state.view().dreaming;
-    },
-    get toggle() {
-      return state.view().toggle;
-    },
-    query: container.querySelector.bind(container),
-    text: (selector: string) => container.querySelector(selector)?.textContent,
-    waitText: (selector: string, text: string) =>
-      waitForSolid(() => expect(container.querySelector(selector)?.textContent).toBe(text)),
-    container,
-    setAgentId: agentTarget.set,
-    unmount,
-  };
-}
+it.each(["rejected", "declined"] as const)(
+  "shows a %s toggle write through its receipt and permits retry",
+  async (outcome) => {
+    const page = await createPage();
+    page.context.setConfig({});
+    const pending = deferred<boolean>();
+    const patch = vi.mocked(page.context.runtimeConfig.patch);
+    patch.mockReturnValueOnce(pending.promise);
+    page.state.setEnabled(false);
+    flush();
+    click(page.container, CONFIRM_BUTTON);
+    await waitForSolid(() => expect(page.text(CONFIRM_BUTTON)).toBe("Saving…"));
+    expect(page.toggle.onConfirm()).toBeUndefined();
+    await waitForSolid(() => expect(patch).toHaveBeenCalledOnce());
+    if (outcome === "rejected") {
+      pending.reject(new Error("synthetic patch failure"));
+    } else {
+      pending.resolve(false);
+    }
+    await waitForSolid(() => expect(page.query(".exec-approval-error")).not.toBeNull());
+    expect(page.toggle.open).toBe(true);
+    expect(page.query<HTMLButtonElement>(CONFIRM_BUTTON)?.disabled).toBe(false);
+    const retry = deferred<boolean>();
+    patch.mockReturnValueOnce(retry.promise);
+    click(page.container, CONFIRM_BUTTON);
+    await waitForSolid(() => expect(page.text(CONFIRM_BUTTON)).toBe("Saving…"));
+    expect(page.query(".exec-approval-error")).toBeNull();
+    retry.resolve(true);
+    await waitForSolid(() => expect(page.toggle.open).toBe(false));
+    expect(patch).toHaveBeenCalledTimes(2);
+    expect(page.query(".exec-approval-error")).toBeNull();
+  },
+);
 
-function click(container: HTMLElement, selector: string) {
-  const button = container.querySelector<HTMLButtonElement>(selector);
-  expect(button).not.toBeNull();
-  button!.click();
-  flush();
-}
+it.each(["reconnect", "agent", "client", "access", "unmount"] as const)(
+  "releases the admitted toggle receipt immediately on %s retirement",
+  async (replacement) => {
+    const page = await createPage();
+    page.context.setConfig({});
+    const pending = deferred<boolean>();
+    const patch = vi.mocked(page.context.runtimeConfig.patch);
+    patch.mockReturnValueOnce(pending.promise);
+    page.state.setEnabled(false);
+    flush();
+    const completion = page.toggle.onConfirm();
+    const settled = vi.fn();
+    void completion?.then(settled);
+    await waitForSolid(() => expect(patch).toHaveBeenCalledOnce());
+    if (replacement === "reconnect") {
+      page.context.emit({ phase: "reconnecting", hello: null });
+    } else if (replacement === "agent") {
+      page.setAgentId("support");
+    } else if (replacement === "client") {
+      page.context.emit({ client: emptyClient() });
+    } else if (replacement === "access") {
+      page.context.emit({ hello: gatewayHelloForMethods([], []) });
+    } else {
+      page.unmount();
+    }
+    await waitForSolid(() => expect(settled).toHaveBeenCalledOnce());
+    if (replacement === "reconnect") {
+      expect(page.toggle.open).toBe(true);
+    } else if (replacement !== "unmount") {
+      expect(page.toggle.open).toBe(false);
+    }
+    pending.reject(new Error("retired transport failure"));
+    await Promise.resolve();
+    expect(page.query(".exec-approval-error")).toBeNull();
+  },
+);
 
 function wikiOverview(title = "Original title") {
   return {
@@ -171,6 +162,102 @@ function wikiOverview(title = "Original title") {
     ],
   };
 }
+
+it.each(["dreams", "insights", "wiki"] as const)(
+  "keeps the %s diary toolbar focused through a failed read and retry",
+  async (tab) => {
+    const failure = deferred<unknown>();
+    const methods = {
+      dreams: DIARY,
+      insights: "wiki.importInsights",
+      wiki: "wiki.overview",
+    } as const;
+    const method = methods[tab];
+    let fail = false;
+    const replies = {
+      [DIARY]: () => diary("Retained diary"),
+      "wiki.overview": () => wikiOverview(),
+      "wiki.importInsights": () => ({
+        sourceType: "chatgpt",
+        totalItems: 0,
+        totalClusters: 0,
+        clusters: [],
+        truncated: false,
+      }),
+    };
+    const settled = replies[method];
+    const page = await createPage(
+      { ...replies, [method]: () => (fail ? failure.promise : settled()) },
+      "main",
+      gatewayHelloForMethods(["wiki.overview", "wiki.importInsights", "config.patch"]),
+    );
+    await waitForSolid(() =>
+      expect(page.request.mock.calls.some(([name]) => name === method)).toBe(true),
+    );
+    await waitForSolid(() =>
+      expect(
+        {
+          dreams: page.dreaming.dreamDiaryLoading,
+          insights: page.dreaming.wikiImportInsightsLoading,
+          wiki: page.dreaming.wikiOverviewLoading,
+        }[tab],
+      ).toBe(false),
+    );
+    page.context.setConfig({ plugins: { entries: { "memory-wiki": { enabled: true } } } });
+    click(page.container, "#dreams-tab-diary");
+    click(page.container, `#dream-diary-tab-${tab}`);
+    const toolbar = page.query(".dreams-diary__chrome");
+    const tabControl = page.query<HTMLButtonElement>(`#dream-diary-tab-${tab}`)!;
+    tabControl.focus();
+    const refresh = () => {
+      ({
+        dreams: page.dreaming.onRefreshDiary,
+        insights: page.dreaming.onRefreshImports,
+        wiki: page.dreaming.onRefreshWikiOverview,
+      })[tab]();
+    };
+    const initialRequests = page.request.mock.calls.filter(([name]) => name === method).length;
+    fail = true;
+    refresh();
+    await waitForSolid(() =>
+      expect(page.request.mock.calls.filter(([name]) => name === method)).toHaveLength(
+        initialRequests + 1,
+      ),
+    );
+    expect(page.query(".dreams-diary__chrome")).toBe(toolbar);
+    failure.reject(new Error("Scoped read failed"));
+    await page.waitText(".dreams-diary__error", "Scoped read failed");
+    expect(page.query(".dreams-diary__chrome")).toBe(toolbar);
+    expect(document.activeElement).toBe(tabControl);
+    fail = false;
+    refresh();
+    await waitForSolid(() => expect(page.query(".dreams-diary__error")).toBeNull());
+    expect(page.query(".dreams-diary__chrome")).toBe(toolbar);
+    expect(document.activeElement).toBe(tabControl);
+  },
+);
+
+it("retains accepted scene status and its DOM when the status refresh fails", async () => {
+  const failure = deferred<unknown>();
+  let fail = false;
+  const page = await createPage({
+    [STATUS]: () => (fail ? failure.promise : memoryStatus(23)),
+  });
+  await waitForSolid(() => expect(page.text(".dreams__status-detail")).toContain("23"));
+  const scene = page.query(".dreams");
+  const detail = page.query(".dreams__status-detail");
+  fail = true;
+  const pending = page.state.loadResources("dreamingStatus", false);
+  await waitForSolid(() =>
+    expect(page.request.mock.calls.filter(([method]) => method === STATUS)).toHaveLength(2),
+  );
+  failure.reject(new Error("Status refresh failed"));
+  await pending;
+  await page.waitText(".dreams__controls-error", "Status refresh failed");
+  expect(page.query(".dreams")).toBe(scene);
+  expect(page.query(".dreams__status-detail")).toBe(detail);
+  expect(detail?.textContent).toContain("23");
+});
 
 it("scopes native memory requests to the current agent and releases shell layout", async () => {
   const request = vi.fn(emptyReply);
@@ -254,7 +341,7 @@ it.each([false, true])("scopes confirmed actions (agent changed: %s)", async (ch
     page.setAgentId("support");
   }
   confirmation.resolve(true);
-  await waitForSolid(() => expect(page.dreaming.dreamDiaryActionLoading).toBe(false));
+  await waitForSolid(() => expect(page.state.diaryActionBusy()).toBe(false));
   await waitForSolid(() =>
     expect(page.request.mock.calls.filter(([method]) => method === REPAIR)).toEqual(
       changed ? [] : [[REPAIR, { agentId: "main" }]],
@@ -275,7 +362,11 @@ it.each(["", "main"])(
     );
     const page = await createPage(request);
     await waitForSolid(() => expect(page.dreaming.dreamDiaryContent).toBe("main-only"));
+    click(page.container, "#dreams-tab-diary");
+    await page.waitText("#dream-diary-panel", "main-only\n");
     page.setAgentId("support");
+    flush();
+    expect(page.container.textContent).not.toContain("main-only");
     expect(page.dreaming).toMatchObject({ selectedAgentId: "support", dreamDiaryContent: null });
     await waitForSolid(() => expect(request).toHaveBeenCalledWith(DIARY, { agentId: "support" }));
     page.setAgentId(agentId);
@@ -325,9 +416,9 @@ it.each([false, true])(
       : "Connection lost before the memory action was confirmed. It may have completed.";
     expect(page.text("[role='status']")).toContain(message);
     expect(page.dreaming).toMatchObject({
-      dreamDiaryActionLoading: false,
       access: { canRepairDreamingArtifacts: false },
     });
+    expect(page.state.diaryActionBusy()).toBe(false);
 
     context.emit({ phase: "connected", hello });
     action.resolve(result);
@@ -348,6 +439,81 @@ it.each([false, true])(
     });
   },
 );
+
+it("shows the replacement agent's diary while the retired action is pending", async () => {
+  const pending = deferred<unknown>();
+  const method = "doctor.memory.backfillDreamDiary";
+  const page = await createPage(
+    (name, params) =>
+      name === method
+        ? pending.promise
+        : name === DIARY
+          ? diary(`Sample ${String(asOptionalRecord(params)?.agentId)} diary`)
+          : emptyReply(name),
+    "main",
+    gatewayHelloForMethods([STATUS, DIARY, method], ["operator.read", "operator.write"]),
+  );
+  try {
+    click(page.container, "#dreams-tab-diary");
+    await waitForSolid(() =>
+      expect(page.text(".dreams-diary__prose")).toContain("Sample main diary"),
+    );
+    page.dreaming.onBackfillDiary();
+    await waitForSolid(() => expect(page.state.diaryActionBusy()).toBe(true));
+    page.setAgentId("support");
+    await waitForSolid(() =>
+      expect(page.text(".dreams-diary__prose")).toContain("Sample support diary"),
+    );
+    expect(page.state.diaryActionBusy()).toBe(false);
+  } finally {
+    pending.resolve({ written: 1 });
+    await pending.promise;
+  }
+});
+
+it("keeps a replacement agent's diary action busy after the old action settles", async () => {
+  const oldAction = deferred<unknown>();
+  const nextAction = deferred<unknown>();
+  const method = "doctor.memory.backfillDreamDiary";
+  const page = await createPage(
+    (name, params) =>
+      name === method
+        ? asOptionalRecord(params)?.agentId === "main"
+          ? oldAction.promise
+          : nextAction.promise
+        : emptyReply(name),
+    "main",
+    gatewayHelloForMethods([STATUS, DIARY, method], ["operator.read", "operator.write"]),
+  );
+  click(page.container, "#dreams-tab-advanced");
+  page.dreaming.onBackfillDiary();
+  await waitForSolid(() => expect(page.state.diaryActionBusy()).toBe(true));
+  page.dreaming.onBackfillDiary();
+  expect(page.request.mock.calls.filter(([name]) => name === method)).toHaveLength(1);
+
+  page.setAgentId("support");
+  await waitForSolid(() => expect(page.state.diaryActionBusy()).toBe(false));
+  page.dreaming.onBackfillDiary();
+  await waitForSolid(() => expect(page.state.diaryActionBusy()).toBe(true));
+  const working = () =>
+    Array.from(page.container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent === "Working…",
+    );
+  await waitForSolid(() => expect(working()?.disabled).toBe(true));
+  oldAction.resolve({ written: 1 });
+  await oldAction.promise;
+  flush();
+  expect(page.state.diaryActionBusy()).toBe(true);
+  expect(working()?.disabled).toBe(true);
+
+  nextAction.resolve({ written: 2 });
+  await waitForSolid(() => expect(page.state.diaryActionBusy()).toBe(false));
+  expect(working()).toBeUndefined();
+  expect(page.dreaming.dreamDiaryActionMessage).toEqual({
+    kind: "success",
+    text: "Backfilled 2 dream diary entries.",
+  });
+});
 
 it("retains diary, preview and toggle drafts through reconnect while rejecting old reads", async () => {
   const stale = deferred<unknown>();
@@ -371,10 +537,13 @@ it("retains diary, preview and toggle drafts through reconnect while rejecting o
   flush();
   expect(page.dreaming).toMatchObject({
     dreamDiaryContent: "Retained diary",
-    wikiPreview: { page: { path: "retained.md" }, loading: true },
+    wikiPreview: { page: { path: "retained.md" } },
   });
+  expect(page.text(".dreams-diary__preview-body .dreams-diary__empty-text")).toBe(
+    "Loading wiki page…",
+  );
   expect(page.toggle).toMatchObject({ open: true, disabled: true });
-  expect(page.query<HTMLButtonElement>(".exec-approval-actions button")?.disabled).toBe(true);
+  expect(page.query<HTMLButtonElement>(CONFIRM_BUTTON)?.disabled).toBe(true);
   refresh = true;
   context.emit({ phase: "connected", hello });
   await waitForSolid(() =>
@@ -384,7 +553,10 @@ it("retains diary, preview and toggle drafts through reconnect while rejecting o
   expect(page.request.mock.calls.filter(([method]) => method === "wiki.get")).toHaveLength(2);
   stale.resolve({ title: "Old", path: "retained.md", content: "Stale preview" });
   await preview;
-  expect(page.dreaming.wikiPreview).toMatchObject({ page: { content: "" }, loading: true });
+  expect(page.dreaming.wikiPreview).toMatchObject({ page: { content: "" } });
+  expect(page.text(".dreams-diary__preview-body .dreams-diary__empty-text")).toBe(
+    "Loading wiki page…",
+  );
   expect(page.toggle.open).toBe(true);
   freshPreview.resolve({ title: "Fresh", path: "retained.md", content: "Fresh preview" });
   await page.waitText(PREVIEW_TEXT, "Fresh preview");
@@ -404,9 +576,13 @@ it.each(["agent", "client", "access", "unmount"] as const)(
   "retires pending wiki requests and modal state on %s replacement",
   async (replacement) => {
     const pending = deferred<unknown>();
-    const page = await createPage({ "wiki.get": () => pending.promise }, "support");
+    const page = await createPage(
+      { [DIARY]: () => diary("support-only"), "wiki.get": () => pending.promise },
+      "support",
+    );
     const { context } = page;
     click(page.container, "#dreams-tab-diary");
+    await page.waitText("#dream-diary-panel", "support-only\n");
     const preview = page.dreaming.onOpenWikiPage("support.md");
     page.state.setEnabled(false);
     await waitForSolid(() => expect(page.query(PREVIEW)).not.toBeNull());
@@ -428,6 +604,7 @@ it.each(["agent", "client", "access", "unmount"] as const)(
     if (replacement !== "unmount") {
       expect(page.toggle.open).toBe(false);
       expect(page.dreaming.wikiPreview).toBeNull();
+      expect(page.container.textContent).not.toContain("support-only");
     }
   },
 );
@@ -457,6 +634,37 @@ it.each(["support-only", ""])("loads scoped wiki preview content %j", async (con
   expect(page.dreaming.wikiPreview).toBeNull();
 });
 
+it("keeps the preview dialog and focused close control when its read fails, then opens a fresh page", async () => {
+  const failure = deferred<unknown>();
+  let fail = true;
+  const page = await createPage({
+    "wiki.get": () =>
+      fail ? failure.promise : { title: "Fresh", path: "fresh.md", content: "Fresh wiki content" },
+  });
+  click(page.container, "#dreams-tab-diary");
+  const pending = page.dreaming.onOpenWikiPage("failed.md");
+  flush();
+  const dialog = page.query("openclaw-modal-dialog");
+  expect(dialog).not.toBeNull();
+  await waitForSolid(() => expect(dialog?.querySelector("dialog")?.dataset.phase).toBe("open"));
+  const close = page.query<HTMLButtonElement>(".dreams-diary__preview-footer button")!;
+  close.focus();
+  expect(document.activeElement).toBe(close);
+  failure.reject(new Error("Wiki request failed"));
+  await pending;
+  await page.waitText(".dreams-diary__error", "Wiki request failed");
+  expect(page.query("openclaw-modal-dialog")).toBe(dialog);
+  expect(page.query(".dreams-diary__preview-footer button")).toBe(close);
+  expect(document.activeElement).toBe(close);
+  close.click();
+  flush();
+  expect(page.query("openclaw-modal-dialog")).toBeNull();
+  fail = false;
+  await page.dreaming.onOpenWikiPage("fresh.md");
+  await page.waitText(PREVIEW_TEXT, "Fresh wiki content");
+  expect(page.query(".dreams-diary__error")).toBeNull();
+});
+
 it("updates the mounted view across tab selection and owner notifications", async () => {
   let promotedToday = 2;
   let title = "Original title";
@@ -477,6 +685,7 @@ it("updates the mounted view across tab selection and owner notifications", asyn
   const scene = page.query(".dreams");
   promotedToday = 9;
   await page.state.loadResources();
+  await waitForSolid(() => expect(page.dreaming.readStatusData().promotedCount).toBe(9));
   await waitForSolid(() => expect(page.text(".dreams__status-detail")).toContain("9 promoted"));
   expect(page.query(".dreams")).toBe(scene);
   expect(page.container.querySelectorAll(".dreams__phase--off")).toHaveLength(2);

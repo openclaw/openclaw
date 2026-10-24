@@ -1,5 +1,7 @@
 import { fetchControlUiResource, subscribeBrowserAuthRestored } from "../../../app/browser-http.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { formatUiExternalText } from "../../../lib/format-error.ts";
 import { buildChatMediaFetchHeaders } from "./chat-media-playback.ts";
 import {
@@ -16,6 +18,10 @@ import {
   type ChatMediaResource,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
+
+registerChatComposerEnglish();
+
+registerChatMediaEnglish();
 
 type AssistantAttachmentAvailability =
   | { status: "checking" }

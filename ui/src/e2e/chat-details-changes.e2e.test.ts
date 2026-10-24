@@ -76,7 +76,7 @@ suite.define(() => {
     const details = await openChatDetails(page);
     const environment = details.locator('[data-details-group="environment"]');
     const disclosure = environment.locator(":scope > summary");
-    const action = environment.getByRole("button", { name: /^Changes/ });
+    const action = environment.locator(".chat-pr__diff");
     await action.waitFor();
     await pauseVirtualClock(page);
     await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(1);
@@ -133,11 +133,11 @@ suite.define(() => {
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(3);
     await gateway.resolveDeferred("sessions.diff");
     await expect.poll(() => review.getAttribute("aria-busy")).toBe("false");
-    await expect.poll(() => action.textContent()).toContain("+12480");
-    expect(await action.textContent()).toContain("−1030");
+    await expect.poll(() => action.textContent()).toContain("+12,480");
+    expect(await action.textContent()).toContain("−1,030");
     expect(
       await action.getByLabel("Some changes could not be displayed.", { exact: true }).count(),
-    ).toBe(1);
+    ).toBe(0);
     expect(
       await review.getByRole("button", { name: "Choose change scope", exact: true }).textContent(),
     ).toBe("Uncommitted");

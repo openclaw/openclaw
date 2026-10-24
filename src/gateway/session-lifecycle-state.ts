@@ -198,7 +198,6 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           lifecycleGeneration: params.event.lifecycleGeneration,
           mainSessionRestartRecovery: params.event.mainSessionRestartRecovery,
           controlUiVisible: params.event.controlUiVisible,
-          isHeartbeat: params.event.isHeartbeat,
           contextClaimId: params.event.contextClaimId,
           data: params.event.data,
         },

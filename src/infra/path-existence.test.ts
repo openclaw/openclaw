@@ -26,6 +26,9 @@ function fixture() {
 
 it("distinguishes entries from followed targets and returns typed directory entries", async () => {
   const { root, file, directory, link, dangling, missing, child } = fixture();
+  expect(await paths.realpathOrResolve(link)).toBe(fs.realpathSync.native(file));
+  expect(await paths.realpathOrResolve(dangling)).toBe(dangling);
+  expect(await paths.realpathOrResolve(path.relative(process.cwd(), missing))).toBe(missing);
   expect(await paths.pathEntryExists(dangling)).toBe(true);
   expect(await paths.pathEntryExists(missing)).toBe(false);
   expect((await paths.lstatIfExists(dangling))?.isSymbolicLink()).toBe(true);
@@ -56,6 +59,13 @@ it("distinguishes entries from followed targets and returns typed directory entr
   expect(entries.find((entry) => entry.name === "directory")?.isDirectory()).toBe(true);
   expect(paths.readDirectoryEntriesSync(missing)).toEqual([]);
   expect(paths.readDirectoryEntriesSync(file)).toEqual([]);
+});
+
+it("uses the lexical absolute path when realpath fails beyond definite absence", async () => {
+  vi.spyOn(fsPromises, "realpath").mockRejectedValue(
+    Object.assign(new Error("filesystem probe failed"), { code: "EACCES" }),
+  );
+  expect(await paths.realpathOrResolve("blocked/../missing")).toBe(path.resolve("missing"));
 });
 
 it.each([

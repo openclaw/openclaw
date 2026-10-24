@@ -1,4 +1,5 @@
 import { GCProfiler } from "node:v8";
+import { isMainThread } from "node:worker_threads";
 
 export type GcSample = {
   kind: "scavenge" | "mark_sweep_compact" | "incremental" | "weak_processing";
@@ -12,6 +13,9 @@ export type GcSample = {
     | "construct_retained"
     | "other";
   durationMs: number;
+  /** Positive native before/after heap drop, not total allocated bytes. */
+  reclaimedBytes?: number;
+  heapUsedBeforeBytes?: number;
 };
 
 const kinds: Readonly<Record<string, GcSample["kind"]>> = {
@@ -50,13 +54,27 @@ function drain(restart: boolean): void {
     }
     if (kind) {
       // GCProfiler reports microseconds but does not expose callback flags.
-      samples.push({ kind, reason: "other", durationMs: entry.cost / 1000 });
+      const before = entry.beforeGC.heapStatistics.usedHeapSize;
+      samples.push({
+        kind,
+        reason: "other",
+        durationMs: entry.cost / 1000,
+        heapUsedBeforeBytes: before,
+        reclaimedBytes: Math.max(0, before - entry.afterGC.heapStatistics.usedHeapSize),
+      });
     }
   }
   if (samples.length) {
     for (const publish of subscribers) {
       publish(samples);
     }
+  }
+}
+
+/** Include collections from short tasks before their worker can be terminated. */
+export function flushGcSamples(): void {
+  if (profiler) {
+    drain(true);
   }
 }
 
@@ -73,7 +91,8 @@ export function observeGcSamples(publish: (samples: GcSample[]) => void): (() =>
     profiler.start();
     // A per-GC PerformanceObserver wakes idle workers after every collection and
     // can sustain a collection loop. Native profiling only wakes JS on this cadence.
-    timer = setInterval(() => drain(true), 1000).unref();
+    // Bound worker batches so retirement does not drain a full second of native GC records.
+    timer = setInterval(() => drain(true), isMainThread ? 1000 : 100).unref();
   }
   subscribers.add(publish);
   return () => {

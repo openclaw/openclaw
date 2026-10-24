@@ -470,6 +470,19 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expectCompactionCompleteAndRetained(host, "compact-1");
   });
 
+  it("keeps recovery compaction status and expiry when hook notices arrive", () => {
+    const host = createTimedHost();
+    emitEvent(host, "run-1", 1, "compaction", { phase: "start", itemId: "recovery-1" });
+    const status = host.compactionStatus;
+    const timer = host.compactionClearTimer;
+    emitEvent(host, "run-1", 2, "compaction", { phase: "notice", messages: ["Preparing context"] });
+    expect(host.compactionStatus).toBe(status);
+    expect(host.compactionClearTimer).toBe(timer);
+    vi.advanceTimersByTime(5 * 60_000);
+    expect(host.compactionStatus).toBeNull();
+    expect(host.compactionClearTimer).toBeNull();
+  });
+
   it("auto-clears active compaction after the stale timeout", () => {
     useToolStreamFakeTimers();
     const host = createHost();

@@ -6,10 +6,6 @@ import {
   shouldAckReaction,
 } from "./ack-reactions.js";
 
-const flushMicrotasks = async () => {
-  await Promise.resolve();
-};
-
 describe("shouldAckReaction", () => {
   const groupMentionsScope = {
     scope: "group-mentions" as const,
@@ -21,43 +17,28 @@ describe("shouldAckReaction", () => {
   };
   const ack = (overrides: Partial<Parameters<typeof shouldAckReaction>[0]>) =>
     shouldAckReaction({ ...groupMentionsScope, ...overrides });
+  const silent = { canDetectMention: false, effectiveWasMentioned: false };
+  const direct = { ...silent, isDirect: true, isGroup: false, isMentionableGroup: false };
+  const room = { inboundEventKind: "room_event" as const, effectiveWasMentioned: false };
 
   it("honors direct and group-all scopes", () => {
-    expect(
-      ack({
-        scope: "direct",
-        isDirect: true,
-        isGroup: false,
-        isMentionableGroup: false,
-        canDetectMention: false,
-        effectiveWasMentioned: false,
-      }),
-    ).toBe(true);
-
-    expect(ack({ scope: "group-all", canDetectMention: false, effectiveWasMentioned: false })).toBe(
-      true,
-    );
+    expect(ack({ scope: "direct", ...direct })).toBe(true);
+    expect(ack({ scope: "group-all", ...silent })).toBe(true);
   });
-
   it("skips when scope is off", () => {
     expect(ack({ scope: "off", isDirect: true })).toBe(false);
   });
-
   it.each([
     ["all", true],
     ["group-all", false],
   ] as const)("applies %s scope to ambient room events", (scope, expected) => {
-    expect(ack({ scope, inboundEventKind: "room_event", effectiveWasMentioned: false })).toBe(
-      expected,
-    );
+    expect(ack({ scope, ...room })).toBe(expected);
   });
-
   it("defaults to group-mentions gating", () => {
     expect(ack({ scope: undefined })).toBe(true);
   });
-
   it("requires mention gating for group-mentions", () => {
-    expect(shouldAckReaction(groupMentionsScope)).toBe(true);
+    expect(ack({})).toBe(true);
     expect(ack({ canDetectMention: false })).toBe(false);
     expect(ack({ isMentionableGroup: false })).toBe(false);
     expect(ack({ effectiveWasMentioned: false })).toBe(false);
@@ -65,13 +46,19 @@ describe("shouldAckReaction", () => {
   });
 });
 
+function makeAck(overrides: Partial<Parameters<typeof createAckReactionHandle>[0]> = {}) {
+  const params = {
+    ackReactionValue: " 👀 ",
+    send: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+  return { ...params, handle: createAckReactionHandle(params) };
+}
+
 describe("createAckReactionHandle", () => {
   it("tracks a successful ack send", async () => {
-    const send = vi.fn().mockResolvedValue(undefined);
-    const remove = vi.fn().mockResolvedValue(undefined);
-
-    const handle = createAckReactionHandle({ ackReactionValue: " 👀 ", send, remove });
-
+    const { handle, send, remove } = makeAck();
     expect(handle?.ackReactionValue).toBe("👀");
     expect(handle?.remove).toBe(remove);
     expect(send).toHaveBeenCalledTimes(1);
@@ -82,10 +69,8 @@ describe("createAckReactionHandle", () => {
     const error = new Error("nope");
     const onSendError = vi.fn();
 
-    const handle = createAckReactionHandle({
-      ackReactionValue: "👀",
+    const { handle } = makeAck({
       send: vi.fn().mockRejectedValue(error),
-      remove: vi.fn().mockResolvedValue(undefined),
       onSendError,
     });
 
@@ -94,13 +79,7 @@ describe("createAckReactionHandle", () => {
   });
 
   it("skips empty ack values", () => {
-    const handle = createAckReactionHandle({
-      ackReactionValue: " ",
-      send: vi.fn().mockResolvedValue(undefined),
-      remove: vi.fn().mockResolvedValue(undefined),
-    });
-
-    expect(handle).toBeNull();
+    expect(makeAck({ ackReactionValue: " " }).handle).toBeNull();
   });
 });
 
@@ -113,7 +92,7 @@ describe("removeAckReactionAfterReply", () => {
       ackReactionValue: "👀",
       remove,
     });
-    await flushMicrotasks();
+    await Promise.resolve();
     expect(remove).not.toHaveBeenCalled();
   });
 });
@@ -132,7 +111,7 @@ describe("removeAckReactionHandleAfterReply", () => {
       },
     });
 
-    await flushMicrotasks();
+    await Promise.resolve();
     expect(remove).toHaveBeenCalledTimes(1);
     expect(onError).not.toHaveBeenCalled();
   });

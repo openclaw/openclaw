@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -9,7 +8,7 @@ import {
   startQaMockOpenAiServer,
   type MockOpenAiRequestSnapshot,
 } from "../../../../extensions/qa-lab/api.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const MODEL_ID = "gpt-5.6-luna";
@@ -49,19 +48,7 @@ function promptInstructions(request: MockOpenAiRequestSnapshot): string {
 
 describe("direct-channel silent-reply prompt contract", () => {
   const cleanups: Array<() => Promise<void>> = [];
-  afterEach(async () => {
-    const errors: unknown[] = [];
-    for (const cleanup of cleanups.splice(0).toReversed()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length) {
-      throw new AggregateError(errors, "silent prompt proof cleanup failed");
-    }
-  });
+  afterEach(() => runQaGatewayFixture(async () => {}, ...cleanups.splice(0).toReversed()));
 
   it("omits generic silence guidance in the actual provider request while replying normally", async () => {
     const state = createQaBusState();
@@ -72,59 +59,23 @@ describe("direct-channel silent-reply prompt contract", () => {
     cleanups.push(() => mock.stop());
     const owner = createQaGatewayChild();
     cleanups.push(() => stopQaGatewayFixture(owner));
-    const artifactDir = path.join(REPO_ROOT, ".artifacts/silent-reply-prompt-mode");
-    const writeArtifact = async (name: string, data: unknown) => {
-      await fs.mkdir(artifactDir, { recursive: true });
-      await fs.writeFile(
-        path.join(artifactDir, name),
-        typeof data === "string" ? data : `${JSON.stringify(data, null, 2)}\n`,
-      );
-    };
-    let readGatewayLogs = () =>
-      "Gateway did not finish startup; see flow.log for the startup error.";
-    cleanups.push(async () => {
-      // Diagnostics must run before the Gateway and provider cleanup owners.
-      await writeArtifact("gateway.log", readGatewayLogs());
-      await writeArtifact("bus.json", state.getSnapshot());
-      let providerDiagnostics: unknown;
-      try {
-        const response = await fetch(`${mock.baseUrl}/debug/requests?after=0`, {
-          signal: AbortSignal.timeout(5_000),
-        });
-        providerDiagnostics = { status: response.status, body: await response.json() };
-      } catch (error) {
-        providerDiagnostics = {
-          unavailable: error instanceof Error ? error.message : String(error),
-        };
-      }
-      await writeArtifact("provider.json", providerDiagnostics);
+    const gateway = await owner.start({
+      repoRoot: REPO_ROOT,
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [path.join(REPO_ROOT, "dist/index.js")],
+        cwd: REPO_ROOT,
+        usePackagedPlugins: true,
+      },
+      transport,
+      transportBaseUrl: bus.baseUrl,
+      providerBaseUrl: `${mock.baseUrl}/v1`,
+      providerMode: "mock-openai",
+      primaryModel: MODEL_REF,
+      alternateModel: MODEL_REF,
+      forcedRuntime: "openclaw",
+      controlUiEnabled: false,
     });
-    const gateway = await owner
-      .start({
-        repoRoot: REPO_ROOT,
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: [path.join(REPO_ROOT, "dist/index.js")],
-          cwd: REPO_ROOT,
-          usePackagedPlugins: true,
-        },
-        transport,
-        transportBaseUrl: bus.baseUrl,
-        providerBaseUrl: `${mock.baseUrl}/v1`,
-        providerMode: "mock-openai",
-        primaryModel: MODEL_REF,
-        alternateModel: MODEL_REF,
-        forcedRuntime: "openclaw",
-        controlUiEnabled: false,
-      })
-      .catch(async (error: unknown) => {
-        await writeArtifact(
-          "startup-error.log",
-          error instanceof Error ? (error.stack ?? error.message) : String(error),
-        );
-        throw error;
-      });
-    readGatewayLogs = gateway.logs;
     await transport.waitReady({ gateway });
     const cursorResponse = await fetch(`${mock.baseUrl}/debug/request-cursor`);
     expect(cursorResponse.ok).toBe(true);
@@ -173,22 +124,6 @@ describe("direct-channel silent-reply prompt contract", () => {
       );
     expect(visible).toHaveLength(1);
     expect(visible[0]?.isError).not.toBe(true);
-    const evidence = {
-      kind: "qa-channel-direct-ingress-gateway-provider-prompt",
-      channel: "qa-channel",
-      liveDiscord: false,
-      requestKind: request.requestKind,
-      providerOutcome: request.outcome,
-      providerRequests: requests.length,
-      visibleReplies: visible.length,
-      reply: outbound.text,
-      hasTooling: instructions.includes("## Tooling"),
-      hasCare: instructions.includes("## Care"),
-      hasGenericSilentReplies: instructions.includes("## Silent Replies"),
-    };
-    await writeArtifact("observed.json", evidence);
-    await writeArtifact("synthetic-instructions.txt", instructions);
-    process.stdout.write(`${JSON.stringify(evidence)}\n`);
-    expect(evidence.hasGenericSilentReplies, "SILENT_REPLY_GUIDANCE_LEAK").toBe(false);
+    expect(instructions, "SILENT_REPLY_GUIDANCE_LEAK").not.toContain("## Silent Replies");
   }, 180_000);
 });

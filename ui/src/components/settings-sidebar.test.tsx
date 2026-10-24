@@ -8,7 +8,7 @@ import { i18n, t } from "../i18n/index.ts";
 import { pt_BR } from "../i18n/locales/pt-BR.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import type { AgentSelectElement } from "./agent-select.ts";
+import type { AgentSelectElement } from "./agent-select.tsx";
 import { saveIndicatorProps as saveIndicator } from "./settings-save-indicator.test-support.ts";
 import { renderSettingsSidebar as SettingsSidebar } from "./settings-sidebar.tsx";
 import "./tooltip.ts";
@@ -406,6 +406,23 @@ describe("settings sidebar search", () => {
       expect(
         container.querySelector<HTMLElement>("openclaw-settings-save-indicator"),
       ).not.toBeNull();
+
+      for (const kind of [
+        "connecting",
+        "starting",
+        "restarting",
+        "suspending",
+        "reconnecting",
+        "restoring",
+      ] as const) {
+        renderSidebar(kind);
+        expect(
+          container.querySelector(".gateway-status__icon .session-run-spinner"),
+        ).not.toBeNull();
+        expect(container.querySelector(".gateway-status__retry")).toBeNull();
+      }
+      renderSidebar("reload-required");
+      expect(container.querySelector(".gateway-status__icon .session-run-spinner")).toBeNull();
 
       renderSidebar("suspended", "connection refused?token=settings-secret");
       const suspended = container.querySelector<HTMLElement>(".gateway-status--suspended");

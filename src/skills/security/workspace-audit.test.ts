@@ -1,12 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import * as directoryWalker from "@openclaw/fs-safe/walk";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfigWithLegacyRoster } from "../../config/legacy.roster.js";
 import { AsyncTempCaseFactory } from "../../security/test-temp-cases.js";
 import { collectWorkspaceSkillSymlinkEscapeFindings } from "./workspace-audit.js";
 
 const isWindows = process.platform === "win32";
-type AuditParams = Parameters<typeof collectWorkspaceSkillSymlinkEscapeFindings>[0];
+vi.mock("@openclaw/fs-safe/walk", async (importOriginal) => {
+  const actual = await importOriginal<typeof directoryWalker>();
+  return { ...actual, walkDirectory: vi.fn(actual.walkDirectory) };
+});
+const { walkDirectory: actualWalk } =
+  await vi.importActual<typeof directoryWalker>("@openclaw/fs-safe/walk");
 
 describe("security audit workspace skill path escape findings", () => {
   const tempCases = new AsyncTempCaseFactory("openclaw-security-audit-workspace-");
@@ -33,10 +39,9 @@ describe("security audit workspace skill path escape findings", () => {
     return outsidePath;
   }
 
-  function audit(workspaceDir: string, skillScanLimits?: AuditParams["skillScanLimits"]) {
+  function audit(workspaceDir: string) {
     return collectWorkspaceSkillSymlinkEscapeFindings({
       cfg: { agents: { defaults: { workspace: workspaceDir } } },
-      skillScanLimits,
     });
   }
 
@@ -110,30 +115,32 @@ describe("security audit workspace skill path escape findings", () => {
   });
 
   it.each([
-    {
-      name: "directory visit cap",
-      directories: ["a", "b", "c"],
-      files: [],
-      limits: { maxDirVisits: 2 },
-      truncated: true,
-    },
-    {
-      name: "file cap",
-      directories: ["a", "b"],
-      files: ["a/SKILL.md", "b/SKILL.md"],
-      limits: { maxFiles: 1 },
-      truncated: true,
-    },
-    {
-      name: "exact file cap with excluded directories",
-      directories: ["a", ".hidden", "node_modules"],
-      files: ["a/SKILL.md", ".hidden/SKILL.md", "node_modules/SKILL.md"],
-      limits: { maxFiles: 1 },
-      truncated: false,
-    },
-  ])("reports scan completeness for $name", async ({ directories, files, limits, truncated }) => {
-    const workspaceDir = await makeWorkspace("workspace-skill-capped", files, directories);
-    const findings = await audit(workspaceDir, limits);
+    ["directory visit cap", "directory", 40_000, true],
+    ["file cap", "file", 2_001, true],
+    ["exact file cap with excluded directories", "file", 2_000, false],
+  ] as const)("reports scan completeness for %s", async (_name, kind, count, truncated) => {
+    const workspaceDir = await makeWorkspace(
+      "workspace-skill-capped",
+      ["a/SKILL.md"],
+      [".hidden", "node_modules"],
+    );
+    vi.mocked(directoryWalker.walkDirectory).mockImplementationOnce(async (root, options) => {
+      const scan = await actualWalk(root);
+      const sample = scan.entries.find(
+        (entry) => entry.kind === kind && entry.name !== ".hidden" && entry.name !== "node_modules",
+      )!;
+      const visit = kind === "directory" ? options?.descend : options?.include;
+      for (let index = 0; index < count; index += 1) {
+        await visit?.(sample);
+      }
+      for (const entry of scan.entries.filter(
+        (candidate) => candidate.name === ".hidden" || candidate.name === "node_modules",
+      )) {
+        await options?.descend?.(entry);
+      }
+      return { ...scan, entries: [] };
+    });
+    const findings = await audit(workspaceDir);
     expect(findings.some((finding) => finding.checkId === "skills.workspace.scan_truncated")).toBe(
       truncated,
     );

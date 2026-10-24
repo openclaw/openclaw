@@ -66,19 +66,12 @@ afterEach(() => {
 async function createFixture(
   options: Partial<Parameters<typeof createAgentAccountingPersistenceFixture>[0]> = {},
 ) {
-  const fixture = await createAgentAccountingPersistenceFixture({
+  return createAgentAccountingPersistenceFixture({
     storePath,
     root: options.root ?? tempDirs.make("openclaw-context-pressure-"),
     fixtureId: ++fixtureSequence,
     registerOperation: (operation) => operations.push(operation),
     ...options,
-  });
-  return Object.assign(fixture, {
-    patch: async (patch: Partial<SessionEntry>) => {
-      const next = { ...fixture.read()!, ...patch };
-      await fixture.replace(next);
-      return next;
-    },
   });
 }
 
@@ -478,26 +471,60 @@ it.each([
 );
 
 it.each([
-  { kind: "NO_REPLY", expectation: "required", missing: false },
-  { kind: "NO_REPLY", expectation: "optional", missing: false },
-  { kind: "empty", expectation: "required", missing: true },
-  { kind: "hook_block", expectation: "required", missing: false },
+  ["queued", "NO_REPLY", "required", false],
+  ["queued", "NO_REPLY", "optional", false],
+  ["queued", "empty", "required", true],
+  ["queued", "hook_block", "required", false],
+  ["fallback", "NO_REPLY", "required", false],
+  ["fallback", "empty", "required", true],
+  ["fallback", "hook_block", "required", false],
 ] as const)(
-  "accounts for queued $expectation $kind completion despite trace",
-  async ({ kind, expectation, missing }) => {
+  "accounts for %s %s %s completion without hiding missing output",
+  async (lane, kind, expectation, missing) => {
     const fixture = await createFixture();
-    fixture.context.followupRun.run.traceAuthorized = true;
-    fixture.context.followupRun.run.traceLevelOverride = "raw";
-    setTerminalReply(fixture, kind, expectation);
-    const delivered = await fixture.deliverQueued();
-    if (missing) {
-      expect(delivered.filter((payload) => payload.isError && payload.isStatusNotice)).toHaveLength(
-        1,
-      );
-      expect(delivered.some((payload) => isReplyPayloadTerminalContent(payload))).toBe(false);
-    } else {
-      expect(delivered).toEqual([]);
+    const { context } = fixture;
+    setTerminalReply(
+      fixture,
+      kind,
+      expectation,
+      lane === "fallback" ? "Reply suppressed" : "blocked",
+    );
+    if (lane === "queued") {
+      context.followupRun.run.traceAuthorized = true;
+      context.followupRun.run.traceLevelOverride = "raw";
+      const delivered = await fixture.deliverQueued();
+      if (missing) {
+        expect(
+          delivered.filter((payload) => payload.isError && payload.isStatusNotice),
+        ).toHaveLength(1);
+        expect(delivered.some((payload) => isReplyPayloadTerminalContent(payload))).toBe(false);
+      } else {
+        expect(delivered).toEqual([]);
+      }
+      return;
     }
+    const onAgentRunTerminalOutcome = vi.fn();
+    context.opts = { onAgentRunTerminalOutcome };
+    context.execution.resolved = { provider: "fallback-provider", model: "fallback-model" };
+    context.execution.fallback.attempts = [
+      { provider: diagnostic.provider, model: diagnostic.model, reason: "auth", error: "No login" },
+    ];
+    const result = await finalizeReplyAgentRun(context);
+    context.replyOperation.complete();
+    if (missing) {
+      expect(result).toMatchObject({ isError: true, text: expect.any(String) });
+      expect(context.replyOperation.result).toMatchObject({ kind: "failed", code: "run_failed" });
+      expect(onAgentRunTerminalOutcome).toHaveBeenCalledWith("failed");
+    } else {
+      expect(result).toBeUndefined();
+      expect(context.replyOperation.result).toEqual({ kind: "completed" });
+      expect(onAgentRunTerminalOutcome).not.toHaveBeenCalledWith("failed");
+    }
+    expect(fixture.read()?.fallbackNotice).toMatchObject({
+      kind: "active",
+      activeModel: "fallback-provider/fallback-model",
+    });
+    expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
   },
 );
 
@@ -509,9 +536,8 @@ it("keeps queued diagnostic supplements behind source send policy", async () => 
   expect(await fixture.deliverQueued()).toEqual([]);
 });
 
-it("accounts a completed compaction before an empty heartbeat skips reply preparation", async () => {
+it("accounts a completed compaction before an optional empty reply skips preparation", async () => {
   const fixture = await createFixture();
-  fixture.context.isHeartbeat = true;
   fixture.context.followupRun.run.terminalReplyExpectation = "optional";
   fixture.recordCompaction({ currentContextTokens: 40 });
   fixture.context.execution.result.payloads = [];
@@ -553,46 +579,6 @@ describe.each(["ordinary", "followup"] as const)("%s byte-compaction accounting"
     },
   );
 });
-
-it.each([
-  { completion: "NO_REPLY", expectation: "required", missing: false },
-  { completion: "empty", expectation: "required", missing: true },
-  { completion: "hook_block", expectation: "required", missing: false },
-] as const)(
-  "finalizes a $expectation $completion fallback without hiding missing output",
-  async ({ completion, expectation, missing }) => {
-    const fixture = await createFixture();
-    const { context } = fixture;
-    setTerminalReply(fixture, completion, expectation, "Reply suppressed");
-    const onAgentRunTerminalOutcome = vi.fn();
-    context.opts = { onAgentRunTerminalOutcome };
-    context.execution.resolved = { provider: "fallback-provider", model: "fallback-model" };
-    context.execution.fallback.attempts = [
-      { provider: diagnostic.provider, model: diagnostic.model, reason: "auth", error: "No login" },
-    ];
-
-    const result = await finalizeReplyAgentRun(context);
-    context.replyOperation.complete();
-
-    if (missing) {
-      expect(result).toMatchObject({
-        isError: true,
-        text: expect.any(String),
-      });
-      expect(context.replyOperation.result).toMatchObject({ kind: "failed", code: "run_failed" });
-      expect(onAgentRunTerminalOutcome).toHaveBeenCalledWith("failed");
-    } else {
-      expect(result).toBeUndefined();
-      expect(context.replyOperation.result).toEqual({ kind: "completed" });
-      expect(onAgentRunTerminalOutcome).not.toHaveBeenCalledWith("failed");
-    }
-    expect(fixture.read()?.fallbackNotice).toMatchObject({
-      kind: "active",
-      activeModel: "fallback-provider/fallback-model",
-    });
-    expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
-  },
-);
 
 describe("cancelled followup compaction accounting", () => {
   it("retains committed compaction facts after restart abort without success bookkeeping", async () => {
@@ -637,8 +623,7 @@ describe("cancelled followup compaction accounting", () => {
   it("accounts cancellation against the committed successor despite a predecessor cache", async () => {
     const fixture = await createFixture();
     const sessionId = `${fixture.sessionId}-accepted-successor`;
-    await fixture.replace({
-      ...fixture.context.activeSessionEntry!,
+    await fixture.patch({
       sessionId,
       compactionCount: 3,
     });

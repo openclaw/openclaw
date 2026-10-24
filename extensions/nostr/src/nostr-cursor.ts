@@ -88,10 +88,8 @@ export function createNostrCursorStateWriter(options: {
   };
 
   const clearTimer = (): void => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    clearTimeout(timer);
+    timer = undefined;
   };
 
   const runFlush = async (): Promise<void> => {

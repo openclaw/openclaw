@@ -28,15 +28,19 @@ const chooser = { method: "POST", path: "/hooks/file-chooser", body: {} };
 const MARKER_CONTENT = "openclaw-browser-proxy-upload-v1\n";
 type StageRequest = Parameters<typeof uploads.stageBrowserProxyUploadRequest>[0];
 
-beforeEach(async () => {
+async function initializeUploads(fakeDate = false) {
   const root = (fixture.root = tempDirs.make("browser-proxy-upload-"));
   uploadDir = path.join(root, "uploads");
   inboundMediaDir = path.join(root, "media", "inbound");
   vi.resetModules();
   uploads = await import("./browser-proxy-upload.js");
-  browserPaths = await import("./browser/paths.js");
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-});
+  if (!fakeDate) {
+    browserPaths = await import("./browser/paths.js");
+  }
+  vi.useFakeTimers({
+    toFake: fakeDate ? ["setTimeout", "clearTimeout", "Date"] : ["setTimeout", "clearTimeout"],
+  });
+}
 afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllTimers();
@@ -91,6 +95,7 @@ async function retainedDirectory(name: string, contents: string, marked = true) 
 }
 
 describe("browser proxy upload transport", () => {
+  beforeEach(() => initializeUploads());
   it("transfers Gateway inbound media bytes instead of resolving the URI on the node", async () => {
     await fs.mkdir(inboundMediaDir, { recursive: true });
     await fs.writeFile(path.join(inboundMediaDir, "report.txt"), "gateway inbound bytes", "utf8");
@@ -322,5 +327,93 @@ describe("browser proxy upload transport", () => {
     const body = { paths: ["/tmp/openclaw/uploads/report.txt"] };
     await expect(prepare(body, { path: "/act" })).resolves.toEqual({ body });
     await expect(stage({ body, path: "/act" })).resolves.toEqual({ body });
+  });
+});
+
+describe("browser proxy upload activity", () => {
+  const HOUR_MS = 60 * 60 * 1000;
+  const chmodFaultUnavailable = process.platform === "win32" || process.getuid?.() === 0;
+  const restricted: string[] = [];
+  const stageReport = () => stage({ body: { ref: "e1" }, upload: uploadFiles("report") });
+  beforeEach(() => initializeUploads(true));
+  afterEach(async () => {
+    for (const directory of restricted.splice(0)) {
+      await fs.chmod(directory, 0o700).catch(() => {});
+    }
+  });
+  async function restrictPermissions(target: string, mode: number) {
+    await fs.chmod(target, mode);
+    restricted.push(target);
+  }
+
+  const expectIdle = () => expect(uploads.hasBrowserProxyUploadWork()).toBe(false);
+  const expectMissing = (target: string) =>
+    expect(fs.lstat(target)).rejects.toHaveProperty("code", "ENOENT");
+  const expectContents = (target: string, contents: string) =>
+    expect(fs.readFile(target, "utf8")).resolves.toBe(contents);
+  function expectBusyUntilDone(operation: Promise<void>) {
+    expect(uploads.hasBrowserProxyUploadWork()).toBe(true);
+    return operation.then(expectIdle);
+  }
+
+  it("keeps filesystem operations busy without treating retained files as active work", async () => {
+    expectIdle();
+    await expectBusyUntilDone(uploads.ensureBrowserProxyUploadCleanup());
+    const staged = await stageReport();
+    expectIdle();
+    await expectContents(path.join(staged.directory!, "0", "report.txt"), "report");
+    await expectBusyUntilDone(uploads.discardStagedBrowserProxyUpload(staged));
+    const retained = (await stageReport()).directory!;
+    await vi.advanceTimersByTimeAsync(24 * HOUR_MS);
+    await vi.waitFor(async () => {
+      await expectMissing(retained);
+      expectIdle();
+    });
+  });
+
+  it.skipIf(chmodFaultUnavailable)("retries cached recovery on the next upload", async () => {
+    const stagingRoot = path.join(uploadDir, ".proxy-uploads");
+    const expired = path.join(stagingRoot, "upload-expired");
+    await fs.mkdir(expired, { recursive: true });
+    await fs.writeFile(path.join(expired, ".openclaw-browser-proxy-upload-v1"), MARKER_CONTENT);
+    const past = new Date(Date.now() - 25 * HOUR_MS);
+    await fs.utimes(expired, past, past);
+    await restrictPermissions(stagingRoot, 0o000);
+    const reads = vi.spyOn(fs, "readdir");
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await uploads.ensureBrowserProxyUploadCleanup();
+    }
+    expect(reads.mock.calls.filter(([target]) => target === stagingRoot)).toHaveLength(1);
+    expectIdle();
+    await fs.chmod(stagingRoot, 0o700);
+    await stageReport();
+    await expectMissing(expired);
+    expectIdle();
+  });
+
+  it.skipIf(chmodFaultUnavailable)("retains deletion for retry while idle", async () => {
+    const staged = await stageReport();
+    const directory = staged.directory!;
+    const child = path.join(directory, "0");
+    await restrictPermissions(child, 0o500);
+    await expectBusyUntilDone(uploads.discardStagedBrowserProxyUpload(staged));
+    await expectContents(path.join(directory, ".openclaw-browser-proxy-upload-v1"), MARKER_CONTENT);
+    await expectContents(path.join(child, "report.txt"), "report");
+    await fs.chmod(child, 0o700);
+    await uploads.discardStagedBrowserProxyUpload(staged);
+    await expectMissing(directory);
+    expectIdle();
+  });
+
+  it("removes a replaced staging symlink without traversing the linked directory", async () => {
+    const staged = await stageReport();
+    await uploads.discardStagedBrowserProxyUpload(staged);
+    const foreign = path.join(fixture.root, "uploads", "foreign");
+    await fs.mkdir(foreign);
+    await fs.writeFile(path.join(foreign, "keep.txt"), "keep");
+    await fs.symlink(foreign, staged.directory!, process.platform === "win32" ? "junction" : "dir");
+    await uploads.discardStagedBrowserProxyUpload(staged);
+    await expectContents(path.join(foreign, "keep.txt"), "keep");
+    await expectMissing(staged.directory!);
   });
 });

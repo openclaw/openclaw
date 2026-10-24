@@ -33,7 +33,6 @@ import {
   getTelegramSpooledReplayLifecycle,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
-import { commitTelegramMessageDispatchReplay } from "./message-dispatch-dedupe.js";
 import { monitorTelegramProvider } from "./monitor.js";
 import { installTelegramIngressQueueRuntime } from "./runtime-state.test-support.js";
 import { setTelegramRuntime } from "./runtime.js";
@@ -41,6 +40,7 @@ import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.t
 import type { TelegramRuntime } from "./runtime.types.js";
 import { openTelegramIngressQueue } from "./telegram-ingress-spool.js";
 import {
+  createHeldTelegramReplay,
   writeTelegramSpooledUpdate,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
@@ -77,6 +77,10 @@ import { registerTelegramWebhookRegistrationTests } from "./test-support/webhook
 const legacyListenerForRequest = vi.hoisted(() =>
   vi.fn((): { port: number; host?: string } | undefined => undefined),
 );
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  computeBackoff: () => 0,
+}));
 vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/webhook-ingress")>()),
   getWebhookLegacyListener: legacyListenerForRequest,
@@ -213,6 +217,15 @@ async function expectInvalidLane(laneKey: string) {
       { reason: "invalid-event", laneKey },
     ]);
     expect(handleUpdateSpy).not.toHaveBeenCalled();
+  });
+}
+
+async function expectReplayed(update: unknown) {
+  await withWebhook(async ({ ingress }) => {
+    await ingress.waitForIdle();
+    expect(handleUpdateSpy).toHaveBeenCalledOnce();
+    expect(handleUpdateSpy).toHaveBeenCalledWith(update);
+    expect(await webhookQueue().listFailed?.()).toEqual([]);
   });
 }
 
@@ -550,19 +563,11 @@ describe("startTelegramWebhook", () => {
 
     await withWebhook(
       async ({ port }) => {
-        const response = await postUpdate(port, telegramMessageUpdate(806, "startup webhook"));
-        expect(response.status).toBe(200);
-        expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+        await expectAccepted(await postUpdate(port, telegramMessageUpdate(806, "startup webhook")));
       },
       {
         runtime: testRuntime(runtimeLog),
         setStatus,
-        webhookRegistrationRetryPolicy: {
-          initialMs: 0,
-          maxMs: 0,
-          factor: 1,
-          jitter: 0,
-        },
       },
     );
 
@@ -812,62 +817,16 @@ describe("startTelegramWebhook", () => {
         registered.resolve();
         return true;
       });
-      const operationStarted = createDeferred<void>();
-      const releaseOperation = createDeferred<void>();
-      const recorded = new Set<string>();
+      const replay = createHeldTelegramReplay(operation);
+      const { operationStarted, releaseOperation, recorded } = replay;
       const setStatus = vi.fn();
       let settlement: Promise<void> | undefined;
       handleUpdateSpy.mockImplementationOnce(async () => {
         const participant = createTelegramSpooledReplayDeferredParticipant("held-webhook-work");
-        const hold = participant?.beginSettlementHold();
-        if (!participant || !hold) {
+        if (!participant) {
           throw new Error("Expected accepted webhook settlement ownership");
         }
-        settlement = (async () => {
-          try {
-            if (operation === "introduction") {
-              operationStarted.resolve();
-              await releaseOperation.promise;
-              recorded.add("introduction");
-            } else {
-              await commitTelegramMessageDispatchReplay({
-                requirePersistent: true,
-                guard: {
-                  claim: async () => ({ kind: "invalid" }),
-                  warmup: async () => 0,
-                  forget: async (event) => {
-                    operationStarted.resolve();
-                    await releaseOperation.promise;
-                    for (const key of "keys" in event ? (event.keys ?? []) : []) {
-                      recorded.delete(key);
-                    }
-                    return true;
-                  },
-                },
-                claims: ["first", "second"].map((key) => ({
-                  keys: [key],
-                  commit: async (options) => {
-                    if (operation === "commit" && key === "first") {
-                      operationStarted.resolve();
-                      await releaseOperation.promise;
-                    }
-                    recorded.add(key);
-                    if (operation === "rollback" && key === "second") {
-                      options?.onDiskError?.(new Error("synthetic commit failure"));
-                    }
-                    return true;
-                  },
-                  release: () => undefined,
-                })),
-              });
-            }
-            hold.release("discard-pending");
-            participant.settle({ kind: "completed" });
-          } catch (error) {
-            hold.release("replay-pending");
-            participant.settle({ kind: "failed-retryable", error });
-          }
-        })();
+        settlement = replay.settle(participant);
         await settlement;
       });
       let stopped = false;
@@ -1146,12 +1105,7 @@ describe("startTelegramWebhook", () => {
         ]);
       });
 
-      await withWebhook(async ({ ingress }) => {
-        await ingress.waitForIdle();
-        expect(handleUpdateSpy).toHaveBeenCalledOnce();
-        expect(handleUpdateSpy).toHaveBeenCalledWith(update);
-        expect(await webhookQueue().listFailed?.()).toEqual([]);
-      });
+      await expectReplayed(update);
     },
   );
 
@@ -1169,12 +1123,7 @@ describe("startTelegramWebhook", () => {
       await spoolUpdate(update, persistedLaneKey);
       await closeStateDatabase();
 
-      await withWebhook(async ({ ingress }) => {
-        await ingress.waitForIdle();
-        expect(handleUpdateSpy).toHaveBeenCalledOnce();
-        expect(handleUpdateSpy).toHaveBeenCalledWith(update);
-        expect(await webhookQueue().listFailed?.()).toEqual([]);
-      });
+      await expectReplayed(update);
     },
   );
 

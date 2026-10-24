@@ -109,6 +109,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/infra/database-engine/physical-facts-worker.test-support.ts!",
   // The PostgreSQL namespace isolation test resolves this worker through resolveRuntimeWorkerUrl.
   "src/infra/database-engine/multi-namespace.worker.test-support.ts!",
+  // The state-read admission test launches this Worker from computed source and dist paths.
+  "src/infra/database-engine/state-read-admission.worker.test-support.ts!",
   // The proxy owner test spawns this capture child through resolveRuntimeWorkerUrl.
   "src/proxy-capture/child-transport.process.test-support.ts!",
   // The PostgreSQL state owner test resolves this worker through resolveRuntimeWorkerUrl.
@@ -188,6 +190,10 @@ const workspaces = Object.fromEntries(
               // The plugin README documents this standalone fixture benchmark command.
               ...(workspace === "extensions/team-reports"
                 ? ["src/report-run.benchmark.test-support.ts!"]
+                : []),
+              // extensions/diagnostics-prometheus/benchmarks/README.md invokes this Node benchmark by path.
+              ...(workspace === "extensions/diagnostics-prometheus"
+                ? ["src/metric-store.benchmark.test-support.ts!"]
                 : []),
               // The PostgreSQL fixture resolves this backend through openEngineWorkerStore.
               ...(workspace === "extensions/workboard"

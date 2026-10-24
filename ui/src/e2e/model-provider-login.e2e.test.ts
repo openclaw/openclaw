@@ -12,7 +12,9 @@ import {
   openChatModelPicker,
   pickerValue as modelPickerValue,
 } from "../test-helpers/select-picker-e2e.ts";
+import { sessionsUsageResponse } from "../test-helpers/sessions-usage-response.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expandProvider } from "./model-providers.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI model provider login mocked Gateway E2E",
@@ -257,7 +259,7 @@ suite.define(() => {
           expect(search.get("provider")).toBe("openai");
           expect(search.has("connect")).toBe(false);
           await gateway.waitForRequest("models.authStatus", { match: { agentId: "writer" } });
-          const card = page.locator('[data-provider-id="openai"]');
+          const card = await expandProvider(page, "openai");
           await card.getByText("alex@example.invalid", { exact: true }).waitFor();
           expect(await page.locator('[data-provider-id="anthropic"]').count()).toBe(0);
           expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
@@ -348,19 +350,16 @@ suite.define(() => {
         });
         const dialog = page.locator("openclaw-modal-dialog");
         await captureProviderProof("login-browser-callback-pending.png", dialog);
-        const openSignIn = dialog.getByRole("link", { name: "Open sign-in", exact: true });
+        const openSignIn = dialog.getByRole("link", { name: "Reopen browser tab", exact: true });
         await openSignIn.waitFor();
         expect(await openSignIn.getAttribute("href")).toBe("https://provider.example/sign-in");
         expect(
-          await dialog.getByRole("button", { name: "Copy link", exact: true }).isEnabled(),
+          await dialog.getByRole("button", { name: "Copy sign-in link", exact: true }).isEnabled(),
         ).toBe(true);
-        expect(await dialog.getByRole("button", { name: "Cancel", exact: true }).isEnabled()).toBe(
-          true,
-        );
-        await dialog
-          .getByRole("status")
-          .filter({ hasText: "Waiting for approval in your browser…" })
-          .waitFor();
+        expect(
+          await dialog.getByRole("button", { name: "Cancel sign-in", exact: true }).isEnabled(),
+        ).toBe(true);
+        await dialog.getByRole("status").filter({ hasText: "Waiting for" }).waitFor();
         expect(await dialog.getByRole("button", { name: "Continue", exact: true }).count()).toBe(0);
         expect(await dialog.locator('input[name="wizard-text"]').count()).toBe(0);
         const [signInPage] = await Promise.all([context.waitForEvent("page"), openSignIn.click()]);
@@ -451,16 +450,15 @@ suite.define(() => {
               },
             },
             "usage.status": { updatedAt: now, providers: [] },
-            "sessions.usage": { aggregates: { byProvider: [] } },
+            "sessions.usage": sessionsUsageResponse(),
           },
         });
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         const primary = page.locator(".model-providers__defaults openclaw-select-picker").first();
         await expect.poll(() => modelPickerValue(primary)).toBe("example/existing");
         await captureProviderProof(`login-models-before-${modelAccess.value}.png`, primary);
-        await page
-          .locator(modelAccess.native ? "[data-model-readiness] button" : "[data-models-connect]")
-          .click();
+        // A working default hides the setup prompt; Provider access owns Connect provider.
+        await page.locator("[data-models-connect]").click();
         expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
         await page.locator('[data-models-login-provider="example"]').click();
         const signIn = page.getByRole("button", { name: "Example device sign-in", exact: true });
@@ -483,7 +481,7 @@ suite.define(() => {
         await dialog.getByText("TEST-1234", { exact: true }).waitFor();
         expect(
           await dialog
-            .getByRole("link", { name: "Open sign-in", exact: true })
+            .getByRole("link", { name: "Reopen browser tab", exact: true })
             .getAttribute("href"),
         ).toBe("https://example.invalid/device");
         await captureProviderProof(
@@ -573,7 +571,8 @@ suite.define(() => {
         await saved.waitFor();
         await captureProviderProof(`login-after-saved-${modelAccess.value}.png`, dialog);
         await dialog.getByRole("button", { name: "Close", exact: true }).click();
-        await page.getByText("signed-in@example.invalid", { exact: true }).waitFor();
+        const example = await expandProvider(page, "example");
+        await example.getByText("signed-in@example.invalid", { exact: true }).waitFor();
         await expect
           .poll(async () => (await gateway.getRequests("models.authStatus")).length)
           .toBeGreaterThan(authReads);
@@ -757,10 +756,10 @@ suite.define(() => {
         });
         await gateway.deferNext("wizard.next");
         await gateway.resolveDeferred("wizard.next");
-        await page.getByRole("link", { name: "Open sign-in", exact: true }).waitFor();
+        await page.getByRole("link", { name: "Reopen browser tab", exact: true }).waitFor();
         await expect.poll(() => popup.url()).toBe(signInUrl);
         expect(await popup.evaluate(() => window.opener)).toBeNull();
-        await page.getByRole("button", { name: "Copy link", exact: true }).waitFor();
+        await page.getByRole("button", { name: "Copy sign-in link", exact: true }).waitFor();
         expect(await dialog.textContent()).not.toContain(signInUrl);
         await captureProviderProof("login-browser-waiting.png", dialog);
         await gateway.resolveDeferred("wizard.next");

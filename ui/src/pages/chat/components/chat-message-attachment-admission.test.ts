@@ -3,7 +3,7 @@
 import { createComponent, createSignal, getOwner } from "solid-js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { managedSource, ticketResponse } from "./chat-message-media.test-helpers.ts";
 import {
@@ -376,8 +376,10 @@ describe("deferred attachment source admission", () => {
             view.container.querySelectorAll(".chat-comment-preview__text--selection"),
           ).toHaveLength(2);
         } else {
-          expect(view.container.textContent).toContain(
-            kind === "comment" ? "hello" : "Visible pasted excerpt",
+          await waitForSolid(() =>
+            expect(view.container.textContent).toContain(
+              kind === "comment" ? "hello" : "Visible pasted excerpt",
+            ),
           );
         }
       }

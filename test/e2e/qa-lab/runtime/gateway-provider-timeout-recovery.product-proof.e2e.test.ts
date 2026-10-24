@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { closeHttpServer } from "../../../helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
@@ -86,10 +87,7 @@ async function startControlledProvider() {
     release: () => responseGate.resolve(),
     stop: async () => {
       responseGate.resolve();
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeHttpServer(server);
     },
   };
 }

@@ -1,7 +1,5 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -11,18 +9,11 @@ import { sendAuthorizationRequest } from "../server-methods.authorization.test-s
 import { hooksStatusHandlers } from "./hooks-status.js";
 import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  setActivePluginRegistry(createEmptyPluginRegistry());
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
 function createHookRegistry() {
-  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-status-"));
-  tempDirs.push(workspaceDir);
+  const workspaceDir = tempDirs.make("openclaw-hooks-status-");
   const registry = createEmptyPluginRegistry();
   registry.hooks.push({
     pluginId: "live-hooks",

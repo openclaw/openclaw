@@ -4,11 +4,9 @@ import { createMemo, For } from "solid-js";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
 import { getCardAlerts, visibleCardAlerts } from "../../lib/workboard/card-alerts.ts";
-import {
-  getWorkboardDependencyState,
-  getWorkboardLifecycle,
-  type WorkboardCard,
-} from "../../lib/workboard/index.ts";
+import { getWorkboardDependencyState } from "../../lib/workboard/card-state.ts";
+import { getWorkboardLifecycle } from "../../lib/workboard/lifecycle.ts";
+import type { WorkboardCard } from "../../lib/workboard/types.ts";
 import {
   getCardActionState,
   CardAction,

@@ -48,7 +48,6 @@ const AGENT_EVENT_ROUTING_FIELDS = [
   ["projectSessionLifecycle", "projectSessionLifecycle"],
   ["projectSessionMessages", "projectSessionMessages"],
   ["mainSessionRestartRecovery", "mainSessionRestartRecovery"],
-  ["isHeartbeat", "isHeartbeat"],
   ["verboseLevel", "verboseLevel"],
   ["registeredAt", "registeredAt"],
 ] as const;

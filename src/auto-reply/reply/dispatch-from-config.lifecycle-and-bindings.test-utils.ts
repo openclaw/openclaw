@@ -590,7 +590,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(diagnosticMocks.logMessageQueued).toHaveBeenCalledTimes(1);
     expect(diagnosticMocks.logSessionStateChange).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
-      state: "processing",
+      state: "waiting",
       reason: "message_start",
     });
     const processedEvent = dispatchHarness.firstMockArg(
@@ -630,7 +630,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(diagnosticMocks.logSessionStateChange).toHaveBeenCalledWith({
       sessionId: "test-uuid-1234",
       sessionKey: "agent:main:main",
-      state: "processing",
+      state: "waiting",
       reason: "message_start",
     });
   });

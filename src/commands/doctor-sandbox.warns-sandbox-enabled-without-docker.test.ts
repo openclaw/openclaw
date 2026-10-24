@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withMockedPlatform as onPlatform } from "../test-utils/vitest-spies.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import type { DoctorRepairMode } from "./doctor-repair-mode.js";
 
@@ -83,15 +84,6 @@ describe("sandbox health", () => {
     return {
       agents: { defaults: { sandbox: { mode, ...(network ? { docker: { network } } : {}) } } },
     };
-  }
-
-  async function onPlatform(platform: NodeJS.Platform, run: () => Promise<void>) {
-    const spy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-    try {
-      await run();
-    } finally {
-      spy.mockRestore();
-    }
   }
 
   it.each(["non-main", "off"] as const)(

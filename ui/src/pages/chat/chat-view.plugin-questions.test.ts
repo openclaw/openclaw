@@ -182,8 +182,8 @@ it.each([
       onAsyncQuestionSubmit: submit,
     });
     selectReplacement();
-    await waitForSolid(async () => {
-      await questionPanelIn(provider);
+    await questionPanelIn(provider);
+    await waitForSolid(() => {
       expect(count("openclaw-chat-question-panel")).toBe(1);
       expect(count('textarea[aria-label="Custom draft"]')).toBe(mode === "nondelegating" ? 1 : 0);
       expect(count(".agent-chat__composer-combobox textarea")).toBe(

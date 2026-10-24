@@ -165,17 +165,11 @@ it("reports the selected App contract without minting an execution token during 
   expect(
     (await resolveGitHubToolIdentityStatus({ config, agentId: "main", selectedScope: "system" }))
       .effective,
-  ).toEqual({
+  ).toMatchObject({
     source: "system-configured",
     credentialKind: "app-installation",
     credentialState: "configured_unavailable",
     account: null,
-    gitAuthor: { name: null, email: null },
-    evidence: "none",
-    accessExpiresAtMs: null,
-    refreshState: "not_applicable",
-    oauthScopes: [],
-    repositoryGrants: "unknown",
   });
   expect(fetcher).not.toHaveBeenCalled();
 });

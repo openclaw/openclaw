@@ -3,14 +3,16 @@ import { expect, it } from "vitest";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
+  captureUiProofEnabled,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { captureFrame } from "./sidebar-assertions.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const sessionKey = "agent:main:mobile-header";
-const title = "Mobile header redesign";
+const title = "Seeing duplicate text in the session";
 
 async function installFixture(page: Page) {
   return installMockGateway(page, {
@@ -45,6 +47,10 @@ suite.define(() => {
       await header.getByRole("button", { name: title + " — Details", exact: true }).waitFor();
       await gateway.setOnline(false);
       await header.locator(".mobile-header__notices").waitFor();
+      await header.locator(".chat-header-session-menu__trigger").click();
+      expect(await page.getByRole("menuitem", { name: "Rename", exact: true }).count()).toBe(0);
+      await page.getByRole("menuitem", { name: "Panels", exact: true }).click();
+      await page.locator(".chat-pane-cache__pane--active .chat-mobile-host").waitFor();
       const offlineDetails = await openChatDetails(page);
       expect(
         await offlineDetails
@@ -83,29 +89,33 @@ suite.define(() => {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           const header = page.locator(".chat-pane-cache__pane--active .agent-chat__header--mobile");
           await header.locator(".mobile-header__title-text", { hasText: title }).waitFor();
-          const panels = header.getByRole("button", { name: "Panels", exact: true });
-          await panels.waitFor();
+          if (captureUiProofEnabled) {
+            await captureFrame(suite.artifactDir, `mobile-header-${viewport.width}.png`, header, [
+              header.locator(".mobile-header__title-text"),
+            ]);
+          }
+          expect((await header.boundingBox())!.height).toBe(48);
           const actions = header.locator(".chat-header-session-menu__trigger");
           await actions.waitFor();
           expect(
-            await header.locator(".mobile-header__capsule").getByRole("button").allTextContents(),
-          ).toHaveLength(2);
+            await header.locator(".mobile-header__project, .chat-mobile-people-grid").count(),
+          ).toBe(0);
           expect(await header.locator(".header-new-session").count()).toBe(0);
           expect(await header.getByRole("button", { name: "Details", exact: true }).count()).toBe(
             0,
           );
           const geometry = await header.evaluate((element) => {
             const titleText = element.querySelector(".mobile-header__title-text")!;
-            const capsule = element.querySelector(".mobile-header__capsule")!;
+            const actionGroup = element.querySelector(".mobile-header__actions")!;
             return {
               titleWidth: titleText.getBoundingClientRect().width,
               headerRight: element.getBoundingClientRect().right,
-              actionsRight: capsule.getBoundingClientRect().right,
+              actionsRight: actionGroup.getBoundingClientRect().right,
               bodyWidth: document.documentElement.scrollWidth,
               viewportWidth: innerWidth,
               buttons: Array.from(
                 element.querySelectorAll<HTMLButtonElement>(
-                  ".mobile-header__navigation, .mobile-header__capsule button",
+                  ".mobile-header__navigation, .mobile-header__title, .mobile-header__actions button",
                 ),
               )
                 .filter((button) => button.checkVisibility())
@@ -116,20 +126,21 @@ suite.define(() => {
                 })),
             };
           });
-          expect(geometry.titleWidth).toBeGreaterThan(80);
+          expect(geometry.titleWidth).toBeGreaterThan(200);
           expect(geometry.actionsRight).toBeLessThanOrEqual(geometry.headerRight);
           expect(geometry.bodyWidth).toBe(geometry.viewportWidth);
           expect(geometry.buttons.map((button) => button.label)).toEqual([
             "Expand sidebar",
-            "Panels",
+            title + " — Details",
             "Actions for " + title,
           ]);
           for (const button of geometry.buttons) {
-            expect(button.width).toBeGreaterThanOrEqual(40);
-            expect(button.height).toBeGreaterThanOrEqual(40);
+            expect(button.width).toBeGreaterThanOrEqual(44);
+            expect(button.height).toBeGreaterThanOrEqual(44);
           }
 
           const details = await openChatDetails(page);
+          await details.getByRole("heading", { name: title, exact: true }).waitFor();
           expect((await details.boundingBox())!.width).toBeGreaterThanOrEqual(viewport.width - 24);
           await details.getByRole("button", { name: "Details", exact: true }).focus();
           await page.keyboard.press("Escape");
@@ -140,7 +151,8 @@ suite.define(() => {
               .evaluate((element) => element === document.activeElement),
           ).toBe(true);
 
-          await panels.click();
+          await actions.click();
+          await page.getByRole("menuitem", { name: "Panels", exact: true }).click();
           const host = page.locator(".chat-pane-cache__pane--active .chat-mobile-host");
           await host.getByRole("button", { name: "Panels", exact: true }).click();
           await host
@@ -167,7 +179,7 @@ suite.define(() => {
             .waitFor();
           await expect.poll(async () => (await files.boundingBox())!.width).toBeLessThan(800);
           await page.setViewportSize({ width: viewport.width, height: viewport.height });
-          await panels.waitFor();
+          await actions.waitFor();
           await expect
             .poll(async () => (await files.boundingBox())!.width)
             .toBeGreaterThanOrEqual(viewport.width - 24);

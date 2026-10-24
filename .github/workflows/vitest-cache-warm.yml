@@ -14,7 +14,7 @@ on:
 
 # Match npm preflight and FRV only for full-build cache publication.
 env:
-  RELEASE_BUILD_NODE_VERSION: "24.21.0"
+  RELEASE_BUILD_NODE_VERSION: "24.22.1"
 
 permissions:
   contents: read

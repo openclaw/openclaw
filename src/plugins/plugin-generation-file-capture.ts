@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -6,6 +7,7 @@ import {
   type RootFileCopyBatchSync,
   type RootFileOpenBatchSync,
 } from "@openclaw/fs-safe/advanced";
+import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
@@ -16,6 +18,66 @@ import {
   readPluginSourceDirectory,
   type PluginCapturedSourceFact,
 } from "./plugin-source-verification.js";
+
+/** Publish only verified dependency links; real nested installs keep their own bytes. */
+export function linkPluginGenerationDependency(link: string, target: string): boolean {
+  const entry = fs.lstatSync(link, { throwIfNoEntry: false });
+  if (entry && !entry.isSymbolicLink()) {
+    return false;
+  }
+  if (
+    entry &&
+    path.resolve(path.dirname(link), fs.readlinkSync(link)) === target &&
+    fs.statSync(link, { throwIfNoEntry: false })
+  ) {
+    return false;
+  }
+  fs.mkdirSync(path.dirname(link), { recursive: true, mode: 0o700 });
+  if (process.platform === "win32") {
+    if (entry) {
+      // MoveFileEx cannot replace a directory junction. Unlink only the reparse point.
+      if (!fs.lstatSync(link).isSymbolicLink()) {
+        throw new Error(`Dependency link became a real entry: ${link}`);
+      }
+      fs.unlinkSync(link);
+    }
+    fs.symlinkSync(target, link, "junction");
+  } else {
+    const staged = `${link}.${randomUUID()}.tmp`;
+    try {
+      fs.symlinkSync(path.relative(path.dirname(link), target), staged, "junction");
+      fs.renameSync(staged, link);
+    } finally {
+      fs.rmSync(staged, { force: true });
+    }
+  }
+  if (!fs.lstatSync(link).isSymbolicLink() || fs.realpathSync(link) !== fs.realpathSync(target)) {
+    throw new Error(`Dependency link does not resolve to its captured target: ${link}`);
+  }
+  if (entry) {
+    process.emitWarning(`Replacing plugin dependency link ${link}`);
+  }
+  return true;
+}
+
+/** Native child imports can follow host identity without borrowing parent resolver hooks. */
+export function linkPluginGenerationHostModule(link: string, target: string): boolean {
+  if (fs.lstatSync(link, { throwIfNoEntry: false })) {
+    return false;
+  }
+  fs.mkdirSync(path.dirname(link), { recursive: true, mode: 0o700 });
+  try {
+    fs.symlinkSync(target, link, "file");
+    return true;
+  } catch (error) {
+    // Directory junctions can work where file links are denied. Keep the
+    // existing parent redirect; never copy a second SDK graph.
+    if (!["EPERM", "EACCES", "ENOSYS", "ENOTSUP"].some((code) => hasErrnoCode(error, code))) {
+      throw error;
+    }
+    return false;
+  }
+}
 
 export function createPluginSourceLinkCapture() {
   const links = new Set<string>();
@@ -41,6 +103,7 @@ export function createPluginGenerationFileCapture({
   directory,
   outputRoot,
   capturedPaths,
+  hostModuleLinks,
   originalSources,
   hardlinkedSources,
   sourceCapture,
@@ -57,6 +120,7 @@ export function createPluginGenerationFileCapture({
   directory: string;
   outputRoot?: string;
   capturedPaths: Map<string, string>;
+  hostModuleLinks: ReadonlySet<string>;
   originalSources: Map<string, string>;
   hardlinkedSources: Set<string>;
   sourceCapture: Pick<ReturnType<typeof createPluginSourceCapture>, "additions">;
@@ -77,7 +141,7 @@ export function createPluginGenerationFileCapture({
     openFile: RootFileOpenBatchSync["openFile"],
   ) => {
     // Metadata can precede its package body; promotion never replaces those captured bytes.
-    if (capturedPaths.get(path.resolve(source)) === target) {
+    if (capturedPaths.get(path.resolve(source)) === target || hostModuleLinks.has(target)) {
       return;
     }
     const prepared = nativeAdmission.resolvePreparedSource(source);

@@ -1,5 +1,6 @@
 // Shared fixtures for dispatch runtime selection, hooks, and provider handoff.
 import { vi, type Mock } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type {
   AcpSessionResolution,
   SessionAcpMeta,
@@ -124,6 +125,19 @@ function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
 
 export function setNoAbort() {
   mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
+}
+
+export function createDispatchGate<T = void>() {
+  const started = createDeferred();
+  const pending = createDeferred<T>();
+  return {
+    ...pending,
+    started: started.promise,
+    wait: () => {
+      started.resolve();
+      return pending.promise;
+    },
+  };
 }
 
 export function resetDeliverySettlementFixture() {
@@ -652,6 +666,7 @@ export const describe1BeforeEach0 = () => {
 };
 
 export const describe2BeforeEach0 = () => {
+  controllerTesting.resetSessionControllerForTest();
   // This suite swaps global registries between cases; keep each request on a live
   // snapshot so later retirement cannot invalidate the dispatch under test.
   const activeRegistry = getActivePluginRegistry();

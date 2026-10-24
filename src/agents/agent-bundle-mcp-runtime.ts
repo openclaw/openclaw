@@ -42,7 +42,7 @@ import {
 import { applyMcpConnectionOverride } from "./mcp-connection-resolver.js";
 import { isMcpMethodNotFoundError, redactMcpDiagnosticError } from "./mcp-error.js";
 import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
-import { prepareMcpCaps, summarizeServerCapabilities } from "./mcp-metadata.js";
+import { buildMcpClientCapabilities, summarizeServerCapabilities } from "./mcp-metadata.js";
 import {
   mcpCallToolResultSchema,
   mcpGetPromptResultSchema,
@@ -62,6 +62,7 @@ import {
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import type { McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
+import { recordModelFallbackStop } from "./model-fallback-stop.js";
 import { observeNativeMcpProbe } from "./native-mcp-connect.js";
 import { createNativeMcpClientBridge } from "./native-mcp-runtime-client.js";
 import {
@@ -368,7 +369,7 @@ function createServerMcpRuntime(
             version: "0.0.0",
           },
           {
-            capabilities: prepareMcpCaps(transport, nativeContext?.capabilities, mcpAppsEnabled),
+            capabilities: nativeContext?.capabilities ?? buildMcpClientCapabilities(mcpAppsEnabled),
             versionNegotiation: { mode: nativeContext && !legacy ? "auto" : "legacy" },
             ...(nativeContext ? { inputRequired: { autoFulfill: false } } : {}),
             jsonSchemaValidator: schemaValidator,
@@ -879,7 +880,9 @@ function createServerMcpRuntime(
       await Promise.allSettled(pendingDisposals);
       if (cleanupFailed) {
         recordAgentCleanupFailure();
-        throw new Error("MCP runtime cleanup could not confirm closure");
+        const error = new Error("MCP runtime cleanup could not confirm closure");
+        recordModelFallbackStop(error);
+        throw error;
       }
     },
     dispose() {

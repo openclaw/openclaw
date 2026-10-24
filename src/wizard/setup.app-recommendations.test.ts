@@ -186,6 +186,28 @@ function storedRecord(
   };
 }
 
+function fixture(initial: OnboardingRecommendationsRecord | null = null, selected: string[] = []) {
+  const store = storeDeps(initial);
+  const recommend = vi.fn(async () => recommendationResult());
+  const prompter = createPrompter(selected);
+  const run = (params: SetupFixture = {}) =>
+    setupAppRecommendations({
+      prompter,
+      ...params,
+      deps: { ...store, recommend, ...params.deps },
+    });
+  return { store, recommend, prompter, run };
+}
+
+function legacySkill() {
+  const skill = recommendationResult().matches[1]!;
+  return {
+    ...skill,
+    candidateId: "chat-skill",
+    candidate: { ...skill.candidate, id: "chat-skill" },
+  };
+}
+
 function recommendationResult(): Extract<SetupAppRecommendationsResult, { status: "ok" }> {
   const apps = [{ label: "Chat", bundleId: "com.example.chat" }];
   const matches = [
@@ -297,57 +319,27 @@ describe("setupAppRecommendations", () => {
     [{ wizard: { appRecommendations: false } }, "darwin" as const],
     [{}, "linux" as const],
   ])("skips when gated", async (config, platform) => {
-    const recommend = vi.fn(async () => recommendationResult());
-    const store = storeDeps();
-    await setupAppRecommendations({
-      config,
-      platform,
-      deps: { recommend, ...store },
-    });
+    const { recommend, store, run } = fixture();
+    await run({ config, platform });
     expect(recommend).not.toHaveBeenCalled();
     expect(store.readStored).not.toHaveBeenCalled();
   });
 
   it("short-circuits before scanning when the offer was already answered", async () => {
-    const recommend = vi.fn(async () => recommendationResult());
-    const writeOffer = vi.fn();
+    const { recommend, prompter, store, run } = fixture(
+      storedRecord([legacySkill()], { acceptedAt: 2, updatedAt: 2 }),
+    );
     const clearPendingStored = vi.fn();
-    const prompter = createPrompter();
-    const legacyMatch = recommendationResult().matches[1]!;
-
-    await setupAppRecommendations({
-      prompter,
-      deps: {
-        recommend,
-        writeOffer,
-        clearPendingStored,
-        readStored: async () =>
-          storedRecord(
-            [
-              {
-                ...legacyMatch,
-                candidateId: "chat-skill",
-                candidate: { ...legacyMatch.candidate, id: "chat-skill" },
-              },
-            ],
-            { acceptedAt: 2, updatedAt: 2 },
-          ),
-      },
-    });
-
+    await run({ deps: { clearPendingStored } });
     expect(recommend).not.toHaveBeenCalled();
     expect(prompter.progress).not.toHaveBeenCalled();
-    expect(writeOffer).not.toHaveBeenCalled();
+    expect(store.writeOffer).not.toHaveBeenCalled();
     expect(clearPendingStored).not.toHaveBeenCalled();
   });
 
   it("rescans a pending offer with a bare ClawHub id", async () => {
     const pendingMatches = recommendationResult().matches;
-    pendingMatches[1] = {
-      ...pendingMatches[1]!,
-      candidateId: "chat-skill",
-      candidate: { ...pendingMatches[1]!.candidate, id: "chat-skill" },
-    };
+    pendingMatches[1] = legacySkill();
     const recommend = vi.fn(async () => recommendationResult());
     const clearPendingStored = vi.fn(async () => true);
 
@@ -367,28 +359,15 @@ describe("setupAppRecommendations", () => {
   });
 
   it("leaves a pending stored offer to the bootstrap without rescanning", async () => {
-    const recommend = vi.fn(async () => recommendationResult());
-    const writeOffer = vi.fn();
-    const prompter = createPrompter();
-
-    await setupAppRecommendations({
-      prompter,
-      deps: {
-        recommend,
-        writeOffer,
-        readStored: async () => storedRecord(),
-        deferOfferToBootstrap: () => true,
-      },
-    });
-
+    const { recommend, prompter, store, run } = fixture(storedRecord());
+    await run({ deps: { deferOfferToBootstrap: () => true } });
     expect(recommend).not.toHaveBeenCalled();
     expect(prompter.multiselect).not.toHaveBeenCalled();
-    expect(writeOffer).not.toHaveBeenCalled();
+    expect(store.writeOffer).not.toHaveBeenCalled();
   });
 
   it("reoffers a failed install and consumes it after a successful retry", async () => {
-    const store = storeDeps();
-    const recommend = vi.fn(async () => recommendationResult());
+    const { store, recommend, prompter, run } = fixture();
     const installSkill = vi
       .fn()
       .mockResolvedValueOnce({ ok: false as const, error: "offline" })
@@ -398,20 +377,17 @@ describe("setupAppRecommendations", () => {
         version: "1.0.0",
         targetDir: "/tmp/workspace/skills/chat-skill",
       });
-    const prompter = createPrompter();
     vi.mocked(prompter.multiselect)
       .mockResolvedValueOnce(["recommendation:1"])
       .mockResolvedValueOnce(["recommendation:0"]);
-    const deps = { recommend, installSkill, ...store };
-
-    await setupAppRecommendations({ prompter, deps });
+    await run({ deps: { installSkill } });
 
     expect(await store.readStored()).toMatchObject({
       acceptedAt: null,
       matches: [expect.objectContaining({ candidateId: "@demo-owner/chat-skill" })],
     });
 
-    await setupAppRecommendations({ prompter, deps });
+    await run({ deps: { installSkill } });
 
     expect(recommend).toHaveBeenCalledOnce();
     expect(installSkill).toHaveBeenCalledTimes(2);
@@ -470,18 +446,12 @@ describe("setupAppRecommendations", () => {
     const ensurePlugin = vi.fn();
     const installSkill = vi.fn();
     const config: OpenClawConfig = {};
-    const store = storeDeps();
+    const { store, run } = fixture(null, ["__skip__", "recommendation:0"]);
 
     await expect(
-      setupAppRecommendations({
+      run({
         config,
-        prompter: createPrompter(["__skip__", "recommendation:0"]),
-        deps: {
-          ...store,
-          recommend: async () => recommendationResult(),
-          ensurePlugin,
-          installSkill,
-        },
+        deps: { ensurePlugin, installSkill },
       }),
     ).resolves.toBe(config);
     expect(ensurePlugin).not.toHaveBeenCalled();
@@ -492,18 +462,11 @@ describe("setupAppRecommendations", () => {
   });
 
   it("stores a pending offer for a fresh workspace bootstrap", async () => {
-    const store = storeDeps();
+    const { store, prompter, recommend, run } = fixture();
     store.deferOfferToBootstrap.mockReturnValue(true);
-    const prompter = createPrompter();
     delete prompter.plain;
     const log = vi.fn();
-    const recommend = vi.fn(async () => recommendationResult());
-
-    await setupAppRecommendations({
-      prompter,
-      runtime: { ...runtime, log },
-      deps: { recommend, ...store },
-    });
+    await run({ runtime: { ...runtime, log } });
 
     expect(store.writeOffer).toHaveBeenCalledWith(
       expect.objectContaining({ answered: false, matches: recommendationResult().matches }),

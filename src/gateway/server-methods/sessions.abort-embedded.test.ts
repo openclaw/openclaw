@@ -42,22 +42,114 @@ import { cancelGatewayWorkerSessionWork } from "../server-worker-placement-cance
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
-import { createActiveRun, createChatAbortContext } from "./chat.abort.test-helpers.js";
+import { createActiveRun } from "./chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 import {
   prepareSessionLifecycleDrain,
   type SessionLifecycleDrain,
 } from "./sessions-lifecycle-drain.js";
 import { createEmbeddedSessionFixture } from "./sessions.abort-embedded.test-support.js";
+import {
+  abortContext,
+  expectCancelledSession,
+  stopSession,
+} from "./sessions.abort-lifecycle.test-support.js";
 
 const fixture = useChatAbortRegistryFixture();
 const parentKey = "agent:main:direct:embedded-parent";
 const parentId = "embedded-parent-session";
 const childKey = (id: string) => `agent:main:subagent:${id}`;
+const parentIdentity = { sessionId: parentId, sessionKey: parentKey, agentId: "main" };
 const { target: parentTarget, seed: seedEmbeddedSession } = createEmbeddedSessionFixture(
   parentKey,
   parentId,
 );
+
+function registerParent(runId: string) {
+  return registerChatAbortController({
+    ...parentIdentity,
+    target: parentTarget(),
+    runId,
+    timeoutMs: 30_000,
+  });
+}
+
+function drainParent(
+  action: "delete" | "archive",
+  context: Parameters<typeof prepareSessionLifecycleDrain>[0]["context"],
+  authorize?: () => void,
+) {
+  return prepareSessionLifecycleDrain({
+    ...parentIdentity,
+    action,
+    context,
+    authorize,
+    storePath: resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: "main" }),
+    sessionKeys: [parentKey],
+    defaultAgentId: "main",
+    lifecycleIdentities: [parentKey, parentId],
+  });
+}
+
+function requestStop(
+  method: "chat.abort" | "sessions.abort",
+  client: Parameters<typeof handleGatewayRequest>[0]["client"],
+  context: Parameters<typeof handleGatewayRequest>[0]["context"],
+  respond: Parameters<typeof handleGatewayRequest>[0]["respond"],
+  params: Record<string, unknown> = {},
+  sessionMutationCommitGuard?: () => void,
+) {
+  return handleGatewayRequest({
+    req: {
+      type: "req",
+      id: "stop",
+      method,
+      params: {
+        ...(method === "chat.abort" ? { sessionKey: parentKey } : { key: parentKey }),
+        ...params,
+      },
+    },
+    client,
+    context,
+    respond,
+    sessionMutationCommitGuard,
+    isWebchatConnect: () => false,
+    extraHandlers: {
+      [method]: method === "chat.abort" ? handleChatAbortRequest : sessionAbortHandlers[method]!,
+    },
+  });
+}
+
+async function seedOwnedParent(client: ReturnType<typeof roleClient>) {
+  await sessions.upsertSessionEntryCore(
+    { agentId: "main", sessionKey: parentKey },
+    {
+      sessionId: parentId,
+      updatedAt: 1,
+      createdActor: {
+        type: "human",
+        source: "profile",
+        id: client.authenticatedUserProfile!.profileId,
+      },
+    },
+  );
+}
+
+function enqueueCollector(
+  groupId: string,
+  runId: string,
+  start: () => Promise<void>,
+  active = "running",
+) {
+  enqueueSwarmRun({
+    groupId,
+    runId,
+    start,
+    activeRunIds: [active],
+    maxConcurrent: 1,
+    onStartFailure: () => true,
+  });
+}
 
 it.for(["controller", "reply-only"] as const)(
   "delete drain records cancellation before settling a retained %s reply",
@@ -65,45 +157,21 @@ it.for(["controller", "reply-only"] as const)(
     const runId = "delete-retained-reply";
     await seedEmbeddedSession(runId);
     const context = createDirectChatContext({ getRuntimeConfig });
-    const registration =
-      owner === "controller"
-        ? registerChatAbortController({
-            target: parentTarget(),
-            runId,
-            sessionId: parentId,
-            sessionKey: parentKey,
-            agentId: "main",
-            timeoutMs: 30_000,
-          })
-        : undefined;
+    const registration = owner === "controller" ? registerParent(runId) : undefined;
     const releaseClaim = registration?.registered
       ? await claimRpcSourceForTest(registration.entry)
       : undefined;
     const operation = registration?.registered
       ? registration.entry.input.claim!.operation!
       : createReplyOperation({
-          sessionKey: parentKey,
-          sessionId: parentId,
-          agentId: "main",
+          ...parentIdentity,
           resetTriggered: false,
           target: parentTarget(),
         });
     const aborted = createDeferredCore();
     operation.abortSignal.addEventListener("abort", () => aborted.resolve(), { once: true });
     let drain: SessionLifecycleDrain | undefined;
-    const pending = prepareSessionLifecycleDrain({
-      action: "delete",
-      context,
-      storePath: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
-        agentId: "main",
-      }),
-      sessionKeys: [parentKey],
-      sessionKey: parentKey,
-      sessionId: parentId,
-      agentId: "main",
-      defaultAgentId: "main",
-      lifecycleIdentities: [parentKey, parentId],
-    }).then((result) => {
+    const pending = drainParent("delete", context).then((result) => {
       drain = result;
       return result;
     });
@@ -143,17 +211,7 @@ it.each(["chat.abort", "sessions.abort", "controller-backed"] as const)(
     const runId = "http-embedded-run";
     const target = await seedEmbeddedSession(runId);
     const context = createDirectChatContext({ getRuntimeConfig });
-    const registration =
-      mode === "controller-backed"
-        ? registerChatAbortController({
-            target: parentTarget(),
-            runId,
-            sessionId: parentId,
-            sessionKey: parentKey,
-            agentId: "main",
-            timeoutMs: 30_000,
-          })
-        : undefined;
+    const registration = mode === "controller-backed" ? registerParent(runId) : undefined;
     const releaseClaim = registration?.registered
       ? await claimRpcSourceForTest(registration.entry)
       : undefined;
@@ -173,31 +231,13 @@ it.each(["chat.abort", "sessions.abort", "controller-backed"] as const)(
     });
     const method = mode === "sessions.abort" ? mode : "chat.abort";
     try {
-      await withExecRequestTurn(
-        { identity: { runId, sessionId: parentId, sessionKey: parentKey, agentId: "main" } },
-        async () => {
-          const sendStop = () =>
-            handleGatewayRequest({
-              req: {
-                type: "req",
-                id: "http-stop",
-                method,
-                params: method === "chat.abort" ? { sessionKey: parentKey } : { key: parentKey },
-              },
-              client: roleClient("write", "http-stop-operator"),
-              context,
-              respond,
-              isWebchatConnect: () => false,
-              extraHandlers: {
-                "chat.abort": handleChatAbortRequest,
-                "sessions.abort": sessionAbortHandlers["sessions.abort"]!,
-              },
-            });
-          await (registration?.entry
-            ? withSessionControllerSource(registration.entry.input, sendStop)
-            : sendStop());
-        },
-      );
+      await withExecRequestTurn({ identity: { runId, ...parentIdentity } }, async () => {
+        const sendStop = () =>
+          requestStop(method, roleClient("write", "http-stop-operator"), context, respond);
+        await (registration?.entry
+          ? withSessionControllerSource(registration.entry.input, sendStop)
+          : sendStop());
+      });
       expect(abort).toHaveBeenCalledTimes(1);
       expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
         true,
@@ -206,11 +246,7 @@ it.each(["chat.abort", "sessions.abort", "controller-backed"] as const)(
           : { ok: true, abortedRunId: runId, status: "aborted" },
       ]);
       if (!registration) {
-        expect(responseEntry).toMatchObject({
-          status: "killed",
-          abortedLastRun: true,
-          lastRunId: runId,
-        });
+        expectCancelledSession(responseEntry, runId);
         expect(responseEntry?.lifecycleRunId).toBeUndefined();
         expect(context.dedupe.has(`chat:${runId}`)).toBe(false);
         expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
@@ -242,23 +278,10 @@ it.each(["revoked", "current"] as const)(
     try {
       let failure: unknown;
       try {
-        drain = await prepareSessionLifecycleDrain({
-          action: "archive",
-          authorize: () => {
-            if (!current) {
-              throw revoked;
-            }
-          },
-          context: createDirectChatContext({ getRuntimeConfig }),
-          storePath: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
-            agentId: "main",
-          }),
-          sessionKeys: [parentKey],
-          sessionKey: parentKey,
-          sessionId: parentId,
-          agentId: "main",
-          defaultAgentId: "main",
-          lifecycleIdentities: [parentKey, parentId],
+        drain = await drainParent("archive", createDirectChatContext({ getRuntimeConfig }), () => {
+          if (!current) {
+            throw revoked;
+          }
         });
       } catch (error) {
         failure = error;
@@ -272,7 +295,7 @@ it.each(["revoked", "current"] as const)(
       } else {
         expect(failure).toBeUndefined();
         expect(drain?.hasAuthoritativeWork()).toBe(false);
-        expect(after).toMatchObject({ status: "killed", abortedLastRun: true, lastRunId: runId });
+        expectCancelledSession(after, runId);
         expect(after?.lifecycleRunId).toBeUndefined();
       }
     } finally {
@@ -321,19 +344,12 @@ it.each(["forbidden", "allowed"] as const)(
     setActiveEmbeddedRun(parentId, handle, parentKey, undefined, "main");
     const respond = vi.fn();
     try {
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "shared-embedded-stop",
-          method: "chat.abort",
-          params: { sessionKey: parentKey },
-        },
+      await requestStop(
+        "chat.abort",
         client,
-        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+        createDirectChatContext({ getRuntimeConfig: () => cfg }),
         respond,
-        isWebchatConnect: () => false,
-        extraHandlers: { "chat.abort": handleChatAbortRequest },
-      });
+      );
       expect(respond).toHaveBeenCalledOnce();
       const after = sessions.loadSessionEntry({ ...target, readConsistency: "latest" });
       if (access === "forbidden") {
@@ -349,7 +365,7 @@ it.each(["forbidden", "allowed"] as const)(
         ]);
       } else {
         expect(abort).toHaveBeenCalledOnce();
-        expect(after).toMatchObject({ status: "killed", abortedLastRun: true, lastRunId: runId });
+        expectCancelledSession(after, runId);
         expect(after?.lifecycleRunId).toBeUndefined();
         expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
           true,
@@ -406,23 +422,10 @@ it.each(["before signal", "after signal"] as const)(
     const revoked = new Error("embedded Stop authority revoked");
     try {
       const outcome = await Promise.allSettled([
-        handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "revoked-embedded-stop",
-            method: "chat.abort",
-            params: { sessionKey: parentKey },
-          },
-          client,
-          context,
-          respond,
-          isWebchatConnect: () => false,
-          sessionMutationCommitGuard: () => {
-            if (!current) {
-              throw revoked;
-            }
-          },
-          extraHandlers: { "chat.abort": handleChatAbortRequest },
+        requestStop("chat.abort", client, context, respond, {}, () => {
+          if (!current) {
+            throw revoked;
+          }
         }),
       ]);
       expect(queued.input.abortSignal.aborted).toBe(true);
@@ -452,18 +455,7 @@ it.each(["matched", "old-incarnation", "foreign-key"] as const)(
     const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
     setRuntimeConfigSnapshot(cfg);
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    await sessions.upsertSessionEntryCore(
-      { agentId: "main", sessionKey: parentKey },
-      {
-        sessionId: parentId,
-        updatedAt: 1,
-        createdActor: {
-          type: "human",
-          source: "profile",
-          id: client.authenticatedUserProfile!.profileId,
-        },
-      },
-    );
+    await seedOwnedParent(client);
     const selectedId = target === "old-incarnation" ? "previous-parent" : parentId;
     const selectedKey = target === "foreign-key" ? "agent:main:foreign" : parentKey;
     const abort = vi.fn(() => clearActiveEmbeddedRun(selectedId, handle, selectedKey));
@@ -471,19 +463,12 @@ it.each(["matched", "old-incarnation", "foreign-key"] as const)(
     setActiveEmbeddedRun(selectedId, handle, selectedKey);
     const respond = vi.fn();
     try {
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "narrow-chat-stop",
-          method: "chat.abort",
-          params: { sessionKey: parentKey },
-        },
+      await requestStop(
+        "chat.abort",
         client,
-        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+        createDirectChatContext({ getRuntimeConfig: () => cfg }),
         respond,
-        isWebchatConnect: () => false,
-        extraHandlers: { "chat.abort": handleChatAbortRequest },
-      });
+      );
       expect(abort).toHaveBeenCalledTimes(target === "matched" ? 1 : 0);
       expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
         true,
@@ -508,18 +493,7 @@ it.each(["matched", "old-incarnation", "foreign-key", "missing-row"] as const)(
     setRuntimeConfigSnapshot(cfg);
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     if (target !== "missing-row") {
-      await sessions.upsertSessionEntryCore(
-        { agentId: "main", sessionKey: parentKey },
-        {
-          sessionId: parentId,
-          updatedAt: 1,
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: client.authenticatedUserProfile!.profileId,
-          },
-        },
-      );
+      await seedOwnedParent(client);
     }
     const selectedId = target === "old-incarnation" ? "previous-parent" : parentId;
     const selectedKey = target === "foreign-key" ? "agent:main:foreign" : parentKey;
@@ -529,19 +503,7 @@ it.each(["matched", "old-incarnation", "foreign-key", "missing-row"] as const)(
     const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
     const respond = vi.fn();
     try {
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "embedded-stop",
-          method: "sessions.abort",
-          params: { key: parentKey, runId: "selected-embedded" },
-        },
-        client,
-        context,
-        respond,
-        isWebchatConnect: () => false,
-        extraHandlers: { "sessions.abort": sessionAbortHandlers["sessions.abort"]! },
-      });
+      await requestStop("sessions.abort", client, context, respond, { runId: "selected-embedded" });
       expect(abort).toHaveBeenCalledTimes(target === "matched" ? 1 : 0);
       expect(respond).toHaveBeenCalledOnce();
       expect(respond.mock.calls[0]?.[0]).toBe(target === "matched");
@@ -572,18 +534,7 @@ it.each([false, true])(
     const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
     setRuntimeConfigSnapshot(cfg);
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    await sessions.upsertSessionEntryCore(
-      { agentId: "main", sessionKey: parentKey },
-      {
-        sessionId: parentId,
-        updatedAt: 1,
-        createdActor: {
-          type: "human",
-          source: "profile",
-          id: client.authenticatedUserProfile!.profileId,
-        },
-      },
-    );
+    await seedOwnedParent(client);
     const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
     const queued = createActiveRun(parentKey, {
       queued: true,
@@ -608,19 +559,7 @@ it.each([false, true])(
     );
     const respond = vi.fn();
     try {
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "late-embedded",
-          method: "sessions.abort",
-          params: { key: parentKey },
-        },
-        client,
-        context,
-        respond,
-        isWebchatConnect: () => false,
-        extraHandlers: { "sessions.abort": sessionAbortHandlers["sessions.abort"]! },
-      });
+      await requestStop("sessions.abort", client, context, respond);
       await successorRegistration;
       expect(queued.input.abortSignal.aborted).toBe(true);
       expect(abort).not.toHaveBeenCalled();
@@ -639,23 +578,9 @@ it.each([false, true])(
 );
 
 async function stopParent(runId = "parent") {
-  const context = createChatAbortContext({
-    getRuntimeConfig,
-    getSessionEventSubscriberConnIds: () => new Set(),
-  });
   expect(rpcSourceTesting.size).toBe(0);
   const respond = vi.fn();
-  await sessionAbortHandlers["sessions.abort"]!({
-    req: { type: "req", id: "stop", method: "sessions.abort" },
-    params: { key: parentKey, runId },
-    respond,
-    context: context as never,
-    client: {
-      connId: "operator",
-      connect: { scopes: ["operator.read", "operator.write"] },
-    } as never,
-    isWebchatConnect: () => false,
-  });
+  await stopSession(parentKey, respond, abortContext(), { runId });
   return respond;
 }
 
@@ -702,23 +627,9 @@ it("exact embedded Stop cancels running and queued collectors without dispatchin
     ["queued", queuedDispatch],
     ["other-turn", otherTurnDispatch],
   ] as const) {
-    enqueueSwarmRun({
-      groupId: "selected",
-      runId,
-      start,
-      activeRunIds: ["running"],
-      maxConcurrent: 1,
-      onStartFailure: () => true,
-    });
+    enqueueCollector("selected", runId, start);
   }
-  enqueueSwarmRun({
-    groupId: "unrelated",
-    runId: "other-session",
-    start: otherSessionDispatch,
-    activeRunIds: ["unrelated-capacity"],
-    maxConcurrent: 1,
-    onStartFailure: () => true,
-  });
+  enqueueCollector("unrelated", "other-session", otherSessionDispatch, "unrelated-capacity");
   const parentAbort = vi.fn(() => {
     emitAgentEvent({
       runId: "parent",
@@ -786,14 +697,7 @@ it.each(["missing", "replaced", "finalizing", "throwing", "unreadable child"])(
     });
     await seedChild("queued", "parent");
     const dispatch = vi.fn(async () => {});
-    enqueueSwarmRun({
-      groupId: "declined",
-      runId: "queued",
-      start: dispatch,
-      activeRunIds: ["capacity"],
-      maxConcurrent: 1,
-      onStartFailure: () => true,
-    });
+    enqueueCollector("declined", "queued", dispatch, "capacity");
     const abort = vi.fn(() => {
       if (state === "throwing") {
         clearActiveEmbeddedRun(parentId, parent, parentKey);
@@ -877,18 +781,8 @@ it.each([true, false])(
     await seedChild("running", "parent", false);
     await seedChild("queued", "parent");
     const dispatch = vi.fn(async () => {});
-    enqueueSwarmRun({
-      groupId: "controller-backed",
-      runId: "queued",
-      start: dispatch,
-      activeRunIds: ["running"],
-      maxConcurrent: 1,
-      onStartFailure: () => true,
-    });
-    const context = createChatAbortContext({
-      getRuntimeConfig,
-      getSessionEventSubscriberConnIds: () => new Set(),
-    });
+    enqueueCollector("controller-backed", "queued", dispatch);
+    const context = abortContext();
     const registration = registerChatAbortController({
       target: captureSessionTarget({
         storeScope: parentStorePath,
@@ -947,17 +841,7 @@ it.each([true, false])(
       expect(resolveActiveEmbeddedRunOwnerByRunId("parent")).toBeDefined();
       expect(rpcSourceTesting.get("parent")).toBe(registration.entry);
       const respond = vi.fn();
-      await sessionAbortHandlers["sessions.abort"]!({
-        req: { type: "req", id: "stop", method: "sessions.abort" },
-        params: { key: parentKey, runId: "parent" },
-        respond,
-        context: context as never,
-        client: {
-          connId: "operator",
-          connect: { scopes: ["operator.read", "operator.write"] },
-        } as never,
-        isWebchatConnect: () => false,
-      });
+      await stopSession(parentKey, respond, context, { runId: "parent" });
       expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
         true,
         {

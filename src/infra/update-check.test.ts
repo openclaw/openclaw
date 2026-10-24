@@ -45,6 +45,11 @@ const packageMetadata = (version: string, node = ">=22.19.0") => ({
   version,
   engines: { node },
 });
+const expectedMetadata = (
+  version: string,
+  nodeEngine = ">=22.19.0",
+  schemaVersions = legacySchemaVersions,
+) => ({ version, nodeEngine, schemaVersions });
 function expectPackageError(
   result: Awaited<ReturnType<typeof packageTarget>>,
   error: string | string[],
@@ -163,11 +168,9 @@ it("normalizes npm 12 singleton-array metadata", async () => {
       },
     ]);
 
-  await expect(packageTarget({ target: "latest", runCommand })).resolves.toEqual({
-    version: "2026.7.1",
-    nodeEngine: ">=22.22.3",
-    schemaVersions,
-  });
+  await expect(packageTarget({ target: "latest", runCommand })).resolves.toEqual(
+    expectedMetadata("2026.7.1", ">=22.22.3", schemaVersions),
+  );
 });
 
 it("uses npm global scope, user config auth, and ignores project npmrc for real metadata", async () => {
@@ -223,11 +226,7 @@ it("uses npm global scope, user config auth, and ignores project npmrc for real 
           NPM_CONFIG_USERCONFIG: userConfig,
         },
       }),
-    ).resolves.toEqual({
-      version: "2026.6.6",
-      nodeEngine: ">=22.19.0",
-      schemaVersions: legacySchemaVersions,
-    });
+    ).resolves.toEqual(expectedMetadata("2026.6.6"));
 
     expect(requests.some((request) => request.url.startsWith("/user/openclaw"))).toBe(true);
     expect(requests.some((request) => request.url.startsWith("/project/"))).toBe(false);
@@ -238,11 +237,7 @@ it("uses npm global scope, user config auth, and ignores project npmrc for real 
 it("uses the public registry when no npm command is available", async () => {
   registryReply("latest", { json: packageMetadata("2026.6.8") });
 
-  await expect(packageTarget({ target: "latest" })).resolves.toEqual({
-    version: "2026.6.8",
-    nodeEngine: ">=22.19.0",
-    schemaVersions: legacySchemaVersions,
-  });
+  await expect(packageTarget({ target: "latest" })).resolves.toEqual(expectedMetadata("2026.6.8"));
 });
 
 it("times out when the public registry response body stalls after headers", async () => {
@@ -389,7 +384,7 @@ it("does not query the exact package after cancellation during selector lookup",
 
   await expect(
     registryStatus({
-      registryChannel: "extended-stable",
+      resolveRegistryChannel: () => "extended-stable",
       signal: controller.signal,
       timeoutMs: undefined,
     }),
@@ -472,13 +467,9 @@ it("formats branch, detached tag, and non-git installs", () => {
       },
     });
   expect(label({})).toBe("main · @ 12345678");
-  expect(
-    label({
-      sha: "abcdef1234567890",
-      tag: "v1.2.3",
-      branch: "HEAD",
-    }),
-  ).toBe("detached · tag v1.2.3 · @ abcdef12");
+  expect(label({ sha: "abcdef1234567890", tag: "v1.2.3", branch: "HEAD" })).toBe(
+    "detached · tag v1.2.3 · @ abcdef12",
+  );
 
   expect(
     formatGitInstallLabel({
@@ -502,7 +493,7 @@ it.each(["beta", "latest"])(
       );
     }
 
-    const status = await registryStatus({ registryChannel: "beta" });
+    const status = await registryStatus({ resolveRegistryChannel: () => "beta" });
 
     expect(status.registry).toEqual({ latestVersion: "2026.6.6", tag: selectedTag });
   },
@@ -521,7 +512,7 @@ it("reports unsupported_git_channel for Git status without querying npm", async 
     expect(initialized, initialized.stderr).toMatchObject({ code: 0, termination: "exit" });
     const status = await registryStatus({
       root,
-      registryChannel: "extended-stable",
+      resolveRegistryChannel: () => "extended-stable",
       fetchGit: false,
     });
 

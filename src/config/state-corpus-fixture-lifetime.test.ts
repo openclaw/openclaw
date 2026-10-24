@@ -10,6 +10,7 @@ import * as workers from "../infra/sqlite-readonly-worker.js";
 import * as agentDatabases from "../state/openclaw-agent-db.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../state/openclaw-state-db-cache.js";
 import * as stateDatabase from "../state/openclaw-state-db.js";
+import { captureEnv as captureRestorableEnv } from "../test-utils/env.js";
 import { createConfigIO } from "./io.js";
 import { createStateStartupCorpusFixture } from "./state-startup-corpus.test-support.js";
 
@@ -256,7 +257,7 @@ it("retains fixture inputs and env when database or worker-scope cleanup cannot 
   for (const key of ["TMPDIR", "TMP", "TEMP"]) {
     vi.stubEnv(key, owner.root);
   }
-  const originalEnv = captureEnv();
+  const originalEnv = captureRestorableEnv(envKeys);
   const fixture = createStateStartupCorpusFixture();
   const bodyFailure = new Error("synthetic Doctor failure");
   const databaseFailure = new Error("synthetic database close failure");
@@ -304,12 +305,6 @@ it("retains fixture inputs and env when database or worker-scope cleanup cannot 
     if (home) {
       fs.rmSync(home, { recursive: true, force: true });
     }
-    for (const [key, value] of Object.entries(originalEnv)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    originalEnv.restore();
   }
 });

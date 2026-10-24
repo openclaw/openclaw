@@ -69,7 +69,7 @@ suite.define(() => {
           const statusLink = page.locator(".updates-status-control .update-git-revisions a");
           const compareUrl = `https://github.com/example/openclaw/compare/${refreshedGit.currentSha}...${refreshedGit.upstreamSha}`;
           await expect.poll(() => statusLink.getAttribute("href")).toBe(compareUrl);
-          await page.getByRole("button", { name: "Update now", exact: true }).click();
+          await page.getByRole("button", { name: "Update Gateway…", exact: true }).click();
           await page.getByRole("dialog", { name: "Update Gateway", exact: true }).waitFor();
           const modal = page.locator("openclaw-modal-dialog");
           const summary = modal.locator(".exec-approval-command > div").first();

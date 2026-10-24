@@ -104,3 +104,21 @@ it("imports provider-only fields still preserved by the July Doctor writer", asy
   expectNormalized(loadLegacySessionStore(storePath), "telegram");
   expect(await fs.readFile(storePath, "utf8")).toBe(raw);
 });
+
+it("refuses a malformed UTF-8 legacy index without changing its bytes", async () => {
+  const raw = Buffer.concat([
+    Buffer.from('{"agent:main:main":{"sessionId":"session-'),
+    Buffer.from([0xff]),
+    Buffer.from('","updatedAt":1}}'),
+  ]);
+  await fs.writeFile(storePath, raw);
+  const issues: Parameters<typeof readLegacySessionStoreEntries>[1] = [];
+  expect(readLegacySessionStoreEntries({ storePath }, issues)).toEqual({ entries: [] });
+  expect(issues).toEqual([
+    expect.objectContaining({
+      code: "store_unreadable",
+      message: expect.stringContaining("UTF-8"),
+    }),
+  ]);
+  expect(await fs.readFile(storePath)).toEqual(raw);
+});

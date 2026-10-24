@@ -20,9 +20,9 @@ type DiscordRuntime = Parameters<typeof setDiscordRuntime>[0];
 let stateDir: string;
 let env: NodeJS.ProcessEnv;
 const scope = { userId: "456" };
-const record = (modelRef: string) => recordDiscordModelPickerRecentModel({ env, scope, modelRef });
+const record = (modelRef: string) => recordDiscordModelPickerRecentModel({ scope, modelRef });
 const read = (options: { allowedModelRefs?: Set<string> } = {}) =>
-  readDiscordModelPickerRecentModels({ env, scope, ...options });
+  readDiscordModelPickerRecentModels({ scope, ...options });
 const openStore = (namespace = "model-picker-preferences", maxEntries = 2_000) =>
   createPluginStateKeyedStoreForTests("discord", { namespace, maxEntries, env });
 
@@ -50,15 +50,14 @@ describe("discord model picker preferences", () => {
   it("records recent models in recency order without duplicates", async () => {
     const userScope = { userId: "123" };
 
-    await recordDiscordModelPickerRecentModel({ env, scope: userScope, modelRef: "openai/gpt-4o" });
+    await recordDiscordModelPickerRecentModel({ scope: userScope, modelRef: "openai/gpt-4o" });
     await recordDiscordModelPickerRecentModel({
-      env,
       scope: userScope,
       modelRef: "openai/gpt-4.1",
     });
-    await recordDiscordModelPickerRecentModel({ env, scope: userScope, modelRef: "openai/gpt-4o" });
+    await recordDiscordModelPickerRecentModel({ scope: userScope, modelRef: "openai/gpt-4o" });
 
-    const recent = await readDiscordModelPickerRecentModels({ env, scope: userScope });
+    const recent = await readDiscordModelPickerRecentModels({ scope: userScope });
     expect(recent).toEqual(["openai/gpt-4o", "openai/gpt-4.1"]);
   });
 
@@ -72,23 +71,29 @@ describe("discord model picker preferences", () => {
   it("prunes older stored models beyond the recent limit", async () => {
     const userScope = { userId: "limited-user" };
     for (const modelRef of [
-      "openai/model-a",
-      "openai/model-b",
-      "openai/model-c",
-      "openai/model-d",
+      "openai/a",
+      "openai/b",
+      "openai/c",
+      "openai/d",
+      "openai/e",
+      "openai/f",
     ]) {
-      await recordDiscordModelPickerRecentModel({ env, scope: userScope, modelRef, limit: 2 });
+      await recordDiscordModelPickerRecentModel({ scope: userScope, modelRef });
     }
 
-    await expect(
-      readDiscordModelPickerRecentModels({ env, scope: userScope, limit: 10 }),
-    ).resolves.toEqual(["openai/model-d", "openai/model-c"]);
+    await expect(readDiscordModelPickerRecentModels({ scope: userScope })).resolves.toEqual([
+      "openai/f",
+      "openai/e",
+      "openai/d",
+      "openai/c",
+      "openai/b",
+    ]);
     const store = createPluginStateKeyedStoreForTests<unknown>("discord", {
       namespace: "model-picker-preferences",
       maxEntries: 2_000,
       env,
     });
-    expect(await store.entries()).toHaveLength(2);
+    expect(await store.entries()).toHaveLength(5);
   });
 
   it("falls back to empty recents when stored state is malformed", async () => {

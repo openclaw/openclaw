@@ -114,7 +114,7 @@ suite.define(() => {
       suite.withPage(
         { permissions: ["microphone"], viewport: { width: 390, height: 844 } },
         async ({ page }) => {
-          const { gateway, textarea, admit, emit } = await openDictation(page, {
+          const { gateway, textarea, admit, emit, close } = await openDictation(page, {
             heldMethods: ["chat.send"],
             sessionInfo: {
               key: "agent:main:main",
@@ -158,11 +158,17 @@ suite.define(() => {
               .getByText("Review complete.", { exact: true })
               .waitFor();
             await button(page, "Stop and keep text", true).click();
-            expect(await textarea.inputValue()).toBe("Please check the tests too.");
+            await gateway.waitForRequest("talk.session.close");
+            await close();
+            await expectDraft(textarea, "Please check the tests too.");
             expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           }
           await capture("dictated-draft");
           await button(page, waitForCompletion ? "Send message" : "Send", true).click();
+          if (!waitForCompletion) {
+            await gateway.waitForRequest("talk.session.close");
+            await close();
+          }
           const request = await gateway.waitForRequest("chat.send");
           expect(request.params).toMatchObject({ message: "Please check the tests too." });
           await expectDraft(textarea, "");
@@ -184,7 +190,7 @@ suite.define(() => {
     { name: "cancel after blur", start: 7, end: 7, expected: "ship it please", cancel: true },
   ])("preserves the draft through $name", ({ name, start, end, expected, cancel }) =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      const { gateway, textarea, admit, emit } = await openDictation(page);
+      const { gateway, textarea, admit, emit, close } = await openDictation(page);
       await textarea.fill("ship it");
       await textarea.evaluate(
         (element: HTMLTextAreaElement, selection) =>
@@ -219,8 +225,11 @@ suite.define(() => {
         await button(page, "Stop and keep text").click();
       }
       await gateway.waitForRequest("talk.session.close");
+      if (!cancel) {
+        await close();
+      }
       const committedDraft = cancel ? "ship it" : expected;
-      expect(await textarea.inputValue()).toBe(committedDraft);
+      await expectDraft(textarea, committedDraft);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await captureComposer(page, `dictation-${name.replaceAll(" ", "-")}-committed.png`);
       expect(await textarea.inputValue()).toBe(committedDraft);

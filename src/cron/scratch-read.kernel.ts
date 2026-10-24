@@ -47,7 +47,7 @@ export function readScratchStateFromDatabase(
   return row ? rowToState(row) : { currentRevision: 0 };
 }
 
-export function readHeartbeatMonitorScratchFromDatabase(
+function readHeartbeatMonitorScratchFromDatabase(
   db: EngineConnection,
   storeKey: string,
   agentId: string,

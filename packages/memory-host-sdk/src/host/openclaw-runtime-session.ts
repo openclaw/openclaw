@@ -191,11 +191,10 @@ export { canonicalizeMainSessionAlias } from "../../../../src/config/sessions/ma
 export {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
-} from "../../../../src/config/sessions/session-history.js";
+} from "../../../../src/config/sessions/session-history-read.js";
 export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 export type { CanonicalSessionReaderContinuation } from "../../../../src/config/sessions/session-canonical-key.js";
 export type { SessionEntry } from "../../../../src/config/sessions/types.js";
-export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
 export {
   parseSqliteSessionFileMarker,
   resolveStorePath,
@@ -204,36 +203,6 @@ export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-pr
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
 export { prepareAssistantTranscriptText } from "../../../../src/shared/chat-message-content.js";
 
-/**
- * Returns an opaque revision that changes for every canonical transcript mutation.
- * Read-only callers stay on the read-only reader; a missing transcript has no revision.
- */
-export function readTranscriptContentRevisionSync(params: {
-  agentId?: string;
-  env?: NodeJS.ProcessEnv;
-  sessionId: string;
-  sessionKey?: string;
-  storePath?: string;
-  readOnly?: boolean;
-}): string | undefined {
-  const { readOnly, ...scope } = params;
-  // Inventory runs in pooled history Workers; a writable open there would claim an
-  // agent-database lease that only that Worker's process exit could release.
-  const stats = readOnly
-    ? readTranscriptStatsBatchReadOnlySync([scope])[0]
-    : readAccessorTranscriptStatsSync(scope);
-  if (!stats) {
-    return undefined;
-  }
-  return [
-    "sqlite",
-    stats.maxSeq,
-    stats.sizeBytes,
-    stats.eventCount,
-    stats.lastMutationAtMs ?? "",
-    stats.lastObservedMutationAtMs ?? "",
-  ].join(":");
-}
 /** Extracts the agent id from a canonical `agents/<id>/sessions` directory path. */
 export function extractAgentIdFromSessionsDir(sessionsDir: string): string | null {
   const parts = path.normalize(path.resolve(sessionsDir)).split(path.sep).filter(Boolean);

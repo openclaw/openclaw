@@ -72,17 +72,12 @@ export async function waitForWhatsAppSutReactionToTrigger(
 
 export async function waitForWhatsAppSutReactionSequenceToTrigger(
   context: WhatsAppQaMessageScenarioContext,
-  params: {
-    emojis: readonly string[];
-    observedAfter?: Date;
-    timeoutMs?: number;
-  },
+  emojis: readonly string[],
 ) {
   requireWhatsAppTriggerMessageId(context);
-  const observedAfter = params.observedAfter ?? context.requestStartedAt;
-  const deadline = Date.now() + (params.timeoutMs ?? 30_000);
+  const deadline = Date.now() + 60_000;
   const matched: WhatsAppQaDriverObservedMessage[] = [];
-  let lastMatchedObservedAtMs = observedAfter.getTime();
+  let lastMatchedObservedAtMs = context.requestStartedAt.getTime();
   let lastMatchedObservedIndex = -1;
 
   const scan = () => {
@@ -96,7 +91,7 @@ export async function waitForWhatsAppSutReactionSequenceToTrigger(
         return timeDelta === 0 ? left.index - right.index : timeDelta;
       });
     for (const { index, message } of messages) {
-      if (matched.length >= params.emojis.length) {
+      if (matched.length >= emojis.length) {
         return true;
       }
       const observedAtMs = new Date(message.observedAt).getTime();
@@ -106,7 +101,7 @@ export async function waitForWhatsAppSutReactionSequenceToTrigger(
       ) {
         continue;
       }
-      const expectedEmoji = params.emojis[matched.length];
+      const expectedEmoji = emojis[matched.length];
       if (!expectedEmoji) {
         return false;
       }
@@ -116,13 +111,13 @@ export async function waitForWhatsAppSutReactionSequenceToTrigger(
         lastMatchedObservedIndex = index;
       }
     }
-    return matched.length >= params.emojis.length;
+    return matched.length >= emojis.length;
   };
 
   while (!scan()) {
     if (Date.now() >= deadline) {
       throw new Error(
-        `timed out waiting for WhatsApp status reaction sequence ${params.emojis.join(" -> ")}`,
+        `timed out waiting for WhatsApp status reaction sequence ${emojis.join(" -> ")}`,
       );
     }
     await sleep(250);

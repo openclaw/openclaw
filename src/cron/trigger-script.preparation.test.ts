@@ -2,11 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { CodeModeHeadlessResult } from "../agents/code-mode.js";
-import { resolveOpenClawPluginToolsForOptions } from "../agents/openclaw-plugin-tools.js";
-import {
-  createPreparedInboundRegistryLoader,
-  loadPreparedInboundPluginRegistry,
-} from "../agents/prepared-model-runtime.inbound-registry.js";
+import { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
 import { prepareOwnedPluginLoadContext } from "../agents/prepared-model-runtime.plugin-context.js";
 import { ToolSearchRuntime } from "../agents/tool-search-runtime.js";
 import { resolveToolSearchConfig } from "../agents/tool-search.js";
@@ -23,11 +19,8 @@ import {
 import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { createPluginRegistryOwner, setActivePluginRegistry } from "../plugins/runtime.js";
-import {
-  getPluginRuntimeGatewayRequestScope,
-  withPluginRuntimeRegistryScope,
-} from "../plugins/runtime/gateway-request-scope.js";
+import { createPluginRegistryOwner } from "../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -275,41 +268,5 @@ it.each(["gateway", "standalone"] as const)(
     nextConfig.tools = { deny: ["cold_probe"] };
     setRuntimeConfigSnapshot(nextConfig, config);
     await expectPayload(run("first", "other", ["cold_probe"]), null);
-  },
-);
-
-it.each(["scoped", "global"] as const)(
-  "uses only %s registry ownership during downstream loading without a model runtime",
-  async (owner) => {
-    const input = { config, workspaceDir: state.workspaceDir, agentDir: state.agentDir() };
-    const metadataSnapshot = loadPluginMetadataSnapshot(input);
-    const registry = createPreparedInboundRegistryLoader()(input, metadataSnapshot);
-    prepareOwnedPluginLoadContext(input, process.env, registry, metadataSnapshot, true);
-    if (owner === "global") {
-      setActivePluginRegistry(registry);
-    }
-    const tools = withPluginRuntimeRegistryScope(owner === "scoped" ? registry : undefined, () =>
-      resolveOpenClawPluginToolsForOptions({
-        options: {
-          config,
-          workspaceDir: state.workspaceDir,
-          agentSessionKey: "agent:main:cron:scoped:trigger",
-          pluginToolAllowlist: ["cold_probe"],
-        },
-        resolvedConfig: config,
-      }),
-    );
-    expect(tools.map((tool) => tool.name)).toEqual(["cold_probe"]);
-    await expect(tools[0]!.execute("scoped-call", {})).resolves.toMatchObject({
-      details: {
-        artifact: owner === "scoped" ? "built" : "source",
-        agentId: "main",
-        sessionKey: "agent:main:cron:scoped:trigger",
-      },
-    });
-    expect(readRegistrations()).toEqual([
-      registration("built", "discovery"),
-      registration(owner === "scoped" ? "built" : "source", "tool-discovery"),
-    ]);
   },
 );

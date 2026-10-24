@@ -76,7 +76,6 @@ it("loads category navigation without waiting for catalog cards", async () => {
   await discovery.ensureCategories();
   expect(request).toHaveBeenCalledWith("plugins.catalog.categories", {}, expect.anything());
   expect(discovery.read().categories).toEqual(categories);
-  expect(discovery.read().loading).toBe(true);
   browse.resolve({ items: [] });
   await loading;
   expect(discovery.read().categories).toEqual(categories);
@@ -91,14 +90,12 @@ it("settles empty categories, deduplicates warm loads, and retries errors explic
     return { categories: [] };
   });
   await discovery.ensureCategories();
-  expect(discovery.read().categoriesLoading).toBe(false);
   expect(discovery.read().categoriesError).toContain("Categories unavailable");
   await discovery.ensureCategories();
   expect(request).toHaveBeenCalledOnce();
   fail = false;
   await discovery.ensureCategories(true);
   expect(discovery.read().categoriesError).toBeNull();
-  expect(discovery.read().categoriesLoading).toBe(false);
   await discovery.ensureCategories();
   expect(request).toHaveBeenCalledTimes(2);
 });
@@ -112,9 +109,7 @@ it("uses overview categories when they arrive first without accepting a late cat
     method === "plugins.catalog.categories" ? pending.promise : { items: [], categories },
   );
   const loading = discovery.ensureCategories();
-  expect(discovery.read().categoriesLoading).toBe(true);
   await discovery.refresh();
-  expect(discovery.read().categoriesLoading).toBe(false);
   expect(discovery.read().categories).toEqual(categories);
   pending.resolve({ categories: [] });
   await loading;
@@ -133,7 +128,6 @@ it("discards category navigation and late responses across connection invalidati
   });
   await loading;
   expect(discovery.read().categories).toEqual([]);
-  expect(discovery.read().categoriesLoading).toBe(false);
 });
 
 it("cancels pending reads and the search debounce when its owner is disposed", async () => {
@@ -144,8 +138,12 @@ it("cancels pending reads and the search debounce when its owner is disposed", a
 
   const loading = discovery.refresh();
   const signal = request.mock.lastCall?.[2]?.signal;
+  const browseRead = discovery.read().reads.browse;
   discovery.updateQuery("memory");
+  const debounceRead = discovery.read().reads.browse;
   dispose();
+  // Readiness retires immediately, while run() retains the actual transport settlement.
+  await expect(Promise.all([browseRead, debounceRead])).resolves.toEqual([null, null]);
   expect(signal?.aborted).toBe(true);
   pending.resolve({ items: [entry(2)] });
   await loading;
@@ -185,7 +183,6 @@ it("populates the grouped home page and keeps it visible during a refresh", asyn
   );
 
   const loading = discovery.refresh();
-  expect(discovery.read().loading).toBe(false);
   expect(discovery.read().featured).toEqual([featured]);
   expect(discovery.read().trending).toEqual([trending]);
   refresh.resolve({ items: [category], categories });
@@ -215,26 +212,21 @@ it("preserves home navigation when a category completes during the search deboun
   ]);
   await discovery.refresh();
   void discovery.selectCategory("channels");
-  expect(discovery.read().loading).toBe(true);
   discovery.updateQuery("calendar");
-  expect(discovery.read().loading).toBe(true);
 
   category.resolve({ items: categoryItems });
   await vi.advanceTimersByTimeAsync(0);
   expect(request).toHaveBeenCalledTimes(2);
   expect(request.mock.lastCall?.[1]).toMatchObject({ category: "channels" });
   expect(discovery.read().result?.items).toEqual(categoryItems);
-  expect(discovery.read().loading).toBe(true);
   expect.soft(discovery.read().categories).toEqual(categories);
   expect.soft(discovery.read().featured).toEqual([featured]);
   expect.soft(discovery.read().trending).toEqual([trending]);
 
   await vi.advanceTimersByTimeAsync(250);
   expect(request.mock.lastCall?.[1]).toMatchObject({ query: "calendar" });
-  expect(discovery.read().loading).toBe(true);
   search.resolve({ items: searchItems });
   await vi.advanceTimersByTimeAsync(0);
-  expect(discovery.read().loading).toBe(false);
   expect(discovery.read().result?.items).toEqual(searchItems);
   expect.soft(discovery.read().categories).toEqual(categories);
   expect.soft(discovery.read().featured).toEqual([featured]);
@@ -330,7 +322,6 @@ it("restores the loaded overview immediately when clearing search and retires la
   await vi.advanceTimersByTimeAsync(250);
   discovery.updateQuery("");
 
-  expect(discovery.read().loading).toBe(false);
   expect(discovery.read().result?.items).toEqual([overview]);
   lateSearch.resolve({ items: [entry(3)] });
   await vi.advanceTimersByTimeAsync(250);
@@ -393,7 +384,6 @@ it.each(["refresh", "disconnect", "invalidate"] as const)(
     request.mockClear();
     discovery.updateQuery("");
 
-    expect(discovery.read().loading).toBe(true);
     expect(request).toHaveBeenCalledOnce();
     expect(request.mock.lastCall?.[1]).toEqual({ intent: "all", pageSize: 100 });
     freshOverview.resolve({ items: [installed] });
@@ -401,7 +391,6 @@ it.each(["refresh", "disconnect", "invalidate"] as const)(
     expect(discovery.read().result?.items).toEqual([installed]);
     expect(discovery.read().featured).toEqual([installed]);
     expect(discovery.read().trending).toEqual([installed]);
-    expect(discovery.read().loading).toBe(false);
   },
 );
 
@@ -422,13 +411,11 @@ it("retries a degraded overview when returning from search", async () => {
   request.mockClear();
   discovery.updateQuery("");
 
-  expect(discovery.read().loading).toBe(true);
   expect(request).toHaveBeenCalledOnce();
   recovery.resolve({ items: [incomplete, recovered] });
   await vi.advanceTimersByTimeAsync(0);
   expect(discovery.read().result?.items).toEqual([incomplete, recovered]);
   expect(discovery.read().remoteError).toBeNull();
-  expect(discovery.read().loading).toBe(false);
 });
 
 it("loads one bounded page initially and continues only after explicit expansion", async () => {

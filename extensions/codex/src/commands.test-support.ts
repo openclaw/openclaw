@@ -105,7 +105,10 @@ export function useCodexCommandTestState(options: {
     afterEach(async () => {
       options.beforeCleanup?.();
       restoreCodexCommandMocks();
-      codexDiagnosticsFeedbackState.clear();
+      codexDiagnosticsFeedbackState.lastUploadByThread.clear();
+      codexDiagnosticsFeedbackState.lastUploadByScope.clear();
+      codexDiagnosticsFeedbackState.pendingConfirmations.clear();
+      codexDiagnosticsFeedbackState.pendingTokensByScope.clear();
       resetSharedCodexAppServerClientForTests();
       await cleanupCodexState();
       cleanup();

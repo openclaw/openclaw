@@ -9,6 +9,7 @@ import { createContext, createGatewayHarness } from "../../../test-helpers/app-s
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import "./chat-details-session.tsx";
 import "./chat-processes-panel.tsx";
 
@@ -111,7 +112,7 @@ it("keeps Stop separate from opening output and restores list focus after return
   const request = vi.fn((method: string) =>
     method === "sessions.processes.stop" ? stopped.promise : result,
   );
-  const { mount } = mountProcesses(request);
+  const { connection, mount } = mountProcesses(request);
   const panel = document.createElement("openclaw-chat-processes-panel");
   panel.sessionKey = "agent:main:parent";
   panel.mobile = true;
@@ -133,18 +134,30 @@ it("keeps Stop separate from opening output and restores list focus after return
   });
   expect(stop.disabled).toBe(true);
   expect(list.hidden).toBe(false);
+  await settle(panel, 0);
+  expect(opener.isConnected).toBe(true);
+  expect(panel.querySelector('button[aria-label="Build app"]')).toBe(opener);
   opener.click();
-  await panel.updateComplete;
-  expect(panel.querySelector("pre")?.textContent).toBe("Compiling\nReady");
+  await waitForSolid(() => {
+    expect(panel.querySelector("pre")?.textContent).toBe("Compiling\nReady");
+  });
   const detailStop = panel.querySelector<HTMLButtonElement>(
     '.chat-processes__detail button[aria-label="Stop Build app"]',
   )!;
+  expect(detailStop.disabled).toBe(true);
+  stopped.resolve({ requested: true });
+  await vi.advanceTimersByTimeAsync(0);
+  await panel.updateComplete;
+  // Acknowledgment alone does not prove the process has exited.
   expect(detailStop.disabled).toBe(true);
   result = {
     ...result,
     processes: [{ ...result.processes[0]!, status: "killed", endedAt: 5000, canStop: false }],
   };
-  stopped.resolve({ requested: true });
+  connection.publishEvent("sessions.processes.changed", {
+    sessionKey: panel.sessionKey,
+    agentId: "main",
+  });
   await vi.advanceTimersByTimeAsync(0);
   await panel.updateComplete;
   expect(
@@ -234,4 +247,266 @@ it("keeps details process observation through refreshes and follows its presente
   await settle(details, 0);
   expect(request.mock.calls).toEqual([mainRead, workerRead, mainRead]);
   expect(details.querySelector(".chat-details__process")?.textContent).toContain("Main build");
+});
+
+it("keeps the full panel read-error flow while compact Details retains its shared rows", async () => {
+  const result = { ...completeList, processes: [process()] };
+  const retry = createDeferred<SessionsProcessesListResult>();
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce(result)
+    .mockRejectedValueOnce(new Error("Worker reconnecting"))
+    .mockReturnValueOnce(retry.promise);
+  const { connection, mount } = mountProcesses(request);
+  const panel = document.createElement("openclaw-chat-processes-panel");
+  panel.sessionKey = "agent:main:parent";
+  const details = document.createElement("openclaw-chat-details-session");
+  details.props = {
+    sessionKey: panel.sessionKey,
+    currentAgentId: "main",
+    selectedSession: undefined,
+    messages: [],
+    onOpenProcesses: () => {},
+  };
+  details.presented = true;
+  details.desktop = true;
+  const surfaces = document.createElement("div");
+  surfaces.append(panel, details);
+  mount(surfaces);
+  await settle(panel, 0);
+  expect(request).toHaveBeenCalledOnce();
+  expect(panel.textContent).toContain("Build app");
+  expect(details.textContent).toContain("Build app");
+  connection.publishEvent("sessions.processes.changed", {
+    sessionKey: panel.sessionKey,
+    agentId: "main",
+  });
+  await settle(panel, 0);
+  expect(panel.textContent).not.toContain("Build app");
+  expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Worker reconnecting");
+  expect(details.textContent).toContain("Build app");
+  expect(details.textContent).not.toContain("Worker reconnecting");
+  panel.querySelector<HTMLButtonElement>(".chat-processes__error button")!.click();
+  await settle(panel, 0);
+  expect(panel.querySelector('[role="alert"]')).toBeNull();
+  expect(panel.textContent).not.toContain("Build app");
+  expect(panel.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe("Loading…");
+  expect(panel.querySelector(".chat-processes__list")?.getAttribute("aria-busy")).toBe("true");
+  expect(details.querySelector(".chat-details-processes")?.getAttribute("aria-busy")).toBe("true");
+  expect(details.textContent).toContain("Build app");
+  retry.resolve(result);
+  await settle(panel, 0);
+  expect(panel.textContent).toContain("Build app");
+  expect(details.textContent).toContain("Build app");
+  const opener = panel.querySelector<HTMLButtonElement>(".chat-processes__open")!;
+  opener.click();
+  await waitForSolid(() => expect(panel.querySelector("pre")?.textContent).toBe("Compiling"));
+  panel.querySelector<HTMLButtonElement>('button[aria-label="Back to Processes"]')!.click();
+  await waitForSolid(() => expect(document.activeElement).toBe(opener));
+  expect(request).toHaveBeenCalledTimes(3);
+});
+
+it("keeps a shared held read and Stop alive when one presentation moves away", async () => {
+  const first = createDeferred<SessionsProcessesListResult>();
+  const stopped = createDeferred<{ requested: boolean }>();
+  const result = { ...completeList, processes: [process({ canStop: true })] };
+  const request = vi.fn((method: string, params?: unknown) => {
+    if (method === "sessions.processes.stop") {
+      return stopped.promise;
+    }
+    if (asOptionalRecord(params)?.key === "global") {
+      return { ...completeList, processes: [process({ name: "Worker build" })] };
+    }
+    return first.promise;
+  });
+  const { mount } = mountProcesses(request);
+  const panel = document.createElement("openclaw-chat-processes-panel");
+  panel.sessionKey = "agent:main:parent";
+  const details = document.createElement("openclaw-chat-details-session");
+  details.props = {
+    sessionKey: panel.sessionKey,
+    currentAgentId: "main",
+    selectedSession: undefined,
+    messages: [],
+    onOpenProcesses: () => {},
+  };
+  details.presented = true;
+  details.desktop = true;
+  const surfaces = document.createElement("div");
+  surfaces.append(panel, details);
+  mount(surfaces);
+  await settle(panel, 0);
+  expect(panel.querySelector(".chat-processes__list")?.getAttribute("aria-busy")).toBe("true");
+  expect(request).toHaveBeenCalledOnce();
+  panel.presented = false;
+  panel.sessionKey = "global";
+  panel.agentId = "worker";
+  panel.presented = true;
+  await settle(panel, 0);
+  expect(panel.textContent).toContain("Worker build");
+  expect(details.textContent).not.toContain("Build app");
+  panel.sessionKey = "agent:main:parent";
+  panel.agentId = "main";
+  first.resolve(result);
+  await settle(panel, 0);
+  expect(details.textContent).toContain("Build app");
+  expect(request.mock.calls.filter(([method]) => method === "sessions.processes.list")).toEqual([
+    mainRead,
+    workerRead,
+  ]);
+  panel.presented = true;
+  await settle(panel, 0);
+  panel.querySelector<HTMLButtonElement>(".chat-processes__stop")!.click();
+  await settle(panel, 0);
+  expect(details.querySelector<HTMLButtonElement>(".chat-details-processes__stop")!.disabled).toBe(
+    true,
+  );
+  panel.sessionKey = "global";
+  panel.agentId = "worker";
+  await settle(panel, 0);
+  expect(panel.textContent).toContain("Worker build");
+  expect(details.textContent).toContain("Build app");
+  expect(details.querySelector<HTMLButtonElement>(".chat-details-processes__stop")!.disabled).toBe(
+    true,
+  );
+  expect(request.mock.calls.filter(([method]) => method === "sessions.processes.list")).toEqual([
+    mainRead,
+    workerRead,
+    workerRead,
+  ]);
+  stopped.resolve({ requested: false });
+  await settle(panel, 0);
+  expect(panel.querySelector('[role="alert"]')).toBeNull();
+  expect(details.querySelector<HTMLButtonElement>(".chat-details-processes__stop")!.disabled).toBe(
+    false,
+  );
+});
+
+it("retires a held Stop before a same-session replacement connection renders", async () => {
+  const oldStop = createDeferred<{ requested: boolean }>();
+  const nextStop = createDeferred<{ requested: boolean }>();
+  const request = vi.fn((method: string) =>
+    method === "sessions.processes.stop"
+      ? oldStop.promise
+      : { ...completeList, processes: [process({ canStop: true })] },
+  );
+  const { connection, mount } = mountProcesses(request);
+  const panel = document.createElement("openclaw-chat-processes-panel");
+  panel.sessionKey = "agent:main:parent";
+  mount(panel);
+  await settle(panel, 0);
+  panel.querySelector<HTMLButtonElement>(".chat-processes__stop")!.click();
+  await settle(panel, 0);
+  const replacement = vi.fn((method: string) =>
+    method === "sessions.processes.stop"
+      ? nextStop.promise
+      : { ...completeList, processes: [process({ name: "Replacement build", canStop: true })] },
+  );
+  connection.publish({ client: createTestGatewayClient(replacement) });
+  await settle(panel, 0);
+  expect(panel.textContent).toContain("Replacement build");
+  const stop = panel.querySelector<HTMLButtonElement>(".chat-processes__stop")!;
+  expect(stop.disabled).toBe(false);
+  stop.click();
+  await settle(panel, 0);
+  expect(stop.disabled).toBe(true);
+  oldStop.resolve({ requested: false });
+  await settle(panel, 0);
+  expect(stop.disabled).toBe(true);
+  expect(panel.querySelector('[role="alert"]')).toBeNull();
+  nextStop.resolve({ requested: false });
+  await settle(panel, 0);
+  expect(stop.disabled).toBe(false);
+  expect(panel.querySelector('[role="alert"]')).not.toBeNull();
+  expect(
+    request.mock.calls.filter(([method]) => method === "sessions.processes.stop"),
+  ).toHaveLength(1);
+  expect(
+    replacement.mock.calls.filter(([method]) => method === "sessions.processes.stop"),
+  ).toHaveLength(1);
+});
+
+it("dismisses completed processes only from Details and keeps the full collection", async () => {
+  const result = {
+    ...completeList,
+    processes: [
+      process({ name: "Live watch", processId: "watch", instanceId: "watch-1", canStop: true }),
+      process({ name: "Completed build", status: "completed", canStop: false, endedAt: 2 }),
+    ],
+  };
+  const { connection, mount } = mountProcesses(() => result);
+  connection.publish({ selfUser: { id: "dismissal-viewer" } });
+  const panel = document.createElement("openclaw-chat-processes-panel");
+  panel.sessionKey = "agent:main:dismissal";
+  const details = document.createElement("openclaw-chat-details-session");
+  details.props = {
+    sessionKey: panel.sessionKey,
+    currentAgentId: "main",
+    selectedSession: undefined,
+    messages: [],
+    onOpenProcesses: () => {},
+  };
+  details.presented = true;
+  details.desktop = true;
+  const surfaces = document.createElement("div");
+  surfaces.append(panel, details);
+  mount(surfaces);
+  await settle(details, 0);
+  const completed = () => details.querySelector('[data-process-id="build"]');
+  expect(completed()?.textContent).toContain("Completed build");
+  expect(completed()?.querySelector("button")?.getAttribute("title")).toBeNull();
+  expect(details.querySelector(".chat-details-processes__stop")?.getAttribute("title")).toBe(
+    "Stop process",
+  );
+  expect(
+    details.querySelector('[data-process-id="watch"] .chat-details-processes__dismiss'),
+  ).toBeNull();
+  const dismiss = completed()?.querySelector<HTMLButtonElement>(
+    'button[aria-label="Dismiss process"]',
+  );
+  expect(dismiss).not.toBeNull();
+  connection.publish({ selfUser: undefined });
+  await settle(details, 0);
+  expect(dismiss!.disabled).toBe(true);
+  dismiss!.click();
+  await settle(details, 0);
+  expect(completed()).not.toBeNull();
+  connection.publish({ selfUser: { id: "dismissal-viewer" } });
+  await settle(details, 0);
+  expect(dismiss!.disabled).toBe(false);
+  dismiss!.click();
+  await settle(details, 0);
+  expect(completed()).toBeNull();
+  expect(details.textContent).toContain("Live watch");
+  panel.querySelector<HTMLButtonElement>(".chat-processes__finished-toggle")!.click();
+  await settle(panel, 0);
+  expect(panel.textContent).toContain("Completed build");
+  details.presented = false;
+  await settle(details, 0);
+  details.presented = true;
+  await settle(details, 0);
+  expect(completed()).toBeNull();
+  details.desktop = false;
+  await settle(details, 0);
+  expect(completed()).toBeNull();
+  expect(details.textContent).toContain("Live watch");
+  details.desktop = true;
+  await settle(details, 0);
+  details.props = { ...details.props!, sessionKey: "agent:main:other" };
+  await settle(details, 0);
+  expect(completed()).not.toBeNull();
+  details.props = { ...details.props!, sessionKey: panel.sessionKey };
+  await settle(details, 0);
+  expect(completed()).toBeNull();
+  connection.publish({ selfUser: null });
+  await settle(details, 0);
+  completed()!.querySelector<HTMLButtonElement>('button[aria-label="Dismiss process"]')!.click();
+  await settle(details, 0);
+  expect(completed()).toBeNull();
+  connection.publish({ selfUser: undefined });
+  await settle(details, 0);
+  expect(completed()).not.toBeNull();
+  connection.publish({ selfUser: { id: "other-viewer" } });
+  await settle(details, 0);
+  expect(completed()).not.toBeNull();
 });

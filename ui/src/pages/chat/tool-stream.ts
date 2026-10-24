@@ -494,7 +494,7 @@ export function handleAgentEvent(
   if (!acceptActivityEvent(host, payload)) {
     return false;
   }
-  if (payload.stream === "lifecycle" || payload.stream === "tool") {
+  if (payload.stream === "lifecycle" || payload.stream === "tool" || payload.stream === "item") {
     const runId = toTrimmedString(payload.runId);
     if (runId) {
       (host.knownAgentRunIds ??= new Set()).add(runId);

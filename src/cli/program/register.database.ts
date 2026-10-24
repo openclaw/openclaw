@@ -137,6 +137,15 @@ export function registerDatabaseCommand(program: Command): void {
       try {
         const { doctorDatabasePort } = await import("../../commands/doctor-database-port.js");
         const result = await doctorDatabasePort(options);
+        if ("memoryRebuilds" in result) {
+          for (const rebuild of result.memoryRebuilds) {
+            if (rebuild.warning) {
+              defaultRuntime.error(
+                `Memory rebuild WARNING (${rebuild.agentId}): ${rebuild.warning}`,
+              );
+            }
+          }
+        }
         if (options.json) {
           writeRuntimeJson(defaultRuntime, result);
         } else {
@@ -144,6 +153,14 @@ export function registerDatabaseCommand(program: Command): void {
             defaultRuntime,
             `Database port: ${result.phase} (${result.engine}${"to" in result ? ` → ${result.to}` : ""}); ${result.stores.length} database stores.\n${"remainingSqlite" in result ? `${result.remainingSqlite.length} other stores remain on SQLite.\n` : ""}${"backup" in result ? `Original backup: ${result.backup}\n${result.restart}\n` : ""}${"verification" in result ? `${result.verification}\n` : ""}`,
           );
+          if ("memoryRebuilds" in result) {
+            for (const rebuild of result.memoryRebuilds) {
+              writeRuntimeStdout(
+                defaultRuntime,
+                `Memory index (${rebuild.agentId}): ${rebuild.status}${rebuild.elapsedMs === undefined ? "" : ` in ${(rebuild.elapsedMs / 1000).toFixed(1)}s`}.\n`,
+              );
+            }
+          }
         }
       } catch (error) {
         writeDatabaseError(error, options.json === true);

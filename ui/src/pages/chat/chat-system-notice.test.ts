@@ -311,6 +311,34 @@ describe("skill review notices", () => {
     __openclaw: { runId: "run" },
   };
 
+  it.each([
+    [{ idempotencyKey: "skill-workshop-notice:review" }, true],
+    [{ __openclaw: { idempotencyKey: "skill-workshop-notice:review" } }, true],
+    [{ idempotencyKey: "ordinary-delivery" }, false],
+    [{ idempotencyKey: "skill-workshop-notice:" }, false],
+    [{ idempotencyKey: "skill-workshop-notice:review", provider: "model-provider" }, false],
+    [{ idempotencyKey: "skill-workshop-notice:review", model: "model-output" }, false],
+    [{ idempotencyKey: "skill-workshop-notice:review", role: "user" }, false],
+  ])("uses legacy notice provenance, not Learned text: %j", (fields, projected) => {
+    const item = {
+      kind: "message" as const,
+      key: "legacy-notice",
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: "💾 Learned: updated deploy-staging.",
+        timestamp: 2000,
+        ...fields,
+      },
+    };
+    expect(projectChatSystemNotice(item)).toEqual(
+      projected
+        ? [{ kind: "notice", key: item.key, text: item.message.content, timestamp: 2000 }]
+        : [item],
+    );
+  });
+
   it("renders a marked review notice natively and keeps malformed markers as text", () => {
     const skills = [{ name: "deploy-staging", action: "updated", summary: "rollback" }];
     expect(render([question, answer, notice(skills)], [])).toMatchObject([

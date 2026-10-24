@@ -18,6 +18,7 @@ import {
   retainVitestWorkerArtifacts,
 } from "../../scripts/lib/vitest-worker-cache.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeWorkerFixtureManifest } from "./fixtures/vitest-worker-compiler.mjs";
 import { writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 vi.mock("../../scripts/lib/native-typescript-config.mts", { spy: true });
@@ -73,29 +74,14 @@ function fixture() {
       "build-info.json": "{}\n",
       "nested/deeper.js": 'export const nested = "fixture";\n',
     };
-    const hashes: Record<string, string> = {};
-    for (const [name, bytes] of Object.entries(outputs).toSorted(([a], [b]) =>
-      a.localeCompare(b),
-    )) {
-      const filename = path.join(directory, "dist", name);
-      fs.mkdirSync(path.dirname(filename), { recursive: true });
-      fs.writeFileSync(filename, bytes);
-      hashes[name] = hashVitestWorkerArtifact(bytes);
-    }
-    fs.chmodSync(path.join(directory, "dist/probe.js"), 0o755);
     const inputs = Object.fromEntries(
-      [...Object.keys(sources), ...configFiles]
-        .map((name) => path.resolve(root, name))
-        .toSorted()
-        .map((filename) => [filename, hashVitestWorkerArtifact(fs.readFileSync(filename))]),
+      [...Object.keys(sources), ...configFiles].map((name) => {
+        const filename = path.resolve(root, name);
+        return [filename, fs.readFileSync(filename)];
+      }),
     );
-    const manifest: VitestWorkerManifest = {
-      inputs,
-      outputs: hashes,
-      identity: hashVitestWorkerArtifact(JSON.stringify([inputs, hashes])),
-      durationMs: 1,
-    };
-    fs.writeFileSync(path.join(directory, "manifest.json"), JSON.stringify(manifest));
+    const manifest: VitestWorkerManifest = writeWorkerFixtureManifest(directory, inputs, outputs);
+    fs.chmodSync(path.join(directory, "dist/probe.js"), 0o755);
     return manifest;
   };
   return {
@@ -163,10 +149,8 @@ it("restores identical executable bytes into the same reserved generation path",
   const owner = await f.cache();
   expect(await owner.restore()).toBeUndefined();
   const manifest = f.prepare();
-  expect(f.observe()).toEqual({
-    value: "first",
-    generation: pathToFileURL(f.directory).href,
-  });
+  const expected = { value: "first", generation: pathToFileURL(f.directory).href };
+  expect(f.observe()).toEqual(expected);
   expect(await retainVitestWorkerArtifacts(f.root, f.directory, manifest)).toBe(false);
   manifest.cacheSignature = await owner.seal(manifest);
   const { cached } = f;
@@ -197,10 +181,7 @@ it("restores identical executable bytes into the same reserved generation path",
     expect(direct.status, String(direct.error ?? direct.stderr)).toBe(0);
     expect(JSON.parse(direct.stdout).value).toBe("first");
   }
-  expect(f.observe()).toEqual({
-    value: "first",
-    generation: pathToFileURL(f.directory).href,
-  });
+  expect(f.observe()).toEqual(expected);
 });
 
 it("observes resolution changes made while checking cached output bytes", async () => {
@@ -226,7 +207,7 @@ it("observes resolution changes made while checking cached output bytes", async 
   try {
     expect(await f.restore()).toBeUndefined();
     expect(changed).toBe(true);
-    expect(fs.existsSync(path.join(f.directory, "dist"))).toBe(false);
+    f.expectAbsent("dist");
   } finally {
     reader.mockRestore();
   }

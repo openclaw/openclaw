@@ -18,6 +18,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
 import { agentsHandlers } from "./agents.js";
 import type { GatewayClient } from "./client-types.js";
 
@@ -70,24 +71,18 @@ async function expectPersistedAvatar() {
   expect(await readIdentity()).toContain(inlineAvatar);
   expect(await readConfig()).toContain(inlineAvatar);
 }
-async function call(
+function call(
   method: "agents.create" | "agents.update",
   fields: Record<string, unknown> = { avatar: inlineAvatar },
   requester = client,
 ) {
-  const respond = vi.fn();
   const target =
     method === "agents.create" ? { name: "New Avatar Agent", workspace } : { agentId: "existing" };
   const params = { ...target, ...fields };
-  await agentsHandlers[method]!({
-    req: { type: "req", id: "avatar-policy", method, params },
-    params,
+  return callAgentHandler(agentsHandlers[method]!, method, params, {
     context,
-    respond,
     client: requester,
-    isWebchatConnect: () => false,
   });
-  return respond;
 }
 beforeAll(async () => {
   state = await createOpenClawTestState({ layout: "state-only", label: "agent-avatar-policy" });

@@ -58,7 +58,7 @@ export async function requireEligibleCodexThread(params: {
       // fresh non-archived membership on the captured home.
       const { CODEX_CATALOG_NATIVE_PAGE_LIMIT } =
         await import("./session-catalog-native-projection.js");
-      const { CODEX_CATALOG_MAX_ROWS } = await import("./session-catalog-limits.js");
+      const { rememberCodexCatalogCursor } = await import("./session-catalog-limits.js");
       let cursor: string | undefined;
       const seenCursors = new Set<string>();
       for (;;) {
@@ -86,13 +86,7 @@ export async function requireEligibleCodexThread(params: {
         if (!nextCursor || seenCursors.has(nextCursor)) {
           throw unverified();
         }
-        seenCursors.add(nextCursor);
-        if (seenCursors.size > CODEX_CATALOG_MAX_ROWS) {
-          const oldest = seenCursors.values().next().value;
-          if (oldest !== undefined) {
-            seenCursors.delete(oldest);
-          }
-        }
+        rememberCodexCatalogCursor(seenCursors, nextCursor);
         cursor = nextCursor;
       }
     }

@@ -1,4 +1,4 @@
-import { onCleanup } from "solid-js";
+import { onSettled } from "solid-js";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import {
@@ -34,7 +34,7 @@ export function SidebarRegionDivider(props: SidebarRegionDividerProps) {
       shell.setAttribute("data-sidebar-resizing", "");
     }
   };
-  onCleanup(() => {
+  onSettled(() => () => {
     cancelLayout(resizeCommit);
     props.elements?.shell.removeAttribute("data-sidebar-resizing");
   });

@@ -1,3 +1,5 @@
+import { isOwnedTranscriptPayload } from "../config/sessions/transcript-json.js";
+import { projectModelContextMessages } from "../shared/model-context-message.js";
 import type { PluginHookName } from "./types.js";
 
 export class HookIsolationError extends Error {}
@@ -18,7 +20,7 @@ function containsSharedMemory(value: unknown, seen: Set<object>, sourceData = fa
       Reflect.get(prototype, "buffer", value) instanceof SharedArrayBuffer
     );
   }
-  if (value instanceof ArrayBuffer) {
+  if (value instanceof ArrayBuffer || isOwnedTranscriptPayload(value)) {
     return false;
   }
   const webAssemblyMemory = (
@@ -29,11 +31,10 @@ function containsSharedMemory(value: unknown, seen: Set<object>, sourceData = fa
   if (
     webAssemblyMemory &&
     value instanceof webAssemblyMemory &&
-    typeof SharedArrayBuffer !== "undefined"
+    typeof SharedArrayBuffer !== "undefined" &&
+    Reflect.get(webAssemblyMemory.prototype, "buffer", value) instanceof SharedArrayBuffer
   ) {
-    if (Reflect.get(webAssemblyMemory.prototype, "buffer", value) instanceof SharedArrayBuffer) {
-      return true;
-    }
+    return true;
   }
   if (seen.has(value)) {
     return false;
@@ -89,8 +90,8 @@ function containsSharedMemory(value: unknown, seen: Set<object>, sourceData = fa
 
 export function cloneHookIsolationValue<T>(hookName: PluginHookName, value: T): T {
   try {
-    // The pinned Bun clone omits Error.cause. Validate source data edges too;
-    // accessors are evaluated only once, by the native clone below.
+    // Bun omits Error.cause, so scan unowned source edges too; owned transcript JSON is frozen.
+    // Accessors run only in the native clone; its unowned result is fully scanned below.
     if (containsSharedMemory(value, new Set<object>(), true)) {
       throw new TypeError("shared memory cannot be isolated");
     }
@@ -101,6 +102,66 @@ export function cloneHookIsolationValue<T>(hookName: PluginHookName, value: T): 
     }
     return cloned;
   } catch (cause) {
+    throw new HookIsolationError(`[hooks] ${hookName} mutable input isolation failed`, { cause });
+  }
+}
+
+/** Copy dispatch envelopes while retaining only payloads sealed by the transcript owner. */
+export function clonePromptHookEvent<T extends { messages: unknown[] }>(
+  hookName: PluginHookName,
+  event: T,
+): T {
+  try {
+    const shared: Array<{ index: number; key: string; value: object }> = [];
+    const messages = projectModelContextMessages(event.messages);
+    for (let index = 0; index < messages.length; index++) {
+      const message = messages[index];
+      if (!message || typeof message !== "object") {
+        continue;
+      }
+      const prototype = Object.getPrototypeOf(message);
+      // Preserve native cloning for non-record values, including Error.cause.
+      if (prototype !== Object.prototype && prototype !== null) {
+        continue;
+      }
+      const original = event.messages[index];
+      const ownedMessage =
+        original && typeof original === "object" && isOwnedTranscriptPayload(original)
+          ? original
+          : undefined;
+      const envelope: Record<string, unknown> = { ...message };
+      for (const key of Object.keys(envelope)) {
+        const value = envelope[key];
+        // Entry normalization owns the whole message. Projection can replace metadata,
+        // so only unchanged fields inherit that owner's deep-freeze guarantee.
+        if (
+          value &&
+          typeof value === "object" &&
+          ((ownedMessage && Reflect.get(ownedMessage, key) === value) ||
+            isOwnedTranscriptPayload(value))
+        ) {
+          shared.push({ index, key, value });
+          envelope[key] = undefined;
+        }
+      }
+      messages[index] = envelope;
+    }
+    // Clone the remaining graph with the existing native-value and shared-memory checks.
+    const snapshot = cloneHookIsolationValue(hookName, { ...event, messages });
+    for (const { index, key, value } of shared) {
+      // Each recorded position is an own property of a plain cloned envelope.
+      Object.defineProperty(snapshot.messages[index], key, {
+        value,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
+    return snapshot;
+  } catch (cause) {
+    if (cause instanceof HookIsolationError) {
+      throw cause;
+    }
     throw new HookIsolationError(`[hooks] ${hookName} mutable input isolation failed`, { cause });
   }
 }

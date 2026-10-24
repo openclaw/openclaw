@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -42,7 +43,7 @@ async function withFixture(
       refuseHostWrites();
     }
     const seed = expectDefined(
-      await manager.appendMessageAsync({ role: "user", content: "Seed", timestamp: 1 }),
+      await manager.appendMessageAsync(makeUserMessage("Seed", 1)),
       "committed seed entry id",
     );
     await run({ target, manager, seed, reopen });
@@ -131,7 +132,7 @@ it("awaits leaf, branch, raw persistence, and static transcript operations witho
     expect(leafReopened.getAppendMode()).toBe("side");
 
     const newerUser = expectDefined(
-      await leafReopened.appendMessageAsync({ role: "user", content: "Newer turn", timestamp: 2 }),
+      await leafReopened.appendMessageAsync(makeUserMessage("Newer turn", 2)),
       "committed newer user id",
     );
     const beforeStaleLeaf = await loadTranscriptEvents(target);
@@ -223,7 +224,7 @@ it("propagates queued write revocation and user/custom commit failures without p
       await expect(pending).rejects.toThrow("write owner revoked");
     }
     for (const message of [
-      { role: "user" as const, content: "Refused user", timestamp: 2 },
+      makeUserMessage("Refused user", 2),
       {
         role: "custom" as const,
         customType: "refused-note",
@@ -251,18 +252,7 @@ it("propagates queued write revocation and user/custom commit failures without p
 });
 
 it("prepares current compaction metadata and retained history in one worker read", async () => {
-  await withOpenClawTestState({ label: "compaction-preparation" }, async (state) => {
-    const target = sessionScope(
-      path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      "compaction-preparation",
-    );
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const manager = await SessionManager.openAsync(target, state.workspaceDir);
-    const retained = await manager.appendMessageAsync({
-      role: "user",
-      content: "Retained user content",
-      timestamp: 1,
-    });
+  await withFixture("compaction-preparation", async ({ target, manager, seed: retained }) => {
     const opaque = await manager.appendCustomEntryAsync("retained-plugin-data", { value: 42 });
     await replaceSessionEntry(target, {
       sessionId: target.sessionId,
@@ -298,7 +288,7 @@ it("prepares current compaction metadata and retained history in one worker read
       });
       expect(prepared.runtimeEntry).toEqual(prepared.entry);
       expect(prepared.sessionManager.getEntries()).toMatchObject([
-        { id: retained, type: "message", message: { content: "Retained user content" } },
+        { id: retained, type: "message", message: { content: "Seed" } },
         { id: opaque, type: "custom", data: { value: 42 } },
       ]);
     } finally {
@@ -325,11 +315,7 @@ it("keeps the requested entry separate from the persisted compaction window owne
     const target = sessionScope(requested.storePath, requested.sessionId);
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(target, state.workspaceDir);
-    const retained = await manager.appendMessageAsync({
-      role: "user",
-      content: "Window-owned content",
-      timestamp: 1,
-    });
+    const retained = await manager.appendMessageAsync(makeUserMessage("Window-owned content", 1));
     const prepared = await SessionManager[sessionManagerOpenCompaction](requested);
     expect(prepared.sessionTarget).toEqual(target);
     expect(prepared.entry).toMatchObject({ label: "Alias metadata" });

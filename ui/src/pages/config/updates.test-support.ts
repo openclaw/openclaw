@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createComponent, createSignal, merge, Show } from "solid-js";
 import { vi } from "vitest";
+import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import type { ApplicationUpdateOverlaySnapshot } from "../../app/overlays-types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -13,6 +14,11 @@ export type UpdatesViewOverrides = Partial<Omit<UpdatesViewProps, "update">> & {
 
 export function createUpdatesViewProps(overrides: UpdatesViewOverrides = {}): UpdatesViewProps {
   return {
+    statusRead: null,
+    captureCommandPresentation: () => ({
+      retired: new Promise<void>(() => {}),
+      isCurrent: () => true,
+    }),
     configObject: { update: { channel: "stable", auto: { enabled: false } } },
     gatewayVersion: "2026.8.1",
     controlUiCommit: "0123456789abcdef0123456789abcdef01234567",
@@ -31,7 +37,7 @@ export function createUpdatesViewProps(overrides: UpdatesViewOverrides = {}): Up
     onChannelChange: vi.fn(),
     onUpdateChecksChange: vi.fn(),
     onAutomaticUpdatesChange: vi.fn(),
-    onUpdateNow: vi.fn(),
+    onUpdateNow: vi.fn(async () => undefined),
     onHoldUpdate: vi.fn(async () => true),
     onCheckStatus: vi.fn(async () => true),
     onReportFailure: vi.fn(async () => undefined),
@@ -110,4 +116,22 @@ export function createUpdatesViewDom() {
       flush();
     },
   };
+}
+
+export function nativeSettings(snapshot: NativeDeviceSettingsCapability["snapshot"]) {
+  return {
+    snapshot,
+    initialSnapshot: Promise.resolve(snapshot),
+    subscribe: () => () => undefined,
+    set: vi.fn<NativeDeviceSettingsCapability["set"]>((_key, _value, onSettled) =>
+      Promise.resolve(onSettled?.()),
+    ),
+    requestPermission: vi.fn(),
+    openSystemSettings: vi.fn(),
+    openPanel: vi.fn(),
+    checkForUpdates: vi.fn(),
+    setupChromeExtension: vi.fn(),
+    refresh: vi.fn(),
+    dispose: vi.fn(),
+  } satisfies NativeDeviceSettingsCapability;
 }

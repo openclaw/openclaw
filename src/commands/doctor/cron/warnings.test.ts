@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   noteCronDeliveryTargetAdvisory,
+  noteCronModelOverrides,
   noteLegacyWhatsAppCrontabHealthCheck,
 } from "./warnings.js";
 
@@ -89,5 +90,30 @@ it("warns about legacy ensure-whatsapp crontab entries on Linux", async () => {
     "Matched 1 entry",
   ]) {
     expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining(text), "Cron");
+  }
+});
+
+it.each([
+  ["gem", "google/gemini-2.5-pro", false],
+  ["google/gemini-2.5-pro", "gem", false],
+  ["gem", "google/gemini-2.5-flash", true],
+])("compares cron override %s against %s after resolving aliases", (primary, model, mismatch) => {
+  noteCronModelOverrides({
+    cfg: {
+      agents: {
+        defaults: {
+          model: { primary },
+          models: { "google/gemini-2.5-pro": { alias: "gem" } },
+        },
+      },
+    },
+    jobs: [job({ payload: { kind: "agentTurn", message: "Brief", model } })],
+  });
+  const text = mocks.note.mock.calls.at(-1)?.[0];
+  expect(text).toContain("1 job set `payload.model`");
+  if (mismatch) {
+    expect(text).toContain("1 job uses a different model");
+  } else {
+    expect(text).not.toContain("different model");
   }
 });

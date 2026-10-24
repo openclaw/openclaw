@@ -31,28 +31,33 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
   // Count every returned item while rendering only the small selected cluster.
   viewState.diaryPage = 1;
   const clusterSizes = [2_499, 1];
-  return {
+  const props: DreamingProps = {
     access: fullDreamingViewAccess,
     viewState,
     active: true,
     selectedAgentId: "main",
-    shortTermCount: 0,
-    promotedCount: 0,
-    shortTermEntries: [],
-    promotedEntries: [],
-    nextCycle: null,
-    timezone: null,
     statusError: null,
+    readStatus: () => null,
+    readStatusData: () => ({
+      shortTermCount: 0,
+      promotedCount: 0,
+      shortTermEntries: [],
+      promotedEntries: [],
+      phases: undefined,
+      nextCycle: null,
+      timezone: null,
+    }),
+    readDiary: () => props.dreamDiaryContent,
+    readImports: () => props.wikiImportInsights,
+    readOverview: () => props.wikiOverview,
     modeSaving: false,
     dreamDiaryLoading: false,
     dreamDiaryActionLoading: false,
     dreamDiaryActionMessage: null,
     dreamDiaryActionArchivePath: null,
-    dreamDiaryError: null,
     dreamDiaryContent: null,
     memoryWikiEnabled: true,
     wikiImportInsightsLoading: false,
-    wikiImportInsightsError: null,
     wikiImportInsights:
       tab === "insights"
         ? {
@@ -88,7 +93,6 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
           }
         : null,
     wikiOverviewLoading: false,
-    wikiOverviewError: null,
     wikiOverview:
       tab === "wiki"
         ? {
@@ -123,7 +127,7 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
     onRefreshDiary: () => {},
     onRefreshImports: () => {},
     onRefreshWikiOverview: () => {},
-    onOpenConfig: () => {},
+    onOpenConfig: async () => {},
     onOpenWikiPage: async () => {},
     onCloseWikiPreview: () => {},
     wikiPreview: null,
@@ -135,6 +139,7 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
     onRepairDreamingArtifacts: () => {},
     onViewStateChange: (update) => update(viewState),
   };
+  return props;
 }
 
 describe("bounded Memory Wiki dashboard results", () => {

@@ -5,21 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
 import { loadMemoryWikiCompiledCache, readMemoryWikiDashboardState } from "./compiled-cache.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
-import { renderWikiMarkdown } from "./markdown.js";
+import { renderWikiMarkdown, toWikiPageSummary } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
-
-function writePage(
-  targetPath: string,
-  id: string,
-  title: string,
-  options: { frontmatter?: Record<string, unknown>; body?: string } = {},
-) {
-  const markdown = {
-    frontmatter: { pageType: id.split(".")[0], id, title, ...options.frontmatter },
-    body: options.body ?? `# ${title}\n`,
-  };
-  return fs.writeFile(targetPath, renderWikiMarkdown(markdown), "utf8");
-}
 
 const { createVault: createTestVault } = createMemoryWikiTestHarness();
 const createVault = (config?: MemoryWikiPluginConfig) =>
@@ -101,14 +88,14 @@ describe("compileMemoryWikiVault", () => {
   });
 
   it("bounds concurrent page reads and stops the queue after abort", async () => {
-    const { rootDir, config } = await createVault();
+    const { rootDir, config, page } = await createVault();
 
     for (let index = 0; index < 24; index += 1) {
-      await writePage(
-        path.join(rootDir, "sources", `page-${index}.md`),
-        `source.page-${index}`,
-        `Page ${index}`,
-      );
+      await page(`sources/page-${index}.md`, {
+        pageType: "source",
+        id: `source.page-${index}`,
+        title: `Page ${index}`,
+      });
     }
 
     const originalReadFile = fs.readFile.bind(fs);
@@ -197,108 +184,83 @@ describe("compileMemoryWikiVault", () => {
     expect(result.updatedFiles).not.toContain(whitespaceSourcePath);
   });
 
-  it("does not relate every page through a broad shared source", async () => {
-    const { rootDir, config } = await createVault();
-
-    await writePage(path.join(rootDir, "sources", "alpha.md"), "source.alpha", "Alpha");
-
-    for (let index = 0; index < 30; index += 1) {
-      await writePage(
-        path.join(rootDir, "entities", `entity-${index}.md`),
-        `entity.${index}`,
-        `Entity ${index}`,
-        {
-          frontmatter: { sourceIds: ["source.alpha"] },
-        },
-      );
-    }
-
-    await compileMemoryWikiVault(config);
-
-    const firstEntity = await fs.readFile(path.join(rootDir, "entities", "entity-0.md"), "utf8");
-    const sourcePage = await fs.readFile(path.join(rootDir, "sources", "alpha.md"), "utf8");
-    expect(firstEntity).toContain("[Alpha](../sources/alpha.md)");
-    expect(firstEntity).not.toContain("### Related Pages");
-    expect(sourcePage).not.toContain("### Referenced By");
-  });
-
-  it("records backlinks from shortest-path, heading, and block wikilinks", async () => {
-    const { rootDir, config } = await createVault({ vault: { renderMode: "obsidian" } });
-
-    await writePage(
-      path.join(rootDir, "entities", "brad-groux.md"),
-      "entity.brad-groux",
-      "Brad Groux",
-    );
-    for (const [slug, title, text] of [
-      ["teams-rollout", "Teams Rollout", "Owned by [[brad-groux]]."],
-      ["release-train", "Release Train", "See [[entities/brad-groux#Responsibilities|Brad]]."],
-      ["block-reference", "Block Reference", "See [[brad-groux#^block]]."],
-    ] as const) {
-      await writePage(path.join(rootDir, "concepts", `${slug}.md`), `concept.${slug}`, title, {
-        body: `# ${title}\n\n${text}\n`,
-      });
-    }
-
-    await compileMemoryWikiVault(config);
-
-    const brad = await fs.readFile(path.join(rootDir, "entities", "brad-groux.md"), "utf8");
-    expect(brad).toContain("### Referenced By");
-    expect(brad).toContain("- [[concepts/block-reference|Block Reference]]");
-    expect(brad).toContain("- [[concepts/release-train|Release Train]]");
-    expect(brad).toContain("- [[concepts/teams-rollout|Teams Rollout]]");
-  });
-
   it("writes agent directory, relationship, provenance, and privacy reports", async () => {
-    const { rootDir, config } = await createVault();
-
-    await writePage(path.join(rootDir, "entities", "brad.md"), "entity.brad", "Brad Groux", {
-      frontmatter: {
-        entityType: "person",
-        canonicalId: "maintainer.brad-groux",
-        aliases: ["brad"],
+    const { rootDir, config, page: writePage, read } = await createVault();
+    const relationships = [
+      {
+        targetId: "entity.alice",
+        targetTitle: "Alice",
+        kind: "collaborates-with",
+        weight: 0.7,
+        confidence: 0.6,
+        evidenceKind: "discrawl-stat",
         privacyTier: "local-private",
-        bestUsedFor: ["Microsoft routing"],
-        lastRefreshedAt: "2026-04-29T00:00:00.000Z",
-        personCard: {
-          handles: ["@bgroux"],
-          lane: "Microsoft Teams",
-          askFor: ["Teams and Azure questions"],
-          privacyTier: "confirm-before-use",
-        },
-        relationships: [
-          {
-            targetId: "entity.alice",
-            targetTitle: "Alice",
-            kind: "collaborates-with",
-            evidenceKind: "discrawl-stat",
-            privacyTier: "local-private",
-          },
-        ],
-        claims: [
-          {
-            id: "claim.brad.teams",
-            text: "Brad is useful for Microsoft Teams routing.",
-            status: "supported",
-            confidence: 0.9,
-            evidence: [
-              {
-                kind: "maintainer-whois",
-                sourceId: "source.maintainers",
-                privacyTier: "local-private",
-              },
-            ],
-          },
-        ],
       },
+    ];
+    const evidence = [
+      {
+        kind: "maintainer-whois",
+        sourceId: "source.maintainers",
+        confidence: 0.8,
+        privacyTier: "local-private",
+      },
+    ];
+    const metadata = {
+      entityType: "person",
+      canonicalId: "maintainer.brad-groux",
+      aliases: ["brad", "bgroux"],
+      privacyTier: "local-private",
+      bestUsedFor: ["Microsoft ecosystem routing"],
+      notEnoughFor: ["legal approval"],
+      lastRefreshedAt: "2026-04-29T00:00:00.000Z",
+      relationships,
+    };
+    await writePage("entities/brad.md", {
+      ...metadata,
+      pageType: "entity",
+      id: "entity.brad",
+      title: "Brad Groux",
+      personCard: {
+        handles: ["@bgroux"],
+        email: "brad@example.com",
+        lane: "Microsoft Teams",
+        askFor: ["Teams and Azure questions"],
+        confidence: 0.8,
+        privacyTier: "confirm-before-use",
+      },
+      claims: [
+        {
+          id: "claim.brad.teams",
+          text: "Brad is useful for Microsoft Teams routing.",
+          status: "supported",
+          confidence: 0.9,
+          evidence,
+        },
+      ],
     });
 
     await compileMemoryWikiVault(config);
 
+    const summary = toWikiPageSummary({
+      absolutePath: path.join(rootDir, "entities/brad.md"),
+      relativePath: "entities/brad.md",
+      raw: await read("entities/brad.md"),
+    });
+    expect(summary).toMatchObject({
+      ...metadata,
+      personCard: {
+        handles: ["@bgroux"],
+        emails: ["brad@example.com"],
+        lane: "Microsoft Teams",
+        privacyTier: "confirm-before-use",
+      },
+    });
+    expect(summary?.relationships).toEqual(relationships);
+    expect(summary?.claims[0]?.id).toBe("claim.brad.teams");
+    expect(summary?.claims[0]?.evidence).toEqual(evidence);
+
     const expectReport = async (name: string, content: string) =>
-      expect(fs.readFile(path.join(rootDir, "reports", `${name}.md`), "utf8")).resolves.toContain(
-        content,
-      );
+      expect(read(`reports/${name}.md`)).resolves.toContain(content);
     await expectReport("person-agent-directory", "[Brad Groux](../entities/brad.md)");
     await expectReport("relationship-graph", "[Brad Groux](../entities/brad.md) -> Alice");
     await expectReport("provenance-coverage", "maintainer-whois: 1");
@@ -314,7 +276,7 @@ describe("compileMemoryWikiVault", () => {
     );
     expect(bradPage).toMatchObject({
       canonicalId: "maintainer.brad-groux",
-      aliases: ["brad"],
+      aliases: ["brad", "bgroux"],
       personCard: { lane: "Microsoft Teams" },
       relationshipCount: 1,
     });
@@ -346,16 +308,17 @@ describe("compileMemoryWikiVault", () => {
   );
 
   it("compiles valid non-ASCII pages including a literal replacement character", async () => {
-    const { rootDir, config } = await createVault();
-    const entityPath = path.join(rootDir, "entities", "router.md");
+    const { config, page, read } = await createVault();
     const notesLine = "- 中文 🦀 \uFFFD tail";
-    await writePage(entityPath, "entity.router", "Router", {
-      body: `# Router\n\n## Human Notes\n\n${notesLine}\n`,
-    });
+    await page(
+      "entities/router.md",
+      { pageType: "entity", id: "entity.router", title: "Router" },
+      `# Router\n\n## Human Notes\n\n${notesLine}\n`,
+    );
 
     await compileMemoryWikiVault(config);
 
-    const after = await fs.readFile(entityPath, "utf8");
+    const after = await read("entities/router.md");
     expect(after).toContain(notesLine);
     expect(after).toContain("<!-- openclaw:wiki:related:start -->");
   });

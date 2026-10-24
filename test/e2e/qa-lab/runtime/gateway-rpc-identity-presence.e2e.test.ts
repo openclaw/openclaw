@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { provisionDefaultProactiveJob } from "../../../../src/cron/default-proactive-job.js";
+import { loadGatewayTestConfig } from "../../../../src/gateway/test-helpers.config-runtime.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -19,10 +21,10 @@ let started:
       port: number;
       server: Awaited<ReturnType<typeof startTestGatewayServer>>;
       client: Awaited<ReturnType<typeof connectGatewayClient>>;
+      proactiveJobId: string;
     }
   | undefined;
 let observer: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-let stateDir = "";
 type ObserverEvent = {
   event?: string;
   payload?: unknown;
@@ -40,11 +42,16 @@ function nextCatalogPresenceEvent(): Promise<ObserverEvent> {
 }
 
 beforeAll(async () => {
-  stateDir = process.env.OPENCLAW_STATE_DIR ?? "";
-  if (!stateDir) {
+  if (!process.env.OPENCLAW_STATE_DIR) {
     throw new Error("OPENCLAW_STATE_DIR is required");
   }
   await loadOrCreateProcessDeviceIdentityAsync();
+  const proactiveJob = await provisionDefaultProactiveJob(loadGatewayTestConfig(), "main", {
+    cadenceMs: 30 * 60 * 1000,
+  });
+  if (!proactiveJob) {
+    throw new Error("Expected setup to provision the default proactive automation");
+  }
   // Suite hooks must retain this server's state through their per-test reset.
   const port = await getGatewayTestPort();
   const server = await startTestGatewayServer(port, {
@@ -57,7 +64,7 @@ beforeAll(async () => {
       token: TOKEN,
       clientDisplayName: "rpc-identity-presence-bootstrap",
     });
-    started = { port, server, client };
+    started = { port, server, client, proactiveJobId: proactiveJob.id };
   } catch (error) {
     await server.close();
     throw error;
@@ -99,29 +106,18 @@ describe("gateway RPC identity and presence", () => {
       throw new Error("Gateway clients did not start");
     }
     const writer = started.client;
-    const writerIdentity = (await writer.request("gateway.identity.get", {})) as {
-      deviceId: string;
-      publicKey: string;
-    };
-    const observerIdentity = (await observer.request("gateway.identity.get", {})) as {
-      deviceId: string;
-      publicKey: string;
-    };
+    const writerIdentity = await writer.request("gateway.identity.get", {});
+    const observerIdentity = await observer.request("gateway.identity.get", {});
     expect(observerIdentity).toEqual(writerIdentity);
     expect(writerIdentity).toEqual({
       deviceId: expect.any(String),
       publicKey: expect.any(String),
     });
 
-    const systemInfo = (await writer.request("system.info", {})) as {
-      arch: string;
-      cpuCount: number;
-      hostname: string;
-      memoryTotalBytes: number;
-      nodeVersion: string;
-      platform: string;
-      processInstanceId: string;
-    };
+    const systemInfo = await writer.request<{ cpuCount: number; memoryTotalBytes: number }>(
+      "system.info",
+      {},
+    );
     expect(systemInfo).toMatchObject({
       arch: expect.any(String),
       cpuCount: expect.any(Number),
@@ -134,8 +130,7 @@ describe("gateway RPC identity and presence", () => {
     expect(systemInfo.cpuCount).toBeGreaterThan(0);
     expect(systemInfo.memoryTotalBytes).toBeGreaterThan(0);
 
-    const before = await observer.request("system-presence", {});
-    expect(Array.isArray(before)).toBe(true);
+    expect(Array.isArray(await observer.request("system-presence", {}))).toBe(true);
 
     const presenceEvent = nextCatalogPresenceEvent();
     const systemEvent = await writer.request("system-event", {
@@ -156,16 +151,13 @@ describe("gateway RPC identity and presence", () => {
       stateVersion: { presence: expect.any(Number) },
     });
 
-    const after = await observer.request("system-presence", {});
-    expect(after).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          deviceId: "rpc-catalog-device",
-          host: "rpc-catalog-host",
-          mode: "qa",
-          reason: "catalog-proof",
-        }),
-      ]),
+    expect(await observer.request("system-presence", {})).toContainEqual(
+      expect.objectContaining({
+        deviceId: "rpc-catalog-device",
+        host: "rpc-catalog-host",
+        mode: "qa",
+        reason: "catalog-proof",
+      }),
     );
 
     const lastHeartbeat = await writer.request("last-heartbeat", {});
@@ -176,10 +168,18 @@ describe("gateway RPC identity and presence", () => {
         enabled: false,
         ok: true,
       });
+      expect(await writer.request("cron.get", { id: started.proactiveJobId })).toMatchObject({
+        id: started.proactiveJobId,
+        enabled: false,
+      });
     } finally {
       expect(await writer.request("set-heartbeats", { enabled: true })).toMatchObject({
         enabled: true,
         ok: true,
+      });
+      expect(await writer.request("cron.get", { id: started.proactiveJobId })).toMatchObject({
+        id: started.proactiveJobId,
+        enabled: true,
       });
     }
   });

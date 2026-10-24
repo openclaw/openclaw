@@ -71,8 +71,15 @@ export async function statusCommand(
     .then(({ scanStatus }) => scanStatus({ ...probeBudget, deep: opts.deep }))
     .catch((error: unknown) => reportStatusScanFailure(error, runtime, opts.timeoutMs));
 
-  const { cfg, update, gatewayProbe, gatewayReachable, configDiagnostics, secretDiagnostics, env } =
-    scan;
+  const {
+    cfg,
+    update,
+    gatewayProbe,
+    gatewayReachable,
+    configDiagnostics,
+    secretDiagnostics: commandSecretDiagnostics,
+    env,
+  } = scan;
 
   if (configDiagnostics) {
     const { formatStatusConfigDiagnosticEntries, theme } =
@@ -114,6 +121,8 @@ export async function statusCommand(
 
   const {
     buildStatusCommandReportLines,
+    buildStatusSecretDiagnostics,
+    SECRET_DEGRADATION_RETRY_HINT,
     buildStatusUpdateSurface,
     formatUsageReportLines,
     getTerminalTableWidth,
@@ -140,15 +149,28 @@ export async function statusCommand(
 
   const tableWidth = getTerminalTableWidth();
 
+  const secretDiagnostics = buildStatusSecretDiagnostics(
+    scan.summary.degradedSecretOwners ?? [],
+    commandSecretDiagnostics,
+  );
   if (secretDiagnostics.length > 0) {
-    // Secret diagnostics are already redacted by the scanner; show them before the main report.
     runtime.log(theme.warn("Secret diagnostics:"));
-    for (const entry of secretDiagnostics) {
+    for (const entry of secretDiagnostics.slice(0, 10)) {
       runtime.log(`- ${entry}`);
+    }
+    if (secretDiagnostics.length > 10) {
+      runtime.log(`… +${secretDiagnostics.length - 10} more`);
+    }
+    if (scan.summary.degradedSecretOwners?.length) {
+      runtime.log(`Retry: ${SECRET_DEGRADATION_RETRY_HINT}`);
     }
     const serviceWrapperPath = daemon.wrapperPath?.trim();
     const cliWrapperPath = process.env[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
-    if (serviceWrapperPath && cliWrapperPath !== serviceWrapperPath) {
+    if (
+      commandSecretDiagnostics.length > 0 &&
+      serviceWrapperPath &&
+      cliWrapperPath !== serviceWrapperPath
+    ) {
       runtime.log(
         theme.warn(
           `The installed gateway service uses ${OPENCLAW_WRAPPER_ENV_KEY} (${sanitizeTerminalText(serviceWrapperPath)}), but this CLI process is not running with that same wrapper. Missing-secret diagnostics may describe the current CLI process rather than the installed gateway service context.`,

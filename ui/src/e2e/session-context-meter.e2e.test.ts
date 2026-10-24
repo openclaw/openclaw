@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { expect, it } from "vitest";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -100,6 +101,9 @@ suite.define(() => {
                 "false",
               );
             }
+            // Settle ancestor entrance motion before taking crop bounds; the screenshot
+            // below finishes animations and would otherwise move the meter after measurement.
+            await waitForControlUiProofSurface(meter, [meter]);
             const meterBounds = await meter.boundingBox();
             const contextBounds = await context.boundingBox();
             expect(meterBounds).not.toBeNull();

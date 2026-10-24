@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -16,6 +15,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
+import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import { finishUpdateRun, recordUpdateRunDiagnostic } from "./daemon-cli.js";
 import { printResult } from "./update-cli/progress.js";
 
@@ -49,7 +49,7 @@ function fixture() {
   return { stateDir, options, run, result, opts, reportPath };
 }
 
-function finishFromPublishedDriver(
+async function finishFromPublishedDriver(
   runId: string,
   outcome: { status: "failed"; reason: string },
   options: { env: NodeJS.ProcessEnv },
@@ -58,9 +58,8 @@ function finishFromPublishedDriver(
   const entry = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.daemon);
   // Published managed drivers call this stable export without awaiting it.
   // Their child exits naturally after the finalizer's filesystem work settles.
-  const child = spawn(
-    process.execPath,
-    [
+  const result = await runCliProcessChild({
+    nodeArgs: [
       ...resolveRuntimeWorkerArgv(entry).slice(0, -1),
       "--input-type=module",
       "-e",
@@ -73,29 +72,17 @@ function finishFromPublishedDriver(
         }
       `,
     ],
-    { env: { ...process.env, ...options.env }, stdio: ["ignore", "pipe", "pipe"], timeout: 15_000 },
-  );
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk: Buffer) => {
-    stdout += chunk.toString();
-    if (stdout.includes("REPORT_LOCK_PRESENT")) {
-      contention?.observed();
-    }
-  });
-  child.stderr.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString();
-  });
-  return new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code, signal) => {
-      if (code !== 0 || signal) {
-        reject(new Error(`Published driver failed (${code}/${signal}): ${stderr}`));
-      } else {
-        resolve(stderr);
+    nodeArgsPolicy: "caller",
+    env: { ...process.env, ...options.env },
+    timeoutMs: 15_000,
+    onStdout(stdout) {
+      if (stdout.includes("REPORT_LOCK_PRESENT")) {
+        contention?.observed();
       }
-    });
+    },
   });
+  expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
+  return result.stderr;
 }
 
 it("exports the terminal-safe update diagnostic writer for installed-runtime finalization", async () => {
@@ -274,11 +261,9 @@ it.each(["terminal", "captured"] as const)(
     expect(getUpdateRun(run.runId, options)?.status).toBe("failed");
     const before = await fs.readFile(reportPath, "utf8");
     closeOpenClawStateDatabaseForTest();
-    const database = new DatabaseSync(resolveOpenClawStateSqlitePath(options.env));
-    try {
+    {
+      using database = new DatabaseSync(resolveOpenClawStateSqlitePath(options.env));
       database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
-    } finally {
-      database.close();
     }
     expect(() => getUpdateRun(run.runId, options)).toThrow(/newer schema/);
     await printResult(

@@ -6,7 +6,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { HelloOk, MessageReactionSummary } from "@openclaw/gateway-protocol";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { Locator, Page } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import type { MigrationsMemoryPlanResult } from "../../../packages/gateway-protocol/src/schema/migrations.ts";
@@ -16,6 +15,7 @@ import type {
   SessionsDiffResult,
 } from "../../../packages/gateway-protocol/src/schema/sessions.ts";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
+import type { ControlUiBootstrapConfig } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { controlUiPluginAssetRoot } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
 import type {
@@ -24,10 +24,10 @@ import type {
   UpdateAvailable,
   UpdateScheduleState,
 } from "../api/types.ts";
-import type { ControlUiReadiness } from "../app/control-ui-readiness.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { createControlUiAttachmentFacts } from "./control-ui-attachment-fixtures.ts";
+import { buildControlUiMockBootstrapConfig } from "./control-ui-bootstrap-fixture.ts";
 import { createControlUiE2eBuildPublication } from "./control-ui-e2e-build-publication.ts";
 import type {
   ControlUiMockGateway,
@@ -79,75 +79,13 @@ export {
   installControlUiRpcDiagnostics,
 } from "./control-ui-e2e-diagnostics.ts";
 export { controlUiE2eWaitTimeoutMs, waitForConfirmModal } from "./control-ui-e2e-readiness.ts";
-
-export function controlUiSessionPath(
-  sessionKey: string,
-  basePath = "",
-  namespace: "chat" | "dashboard" = "chat",
-): string {
-  const pathname = buildControlUiSessionPath({
-    namespace,
-    sessionKey,
-    fallbackAgentId: sessionKey.split(":")[1] || "main",
-    basePath,
-    shortIdLength: 32,
-  });
-  return pathname ?? `${basePath}/chat`;
-}
-
-export function controlUiSessionUrl(
-  baseUrl: string,
-  sessionKey: string,
-  namespace: "chat" | "dashboard" = "chat",
-): string {
-  const url = new URL(baseUrl);
-  // Cold fixture navigation knows the exact key; it must not depend on a warm
-  // short-reference cache or a separately mocked sessions.resolve response.
-  url.pathname =
-    buildControlUiSessionPath({
-      namespace,
-      sessionKey,
-      basePath: url.pathname,
-      fallbackAgentId: sessionKey.split(":")[1] || "main",
-      exactKey: true,
-    }) ?? controlUiSessionPath(sessionKey, url.pathname, namespace);
-  url.search = "";
-  url.hash = "";
-  return url.toString();
-}
-
-export async function navigateToControlUiSession(page: Page, sessionKey: string): Promise<void> {
-  // The hook loads its readiness module on first read, so the first read can be undefined.
-  await page.waitForFunction(() => window.openclawControlUi !== undefined);
-  const expectedPathname = await page.evaluate((sessionPath) => {
-    const app: ControlUiReadiness["hook"] | undefined = window.openclawControlUi;
-    if (!app) {
-      throw new Error("Control UI readiness hook is unavailable");
-    }
-    const pathname = `${app.snapshot().basePath}${sessionPath}`;
-    const url = new URL(window.location.href);
-    url.pathname = pathname;
-    app.navigate("chat", { pathname });
-    return url.pathname;
-  }, controlUiSessionPath(sessionKey));
-  await page.waitForURL((url) => url.pathname === expectedPathname);
-  await page.waitForFunction(
-    (targetSessionKey) =>
-      window.openclawControlUi?.snapshot().routeReady === true &&
-      window.openclawControlUi.snapshot().sessionKey === targetSessionKey,
-    sessionKey,
-  );
-}
-
-export function controlUiBundledGatewayUrl(baseUrl: string): string {
-  const url = new URL(baseUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.origin;
-}
-
-export function controlUiBundledSettingsStorageKey(baseUrl: string): string {
-  return `openclaw.control.settings.v1:${controlUiBundledGatewayUrl(baseUrl)}`;
-}
+export {
+  controlUiBundledGatewayUrl,
+  controlUiBundledSettingsStorageKey,
+  controlUiSessionPath,
+  controlUiSessionUrl,
+  navigateToControlUiSession,
+} from "./control-ui-e2e-session-urls.ts";
 
 export function createControlUiMockSameOriginGatewayScript(): string {
   return `;(${installControlUiMockSameOriginGateway.toString()})();`;
@@ -247,9 +185,11 @@ const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
 const json5BrowserSource = readFileSync(require.resolve("json5/dist/index.min.js"), "utf8");
 
+export { installControlUiMockBootstrapDocument } from "./control-ui-bootstrap-fixture.ts";
 export { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
 
 export type ControlUiMockGatewayScenario = {
+  bootstrapPreferences?: ControlUiBootstrapConfig["preferences"];
   /** Auto-wait for sidebar rosters unless startup is held or connect fails; true overrides those skips, false disables the wait. */
   awaitInitialRoster?: boolean;
   nativePlugins?: readonly NativeControlUiPluginFixture[];
@@ -354,6 +294,8 @@ export type ControlUiMockGatewayScenario = {
   omitConnectHelloAuth?: boolean;
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];
+  /** Role-limited access to other people's sessions, as a configured Gateway role reports it. */
+  operatorSessionCap?: "write" | "suggest" | "view" | "none" | null;
   /** Selected fixture and event default; use controlUiSessionUrl to select it in the UI. */
   sessionKey?: string;
   sessionScope?: AgentsListResult["scope"];
@@ -369,8 +311,12 @@ export type ControlUiMockGatewayScenario = {
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<
-  Omit<ControlUiMockGatewayScenario, "nativePlugins" | "awaitInitialRoster">
->;
+  Omit<
+    ControlUiMockGatewayScenario,
+    "nativePlugins" | "awaitInitialRoster" | "bootstrapPreferences"
+  >
+> &
+  Pick<ControlUiMockGatewayScenario, "bootstrapPreferences">;
 
 const DEFAULT_MOCK_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
 const DEFAULT_MOCK_ATTACHMENT_MAX_BYTES = Math.floor(
@@ -664,6 +610,49 @@ export async function buildProductionControlUiE2e(
   }
 }
 
+export async function refreshProductionControlUiE2e(
+  outDir: string,
+  buildId: string,
+): Promise<void> {
+  // Refresh release identity in a caller-owned copy without recompiling its assets.
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_ENV: "production",
+    OPENCLAW_CONTROL_UI_BUILD_ID: buildId,
+  };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("VITEST")) {
+      delete env[key];
+    }
+  }
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      `const { refreshControlUiBuildOutput, resolveControlUiBuildInfo } =
+await import(process.argv[1]);
+await refreshControlUiBuildOutput(process.argv[2], resolveControlUiBuildInfo());`,
+      new URL("../../vite.config.ts", import.meta.url).href,
+      outDir,
+    ],
+    {
+      cwd: path.join(resolveRepoRoot(), "ui"),
+      encoding: "utf8",
+      env,
+      stdio: ["ignore", "inherit", "pipe"],
+      maxBuffer: 10 * 1024 * 1024,
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `Production Control UI identity refresh failed (exit ${result.status ?? "unknown"}):\n${result.stderr || result.error?.message || "See streamed build output above."}`,
+    );
+  }
+}
+
 async function runProductionControlUiBuild(
   outDir: string,
   options: ControlUiE2eBuildOptions = {},
@@ -772,6 +761,7 @@ function normalizeScenario(
       ? basePathWithSlash.slice(0, -1)
       : basePathWithSlash;
   return {
+    bootstrapPreferences: scenario.bootstrapPreferences,
     pluginAssetsRequireAuth: scenario.pluginAssetsRequireAuth ?? true,
     attachmentMaxBytes: scenario.attachmentMaxBytes ?? DEFAULT_MOCK_ATTACHMENT_MAX_BYTES,
     automaticallyFetchFavicons: scenario.automaticallyFetchFavicons ?? false,
@@ -827,6 +817,7 @@ function normalizeScenario(
     presenceUsers: scenario.presenceUsers ?? [],
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
     omitConnectHelloAuth: scenario.omitConnectHelloAuth ?? false,
+    operatorSessionCap: scenario.operatorSessionCap ?? null,
     operatorScopes: scenario.operatorScopes ?? [
       "operator.admin",
       "operator.read",
@@ -865,34 +856,7 @@ function normalizeScenario(
 }
 
 export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewayScenario = {}) {
-  const normalizedScenario = normalizeScenario(scenario);
-  const nativeCatalog = normalizedScenario.methodResponses["plugins.controlUi.list"] as
-    | { plugins?: { pluginId: string }[] }
-    | undefined;
-  return {
-    pluginAssetsRequireAuth: normalizedScenario.pluginAssetsRequireAuth,
-    pluginFrameGrants: (normalizedScenario.pluginAssetsRequireAuth
-      ? (nativeCatalog?.plugins ?? [])
-      : []
-    ).map(({ pluginId }) => ({
-      pluginId,
-      path: `/__openclaw__/plugins/control-ui/${encodeURIComponent(pluginId)}/`,
-      match: "prefix",
-    })),
-    allowExternalEmbedUrls: false,
-    automaticallyFetchFavicons: normalizedScenario.automaticallyFetchFavicons,
-    communityInvite: normalizedScenario.communityInvite,
-    assistantAgentId: normalizedScenario.assistantAgentId,
-    assistantAvatar: "",
-    assistantName: normalizedScenario.assistantName,
-    basePath: normalizedScenario.basePath,
-    devGitBranch: normalizedScenario.devGitBranch || undefined,
-    embedSandbox: "scripts",
-    serverVersion: normalizedScenario.serverVersion,
-    serverBuildId: normalizedScenario.serverBuildId,
-    terminalEnabled: normalizedScenario.terminalEnabled,
-    cliAgentsEnabled: normalizedScenario.cliAgentsEnabled,
-  };
+  return buildControlUiMockBootstrapConfig(normalizeScenario(scenario));
 }
 
 export function createControlUiMockGatewayInitScript(
@@ -1703,6 +1667,9 @@ function installControlUiMockGateway(
                   recoveryScope: "e2e-recovery-scope",
                   role: "operator",
                   scopes: scenario.operatorScopes,
+                  ...(scenario.operatorSessionCap
+                    ? { sessionCap: scenario.operatorSessionCap }
+                    : {}),
                 },
               }),
           features: {

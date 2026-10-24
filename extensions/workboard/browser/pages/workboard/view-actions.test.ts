@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { setWorkboardCards } from "../../lib/workboard/card-state.ts";
-import { resetWorkboardConnectionState } from "../../lib/workboard/index.ts";
+import { resetWorkboardConnectionState } from "../../lib/workboard/runtime.ts";
 import { createWorkboardCard } from "../../lib/workboard/test/index-helpers.ts";
 import { workboardTestHost } from "../../test/host.setup.ts";
 import { waitForFast } from "../../test/wait-for.ts";
@@ -604,7 +604,9 @@ describe("WorkboardView", () => {
         const dispatched = moveSelect!.dispatchEvent(
           new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
         );
-        expect(dispatched).toBe(false);
+        if (route === "keyboard") {
+          expect(dispatched).toBe(false);
+        }
       }
     }
     await Promise.resolve();

@@ -11,6 +11,7 @@ import {
 } from "../../../sessions/session-controller.rpc-sources.js";
 import { sessionTargetOwnersMatch } from "../../../sessions/session-controller.target.js";
 import { resolveActiveEmbeddedRunOwnerByRunId } from "../../embedded-agent-runner/runs.js";
+import { retireRequesterFollowupAuthority } from "../requester-cron-authority.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import type { SubagentKillSession } from "./subagent-control-session.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
@@ -93,6 +94,7 @@ export function captureSubagentExecution(params: {
 /** Retires the registry projection; controller source settlement retains physical cleanup. */
 export function retireSubagentGatewayBinding(observed: SubagentRunRecord): void {
   const entry = getCurrentSubagentRunOwner(subagentRuns, observed) ?? observed;
+  retireRequesterFollowupAuthority(entry);
   const runtimeKey = getSubagentRunRuntimeKey(entry);
   if (!retiredExecutions.has(runtimeKey)) {
     const execution = getRpcSourceForGateway(entry.runId, getGatewayContextResolver(entry));

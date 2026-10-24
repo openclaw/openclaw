@@ -275,13 +275,24 @@ echo 123
       });
   expect(setup.command).not.toContain(nodeBootstrap.token);
   expect(setup.command).not.toContain(setupCode);
-  const timers = path.join(home, "bootstrap-test-timers.cjs");
-  fs.writeFileSync(timers, 'require("node:timers/promises").setTimeout = async () => {};\n');
+  const hooks = path.join(home, "bootstrap-test-hooks.cjs");
+  // Observe real npm launches even when Linux prepends Node's directory to PATH.
+  fs.writeFileSync(
+    hooks,
+    `require("node:timers/promises").setTimeout = async () => {};
+const childProcess = require("node:child_process");
+const spawn = childProcess.spawn;
+childProcess.spawn = (command, args, options) => {
+  if (command === "npm") require("node:fs").appendFileSync(${JSON.stringify(path.join(home, "npm-calls"))}, args[0] + "\\n");
+  return spawn(command, args, options);
+};
+`,
+  );
   const child = spawn("/bin/sh", [], {
     env: {
       HOME: home,
-      NODE_OPTIONS: `--require ${JSON.stringify(timers)}`,
-      PATH: desktop ? `${bin}:${process.env.PATH}` : process.env.PATH,
+      NODE_OPTIONS: `--require ${JSON.stringify(hooks)}`,
+      PATH: `${bin}:${process.env.PATH}`,
       ...(desktop ? loginEnvironment : {}),
       ...setup.forwardedEnv,
       ...(options?.credentials ? { CRABBOX_WORKER_BOOTSTRAP_TOKEN: options.credentials } : {}),
@@ -323,6 +334,68 @@ echo 123
 }
 
 describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
+  it.each(["present", "absent", "rejected", "download failure"])(
+    "installs a prepared runtime with a %s project lock and keeps fallback available",
+    async (mode) => {
+      const bytes = await packageFixture("locked-runtime");
+      const runtime = await serveArtifact(bytes);
+      const lock =
+        mode === "rejected"
+          ? {}
+          : {
+              lockfileVersion: 3,
+              requires: true,
+              packages: {
+                "": { dependencies: { openclaw: "file:../node-runtime.tgz" } },
+                "node_modules/openclaw": {
+                  version: "2026.8.1",
+                  resolved: "file:../node-runtime.tgz",
+                  integrity: "sha512-" + createHash("sha512").update(bytes).digest("base64"),
+                  hasInstallScript: true,
+                },
+              },
+            };
+      const served = await serveArtifact(
+        Buffer.from(JSON.stringify(lock)),
+        mode === "download failure" ? { statusCodes: [403] } : undefined,
+      );
+      const nodeBootstrap = {
+        ...runtime.nodeBootstrap,
+        ...(mode === "absent" ? {} : { installLock: served.nodeBootstrap }),
+      };
+      // Two fresh machines consume the same prepared archive and project lock.
+      for (let start = 0; start < (mode === "present" ? 2 : 1); start++) {
+        const { home } = testHome();
+        const calls = path.join(home, "npm-calls");
+        const worker = await serveArtifact(Buffer.from("worker archive"));
+        const result = await enroll(
+          home,
+          nodeBootstrap,
+          undefined,
+          true,
+          workerBundleFor(worker.nodeBootstrap),
+        );
+        expect(result.code, result.output).toBe(0);
+        expect(readJson(runtimePackage(home, nodeBootstrap.sha256), "installed.json")).toEqual({
+          scriptsRan: true,
+        });
+        expect(readText(calls).trim().split("\n")).toEqual(
+          mode === "present" ? ["ci"] : mode === "rejected" ? ["ci", "install"] : ["install"],
+        );
+        expect(result.output.includes("CRABBOX_WARNING:openclaw-bootstrap-unlocked-install:")).toBe(
+          mode !== "present",
+        );
+        expect(result.output).toMatch(
+          /CRABBOX_TIMING:openclaw-bootstrap-installation-and-worker-download:\d+/,
+        );
+        expect(result.output).not.toContain(served.nodeBootstrap.token);
+      }
+      expect(served.authorizations).toHaveLength(
+        mode === "present" ? 2 : mode === "absent" ? 0 : 1,
+      );
+    },
+  );
+
   it("reuses a completed runtime upgrade on the next fresh warm child", async () => {
     const root = fs.realpathSync(tempDirs.make("warm-runtime-repeat-proof-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "gateway-state"));

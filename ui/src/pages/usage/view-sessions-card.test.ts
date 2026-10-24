@@ -65,3 +65,44 @@ it("retires pending usage session label copying when its payload changes", async
   expect(writeText.mock.lastCall?.[0]).toContain("second");
   expect(current.dataset.copyState).toBe("copied");
 });
+
+it("announces usage session label copy feedback in a status region", async () => {
+  vi.useFakeTimers();
+  const writeText = vi.fn(async () => undefined);
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  Object.defineProperty(document, "execCommand", { configurable: true, value: () => false });
+  const owner = document.body.appendChild(document.createElement("section"));
+  mountSolid(
+    () =>
+      SessionsCard({
+        sessions: [{ ...usageSession("session", "main", "openai"), label: "first" }],
+        usage: createUsageProps(),
+        totalSessions: 1,
+      }),
+    { container: owner },
+  );
+  flush();
+  const statusText = () =>
+    [...owner.querySelectorAll('.session-bar-actions [role="status"]')].map(
+      (node) => node.textContent,
+    );
+  owner.querySelector<HTMLButtonElement>(".session-bar-actions button")!.click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(statusText()).toEqual(["Copied!"]);
+  const feedback = owner.querySelector<HTMLElement>(".session-bar-copy-feedback")!;
+  expect(feedback.hidden).toBe(false);
+  expect(feedback.textContent).toBe("Copied!");
+  await vi.advanceTimersByTimeAsync(1500);
+  expect(statusText()).toEqual([""]);
+  expect(feedback.hidden).toBe(true);
+
+  writeText.mockRejectedValueOnce(new Error("Synthetic clipboard rejection"));
+  owner.querySelector<HTMLButtonElement>(".session-bar-actions button")!.click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(statusText()).toEqual(["Copy failed"]);
+  expect(feedback.hidden).toBe(false);
+  expect(feedback.textContent).toBe("Copy failed");
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(statusText()).toEqual([""]);
+  expect(feedback.hidden).toBe(true);
+});

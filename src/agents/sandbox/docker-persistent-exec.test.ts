@@ -58,6 +58,12 @@ const receipt: DockerPersistentExecReceipt = {
   containerId: childId,
 };
 const command = { argv: ["python3", "/workspace/watch.py"], cwd: "/workspace" };
+const engineReply = (stdout = "", code = 0, stderr = "") => ({ code, stdout, stderr });
+const outcome = (promise: Promise<void>) =>
+  promise.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
 
 beforeEach(() => {
   mocks.spawn.mockReset();
@@ -102,35 +108,31 @@ function runtime(assertCurrent = () => {}) {
   };
   mocks.exec.mockImplementation(async (_engine, args: string[]) => {
     if (args[0] === "info") {
-      return { code: 0, stdout: state.daemonId, stderr: "" };
+      return engineReply(state.daemonId);
     }
     if (args[0] === "ps") {
-      return { code: 0, stdout: state.exists ? childId : "", stderr: "" };
+      return engineReply(state.exists ? childId : "");
     }
     if (args[0] === "inspect") {
       const id = args.at(-1);
       if (id === parentId) {
         if (!state.parentExists) {
-          return { code: 1, stdout: "", stderr: `Error: No such object: ${id}` };
+          return engineReply("", 1, `Error: No such object: ${id}`);
         }
-        return {
-          code: 0,
-          stderr: "",
-          stdout: JSON.stringify({
+        return engineReply(
+          JSON.stringify({
             Running: true,
             Paused: false,
             Pid: 123,
             StartedAt: state.parentStartedAt,
           }),
-        };
+        );
       }
       if (!state.exists) {
-        return { code: 1, stdout: "", stderr: `Error: No such object: ${id}` };
+        return engineReply("", 1, `Error: No such object: ${id}`);
       }
-      return {
-        code: 0,
-        stderr: "",
-        stdout: JSON.stringify({
+      return engineReply(
+        JSON.stringify({
           Id: childId,
           Name: `/${dockerPersistentExecContainerName(attemptId)}`,
           Config: {
@@ -142,7 +144,7 @@ function runtime(assertCurrent = () => {}) {
           },
           State: { Status: state.status, StartedAt: state.startedAt, ExitCode: 0 },
         }),
-      };
+      );
     }
     if (args[0] === "rm") {
       removalAttempted.resolve();
@@ -152,7 +154,7 @@ function runtime(assertCurrent = () => {}) {
           finish();
         }
       }
-      return { code: state.refuseRemoval ? 1 : 0, stdout: "", stderr: "" };
+      return engineReply("", state.refuseRemoval ? 1 : 0);
     }
     throw new Error(`Unexpected Docker operation: ${args[0]}`);
   });
@@ -190,6 +192,63 @@ function runtime(assertCurrent = () => {}) {
     removalAttempted,
     allocate,
     capability,
+    prepare(overrides: Partial<Parameters<typeof capability.prepare>[0]> = {}) {
+      return capability.prepare({
+        attemptId,
+        custodyScope,
+        command,
+        signal: controller.signal,
+        assertCurrent: () => {},
+        onOutput: () => {},
+        ...overrides,
+      });
+    },
+  };
+}
+
+function cancellableProbes() {
+  vi.useFakeTimers();
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error("control probe timeout")), ms);
+    return controller.signal;
+  });
+}
+
+function awaitAbort(signal: AbortSignal) {
+  return new Promise<void>((_resolve, reject) => {
+    signal.addEventListener(
+      "abort",
+      () =>
+        reject(
+          signal.reason instanceof Error ? signal.reason : new Error("Docker inspection aborted"),
+        ),
+      { once: true },
+    );
+  });
+}
+
+function expectExtinct(
+  f: ReturnType<typeof runtime>,
+  stopped: Awaited<ReturnType<typeof stopDockerPersistentExec>>,
+) {
+  expect(readDockerPersistentExecExtinctionProof(stopped.extinction)).toEqual(receipt);
+  expect(f.state.exists).toBe(false);
+}
+
+function revocableRuntime() {
+  let current = true;
+  const assertCurrent = () => {
+    if (!current) {
+      throw new Error("authority revoked");
+    }
+  };
+  return {
+    ...runtime(assertCurrent),
+    assertCurrent,
+    revoke: () => {
+      current = false;
+    },
   };
 }
 
@@ -197,20 +256,8 @@ it("does not acknowledge CLI spawn as guest startup and removes a stalled attach
   vi.useFakeTimers();
   const f = runtime();
   f.state.startOnSpawn = false;
-  const prepared = await f.capability.prepare({
-    attemptId,
-    custodyScope,
-    command,
-    signal: f.controller.signal,
-    assertCurrent: () => {},
-    onOutput: () => {},
-  });
-  const start = prepared
-    .start(async () => {})
-    .then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+  const prepared = await f.prepare();
+  const start = outcome(prepared.start(async () => {}));
   await f.spawned;
   await vi.advanceTimersByTimeAsync(30_000);
   const error = await start;
@@ -272,14 +319,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("persistent START broker
         return transport;
       });
       await runWithSpawnBroker(broker, async () => {
-        const prepared = await f.capability.prepare({
-          attemptId,
-          custodyScope,
-          command,
-          signal: f.controller.signal,
-          assertCurrent,
-          onOutput: () => {},
-        });
+        const prepared = await f.prepare({ assertCurrent });
         const starting = prepared.start(async () => {
           current = currentAtLaunch;
         });
@@ -310,30 +350,17 @@ it("accepts Docker's recorded start when a command exits before startup observat
     f.finish(true);
     return transport;
   });
-  const prepared = await f.capability.prepare({
-    attemptId,
-    custodyScope,
-    command,
-    signal: f.controller.signal,
-    assertCurrent: () => {},
-    onOutput: () => {},
-  });
+  const prepared = await f.prepare();
   await expect(prepared.start(async () => {})).resolves.toBeUndefined();
   const stopped = await prepared.stopped;
   expect(stopped).toMatchObject({ reason: "source-exited", exitCode: 0 });
-  expect(readDockerPersistentExecExtinctionProof(stopped.extinction)).toEqual(receipt);
-  expect(f.state.exists).toBe(false);
+  expectExtinct(f, stopped);
 });
 
 it.each(["parent", "prepared child", "started child"] as const)(
   "cancels a pending %s probe through the cron owner before its stop deadline",
   async (probe) => {
-    vi.useFakeTimers();
-    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
-      const controller = new AbortController();
-      setTimeout(() => controller.abort(new Error("control probe timeout")), ms);
-      return controller.signal;
-    });
+    cancellableProbes();
     const f = runtime();
     const inspecting = createDeferredCore();
     const execute = mocks.exec.getMockImplementation()!;
@@ -350,18 +377,7 @@ it.each(["parent", "prepared child", "started child"] as const)(
         held = true;
         inspecting.resolve();
         const signal: AbortSignal = args[2].signal;
-        await new Promise<void>((_resolve, reject) => {
-          signal.addEventListener(
-            "abort",
-            () =>
-              reject(
-                signal.reason instanceof Error
-                  ? signal.reason
-                  : new Error("Docker inspection aborted"),
-              ),
-            { once: true },
-          );
-        });
+        await awaitAbort(signal);
       }
       return await execute(...args);
     });
@@ -425,12 +441,7 @@ it.each(["parent", "prepared child", "started child"] as const)(
 );
 
 it("interrupts the prepared-container inspection without losing its cleanup identity", async () => {
-  vi.useFakeTimers();
-  vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
-    const controller = new AbortController();
-    setTimeout(() => controller.abort(new Error("control probe timeout")), ms);
-    return controller.signal;
-  });
+  cancellableProbes();
   const f = runtime();
   const inspecting = createDeferredCore();
   const execute = mocks.exec.getMockImplementation()!;
@@ -440,39 +451,19 @@ it("interrupts the prepared-container inspection without losing its cleanup iden
       held = true;
       inspecting.resolve();
       const signal: AbortSignal = args[2].signal;
-      await new Promise<void>((_resolve, reject) => {
-        signal.addEventListener(
-          "abort",
-          () =>
-            reject(
-              signal.reason instanceof Error
-                ? signal.reason
-                : new Error("Docker inspection aborted"),
-            ),
-          { once: true },
-        );
-      });
+      await awaitAbort(signal);
     }
     return await execute(...args);
   });
   let prepareOutcome: unknown = "pending";
-  const preparing = f.capability
-    .prepare({
-      attemptId,
-      custodyScope,
-      command,
-      signal: f.controller.signal,
-      assertCurrent: () => {},
-      onOutput: () => {},
-    })
-    .then(
-      () => {
-        prepareOutcome = undefined;
-      },
-      (error: unknown) => {
-        prepareOutcome = error;
-      },
-    );
+  const preparing = f.prepare().then(
+    () => {
+      prepareOutcome = undefined;
+    },
+    (error: unknown) => {
+      prepareOutcome = error;
+    },
+  );
   await inspecting.promise;
   f.controller.abort(new Error("preparation cancelled"));
   await vi.advanceTimersByTimeAsync(0);
@@ -494,21 +485,8 @@ it("interrupts the prepared-container inspection without losing its cleanup iden
 it.each(["stop", "revocation"] as const)(
   "rejects startup after %s while Docker's started-state inspection is pending",
   async (interruption) => {
-    let current = true;
-    const assertCurrent = () => {
-      if (!current) {
-        throw new Error("authority revoked");
-      }
-    };
-    const f = runtime(assertCurrent);
-    const prepared = await f.capability.prepare({
-      attemptId,
-      custodyScope,
-      command,
-      signal: f.controller.signal,
-      assertCurrent,
-      onOutput: () => {},
-    });
+    const f = revocableRuntime();
+    const prepared = await f.prepare({ assertCurrent: f.assertCurrent });
     const inspecting = createDeferredCore();
     const release = createDeferredCore();
     const execute = mocks.exec.getMockImplementation()!;
@@ -527,7 +505,9 @@ it.each(["stop", "revocation"] as const)(
     );
     await inspecting.promise;
     const cleanup = interruption === "stop" ? prepared.stop() : undefined;
-    current = interruption !== "revocation";
+    if (interruption === "revocation") {
+      f.revoke();
+    }
     release.resolve();
     await rejection;
     await cleanup;
@@ -545,27 +525,14 @@ it.each([
 ] as const)(
   "keeps allocation inert and refuses START after $interruption during its awaited $during",
   async ({ interruption, during }) => {
-    let current = true;
-    const assertCurrent = () => {
-      if (!current) {
-        throw new Error("authority revoked");
-      }
-    };
-    const f = runtime(assertCurrent);
-    const prepared = await f.capability.prepare({
-      attemptId,
-      custodyScope,
-      command,
-      signal: f.controller.signal,
-      assertCurrent,
-      onOutput: () => {},
-    });
+    const f = revocableRuntime();
+    const prepared = await f.prepare({ assertCurrent: f.assertCurrent });
     expect(f.allocate).toHaveBeenCalledWith(expect.objectContaining({ command }));
     expect(mocks.spawn).not.toHaveBeenCalled();
     let cleanup: ReturnType<typeof prepared.stop> | undefined;
     const interrupt = () => {
       if (interruption === "revocation") {
-        current = false;
+        f.revoke();
       } else {
         cleanup = prepared.stop();
       }
@@ -606,8 +573,7 @@ it.each([
     expect(admit).toHaveBeenCalledTimes(during === "admission" ? 1 : 0);
     expect(mocks.spawn).not.toHaveBeenCalled();
     const stopped = await prepared.stop();
-    expect(readDockerPersistentExecExtinctionProof(stopped.extinction)).toEqual(receipt);
-    expect(f.state.exists).toBe(false);
+    expectExtinct(f, stopped);
     expect(
       mocks.exec.mock.calls.filter(([, args]) => args[0] === "rm").map(([, args]) => args),
     ).toEqual([["rm", "--force", "--volumes", childId]]);
@@ -618,25 +584,15 @@ it.each(["removed", "restarted"] as const)(
   "refuses START when the physical parent is %s during durable admission",
   async (change) => {
     const f = runtime();
-    const prepared = await f.capability.prepare({
-      attemptId,
-      custodyScope,
-      command,
-      signal: f.controller.signal,
-      assertCurrent: () => {},
-      onOutput: () => {},
-    });
+    const prepared = await f.prepare();
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const started = prepared
-      .start(async () => {
+    const started = outcome(
+      prepared.start(async () => {
         entered.resolve();
         await release.promise;
-      })
-      .then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+      }),
+    );
     await entered.promise;
     expect(mocks.spawn).not.toHaveBeenCalled();
     if (change === "removed") {
@@ -648,8 +604,7 @@ it.each(["removed", "restarted"] as const)(
     const error = await started;
     // Join cleanup even on a regression that incorrectly starts the child.
     const stopped = await prepared.stop();
-    expect(readDockerPersistentExecExtinctionProof(stopped.extinction)).toEqual(receipt);
-    expect(f.state.exists).toBe(false);
+    expectExtinct(f, stopped);
     expect(mocks.spawn.mock.calls).toHaveLength(0);
     expect(error).toBeInstanceOf(Error);
     expect(error).toHaveProperty("message", "The admitted sandbox container generation has ended.");
@@ -706,14 +661,7 @@ it("treats guest control-looking bytes as output and settles them before reporti
 
 it("retains uncertainty after transport loss until Docker confirms removal, then retries cleanup", async () => {
   const f = runtime();
-  const prepared = await f.capability.prepare({
-    attemptId,
-    custodyScope,
-    command,
-    signal: f.controller.signal,
-    assertCurrent: () => {},
-    onOutput: () => {},
-  });
+  const prepared = await f.prepare();
   await prepared.start(async () => {});
   f.state.refuseRemoval = true;
   f.finish(false, true);
@@ -721,8 +669,7 @@ it("retains uncertainty after transport loss until Docker confirms removal, then
   expect(f.state.exists).toBe(true);
   f.state.refuseRemoval = false;
   const stopped = await prepared.stop();
-  expect(readDockerPersistentExecExtinctionProof(stopped.extinction)).toEqual(receipt);
-  expect(f.state.exists).toBe(false);
+  expectExtinct(f, stopped);
   expect(mocks.spawn).toHaveBeenCalledOnce();
 });
 
@@ -730,14 +677,7 @@ it.each(["replaced", "removed"] as const)(
   "refuses continued execution after the parent container is %s while retaining child cleanup",
   async (change) => {
     const f = runtime();
-    const prepared = await f.capability.prepare({
-      attemptId,
-      custodyScope,
-      command,
-      signal: f.controller.signal,
-      assertCurrent: () => {},
-      onOutput: () => {},
-    });
+    const prepared = await f.prepare();
     await prepared.start(async () => {});
     if (change === "replaced") {
       f.state.parentStartedAt = "2026-02-01T00:00:00.000Z";
@@ -746,8 +686,7 @@ it.each(["replaced", "removed"] as const)(
     }
     await expect(prepared.checkCurrent()).rejects.toThrow("sandbox container generation has ended");
     const stopped = await prepared.stop();
-    expect(readDockerPersistentExecExtinctionProof(stopped.extinction)).toEqual(receipt);
-    expect(f.state.exists).toBe(false);
+    expectExtinct(f, stopped);
     expect(mocks.spawn).toHaveBeenCalledOnce();
   },
 );

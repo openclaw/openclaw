@@ -59,6 +59,12 @@ function runLiveCommand(
   });
 }
 
+type CommandOptions = Parameters<typeof runLiveCommand>[0];
+const runDiscord = (options: CommandOptions) =>
+  runStandardLiveTransportQaSuiteCommand({ channelId: "discord", options });
+const parseDiscord = (...args: string[]) => parseQa("discord", ...args);
+const doctorStep = { name: "native readiness", actions: [{ call: "channelE2e.doctor" }] };
+
 async function writeAgentE2eRecipe(
   directory: string,
   id: string,
@@ -83,13 +89,7 @@ async function writeAgentE2eRecipe(
           ...execution,
         },
       },
-      ...(includeFlow
-        ? {
-            flow: {
-              steps: [{ name: "native readiness", actions: [{ call: "channelE2e.doctor" }] }],
-            },
-          }
-        : {}),
+      ...(includeFlow ? { flow: { steps: [doctorStep] } } : {}),
     }),
   );
   return file;
@@ -100,7 +100,7 @@ describe("live transport suite runtime", () => {
   let stderrWrite: ReturnType<typeof vi.spyOn>;
 
   async function expectQaFailure(args: string[], message: string | RegExp) {
-    await parseQa("discord", ...args);
+    await parseDiscord(...args);
     expect(stderrWrite).toHaveBeenCalledWith(expect.stringMatching(message));
     expect(process.exitCode).toBe(1);
   }
@@ -256,16 +256,12 @@ describe("live transport suite runtime", () => {
         expect(runFlowWorkers).not.toHaveBeenCalled();
         if (outcome === "failed") {
           initialization.reject(failure);
-          if (caller === "dedicated") {
-            expect(suite).toBeDefined();
-            await expect(suite).rejects.toBe(failure);
-            expect(await settled).toBeUndefined();
-            expect(stderrWrite).toHaveBeenCalledExactlyOnceWith(`${failure.message}\n`);
-            expect(process.exitCode).toBe(1);
-            expect(exit).not.toHaveBeenCalled();
-          } else {
-            expect(await settled).toBe(failure);
-          }
+          expect(suite).toBeDefined();
+          await expect(suite).rejects.toBe(failure);
+          expect(await settled).toBeUndefined();
+          expect(stderrWrite).toHaveBeenCalledExactlyOnceWith(`${failure.message}\n`);
+          expect(process.exitCode).toBe(1);
+          expect(exit).not.toHaveBeenCalled();
           expect(runFlowWorkers).not.toHaveBeenCalled();
           for (const name of priorArtifacts) {
             await expect(fs.stat(path.join(outputDir, "proof", name))).rejects.toMatchObject({
@@ -333,14 +329,11 @@ describe("live transport suite runtime", () => {
     const scenarioId = "discord-canary";
     resolveLiveTransportQaScenarioIds.mockReturnValueOnce([scenarioId]);
 
-    await runStandardLiveTransportQaSuiteCommand({
-      channelId,
-      options: {
-        primaryModel: "openai/custom-selection-model",
-        profile: "all",
-        providerMode: "mock-openai",
-        scenarioIds: [scenarioId, scenarioId],
-      },
+    await runDiscord({
+      primaryModel: "openai/custom-selection-model",
+      profile: "all",
+      providerMode: "mock-openai",
+      scenarioIds: [scenarioId, scenarioId],
     });
 
     expect(resolveLiveTransportQaScenarioIds).toHaveBeenLastCalledWith({
@@ -361,13 +354,10 @@ describe("live transport suite runtime", () => {
   });
 
   it("routes dedicated Discord through Crabline without channel credential inputs", async () => {
-    await runStandardLiveTransportQaSuiteCommand({
-      channelId: "discord",
-      options: {
-        channelDriver: "crabline",
-        providerMode: "mock-openai",
-        scenarioIds: ["discord-crabline-roundtrip"],
-      },
+    await runDiscord({
+      channelDriver: "crabline",
+      providerMode: "mock-openai",
+      scenarioIds: ["discord-crabline-roundtrip"],
     });
 
     expectDispatch({
@@ -382,24 +372,18 @@ describe("live transport suite runtime", () => {
       { credentialSource: "env" },
       { credentialRole: "ci" },
     ]) {
-      await expect(
-        runStandardLiveTransportQaSuiteCommand({
-          channelId: "discord",
-          options: { channelDriver: "crabline", ...options },
-        }),
-      ).rejects.toThrow(/Crabline channel drivers do not use/u);
+      await expect(runDiscord({ channelDriver: "crabline", ...options })).rejects.toThrow(
+        /Crabline channel drivers do not use/u,
+      );
     }
   });
 
   it("keeps voice scenarios on the live Discord transport", async () => {
     await expect(
-      runStandardLiveTransportQaSuiteCommand({
-        channelId: "discord",
-        options: {
-          channelDriver: "crabline",
-          providerMode: "mock-openai",
-          scenarioIds: ["discord-voice-autojoin"],
-        },
+      runDiscord({
+        channelDriver: "crabline",
+        providerMode: "mock-openai",
+        scenarioIds: ["discord-voice-autojoin"],
       }),
     ).rejects.toThrow(/channelDriver=live/u);
   });
@@ -444,7 +428,7 @@ describe("live transport suite runtime", () => {
   });
 
   it("selects only the Discord doctor and respects explicit lane overrides", async () => {
-    await parseQa("discord", "--doctor");
+    await parseDiscord("--doctor");
     expectDispatch({
       providerMode: "mock-openai",
       credentialSource: "convex",
@@ -454,8 +438,7 @@ describe("live transport suite runtime", () => {
       scenarioDefinitions: [expect.objectContaining({ id: "discord-e2e-doctor" })],
     });
 
-    await parseQa(
-      "discord",
+    await parseDiscord(
       "--doctor",
       "--provider-mode",
       "live-frontier",
@@ -478,14 +461,7 @@ describe("live transport suite runtime", () => {
     const first = await writeAgentE2eRecipe(directory, "first-external");
     const second = await writeAgentE2eRecipe(directory, "second-external");
     const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    await parseQa(
-      "discord",
-      "--scenario-file",
-      first,
-      "--scenario-file",
-      second,
-      "--list-scenarios",
-    );
+    await parseDiscord("--scenario-file", first, "--scenario-file", second, "--list-scenarios");
     expect(output.mock.calls.map(([text]) => text).join("")).toBe(
       "first-external\nsecond-external\n",
     );
@@ -593,9 +569,7 @@ describe("live transport suite runtime", () => {
   });
 
   it("rejects an empty scenario file in the argument parser before dispatch", async () => {
-    await expect(parseQa("discord", "--scenario-file", " ")).rejects.toThrow(
-      /non-empty YAML file path/u,
-    );
+    await expect(parseDiscord("--scenario-file", " ")).rejects.toThrow(/non-empty YAML file path/u);
     expect(runQaSuiteCommand).not.toHaveBeenCalled();
   });
 

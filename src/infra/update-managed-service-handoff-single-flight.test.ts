@@ -147,6 +147,22 @@ const baseParams = {
 const mockedChild = (index = 0) =>
   spawnMock.mock.results[index]?.value as ReturnType<typeof createReadyChild>;
 const realChild = (index = 0) => spawnMock.mock.results[index]?.value as ChildProcess;
+const updatePayload = (pid: number, startIdentity: number) => ({
+  version: 2,
+  executor: { pid, startIdentity: String(startIdentity) },
+  helper: { pid, startIdentity: String(startIdentity) },
+  action: { kind: "update" },
+});
+
+async function writeMarkerUpdater(root: string) {
+  const markerPath = path.join(root, "updater-ran");
+  const updaterPath = path.join(root, "updater.cjs");
+  await fs.writeFile(
+    updaterPath,
+    `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "ran")`,
+  );
+  return { markerPath, updaterPath };
+}
 
 function requireOwner(result: ManagedServiceUpdateHandoffResult) {
   if (result.status !== "started" || !result.pid) {
@@ -447,9 +463,8 @@ describe("managed service update handoff single-flight", () => {
     const processIdentity = await import("../shared/pid-alive.js");
     try {
       const started = requireOwner(await start());
-      const identity = started;
-      expect(claim(identity)).toBe(true);
-      await expect(transfer(identity)).resolves.toBe(true);
+      expect(claim(started)).toBe(true);
+      await expect(transfer(started)).resolves.toBe(true);
       if (failure === "dead") {
         vi.spyOn(processIdentity, "isPidAlive").mockReturnValue(false);
       } else {
@@ -462,9 +477,9 @@ describe("managed service update handoff single-flight", () => {
           "getFileLockProcessStartTime",
         ).mockReturnValue(failure === "reused" ? helperStartIdentity + 1 : null);
       }
-      expect(claim(identity)).toBe(false);
+      expect(claim(started)).toBe(false);
       vi.restoreAllMocks();
-      await expect(cancel(identity)).resolves.toBe("restored-in-process");
+      await expect(cancel(started)).resolves.toBe("restored-in-process");
     } finally {
       vi.restoreAllMocks();
     }
@@ -476,12 +491,7 @@ describe("managed service update handoff single-flight", () => {
     );
     const processIdentity = await import("../shared/pid-alive.js");
     const { getFileLockProcessStartTime } = processIdentity;
-    const markerPath = path.join(root, "updater-ran");
-    const updaterPath = path.join(root, "updater.cjs");
-    await fs.writeFile(
-      updaterPath,
-      `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "ran")`,
-    );
+    const { markerPath, updaterPath } = await writeMarkerUpdater(root);
     let leaseDatabasePath: string | undefined;
     let deadOwner: string | undefined;
     let replacement: Awaited<ReturnType<typeof start>> | undefined;
@@ -502,12 +512,7 @@ describe("managed service update handoff single-flight", () => {
         ) as { owner: string; payload_json: string } | undefined;
       const initialLease = readLease();
       expect(initialLease?.owner).toBe(started.handoffId);
-      const originalPayload = {
-        version: 2,
-        executor: { pid: started.pid, startIdentity: String(helperStartIdentity) },
-        helper: { pid: started.pid, startIdentity: String(helperStartIdentity) },
-        action: { kind: "update" },
-      };
+      const originalPayload = updatePayload(started.pid, helperStartIdentity);
       expect(JSON.parse(initialLease?.payload_json ?? "null")).toEqual(originalPayload);
 
       const helperExited = once(helper, "exit");
@@ -741,12 +746,7 @@ describe("managed service update handoff single-flight", () => {
     if (replacementStartIdentity === null) {
       throw new Error("expected the replacement owner to have a stable process identity");
     }
-    const markerPath = path.join(root, "updater-ran");
-    const updaterPath = path.join(root, "updater.cjs");
-    await fs.writeFile(
-      updaterPath,
-      `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "ran")`,
-    );
+    const { markerPath, updaterPath } = await writeMarkerUpdater(root);
     const start = () => startWithPath(updaterPath);
     const started = requireOwner(await start());
     const identity = started;
@@ -768,12 +768,7 @@ describe("managed service update handoff single-flight", () => {
           "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
           root,
           "replacement",
-          JSON.stringify({
-            version: 2,
-            executor: { pid: process.pid, startIdentity: String(replacementStartIdentity) },
-            helper: { pid: process.pid, startIdentity: String(replacementStartIdentity) },
-            action: { kind: "update" },
-          }),
+          JSON.stringify(updatePayload(process.pid, replacementStartIdentity)),
           Date.now(),
         );
       }

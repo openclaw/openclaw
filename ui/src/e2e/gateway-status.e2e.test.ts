@@ -210,22 +210,19 @@ suite.define(() => {
       const identityTooltip = page
         .getByRole("tooltip")
         .filter({ hasText: "Identity and app menu for Owner:" });
-      const retry = flag.getByRole("button", {
-        name: "Reconnecting… — Retry now",
-        exact: true,
-      });
-      await retry.waitFor({ state: "visible" });
+      const recovery = flag.locator(".gateway-status");
+      await recovery.waitFor({ state: "visible" });
       expect(await retainedStatus.getAttribute("title")).toBe("");
       await page.clock.runFor(4_001);
       await flag.waitFor({ state: "hidden" });
       await page.clock.resume();
       await retainedStatus.hover();
-      await retry.waitFor({ state: "visible" });
+      await recovery.waitFor({ state: "visible" });
       await page.clock.runFor(200);
       expect(await identityTooltip.count()).toBe(0);
       expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting…");
       expect(
-        await retry.evaluate((button) => {
+        await recovery.evaluate((button) => {
           const bounds = button.getBoundingClientRect();
           return button.contains(
             document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
@@ -238,9 +235,9 @@ suite.define(() => {
       await pauseVirtualClock(page);
       await gateway.closeLatest(1006, "synthetic failed attempt");
       await retainedStatus.focus();
-      await retry.waitFor({ state: "visible" });
+      await recovery.waitFor({ state: "visible" });
       await page.keyboard.press("Tab");
-      expect(await retry.evaluate((element) => element === document.activeElement)).toBe(true);
+      expect(await recovery.evaluate((element) => element === document.activeElement)).toBe(true);
       await page.clock.resume();
 
       await composer.locator("textarea").focus();
@@ -312,9 +309,8 @@ suite.define(() => {
         const footer = page.locator(".sidebar-footer-bar");
         const connectionStatus = page.locator(".sidebar-shell__footer .gateway-status");
         await expect.poll(() => page.locator(".chat-queue__item").count()).toBe(2);
-        await connectionStatus
-          .getByRole("button", { name: "Reconnecting… · 2 queued — Retry now", exact: true })
-          .waitFor();
+        await connectionStatus.getByText("Reconnecting… · 2 queued", { exact: true }).waitFor();
+        expect(await connectionStatus.getByRole("button").count()).toBe(0);
         expect(await connectionStatus.count()).toBe(1);
         expect(await connectionStatus.locator(".gateway-status__label").textContent()).toBe(
           "Reconnecting… · 2 queued",
@@ -350,11 +346,11 @@ suite.define(() => {
           .poll(() => connectionStatus.evaluate((element) => element.getBoundingClientRect().right))
           .toBeLessThanOrEqual(0);
         expect(
-          await connectionStatus.locator("button").evaluate((button) => {
-            button.focus();
+          await connectionStatus.evaluate((element) => {
+            element.focus();
             return {
-              inert: button.closest("[inert]") !== null,
-              focused: document.activeElement === button,
+              inert: element.closest("[inert]") !== null,
+              focused: document.activeElement === element,
             };
           }),
         ).toEqual({ inert: true, focused: false });
@@ -388,18 +384,10 @@ suite.define(() => {
         expect(await mobileStatus.isVisible()).toBe(false);
         await identityStatus.click();
         await menu.getByText("Alex", { exact: true }).waitFor();
-        const retry = menu.locator('[data-value="command:retry-connect"]');
-        await retry.waitFor();
+        expect(await menu.locator('[data-value="command:retry-connect"]').count()).toBe(0);
         expect(await menu.locator(".sidebar-identity-menu__outbox").count()).toBe(0);
-        const bounds = await retry.boundingBox();
-        expect(bounds).not.toBeNull();
-        expect(bounds!.x).toBeGreaterThanOrEqual(0);
-        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
         expect(await footer.textContent()).not.toContain("in outbox");
-        const socketCount = await gateway.getSocketCount();
-        await gateway.closeLatest(1006, "synthetic failed attempt");
-        await retry.click();
-        await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+        await page.keyboard.press("Escape");
         await gateway.setOnline(true);
         await waitForControlUiGatewayReady(page);
         await connectionStatus.waitFor({ state: "detached" });

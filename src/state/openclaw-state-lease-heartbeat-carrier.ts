@@ -4,6 +4,7 @@ import {
   type Transferable,
   type Worker,
 } from "node:worker_threads";
+import { receiveWorkerMemoryPort } from "../infra/worker-cpu.js";
 import { recordWorkerMessage } from "../infra/worker-message-metrics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -123,6 +124,9 @@ export function acquireLeaseHeartbeatCarrier(params: {
     }
   };
   const receive = (reply: CarrierReply) => {
+    if (primary && receiveWorkerMemoryPort(owned.worker, reply)) {
+      return;
+    }
     if (ports) {
       recordWorkerMessage("lifecycle", "from_worker");
     }

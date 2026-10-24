@@ -1,22 +1,8 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import {
-  MessageChannel,
-  receiveMessageOnPort,
-  threadId,
-  Worker,
-  type MessagePort,
-} from "node:worker_threads";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { receiveMessageOnPort, threadId, type Worker, type MessagePort } from "node:worker_threads";
 import { assertEngineStoreExecutionAllowed } from "../database-engine/admission-scope.js";
 import { observeDatabaseOperation } from "../database-engine/observation.js";
-import {
-  POSTGRES_CONNECT_TIMEOUT_MS,
-  POSTGRES_LOCK_TIMEOUT_MS,
-  POSTGRES_STATEMENT_TIMEOUT_MS,
-} from "../database-engine/policy.js";
-import { resolveRuntimeProcessEntrypointUrl } from "../runtime-process-url.js";
-import { resolveRuntimeWorkerThreadExecArgv } from "../runtime-worker-url.js";
 import type { PostgresSqlConnection, SqlStatement } from "../sql-connection.js";
 import { sqlPublicationAnchor } from "../sql-connection.js";
 import {
@@ -26,6 +12,11 @@ import {
 import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
 import { SqliteWorkerError } from "../sqlite-worker-contract.js";
 import { recordWorkerMessage } from "../worker-message-metrics.js";
+import {
+  createPostgresBridge,
+  postgresBridgeReuseKey,
+  takePreparedPostgresBridge,
+} from "./bridge-prestart.js";
 import { takeIdlePostgresBridge, retainIdlePostgresBridge } from "./idle-bridges.js";
 import {
   decodePostgresError,
@@ -71,11 +62,9 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     assertEngineStoreExecutionAllowed();
     Object.defineProperty(this, Symbol.for("openclaw.postgres-sync-connection"), { value: true });
     this.advisoryLockKey = createHash("sha256").update(storeId).digest().readBigInt64BE();
-    const lockTimeoutMs = options?.lockTimeoutMs ?? POSTGRES_LOCK_TIMEOUT_MS;
-    const statementTimeoutMs = options?.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS;
-    this.reuseKey = options?.reuse
-      ? sha256Hex(JSON.stringify([url, schema, storeId, lockTimeoutMs, statementTimeoutMs]))
-      : undefined;
+    const params = { url, schema, storeId, ...options };
+    const key = postgresBridgeReuseKey(params);
+    this.reuseKey = options?.reuse ? key : undefined;
     const idle = this.reuseKey ? takeIdlePostgresBridge(this.reuseKey) : undefined;
     if (idle) {
       this.port = idle.port;
@@ -83,23 +72,10 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       this.worker = idle.worker;
       this.requestId = idle.requestId;
     } else {
-      const { port1, port2 } = new MessageChannel();
-      this.port = port1;
-      this.control = new Int32Array(new SharedArrayBuffer(8));
-      const workerUrl = resolveRuntimeProcessEntrypointUrl("postgresBridge");
-      this.worker = new Worker(workerUrl, {
-        workerData: {
-          port: port2,
-          signal: this.control.buffer,
-          url,
-          schema,
-          connectTimeoutMs: POSTGRES_CONNECT_TIMEOUT_MS,
-          lockTimeoutMs,
-          statementTimeoutMs,
-        },
-        transferList: [port2],
-        execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
-      });
+      const bridge = takePreparedPostgresBridge(key) ?? createPostgresBridge(params);
+      this.port = bridge.port;
+      this.control = bridge.control;
+      this.worker = bridge.worker;
     }
     this.worker.on("error", this.onWorkerError);
     this.worker.unref();

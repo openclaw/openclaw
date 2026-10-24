@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { loadSettings } from "../../app/settings.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -9,10 +10,9 @@ import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-suppo
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { moveQueuedChatMessage } from "./chat-send-actions.ts";
 import {
-  admitStoredChatComposerQueueItem,
-  listStoredChatOutboxes,
+  admitStoredChatComposerQueueItemResult,
   updateStoredChatComposerQueueItems,
-} from "./composer-persistence.ts";
+} from "./composer-queue-persistence.ts";
 
 const SESSION_KEY = "agent:main";
 const agentsList = {
@@ -164,11 +164,11 @@ it("keeps the equal-time delivery barrier at the tail in place", () => {
   const { host } = queueHost([]);
   for (const id of ["first", "second", "locked"]) {
     expect(
-      admitStoredChatComposerQueueItem(host, admission(host), {
+      admitStoredChatComposerQueueItemResult(host, admission(host), {
         ...queued(id),
         sendState: id === "locked" ? "unconfirmed" : "waiting-reconnect",
       }),
-    ).toBe(true);
+    ).toBe("admitted");
   }
   moveQueuedChatMessage(host, "second", "first");
   expect(storedOrder(host).at(-1)).toBe("locked");

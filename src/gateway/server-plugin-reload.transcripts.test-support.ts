@@ -42,7 +42,14 @@ export async function startTranscriptReloadFixtureSidecars(
       startupModuleRestorers.toReversed().forEach((restore) => restore());
     }
   });
-  await installGatewaySubagentModuleLoad(idle, idle, startupModuleRestorers);
+  await installGatewaySubagentModuleLoad(
+    idle,
+    () => {
+      const settled = Promise.resolve();
+      return { initial: settled, pending: new Map(), settled };
+    },
+    startupModuleRestorers,
+  );
   const config = getConfig();
   const unusedRecovery = async (): Promise<never> => {
     throw new Error("unexpected main-session recovery");
@@ -69,7 +76,7 @@ export async function startTranscriptReloadFixtureSidecars(
     minimalTestGateway: false,
     cfgAtStart: config,
     getConfig,
-    getReadiness: () => ({ ready: true, failing: [], uptimeMs: 0 }),
+    getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 0 }),
     port: 0,
     log,
     isNixMode: false,
@@ -83,6 +90,7 @@ export async function startTranscriptReloadFixtureSidecars(
     deps: {},
     startChannels: idle,
     mainSessionRecoveryStartupCheckedStorePaths: new Set<string>(),
+    isRestartRecoverySuppressed: () => false,
     recoveryRuntime: {
       prepareRestartRecovery: unusedRecovery,
       dispatchSessionMethod: unusedRecovery,

@@ -60,13 +60,13 @@ export async function loadLobsterImage(paletteId: string): Promise<HTMLImageElem
     host.append(artwork);
 
     // Use the neutral pose, not a time sample (blink/breathe have seeded delays).
-    for (const element of [source, ...source.querySelectorAll<SVGElement>("*")]) {
+    const originals = [source, ...source.querySelectorAll<SVGElement>("*")];
+    for (const element of originals) {
       element.style.setProperty("animation", "none", "important");
       element.style.setProperty("transition", "none", "important");
     }
     // SAFETY: DOM cloneNode preserves the concrete SVG root type.
     const clone = source.cloneNode(true) as SVGSVGElement;
-    const originals = [source, ...source.querySelectorAll<SVGElement>("*")];
     const copies = [clone, ...clone.querySelectorAll<SVGElement>("*")];
     for (const [index, original] of originals.entries()) {
       const copy = copies[index];

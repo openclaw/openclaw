@@ -234,9 +234,7 @@ export function registerSlackMessageEvents(params: {
               }
               // app_mention omits channel_type, and Slack ID prefixes are not a type contract.
               // Only an authoritative event/cache/API type may choose this event's owner.
-              const resolved = await ctx
-                .resolveChannelName(mention.channel, eventScope)
-                .catch(() => ({ type: undefined, lookupFailureCategory: "other" as const }));
+              const resolved = await ctx.resolveChannelName(mention.channel, eventScope);
               return {
                 type: resolved.type
                   ? normalizeSlackChannelType(resolved.type, mention.channel)

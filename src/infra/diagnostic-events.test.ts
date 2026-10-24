@@ -369,16 +369,11 @@ describe("diagnostic-events", () => {
       outcome: "denied",
       severity: "medium",
     } as const;
-    emit({
-      ...security,
-      type: "security.event",
-      eventId: "untrusted-security-event",
-    } as unknown as Parameters<typeof emit>[0]);
-    emitTrusted({
-      ...security,
-      type: "security.event",
-      eventId: "generic-trusted-security-event",
-    } as unknown as Parameters<typeof emitTrusted>[0]);
+    for (const send of [emit, emitTrusted]) {
+      send({ ...security, type: "security.event", eventId: "forged" } as unknown as Parameters<
+        typeof emit
+      >[0]);
+    }
     emitSecurity({ ...security, eventId: "security-event-1" });
 
     expect(internalEvents).toHaveBeenCalledExactlyOnceWith(
@@ -820,6 +815,64 @@ describe("diagnostic event plugin usage attribution", () => {
 });
 
 describe("private diagnostic data", () => {
+  it("clones plain private data once per dispatch for interested trusted listeners", () => {
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const producer = { modelContent: { inputMessages: [{ content: "synthetic prompt" }] } };
+    const received: PrivateData[] = [];
+    const mutations: boolean[] = [];
+    onTrusted(() => {}, undefined, { includePrivateData: false });
+    onTrusted(() => {}, { include: ["log.record"] });
+    for (let index = 0; index < 4; index++) {
+      onTrusted((_event, _metadata, data) => {
+        received.push(data);
+        mutations.push(Reflect.set(data.modelContent!, "systemPrompt", "changed"));
+      });
+    }
+
+    emitPrivate({ type: "model.usage", usage: { input: 1 } }, producer);
+
+    expect(clone.mock.calls.filter(([value]) => value === producer)).toHaveLength(1);
+    expect(new Set(received).size).toBe(1);
+    expect(received).toHaveLength(4);
+    expect(mutations).toEqual([false, false, false, false]);
+    producer.modelContent.inputMessages[0]!.content = "producer changed";
+    expect(received[0]).toEqual({
+      modelContent: { inputMessages: [{ content: "synthetic prompt" }] },
+    });
+  });
+
+  it("keeps mutable opaque private values isolated between listeners and producers", () => {
+    const values = { map: new Map([["key", "original"]]), bytes: new Uint8Array([1]) };
+    const producer = { toolContent: { toolInput: values } };
+    onTrusted((_event, _metadata, data) => {
+      const input = data.toolContent!.toolInput as typeof values;
+      input.map.set("key", "listener changed");
+      input.bytes[0] = 2;
+    });
+    const received = collectPrivateEvents();
+
+    emitPrivate({ type: "model.usage", usage: { input: 1 } }, producer);
+
+    expect(received[0]?.privateData).toEqual(producer);
+    expect(values.map.get("key")).toBe("original");
+    expect(values.bytes[0]).toBe(1);
+  });
+
+  it("removes forged OTel attribution without altering another listener's private snapshot", () => {
+    const producer = { hostPluginId: "spoof", errorMessage: "synthetic error" };
+    const ordinary = collectPrivateEvents();
+    const otel = vi.fn<Listener>();
+    onTrusted(markTrustedOtelDiagnosticListener(otel));
+    const afterOtel = collectPrivateEvents();
+
+    emitInternal({ type: "model.usage", usage: { input: 1 } }, producer);
+
+    expect(ordinary[0]?.privateData).toEqual(producer);
+    expect(afterOtel[0]?.privateData).toEqual(producer);
+    expect(otel.mock.calls[0]?.[2]).toEqual({ errorMessage: "synthetic error" });
+    expect(Object.isFrozen(otel.mock.calls[0]?.[2])).toBe(true);
+  });
+
   it("shares the frozen empty private payload with OTel listeners", () => {
     const received: PrivateData[] = [];
     onTrusted((_evt, _meta, data) => received.push(data));

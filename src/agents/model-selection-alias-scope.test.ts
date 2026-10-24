@@ -35,17 +35,12 @@ function resolveConfiguredRefForTest(cfg: OpenClawConfig) {
 }
 
 it.each([
-  {
-    raw: "openai/gpt-4o-mini",
-    expected: { provider: "openai", model: "gpt-4o-mini" },
-  },
-  {
-    raw: "anthropic/claude-sonnet-4-6",
-    expected: { provider: "anthropic", model: "claude-sonnet-4-6" },
-  },
-])("keeps explicit $raw authoritative with default provider openai", ({ raw, expected }) => {
+  ["openai", "gpt-4o-mini"],
+  ["anthropic", "claude-sonnet-4-6"],
+])("keeps explicit %s/%s authoritative with default provider openai", (provider, model) => {
+  const raw = `${provider}/${model}`;
   const resolve = resolver(configWithAliases({ [`openrouter/${raw}`]: { alias: raw } }));
-  expect(resolve(raw)?.ref).toEqual(expected);
+  expect(resolve(raw)?.ref).toEqual({ provider, model });
   expect(resolve(`openrouter/${raw}`)?.ref).toEqual({ provider: "openrouter", model: raw });
 });
 
@@ -67,17 +62,9 @@ it.each(["config", "manifest"])(
 );
 
 it.each([
-  {
-    raw: "openai/anthropic/small@work",
-    target: "openai/gpt-4o-mini",
-    alias: "anthropic/small@work",
-  },
-  {
-    raw: "openai/gpt-4o-mini@work",
-    target: "openrouter/openai/gpt-4o-mini",
-    alias: "openai/gpt-4o-mini",
-  },
-])("resolves profile-qualified primary $raw in its own provider", ({ raw, target, alias }) => {
+  ["openai/anthropic/small@work", "openai/gpt-4o-mini", "anthropic/small@work"],
+  ["openai/gpt-4o-mini@work", "openrouter/openai/gpt-4o-mini", "openai/gpt-4o-mini"],
+])("resolves profile-qualified primary %s in its own provider", (raw, target, alias) => {
   const cfg = configWithAliases({ [target]: { alias } }, raw);
   expect(resolver(cfg)(raw)?.ref).toEqual(smallModel);
   expect(resolveConfiguredRefForTest(cfg)).toEqual(smallModel);

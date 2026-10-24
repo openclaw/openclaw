@@ -1,6 +1,6 @@
 import { listen } from "../../../lib/reactive/listener.ts";
+import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
 import type { buildCachedChatItems } from "../chat-thread.ts";
-import { assistantGroupCanOwnActiveRunStatus } from "../chat-thread.ts";
 
 // The committed transcript owns arrivals; mounting a virtual row is not an arrival.
 export class ChatMessageEntryAnimations {

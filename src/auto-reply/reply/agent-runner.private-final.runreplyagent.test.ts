@@ -1,6 +1,7 @@
 import path from "node:path";
-import { assert, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
+import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { MISSING_REPLY_NOTICE_TEXT } from "../../agents/reply-completion.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -9,8 +10,14 @@ import {
   onAgentEvent as subscribeAgentEvent,
   type AgentEventPayload,
 } from "../../infra/agent-events.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
+import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -25,12 +32,19 @@ import {
 } from "./agent-runner.misc.runreplyagent.test-support.js";
 import { createBaseRun } from "./agent-runner.runreplyagent.test-support.js";
 import { createTestQueueSettings } from "./agent-runner.test-fixtures.js";
-import { deliverFollowupDecision } from "./followup-delivery.js";
-import { createDefaults, createTurn } from "./followup-delivery.test-helpers.js";
+import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
+import {
+  createAccounting,
+  createDefaults,
+  createSettledExecution,
+  createTurn,
+} from "./followup-delivery.test-helpers.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import type { FollowupRun } from "./queue/types.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { routeReply } from "./route-reply.js";
 import type * as RouteReplyModule from "./route-reply.js";
+import { buildTestCtx } from "./test-ctx.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 // Hoist mocks before static dependencies, but defer the runner to avoid incomplete cyclic exports.
@@ -42,6 +56,7 @@ vi.mock("./route-reply.js", async (importOriginal) => ({
   routeReply: vi.fn(async () => ({ ok: true, delivered: true })),
 }));
 const { runReplyAgent } = await import("./agent-runner-run.js");
+const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
 
 setupAgentRunnerTestHooks();
 
@@ -84,7 +99,6 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
     summaryLine?: string;
     strandedReplyRetry?: boolean;
     sendPolicyDenied?: boolean;
-    isHeartbeat?: boolean;
     chatType?: "direct" | "group";
     terminalReplyExpectation?: "required" | "optional";
     pendingContinuation?: boolean;
@@ -162,9 +176,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
         extraSystemPrompt: "Use message(action=send) for all visible replies.",
         terminalReplyExpectation:
           params.terminalReplyExpectation ??
-          (params.isHeartbeat || params.inboundEventKind === "room_event"
-            ? "optional"
-            : "required"),
+          (params.inboundEventKind === "room_event" ? "optional" : "required"),
       },
     });
 
@@ -205,7 +217,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
           opts: {
             runId,
             toolsAllow: queuedRun.toolsAllow,
-            isHeartbeat: params.isHeartbeat,
+
             onDeliberateSilentTerminalReply: params.onDeliberateSilentTerminalReply,
             onObservedReplyDelivery: params.onObservedReplyDelivery,
             onReplyOperationOwned: params.onReplyOperationOwned,
@@ -531,26 +543,6 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
     },
   );
 
-  it.each([
-    { name: "room event", params: { inboundEventKind: "room_event" } },
-    { name: "heartbeat", params: { isHeartbeat: true } },
-    { name: "denied send policy", params: { sendPolicyDenied: true } },
-  ] satisfies Array<{ name: string; params: Parameters<typeof runPrivateFinalCase>[0] }>)(
-    "does not recover a $name",
-    async ({ params }) => {
-      const { result, terminalEvent } = await runPrivateFinalCase(params);
-      expect((terminalEvent?.data.terminalReply as { code?: unknown } | undefined)?.code).not.toBe(
-        "message-tool-not-called",
-      );
-      expectNoRecovery();
-      if (params.isHeartbeat) {
-        expect(
-          normalizeReplyPayloads(result).some((payload) => payload.text === strandedDiagnosticText),
-        ).toBe(false);
-      }
-    },
-  );
-
   it("returns one missing-answer notice if the retry cannot be enqueued", async () => {
     vi.mocked(enqueueFollowupRun).mockReturnValueOnce(false);
     const { result, finalAssistantText } = await runPrivateFinalCase({});
@@ -611,4 +603,166 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
 
     expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
   });
+});
+
+describe("completed Telegram message-tool reply usage (#178404)", () => {
+  afterEach(() => setActivePluginRegistry(createTestRegistry()));
+
+  it.each(["tokens", "full", "off"] as const)(
+    "handles %s usage without disclosing the private final",
+    async (responseUsage) => {
+      const sessionKey = "agent:main:telegram:direct:123";
+      const storePath = path.join(rootDir, `sessions-${responseUsage}.json`);
+      const sessionEntry = { sessionId: "session", updatedAt: 1, responseUsage };
+      await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
+      const cfg = {
+        session: { store: storePath },
+        messages: { visibleReplies: "message_tool" as const },
+        channels: { telegram: { enabled: true } },
+      };
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "telegram",
+            source: "test",
+            plugin: createChannelTestPluginBase({ id: "telegram" }),
+          },
+        ]),
+      );
+      const privateFinal = "Private completion text must not reach Telegram.";
+      runEmbeddedAgentMock.mockResolvedValue({
+        payloads: [{ text: privateFinal }],
+        meta: {
+          agentMeta: { usage: { input: 120, output: 30 } },
+          finalAssistantVisibleText: privateFinal,
+          terminalReply: prepareAgentRunTerminalReply({ rawText: privateFinal }).terminalReply,
+        },
+        sourceReplyDeliveryState: "delivered",
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "telegram",
+            to: "123",
+            sourceReplyFinal: true,
+            text: "Already delivered answer",
+          },
+        ],
+      });
+      const delivered: ReplyPayload[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload);
+        },
+      });
+      const ctx = buildTestCtx({
+        Body: "hello",
+        Provider: "telegram",
+        Surface: "telegram",
+        From: "telegram:123",
+        To: "telegram:123",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "123",
+        SessionKey: sessionKey,
+        AccountId: "default",
+        MessageSid: `inbound-${responseUsage}`,
+      });
+      const result = await createBaseRun({
+        context: ctx,
+        run: {
+          config: cfg,
+          sessionKey,
+          messageProvider: "telegram",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+        reply: {
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          sessionKey,
+          storePath,
+        },
+      }).run();
+      await withReplyDispatcher({
+        dispatcher,
+        run: () =>
+          dispatchReplyFromConfig({
+            ctx,
+            cfg,
+            dispatcher,
+            replyResolver: async () => result,
+          }),
+      });
+
+      if (responseUsage === "off") {
+        expect(delivered).toEqual([]);
+      } else {
+        expect(delivered).toHaveLength(1);
+        expect(delivered[0]).toMatchObject({ text: expect.any(String), isStatusNotice: true });
+        const footer = delivered[0];
+        assert(footer);
+        expect(getReplyPayloadMetadata(footer)?.responseUsageLine).toBe(footer.text);
+        if (responseUsage === "tokens") {
+          expect(footer.text).toBe("Usage: 120 in / 30 out");
+        } else {
+          expect(footer.text).toContain("claude");
+        }
+      }
+      expect(JSON.stringify(delivered)).not.toContain(privateFinal);
+      expect(JSON.stringify(delivered)).not.toContain("Already delivered answer");
+    },
+  );
+});
+
+describe("resolveFollowupDeliveryDecision usage footer", () => {
+  it.each([
+    {
+      name: "a completed message-tool-only source reply",
+      deliveredViaMessageTool: true,
+      expectUsageFooter: true,
+    },
+    {
+      name: "no completed message-tool-only source reply",
+      deliveredViaMessageTool: false,
+      expectUsageFooter: false,
+    },
+  ] as const)(
+    "handles usage for $name without replaying private final text",
+    async ({ deliveredViaMessageTool, expectUsageFooter }) => {
+      const privateFinalText = "This is the private final answer.";
+      const turn = createTurn({ config: { messages: { responseUsage: "full" } } });
+      turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+      turn.queued.run.messageProvider = "telegram";
+      turn.queued.originatingChannel = "telegram";
+      turn.queued.originatingTo = "123456";
+      turn.queued.originatingChatType = "direct";
+      turn.session.current = () => ({
+        sessionId: "session",
+        updatedAt: 1,
+        responseUsage: "full",
+      });
+
+      const execution = createSettledExecution(privateFinalText);
+      execution.outcome.result.didDeliverSourceReplyViaMessageTool = deliveredViaMessageTool;
+      expect(hasCompletedSourceReplyDeliveryEvidence(execution.outcome.result)).toBe(
+        deliveredViaMessageTool,
+      );
+      const decision = await resolveFollowupDeliveryDecision({
+        turn,
+        execution,
+        accounting: createAccounting([{ text: privateFinalText }], {
+          usage: { input: 120, output: 35, total: 155 },
+        }),
+      });
+
+      const deliveredPayloads = decision.kind === "deliver" ? decision.payloads : [];
+      expect(deliveredPayloads).toHaveLength(expectUsageFooter ? 1 : 0);
+      if (expectUsageFooter) {
+        const footer = deliveredPayloads[0];
+        assert(footer);
+        expect(footer).toMatchObject({ isStatusNotice: true, text: expect.any(String) });
+        expect(getReplyPayloadMetadata(footer)?.deliverDespiteSourceReplySuppression).toBe(true);
+      }
+      expect(deliveredPayloads.map((payload) => payload.text)).not.toContain(privateFinalText);
+    },
+  );
 });

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { waitForCliSignalExit, waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import {
   readGatewayLockProcessNamespace,
   type GatewayLockRole,
@@ -11,6 +12,7 @@ import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js"
 import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
@@ -18,7 +20,8 @@ import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -59,14 +62,16 @@ function holdState(role: GatewayLockRole, update: boolean, pid = process.ppid) {
 }
 
 /** `startMs` is how long this Doctor process ran before entering maintenance. */
-function startDoctor(startMs = 0) {
+function startDoctor(startMs = 0, waitForMaintenance = false) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
   const clock = { ms: startMs };
   vi.spyOn(performance, "now").mockImplementation(() => clock.ms);
   const firstLog = createDeferredCore();
   const log = vi.fn((..._args: unknown[]) => firstLog.resolve());
   let settled = false;
+  // Published drivers can run the activation Doctor without an update authority callback.
   const result = beginDoctorMaintenance({
+    waitForMaintenance,
     options: { repair: true, nonInteractive: true },
     root: null,
     runtime: { log, error: vi.fn(), exit: vi.fn() },
@@ -87,31 +92,34 @@ function startDoctor(startMs = 0) {
   return { log, result, advanceTo, firstWait, isSettled: () => settled };
 }
 
-it("waits for a transient OpenClaw command to release state before update Doctor maintenance", async () => {
-  using state = holdState("agent-embedded", true);
-  const { databasePath, holder, before } = state;
-  const doctor = state.startDoctor();
-  await doctor.firstWait;
-  expect(doctor.log).toHaveBeenCalledWith(
-    `Waiting up to 1200 s for the OpenClaw agent-embedded process ${process.ppid} to release ${databasePath} before Doctor maintenance. Let it finish, or stop it to continue sooner.`,
-  );
-  await doctor.advanceTo(45_000);
-  expect(doctor.log).toHaveBeenCalledWith(
-    `Still waiting for the OpenClaw agent-embedded process ${process.ppid} to release ${databasePath} (45 s of 1200 s).`,
-  );
-  // Waiting holds no lock and writes nothing; the holder can finish and release.
-  await doctor.advanceTo(FALLBACK_DEADLINE_MS - 1_000);
-  expect(doctor.isSettled()).toBe(false);
-  expect(fs.readFileSync(databasePath)).toEqual(before);
-  holder.release();
-  await doctor.advanceTo(FALLBACK_DEADLINE_MS - 500);
-  const completed = await doctor.result;
-  expect(completed).toHaveProperty("maintenance");
-  expect(doctor.log).toHaveBeenCalledWith(
-    "State ownership released after 1200 s; continuing Doctor maintenance.",
-  );
-  await ("maintenance" in completed ? completed.maintenance?.finish({}) : undefined);
-});
+it.each(["update", "startup"] as const)(
+  "waits for a transient OpenClaw command before %s maintenance",
+  async (mode) => {
+    using state = holdState("agent-embedded", mode === "update");
+    const { databasePath, holder, before } = state;
+    const doctor = state.startDoctor(0, mode === "startup");
+    await doctor.firstWait;
+    expect(doctor.log).toHaveBeenCalledWith(
+      `Waiting up to 1200 s for the OpenClaw agent-embedded process ${process.ppid} to release ${databasePath} before Doctor maintenance. Let it finish, or stop it to continue sooner.`,
+    );
+    await doctor.advanceTo(45_000);
+    expect(doctor.log).toHaveBeenCalledWith(
+      `Still waiting for the OpenClaw agent-embedded process ${process.ppid} to release ${databasePath} (45 s of 1200 s).`,
+    );
+    // Waiting holds no lock and writes nothing; the holder can finish and release.
+    await doctor.advanceTo(FALLBACK_DEADLINE_MS - 1_000);
+    expect(doctor.isSettled()).toBe(false);
+    expect(fs.readFileSync(databasePath)).toEqual(before);
+    holder.release();
+    await doctor.advanceTo(FALLBACK_DEADLINE_MS - 500);
+    const completed = await doctor.result;
+    expect(completed).toHaveProperty("maintenance");
+    expect(doctor.log).toHaveBeenCalledWith(
+      "State ownership released after 1200 s; continuing Doctor maintenance.",
+    );
+    await ("maintenance" in completed ? completed.maintenance?.finish({}) : undefined);
+  },
+);
 
 it.each([
   ["elapsed startup time", 100_000, 0, FALLBACK_DEADLINE_MS, 1100],
@@ -153,6 +161,29 @@ it.each([
     expect(message).toContain("then run openclaw doctor --fix from an independent shell.");
   },
 );
+
+it("preserves accepted shutdown after cancelling a startup maintenance wait", async () => {
+  using state = holdState("agent-embedded", false);
+  const { databasePath, holder, before } = state;
+  const doctor = state.startDoctor(0, true);
+  try {
+    await doctor.firstWait;
+    const drain = waitForSignalExitBarriers("SIGTERM").catch((error: unknown) => error);
+    const completed = await doctor.result;
+    await drain;
+    expect(completed).toHaveProperty("error");
+    const error = "error" in completed ? completed.error : undefined;
+    expect(error).not.toBeInstanceOf(DoctorMaintenanceRefusalError);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("Doctor interrupted by SIGTERM");
+    expect(await waitForCliSignalExit()).toBe(143);
+    expect(fs.readFileSync(databasePath)).toEqual(before);
+  } finally {
+    holder.release();
+    await doctor.result;
+    await waitForCliSignalExit();
+  }
+});
 
 it.each([
   ["manual doctor --fix with a transient holder", "agent-embedded", false, process.ppid],

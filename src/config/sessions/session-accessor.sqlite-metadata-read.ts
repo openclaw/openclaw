@@ -34,13 +34,6 @@ const transcriptPresenceQuery = createSqliteQueryCache((database: EngineConnecti
   });
 });
 
-/** Reads physical transcript presence without decoding events or restoring cold storage. */
-export function hasSessionTranscriptEventsSync(scope: SessionTranscriptReadScope): boolean {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return Boolean(transcriptPresenceQuery(database.db)(resolved.sessionId));
-}
-
 /** Physical presence and freshness share the caller's read transaction; neither scans events. */
 export function readSessionTranscriptMetadataInDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -52,14 +45,9 @@ export function readSessionTranscriptMetadataInDatabase(
   };
 }
 
-/** Reads both physical mutation fences from the same session window snapshot. */
-export function readTranscriptMutationStateSync(scope: SessionTranscriptReadScope) {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return readTranscriptMutationStateInTransaction(database, resolved.sessionId);
-}
-
 /** Reads only the current transcript mutation fence without parsing transcript rows. */
 export function readTranscriptMutationAtSync(scope: SessionTranscriptReadScope): number | null {
-  return readTranscriptMutationStateSync(scope).updatedAt;
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt;
 }

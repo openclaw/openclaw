@@ -15,6 +15,7 @@ import { bindReplySourceToFollowup } from "../auto-reply/reply/reply-source-bind
 import { emitAgentEvent, type AgentEventStream } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { captureSessionControllerSourceSettlement } from "../sessions/session-controller.mailbox.js";
+import { widgetResult } from "./server-chat.agent-events.test-harness.js";
 import { installGatewayServerChatTestSuite } from "./server.chat.gateway-server-chat.test-support.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 import { createPreparedLifecycleWriteTracker } from "./session-lifecycle-state.test-support.js";
@@ -161,25 +162,7 @@ describe("queued WebChat follow-up delivery", () => {
             emit("tool", {
               phase: "result",
               name: "show_widget",
-              result: {
-                content: [
-                  {
-                    type: "text",
-                    text: JSON.stringify({
-                      kind: "canvas",
-                      presentation: {
-                        target: "assistant_message",
-                        title: "Result",
-                        sandbox: "scripts",
-                      },
-                      view: {
-                        id: "result",
-                        url: "/__openclaw__/canvas/documents/result/index.html",
-                      },
-                    }),
-                  },
-                ],
-              },
+              result: widgetResult("result", "assistant_message", "Result"),
             });
           }
           if (name === "text") {

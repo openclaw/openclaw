@@ -144,11 +144,15 @@ function assertMutationSource(
     if (!lifecycle || lifecycle.lifecycle_revision !== selector.lifecycleRevision) {
       throw new Error("GitHub publication transition source lifecycle changed.");
     }
-    assertGitHubPublicationWorktreeSource(source, {
-      id: row.worktree_id,
-      repoFingerprint: row.repository_fingerprint,
-      branch: row.branch,
-    });
+    assertGitHubPublicationWorktreeSource(
+      source,
+      {
+        id: row.worktree_id,
+        repoFingerprint: row.repository_fingerprint,
+        branch: row.branch,
+      },
+      result.kind === "shared",
+    );
   }
   if (result.kind === "personal") {
     for (const row of result.rows) {

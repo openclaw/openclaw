@@ -9,11 +9,17 @@ import {
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath, buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
-export type WorkspaceNode =
-  | WorkerWorkspaceManifestEntry
-  | { path: string; type: "directory" }
-  | { path: string; type: "unsupported" }
-  | undefined;
+type ManifestNode = WorkerWorkspaceManifestEntry | { path: string; type: "directory" };
+
+export type WorkspaceNode = ManifestNode | { path: string; type: "unsupported" } | undefined;
+
+type ManifestNodes = ReturnType<typeof manifestNodes>;
+export type WorkspacePreflightInput = {
+  baseNodes: Array<[string, ManifestNode]>;
+  currentNodes: WorkspacePreflightInput["baseNodes"];
+  changedPaths: string[];
+  buildCacheInputs?: string[];
+};
 
 export function sameEntry(left: WorkspaceNode, right: WorkspaceNode): boolean {
   if (left === right) {
@@ -40,10 +46,7 @@ export function sameEntry(left: WorkspaceNode, right: WorkspaceNode): boolean {
 export function manifestNodes(manifest: WorkerWorkspaceManifest) {
   const staged = stagedInputDirectoriesFromEntries(manifest.entries);
   const retained = buildCacheInputPaths(manifest.buildCacheInputs);
-  const nodes = new Map<
-    string,
-    WorkerWorkspaceManifestEntry | { path: string; type: "directory" }
-  >();
+  const nodes = new Map<string, ManifestNode>();
   for (const directory of manifest.directories ?? []) {
     if (
       !isDerivedWorkspacePath(
@@ -84,8 +87,10 @@ export function changedPaths(
   signal?: AbortSignal,
 ): Set<string> {
   signal?.throwIfAborted();
-  const baseNodes = manifestNodes(base);
-  const currentNodes = manifestNodes(current);
+  return changedNodePaths(manifestNodes(base), manifestNodes(current));
+}
+
+function changedNodePaths(baseNodes: ManifestNodes, currentNodes: ManifestNodes): Set<string> {
   const changed = new Set<string>();
   // Preserve base order followed by newly introduced current paths.
   for (const [entryPath, entry] of baseNodes) {
@@ -99,6 +104,47 @@ export function changedPaths(
     }
   }
   return changed;
+}
+
+/** Immutable source facts live for one apply; every preflight still reads the target afresh. */
+export function prepareWorkspaceReconciliation(
+  base: WorkerWorkspaceManifest,
+  current: WorkerWorkspaceManifest,
+) {
+  const baseNodes = manifestNodes(base);
+  const currentNodes = manifestNodes(current);
+  const changed = changedNodePaths(baseNodes, currentNodes);
+  const inspected = new Set(changed);
+  for (const entryPath of changed) {
+    for (const ancestor of workspacePathAncestors(entryPath)) {
+      inspected.add(ancestor);
+    }
+  }
+  const preflight: WorkspacePreflightInput = {
+    baseNodes: [],
+    currentNodes: [],
+    changedPaths: [...changed],
+    buildCacheInputs:
+      base.buildCacheInputs === undefined && current.buildCacheInputs === undefined
+        ? undefined
+        : [
+            ...buildCacheInputPaths([
+              ...(base.buildCacheInputs ?? []),
+              ...(current.buildCacheInputs ?? []),
+            ]),
+          ],
+  };
+  for (const entryPath of inspected) {
+    const previous = baseNodes.get(entryPath);
+    const next = currentNodes.get(entryPath);
+    if (previous) {
+      preflight.baseNodes.push([entryPath, previous]);
+    }
+    if (next) {
+      preflight.currentNodes.push([entryPath, next]);
+    }
+  }
+  return { baseNodes, currentNodes, changed, preflight };
 }
 
 export function parseChangedWorkspaceResult(

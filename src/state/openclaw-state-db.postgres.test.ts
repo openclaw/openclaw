@@ -289,8 +289,9 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
 
   it("retains one discovery generation across awaited, nested and native reads", async () => {
     const directory = tempDirs.make("state-composite-snapshot-postgres-");
-    const pathname = path.join(directory, "state.sqlite");
-    const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
+    const env = { ...process.env, OPENCLAW_STATE_DIR: directory };
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    const options = { path: pathname, env };
     installDatabaseEngineSelection({
       effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
       postgres: { connection: connection!, schemaPrefix: "state_composite_snapshot" },
@@ -321,7 +322,8 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       expect(namespace).toBeDefined();
       const anchor = fs.readFileSync(pathname);
       const credentialPath = path.join(directory, "client", "credentials.sqlite");
-      expect(fs.readdirSync(directory).toSorted()).toEqual(["client", "state.sqlite"]);
+      expect(fs.readdirSync(directory).toSorted()).toEqual(["client", "state"]);
+      expect(fs.readdirSync(path.dirname(pathname)).toSorted()).toEqual(["openclaw.sqlite"]);
       expect(fs.readdirSync(path.dirname(credentialPath))).toEqual(["credentials.sqlite"]);
       const credentialBytes = fs.readFileSync(credentialPath);
       await withOpenClawStateDatabaseReadSnapshot(async () => {
@@ -350,7 +352,8 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       expect(await read()).toBe("after");
       expect(fs.readFileSync(pathname)).toEqual(anchor);
       expect(fs.readFileSync(credentialPath)).toEqual(credentialBytes);
-      expect(fs.readdirSync(directory).toSorted()).toEqual(["client", "state.sqlite"]);
+      expect(fs.readdirSync(directory).toSorted()).toEqual(["client", "state"]);
+      expect(fs.readdirSync(path.dirname(pathname)).toSorted()).toEqual(["openclaw.sqlite"]);
       expect(fs.readdirSync(path.dirname(credentialPath))).toEqual(["credentials.sqlite"]);
     } finally {
       await closeOpenClawStateDatabaseAsync();
@@ -497,8 +500,9 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
 
   it("reads warm and cold discovery state without copying or changing the PostgreSQL anchor", async () => {
     const directory = tempDirs.make("state-discovery-postgres-");
-    const pathname = path.join(directory, "state.sqlite");
-    const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
+    const env = { ...process.env, OPENCLAW_STATE_DIR: directory };
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    const options = { path: pathname, env };
     const client = new pg.Client({ connectionString: connection });
     await client.connect();
     installDatabaseEngineSelection({
@@ -524,7 +528,8 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       expect(namespace).toBeDefined();
       const anchorBytes = fs.readFileSync(pathname);
       const credentialPath = path.join(directory, "client", "credentials.sqlite");
-      expect(fs.readdirSync(directory).toSorted()).toEqual(["client", "state.sqlite"]);
+      expect(fs.readdirSync(directory).toSorted()).toEqual(["client", "state"]);
+      expect(fs.readdirSync(path.dirname(pathname)).toSorted()).toEqual(["openclaw.sqlite"]);
       expect(fs.readdirSync(path.dirname(credentialPath))).toEqual(["credentials.sqlite"]);
       const credentialBytes = fs.readFileSync(credentialPath);
       let prepared: Promise<{ changes: string[]; warnings: string[] }> | undefined;
@@ -563,7 +568,8 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         expect(reply?.row).toEqual({ value_json: valueJson, updated_at_ms: 1 });
         expect(fs.readFileSync(pathname)).toEqual(anchorBytes);
         expect(fs.readFileSync(credentialPath)).toEqual(credentialBytes);
-        expect(fs.readdirSync(directory).toSorted()).toEqual(["client", "state.sqlite"]);
+        expect(fs.readdirSync(directory).toSorted()).toEqual(["client", "state"]);
+        expect(fs.readdirSync(path.dirname(pathname)).toSorted()).toEqual(["openclaw.sqlite"]);
         expect(fs.readdirSync(path.dirname(credentialPath))).toEqual(["credentials.sqlite"]);
       }
       using anchor = openNodeSqliteDatabase(pathname, { readOnly: true });

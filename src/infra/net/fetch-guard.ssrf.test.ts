@@ -764,7 +764,7 @@ describe("configured local-origin bypass", () => {
 describe("request lifecycle", () => {
   it("blocks a private DNS rebind before consulting a warm dispatcher", async () => {
     installRuntime();
-    const pool = new PinnedDispatcherPool({ maxEntries: 2, idleTtlMs: 60_000 });
+    const pool = new PinnedDispatcherPool();
     const lookupFn = vi
       .fn()
       .mockResolvedValueOnce([publicAddress])

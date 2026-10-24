@@ -9,7 +9,6 @@ import { bindSessionMcpRuntimeTestScheduler } from "./agent-bundle-mcp-manager.t
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRequesterScope, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { OpenClawStreamableHTTPClientTransport } from "./mcp-http-transport.js";
-import { buildMcpCatalogNotices } from "./tools-effective-mcp-inventory.js";
 
 const { resolveTransport, warn } = vi.hoisted(() => ({
   resolveTransport: vi.fn(),
@@ -165,15 +164,18 @@ it("bounds the first connection and never waits for known-failed retries", async
   expect(warn).toHaveBeenCalledTimes(2);
 });
 
-it("keeps one inventory notice per failure episode and publishes recovery next turn", async () => {
+it("keeps one catalog diagnostic per failure episode and publishes recovery next turn", async () => {
   const runtime = makeRuntime();
   const failed = await discover(runtime);
   expect(failed.catalog.tools).toEqual([]);
-  const notices = buildMcpCatalogNotices(failed.catalog);
-  expect(notices).toEqual([
-    expect.objectContaining({ id: "mcp-server-diagnostic:remote", severity: "warning" }),
+  const diagnostics = structuredClone(failed.catalog.diagnostics);
+  expect(diagnostics).toEqual([
+    expect.objectContaining({
+      serverName: "remote",
+      message: expect.stringContaining("server unavailable"),
+    }),
   ]);
-  expect(buildMcpCatalogNotices(await runtime.getCatalog())).toEqual(notices);
+  expect((await runtime.getCatalog()).diagnostics).toEqual(diagnostics);
   reachable = true;
   await vi.advanceTimersByTimeAsync(5_000);
   const listing = Promise.withResolvers<void>();
@@ -181,14 +183,14 @@ it("keeps one inventory notice per failure episode and publishes recovery next t
   const turn = await discover(runtime);
   expect(turn.waitedMs).toBe(0);
   expect(turn.catalog.tools).toEqual([]);
-  expect(buildMcpCatalogNotices(turn.catalog)).toEqual(notices);
+  expect(turn.catalog.diagnostics).toEqual(diagnostics);
   expect(initializes).toBe(2);
 
   listing.resolve();
   await vi.advanceTimersByTimeAsync(0);
   const recovered = await runtime.getCatalog();
   expect(recovered.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
-  expect(buildMcpCatalogNotices(recovered)).toEqual([]);
+  expect(recovered.diagnostics ?? []).toEqual([]);
   expect(turn.catalog.tools).toEqual([]);
 });
 

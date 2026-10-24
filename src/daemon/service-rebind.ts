@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import { settleWithCleanup } from "../infra/error-graph-internal.js";
 import { readServiceFileState } from "./service-stage.js";
 import type { GatewayServiceCommandConfig } from "./service-types.js";
 
@@ -131,21 +132,9 @@ export async function settleGatewayServiceRebind<T>(
   if (!capture) {
     return await operation();
   }
-  const [outcome] = await Promise.allSettled([operation()]);
-  try {
-    await capture.refresh?.(assertCurrent);
-  } catch (error) {
-    if (outcome.status === "rejected") {
-      throw new AggregateError(
-        [outcome.reason, error],
-        "Service rebind settlement could not be verified.",
-        { cause: error },
-      );
-    }
-    throw error;
-  }
-  if (outcome.status === "rejected") {
-    throw outcome.reason;
-  }
-  return outcome.value;
+  return settleWithCleanup(
+    operation(),
+    () => capture.refresh?.(assertCurrent),
+    "Service rebind settlement could not be verified.",
+  );
 }

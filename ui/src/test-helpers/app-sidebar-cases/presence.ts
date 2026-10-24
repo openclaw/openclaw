@@ -14,7 +14,7 @@ import { settleLitElement } from "../lit-settle.ts";
 import { flush } from "../solid-settle.ts";
 import "../../components/app-sidebar.tsx";
 
-await import("../../components/viewer-facepile.ts");
+await import("../../components/solid/viewer-facepile.tsx");
 
 async function mountOnlineSidebar(...args: Parameters<typeof mountSidebar>) {
   const mounted = await mountSidebar(...args);
@@ -25,7 +25,7 @@ async function mountOnlineSidebar(...args: Parameters<typeof mountSidebar>) {
 describe("AppSidebar viewer presence", () => {
   it.each([
     ["profile-bob", "bob"],
-    ["gateway-owner", "Shared owner"],
+    ["gateway-owner", "bob · Shared owner"],
   ])("shows presence and offline owner %s while excluding self", async (ownerId, ownerName) => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gateway = createGatewayHarness(client);

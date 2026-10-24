@@ -533,7 +533,7 @@ it.each(["healthy", "corrupt-companion", "invalid-blob"])(
       expect(companion).not.toBe("");
       await git(artifact, ["update-ref", companion, fork.checkpointRef!]);
     }
-    const forkSource = { store, workspaceId: fork.workspaceId, includePublication: true };
+    const forkSource = { store, workspaceId: fork.workspaceId };
     let reads = 0;
     await withCheckpoint(forkSource, async (snapshot) => {
       const { stagingRoot, publicationStagingRoot, publicationDigest } = snapshot;

@@ -24,13 +24,6 @@ type OpenAIResponsesPayloadModel = {
   compat?: unknown;
 };
 
-type OpenAIResponsesPayloadPolicyOptions = {
-  extraParams?: Record<string, unknown>;
-  storeMode?: "provider-policy" | "transport-default" | "disable" | "preserve";
-  enablePromptCacheStripping?: boolean;
-  enableServerCompaction?: boolean;
-};
-
 type OpenAIResponsesPayloadPolicy = {
   allowsServiceTier: boolean;
   compactThreshold: number | undefined;
@@ -318,7 +311,12 @@ function stripInputItemStatuses(input: unknown): void {
 /** Resolve payload mutation policy for one OpenAI Responses-style model endpoint. */
 export function resolveOpenAIResponsesPayloadPolicy(
   model: OpenAIResponsesPayloadModel,
-  options: OpenAIResponsesPayloadPolicyOptions = {},
+  options: {
+    extraParams?: Record<string, unknown>;
+    storeMode?: "provider-policy" | "transport-default" | "disable" | "preserve";
+    enablePromptCacheStripping?: boolean;
+    enableServerCompaction?: boolean;
+  } = {},
 ): OpenAIResponsesPayloadPolicy {
   const capabilities = resolveOpenAIResponsesPayloadCapabilities(model);
   const storeMode = options.storeMode ?? "provider-policy";

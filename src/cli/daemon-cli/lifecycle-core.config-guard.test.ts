@@ -100,6 +100,7 @@ function createServiceRunArgs() {
     serviceNoun: "Gateway",
     service,
     renderStartHints: () => [],
+    renderFailureHints: () => [],
     opts: { json: true },
   };
 }

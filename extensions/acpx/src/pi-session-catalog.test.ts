@@ -46,39 +46,29 @@ vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
 import { registerPiSessionCatalog } from "./pi-session-catalog-plugin.js";
 import { listLocalPiSessionPage, readLocalPiTranscriptPage } from "./pi-session-catalog.js";
 import {
-  bindTestCatalogOwner,
+  capturePiCatalog as captureCatalog,
   capturePiContinuationCatalog,
-  createPiStoreFixture,
-  installFakePiFixture,
   piJsonl,
   piMessage,
   piSessionHeader,
-  registerPiNodeHostCommands,
-  restorePiEnvironment,
-  type TestSessionCatalogProvider,
+  usePiFixtures,
 } from "./pi-session-catalog.test-support.js";
 
 const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
 const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
 const PI_TERMINAL_RESUME_COMMAND = "acpx.pi.terminal.resume.v1";
 
-const temporaryDirectories: string[] = [];
-const originalPath = process.env.PATH;
-const originalEnvironment = {
-  PI_CODING_AGENT_SESSION_DIR: process.env.PI_CODING_AGENT_SESSION_DIR,
-  PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
-  HOME: process.env.HOME,
-  USERPROFILE: process.env.USERPROFILE,
-  PATH: originalPath,
-};
+const {
+  directories: temporaryDirectories,
+  createStore: createPiStore,
+  installPi: installFakePi,
+} = usePiFixtures();
 const localRequest = { hostId: "gateway", threadId: "pi-session" };
 const transcriptRequest = { threadId: "pi-session", limit: 20 };
 const containingSessions = (session: Record<string, unknown>) => [
   expect.objectContaining({ sessions: [expect.objectContaining(session)] }),
 ];
 
-const createPiStore = createPiStoreFixture.bind(null, temporaryDirectories);
-const installFakePi = () => installFakePiFixture(temporaryDirectories, originalPath);
 const sessionInfo = (id: string, name: string, parentId: string | null = null, second = 1) => ({
   type: "session_info",
   id,
@@ -89,29 +79,6 @@ const sessionInfo = (id: string, name: string, parentId: string | null = null, s
 const header = (id = "pi-session", version = 3) =>
   piSessionHeader({ id, version, timestamp: "2026-07-13T10:00:00Z" });
 
-function captureCatalog(
-  runtime: {
-    config?: Pick<OpenClawPluginApi["runtime"]["config"], "current">;
-    nodes: Partial<OpenClawPluginApi["runtime"]["nodes"]>;
-  } = {
-    config: { current: () => ({}) },
-    nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) },
-  },
-) {
-  let provider: TestSessionCatalogProvider | undefined;
-  const commands: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0][] = [];
-  registerPiSessionCatalog({
-    pluginConfig: {},
-    runtime,
-    registerSessionCatalog: (value: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0]) => {
-      provider = bindTestCatalogOwner(value);
-    },
-    registerNodeHostCommand: (command: (typeof commands)[number]) => commands.push(command),
-    registerNodeInvokePolicy: vi.fn(),
-  } as unknown as OpenClawPluginApi);
-  return { provider: provider!, commands };
-}
-
 function usePiCandidateCacheClock(): () => void {
   let now = Date.now();
   vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -120,16 +87,9 @@ function usePiCandidateCacheClock(): () => void {
   };
 }
 
-afterEach(async () => {
-  vi.restoreAllMocks();
+afterEach(() => {
   acpRuntimeMocks.resolveAcpSessionAvailability.mockReset().mockReturnValue({ available: true });
   nodeHostMocks.runNodePtyCommand.mockClear();
-  restorePiEnvironment(originalEnvironment);
-  await Promise.all(
-    temporaryDirectories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
 });
 
 describe("Pi session catalog", () => {
@@ -347,7 +307,7 @@ describe("Pi session catalog", () => {
   it("auto-detects the store and honors the node-local Web UI switch", async () => {
     const directory = await createPiStore();
     const binDirectory = await installFakePi();
-    const commands = registerPiNodeHostCommands();
+    const { commands } = captureCatalog();
     expect(commands.map((command) => command.command)).toEqual([
       PI_SESSIONS_LIST_COMMAND,
       PI_SESSION_READ_COMMAND,

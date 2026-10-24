@@ -122,7 +122,11 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
         (match.construct === "transaction-mode" ||
           match.construct === "pragma" ||
           match.construct === "schema-version")) ||
-      (file === "src/infra/sqlite-migration-scoped-snapshot.ts" && match.construct === "rowid");
+      ((file === "src/infra/sqlite-migration-scoped-snapshot.ts" ||
+        // The SQLite v31 schema transaction rebuilds this table without changing row identities.
+        // PostgreSQL relaxes its constraint directly in openclaw-state-db-engine.ts.
+        file === "src/state/openclaw-state-db-schema-v31-workspace-manifests.ts") &&
+        match.construct === "rowid");
     const { line, character } = source.getLineAndCharacterOfPosition(position);
     sites.push({
       ...match,

@@ -1,6 +1,6 @@
-// Feishu tests cover send plugin behavior.
 import type { HttpInstance, HttpRequestOptions } from "@larksuiteoapi/node-sdk";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuAgentBody } from "./bot-agent-body.js";
 import { FeishuConfigSchema } from "./config-schema.js";
@@ -15,6 +15,7 @@ import {
 const {
   mockConvertMarkdownTables,
   mockClientGet,
+  mockClientCreate,
   mockClientList,
   mockClientPatch,
   mockClientUpdate,
@@ -27,6 +28,12 @@ const {
 } = vi.hoisted(() => ({
   mockConvertMarkdownTables: vi.fn((text: string) => text),
   mockClientGet: vi.fn(),
+  mockClientCreate:
+    vi.fn<
+      (params: {
+        data: { receive_id: string; content: string; msg_type: string };
+      }) => Promise<{ code: number; data: { message_id: string } }>
+    >(),
   mockClientList: vi.fn(),
   mockClientPatch: vi.fn(),
   mockClientUpdate: vi.fn(),
@@ -90,6 +97,7 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockClientCreate.mockReset();
   mockResolveMarkdownTableMode.mockReturnValue("preserve");
   mockConvertMarkdownTables.mockImplementation((text: string) => text);
   mockRuntimeResolveMarkdownTableMode.mockImplementation(() => {
@@ -106,7 +114,7 @@ beforeEach(() => {
   mockCreateFeishuClient.mockReturnValue({
     im: {
       message: {
-        create: vi.fn(),
+        create: mockClientCreate,
         get: mockClientGet,
         list: mockClientList,
         patch: mockClientPatch,
@@ -150,18 +158,7 @@ describe("getMessageFeishu", () => {
   }
 
   it("sends native mentions while preserving body mentions, prose breaks, and code fences", async () => {
-    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_mentions" } });
-    mockCreateFeishuClient.mockReturnValue({
-      im: {
-        message: {
-          create,
-          reply: vi.fn(),
-          get: mockClientGet,
-          list: mockClientList,
-          patch: mockClientPatch,
-        },
-      },
-    });
+    mockClientCreate.mockResolvedValue({ code: 0, data: { message_id: "om_mentions" } });
 
     const result = await sendMessageFeishu({
       cfg: {} as ClawdbotConfig,
@@ -174,7 +171,7 @@ describe("getMessageFeishu", () => {
       'body <at user_id="ou_body">Body User</at>\nsecond line\n\n```ts\nconst value = 1\n```',
       "preserve",
     );
-    expect(create).toHaveBeenCalledWith({
+    expect(mockClientCreate).toHaveBeenCalledWith({
       params: { receive_id_type: "chat_id" },
       data: {
         receive_id: "oc_send",
@@ -198,18 +195,7 @@ describe("getMessageFeishu", () => {
   });
 
   it("sends structured cards with schema-2.0 width config and intact newlines", async () => {
-    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_card" } });
-    mockCreateFeishuClient.mockReturnValue({
-      im: {
-        message: {
-          create,
-          reply: vi.fn(),
-          get: mockClientGet,
-          list: mockClientList,
-          patch: mockClientPatch,
-        },
-      },
-    });
+    mockClientCreate.mockResolvedValue({ code: 0, data: { message_id: "om_card" } });
 
     await sendStructuredCardFeishu({
       cfg: {} as ClawdbotConfig,
@@ -218,7 +204,7 @@ describe("getMessageFeishu", () => {
       header: { title: "Agent", template: "space lobster" },
     });
 
-    const request = create.mock.calls[0]?.[0] as { data?: { content?: string } } | undefined;
+    const request = mockClientCreate.mock.calls[0]?.[0];
     expect(JSON.parse(request?.data?.content ?? "null")).toEqual({
       schema: "2.0",
       config: { width_mode: "fill" },
@@ -228,26 +214,18 @@ describe("getMessageFeishu", () => {
   });
 
   it("preserves the canonical root and thread returned by the Feishu message API", async () => {
-    mockClientGet.mockResolvedValueOnce({
-      code: 0,
-      data: {
-        items: [
-          {
-            message_id: "om_topic_child",
-            root_id: "om_topic_root",
-            thread_id: "omt_topic",
-            chat_id: "oc_topic_group",
-            msg_type: "text",
-            body: { content: JSON.stringify({ text: "topic reply" }) },
-          },
-        ],
-      },
-    });
-
-    const result = await getMessageFeishu({
-      cfg: {} as ClawdbotConfig,
-      messageId: "om_topic_child",
-    });
+    mockClientGet.mockResolvedValueOnce(
+      page([
+        {
+          ...textMessage("om_topic_child", "topic reply"),
+          root_id: "om_topic_root",
+          thread_id: "omt_topic",
+          chat_id: "oc_topic_group",
+          msg_type: "text",
+        },
+      ]),
+    );
+    const result = await getMessageFeishu({ cfg: {}, messageId: "om_topic_child" });
 
     expect(result).toEqual(
       expect.objectContaining({
@@ -258,89 +236,45 @@ describe("getMessageFeishu", () => {
     );
   });
 
-  it("falls through empty interactive card element arrays and locale variants", async () => {
-    mockClientGet.mockResolvedValueOnce({
-      code: 0,
-      data: {
-        items: [
-          {
-            message_id: "om_i18n_card",
-            chat_id: "oc_i18n_card",
-            msg_type: "interactive",
-            body: {
-              content: JSON.stringify({
-                elements: [],
-                body: { elements: [] },
-                i18n_elements: {
-                  zh_cn: [],
-                  en_us: [
-                    {
-                      tag: "markdown",
-                      content: "hello ${count} {{label}} {{metadata}}",
-                    },
-                  ],
-                },
-                template_variable: {
-                  count: 2,
-                  label: "tasks",
-                  metadata: { ignored: true },
-                },
-              }),
-            },
-          },
-        ],
+  it.each([
+    {
+      name: "i18n",
+      card: {
+        elements: [],
+        body: { elements: [] },
+        i18n_elements: {
+          zh_cn: [],
+          en_us: [{ tag: "markdown", content: "hello ${count} {{label}} {{metadata}}" }],
+        },
+        template_variable: { count: 2, label: "tasks", metadata: { ignored: true } },
       },
-    });
-
-    const result = await getMessageFeishu({
-      cfg: {} as ClawdbotConfig,
-      messageId: "om_i18n_card",
-    });
-
-    expectParsedMessage(result, {
-      messageId: "om_i18n_card",
-      chatId: "oc_i18n_card",
       content: "hello 2 tasks {{metadata}}",
-      contentType: "interactive",
-    });
-  });
-
-  it("falls back to post-format content when interactive card elements are empty", async () => {
-    mockClientGet.mockResolvedValueOnce({
-      code: 0,
-      data: {
-        items: [
-          {
-            message_id: "om_post_card",
-            chat_id: "oc_post_card",
-            msg_type: "interactive",
-            body: {
-              content: JSON.stringify({
-                elements: [],
-                post: {
-                  zh_cn: {
-                    title: "Card summary",
-                    content: [[{ tag: "md", text: "**fallback** body" }]],
-                  },
-                },
-              }),
-            },
-          },
-        ],
+    },
+    {
+      name: "post",
+      card: {
+        elements: [],
+        post: {
+          zh_cn: { title: "Card summary", content: [[{ tag: "md", text: "**fallback** body" }]] },
+        },
       },
-    });
-
-    const result = await getMessageFeishu({
-      cfg: {} as ClawdbotConfig,
-      messageId: "om_post_card",
-    });
-
-    expectParsedMessage(result, {
-      messageId: "om_post_card",
-      chatId: "oc_post_card",
       content: "Card summary\n\n**fallback** body",
-      contentType: "interactive",
-    });
+    },
+  ])("falls through empty card elements to $name content", async ({ name, card, content }) => {
+    const messageId = `om_${name}_card`;
+    const chatId = `oc_${name}_card`;
+    mockClientGet.mockResolvedValueOnce(
+      page([
+        {
+          message_id: messageId,
+          chat_id: chatId,
+          msg_type: "interactive",
+          body: body(card),
+        },
+      ]),
+    );
+    const result = await getMessageFeishu({ cfg: {}, messageId });
+    expectParsedMessage(result, { messageId, chatId, content, contentType: "interactive" });
   });
 
   it("logs a safe diagnostic (not raw content) when message content is not valid JSON", async () => {
@@ -351,20 +285,11 @@ describe("getMessageFeishu", () => {
         chat_id: "oc_test",
         chat_type: "group",
         msg_type: "text",
-        body: {
-          content: "{bad json}",
-        },
-        sender: {
-          id: "ou_1",
-          sender_type: "user",
-        },
+        body: { content: "{bad json}" },
+        sender: { id: "ou_1", sender_type: "user" },
       },
     });
-
-    const result = await getMessageFeishu({
-      cfg: {} as ClawdbotConfig,
-      messageId: "om_bad_json",
-    });
+    const result = await getMessageFeishu({ cfg: {}, messageId: "om_bad_json" });
 
     expect(mockLogVerbose).toHaveBeenCalledWith(
       expect.stringContaining("feishu message content parse failed for text message"),
@@ -521,6 +446,17 @@ function textMessage(message_id: string, text: string) {
   return { message_id, body: body({ text }) };
 }
 
+function historyMessage(
+  messageId: string,
+  senderId: string,
+  contentType: string,
+  content: string,
+  createTime?: number,
+  senderType = "user",
+) {
+  return { messageId, senderId, senderType, contentType, content, createTime };
+}
+
 describe("fetched text mentions", () => {
   it.each(["get", "thread", "forward"] as const)(
     "resolves %s placeholders once using each message's flat metadata",
@@ -643,30 +579,16 @@ describe("listFeishuThreadMessages", () => {
     });
     expect(response).toEqual(before);
     expect(result).toEqual([
-      {
-        messageId: "om_file",
-        senderId: "ou_1",
-        senderType: "user",
-        contentType: "file",
-        content: "[file message]",
-        createTime: 1710000001000,
-      },
-      {
-        messageId: "om_post",
-        senderId: "ou_post",
-        senderType: "user",
-        contentType: "post",
-        content: "Summary\n\n**Ready**",
-        createTime: 1710000000500,
-      },
-      {
-        messageId: "om_card",
-        senderId: "app_1",
-        senderType: "app",
-        contentType: "interactive",
-        content: "hello from card 2.0",
-        createTime: 1710000000000,
-      },
+      historyMessage("om_file", "ou_1", "file", "[file message]", 1710000001000),
+      historyMessage("om_post", "ou_post", "post", "Summary\n\n**Ready**", 1710000000500),
+      historyMessage(
+        "om_card",
+        "app_1",
+        "interactive",
+        "hello from card 2.0",
+        1710000000000,
+        "app",
+      ),
     ]);
   });
 
@@ -690,16 +612,7 @@ describe("listFeishuThreadMessages", () => {
       rootMessageId: "om_root",
     });
 
-    expect(result).toEqual([
-      {
-        messageId: "om_text",
-        senderId: "ou_1",
-        senderType: "user",
-        contentType: "text",
-        content: "partial time",
-        createTime: undefined,
-      },
-    ]);
+    expect(result).toEqual([historyMessage("om_text", "ou_1", "text", "partial time")]);
   });
 
   it("fills thread history from continuation pages after excluding the current and root messages", async () => {
@@ -799,5 +712,146 @@ describe("listFeishuThreadMessages", () => {
     await expect(listFeishuThreadMessages(thread)).rejects.toThrow(
       `Feishu thread history pagination returned a ${firstToken ? "repeated" : "missing"} page token`,
     );
+  });
+});
+
+function okResponse(messageId: string) {
+  return { code: 0, data: { message_id: messageId } };
+}
+
+function expectedSendResult(messageId: string, chatId: string) {
+  return expect.objectContaining({
+    messageId,
+    chatId,
+    receipt: expect.objectContaining({
+      primaryPlatformMessageId: messageId,
+      platformMessageIds: [messageId],
+    }),
+  });
+}
+
+function rateLimitError() {
+  return Object.assign(new Error("Request failed with status code 400"), {
+    response: {
+      status: 400,
+      data: { code: 230020, msg: "This operation triggers the frequency limit" },
+    },
+  });
+}
+
+describe("concurrent Feishu sends", () => {
+  const cfg = {};
+  beforeEach(() => {
+    mockResolveFeishuAccount.mockReturnValue({ accountId: "default", configured: true });
+    mockCreateFeishuClient.mockReturnValue({ im: { message: { create: mockClientCreate } } });
+  });
+  afterEach(() => vi.useRealTimers());
+  it.each([
+    { scope: "one target", targets: ["oc_shared", "oc_shared", "oc_shared"] },
+    { scope: "distinct targets", targets: ["oc_alpha", "oc_beta", "oc_gamma"] },
+  ])(
+    "keeps sends to $scope independent when responses arrive out of order",
+    async ({ targets }) => {
+      const requests = targets.map((to, index) => ({
+        to,
+        messageId: `om_concurrent_${index}`,
+        response: createDeferred<ReturnType<typeof okResponse>>(),
+        started: createDeferred<void>(),
+      }));
+      for (const request of requests) {
+        mockClientCreate.mockImplementationOnce(() => {
+          request.started.resolve();
+          return request.response.promise;
+        });
+      }
+      const completionOrder: string[] = [];
+      const sends = requests.map((request, index) => ({
+        ...request,
+        sending: sendMessageFeishu({ cfg, to: request.to, text: `message ${index}` }).then(
+          (result) => {
+            completionOrder.push(result.messageId);
+            return result;
+          },
+        ),
+      }));
+      const settled = Promise.allSettled(sends.map((send) => send.sending));
+
+      try {
+        await Promise.all(requests.map((request) => request.started.promise));
+        expect(mockClientCreate.mock.calls.map(([params]) => params.data.receive_id)).toEqual(
+          targets,
+        );
+        expect(completionOrder).toEqual([]);
+
+        const expectedOrder: string[] = [];
+        for (const send of sends.toReversed()) {
+          send.response.resolve(okResponse(send.messageId));
+          await expect(send.sending).resolves.toEqual(expectedSendResult(send.messageId, send.to));
+          expectedOrder.push(send.messageId);
+          expect(completionOrder).toEqual(expectedOrder);
+        }
+        expect(mockClientCreate).toHaveBeenCalledTimes(targets.length);
+      } finally {
+        for (const send of sends) {
+          send.response.resolve(okResponse(send.messageId));
+        }
+        await settled;
+      }
+    },
+  );
+
+  it("keeps successful, recovering, and exhausted sends independent", async () => {
+    vi.useFakeTimers();
+    const attempts = new Map<string, number>();
+    const started = createDeferred<void>();
+    mockClientCreate.mockImplementation(async ({ data: { receive_id: to } }) => {
+      const attempt = (attempts.get(to) ?? 0) + 1;
+      attempts.set(to, attempt);
+      if (attempts.size === 3) {
+        started.resolve();
+      }
+      if (to === "oc_exhausted" || (to === "oc_recovering" && attempt === 1)) {
+        throw rateLimitError();
+      }
+      return okResponse(`om_${to}`);
+    });
+
+    const exhausted = sendMessageFeishu({ cfg, to: "oc_exhausted", text: "exhausted" });
+    const recovering = sendMessageFeishu({ cfg, to: "oc_recovering", text: "recovering" });
+    const successful = sendMessageFeishu({ cfg, to: "oc_successful", text: "successful" });
+    // Attach rejection handlers before advancing the retry clock.
+    const settled = Promise.allSettled([exhausted, recovering, successful]);
+
+    try {
+      await started.promise;
+      expect(attempts).toEqual(
+        new Map([
+          ["oc_exhausted", 1],
+          ["oc_recovering", 1],
+          ["oc_successful", 1],
+        ]),
+      );
+      await expect(successful).resolves.toEqual(
+        expectedSendResult("om_oc_successful", "oc_successful"),
+      );
+
+      await vi.runAllTimersAsync();
+      await expect(exhausted).rejects.toThrow(/^Feishu send failed:.*"feishu_code":230020/u);
+      expect(attempts).toEqual(
+        new Map([
+          ["oc_exhausted", 3],
+          ["oc_recovering", 2],
+          ["oc_successful", 1],
+        ]),
+      );
+      expect(await settled).toEqual([
+        { status: "rejected", reason: expect.any(Error) },
+        { status: "fulfilled", value: expectedSendResult("om_oc_recovering", "oc_recovering") },
+        { status: "fulfilled", value: expectedSendResult("om_oc_successful", "oc_successful") },
+      ]);
+    } finally {
+      await vi.runAllTimersAsync();
+      await settled;
+    }
   });
 });

@@ -63,16 +63,18 @@ function reactionFetch(
   }));
 }
 
+function requestedPaths(fetchMock: ReturnType<typeof createMattermostReactionFetchMock>) {
+  return fetchMock.mock.calls.map(([url]) => new URL(requestUrl(url)).pathname);
+}
+
 it("binds delegated reactions to the authorized channel before mutation", async () => {
   const fetchMock = reactionFetch({ postChannelId: "CHANNEL1" });
 
-  const result = await delegatedReaction("channel:CHANNEL1");
-
-  expect(result).toEqual({ ok: true });
-  expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).toEqual([
-    expect.stringMatching(/\/api\/v4\/posts\/POST1$/),
-    expect.stringMatching(/\/api\/v4\/users\/me$/),
-    expect.stringMatching(/\/api\/v4\/reactions$/),
+  expect(await delegatedReaction("channel:CHANNEL1")).toEqual({ ok: true });
+  expect(requestedPaths(fetchMock)).toEqual([
+    "/api/v4/posts/POST1",
+    "/api/v4/users/me",
+    "/api/v4/reactions",
   ]);
 });
 
@@ -91,9 +93,7 @@ it.each<[string | null, string]>([
 it("fails closed for an unspecified origin without a canonical target", async () => {
   const fetchMock = reactionFetch({ postChannelId: "CHANNEL1" });
 
-  const result = await addReaction();
-
-  expect(result).toEqual({
+  expect(await addReaction()).toEqual({
     ok: false,
     error: expect.stringContaining("require a canonical authorized conversation target"),
   });
@@ -112,9 +112,7 @@ it.each(["PEER123", "BOT123"])(
       ok: false,
       error: expect.stringContaining("belongs to a different direct conversation"),
     });
-    expect(
-      fetchMock.mock.calls.some((call) => requestUrl(call[0]).endsWith("/api/v4/reactions")),
-    ).toBe(false);
+    expect(requestedPaths(fetchMock)).not.toContain("/api/v4/reactions");
   },
 );
 
@@ -125,9 +123,7 @@ it("binds delegated self-DM reactions without collapsing duplicate participant i
     channelName: "BOT123__BOT123",
   });
 
-  const result = await delegatedReaction("user:BOT123");
-
-  expect(result).toEqual({ ok: true });
+  expect(await delegatedReaction("user:BOT123")).toEqual({ ok: true });
 });
 
 it("uses the selected account for delegated binding and mutation", async () => {
@@ -181,12 +177,10 @@ it("returns a Result error when add reaction API call fails", async () => {
     body: { id: "err", message: "boom" },
   });
 
-  const result = await addReaction({ conversationReadOrigin: "direct-operator" });
-
-  expect(result.ok).toBe(false);
-  if (!result.ok) {
-    expect(result.error).toContain("Mattermost add reaction failed");
-  }
+  expect(await addReaction({ conversationReadOrigin: "direct-operator" })).toEqual({
+    ok: false,
+    error: expect.stringContaining("Mattermost add reaction failed"),
+  });
 });
 
 it("reports an accepted removal as success when its 200 body cannot be read", async () => {
@@ -203,12 +197,10 @@ it("reports an accepted removal as success when its 200 body cannot be read", as
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
   }));
 
-  const result = await removeReaction({ conversationReadOrigin: "direct-operator" });
-
-  expect(result).toEqual({ ok: true });
-  expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).toEqual([
-    expect.stringMatching(/\/api\/v4\/users\/me$/),
-    expect.stringMatching(/\/api\/v4\/users\/BOT123\/posts\/POST1\/reactions\/thumbsup$/),
+  expect(await removeReaction({ conversationReadOrigin: "direct-operator" })).toEqual({ ok: true });
+  expect(requestedPaths(fetchMock)).toEqual([
+    "/api/v4/users/me",
+    "/api/v4/users/BOT123/posts/POST1/reactions/thumbsup",
   ]);
 });
 
@@ -219,21 +211,17 @@ it("caches the bot user id across reaction mutations", async () => {
   });
 
   const cfg = createMattermostTestConfig(cacheKey);
-  const addResult = await addReaction({ cfg, conversationReadOrigin: "direct-operator" });
-  const removeResult = await removeReaction({ cfg, conversationReadOrigin: "direct-operator" });
-
-  const usersMeCalls = fetchMock.mock.calls.filter((call) =>
-    requestUrl(call[0]).endsWith("/api/v4/users/me"),
-  );
-  expect(addResult).toEqual({ ok: true });
-  expect(removeResult).toEqual({ ok: true });
-  expect(usersMeCalls).toHaveLength(1);
+  expect(await addReaction({ cfg, conversationReadOrigin: "direct-operator" })).toEqual({
+    ok: true,
+  });
+  expect(await removeReaction({ cfg, conversationReadOrigin: "direct-operator" })).toEqual({
+    ok: true,
+  });
+  expect(requestedPaths(fetchMock).filter((path) => path === "/api/v4/users/me")).toHaveLength(1);
 
   vi.mocked(Date.now).mockReturnValue(1_800_000_600_001);
   await expect(addReaction({ cfg, conversationReadOrigin: "direct-operator" })).resolves.toEqual({
     ok: true,
   });
-  expect(
-    fetchMock.mock.calls.filter((call) => requestUrl(call[0]).endsWith("/api/v4/users/me")),
-  ).toHaveLength(2);
+  expect(requestedPaths(fetchMock).filter((path) => path === "/api/v4/users/me")).toHaveLength(2);
 });

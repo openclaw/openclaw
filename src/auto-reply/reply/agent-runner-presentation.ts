@@ -57,7 +57,7 @@ export function createAgentTurnPresentation(params: {
     if (params.turn.followupRun.run.silentExpected) {
       return { skip: true };
     }
-    if (!params.turn.isHeartbeat && hasHeartbeatToken !== false && text?.includes("HEARTBEAT_OK")) {
+    if (hasHeartbeatToken !== false && text?.includes("HEARTBEAT_OK")) {
       const stripped = stripHeartbeatToken(text, { mode: "message" });
       if (stripped.shouldSkip && !reply.hasMedia) {
         return { skip: true };
@@ -139,7 +139,7 @@ export function createAgentTurnPresentation(params: {
   ) => {
     const delta = payload.delta;
     const incremental = runtime === "embedded" && delta !== undefined && !payload.replace;
-    if (!hasPartialHeartbeatToken && !params.turn.isHeartbeat) {
+    if (!hasPartialHeartbeatToken) {
       const probe = incremental ? partialHeartbeatTail + delta : (payload.text ?? "");
       hasPartialHeartbeatToken = probe.includes("HEARTBEAT_OK");
       // Retain overlap for split tokens; a new message can only cause a conservative match.

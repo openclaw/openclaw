@@ -5,9 +5,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import type { BrowserAnnotationDraft } from "../../components/browser/browser-annotation.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store-scope.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import "../../lib/toast-host.tsx";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentDataUrl,
@@ -24,7 +25,6 @@ import {
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
-import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 
 type AnnotationPane = TestChatPane & {
   receiveBrowserAnnotation: (event: Event) => void;

@@ -39,6 +39,9 @@ function expectItems(actual: unknown, ...expected: Record<string, unknown>[]) {
   expect(actual).toEqual(expected.map((item) => expect.objectContaining(item)));
 }
 
+const containingItems = (...items: Record<string, unknown>[]) =>
+  expect.arrayContaining(items.map((item) => expect.objectContaining(item)));
+
 async function renderSourceFixture(
   source: string | Readonly<Record<string, string>>,
   entrypoints: readonly string[] = ["fixture"],
@@ -105,23 +108,19 @@ async function renderPrivateDeclarationFixture(params?: {
   optionalResult?: boolean;
 }) {
   return renderSourceFixture({
-    "fixture.ts": [
-      'import type { FixtureOptionLeaf } from "./fixture-option.js";',
-      'import type { FixtureResultLeaf } from "./fixture-result.js";',
-      `${params?.comments ? "/** Options docs */ " : ""}type FixtureOptions = { nested: FixtureOptionLeaf };`,
-      "type FixtureResult = { nested: FixtureResultLeaf };",
-      "export declare function createFixture(options: FixtureOptions): FixtureResult;",
-      `${params?.comments ? "/** Error docs */ " : ""}export class FixtureError extends Error {`,
-      "  readonly status: number;",
-      '  constructor(status: number) { super("fixture"); this.status = status; }',
-      "  getStatus() { return this.status; }",
-      "}",
-    ].join("\n"),
-    "fixture-option.ts": [
-      'import type { FixtureResultLeaf } from "./fixture-result.js";',
-      'import type { FixtureExternal } from "fixture-external";',
-      `export type FixtureOptionLeaf = { required${params?.optionalOption ? "?" : ""}: string; result?: FixtureResultLeaf; external?: FixtureExternal };`,
-    ].join("\n"),
+    "fixture.ts": `import type { FixtureOptionLeaf } from "./fixture-option.js";
+import type { FixtureResultLeaf } from "./fixture-result.js";
+${params?.comments ? "/** Options docs */ " : ""}type FixtureOptions = { nested: FixtureOptionLeaf };
+type FixtureResult = { nested: FixtureResultLeaf };
+export declare function createFixture(options: FixtureOptions): FixtureResult;
+${params?.comments ? "/** Error docs */ " : ""}export class FixtureError extends Error {
+  readonly status: number;
+  constructor(status: number) { super("fixture"); this.status = status; }
+  getStatus() { return this.status; }
+}`,
+    "fixture-option.ts": `import type { FixtureResultLeaf } from "./fixture-result.js";
+import type { FixtureExternal } from "fixture-external";
+export type FixtureOptionLeaf = { required${params?.optionalOption ? "?" : ""}: string; result?: FixtureResultLeaf; external?: FixtureExternal };`,
     "fixture-result.ts": 'export type { FixtureResultLeaf } from "./fixture-result-shape.js";\n',
     "fixture-result-shape.ts": importedType(
       "FixtureOptionLeaf",
@@ -148,13 +147,11 @@ async function renderDependencyDeclarationFixture(dependencyDeclaration: string)
 function createTupleAliasFixture(tuple: string, warmup: string, prewarm: boolean) {
   const cwd = tempDirs.make("openclaw-plugin-sdk-tuple-");
   const fileName = path.join(cwd, "fixture.ts");
-  const source = [
-    "interface Array<T> { [index: number]: T; readonly length: number }",
-    "interface ReadonlyArray<T> { readonly [index: number]: T; readonly length: number }",
-    `type Warmup = ${warmup};`,
-    `const VALUES = ${tuple};`,
-    "type Value = (typeof VALUES)[number];",
-  ].join("\n");
+  const source = `interface Array<T> { [index: number]: T; readonly length: number }
+interface ReadonlyArray<T> { readonly [index: number]: T; readonly length: number }
+type Warmup = ${warmup};
+const VALUES = ${tuple};
+type Value = (typeof VALUES)[number];`;
   const native = nativeProject(
     cwd,
     [fileName],
@@ -261,17 +258,13 @@ it("reads added and removed entrypoints from each revision's own inventory", asy
   ]);
   expectItems(addedDiff.exports, {
     change: "added",
-    declarationChanges: expect.arrayContaining([
-      expect.objectContaining({ after: expect.stringContaining("value: number") }),
-    ]),
+    declarationChanges: containingItems({ after: expect.stringContaining("value: number") }),
     entrypoint: "added",
     exportName: "createAdded",
   });
   expect(removedDiff.exports[0]).toMatchObject({
     change: "removed",
-    declarationChanges: expect.arrayContaining([
-      expect.objectContaining({ before: expect.stringContaining("value: number") }),
-    ]),
+    declarationChanges: containingItems({ before: expect.stringContaining("value: number") }),
   });
   expect(addedDiff.digest).not.toBe(diffApi(before, sameNamesDifferentContents).digest);
   expect(report(addedDiff)).toContain("value: number");
@@ -462,17 +455,15 @@ it("renders a checkout reached through a symlinked alias", async () => {
     { symlinked: true },
   );
 
-  expect(baseline.modules).toEqual([
-    expect.objectContaining({
-      source: fixtureSource,
-      exports: [
-        expect.objectContaining({
-          exportName: "measure",
-          declaration: expect.stringContaining("export function measure(value: string): number;"),
-        }),
-      ],
-    }),
-  ]);
+  expectItems(baseline.modules, {
+    source: fixtureSource,
+    exports: [
+      expect.objectContaining({
+        exportName: "measure",
+        declaration: expect.stringContaining("export function measure(value: string): number;"),
+      }),
+    ],
+  });
 });
 
 it("fails when a declaration dependency cannot be resolved", async () => {
@@ -522,16 +513,12 @@ it("keeps hashes stable when unqualified declarations move", async () => {
 it("includes globals from side-effect imports in closure hashes", async () => {
   const render = (optionalValue: boolean) =>
     renderSourceFixture({
-      "fixture.ts": [
-        'import "./ambient.js";',
-        "export declare function createFixture(value: OpenClawBaselineFixtureGlobal): void;",
-      ].join("\n"),
-      "ambient.ts": [
-        "declare global {",
-        `  interface OpenClawBaselineFixtureGlobal { value${optionalValue ? "?" : ""}: string }`,
-        "}",
-        "export {};",
-      ].join("\n"),
+      "fixture.ts":
+        'import "./ambient.js";\nexport declare function createFixture(value: OpenClawBaselineFixtureGlobal): void;',
+      "ambient.ts": `declare global {
+  interface OpenClawBaselineFixtureGlobal { value${optionalValue ? "?" : ""}: string }
+}
+export {};`,
     });
   const baseline = await render(false);
   const changed = await render(true);
@@ -629,25 +616,17 @@ it("captures private shape changes while ignoring documentation and implementati
   const resultChanged = await renderPrivateDeclarationFixture({ optionalResult: true });
   const declaration = baseline.modules[0]?.exports[0];
 
-  expect(declaration).toEqual(
-    expect.objectContaining({
-      exportName: "createFixture",
-      kind: "function",
-      source: fixtureSource,
-    }),
-  );
+  expect(declaration).toMatchObject({
+    exportName: "createFixture",
+    kind: "function",
+    source: fixtureSource,
+  });
   expect(declaration?.closureHash).toMatch(/^[a-f0-9]{64}$/u);
   expect(declaration?.closureSectionIds?.map((id) => baseline.declarationSections[id])).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        name: "FixtureOptionLeaf",
-        text: expect.stringContaining("required: string"),
-      }),
-      expect.objectContaining({
-        name: "FixtureResult",
-        text: expect.stringContaining("FixtureResultLeaf"),
-      }),
-    ]),
+    containingItems(
+      { name: "FixtureOptionLeaf", text: expect.stringContaining("required: string") },
+      { name: "FixtureResult", text: expect.stringContaining("FixtureResultLeaf") },
+    ),
   );
   expect(declaration?.declaration).toContain("FixtureOptions");
   expect(declaration?.declaration).toContain("FixtureResult");

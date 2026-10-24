@@ -15,7 +15,7 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type {
   PublishedSessionTranscriptArchive,
@@ -28,6 +28,7 @@ import type {
 export function readSessionArchivePruningInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   limit = 1,
+  offset = 0,
 ): SessionArchivePruningSnapshot {
   const freePages = isPostgresSqlConnection(database.db) ? 0 : readSqliteFreePageCount(database.db);
   if (!tableExists(database.db, "session_transcript_archives")) {
@@ -54,7 +55,8 @@ export function readSessionArchivePruningInDatabase(
       .orderBy("created_at", "asc")
       .orderBy("session_id", "asc")
       .orderBy("generation", "asc")
-      .limit(limit),
+      .limit(limit)
+      .offset(offset),
   ).rows;
   return { archives: rows.map((row) => Object.assign({}, row)), freePages };
 }
@@ -73,7 +75,7 @@ export function readSessionArchivePruningInWorker(
       ) {
         throw new Error("SQLite archive pruning database owner changed");
       }
-      const value = readSessionArchivePruningInDatabase(database, request.limit);
+      const value = readSessionArchivePruningInDatabase(database, request.limit, request.offset);
       assertExistingDatabaseIdentity(request.database.path, identity);
       return value;
     },

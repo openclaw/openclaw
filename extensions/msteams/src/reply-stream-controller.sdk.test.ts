@@ -36,6 +36,7 @@ const provider = createServer((request, response) => {
           priorScenarioRequests > 0) ||
         (scenario === "presentation-close-failure" && activity.type === "message") ||
         (scenario === "cancel-close" && activity.type === "message") ||
+        (scenario.startsWith("cancel-card-") && activity.type === "message") ||
         (scenario === "presentation-timeout" && priorScenarioRequests === 2) ||
         (activity.text?.length ?? 0) > 4_000;
       const status = rejected ? 403 : 201;
@@ -180,6 +181,51 @@ async function acknowledgedController(scenario: string, text = acknowledgedPrefi
 }
 
 describe("Microsoft Teams SDK acknowledged stream fallback", () => {
+  it.each([
+    { mode: "partial", canceled: false, media: false },
+    { mode: "progress", canceled: false, media: false },
+    { mode: "partial", canceled: true, media: false },
+    { mode: "progress", canceled: true, media: false },
+    { mode: "partial", canceled: false, media: true },
+    { mode: "partial", canceled: true, media: true },
+  ] as const)(
+    "settles $mode cards before releasing them (canceled=$canceled, media=$media)",
+    async ({ mode, canceled, media }) => {
+      const scenario = `${canceled ? "cancel-" : ""}card-${mode}${media ? "-media" : ""}`;
+      const { controller, firstAcknowledgement, stream } = createLoopbackController(scenario, {
+        streaming: { mode },
+      });
+      const text = "Choose an environment";
+      const presentation = {
+        blocks: [{ type: "buttons" as const, buttons: [{ label: "Deploy", value: "deploy" }] }],
+      };
+      const mediaUrl = "https://example.test/report.png";
+      if (mode === "partial") {
+        controller.onPartialReply({ text });
+        await firstAcknowledgement;
+      }
+      expect(
+        controller.preparePayload({ text, presentation, ...(media ? { mediaUrl } : {}) }),
+      ).toEqual(media ? { text: undefined, mediaUrl } : undefined);
+      if (mode === "progress") {
+        await firstAcknowledgement;
+      }
+
+      await expect(controller.finalize()).resolves.toEqual({
+        visibleReplySent: true,
+        content: text,
+        messageId: `stream-${scenario}`,
+        ...(canceled ? {} : { postNativePayloads: [{ text: undefined, presentation }] }),
+      });
+      expect(stream.canceled).toBe(canceled);
+      expect(scenarioRequests(scenario).map((request) => [request.type, request.status])).toEqual([
+        ["typing", 201],
+        ["typing", 201],
+        ["message", canceled ? 403 : 201],
+      ]);
+    },
+  );
+
   it("redelivers only text not acknowledged by the real Teams SDK and HTTP provider", async () => {
     const { acknowledgements, controller, firstFlushFailure } =
       await acknowledgedController("size-limit");
@@ -247,8 +293,13 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
       const { acknowledgements, controller, stream } = await acknowledgedController(scenario);
       const canceled = scenario === "cancel-replacement";
       const mediaUrl = `https://example.test/${canceled ? "must-not-send" : "replacement"}.png`;
+      const presentation = {
+        blocks: [{ type: "buttons" as const, buttons: [{ label: "Deploy", value: "deploy" }] }],
+      };
       controller.onPartialReply({ text: replacementReply });
-      expect(controller.preparePayload({ text: replacementReply, mediaUrl })).toBeUndefined();
+      expect(
+        controller.preparePayload({ text: replacementReply, mediaUrl, presentation }),
+      ).toBeUndefined();
       await expect(controller.finalize()).resolves.toEqual(
         canceled
           ? {
@@ -261,7 +312,7 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
               content: replacementReply,
               logicalContent: replacementReply,
               messageId: `stream-${scenario}`,
-              postNativePayloads: [{ text: undefined, mediaUrl }],
+              postNativePayloads: [{ text: undefined, mediaUrl, presentation }],
             },
       );
       if (canceled) {
@@ -309,13 +360,18 @@ describe("Teams native final text preparation", () => {
       const text = canceled
         ? "# Deployment status"
         : "# Deployment status\n\n@[Alex](11111111-2222-3333-4444-555555555555)";
+      const presentation = {
+        blocks: [{ type: "buttons" as const, buttons: [{ label: "Deploy", value: "deploy" }] }],
+      };
       const { controller } = await acknowledgedController(scenario, text);
-      controller.preparePayload({ text });
+      controller.preparePayload({ text, presentation });
       await expect(controller.finalize()).resolves.toEqual({
         visibleReplySent: true,
         messageId: `stream-${scenario}`,
         content: canceled ? text : "**Deployment status**\n\n<at>Alex</at>",
-        ...(canceled ? {} : { logicalContent: text }),
+        ...(canceled
+          ? {}
+          : { logicalContent: text, fallbackPayload: { text: undefined, presentation } }),
       });
       expect(scenarioRequests(scenario).map((request) => request.status)).toEqual(
         canceled ? [201, 403] : [201, 201, 403],

@@ -9,9 +9,9 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
-import type { CronJob, CronJobExecutionResult } from "../types.js";
+import type { CronEvent, CronJob, CronJobExecutionResult } from "../types.js";
 import { run } from "./ops-run.js";
-import type { CronEvent, CronServiceDeps } from "./state.js";
+import type { CronServiceDeps } from "./state.js";
 
 export function createOkIsolatedCronStateFactory(log: CronServiceDeps["log"]) {
   return function createOkIsolatedCronState(params: {

@@ -28,7 +28,6 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
-  createSessionEntryWithTranscript,
   deleteSessionEntryLifecycle,
   loadSessionEntry,
   loadTranscriptEvents,
@@ -98,7 +97,7 @@ describe("SQLite transcript archive sessions", () => {
     updatedAt = 1,
   ) {
     const { sessionId } = scope;
-    const event = createTranscriptEvent(sessionId, content);
+    const event = { type: "session", id: sessionId, content };
     await replaceSessionEntry(scope, { sessionId, updatedAt });
     await replaceTranscriptEvents(scope, [event]);
     return event;
@@ -141,7 +140,12 @@ describe("SQLite transcript archive sessions", () => {
   }
 
   function expectArchivedEvent(archivePath: string | undefined, event: unknown) {
-    expect(readArchiveLines(archivePath)).toEqual([JSON.stringify(event)]);
+    expect(archivePath).toBeTruthy();
+    expect(
+      readSessionArchiveContentSync(archivePath ?? "")
+        .trim()
+        .split("\n"),
+    ).toEqual([JSON.stringify(event)]);
   }
 
   function deleteArchivedSession(sessionKey: string, targetStorePath = storePath) {
@@ -210,16 +214,7 @@ describe("SQLite transcript archive sessions", () => {
 
     const result = await deleteArchivedSession(sessionKey);
 
-    expect(archiveWorkers.replies.map(({ message }) => message.type)).toEqual([
-      "done",
-      "published",
-      "done",
-      "published",
-      "done",
-      "published",
-    ]);
-    expect(new Set(archiveWorkers.replies.map(({ worker }) => worker)).size).toBe(1);
-    expect(archiveWorkers.replies.every(({ worker }) => worker.threadId > 0)).toBe(true);
+    archiveWorkers.expectReused(3);
     expect(publicationRows).toEqual(sessionIds.map(() => ({ session_key: sessionKey })));
     expect(result.deleted).toBe(true);
     expect(result.archivedTranscripts).toHaveLength(sessionIds.length);
@@ -238,35 +233,6 @@ describe("SQLite transcript archive sessions", () => {
     ).toEqual(
       sessionIds.map(() => ({ published_at: expect.any(Number), session_key: sessionKey })),
     );
-    await closeAgentDatabase(database.path);
-    archiveWorkers.expectJoined(1);
-  });
-
-  it("reuses one archive worker across sequential deletions of newly created sessions", async () => {
-    const database = openLifecycleTestDatabase(storePath);
-    using archiveWorkers = observeArchiveSessionWorkers();
-    for (const sessionId of ["empty-first", "empty-second"]) {
-      const scope = sessionScope(sessionId);
-      await createSessionEntryWithTranscript(scope, () => ({
-        ok: true,
-        entry: { sessionId, updatedAt: Date.now() },
-      }));
-      const events = await loadTranscriptEvents(scope);
-      expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({ type: "session", id: sessionId });
-      const result = await deleteArchivedSession(scope.sessionKey);
-      expect(result.deleted).toBe(true);
-      expect(result.archivedTranscripts).toHaveLength(1);
-      expectArchivedEvent(result.archivedTranscripts[0]?.archivedPath, events[0]);
-    }
-    expect(archiveWorkers.replies.map(({ message }) => message.type)).toEqual([
-      "done",
-      "published",
-      "done",
-      "published",
-    ]);
-    expect(new Set(archiveWorkers.replies.map(({ worker }) => worker)).size).toBe(1);
-    expect(archiveWorkers.replies.every(({ worker }) => worker.threadId > 0)).toBe(true);
     await closeAgentDatabase(database.path);
     archiveWorkers.expectJoined(1);
   });
@@ -317,12 +283,9 @@ describe("SQLite transcript archive sessions", () => {
     ]);
     archiveWorkers.expectJoined(1);
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ sessionId: sessionIds[1] });
-    await expect(
-      loadTranscriptEvents({ sessionKey, sessionId: sessionIds[0], storePath }),
-    ).resolves.toEqual([]);
-    await expect(
-      loadTranscriptEvents({ sessionKey, sessionId: sessionIds[1], storePath }),
-    ).resolves.toEqual([events[1]]);
+    const historicalScope = { sessionKey, sessionId: sessionIds[0], storePath };
+    await expect(loadTranscriptEvents(historicalScope)).resolves.toEqual([]);
+    await expectSession({ sessionKey, sessionId: sessionIds[1], storePath }, events[1]);
     expect(archiveRow(sessionIds[0], "published_at, last_publish_error")).toEqual({
       published_at: null,
       last_publish_error: expect.stringContaining("collision"),
@@ -342,9 +305,7 @@ describe("SQLite transcript archive sessions", () => {
       );
       expectArchivedEvent(collisionPath, events[0]);
       expect(readPending()).toEqual(pending);
-      await expect(
-        loadTranscriptEvents({ sessionKey, sessionId: sessionIds[0], storePath }),
-      ).resolves.toEqual([]);
+      await expect(loadTranscriptEvents(historicalScope)).resolves.toEqual([]);
     } finally {
       fault.disable();
     }
@@ -761,66 +722,35 @@ type ArchiveSessionReply = TranscriptArchiveWorkerMessage | TranscriptArchivePub
 
 function observeArchiveMetadata(afterExecute: (type: string, result: unknown) => Promise<void>) {
   const withWorker = sessionWorker.withSessionEntryWorker;
-  return vi
-    .spyOn(sessionWorker, "withSessionEntryWorker")
-    .mockImplementation(
-      (
-        databaseOptions,
-        identity,
-        assertCurrent,
-        withExecution,
-        onCommit,
-        retainedExecution,
-        signal,
-        prepare,
-        onTransaction,
-        onAdmission,
-        releaseSource,
-        operationMode,
-        expectedCreationIdentity,
-        concurrentBoardReads,
-      ) =>
-        withWorker(
-          databaseOptions,
-          identity,
-          assertCurrent,
-          (execution, owner, context) =>
-            withExecution(
-              {
-                ...execution,
-                get fileIdentity() {
-                  return execution.fileIdentity;
-                },
-                runExisting(readSource, read, readOptions) {
-                  return execution.runExisting(
-                    readSource,
-                    (worker) =>
-                      read({
-                        execute: async (command, requestOptions) => {
-                          const result = await worker.execute(command, requestOptions);
-                          await afterExecute(command.type, result);
-                          return result;
-                        },
-                      }),
-                    readOptions,
-                  );
-                },
-              },
-              owner,
-              context,
-            ),
-          onCommit,
-          retainedExecution,
-          signal,
-          prepare,
-          onTransaction,
-          onAdmission,
-          releaseSource,
-          operationMode,
-          expectedCreationIdentity,
-          concurrentBoardReads,
-        ),
-    );
+  return vi.spyOn(sessionWorker, "withSessionEntryWorker").mockImplementation((...args) => {
+    const withExecution = args[3];
+    args[3] = (execution, owner, context) =>
+      withExecution(
+        {
+          ...execution,
+          get fileIdentity() {
+            return execution.fileIdentity;
+          },
+          runExisting(readSource, read, readOptions) {
+            return execution.runExisting(
+              readSource,
+              (worker) =>
+                read({
+                  execute: async (command, requestOptions) => {
+                    const result = await worker.execute(command, requestOptions);
+                    await afterExecute(command.type, result);
+                    return result;
+                  },
+                }),
+              readOptions,
+            );
+          },
+        },
+        owner,
+        context,
+      );
+    return withWorker(...args);
+  });
 }
 
 function observeArchiveSessionWorkers(
@@ -842,6 +772,13 @@ function observeArchiveSessionWorkers(
   process.on("worker", observeWorker);
   return {
     replies,
+    expectReused(count: number) {
+      expect(replies.map(({ message }) => message.type)).toEqual(
+        Array.from({ length: count }, () => ["done", "published"]).flat(),
+      );
+      expect(new Set(replies.map(({ worker }) => worker)).size).toBe(1);
+      expect(replies.every(({ worker }) => worker.threadId > 0)).toBe(true);
+    },
     expectJoined(count: number) {
       const workers = new Set(replies.map(({ worker }) => worker));
       expect(workers.size).toBe(count);
@@ -851,17 +788,6 @@ function observeArchiveSessionWorkers(
       process.off("worker", observeWorker);
     },
   };
-}
-
-function createTranscriptEvent(sessionId: string, content: string) {
-  return { type: "session", id: sessionId, content };
-}
-
-function readArchiveLines(archivePath: string | undefined): string[] {
-  expect(archivePath).toBeTruthy();
-  return readSessionArchiveContentSync(archivePath ?? "")
-    .trim()
-    .split("\n");
 }
 
 function openLifecycleTestDatabase(storePath: string) {

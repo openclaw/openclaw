@@ -219,14 +219,15 @@ export async function claimLegacyMigrationSourceClaims<
   TSnapshot extends LegacyMigrationSourceIdentity,
 >(
   claims: readonly { claim: LegacyMigrationSourceClaim<TSnapshot>; snapshot: TSnapshot }[],
-  params: { beforeClaim?: () => void; mismatchMessage: string },
+  beforeClaim?: () => void,
 ): Promise<void> {
-  params.beforeClaim?.();
+  beforeClaim?.();
+  const mismatchMessage = "legacy Web Push source changed before doctor could claim it";
   const claimed: LegacyMigrationSourceClaim<TSnapshot>[] = [];
   try {
     for (const { claim, snapshot } of claims) {
       claimed.push(claim);
-      await claim.claim({ snapshot, mismatchMessage: params.mismatchMessage });
+      await claim.claim({ snapshot, mismatchMessage });
     }
   } catch (error) {
     const restoreErrors = await restoreLegacyMigrationSourceClaims(claimed);
@@ -341,7 +342,6 @@ export function claimAndRemoveLegacyMigrationSource(params: {
   snapshot: LegacyMigrationSourceSnapshot;
   label: string;
   followSymlinks?: boolean;
-  maxBytes?: number;
   beforeClaim?: () => void;
   beforeRestore?: () => void;
   removeSource?: (sourcePath: string) => void;

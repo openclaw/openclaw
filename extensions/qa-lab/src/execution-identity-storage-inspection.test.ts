@@ -84,22 +84,19 @@ describe("inspectQaExecutionIdentityStorage", () => {
     });
 
     const nativeCalls = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      vi.spyOn(DatabaseSync.prototype, "close"),
-      vi.spyOn(StatementSync.prototype, "get"),
-      vi.spyOn(StatementSync.prototype, "all"),
-      vi.spyOn(StatementSync.prototype, "iterate"),
-      vi.spyOn(StatementSync.prototype, "run"),
+      ...(["prepare", "exec", "close"] as const).map((name) =>
+        vi.spyOn(DatabaseSync.prototype, name),
+      ),
+      ...(["get", "all", "iterate", "run"] as const).map((name) =>
+        vi.spyOn(StatementSync.prototype, name),
+      ),
     ];
     await withDatabase((db) => {
       expect(db.prepare("SELECT COUNT(*) AS count FROM execution_identity_contexts").get()).toEqual(
         { count: 2 },
       );
     }, true);
-    expect(nativeCalls[0]).toHaveBeenCalledOnce();
-    expect(nativeCalls[2]).toHaveBeenCalledOnce();
-    expect(nativeCalls[3]).toHaveBeenCalledOnce();
+    expect(nativeCalls.map((call) => call.mock.calls.length)).toEqual([1, 0, 1, 1, 0, 0, 0]);
     vi.clearAllMocks();
 
     const scenario = makeQaSuiteTestScenario("execution-identity-worker-counts");
@@ -151,9 +148,7 @@ describe("inspectQaExecutionIdentityStorage", () => {
         },
       ),
     ).toEqual({ contextCount: 2, decisionCount: 1 });
-    for (const nativeCall of nativeCalls) {
-      expect(nativeCall).not.toHaveBeenCalled();
-    }
+    expect(nativeCalls.map((call) => call.mock.calls)).toEqual([[], [], [], [], [], [], []]);
 
     await withDatabase((db) =>
       db.exec(`

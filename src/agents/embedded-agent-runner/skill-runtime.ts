@@ -29,6 +29,10 @@ export async function prepareEmbeddedSkills(params: {
     | "contextTokenBudget"
     | "toolExecutionAllow"
     | "operation"
+    | "sessionPersistence"
+    | "disableTools"
+    | "modelRun"
+    | "promptMode"
   >;
   effectiveWorkspace: string;
   sandbox: SandboxContext | null | undefined;
@@ -38,8 +42,12 @@ export async function prepareEmbeddedSkills(params: {
   const executionAllow = params.attempt.toolExecutionAllow;
   // Retained schemas are not execution permission. An unreadable skill catalog
   // creates impossible prerequisites and exposes an ungated Code Mode reader.
+  // Detached tool-free raw requests consume neither skills nor their environment.
   if (
     params.attempt.operation === "settled-tool-finalization" ||
+    (params.attempt.sessionPersistence === "detached" &&
+      params.attempt.disableTools === true &&
+      (params.attempt.modelRun === true || params.attempt.promptMode === "none")) ||
     (executionAllow && !isToolExecutionAllowed(executionAllow, "read"))
   ) {
     return {

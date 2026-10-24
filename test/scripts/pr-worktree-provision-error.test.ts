@@ -6,10 +6,6 @@ import { GatewayStateOwnerContentionError } from "../../src/infra/gateway-state-
 import { markSqliteNativeOpenFailure } from "../../src/infra/sqlite-error-diagnostics.js";
 import { markOpenClawStateDatabaseFailure } from "../../src/state/openclaw-state-db-failure.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../src/state/openclaw-state-lease-error.js";
-import {
-  hydrateOpenClawStateWorkerError,
-  retainOpenClawStateWorkerErrorPayload,
-} from "../../src/state/openclaw-state-worker-error.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 
@@ -48,48 +44,26 @@ describe("native PR provisioning diagnostics", () => {
     });
   });
 
-  it("preserves distinct busy, lifecycle and worker failures without guessing a classification", () => {
-    const busy = render(
-      storage(
-        Object.assign(new Error("synthetic busy"), { code: "SQLITE_BUSY", errcode: 5 }),
-        "sqlite-busy",
-      ),
-    );
-    expect(busy.outcome.reason).toBe("sqlite-busy");
-    expect(busy.error.nodes[1]).toMatchObject({ code: "SQLITE_BUSY", errcode: 5 });
-    const lifecycle = render(
-      storage(new GatewayStateOwnerContentionError("/fixture/state.sqlite"), "lifecycle-busy"),
-    );
-    expect(lifecycle.outcome.reason).toBe("lifecycle-busy");
-    expect(lifecycle.error.nodes[1]).toMatchObject({
-      type: "state-owner-contention",
-      databasePath: "/fixture/state.sqlite",
-    });
-    const worker = render(
-      storage(Object.assign(new Error("synthetic worker unavailable"), { code: "unavailable" })),
-    );
-    expect(worker.outcome.reason).toBe("storage-error");
-    expect(worker.error.nodes[1].code).toBe("unavailable");
-  });
-
-  it("retains shared and cyclic causes as a hydratable graph without changing the original", () => {
-    const leaf = new Error("shared synthetic cause");
-    const aggregate = new AggregateError([leaf, leaf], "aggregate", { cause: leaf });
-    leaf.cause = aggregate;
-    const error = storage(aggregate);
-    const out = render(error);
-    const carrier = new Error("wire carrier");
-    retainOpenClawStateWorkerErrorPayload(carrier, out.error);
-    const restored = hydrateOpenClawStateWorkerError(carrier);
-    expect(restored).not.toBe(carrier);
-    expect(restored.cause).toBeInstanceOf(AggregateError);
-    const restoredAggregate = restored.cause as AggregateError;
-    expect(restoredAggregate.errors[0]).toBe(restoredAggregate.errors[1]);
-    expect(restoredAggregate.cause).toBe(restoredAggregate.errors[0]);
-    expect(restoredAggregate.errors[0].cause).toBe(restoredAggregate);
-    expect(error.cause).toBe(aggregate);
-    expect(leaf.cause).toBe(aggregate);
-    expect(aggregate.errors).toEqual([leaf, leaf]);
+  it.each([
+    [
+      "sqlite-busy",
+      Object.assign(new Error("busy"), { code: "SQLITE_BUSY", errcode: 5 }),
+      { code: "SQLITE_BUSY", errcode: 5 },
+    ],
+    [
+      "lifecycle-busy",
+      new GatewayStateOwnerContentionError("/fixture/state.sqlite"),
+      { type: "state-owner-contention", databasePath: "/fixture/state.sqlite" },
+    ],
+    [
+      "storage-error",
+      Object.assign(new Error("worker unavailable"), { code: "unavailable" }),
+      { code: "unavailable" },
+    ],
+  ] as const)("preserves %s without guessing a classification", (reason, error, fields) => {
+    const out = render(storage(error, reason));
+    expect(out.outcome.reason).toBe(reason);
+    expect(out.error.nodes[1]).toMatchObject(fields);
   });
 
   it.each([
@@ -160,11 +134,6 @@ describe("native PR provisioning diagnostics", () => {
     const out = render(new Error(message));
     expect(out.outcome).toBeUndefined();
     expect(out.error.nodes).toEqual([{ type: "error", name: "Error", message }]);
-    const carrier = new Error("wire carrier");
-    retainOpenClawStateWorkerErrorPayload(carrier, out.error);
-    expect(hydrateOpenClawStateWorkerError(carrier, { includeOrdinary: true }).message).toBe(
-      message,
-    );
   });
 
   it("safely handles primitives", () => {
@@ -195,11 +164,15 @@ describe("native PR provisioning diagnostics", () => {
       const report = result.stderr.split("\n").find((line) => line.startsWith('{"error":'));
       expect(report, result.stderr).toBeDefined();
       const out = JSON.parse(report!);
-      expect(out.outcome, report).toEqual({ kind: "store-unavailable", reason: "storage-error" });
+      expect(out.outcome, report).toBeUndefined();
       expect(out.error.nodes).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED" }),
           expect.objectContaining({ code: "ERR_SQLITE_ERROR", errcode: 26 }),
+        ]),
+      );
+      expect(out.error.nodes).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED" }),
         ]),
       );
       expect(readFileSync(database, "utf8")).toBe(corrupt);

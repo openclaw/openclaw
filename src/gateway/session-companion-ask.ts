@@ -411,7 +411,6 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     const sessionKey = request.sessionKey.trim();
     const agentId = request.agentId.trim();
     const question = request.question.trim();
-    const incognito = isIncognitoSessionKey(sessionKey);
     if (!sessionKey || !agentId || !question || params.isDisposed() || request.signal?.aborted) {
       throw new SessionCompanionAskError("unavailable", "Side chat is unavailable.");
     }
@@ -490,6 +489,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       aborted.reject(new Error("session companion ask timed out or was cancelled"));
     controller.signal.addEventListener("abort", onAbort, { once: true });
     let ownedThread: SessionCompanionThread | undefined;
+    let mustSettleExecution = isIncognitoSessionKey(sessionKey);
     const discardOwnedThread = () => {
       if (ownedThread && params.threads.get(threadKey) === ownedThread) {
         params.threads.delete(threadKey);
@@ -579,6 +579,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         signal: controller.signal,
       };
       let rawAnswer: string;
+      mustSettleExecution = true;
       if (fallbacks.length) {
         // The fallback owner filters the whole chain before choosing a permitted route.
         const selection = resolveSessionCompanionModel({
@@ -673,16 +674,17 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       }
       companionLog.warn("session companion ask failed", { sessionKey, error });
       throw new SessionCompanionAskError(
-        "unavailable",
+        activeAsk.cancellation === "timeout" ? "timeout" : "unavailable",
         activeAsk.cancellation === "timeout"
-          ? "Side chat timed out."
+          ? "Side chat timed out. Try again."
           : activeAsk.cancellation === "explicit-reset"
             ? "The Side chat request was cancelled."
             : "Side chat could not answer right now.",
       );
     } finally {
-      // Actor source authority must outlive accepted writes to the separate durable run.
-      if (incognito) {
+      // Keep RPC source facts and the busy slot until internal-session writes and cleanup
+      // settle. Ordinary context reads still time out without waiting for a model run.
+      if (mustSettleExecution) {
         await execution.catch(() => undefined);
       }
       clearTimeout(timeout);

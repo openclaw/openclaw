@@ -6,6 +6,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
 import { projectAssistantDisplayContent } from "../../../../src/shared/assistant-display-content.js";
+import { getOrCreateWeakOwnerMap } from "../../../../src/shared/weak-owner-map.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
@@ -45,7 +46,7 @@ import {
 } from "./chat-send-support.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { applyChatModelCatalogSnapshot } from "./chat-state-refresh.ts";
+import { applyChatModelCatalogSnapshot, refreshChatModelAuthStatus } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   refreshSessionWorkspace,
@@ -239,11 +240,7 @@ function replayPendingSessionMessageReload(
 const terminalRecoveryClaimsByPane = new WeakMap<object, Map<string, true>>();
 
 function claimTerminalRecovery(state: ChatPageHost, runId: string): boolean {
-  let claims = terminalRecoveryClaimsByPane.get(state);
-  if (!claims) {
-    claims = new Map();
-    terminalRecoveryClaimsByPane.set(state, claims);
-  }
+  const claims = getOrCreateWeakOwnerMap(terminalRecoveryClaimsByPane, state);
   if (claims.has(runId)) {
     return false;
   }
@@ -475,6 +472,8 @@ function applyPageGatewayEvent(
           }
           if (terminalPayload && sessionMatches) {
             clearPendingQueueItemsForRun(state, terminalPayload.runId);
+            // Refresh stale usage after a run; split panes share the Gateway deadline.
+            void refreshChatModelAuthStatus(state, terminalPayload.runId);
           }
           if (shouldRefreshPullRequests && payload) {
             refreshPullRequestsForFinalReply(state, payload.runId, payload.message);

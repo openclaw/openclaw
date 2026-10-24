@@ -34,6 +34,7 @@ import { isIncognitoSessionKey, normalizeOptionalAgentId } from "../../../routin
 import { recordSessionCreated } from "../../../sessions/session-created.js";
 import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
 import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
+import { resolveConfiguredAcpSubagentTargetIds } from "../../agent-roster.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../../agent-tool-source-execution-guard.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
@@ -94,10 +95,7 @@ import {
   resolveRuntimeCwdForAcpSpawn,
   type AcpSpawnInitializedRuntime,
 } from "./acp-spawn-runtime.js";
-import {
-  resolveConfiguredAcpSubagentTargetIds,
-  resolveTargetAcpAgentId,
-} from "./acp-spawn-target.js";
+import { resolveTargetAcpAgentId } from "./acp-spawn-target.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import { captureSpawnParentLineage } from "./spawn-parent-lineage.js";
 import {
@@ -320,7 +318,7 @@ export async function spawnAcpDirect(
       requesterAgentId,
       targetAgentId,
       requestedAgentId: params.agentId,
-      configuredAgentIds: resolveConfiguredAcpSubagentTargetIds(cfg),
+      configuredAgentIds: Array.from(resolveConfiguredAcpSubagentTargetIds(cfg)),
       additionalActiveChildren: hasSubagentEnvelope
         ? countUntrackedActiveAcpRunsForOwner(requesterInternalKey, pendingChildSessionKeys) +
           pendingChildren

@@ -158,11 +158,7 @@ it("reports quiet runtime waits without scheduling abort", async () => {
   });
   const events: DiagnosticEventPayload[] = [];
   const unsubscribe = onDiagnosticEvent((event) => events.push(event));
-  let recoveryAtDiagnosticTick: ReturnType<typeof operation.watchdog.snapshot>["recovery"];
-  const recover = vi.fn((request: Parameters<typeof recoverStuckDiagnosticSession>[0]) => {
-    recoveryAtDiagnosticTick = request.operation?.watchdog.snapshot().recovery;
-    return recoverStuckDiagnosticSession(request);
-  });
+  const recover = vi.fn(recoverStuckDiagnosticSession);
   try {
     startGatewayDiagnosticHeartbeat(
       createTestGatewayScheduler("fake-timers"),
@@ -182,15 +178,10 @@ it("reports quiet runtime waits without scheduling abort", async () => {
 
     runtimeOwnsLiveness = false;
     await vi.advanceTimersByTimeAsync(30_000);
-    // Diagnostics request a tick from the captured controller once the runtime wait ends.
-    expect(recover).toHaveBeenCalledOnce();
-    expect(recover.mock.calls[0]?.[0].operation).toBe(operation);
-    expect(recoveryAtDiagnosticTick).toMatchObject({ status: "pending" });
-    await expect(recover.mock.results[0]?.value).resolves.toMatchObject({
-      status: "skipped",
-      reason: "active_reply_work",
-    });
-    // The controller timer started recovery before the diagnostic projection observed it.
+    expect(recover).not.toHaveBeenCalled();
+    expect(operation.watchdog.snapshot().recovery).toMatchObject({ status: "pending" });
+    expect(events.filter((event) => event.type.startsWith("session.recovery."))).toEqual([]);
+    // The real controller timer owns recovery; diagnostic projection must not duplicate it.
     resumeRecovery.resolve();
     await operation.ownerSettlement;
     expect(abort).toHaveBeenCalledOnce();

@@ -47,6 +47,8 @@ import {
 
 type StreamApprovalFixture = {
   tools: CreatorTransportTools;
+  add: (job?: Record<string, unknown>) => Promise<unknown>;
+  updateJob: (jobId: string, job: Record<string, unknown>) => Promise<unknown>;
   read: ReturnType<typeof createCronFixture>["read"];
   manager: ExecApprovalManager;
   takeApproval: (operation: Promise<unknown>) => Promise<ExecApprovalRequest>;
@@ -272,6 +274,10 @@ export async function withStreamApprovalFixture(
         };
         await run({
           tools,
+          add: (job = approvedStreamJob()) =>
+            tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "add", job }),
+          updateJob: (jobId, job) =>
+            tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "update", jobId, job }),
           read: fixture.read,
           manager,
           deliveries,

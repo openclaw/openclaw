@@ -52,18 +52,12 @@ function bindProfile(fixture: Fixture, native = false) {
   return bindChatProfile(fixture.client, "caller@example.test", native);
 }
 
-it.each([
-  { admin: true, mainAllowed: true },
-  { admin: false, mainAllowed: true },
-  { admin: false, mainAllowed: false },
-])(
-  "authorizes the default-scope global alias against main (admin: $admin, allowed: $mainAllowed)",
-  async ({ admin, mainAllowed }) => {
+it.each([true, false])(
+  "authorizes the default-scope global alias against main (allowed: %s)",
+  async (mainAllowed) => {
     const fixture = await createFixture();
     const { successor: owner } = bindProfile(fixture);
-    if (!admin) {
-      fixture.client.connect.scopes = ["operator.read", "operator.write"];
-    }
+    fixture.client.connect.scopes = ["operator.read", "operator.write"];
     fixture.params.sessionKey = "global";
     fixture.params.agentId = "main";
     const createdActor = { type: "human", source: "profile", id: owner.id } as const;
@@ -79,15 +73,11 @@ it.each([
       createdActor,
       visibility: mainAllowed ? "draft" : "shared",
     });
-    const projection = admin
-      ? undefined
-      : await createSessionRowProjection({
-          cfg: fixture.context.getRuntimeConfig(),
-          modelCatalog: [],
-        });
-    if (projection) {
-      bindSessionRowProjection(fixture.context, () => projection);
-    }
+    const projection = await createSessionRowProjection({
+      cfg: fixture.context.getRuntimeConfig(),
+      modelCatalog: [],
+    });
+    bindSessionRowProjection(fixture.context, () => projection);
     try {
       const respond = await fixture.send(undefined, {});
       if (mainAllowed) {
@@ -110,8 +100,8 @@ it.each([
       expect(loadTranscriptEventsSync(literal)).toEqual([]);
     } finally {
       await fixture.cleanup();
-      projection?.dispose();
-      await projection?.ensureMaterialized();
+      projection.dispose();
+      await projection.ensureMaterialized();
     }
   },
 );

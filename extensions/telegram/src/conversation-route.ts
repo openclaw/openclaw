@@ -228,7 +228,7 @@ export async function touchTelegramConversationRoute(
   await bindings.touchAsync(captured.bindingId, undefined, captured.conversation);
 }
 
-export function resolveTelegramConversationBaseSessionKey(
+function resolveTelegramConversationBaseSessionKey(
   params: Parameters<typeof resolveTelegramNamedAccountBaseSessionKey>[1],
 ): string {
   return resolveTelegramNamedAccountBaseSessionKey(
@@ -277,4 +277,19 @@ export function resolveTelegramTargetSession(params: {
         threadId: `${params.chatId}:${params.dmThreadId}`,
       }).sessionKey
     : baseSessionKey;
+}
+
+/** Route inbound DM-topic and named-account traffic to the same session as its messages. */
+export function applyTelegramTargetSession(
+  params: Parameters<typeof resolveTelegramTargetSession>[0],
+): TelegramResolvedRoute {
+  const sessionKey = resolveTelegramTargetSession(params);
+  return {
+    ...params.route,
+    sessionKey,
+    lastRoutePolicy: deriveLastRoutePolicy({
+      sessionKey,
+      mainSessionKey: params.route.mainSessionKey,
+    }),
+  };
 }

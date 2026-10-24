@@ -21,7 +21,7 @@ The agent can register the tool before automatic model selection completes. On e
 
 Automatic candidates are auth-checked before selection. Explicit PDF/image settings retain their configured precedence and are authenticated at execution. If deferred resolution finds no usable model, the call fails with `No PDF model configured.` before opening the PDF.
 
-PDF analysis uses the selected model's configured provider credentials or connected account. It does not require a separate PDF API key.
+PDF analysis uses the selected model's configured provider credentials or connected account. It does not require a separate PDF API key. Native Anthropic requests use bearer authentication and the maintained OAuth client identity for saved setup-token/OAuth credentials; API-key credentials continue to use API-key authentication. Native Claude CLI login alone does not supply an HTTP credential for PDF analysis.
 
 ## Input reference
 

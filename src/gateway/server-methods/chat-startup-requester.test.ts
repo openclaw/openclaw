@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -10,10 +9,10 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import { chatHistoryHandlers } from "./chat-history-handler.js";
+import { requestHistory } from "./chat-history-fixtures.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { identifiedClient } from "./sessions-read-cache.test-support.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -39,17 +38,7 @@ function adminClient(profileId: string) {
 }
 
 async function request(context: GatewayRequestContext, client: GatewayClient) {
-  const method = "chat.startup";
-  const respond = vi.fn<RespondFn>();
-  const handler = expectDefined(chatHistoryHandlers[method], "history handler");
-  await handler({
-    params: scope,
-    client,
-    context,
-    respond,
-    req: { type: "req", id: "requester-history", method },
-    isWebchatConnect: () => false,
-  });
+  const respond = await requestHistory("chat.startup", scope, context, client);
   expect(respond).toHaveBeenCalledWith(
     true,
     expect.objectContaining({ sessionId: "requester-history" }),

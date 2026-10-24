@@ -34,10 +34,7 @@ describe("telegram error policy", () => {
         groupConfig: {},
         topicConfig: { errorPolicy: "silent" },
       }),
-    ).toEqual({
-      policy: "silent",
-      cooldownMs: 14_400_000,
-    });
+    ).toEqual({ policy: "silent", cooldownMs: 14_400_000 });
   });
 
   it("keeps cooldowns per error message within the same scope", () => {
@@ -92,17 +89,12 @@ describe("telegram error policy", () => {
   });
 
   it("keeps forum and direct-message topics with the same id in separate scopes", () => {
-    const base = { accountId, chatId: 42 };
-    expect(
+    const scope = (kind: "forum" | "direct-messages") =>
       buildTelegramErrorScopeKey({
-        ...base,
-        threadSpec: { id: 9, scope: "forum" },
-      }),
-    ).not.toBe(
-      buildTelegramErrorScopeKey({
-        ...base,
-        threadSpec: { id: 9, scope: "direct-messages" },
-      }),
-    );
+        accountId,
+        chatId: 42,
+        threadSpec: { id: 9, scope: kind },
+      });
+    expect(scope("forum")).not.toBe(scope("direct-messages"));
   });
 });

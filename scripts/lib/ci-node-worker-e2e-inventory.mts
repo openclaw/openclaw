@@ -28,7 +28,7 @@ export const NODE_WORKER_E2E_OWNER_GLOBS = [
   "src/infra/node-runner-inventory*.ts",
   "src/agents/bash-tools.exec-host-node*.ts",
   "src/agents/code-mode-node*.ts",
-  "src/agents/node-plugin-tools.ts",
+  "src/agents/openclaw-plugin-tools.ts",
   "packages/gateway-protocol/src/schema/{nodes,worker-admission}.ts",
   "scripts/lib/ci-node-worker-e2e-inventory.mts",
 ] as const;

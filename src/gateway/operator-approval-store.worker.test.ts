@@ -17,6 +17,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as store from "./operator-approval-store.js";
@@ -630,4 +631,19 @@ it("commits verdicts during a terminal history read and rejects revoked read aut
     signal.removeEventListener("abort", unblock);
     await Promise.allSettled([earlier, result]);
   }
+});
+
+it("leaves the writer free while the host decides approval admission", async () => {
+  const databaseOptions = options();
+  openOpenClawStateDatabase(databaseOptions);
+  using contention = probe.writerLock(resolveOpenClawStateSqlitePath(databaseOptions.env));
+  probe.admission(workerAdmission, (request, grant, admit) => {
+    contention.observe(request.stage);
+    admit(request, grant);
+  });
+  await store.insertOperatorApproval({ approval: approval("contention"), databaseOptions });
+  expect(contention.observed).toEqual(["transaction:free", "commit:held"]);
+  expect(await store.listPendingOperatorApprovals({ nowMs: 2000, databaseOptions })).toEqual([
+    expect.objectContaining({ id: "contention" }),
+  ]);
 });

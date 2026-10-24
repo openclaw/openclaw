@@ -210,7 +210,7 @@ export function inspectTelegramAccount(
     ? findTelegramTokenOwnerAccountId({ ...params, accountId: account.accountId })
     : null;
   const groups =
-    params.cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
+    resolveTelegramAccountConfig(params.cfg, account.accountId)?.groups ??
     params.cfg.channels?.telegram?.groups;
   return {
     ...account,

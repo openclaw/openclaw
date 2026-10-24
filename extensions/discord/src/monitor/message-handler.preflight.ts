@@ -740,13 +740,7 @@ export async function preflightDiscordMessage(
     }
   }
 
-  if (
-    author.bot &&
-    !sender.isPluralKit &&
-    allowBotsMode !== "off" &&
-    params.botUserId &&
-    author.id !== params.botUserId
-  ) {
+  if (author.bot && !sender.isPluralKit && params.botUserId) {
     const botLoopResult = recordChannelBotPairLoopAndCheckSuppression({
       scopeId: params.accountId,
       conversationId: messageChannelId,

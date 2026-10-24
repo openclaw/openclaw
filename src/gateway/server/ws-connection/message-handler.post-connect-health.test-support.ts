@@ -19,6 +19,7 @@ import { GatewayConnectionWork } from "../../server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import { GatewayClientRegistry } from "../client-registry.js";
+import { gatewayTestTextTransport } from "../connection-transport.test-support.js";
 import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test-helpers.js";
 import { createOperatorWsClient } from "./authenticated-request-dispatch.test-support.js";
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
@@ -413,7 +414,7 @@ export function attachGatewayHarness(options: {
   });
   attachGatewayWsMessageHandler({
     clients: new GatewayClientRegistry(),
-    socket,
+    socket: gatewayTestTextTransport(socket),
     prepareAuthenticatedReceive: () => ({ ok: true, value: handoffAuthenticatedReceive }),
     connectionWork,
     bootId: "post-connect-health-test-boot",

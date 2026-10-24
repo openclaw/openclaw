@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import * as gitReads from "../infra/git-read-cache.js";
 import { publicationRowDefaults } from "../state/github-publication-fixtures.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
@@ -11,11 +14,13 @@ import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.
 import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-support.js";
 import { prepareControlUiSessionPrServiceTarget } from "./control-ui-session-pr-read.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
+import { selectTaskPublicationSessions } from "./control-ui-session-task-prs.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { insertRepositoryGitHubPublicationFixture } from "./github-publication-store.test-support.js";
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication.kernel.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+import * as records from "./session-row-projection-record.js";
 
 let state: OpenClawTestState;
 let fixture: Awaited<ReturnType<typeof createFixture>>;
@@ -103,6 +108,121 @@ function stubOffline(message = "offline") {
   return fetcher;
 }
 
+it("shares lineage work across audiences without sharing visibility or stale descendants", async () => {
+  const child = "agent:main:a-child";
+  const hidden = "agent:main:b-hidden";
+  const leaf = "agent:main:c-leaf";
+  const privateChild = "agent:main:d-private";
+  await fixture.seed(child, fixture.profile.id, { parentSessionKey: sessionKey });
+  await fixture.seed(hidden, fixture.other.id, {
+    parentSessionKey: sessionKey,
+    visibility: "draft",
+  });
+  await fixture.seed(leaf, fixture.profile.id, { parentSessionKey: child });
+  await fixture.seed(privateChild, fixture.profile.id, {
+    parentSessionKey: sessionKey,
+    incognito: true,
+  });
+  const projection = getSessionRowProjection(fixture.context)!;
+  await projection.ensureMaterialized();
+  const root = projection.describe({ agentId: "main", key: sessionKey })!;
+  const reads = vi.spyOn(projection, "selectEntries");
+  const captures = vi.spyOn(projection, "capture");
+  const resolveParent = vi.spyOn(records, "parentReference");
+  const expected = (keys: string[]) =>
+    keys.map((key) => ({
+      agentId: "main",
+      sessionKey: key,
+      sessionId:
+        key === sessionKey ? fixture.sessionId : key + "-" + fixture.sessionId.split("-").at(-1),
+      lifecycleRevision: null,
+    }));
+  const allowsAll = () => true;
+  const allowsShared = (row: { key: string }) => row.key !== hidden;
+  const selected = selectTaskPublicationSessions(projection, root, allowsAll);
+  expect(selected).toEqual(expected([child, hidden, leaf, sessionKey]));
+  selected.reverse();
+  expect(selectTaskPublicationSessions(projection, root, allowsAll)).toEqual(
+    expected([child, hidden, leaf, sessionKey]),
+  );
+  const firstReads = reads.mock.calls.length;
+  const firstCaptures = captures.mock.calls.length;
+  expect(firstReads).toBeGreaterThan(0);
+  expect(selectTaskPublicationSessions(projection, root, allowsShared)).toEqual(
+    expected([child, leaf, sessionKey]),
+  );
+  expect(selectTaskPublicationSessions(projection, root, allowsAll)).toEqual(
+    expected([child, hidden, leaf, sessionKey]),
+  );
+  expect(reads).toHaveBeenCalledTimes(firstReads);
+  expect(captures).toHaveBeenCalledTimes(firstCaptures);
+  expect(resolveParent).not.toHaveBeenCalled();
+
+  await fixture.seed("agent:main:unrelated", fixture.profile.id);
+  await projection.ensureMaterialized();
+  selectTaskPublicationSessions(projection, root, allowsAll);
+  const afterCreation = reads.mock.calls.length;
+  await fixture.seed("agent:main:unrelated", fixture.profile.id, {
+    label: "Updated",
+    updatedAt: 2,
+  });
+  await fixture.seed(child, fixture.profile.id, { parentSessionKey: sessionKey, label: "Updated" });
+  await projection.ensureMaterialized();
+  expect(selectTaskPublicationSessions(projection, root, allowsShared)).toEqual(
+    expected([child, leaf, sessionKey]),
+  );
+  expect(reads).toHaveBeenCalledTimes(afterCreation);
+
+  // Permissions consume the replacement row even when lineage itself is unchanged.
+  await fixture.seed(hidden, fixture.profile.id, {
+    parentSessionKey: sessionKey,
+    visibility: "shared",
+  });
+  await projection.ensureMaterialized();
+  expect(
+    selectTaskPublicationSessions(projection, root, (row) => row.entry.visibility !== "draft"),
+  ).toEqual(expected([child, hidden, leaf, sessionKey]));
+  expect(reads).toHaveBeenCalledTimes(afterCreation);
+
+  await fixture.seed(leaf, fixture.profile.id, { parentSessionKey: hidden, updatedAt: 2 });
+  await projection.ensureMaterialized();
+  const current = projection.describe({ agentId: "main", key: sessionKey })!;
+  resolveParent.mockClear();
+  expect(selectTaskPublicationSessions(projection, current, allowsShared)).toEqual(
+    expected([child, sessionKey]),
+  );
+  expect(selectTaskPublicationSessions(projection, current, allowsAll)).toEqual(
+    expected([child, hidden, leaf, sessionKey]),
+  );
+  expect(reads.mock.calls.length).toBeGreaterThan(firstReads);
+  expect(resolveParent).not.toHaveBeenCalled();
+
+  const runId = "task-pr-registry-lineage";
+  subagentRuns.set(
+    runId,
+    createSubagentRunRecord({
+      runId,
+      childSessionKey: leaf,
+      requesterSessionKey: child,
+      controllerSessionKey: child,
+      expectsCompletionMessage: false,
+    }),
+  );
+  try {
+    publishSubagentRunChanges();
+    // No intervening describe/read may prepare the registry's deferred parent indexes.
+    expect(selectTaskPublicationSessions(projection, current, allowsShared)).toEqual(
+      expected([child, leaf, sessionKey]),
+    );
+  } finally {
+    subagentRuns.delete(runId);
+    publishSubagentRunChanges();
+  }
+  expect(selectTaskPublicationSessions(projection, current, allowsShared)).toEqual(
+    expected([child, sessionKey]),
+  );
+});
+
 it("projects three descendant receipts without mixing the parent's current branch", async () => {
   await fixture.seedRepository();
   for (let number = 1; number <= 3; number++) {
@@ -138,31 +258,8 @@ it("projects three descendant receipts without mixing the parent's current branc
     throw new Error("offline");
   });
   await fixture.subscriptions.pollNow();
-  expect(latest()).toMatchObject({
-    status: "unavailable",
-    taskPullRequestCount: 3,
-  });
+  expect(latest()).toMatchObject({ status: "unavailable", taskPullRequestCount: 3 });
   expect(latest()?.taskPullRequests?.every((pr) => pr.pullRequest?.state === "closed")).toBe(true);
-});
-
-it("counts branch PRs against the complete receipt set, not only the bounded preview", async () => {
-  await fixture.seedRepository();
-  for (let number = 1; number <= 25; number++) {
-    receipt(sessionKey, number);
-  }
-  stubGitHub();
-  await fixture.subscribe();
-  await fixture.subscriptions.pollNow();
-  expect(latest()).toMatchObject({ taskPullRequestCount: 25, pullRequestCount: 26 });
-  expect(latest()?.taskPullRequests).toHaveLength(20);
-  receipt(sessionKey, 40, "older-branch-receipt", { updated_at_ms: 1 });
-  await vi.waitFor(() =>
-    expect(latest()).toMatchObject({
-      taskPullRequestCount: 26,
-      pullRequestCount: 26,
-    }),
-  );
-  expect(taskNumbers()?.includes(40)).toBe(false);
 });
 
 async function passive(client = fixture.client) {
@@ -213,46 +310,54 @@ it("reads own and nested receipts without a checkout, refreshes on commit, and n
   expect(fetcher).not.toHaveBeenCalled();
 });
 
-it("retains an external branch PR when active watching becomes passive without polling", async () => {
-  await fixture.seedRepository();
-  for (let number = 1; number <= 25; number++) {
-    receipt(sessionKey, number);
-  }
-  const fetcher = stubGitHub();
-  await fixture.subscribe();
-  await fixture.subscriptions.pollNow();
-  const active = latest();
-  expect(active).toMatchObject({
-    pullRequests: [{ number: 40 }],
-    taskPullRequestCount: 25,
-    pullRequestCount: 26,
-  });
-  const git = vi.spyOn(gitReads, "runGitReadOperation");
-  const networkCalls = fetcher.mock.calls.length;
-  // Another browser may already retain this profile's passive audience cell.
-  await passive(fixture.addReader("passive-peer").client);
-  await passive();
-  expect(latest()).toMatchObject({
-    branchRead: false,
-    pullRequests: active?.pullRequests,
-    repository: active?.repository,
-    taskPullRequestCount: 25,
-    pullRequestCount: 26,
-  });
-  // This overlap is outside the preview: counting only visible URLs is incorrect.
-  receipt(sessionKey, 40, "passive-overlap", { updated_at_ms: 1 });
-  await vi.waitFor(() =>
-    expect(latest()).toMatchObject({
-      branchRead: false,
-      taskPullRequestCount: 26,
+it.each([false, true])(
+  "counts branch PRs beyond the receipt preview (passive=%s)",
+  async (watchPassively) => {
+    await fixture.seedRepository();
+    for (let number = 1; number <= 25; number++) {
+      receipt(sessionKey, number);
+    }
+    const fetcher = stubGitHub();
+    await fixture.subscribe();
+    await fixture.subscriptions.pollNow();
+    const active = latest();
+    expect(active).toMatchObject({
+      pullRequests: [{ number: 40 }],
+      taskPullRequestCount: 25,
       pullRequestCount: 26,
-    }),
-  );
-  expect(taskNumbers()?.includes(40)).toBe(false);
-  await fixture.subscriptions.pollNow();
-  expect(git).not.toHaveBeenCalled();
-  expect(fetcher).toHaveBeenCalledTimes(networkCalls);
-});
+    });
+    expect(active?.taskPullRequests).toHaveLength(20);
+    const git = vi.spyOn(gitReads, "runGitReadOperation");
+    const networkCalls = fetcher.mock.calls.length;
+    if (watchPassively) {
+      // Another browser may already retain this profile's passive audience cell.
+      await passive(fixture.addReader("passive-peer").client);
+      await passive();
+      expect(latest()).toMatchObject({
+        branchRead: false,
+        pullRequests: active?.pullRequests,
+        repository: active?.repository,
+        taskPullRequestCount: 25,
+        pullRequestCount: 26,
+      });
+    }
+    // This overlap is outside the preview: counting only visible URLs is incorrect.
+    receipt(sessionKey, 40, "passive-overlap", { updated_at_ms: 1 });
+    await vi.waitFor(() =>
+      expect(latest()).toMatchObject({
+        ...(watchPassively ? { branchRead: false } : {}),
+        taskPullRequestCount: 26,
+        pullRequestCount: 26,
+      }),
+    );
+    expect(taskNumbers()?.includes(40)).toBe(false);
+    if (watchPassively) {
+      await fixture.subscriptions.pollNow();
+      expect(git).not.toHaveBeenCalled();
+      expect(fetcher).toHaveBeenCalledTimes(networkCalls);
+    }
+  },
+);
 
 it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants", async () => {
   const child = "agent:main:private-child";
@@ -266,9 +371,38 @@ it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants
     identity_source: "personal",
     connection_generation: "personal-generation",
   });
+  const incognito = "agent:main:incognito-child";
+  await fixture.seed(incognito, fixture.profile.id, {
+    parentSessionKey: sessionKey,
+    incognito: true,
+  });
+  receipt(incognito, 3);
+  const childReceipt = {
+    url: "https://github.com/example/repository/pull/1",
+    owner: "example",
+    repo: "repository",
+    number: 1,
+    branch: "openclaw/worker-proof",
+    sourceSessionKey: child,
+    sourceAgentId: "main",
+  };
+  const personalReceipt = {
+    ...childReceipt,
+    url: "https://github.com/example/repository/pull/2",
+    number: 2,
+    sourceSessionKey: sessionKey,
+  };
+  const expectedSnapshot = {
+    pullRequests: [],
+    rateLimited: false,
+    taskPullRequests: [personalReceipt, childReceipt],
+    taskPullRequestCount: 2,
+    branchRead: false,
+    status: "ready",
+  };
   stubOffline();
   await passive();
-  expect(latest()?.taskPullRequestCount).toBe(2);
+  expect(latest()).toEqual(expectedSnapshot);
   const other = fixture.addReader("other-viewer");
   other.client.authenticatedUserProfile = {
     ...other.client.authenticatedUserProfile!,
@@ -276,14 +410,24 @@ it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants
   };
   prepareGatewayRecipientProfile(other.client);
   await passive(other.client);
-  expect(snapshots(other.socket).at(-1)?.taskPullRequestCount).toBe(1);
+  expect(snapshots(other.socket).at(-1)).toEqual({
+    ...expectedSnapshot,
+    taskPullRequests: [childReceipt],
+    taskPullRequestCount: 1,
+  });
   await fixture.seed(child, fixture.other.id, {
     parentSessionKey: sessionKey,
     visibility: "draft",
     updatedAt: 2,
   });
   await fixture.subscriptions.pollNow();
-  await vi.waitFor(() => expect(latest()?.taskPullRequestCount).toBe(1));
+  await vi.waitFor(() =>
+    expect(latest()).toEqual({
+      ...expectedSnapshot,
+      taskPullRequests: [personalReceipt],
+      taskPullRequestCount: 1,
+    }),
+  );
   await fixture.changeReader("grant");
   const delivered = snapshots().length;
   receipt(sessionKey, 3);

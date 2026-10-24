@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   assertNoUnmigratedWorkspaceState,
@@ -32,6 +32,7 @@ async function expectMissing(candidates: string[]) {
 describe("legacy workspace reset cleanup", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
   afterEach(() => resetLegacyWorkspaceStateCheckForTest());
+  afterEach(() => vi.unstubAllEnvs());
 
   let homeDir: string;
   let workspaceDir: string;
@@ -42,13 +43,15 @@ describe("legacy workspace reset cleanup", () => {
     homeDir = tempDirs.make("openclaw-workspace-legacy-cleanup-");
     stateDir = path.join(homeDir, "state");
     workspaceDir = path.join(homeDir, "workspace");
+    vi.stubEnv("OPENCLAW_HOME", homeDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     options = {
       env: { ...process.env, HOME: homeDir, OPENCLAW_STATE_DIR: stateDir },
       homedir: () => homeDir,
     };
     paths = resolveLegacyWorkspaceSourcePaths(workspaceDir, options);
   });
-  const prepare = () => prepareLegacyWorkspaceStateReset(workspaceDir, options);
+  const prepare = () => prepareLegacyWorkspaceStateReset(workspaceDir);
 
   async function createAlias() {
     const targetDir = path.join(homeDir, "workspace-target");

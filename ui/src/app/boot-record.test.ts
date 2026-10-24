@@ -7,21 +7,17 @@ import {
   resolveBootRecordAuth,
   type BootRecord,
 } from "./boot-record.ts";
+import { makeBootRecord } from "./bootstrap.test-support.ts";
 
 const credential = () => "test-token";
 const scope = "https://gateway.example";
 const key = `openclaw.control.bootRecord.v1:${scope}`;
-const record = (): BootRecord => ({
-  version: 2,
-  authMethod: "token",
-  credential: "9d17676d",
-  scope,
-  savedAt: Date.now(),
-  profileId: "profile-a",
-  agents: { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
-  groups: [{ name: "Work", position: 0 }],
-  sectionOrder: ["category:Work", "ungrouped"],
-});
+const record = (overrides: Partial<BootRecord> = {}) =>
+  makeBootRecord(scope, {
+    groups: [{ name: "Work", position: 0 }],
+    sectionOrder: ["category:Work", "ungrouped"],
+    ...overrides,
+  });
 
 const settleWrite = () => vi.advanceTimersByTimeAsync(500);
 
@@ -46,7 +42,7 @@ describe("Control UI boot record", () => {
     "flushes the latest pending record on %s",
     async (event) => {
       persistBootRecord(record());
-      const saved = { ...record(), sectionOrder: ["ungrouped", "category:Work"] };
+      const saved = record({ sectionOrder: ["ungrouped", "category:Work"] });
       saved.agents.agents = [
         { id: "main", identity: { name: "Main", avatar: "private", avatarUrl: "/avatar" } },
       ];
@@ -116,7 +112,7 @@ describe("Control UI boot record", () => {
   ] as const)(
     "evicts only the publishing owner after %s failure (same owner: %s)",
     async (failure, sameOwner) => {
-      const peer = { ...record(), ...(sameOwner ? {} : { recoveryScope: "peer-account" }) };
+      const peer = record(sameOwner ? {} : { recoveryScope: "peer-account" });
       await write(peer);
       const bytes = localStorage.getItem(key);
       expect(readBootRecord(scope, credential)).toEqual(peer);
@@ -125,11 +121,12 @@ describe("Control UI boot record", () => {
           throw new DOMException("quota exceeded", "QuotaExceededError");
         });
       }
-      await write({
-        ...record(),
-        ...(sameOwner ? {} : { recoveryScope: "new-account" }),
-        ...(failure === "oversized" ? { sectionOrder: ["🦞".repeat((64 * 1024) / 3)] } : {}),
-      });
+      await write(
+        record({
+          ...(sameOwner ? {} : { recoveryScope: "new-account" }),
+          ...(failure === "oversized" ? { sectionOrder: ["🦞".repeat((64 * 1024) / 3)] } : {}),
+        }),
+      );
       expect(localStorage.getItem(key)).toBe(sameOwner ? null : bytes);
       expect(readBootRecord(scope, credential)).toEqual(sameOwner ? null : peer);
     },
@@ -137,7 +134,7 @@ describe("Control UI boot record", () => {
 
   it("clears all scopes and fences pending writes even on pagehide", async () => {
     await write();
-    await write({ ...record(), scope: "https://another.example" });
+    await write(record({ scope: "https://another.example" }));
     localStorage.setItem("unrelated", "keep");
     persistBootRecord(record());
     clearBootRecords();
@@ -158,7 +155,7 @@ describe("Control UI boot record", () => {
     async (method) => {
       const auth = resolveBootRecordAuth({ method, recoveryScope: "account-a" });
       expect(auth).toEqual({ authMethod: method, credential: "" });
-      await write({ ...record(), ...auth!, recoveryScope: "account-a" });
+      await write(record({ ...auth!, recoveryScope: "account-a" }));
       expect(readBootRecord(scope, () => "")?.recoveryScope).toBe("account-a");
       clearBootRecords(scope);
       window.dispatchEvent(new Event("pagehide"));

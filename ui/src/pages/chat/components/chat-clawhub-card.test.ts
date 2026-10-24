@@ -276,20 +276,20 @@ describe("ClawHub chat recommendations", () => {
     },
   );
 
-  it("retains detail-only decoded artwork through a pending and failed status refresh", async () => {
+  it("retains detail-only decoded artwork through pending, failed, and retried status refreshes", async () => {
     vi.useFakeTimers();
     const refresh = deferred<ReturnType<typeof detail>>();
+    const retry = deferred<ReturnType<typeof detail>>();
     const result = detail(true);
     Object.assign(result.plugin.catalog, { imageUrl: "https://example.com/detail.png" });
     iconFetch.catalog.mockResolvedValue("blob:detail-artwork");
-    let refreshing = false;
-    const { card, harness, client } = mount(() =>
-      refreshing ? refresh.promise : Promise.resolve(result),
-    );
+    let response = Promise.resolve(result);
+    const { card, harness, client } = mount(() => response);
     await vi.advanceTimersByTimeAsync(0);
-    card.querySelector("img")!.dispatchEvent(new Event("load"));
+    const image = card.querySelector("img")!;
+    image.dispatchEvent(new Event("load"));
     await vi.advanceTimersByTimeAsync(0);
-    refreshing = true;
+    response = refresh.promise;
     harness.emit(client, true, {
       pluginCapabilities: {
         ok: true,
@@ -313,6 +313,25 @@ describe("ClawHub chat recommendations", () => {
     expect(card.querySelector("img")?.getAttribute("src")).toBe("blob:detail-artwork");
     expect(card.querySelector("img")?.hidden).toBe(false);
     expect(card.querySelector(".chat-clawhub-card__installed")).toBeNull();
+    expect(iconFetch.catalog).toHaveBeenCalledOnce();
+
+    response = retry.promise;
+    card.querySelector<HTMLButtonElement>(".chat-clawhub-card__dismiss")!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(card.querySelector(".chat-clawhub-card__status-skeleton")).not.toBeNull();
+    expect(card.querySelector(".chat-clawhub-card__dismiss")).toBeNull();
+    expect(card.querySelector(".chat-clawhub-card__installed")).toBeNull();
+    expect(card.querySelector(".chat-clawhub-card__install")).toBeNull();
+    expect(card.querySelector("img")).toBe(image);
+    expect(image.hidden).toBe(false);
+    expect(iconFetch.catalog).toHaveBeenCalledOnce();
+
+    retry.resolve(result);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(card.querySelector(".chat-clawhub-card__status-skeleton")).toBeNull();
+    expect(card.querySelector(".chat-clawhub-card__installed")?.textContent).toContain("Installed");
+    expect(card.querySelector("img")).toBe(image);
+    expect(image.hidden).toBe(false);
     expect(iconFetch.catalog).toHaveBeenCalledOnce();
   });
 

@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-run.sh");
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function writeExecutable(filePath: string, body: string): void {
   writeFileSync(filePath, body, "utf8");
@@ -14,8 +14,7 @@ function writeExecutable(filePath: string, body: string): void {
 }
 
 function makeFixture(bundleId: string): { root: string; script: string; logFile: string } {
-  const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-run-"));
-  tempDirs.push(root);
+  const root = tempDirs.make("openclaw-ios-run-");
 
   const scriptsDir = path.join(root, "scripts");
   const iosDir = path.join(root, "apps", "ios");
@@ -124,12 +123,6 @@ function runIosRun(
 }
 
 describe("scripts/ios-run.sh", () => {
-  afterEach(() => {
-    for (const dir of tempDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
   it.each([true, false])("isolates simulator proof secrets with sandbox mode=%s", (sandbox) => {
     const fixture = makeFixture("ai.openclawfoundation.app");
     const proofSecret = "x".repeat(32);

@@ -19,9 +19,8 @@ vi.mock("../../cli/command-secret-targets.js", () => ({
   getScopedChannelsCommandSecretTargets: scopedTargets,
 }));
 
-const { resolveQueuedReplyExecutionConfig, resolveQueuedReplyRuntimeConfig } =
-  await import("./agent-runner-utils.js");
-const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+const { resolveQueuedReplyExecutionConfig } = await import("./agent-runner-utils.js");
+const { clearRuntimeConfigSnapshot, selectLiveRuntimeConfig, setRuntimeConfigSnapshot } =
   await import("../../config/config.js");
 
 const secretResult = (resolvedConfig: OpenClawConfig) => ({
@@ -131,9 +130,7 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
     const scopedResolvedConfig = { ...withKey("fresh-scoped-key"), tools: { updatePlan: true } };
     setRuntimeConfigSnapshot(staleRuntimeConfig, unresolvedConfig);
 
-    expect(resolveQueuedReplyRuntimeConfig(structuredClone(unresolvedConfig))).toBe(
-      staleRuntimeConfig,
-    );
-    expect(resolveQueuedReplyRuntimeConfig(scopedResolvedConfig)).toBe(scopedResolvedConfig);
+    expect(selectLiveRuntimeConfig(structuredClone(unresolvedConfig))).toBe(staleRuntimeConfig);
+    expect(selectLiveRuntimeConfig(scopedResolvedConfig)).toBe(scopedResolvedConfig);
   });
 });

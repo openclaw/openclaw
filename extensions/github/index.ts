@@ -7,6 +7,20 @@ import {
   parseGitHubReadParams,
 } from "./src/targets.js";
 
+async function wrappedGitHubResult(
+  result: unknown,
+  context: { assertInvocationCurrent: () => void },
+  signal?: AbortSignal,
+) {
+  const { wrapExternalContent } = await import("openclaw/plugin-sdk/security-runtime");
+  context.assertInvocationCurrent();
+  signal?.throwIfAborted();
+  return textResult(
+    wrapExternalContent(JSON.stringify(result, null, 2), { source: "api", includeWarning: false }),
+    result,
+  );
+}
+
 export default definePluginEntry({
   id: "github",
   name: "GitHub",
@@ -53,16 +67,7 @@ export default definePluginEntry({
               // The bounded reader may make several sequential upstream requests.
               { scopes: ["operator.sessions.read"], timeoutMs: 120_000, signal },
             );
-            const { wrapExternalContent } = await import("openclaw/plugin-sdk/security-runtime");
-            context.assertInvocationCurrent();
-            signal?.throwIfAborted();
-            return textResult(
-              wrapExternalContent(JSON.stringify(document, null, 2), {
-                source: "api",
-                includeWarning: false,
-              }),
-              document,
-            );
+            return wrappedGitHubResult(document, context, signal);
           },
         }),
       },
@@ -110,25 +115,19 @@ export default definePluginEntry({
               timeoutMs: 120_000,
               signal,
             });
-            const { wrapExternalContent } = await import("openclaw/plugin-sdk/security-runtime");
-            context.assertInvocationCurrent();
-            signal?.throwIfAborted();
-            return textResult(
-              wrapExternalContent(JSON.stringify(result, null, 2), {
-                source: "api",
-                includeWarning: false,
-              }),
-              result,
-            );
+            return wrappedGitHubResult(result, context, signal);
           },
         }),
       },
       { name: "github_search", workspaceAccess: false },
     );
-    // Commits open in the reader, but do not spend anonymous quota on hover.
     for (const reader of [
       { id: "github", pathPattern: GITHUB_ITEM_PATH_PATTERN, previewMethod: "github.preview" },
-      { id: "github-commit", pathPattern: GITHUB_COMMIT_PATH_PATTERN },
+      {
+        id: "github-commit",
+        pathPattern: GITHUB_COMMIT_PATH_PATTERN,
+        previewMethod: "github.preview",
+      },
     ]) {
       api.session.controls.registerControlUiDescriptor({
         surface: "link-reader",
@@ -154,7 +153,11 @@ export default definePluginEntry({
           pathPattern: GITHUB_ITEM_PATH_PATTERN,
           previewMethod: "github.sessionPreview",
         },
-        { id: "github-session-commit", pathPattern: GITHUB_COMMIT_PATH_PATTERN },
+        {
+          id: "github-session-commit",
+          pathPattern: GITHUB_COMMIT_PATH_PATTERN,
+          previewMethod: "github.sessionPreview",
+        },
       ]) {
         api.session.controls.registerControlUiDescriptor({
           surface: "link-reader",

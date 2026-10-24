@@ -18,6 +18,7 @@ import { registerSlackInteractionEvents } from "./events/interactions.js";
 import { registerSlackMemberEvents } from "./events/members.js";
 import { registerSlackMessageEvents as registerSlackMessageEventHandlers } from "./events/messages.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./events/system-event-context.js";
+import { resolveSlackIngressTurnLifecycle } from "./ingress.js";
 import type { SlackMessageHandler } from "./message-handler.js";
 import type { SlackPinEvent, SlackReactionEvent } from "./types.js";
 
@@ -218,7 +219,11 @@ export function registerSlackWorkspaceEvents(params: {
   registerSlackChannelIdChangedEvent({ ctx, trackEvent });
   ctx.app.event(
     "app_home_opened",
-    async ({ event, body }: SlackEventMiddlewareArgs<"app_home_opened">) => {
+    async ({
+      event,
+      body,
+      context,
+    }: SlackEventMiddlewareArgs<"app_home_opened"> & AllMiddlewareArgs) => {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
         return;
       }
@@ -233,6 +238,7 @@ export function registerSlackWorkspaceEvents(params: {
           return;
         }
         const outcome = await ctx.setSlackSuggestedPrompts({
+          ...(resolveSlackIngressTurnLifecycle(context) ? { retryTransientErrors: true } : {}),
           channelId: payload.channel,
           title: "Try asking",
           prompts: DEFAULT_SLACK_SUGGESTED_PROMPTS,

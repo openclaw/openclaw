@@ -4,7 +4,6 @@ import {
   readSessionPlacementRecovery,
   writeSessionPlacementRecovery,
 } from "../../lib/sessions/session-placement-recovery.ts";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
 import {
   PendingSessionPlacementRecoveryState,
   resolveSubmissionOutcomeReason,
@@ -87,14 +86,14 @@ describe("pending session placement recovery state", () => {
     ["permission mode", { permissionMode: "guarded" }, { permissionMode: "guarded" }],
     [
       "model/runtime",
-      buildDraftSessionCreateParams({
+      {
         agentId: "cloud",
-        message: "keep the selected runtime",
-        deferInitialTurn: true,
+        message: "",
+        titleSource: "keep the selected runtime",
         model: "openai/gpt-5.6-sol",
         agentRuntime: "codex",
         worktree: true,
-      }),
+      },
       { model: "openai/gpt-5.6-sol", agentRuntime: "codex" },
     ],
     [

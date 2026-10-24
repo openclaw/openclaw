@@ -1,8 +1,11 @@
 import { For, Show, createSignal } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { SystemEventGroup, SystemEventItem } from "../../../lib/chat/chat-types.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { ChatDivider, ChatNotice } from "./chat-divider.tsx";
+
+registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 function SystemEvent(props: { item: SystemEventItem }) {
   return (

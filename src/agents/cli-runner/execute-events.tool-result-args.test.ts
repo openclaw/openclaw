@@ -750,6 +750,25 @@ describe("CLI plan channel bridge", () => {
 });
 
 describe("CLI prepared live output", () => {
+  it("uses the current output replacements for commentary, streaming, and completion", () => {
+    const context = buildContext("cli-live-output-policy");
+    context.backendResolved.textTransforms = { output: [{ from: /MARKER/g, to: "first" }] };
+    const { handlers, events, dispose } = eventFixture(context);
+    try {
+      handlers.emitCliCommentaryText("MARKER");
+      context.backendResolved.textTransforms = { output: [{ from: /MARKER/g, to: "second" }] };
+      handlers.emitCliAssistantDelta({ text: "MARKER", delta: "MARKER" });
+      handlers.emitCliCompletedReply("MARKER", 0);
+      expect(events.map((event) => event.data)).toEqual([
+        expect.objectContaining({ progressText: "first" }),
+        expect.objectContaining({ text: "second", delta: "second" }),
+        expect.objectContaining({ completedText: "second" }),
+      ]);
+    } finally {
+      dispose();
+    }
+  });
+
   it.each(["NO_REPLY.", '"NO_REPLY"', '{"action":"NO_REPLY"}', "NO_REPLY\nNO_REPLY"])(
     "preserves ordinary producer output %j",
     (raw) => {

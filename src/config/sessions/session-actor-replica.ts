@@ -554,13 +554,14 @@ export function readSessionActorRowFacts(params: {
   if (summary && !projection.activitySummaryWatermark) {
     return undefined;
   }
-  return structuredClone({
+  // The row owns its mutable shell; nested facts already belong to the frozen replica.
+  return {
     sessionKey: params.sessionKey,
     entry: attachSessionEntrySnapshots({ ...state.entry }, {}, "list"),
     hasBoard: projection.hasBoard,
     transcriptAssistantMessage: "unknown",
     ...(summary ? { activitySummaryWatermark: projection.activitySummaryWatermark } : {}),
-  });
+  };
 }
 
 /** A single cold entry batch and actor commands publish into the same bounded MAIN owner. */

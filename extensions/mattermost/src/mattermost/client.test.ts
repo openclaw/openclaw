@@ -29,6 +29,21 @@ const clientParams = { baseUrl: "https://chat.example.com/api/v4/", botToken };
 const jsonHeaders = { "content-type": "application/json" };
 const postParams = { channelId: "ch1", message: "hello" };
 
+function jsonResponse(body: BodyInit | null, init: ResponseInit = {}) {
+  return new Response(body, { headers: jsonHeaders, ...init });
+}
+
+function failingBody(operation: "pull" | "cancel" = "pull", status = 200, message = "terminated") {
+  return jsonResponse(
+    new ReadableStream({
+      [operation]() {
+        throw new TypeError(message);
+      },
+    }),
+    { status },
+  );
+}
+
 function responseClient(response: Response) {
   const fetchImpl = (fetchFixture.current = vi.fn<typeof fetch>().mockResolvedValueOnce(response));
   return { client: createMattermostClient(clientParams), fetchImpl };
@@ -155,10 +170,9 @@ describe("Mattermost request boundary", () => {
   });
 
   it("releases null-body errors without unbounded response readers", async () => {
-    const response = new Response(null, {
+    const response = jsonResponse(null, {
       status: 503,
       statusText: "Service Unavailable",
-      headers: jsonHeaders,
     });
     const json = vi.spyOn(response, "json");
     const text = vi.spyOn(response, "text");
@@ -225,16 +239,7 @@ describe("Mattermost request boundary", () => {
   });
 
   it("reports accepted typing as sent despite an unreadable body", async () => {
-    const { client, fetchImpl } = responseClient(
-      new Response(
-        new ReadableStream({
-          pull() {
-            throw new TypeError("terminated");
-          },
-        }),
-        { headers: jsonHeaders },
-      ),
-    );
+    const { client, fetchImpl } = responseClient(failingBody());
     await expect(
       sendMattermostTyping(client, { channelId: "ch1", parentId: "root1" }),
     ).resolves.toBeUndefined();
@@ -244,16 +249,7 @@ describe("Mattermost request boundary", () => {
   });
 
   it("reports accepted deletion as done even when releasing its body fails", async () => {
-    const { client, release } = guardedClient(
-      new Response(
-        new ReadableStream({
-          cancel() {
-            return Promise.reject(new Error("release failed"));
-          },
-        }),
-        { headers: jsonHeaders },
-      ),
-    );
+    const { client, release } = guardedClient(failingBody("cancel", 200, "release failed"));
     release.mockRejectedValueOnce(new Error("release failed"));
     await expect(deleteMattermostPost(client, "post1")).resolves.toBeUndefined();
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
@@ -269,11 +265,10 @@ describe("Mattermost request boundary", () => {
 
 describe("Mattermost credential diagnostics", () => {
   it("decodes JSON escapes before redacting the request credential", async () => {
-    const response = new Response(
+    const response = jsonResponse(
       String.raw`{"message":"Bearer\u0020\u0061bcdefghijklmnopqrstuvwxyz"}`,
       {
         status: 401,
-        headers: jsonHeaders,
       },
     );
     const json = vi.spyOn(response, "json");
@@ -289,9 +284,8 @@ describe("Mattermost credential diagnostics", () => {
 
   it("redacts malformed JSON served with a JSON content type", async () => {
     const { client } = responseClient(
-      new Response(`upstream error: Bearer ${botToken}`, {
+      jsonResponse(`upstream error: Bearer ${botToken}`, {
         status: 502,
-        headers: jsonHeaders,
       }),
     );
     await expect(client.request("/users/me")).rejects.toThrow(
@@ -331,7 +325,7 @@ describe("Mattermost credential diagnostics", () => {
 
 describe("Mattermost post receipts", () => {
   it("preserves accepted visibility when a post receipt cannot be decoded", async () => {
-    const { client, fetchImpl } = responseClient(new Response("{", { headers: jsonHeaders }));
+    const { client, fetchImpl } = responseClient(jsonResponse("{"));
     await expectAccepted(createMattermostPost(client, postParams));
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
@@ -447,29 +441,20 @@ describe("Mattermost DM retries", () => {
   });
 
   it.each([
-    {
-      name: "nested transport code",
-      failure: new TypeError("fetch failed", {
+    [
+      "nested transport code",
+      new TypeError("fetch failed", {
         cause: Object.assign(new Error("connect failed"), { code: "ECONNREFUSED" }),
       }),
-    },
-    {
-      name: "port 443 connection error",
-      failure: new Error("connect ECONNRESET 104.18.32.10:443"),
-    },
-    {
-      name: "fetch transport failure without a nested code",
-      failure: new TypeError("fetch failed"),
-    },
-    {
-      name: "network-down transport code",
-      failure: Object.assign(new Error("transport unavailable"), { code: "ENETDOWN" }),
-    },
-    {
-      name: "legacy timeout diagnostic",
-      failure: new Error("request timed out"),
-    },
-  ])("retries $name with capped exponential jitter", async ({ failure }) => {
+    ],
+    ["port 443 connection error", new Error("connect ECONNRESET 104.18.32.10:443")],
+    ["fetch transport failure without a nested code", new TypeError("fetch failed")],
+    [
+      "network-down transport code",
+      Object.assign(new Error("transport unavailable"), { code: "ENETDOWN" }),
+    ],
+    ["legacy timeout diagnostic", new Error("request timed out")],
+  ] as const)("retries %s with capped exponential jitter", async (_name, failure) => {
     const fetchImpl = (fetchFixture.current = vi
       .fn<typeof fetch>()
       .mockRejectedValueOnce(failure)
@@ -527,16 +512,8 @@ describe("Mattermost DM retries", () => {
   it.each([400, 429, 503])(
     "preserves HTTP %s retry policy when the error response body fails",
     async (status) => {
-      const fetchImpl = (fetchFixture.current = vi.fn<typeof fetch>(
-        async () =>
-          new Response(
-            new ReadableStream({
-              pull() {
-                throw new TypeError("network error");
-              },
-            }),
-            { status, headers: jsonHeaders },
-          ),
+      const fetchImpl = (fetchFixture.current = vi.fn<typeof fetch>(async () =>
+        failingBody("pull", status, "network error"),
       ));
       const client = createMattermostClient(clientParams);
       const outcome = rejection(createMattermostDirectChannelWithRetry(client, ["u1", "u2"]));

@@ -1,4 +1,3 @@
-import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
@@ -60,8 +59,6 @@ export type EmbeddedAgentRunResult = {
   asyncWorkStarted?: true;
   /** Completed core yield settlement, not a requester-visible final reply. */
   requesterContinuationSettled?: true;
-  // Structured heartbeat outcome recorded by the heartbeat response tool.
-  heartbeatToolResponse?: HeartbeatToolResponse;
   successfulCronAdds?: number;
 };
 

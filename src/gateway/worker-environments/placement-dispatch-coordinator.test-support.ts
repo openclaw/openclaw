@@ -1,3 +1,6 @@
+import { vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import type { WorkerPlacementDispatchService as DispatchService } from "./placement-dispatch.js";
 import { localPlacement, sessionIdentity } from "./placement-suite.test-support.js";
 import type {
@@ -77,5 +80,27 @@ export function createCoordinatorTestService(overrides: Partial<DispatchService>
     isInterruptedTurn: () => false,
     resumeProvisioning: unexpected,
     ...overrides,
+  };
+}
+
+export function coordinate(
+  overrides: Partial<DispatchService>,
+  admit: Parameters<typeof coordinateWorkerPlacementDispatch>[1] = (_request, run) => run(),
+  recover?: Parameters<typeof coordinateWorkerPlacementDispatch>[2],
+) {
+  return coordinateWorkerPlacementDispatch(createCoordinatorTestService(overrides), admit, recover);
+}
+
+export function createOperationGate<T>(value: T) {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  return {
+    entered: entered.promise,
+    release: () => release.resolve(),
+    run: vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+      return value;
+    }),
   };
 }

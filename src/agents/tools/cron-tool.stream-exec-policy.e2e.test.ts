@@ -10,26 +10,14 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import type { CronJob } from "../../cron/types.js";
-import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
-import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
-import {
-  createCronCreatorAuthorityCapability,
-  runWithCronCreatorAuthorityCapability,
-} from "../cron-creator-authority-context.js";
 import { createCronTool } from "./cron-tool.js";
+import { withCronManagementCaller } from "./cron-tool.management.test-support.js";
 import {
   createHostStreamApprovalProvider,
   proveHostStreamApprovalEffects,
 } from "./cron-tool.stream-exec-policy.e2e.test-support.js";
-import type { GatewayToolCaller } from "./cron-tool.types.js";
-import {
-  withGatewayToolCallerIdentity,
-  withoutGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import type { CronToolOptions, GatewayToolCaller } from "./cron-tool.types.js";
+import { withoutGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import * as gatewayModule from "./gateway.js";
 import type { GatewayCallOptions } from "./gateway.js";
 
@@ -92,26 +80,9 @@ function toolArgs(instance: OpenClawTestInstance) {
   return { gatewayUrl: instance.url, gatewayToken: instance.gatewayToken };
 }
 
-function createStrongTool() {
+function createAuthorityTool(creatorToolAllowlist: CronToolOptions["creatorToolAllowlist"]) {
   return createCronTool({
-    creatorToolAllowlist: [{ name: "exec", execOrigin: "openclaw" }],
-    execOverrides: { host: "gateway", security: "full", ask: "off" },
-    sandboxed: false,
-  });
-}
-
-function createWeakTool() {
-  return createCronTool({
-    creatorToolAllowlist: ["read"],
-    execOverrides: { host: "gateway", security: "full", ask: "off" },
-    sandboxed: false,
-  });
-}
-
-function createRemoteNativeOnlyTool() {
-  return createCronTool({
-    creatorToolAllowlist: [{ name: "exec", execOrigin: "native" }],
-    // Remote Codex placement is independent of these OpenClaw defaults.
+    creatorToolAllowlist,
     execOverrides: { host: "gateway", security: "full", ask: "off" },
     sandboxed: false,
   });
@@ -121,45 +92,22 @@ async function withWeakManagementTool<T>(
   run: (tool: ReturnType<typeof createCronTool>) => Promise<T>,
 ): Promise<T> {
   const runId = "cron-stream-management-authority";
-  const { operationalRunInstance } = createTestAdmittedRunContext(runId);
-  const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-  const capability = createCronCreatorAuthorityCapability(
-    runId,
-    { kind: "unknown" },
-    { source: "control-ui-admin" },
-  );
-  if (!capability) {
-    throw new Error("expected management authority capability");
-  }
-  const identity: AgentRuntimeIdentity = {
-    kind: "agentRuntime",
-    agentId: "main",
-    sessionKey: "agent:main:control-ui",
-    operationalRunInstance,
-    delegatedAuthority: { ...authority, kind: "local" },
-  };
-  try {
-    using _ = vi
-      .spyOn(gatewayModule, "callGatewayTool")
-      .mockImplementation((...args) =>
-        withoutGatewayToolCallerIdentity(() => callGatewayTool(...args)),
-      );
-    return await runWithCronCreatorAuthorityCapability(capability, () =>
-      withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, () =>
-        run(
-          createCronTool({
-            runId,
-            agentSessionKey: identity.sessionKey,
-            creatorToolAllowlist: ["read"],
-            execOverrides: { host: "gateway", security: "full", ask: "off" },
-            sandboxed: false,
-          }),
-        ),
-      ),
+  using _ = vi
+    .spyOn(gatewayModule, "callGatewayTool")
+    .mockImplementation((...args) =>
+      withoutGatewayToolCallerIdentity(() => callGatewayTool(...args)),
     );
-  } finally {
-    releaseAgentRunDelegatedAuthority(authority);
-  }
+  return await withCronManagementCaller(runId, (identity) =>
+    run(
+      createCronTool({
+        runId,
+        agentSessionKey: identity.sessionKey,
+        creatorToolAllowlist: ["read"],
+        execOverrides: { host: "gateway", security: "full", ask: "off" },
+        sandboxed: false,
+      }),
+    ),
+  );
 }
 
 function seedRestartExhaustedStream(instance: OpenClawTestInstance, jobId: string): void {
@@ -245,8 +193,29 @@ describe("cron stream agent authority final effects", () => {
           wakeMode: "now" as const,
           payload: { kind: "agentTurn" as const, message: "handle events" },
         };
-        const strong = createStrongTool();
-        const weak = createWeakTool();
+        const strong = createAuthorityTool([{ name: "exec", execOrigin: "openclaw" }]);
+        const weak = createAuthorityTool(["read"]);
+        const execute = (tool: ReturnType<typeof createCronTool>, args: Record<string, unknown>) =>
+          tool.execute("stream-proof", { ...toolArgs(instance), ...args });
+        const deny = async (
+          tool: ReturnType<typeof createCronTool>,
+          args: Record<string, unknown>,
+          expectedMethods?: string[],
+        ) => {
+          if (!expectedMethods) {
+            await expect(execute(tool, args)).rejects.toThrow("Gateway exec authority");
+            return;
+          }
+          const methods: string[] = [];
+          using _ = vi
+            .spyOn(gatewayModule, "callGatewayTool")
+            .mockImplementation(async (...callArgs) => {
+              methods.push(callArgs[0]);
+              return await callGatewayTool(...callArgs);
+            });
+          await expect(execute(tool, args)).rejects.toThrow("Gateway exec authority");
+          expect(methods).toEqual(expectedMethods);
+        };
 
         await strong.execute("allowed-create", {
           action: "add",
@@ -259,42 +228,36 @@ describe("cron stream agent authority final effects", () => {
         if (!created) {
           throw new Error("authorized stream was not persisted");
         }
+        const readJob = () => cliJson<CronJob>(instance, ["cron", "get", created.id]);
+        const denyUpdate = (
+          tool: ReturnType<typeof createCronTool>,
+          job: Record<string, unknown>,
+          methods?: string[],
+        ) => deny(tool, { action: "update", jobId: created.id, job }, methods);
         const firstPid = await waitForPid(pidPath, undefined, async () => {
-          const current = await cliJson<CronJob>(instance, ["cron", "get", created.id]);
+          const current = await readJob();
           return `job=${JSON.stringify(current)}\ngateway logs:\n${instance.logs()}`;
         });
 
         const persistedCount = createdJobs.jobs.length;
-        let remoteNativeGatewayCalls = 0;
-        {
-          using _ = vi
-            .spyOn(gatewayModule, "callGatewayTool")
-            .mockImplementation(async (...args) => {
-              remoteNativeGatewayCalls += 1;
-              return await callGatewayTool(...args);
-            });
-          await expect(
-            createRemoteNativeOnlyTool().execute("denied-remote-native-create", {
-              action: "add",
-              ...toolArgs(instance),
-              job: { ...streamInput, name: "denied remote native authority stream" },
-            }),
-          ).rejects.toThrow("Gateway exec authority");
-        }
-        expect(remoteNativeGatewayCalls).toBe(0);
+        await deny(
+          createAuthorityTool([{ name: "exec", execOrigin: "native" }]),
+          {
+            action: "add",
+            job: { ...streamInput, name: "denied remote native authority stream" },
+          },
+          [],
+        );
         expect((await cliJson<{ jobs: CronJob[] }>(instance, ["cron", "list"])).jobs).toHaveLength(
           persistedCount,
         );
         expect(Number(await fs.readFile(pidPath, "utf8"))).toBe(firstPid);
         process.kill(firstPid, 0);
 
-        await expect(
-          weak.execute("denied-create", {
-            action: "add",
-            ...toolArgs(instance),
-            job: { ...streamInput, name: "denied authority stream" },
-          }),
-        ).rejects.toThrow("Gateway exec authority");
+        await deny(weak, {
+          action: "add",
+          job: { ...streamInput, name: "denied authority stream" },
+        });
         expect((await cliJson<{ jobs: CronJob[] }>(instance, ["cron", "list"])).jobs).toHaveLength(
           persistedCount,
         );
@@ -302,26 +265,12 @@ describe("cron stream agent authority final effects", () => {
         await cliJson(instance, ["cron", "disable", created.id]);
         await waitForDead(firstPid);
         await withWeakManagementTool(async (management) => {
-          await expect(
-            management.execute("denied-management-enable", {
-              action: "update",
-              ...toolArgs(instance),
-              jobId: created.id,
-              job: { enabled: true },
-            }),
-          ).rejects.toThrow("Gateway exec authority");
+          await denyUpdate(management, { enabled: true });
         });
-        expect((await cliJson<CronJob>(instance, ["cron", "get", created.id])).enabled).toBe(false);
+        expect((await readJob()).enabled).toBe(false);
 
-        await expect(
-          weak.execute("denied-enable", {
-            action: "update",
-            ...toolArgs(instance),
-            jobId: created.id,
-            job: { enabled: true },
-          }),
-        ).rejects.toThrow("Gateway exec authority");
-        expect((await cliJson<CronJob>(instance, ["cron", "get", created.id])).enabled).toBe(false);
+        await denyUpdate(weak, { enabled: true });
+        expect((await readJob()).enabled).toBe(false);
 
         await strong.execute("allowed-enable", {
           action: "update",
@@ -330,33 +279,14 @@ describe("cron stream agent authority final effects", () => {
           job: { enabled: true },
         });
         const secondPid = await waitForPid(pidPath, firstPid);
-        expect((await cliJson<CronJob>(instance, ["cron", "get", created.id])).enabled).toBe(true);
+        expect((await readJob()).enabled).toBe(true);
 
-        const omittedFieldGatewayMethods: string[] = [];
-        {
-          using _ = vi
-            .spyOn(gatewayModule, "callGatewayTool")
-            .mockImplementation(async (method, opts, params, extra) => {
-              omittedFieldGatewayMethods.push(method);
-              return await callGatewayTool(method, opts, params, extra);
-            });
-          await expect(
-            createWeakTool().execute("denied-omitted-cwd", {
-              action: "update",
-              ...toolArgs(instance),
-              jobId: created.id,
-              job: {
-                schedule: { kind: "stream", command: streamInput.schedule.command },
-              },
-            }),
-          ).rejects.toThrow("Gateway exec authority");
-        }
-        expect(omittedFieldGatewayMethods).toEqual(["cron.get"]);
-        const afterOmittedFieldDenial = await cliJson<CronJob>(instance, [
-          "cron",
-          "get",
-          created.id,
-        ]);
+        await denyUpdate(
+          createAuthorityTool(["read"]),
+          { schedule: { kind: "stream", command: streamInput.schedule.command } },
+          ["cron.get"],
+        );
+        const afterOmittedFieldDenial = await readJob();
         expect(afterOmittedFieldDenial.schedule).toEqual(streamInput.schedule);
         expect(Number(await fs.readFile(pidPath, "utf8"))).toBe(secondPid);
         process.kill(secondPid, 0);
@@ -390,9 +320,7 @@ describe("cron stream agent authority final effects", () => {
         }
         const thirdPid = await waitForPid(pidPath, secondPid);
         expect(injectedConflict).toBe(true);
-        expect((await cliJson<CronJob>(instance, ["cron", "get", created.id])).schedule).toEqual(
-          conflictSchedule,
-        );
+        expect((await readJob()).schedule).toEqual(conflictSchedule);
 
         const exhaustionRaceGatewayMethods: string[] = [];
         let injectedExhaustion = false;
@@ -428,46 +356,26 @@ describe("cron stream agent authority final effects", () => {
         }
         expect(exhaustionRaceGatewayMethods).toEqual(["cron.get"]);
         await waitForDead(thirdPid);
-        const racedExhausted = await cliJson<CronJob>(instance, ["cron", "get", created.id]);
+        const racedExhausted = await readJob();
         expect(racedExhausted.state.streamRestartExhausted).toBe(true);
         expect(Number(await fs.readFile(pidPath, "utf8"))).toBe(thirdPid);
 
         await instance.stopGateway();
         seedRestartExhaustedStream(instance, created.id);
         await instance.startGateway();
-        const exhausted = await cliJson<CronJob>(instance, ["cron", "get", created.id]);
+        const exhausted = await readJob();
         expect(exhausted.enabled).toBe(true);
         expect(exhausted.state.streamRestartExhausted).toBe(true);
         expect(Number(await fs.readFile(pidPath, "utf8"))).toBe(thirdPid);
 
-        const stateRecoveryGatewayMethods: string[] = [];
-        {
-          using _ = vi
-            .spyOn(gatewayModule, "callGatewayTool")
-            .mockImplementation(async (method, opts, params, extra) => {
-              stateRecoveryGatewayMethods.push(method);
-              return await callGatewayTool(method, opts, params, extra);
-            });
-          await expect(
-            createWeakTool().execute("denied-state-only-recovery", {
-              action: "update",
-              ...toolArgs(instance),
-              jobId: created.id,
-              job: { state: { streamRestartExhausted: false } },
-            }),
-          ).rejects.toThrow("Gateway exec authority");
-        }
-        expect(stateRecoveryGatewayMethods).toEqual(["cron.get"]);
+        await denyUpdate(
+          createAuthorityTool(["read"]),
+          { state: { streamRestartExhausted: false } },
+          ["cron.get"],
+        );
 
-        await expect(
-          weak.execute("denied-exhausted-recovery", {
-            action: "update",
-            ...toolArgs(instance),
-            jobId: created.id,
-            job: { enabled: true },
-          }),
-        ).rejects.toThrow("Gateway exec authority");
-        const stillExhausted = await cliJson<CronJob>(instance, ["cron", "get", created.id]);
+        await denyUpdate(weak, { enabled: true });
+        const stillExhausted = await readJob();
         expect(stillExhausted.enabled).toBe(true);
         expect(stillExhausted.state.streamRestartExhausted).toBe(true);
         expect(Number(await fs.readFile(pidPath, "utf8"))).toBe(thirdPid);

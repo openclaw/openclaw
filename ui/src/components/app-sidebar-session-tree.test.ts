@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { compareSessionRowsByUpdatedAt } from "../lib/sessions/index.ts";
 import { runningRow } from "../test-helpers/app-sidebar-session-narration.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import {
@@ -27,12 +28,17 @@ function makeRow(key: string, fields: Partial<GatewaySessionRow> = {}): GatewayS
   return { key, kind: "direct", ...fields };
 }
 
-function project(roots: GatewaySessionRow[], rows = roots) {
+function project(
+  roots: GatewaySessionRow[],
+  rows = roots,
+  compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number,
+) {
   return projectSessionTree({
     roots,
     rowsByKey: new Map(rows.map((row) => [row.key, row])),
     mainSessionKeys: new Set([homeKey]),
     loadingChildKeys: new Set<string>(),
+    compareSessions,
     resolveAttention: () => SIDEBAR_SESSION_NO_ATTENTION,
     toSidebarSession: present,
   });
@@ -135,4 +141,29 @@ it("promotes a child without rewriting origin or moving its own descendants", ()
   expect(tree[0]?.childSessionKeys).toEqual([]);
   expect(tree[1]?.children.map((row) => row.key)).toEqual([grandchild.key]);
   expect(child).toMatchObject({ parentSessionKey: parent.key, spawnedBy: parent.key });
+});
+
+it("sorts each parent's children, including run-folded ones, with the root comparator", () => {
+  const parentKey = "agent:main:dashboard:parent";
+  const runKey = "agent:main:subagent:run";
+  const child = (id: string, updatedAt: number, parent = parentKey) =>
+    makeRow(`agent:main:dashboard:${id}`, { spawnedBy: parent, updatedAt });
+  const rows: GatewaySessionRow[] = [
+    makeRow(parentKey, { updatedAt: 1 }),
+    child("1f0f", 20),
+    child("4f1f", 10),
+    makeRow(runKey, { spawnedBy: parentKey, updatedAt: 5 }),
+    child("a392", 30, runKey),
+    child("d517", 40),
+  ];
+  const childIds = (tree: SidebarRecentSession[]) =>
+    tree[0]?.children.map((row) => row.key.replace("agent:main:dashboard:", ""));
+
+  expect(childIds(project([rows[0]!], rows))).toEqual(["1f0f", "4f1f", "a392", "d517"]);
+  expect(childIds(project([rows[0]!], rows, compareSessionRowsByUpdatedAt))).toEqual([
+    "d517",
+    "a392",
+    "1f0f",
+    "4f1f",
+  ]);
 });

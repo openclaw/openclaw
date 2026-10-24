@@ -66,8 +66,6 @@ import type {
   MediaUnderstandingProvider,
 } from "./types.js";
 
-type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
-
 function trimOutput(text: string, maxChars?: number): string {
   const trimmed = text.trim();
   if (!maxChars || trimmed.length <= maxChars) {
@@ -197,7 +195,7 @@ export function normalizeDecisionReason(reason?: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  const normalized = trimmed.replace(/^Error:\s*/i, "").trim();
+  const normalized = trimmed.replace(/^(?:Error|ProviderHttpError):\s*/i, "").trim();
   return normalized || undefined;
 }
 
@@ -207,7 +205,7 @@ export function summarizeDecisionReason(reason?: string): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  return normalized.split(":")[0]?.trim() || undefined;
+  return normalized.split(/:|\s+\[request_id=/)[0]?.trim() || undefined;
 }
 
 function assertMinAudioSize(params: { size: number; attachmentIndex: number }): void {
@@ -250,7 +248,7 @@ export async function runProviderEntry(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  providerRegistry: ProviderRegistry;
+  providerRegistry: Map<string, MediaUnderstandingProvider>;
   assertCurrent?: () => void;
   config?: MediaUnderstandingConfig;
   secretOwnerId?: string;

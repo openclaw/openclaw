@@ -1,4 +1,5 @@
 import { readMeetingTranscriptWithBrowser } from "./browser-session-control.js";
+import type { MeetingPlatformRuntimeMetadata } from "./platform-adapter-contract.js";
 import { MeetingPlatformAdapter, type MeetingBrowserJoinSession } from "./platform-adapter.js";
 import type {
   MeetingObservationProvenance,
@@ -31,18 +32,10 @@ export function testMeetingObservation(
   };
 }
 
-export const TEST_MEETING_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
-  MeetingBrowserJoinSession<"agent">,
-  "agent",
-  MeetingPluginProbeHealth,
-  MeetingTranscriptSnapshot
->({
+export const TEST_MEETING_PLATFORM_METADATA = {
   id: "test-meeting",
   displayName: "Test Meeting",
-  browserLabel: "Test meeting",
   logScope: "[test-meeting]",
-  nodeCommandName: "test.meeting",
-  nodeConfigPath: "test.meeting.node",
   agentConsult: {
     surface: "a private test meeting",
     userLabel: "Participant",
@@ -52,6 +45,18 @@ export const TEST_MEETING_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     extraSystemPrompt: "",
   },
   session: { idPrefix: "test", participantIdentity: () => "OpenClaw" },
+} satisfies MeetingPlatformRuntimeMetadata;
+
+export const TEST_MEETING_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
+  MeetingBrowserJoinSession<"agent">,
+  "agent",
+  MeetingPluginProbeHealth,
+  MeetingTranscriptSnapshot
+>({
+  ...TEST_MEETING_PLATFORM_METADATA,
+  browserLabel: "Test meeting",
+  nodeCommandName: "test.meeting",
+  nodeConfigPath: "test.meeting.node",
   urls: {
     validateAndNormalize: (input) => String(input),
     normalizeForReuse: (url) => url,

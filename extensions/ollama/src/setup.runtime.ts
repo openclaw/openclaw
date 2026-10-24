@@ -163,16 +163,12 @@ async function promptForOllamaBaseUrl(
   const defaultBaseUrl = resolveOllamaSetupDefaultBaseUrl(env);
   const baseUrlRaw = await prompter.text({
     message: "Ollama base URL",
-    initialValue: defaultBaseUrl,
+    // Prefilling the default makes typed input append to it; hint it and use it for blank input.
     placeholder: defaultBaseUrl,
     validate: (value) =>
-      !value?.trim()
-        ? "Required"
-        : isHostedOllamaCloud(value.trim())
-          ? OLLAMA_HOSTED_BASE_URL_MESSAGE
-          : undefined,
+      isHostedOllamaCloud(value.trim()) ? OLLAMA_HOSTED_BASE_URL_MESSAGE : undefined,
   });
-  return resolveOllamaApiBase((baseUrlRaw ?? defaultBaseUrl).trim().replace(/\/+$/, ""));
+  return resolveOllamaApiBase((baseUrlRaw.trim() || defaultBaseUrl).replace(/\/+$/, ""));
 }
 
 export async function promptAndConfigureOllama(params: {

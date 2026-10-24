@@ -7,18 +7,22 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { Command } from "commander";
-import { mcpEnterpriseIdpStoreKey } from "../agents/mcp-enterprise.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import { readMcpOAuthStoreReadOnly } from "../agents/mcp-oauth-store.js";
-import { clearMcpOAuthCredentials, readMcpOAuthCredentialsStatus } from "../agents/mcp-oauth.js";
+import {
+  clearMcpOAuthCredentials,
+  countMcpOAuthPrincipals,
+  readMcpOAuthCredentialsStatus,
+  type McpOAuthPrincipalStatus,
+} from "../agents/mcp-oauth.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
 import { renderEnvTemplateToken, scanEnvTemplateTokens } from "../config/env-substitution.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
-import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executableFileExists, safeStat } from "../infra/path-existence.js";
@@ -38,7 +42,6 @@ import {
   configureMcpServerOffline,
   updateMcpToolsOffline,
 } from "./mcp-cli-state-owner.js";
-import { buildMcpStatusEntries, countConnectedMcpPrincipals } from "./mcp-cli-status.js";
 import { exitCliAfterOutput, requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { collectOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -137,19 +140,6 @@ function parseKeyValueEntries(values: readonly string[] | undefined, label: stri
   return Object.keys(entries).length > 0 ? entries : undefined;
 }
 
-function parseMcpApprovalModeOption(
-  value: string | undefined,
-): McpCodexToolApprovalMode | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const mode = normalizeLowercaseStringOrEmpty(value);
-  if (mode !== "auto" && mode !== "prompt" && mode !== "approve") {
-    fail('--approval must be "auto", "prompt", or "approve".');
-  }
-  return mode;
-}
-
 function setOptionalField(target: Record<string, unknown>, key: string, value: unknown): void {
   if (value !== undefined) {
     target[key] = value;
@@ -195,8 +185,12 @@ function applyMcpServerControls(
     delete server.supportsParallelToolCalls;
     delete server.supports_parallel_tool_calls;
   }
-  const approvalMode = parseMcpApprovalModeOption(opts.approval);
-  if (approvalMode) {
+  const approval = opts.approval;
+  if (approval !== undefined) {
+    const approvalMode = normalizeLowercaseStringOrEmpty(approval);
+    if (approvalMode !== "auto" && approvalMode !== "prompt" && approvalMode !== "approve") {
+      fail('--approval must be "auto", "prompt", or "approve".');
+    }
     server.codex = { ...asRecord(server.codex), defaultToolsApprovalMode: approvalMode };
   }
 }
@@ -208,11 +202,10 @@ function applyMcpHttpControls(
   if (opts.clearAuth) {
     delete server.auth;
     delete server.oauth;
-    delete server.enterprise;
   }
   const auth = normalizeLowercaseStringOrEmpty(normalizeStringifiedOptionalString(opts.auth) ?? "");
-  if (auth && auth !== "oauth" && auth !== "enterprise") {
-    fail('Invalid --auth value. Use "oauth" or "enterprise".');
+  if (auth && auth !== "oauth") {
+    fail('Invalid --auth value. Use "oauth".');
   }
   if (auth) {
     server.auth = auth;
@@ -253,6 +246,33 @@ function applyMcpHttpControls(
   setOptionalField(server, "clientCert", normalizeStringifiedOptionalString(opts.clientCert));
   setOptionalField(server, "clientKey", normalizeStringifiedOptionalString(opts.clientKey));
 }
+
+/** Documented `mcp status --json` shape: legacy booleans stay additive to `state`. */
+type McpStatusAuthStatusJson = McpOAuthPrincipalStatus & {
+  hasTokens: boolean;
+  requiresAuthorization: boolean;
+  hasClientInformation: boolean;
+  hasCodeVerifier: boolean;
+  hasDiscoveryState: boolean;
+  hasLastAuthorizationUrl: boolean;
+};
+
+type McpStatusEntry = {
+  name: string;
+  configured: true;
+  enabled: boolean;
+  ok: boolean;
+  transport?: string;
+  launch?: string;
+  requestTimeoutMs?: number;
+  connectionTimeoutMs?: number;
+  supportsParallelToolCalls?: boolean;
+  auth?: unknown;
+  authStatus?: McpStatusAuthStatusJson;
+  connectedPrincipals?: number;
+  toolFilter?: unknown;
+  codex?: unknown;
+};
 
 type McpDoctorIssue = {
   level: "error" | "warning" | "info";
@@ -376,23 +396,6 @@ async function collectMcpDoctorIssues(params: {
       }
     }
     if (resolved?.kind === "http") {
-      if (server.auth === "enterprise" && resolved.enterprise) {
-        const stored = await readMcpOAuthStoreReadOnly(
-          mcpEnterpriseIdpStoreKey(resolved.enterprise),
-        );
-        if (
-          !stored.tokens?.id_token ||
-          (!stored.tokens.refresh_token &&
-            (!stored.tokenExpiresAt || stored.tokenExpiresAt <= Date.now()))
-        ) {
-          issues.push(
-            issue(
-              "warning",
-              `Enterprise SSO is not authorized; run ${formatCliCommand(`openclaw mcp login ${name}`)}`,
-            ),
-          );
-        }
-      }
       if (server.auth === "oauth") {
         if (asRecord(server.oauth)?.identity !== "per-requester") {
           const authStatus = await readMcpOAuthCredentialsStatus(
@@ -455,46 +458,100 @@ async function collectMcpDoctorIssues(params: {
     server.enabled !== false &&
     !issues.some((entry) => entry.level === "error")
   ) {
-    const probeIssues = await probeMcpServerIssues({
-      config: params.config,
-      name,
-      server,
-    });
-    issues.push(...probeIssues);
+    try {
+      const result = await probeMcpServers("openclaw-cli-mcp-doctor", params.config, {
+        [name]: server,
+      });
+      const diagnostic = result.diagnostics[0];
+      if (diagnostic) {
+        issues.push(issue("error", `check failed: ${diagnostic.message}`));
+      } else {
+        const connectedServer = result.servers[name];
+        if (!connectedServer) {
+          issues.push(issue("error", "check did not connect to this server"));
+        } else if (connectedServer.approvalHint) {
+          issues.push(
+            issue(
+              "info",
+              `Codex approval mode: ${connectedServer.codexApprovalMode}; ${connectedServer.approvalHint}`,
+            ),
+          );
+        }
+      }
+      if (result.cleanupError) {
+        issues.push(issue("error", `cleanup failed: ${result.cleanupError}`));
+      }
+    } catch (err) {
+      issues.push(issue("error", `check failed: ${formatErrorMessage(err)}`));
+    }
   }
   return issues;
 }
 
-async function probeMcpServerIssues(params: {
-  config: OpenClawConfig;
-  name: string;
-  server: Record<string, unknown>;
-}): Promise<McpDoctorIssue[]> {
-  try {
-    const result = await probeMcpServers("openclaw-cli-mcp-doctor", params.config, {
-      [params.name]: params.server,
-    });
-    const issues: McpDoctorIssue[] = [];
-    const diagnostic = result.diagnostics[0];
-    if (diagnostic) {
-      issues.push(issue("error", `check failed: ${diagnostic.message}`));
-    } else {
-      const server = result.servers[params.name];
-      if (!server) {
-        issues.push(issue("error", "check did not connect to this server"));
-      } else if (server.approvalHint) {
-        issues.push(
-          issue("info", `Codex approval mode: ${server.codexApprovalMode}; ${server.approvalHint}`),
-        );
-      }
-    }
-    if (result.cleanupError) {
-      issues.push(issue("error", `cleanup failed: ${result.cleanupError}`));
-    }
-    return issues;
-  } catch (err) {
-    return [issue("error", `check failed: ${formatErrorMessage(err)}`)];
+async function countConnectedMcpPrincipals(
+  name: string,
+  server: Record<string, unknown>,
+): Promise<number | undefined> {
+  const resolved = resolveMcpTransportConfig(name, server);
+  if (
+    server.auth !== "oauth" ||
+    resolved?.kind !== "http" ||
+    asRecord(server.oauth)?.identity !== "per-requester"
+  ) {
+    return undefined;
   }
+  return countMcpOAuthPrincipals(operatorMcpOAuthIdentity(name, resolved.url));
+}
+
+async function buildMcpStatusEntries(
+  servers: Record<string, Record<string, unknown>>,
+): Promise<McpStatusEntry[]> {
+  const entries = Object.entries(servers).toSorted(([a], [b]) => a.localeCompare(b));
+  return Promise.all(
+    entries.map(async ([name, server]) => {
+      const resolved = resolveMcpTransportConfig(name, server);
+      const enabled = server.enabled !== false;
+      const entry: McpStatusEntry = {
+        name,
+        configured: true,
+        enabled,
+        ok: enabled && Boolean(resolved),
+        transport: resolved?.transportType,
+        launch: resolved?.description,
+        requestTimeoutMs: resolved?.requestTimeoutMs,
+        connectionTimeoutMs: resolved?.connectionTimeoutMs,
+        supportsParallelToolCalls: resolved?.supportsParallelToolCalls,
+        toolFilter: server.toolFilter,
+        codex: server.codex,
+      };
+      if (server.auth) {
+        entry.auth = server.auth;
+      }
+      if (
+        server.auth === "oauth" &&
+        resolved?.kind === "http" &&
+        asRecord(server.oauth)?.identity !== "per-requester"
+      ) {
+        const identity = operatorMcpOAuthIdentity(name, resolved.url);
+        // Documented `mcp status --json` contract: the six legacy authStatus
+        // booleans stay for existing scripts; `state` is the additive shape.
+        const store = await readMcpOAuthStoreReadOnly(identity.storeKey);
+        entry.authStatus = {
+          hasTokens: Boolean(store.tokens),
+          requiresAuthorization:
+            store.pendingAuthorizationChallenge?.requiresAuthorization === true,
+          hasClientInformation: Boolean(store.clientInformation),
+          hasCodeVerifier: Boolean(store.codeVerifier),
+          hasDiscoveryState: Boolean(store.discoveryState),
+          hasLastAuthorizationUrl: Boolean(store.lastAuthorizationUrl),
+          ...(await readMcpOAuthCredentialsStatus(identity, store)),
+        };
+      } else {
+        entry.connectedPrincipals = await countConnectedMcpPrincipals(name, server);
+      }
+      return entry;
+    }),
+  );
 }
 
 const DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS = 5_000;
@@ -638,7 +695,7 @@ export function registerMcpCli(program: Command) {
       defaultRuntime.log(`MCP server status (${loaded.path}):`);
       for (const entry of status) {
         const transport = entry.enabled ? (entry.transport ?? "invalid") : "disabled";
-        const auth = entry.auth === "oauth" || entry.auth === "enterprise" ? ` ${entry.auth}` : "";
+        const auth = entry.auth === "oauth" ? " oauth" : "";
         const oauth =
           entry.authStatus?.state === "requires-authorization"
             ? " authorization-required"
@@ -659,10 +716,10 @@ export function registerMcpCli(program: Command) {
           defaultRuntime.log(
             `  timeouts: connect=${entry.connectionTimeoutMs ?? "n/a"}ms request=${entry.requestTimeoutMs ?? "n/a"}ms`,
           );
-          if (entry.auth === "oauth" || entry.auth === "enterprise") {
+          if (entry.auth === "oauth") {
             defaultRuntime.log(
               entry.connectedPrincipals === undefined
-                ? `  ${entry.auth}: ${entry.authStatus?.state ?? "unauthenticated"}`
+                ? `  oauth: ${entry.authStatus?.state ?? "unauthenticated"}`
                 : `  oauth: per-requester, connected principals: ${entry.connectedPrincipals}`,
             );
           }
@@ -845,7 +902,7 @@ export function registerMcpCli(program: Command) {
           },
         ) => {
           const server: Record<string, unknown> = {};
-          const command = normalizeStringifiedOptionalString(opts.command);
+          const command = readNonBlankString(opts.command);
           const url = normalizeStringifiedOptionalString(opts.url);
           if (command && url) {
             fail("Specify either --command for stdio or --url for HTTP, not both.");
@@ -859,7 +916,7 @@ export function registerMcpCli(program: Command) {
               server.args = opts.arg;
             }
             setOptionalField(server, "env", parseKeyValueEntries(opts.env, "--env"));
-            setOptionalField(server, "cwd", normalizeStringifiedOptionalString(opts.cwd));
+            setOptionalField(server, "cwd", readNonBlankString(opts.cwd));
           }
           if (url) {
             server.url = url;
@@ -881,9 +938,7 @@ export function registerMcpCli(program: Command) {
           if (targetName && Object.hasOwn(loaded.mcpServers, targetName)) {
             fail(`MCP server ${JSON.stringify(targetName)} already exists.`);
           }
-          const shouldProbe =
-            opts.probe !== false && server.enabled !== false && server.auth !== "oauth";
-          if (shouldProbe) {
+          if (opts.probe !== false && server.enabled !== false && server.auth !== "oauth") {
             await probeMcpServersOrFail({
               config: loaded.config,
               path: loaded.path,
@@ -1032,7 +1087,7 @@ export function registerMcpCli(program: Command) {
 
   mcp
     .command("login")
-    .description("Authorize an OAuth or enterprise MCP server")
+    .description("Authorize an OAuth MCP server")
     .argument("<name>", "MCP server name")
     .option("--code <code>", "Authorization code from the OAuth redirect")
     .action(
@@ -1045,7 +1100,7 @@ export function registerMcpCli(program: Command) {
 
   mcp
     .command("logout")
-    .description("Clear stored OAuth or enterprise credentials for an MCP server")
+    .description("Clear stored OAuth credentials for an MCP server")
     .argument("<name>", "MCP server name")
     .action(
       offlineMcpAction("logout", async (_owner, name: string) => {
@@ -1059,18 +1114,6 @@ export function registerMcpCli(program: Command) {
         const resolved = resolveMcpTransportConfig(name, server);
         if (!resolved || resolved.kind !== "http") {
           fail(`MCP server "${name}" needs a valid HTTP transport for OAuth logout.`);
-        }
-        if (resolved.auth === "enterprise" && resolved.enterprise) {
-          await clearMcpOAuthCredentials(
-            operatorMcpOAuthIdentity(
-              "enterprise-sso",
-              `${resolved.enterprise.idpIssuer}\0${resolved.enterprise.idpClientId}`,
-            ),
-          );
-          defaultRuntime.log(
-            `Enterprise SSO credentials cleared for "${name}" and other MCP servers using the same IdP client.`,
-          );
-          return;
         }
         await clearMcpOAuthCredentials(operatorMcpOAuthIdentity(name, resolved.url));
         defaultRuntime.log(`MCP OAuth credentials cleared for "${name}".`);

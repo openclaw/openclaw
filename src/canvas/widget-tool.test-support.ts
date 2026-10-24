@@ -23,8 +23,7 @@ export function asGatewayCaller(
   invoke: ReturnType<typeof createBoardHarness>["invoke"],
 ): InProcessGatewayCaller {
   return async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
-    const response = await invoke(method, params);
-    const [ok, value, error] = response.mock.calls[0]!;
+    const [ok, value, error] = (await invoke(method, params)).mock.calls[0]!;
     if (!ok) {
       throw new Error(error?.message ?? "board request failed");
     }
@@ -33,9 +32,8 @@ export function asGatewayCaller(
 }
 type WidgetTool = ReturnType<typeof createShowWidgetTool>;
 export const widget = { title: "Status", widget_code: "<p>ready</p>" };
-export function runWidget(tool: WidgetTool, args: Record<string, unknown> = {}) {
-  return tool.execute("widget-call", { ...widget, ...args });
-}
+export const runWidget = (tool: WidgetTool, args: Record<string, unknown> = {}) =>
+  tool.execute("widget-call", { ...widget, ...args });
 export function widgetPayload(result: Awaited<ReturnType<WidgetTool["execute"]>>) {
   const text = result.content.find((item) => item.type === "text")?.text;
   if (!text) {
@@ -45,20 +43,18 @@ export function widgetPayload(result: Awaited<ReturnType<WidgetTool["execute"]>>
 }
 
 type ChannelPresenter = Extract<WidgetPresenter, { target: "current_channel" }>;
-export function currentPresenter(
+export const currentPresenter = (
   present: ChannelPresenter["present"],
   options: Partial<Omit<ChannelPresenter, "target" | "present">> = {},
-): ChannelPresenter {
-  return {
-    target: "current_channel",
-    description: "Test channel",
-    capabilities: { sourceKinds: ["html"] },
-    match: () => true,
-    availability: async () => ({ ok: true, value: { available: true } }),
-    present,
-    ...options,
-  };
-}
+): ChannelPresenter => ({
+  target: "current_channel",
+  description: "Test channel",
+  capabilities: { sourceKinds: ["html"] },
+  match: () => true,
+  availability: async () => ({ ok: true, value: { available: true } }),
+  present,
+  ...options,
+});
 
 export function useWidgetHarness() {
   let stateDir: string;
@@ -83,7 +79,7 @@ export function useWidgetHarness() {
     get stateDir() {
       return stateDir;
     },
-    createTool: (options: WidgetToolOptions = {}) => createShowWidgetTool(options),
+    createTool: createShowWidgetTool,
     documentDir,
     documentFile: (id: string, file = "index.html") => path.join(documentDir(id), file),
     expectNoDocument: () => expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow(),
@@ -94,28 +90,11 @@ export function createBoardPutCaller(
   grantState: "none" | "pending" | "rejected" | "granted" = "none",
 ) {
   const mock = vi.fn(async (_method: string, params: Record<string, unknown>) => ({
-    sessionKey: params.sessionKey,
-    revision: 1,
-    tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-    widgets: [
-      {
-        name: params.name,
-        tabId: "main",
-        contentKind: "plugin",
-        pluginKind: "diagram:diagram",
-        sizeW: 6,
-        sizeH: 4,
-        position: 0,
-        grantState,
-        revision: 1,
-      },
-    ],
+    widgets: [{ name: params.name, tabId: "main", grantState }],
     resolvedWidgetName: params.name,
   }));
-  const callGateway: InProcessGatewayCaller = async <T>(
-    method: string,
-    params: Record<string, unknown>,
-  ): Promise<T> => (await mock(method, params)) as T;
+  const callGateway: InProcessGatewayCaller = async <T>(...args: Parameters<typeof mock>) =>
+    (await mock(...args)) as T;
   vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(callGateway);
   return { mock };
 }

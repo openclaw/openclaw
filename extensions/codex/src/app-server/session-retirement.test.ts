@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
 import { legacyCodexConversationBindingId } from "../conversation-binding-data.js";
@@ -139,7 +140,9 @@ it("context reset rejects a claimed native thread before invoking the session tr
   await claimThread(f.client, f.binding.threadId);
   const transaction = vi.fn(async () => {});
 
-  await expect(f.remove(session, transaction)).rejects.toThrow("claimed by active work");
+  const deletion = f.remove(session, transaction);
+  await expect(deletion).rejects.toBeInstanceOf(AgentHarnessPreflightError);
+  await expect(deletion).rejects.toThrow("claimed by active work");
 
   expect(transaction).not.toHaveBeenCalled();
   expect(f.store.read(session)).toEqual(f.binding);

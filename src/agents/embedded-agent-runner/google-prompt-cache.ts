@@ -5,6 +5,7 @@ import {
 } from "@openclaw/ai/internal/shared";
 import { mergeTransportHeaders, sanitizeTransportPayloadText } from "@openclaw/ai/transports";
 import { stableStringify } from "@openclaw/normalization-core";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   asDateTimestampMs,
@@ -13,7 +14,6 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
-import { parseGeminiAuth } from "../../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
@@ -253,7 +253,15 @@ export async function prepareGooglePromptCacheStreamFn(
         `Secret sentinel ${apiKey} is not registered in this process; refusing Google prompt-cache auth`,
       );
     }
-    const parsedAuthHeaders = parseGeminiAuth(resolvedApiKey).headers;
+    const token = resolvedApiKey.startsWith("{")
+      ? safeParseJsonRecord(resolvedApiKey)?.token
+      : undefined;
+    const parsedAuthHeaders: Record<string, string> = {
+      ...(typeof token === "string" && token
+        ? { Authorization: `Bearer ${token}` }
+        : { "x-goog-api-key": resolvedApiKey }),
+      "Content-Type": "application/json",
+    };
     const authHeaders: Record<string, string> =
       !sentinel && !isSecretValueRegisteredForRedaction(apiKey)
         ? parsedAuthHeaders

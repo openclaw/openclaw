@@ -2545,7 +2545,7 @@ describe("release CI summary child correlation", () => {
     },
   );
 
-  it("recomputes mixed-attempt evidence with an authenticated Telegram waiver", async () => {
+  it.each([true, false])("recomputes attempts (recorded version=%s)", async (recordVersion) => {
     const version = "2026.9.1";
 
     const fixture = trustedMainPackageFixture({
@@ -2579,10 +2579,8 @@ describe("release CI summary child correlation", () => {
       getRunAttemptJobs: (runId: string, runAttempt: number) => Array<Record<string, unknown>>;
       loadExecutionPlan: () => Record<string, unknown>;
     };
-    const waiver = version
-      ? { telegramWaiver: `${version}-owner-approved`, targetVersion: version }
-      : {};
-    Object.assign(manifest.validationInputs, waiver);
+    const releaseVersion = { targetVersion: version };
+    Object.assign(manifest.validationInputs, releaseVersion);
     const plannedChild = {
       dispatchName: "Dispatch release checks",
       displayTitle: fixture.childRun.display_title,
@@ -2599,7 +2597,7 @@ describe("release CI summary child correlation", () => {
       workflowSha: fixture.childRun.head_sha,
     };
     const executionPlan = buildReleaseExecutionPlanArtifact({
-      ...waiver,
+      ...releaseVersion,
       attemptEvidenceVersion: 2,
       candidate: null,
       children: [plannedChild],
@@ -2635,6 +2633,10 @@ describe("release CI summary child correlation", () => {
         sha: fixture.workflowSha,
       },
     });
+    if (!recordVersion) {
+      delete executionPlan.targetVersion;
+      executionPlan.sha256 = releaseExecutionPlanSha256(executionPlan);
+    }
     expect(executionPlan.candidate).toBeNull();
     fixture.childRun.run_attempt = 2;
     fixture.childRun.triggering_actor = { login: "release-operator" };
@@ -2729,13 +2731,10 @@ describe("release CI summary child correlation", () => {
         runAttempt: 2,
       }),
     ]);
-    if (version) {
-      delete manifest.validationInputs.telegramWaiver;
-      await expect(validate()).rejects.toThrow(/Telegram waiver/u);
-      Object.assign(manifest.validationInputs, waiver);
-      client.loadExecutionPlan = () => undefined as never;
-      await expect(validate()).rejects.toThrow(/Telegram waiver/u);
-      client.loadExecutionPlan = () => executionPlan;
+    if (recordVersion) {
+      manifest.validationInputs.targetVersion = "2026.9.2";
+      await expect(validate()).rejects.toThrow("target version differs");
+      manifest.validationInputs.targetVersion = version;
     }
 
     for (const [expectedRunAttempts, message] of [
@@ -2886,6 +2885,65 @@ describe("release CI summary child correlation", () => {
         : originalClient.getParentJobs(requestedRunId);
 
     await expect(verifyFixture(fixture)).rejects.toThrow("does not pass release policy");
+  });
+
+  it("admits only Windows-node preview failures at the live release-evidence boundary", async () => {
+    const fixture = trustedMainNpmFixture();
+    const selected = expectDefined(
+      fixture.executionPlan.children.find((entry) => entry.key === "releaseChecksCandidate"),
+      "candidate release checks",
+    );
+    const run = expectDefined(
+      fixture.runs.find((entry) => String(entry.id) === selected.runId),
+      "candidate run",
+    );
+    run.conclusion = "failure";
+    const jobs = [
+      {
+        name: "Run Windows-node main E2E / Setup, connect, and invoke candidate gateway",
+        conclusion: "failure",
+      },
+      {
+        name: "Run Windows-node stable E2E / Setup, connect, and invoke candidate gateway",
+        conclusion: "success",
+      },
+      { name: "Verify release checks", conclusion: "success" },
+    ].map((entry, index) => Object.assign({}, fixture.parentJob, entry, { id: 1501 + index }));
+    const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
+      effectiveRunAttempt: 1,
+      plannedRunAttempt: 1,
+    });
+    Object.assign(
+      expectDefined(fixture.manifest.childEvidence.releaseChecksCandidate, "candidate evidence"),
+      {
+        jobs: composite.jobs,
+        compositeJobsSha256: composite.sha256,
+      },
+    );
+    const advisory = {
+      class: "windows-node-preview",
+      child: "releaseChecksCandidate",
+      job: "Run Windows-node main E2E / Setup, connect, and invoke candidate gateway",
+      conclusion: "failure",
+      runId: selected.runId,
+      url: "",
+    };
+    Object.assign(fixture.manifest, { advisoryJobs: [advisory] });
+    const originalJobs = expectDefined(
+      fixture.client.getRunAttemptJobs.getMockImplementation(),
+      "job reader",
+    );
+    fixture.client.getRunAttemptJobs.mockImplementation((runId) =>
+      runId === selected.runId ? jobs : originalJobs(runId),
+    );
+    const evidence = await verifyFixture(fixture);
+    expect(evidence.valid).toBe(true);
+    expect(
+      evidence.children.find((entry: { role: string }) => entry.role === "releaseChecksCandidate"),
+    ).toMatchObject({
+      conclusion: "failure",
+      advisoryJobs: [advisory],
+    });
   });
 
   it("rejects a failed Windows Node shard at the live release-evidence boundary", async () => {
@@ -3652,38 +3710,6 @@ describe("release CI summary child correlation", () => {
         selected,
       ),
     ).toThrow("selected child is missing from manifest: NPM Telegram Beta E2E");
-  });
-
-  it("validates the Telegram waiver before changing package child coverage", () => {
-    const version = "2026.9.5";
-
-    const raw = rawManifest({});
-    raw.releaseProfile = "stable";
-    Object.assign(raw.validationInputs, {
-      telegramWaiver: `${version}-owner-approved`,
-      targetVersion: version,
-      releasePackageSpec: `openclaw@${version}`,
-    });
-    const expected = { runAttempt: 2, runId: "29090000000" };
-    const manifest = validateParentManifest(raw, expected);
-    expect(
-      requiredChildKeysForRerunGroup(manifest.rerunGroup, manifest.validationInputs),
-    ).not.toContain("npmTelegram");
-    raw.validationInputs.targetVersion = "2026.8.2";
-    expect(() => validateParentManifest(raw, expected)).toThrow(/Telegram waiver/u);
-  });
-
-  it("rejects an unreviewed self-declared Telegram waiver", () => {
-    const raw = rawManifest({});
-    raw.releaseProfile = "stable";
-    Object.assign(raw.validationInputs, {
-      telegramWaiver: "2026.10.1-owner-approved",
-      targetVersion: "2026.10.1",
-      releasePackageSpec: "openclaw@2026.10.1",
-    });
-    expect(() => validateParentManifest(raw, { runAttempt: 2, runId: "29090000000" })).toThrow(
-      /Telegram waiver/u,
-    );
   });
 
   it("keeps historical non-reuse v2 manifests readable without validation inputs", () => {

@@ -23,14 +23,11 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   createCliRunnerPrepareFixture,
   createTestMcpLoopbackClientGrant,
-  createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
 import { getTextContent } from "../test-helpers/agent-tools-fs-helpers.js";
+import { mockCliMcpPreparation } from "./prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
-import {
-  resetCliRunnerPrepareTestDeps,
-  setCliRunnerPrepareTestDeps,
-} from "./prepare.test-support.js";
+import { resetCliRunnerPrepareTestDeps } from "./prepare.test-support.js";
 
 const PROBE_SERVER_INSTRUCTIONS =
   "PROBE_GUIDANCE: echo one word per call.\n" +
@@ -137,25 +134,10 @@ describe("configured MCP servers on CLI turns", () => {
       resolvePluginSetupCliBackend: () => undefined,
       resolveRuntimeCliBackends: () => [claudeBackend],
     });
-    setCliRunnerPrepareTestDeps({
-      isWorkspaceBootstrapPending: async () => false,
-      makeBootstrapWarn: () => () => undefined,
-      resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
-      getActiveMcpLoopbackRuntime: () => ({
-        port: 31783,
-        ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
-      }),
-      createMcpLoopbackServerConfig: createTestMcpLoopbackServerConfig,
+    mockCliMcpPreparation({
       mintMcpLoopbackClientGrant: mintGrant,
-      bindMcpLoopbackClientGrantAdmission: () => true,
-      revokeMcpLoopbackClientGrant: () => true,
       resolveMcpLoopbackPolicyTools,
       resolveMcpLoopbackScopedTools,
-      resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
-      prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
-      getCliLiveSessionGeneration: () => undefined,
-      loadManifestModelCatalog: () => [],
     });
     fixture = createCliRunnerPrepareFixture((params) => {
       setRuntimeConfigSnapshot(params.config ?? {});
@@ -366,7 +348,7 @@ describe("configured MCP servers on CLI turns", () => {
           ? {
               ...turns[0],
               result:
-                "probe__echo is outside the authority this completion turn carries from its requester. Do not retry probe__echo.",
+                "probe__echo is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry probe__echo.",
             }
           : turns[0],
       );

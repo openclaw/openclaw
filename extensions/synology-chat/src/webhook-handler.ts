@@ -87,50 +87,6 @@ class InvalidTokenRateLimiter {
   }
 }
 
-function getRateLimiter(account: ResolvedSynologyChatAccount): FixedWindowRateLimiter {
-  let entry = rateLimiters.get(account.accountId);
-  if (!entry || entry.limit !== account.rateLimitPerMinute) {
-    entry?.limiter.clear();
-    entry = {
-      limit: account.rateLimitPerMinute,
-      limiter: createFixedWindowRateLimiter({
-        windowMs: 60_000,
-        maxRequests: Math.max(1, Math.floor(account.rateLimitPerMinute)),
-        maxTrackedKeys: 5_000,
-      }),
-    };
-    rateLimiters.set(account.accountId, entry);
-  }
-  return entry.limiter;
-}
-
-function getInvalidTokenRateLimiter(account: ResolvedSynologyChatAccount): InvalidTokenRateLimiter {
-  const limit = Math.min(account.rateLimitPerMinute, PREAUTH_MAX_REQUESTS_PER_MINUTE);
-  let rl = invalidTokenRateLimiters.get(account.accountId);
-  if (!rl || rl.limit !== limit) {
-    rl?.clear();
-    rl = new InvalidTokenRateLimiter(limit);
-    invalidTokenRateLimiters.set(account.accountId, rl);
-  }
-  return rl;
-}
-
-function getSynologyWebhookInvalidTokenRateLimitKey(params: {
-  req: IncomingMessage;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-}): string {
-  return (
-    resolveRequestClientIp(
-      params.req,
-      params.trustedProxies,
-      params.allowRealIpFallback === true,
-    ) ??
-    params.req.socket?.remoteAddress ??
-    "unknown"
-  );
-}
-
 function pickAlias(record: Record<string, unknown>, aliases: string[]): string | undefined {
   for (const alias of aliases) {
     const normalized = firstNonEmptyString(record[alias]);
@@ -347,8 +303,28 @@ export async function processSynologyWebhookIngressEvent(params: {
 
 export function createWebhookHandler(deps: WebhookHandlerDeps) {
   const { account, log } = deps;
-  const rateLimiter = getRateLimiter(account);
-  const invalidTokenRateLimiter = getInvalidTokenRateLimiter(account);
+  let rateLimiterEntry = rateLimiters.get(account.accountId);
+  if (!rateLimiterEntry || rateLimiterEntry.limit !== account.rateLimitPerMinute) {
+    rateLimiterEntry?.limiter.clear();
+    rateLimiterEntry = {
+      limit: account.rateLimitPerMinute,
+      limiter: createFixedWindowRateLimiter({
+        windowMs: 60_000,
+        maxRequests: Math.max(1, Math.floor(account.rateLimitPerMinute)),
+        maxTrackedKeys: 5_000,
+      }),
+    };
+    rateLimiters.set(account.accountId, rateLimiterEntry);
+  }
+  const rateLimiter = rateLimiterEntry.limiter;
+  const limit = Math.min(account.rateLimitPerMinute, PREAUTH_MAX_REQUESTS_PER_MINUTE);
+  let invalidTokenLimiterEntry = invalidTokenRateLimiters.get(account.accountId);
+  if (!invalidTokenLimiterEntry || invalidTokenLimiterEntry.limit !== limit) {
+    invalidTokenLimiterEntry?.clear();
+    invalidTokenLimiterEntry = new InvalidTokenRateLimiter(limit);
+    invalidTokenRateLimiters.set(account.accountId, invalidTokenLimiterEntry);
+  }
+  const invalidTokenRateLimiter = invalidTokenLimiterEntry;
 
   return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method !== "POST") {
@@ -409,11 +385,10 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
         return;
       }
       const { trustedProxies, allowRealIpFallback } = deps;
-      const invalidTokenRateLimitKey = getSynologyWebhookInvalidTokenRateLimitKey({
-        req,
-        trustedProxies,
-        allowRealIpFallback,
-      });
+      const invalidTokenRateLimitKey =
+        resolveRequestClientIp(req, trustedProxies, allowRealIpFallback === true) ??
+        req.socket?.remoteAddress ??
+        "unknown";
       // Once a source has exhausted its invalid-token budget, reject all requests in the window.
       if (invalidTokenRateLimiter.isLocked(invalidTokenRateLimitKey)) {
         log?.warn(`Rate limit exceeded for remote IP: ${invalidTokenRateLimitKey}`);

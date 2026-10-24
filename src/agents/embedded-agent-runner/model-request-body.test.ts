@@ -227,10 +227,31 @@ it("observes serialized values without letting the observer change request bytes
   expect(encoded.stream).toBe(true);
 });
 
+it.each([
+  [undefined, "", false],
+  [null, "null", false],
+  [[{ stream: true }], '[{"stream":true}]', false],
+  [
+    { input: ['"\\', { nested: [false, null, 123] }], stream: true },
+    '{"input":["\\\"\\\\",{"nested":[false,null,123]}],"stream":true}',
+    true,
+  ],
+  [
+    { 'quoted"key': { stream: true }, stream: "true" },
+    '{"quoted\\\"key":{"stream":true},"stream":"true"}',
+    false,
+  ],
+])("preserves wire bytes and top-level stream for %j", (payload, wire, stream) => {
+  const encoded = serializeModelRequestBody(payload);
+  expect(new TextDecoder().decode(encoded.body)).toBe(wire);
+  expect(encoded.stream).toBe(stream);
+});
+
 it("fingerprints serialized prompt segments with bounded, content-free history metadata", () => {
   const message = {
     role: "user",
-    content: "private history content",
+    content: 'private history content " \\ \\\" 🦞\ud800',
+    'private-"\\key': { nested: [false, null, [123, "[,]:{}"]] },
     ...Object.fromEntries(Array.from({ length: 100 }, (_, index) => [`private-${index}`, index])),
   };
   const input = Array.from({ length: 514 }, () => message);
@@ -255,7 +276,7 @@ it("fingerprints serialized prompt segments with bounded, content-free history m
     messageDigests: hash("sha256", JSON.stringify(message), "latin1").repeat(512),
     messageFields: Array.from({ length: 32 }, () => ({
       role: hash("sha256", '"user"'),
-      content: hash("sha256", '"private history content"'),
+      content: hash("sha256", JSON.stringify(message.content)),
       other: expect.stringMatching(/^[a-f0-9]{64}$/),
     })),
     messageField: "input",

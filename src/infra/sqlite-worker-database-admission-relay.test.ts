@@ -69,9 +69,9 @@ it("retains storage failure guidance when the caller cancels admission", () => {
     failure = error;
   }
   expect(failure).toMatchObject({ code: "unavailable", cause });
-  expect(
-    renderAssistantRequestFailureCopy({ storageFailure: classifyGatewayStorageFailure(failure) }),
-  ).toContain("disk is full. Free up space");
+  const storageFailure = classifyGatewayStorageFailure(failure);
+  expect(storageFailure).toBe("SQLITE_FULL");
+  expect(renderAssistantRequestFailureCopy({ storageFailure })).toMatch(/free.*space/i);
 });
 
 it("retains the caller deadline until asynchronous work settles", async () => {

@@ -2,14 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { createIsolatedCompletionBoundaryFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveNodeRuntimeExecutable } from "openclaw/plugin-sdk/process-runtime";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
+import { testCodexAppServerBindingStore } from "./src/app-server/session-binding.test-helpers.js";
 import { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
 
 const repo = fileURLToPath(new URL("../../", import.meta.url));
@@ -75,36 +77,13 @@ it.each(["allowed", "forbidden", "revoked"] as const)(
         "openai:forbidden": credential("forbidden"),
       },
     };
-    let enter!: () => void;
-    let release!: () => void;
-    const entered = new Promise<void>((resolve) => {
-      enter = resolve;
-    });
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const entered = createDeferred<void>();
+    const gate = createDeferred<void>();
     let current = true;
     const node = resolveNodeRuntimeExecutable();
-    if (!node) {
-      throw new Error("The Codex adapter fixture requires a Node runtime");
-    }
+    assert(node, "The Codex adapter fixture requires a Node runtime");
     const harness = createCodexAppServerAgentHarness({
-      bindingStore: {
-        read: unexpectedSessionBinding,
-        readAsync: unexpectedSessionBinding,
-        prepareRead: unexpectedSessionBinding,
-        readMany: unexpectedSessionBinding,
-        readNativeSubagentSubmissions: unexpectedSessionBinding,
-        hasOtherThreadOwner: unexpectedSessionBinding,
-        mutate: unexpectedSessionBinding,
-        prepareSessionGenerationReclaim: unexpectedSessionBinding,
-        adoptSessionGeneration: unexpectedSessionBinding,
-        resetSessionGeneration: unexpectedSessionBinding,
-        retireSessionGeneration: unexpectedSessionBinding,
-        withSessionDeletion: unexpectedSessionBinding,
-        withThreadArchiveFence: unexpectedSessionBinding,
-        withLease: unexpectedSessionBinding,
-      },
+      bindingStore: new Proxy(testCodexAppServerBindingStore, { get: unexpectedSessionBinding }),
       pluginConfig: {
         appServer: {
           command: node,
@@ -126,8 +105,8 @@ it.each(["allowed", "forbidden", "revoked"] as const)(
       async resolveModel(call) {
         // Hold the real materializePreparedRuntimeModel await after route/auth planning.
         if (scenario === "revoked" && call === 2) {
-          enter();
-          await gate;
+          entered.resolve();
+          await gate.promise;
         }
         return call === 1 ? platform : subscription;
       },
@@ -152,10 +131,14 @@ it.each(["allowed", "forbidden", "revoked"] as const)(
     let outcome: unknown;
     try {
       if (scenario === "revoked") {
-        await awaitGateBeforeSettlement(entered, pending, "Completion skipped awaited preparation");
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Completion skipped awaited preparation",
+        );
         delete store.profiles["openai:allowed"];
         current = false;
-        release();
+        gate.resolve();
       }
       if (scenario === "allowed") {
         const result = await pending;
@@ -167,16 +150,14 @@ it.each(["allowed", "forbidden", "revoked"] as const)(
           (failure: unknown) => failure,
         );
         expect(error).toBeInstanceOf(Error);
-        if (!(error instanceof Error)) {
-          throw new Error("Expected rejection");
-        }
+        assert(error instanceof Error, "Expected rejection");
         expect(error.message).toMatch(
           scenario === "forbidden" ? /not configured/ : /authority revoked/,
         );
         outcome = { rejected: true, error: error.message };
       }
     } finally {
-      release();
+      gate.resolve();
       await harness.dispose?.();
     }
     const messages: Array<{ method?: string; params?: unknown }> = fs

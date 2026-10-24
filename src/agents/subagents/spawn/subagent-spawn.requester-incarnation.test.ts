@@ -91,8 +91,8 @@ it("preserves a nonowner CLI requester's credit through mediated spawn", async (
       agentId: "main",
       modelProvider: "openai",
       modelId: "gpt-5.4",
-      toolsAllow: ["sessions_spawn"],
     });
+    context.toolsAllow = ["sessions_spawn"];
     const { tools } = await resolveMcpLoopbackScopedTools({
       cfg,
       context,

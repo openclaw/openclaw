@@ -74,13 +74,7 @@ const keyProfile = (provider: string, id: string) => ({
 });
 
 describe("secrets runtime snapshot inline auth-store refs", () => {
-  it("normalizes inline SecretRef object on token to tokenRef", async () => {
-    await expectInlineRef("token");
-  });
-
-  it("normalizes inline SecretRef object on key to keyRef", async () => {
-    await expectInlineRef("key");
-  });
+  it.each(["token", "key"] as const)("normalizes inline SecretRef objects on %s", expectInlineRef);
 
   it("skips refs on auth profiles that are not eligible for their configured provider", async () => {
     const profileId = "openai:mismatched";

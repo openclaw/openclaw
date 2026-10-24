@@ -2,8 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
+import { resolveChatPaneWorkspaceIcon } from "../chat-pane-header-identity.ts";
 import { createSessionContext } from "../chat-pane.test-support.ts";
-import { resolveChatPaneWorkspaceIcon } from "./chat-pane-header-identity.tsx";
 import { mountChatPaneHeader, mockWorkspaceIconFetch } from "./chat-pane-header.test-support.ts";
 import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 
@@ -224,7 +224,14 @@ describe("chat pane workspace chip icon", () => {
       ...initial,
       hello: { ...initial.hello, server: { connId: "initial-connection" } },
     });
-    const iconProps = () => resolveChatPaneWorkspaceIcon(context, "agent:main:connection");
+    const iconProps = () =>
+      resolveChatPaneWorkspaceIcon({
+        sessionKey: "agent:main:connection",
+        resourceBasePath: context.resourceBasePath,
+        hello: context.gateway.snapshot.hello,
+        token: context.gateway.connection.token,
+        password: context.gateway.connection.password,
+      });
     const mounted = mountHeader({ workspaceIcon: null });
     // Update one Solid root so recovery must retain the same workspace element.
     const paint = async () => {

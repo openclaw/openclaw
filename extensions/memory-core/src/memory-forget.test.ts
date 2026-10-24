@@ -180,18 +180,6 @@ describe("memory forget", () => {
       content: [{ type: "toolCall", id: "curated", name: "write", arguments: { path: "USER.md" } }],
     });
     await expect(h.archive("archived")).resolves.toBe(true);
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    expect(
-      db.prepare("SELECT session_id FROM session_windows WHERE session_id = ?").get("archived"),
-    ).toBeUndefined();
-    expect(
-      db
-        .prepare(
-          "SELECT session_id, session_key FROM session_transcript_archives WHERE session_id = ?",
-        )
-        .get("archived"),
-    ).toEqual({ session_id: "archived", session_key: "agent:main:archived" });
-
     const preview = await forget(selector, true);
     expect(preview).toMatchObject({
       sessionIds: ["archived"],

@@ -40,6 +40,35 @@ export const receipt = {
   confirmation: null,
 };
 
+export type ReadFixture = ReturnType<typeof createFixture>;
+export const optionsResult = (overrides: Record<string, unknown> = {}) => ({
+  personal: null,
+  shared: publisher,
+  pendingPersonal: null,
+  latestShared: receipt,
+  ...overrides,
+});
+export const expectReply = (respond: unknown, result: unknown) =>
+  expect(respond).toHaveBeenCalledWith(true, result);
+export const expectFailure = (
+  respond: unknown,
+  detail: Record<string, unknown> = { code: "FORBIDDEN" },
+) => expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(detail));
+export function expectNoCalls(...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+export function expectNoPersonalReads(fixture: ReadFixture) {
+  expectNoCalls(
+    fixture.personalConnectionStatus,
+    fixture.personalPending,
+    fixture.preparePersonalStatus,
+    fixture.personalStatus,
+    fixture.requestForSession,
+  );
+}
+
 export async function withHeldReceipt(
   fixture: ReturnType<typeof createFixture>,
   source: "personal" | "shared" | "status",

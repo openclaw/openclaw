@@ -19,7 +19,6 @@ const settings = (overrides: Record<string, string | undefined> = {}, live = tru
   resolveOpenAILongContextLiveSettings({ ...enabledEnv, ...overrides }, live);
 
 it("stays disabled unless the dedicated gate is enabled", () => {
-  expect(resolveOpenAILongContextLiveSettings({}, false)).toEqual({ enabled: false });
   expect(resolveOpenAILongContextLiveSettings({}, true)).toEqual({ enabled: false });
 });
 

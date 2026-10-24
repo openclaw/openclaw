@@ -8,6 +8,7 @@ import {
   validateWorktreesCreateParams,
   validateWorktreesGcParams,
   validateWorktreesListParams,
+  validateWorktreesRecoverFileParams,
   validateWorktreesRecoverRemovalParams,
   validateWorktreesRemoveParams,
   validateWorktreesRestoreParams,
@@ -274,6 +275,25 @@ export const worktreesHandlers: GatewayRequestHandlers = {
     });
     respond(true, receipt, undefined);
   }),
+  "worktrees.recoverFile": worktreeHandler(
+    validateWorktreesRecoverFileParams,
+    async (opts, params) => {
+      const commitGuard = captureWorktreeMutationGuard(params.expectedOwnerId, opts);
+      if (!commitGuard) {
+        return;
+      }
+      const { recoverLocalWorkspaceFile } =
+        await import("../worker-environments/local-workspace-recovery.js");
+      const result = await recoverLocalWorkspaceFile({
+        ...params,
+        cfg: opts.context.getRuntimeConfig(),
+        signal: opts.signal,
+        assertCurrent: commitGuard,
+      });
+      commitGuard();
+      opts.respond(true, result, undefined);
+    },
+  ),
   "worktrees.recoverRemoval": worktreeHandler(
     validateWorktreesRecoverRemovalParams,
     async (opts, params) => {

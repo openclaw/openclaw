@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   describeImageWithModel,
@@ -84,34 +85,26 @@ function request(overrides: Partial<ImagesDescriptionRequest> = {}): ImagesDescr
 }
 
 function providerMethods() {
-  const provider = createLlamaCppMediaProvider();
-  if (!provider.describeImage || !provider.describeImages) {
-    throw new Error("llama-cpp must register both image provider hooks");
-  }
-  return { single: provider.describeImage, multiple: provider.describeImages };
+  const { describeImage: single, describeImages: multiple } = createLlamaCppMediaProvider();
+  assert(single && multiple, "llama-cpp must register both image provider hooks");
+  return { single, multiple };
 }
 
 function configured(cfg: OpenClawConfig) {
   const provider = cfg.models?.providers?.["llama-cpp"];
-  if (!provider) {
-    throw new Error("fixture provider missing");
-  }
+  assert(provider, "fixture provider missing");
   return provider;
 }
 
 function visionModel(cfg: OpenClawConfig) {
   const model = configured(cfg).models.find((entry) => entry.id === VISION);
-  if (!model) {
-    throw new Error("fixture model missing");
-  }
+  assert(model, "fixture model missing");
   return model;
 }
 
 function singleRequest({ images, ...req }: ImagesDescriptionRequest): ImageDescriptionRequest {
   const image = images[0];
-  if (!image) {
-    throw new Error("fixture image missing");
-  }
+  assert(image, "fixture image missing");
   return { ...req, ...image };
 }
 
@@ -132,9 +125,7 @@ async function expectRejected(req: ImagesDescriptionRequest, message?: string) {
 
 async function transformedPayload(payload: unknown) {
   const call = transport.managed.mock.calls[0];
-  if (!call?.[1]) {
-    throw new Error("Managed image transport did not register its payload transform");
-  }
+  assert(call?.[1], "Managed image transport did not register its payload transform");
   return await call[1](payload, { ...REQUEST_MODEL, id: call[0].model });
 }
 
@@ -143,9 +134,7 @@ function captureSend(model = REQUEST_MODEL, before: () => void = () => {}) {
   transport.managed.mockImplementationOnce(async (_req, transform) => {
     await Promise.resolve();
     before();
-    if (!transform) {
-      throw new Error("fixture transform missing");
-    }
+    assert(transform, "fixture transform missing");
     await transform({ messages: [{ role: "user", content: [] }] }, model);
     send();
     return { text: "local result" };
@@ -278,9 +267,7 @@ it.each([
   const model = visionModel(config);
   const destination =
     target === "provider" ? configured(config) : target === "model" ? model : model.params;
-  if (!destination) {
-    throw new Error("fixture model artifacts missing");
-  }
+  assert(destination, "fixture model artifacts missing");
   Object.assign(destination, { [field]: value });
   if (retained) {
     prepare(req, config);

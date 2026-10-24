@@ -52,6 +52,8 @@ const installList = (
 ) => installMockGateway(page, { ...options, methodResponses: { [listMethod]: response } });
 const setList = (gateway: MockGatewayControls, response: unknown) =>
   gateway.setMethodResponse(listMethod, dashboardResponse(response));
+const getDashboardRequests = async (gateway: MockGatewayControls) =>
+  (await gateway.getRequests(listMethod)).filter(isDashboardRequest);
 async function resumeGateway(gateway: MockGatewayControls) {
   await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
   await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
@@ -100,11 +102,11 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}dashboards`);
       const dashboards = page.locator("openclaw-dashboards-page");
       await dashboards.getByText("Deploy monitor", { exact: true }).waitFor();
-      const before = (await gateway.getRequests(listMethod)).filter(isDashboardRequest);
+      const before = await getDashboardRequests(gateway);
       await gateway.deferNext(listMethod, { hasBoard: true });
       await gateway.emitGatewayEvent("sessions.changed", changedSession(key, 2));
       await expect
-        .poll(async () => (await gateway.getRequests(listMethod)).filter(isDashboardRequest).length)
+        .poll(async () => (await getDashboardRequests(gateway)).length)
         .toBe(before.length + 1);
       await gateway.rejectDeferred(listMethod, {
         code: "UNAVAILABLE",
@@ -124,7 +126,7 @@ suite.define(() => {
       await resumeGateway(gateway);
       await dashboards.getByText("Updated deploy monitor", { exact: true }).waitFor();
       expect(await dashboards.getByRole("alert").count()).toBe(0);
-      const after = (await gateway.getRequests(listMethod)).filter(isDashboardRequest);
+      const after = await getDashboardRequests(gateway);
       expect(after).toHaveLength(before.length + 2);
       expect(after.at(-1)?.params).toEqual(before.at(-1)?.params);
     });
@@ -284,13 +286,9 @@ suite.define(() => {
       );
 
       const afterWave = await listRequests(gateways);
-      expect(
-        afterWave.map((requests, index) =>
-          requestCounts(requests.slice(beforeWave[index]?.length ?? 0)),
-        ),
-      ).toEqual([
-        [1, 1, 2],
-        [1, 1, 2],
+      expect(afterWave.map(requestCounts)).toEqual([
+        [2, 2, 4],
+        [2, 2, 4],
       ]);
       const dashboardRequests = afterWave.flat().filter(isDashboardRequest);
       expect(dashboardRequests).toHaveLength(4);

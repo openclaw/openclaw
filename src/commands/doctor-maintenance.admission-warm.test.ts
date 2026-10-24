@@ -20,15 +20,10 @@ import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js"
 import { setupDoctorAdmissionFixture } from "./doctor-maintenance.admission.test-support.js";
 import { stoppedSystemdBinding } from "./doctor-maintenance.test-support.js";
 
-const setup = setupDoctorAdmissionFixture();
+const fixture = setupDoctorAdmissionFixture();
 const warmSources = ["cached-writer", "admitted-read-only"] as const;
 const runningSql =
   "UPDATE update_runs SET status = 'running', phase = 'requested', finished_at_ms = NULL";
-function fixture(keepWriter = false) {
-  const context = setup(keepWriter);
-  return { ...context, [Symbol.dispose]: context.assertIsolation };
-}
-
 async function withMaintenance(
   source: (typeof warmSources)[number] | "cold-read-only",
   action: (

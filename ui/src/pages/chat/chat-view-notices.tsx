@@ -5,15 +5,17 @@ import type {
   SessionPlacementWorkerRuntimeInstall,
 } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
 import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
+import type { GuestWelcomeHandle } from "../../app/guest-welcome-handle.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import {
   ChatProviderReviewNotice,
   type ChatProviderReviewOwner,
@@ -22,17 +24,22 @@ import type { SubagentRoster, SubagentRowContext } from "./chat-spawned-subagent
 import { ChatGPTUsageLimit } from "./chatgpt-usage-limit.tsx";
 import { ChatChildAttention } from "./components/chat-child-attention.tsx";
 import { ChatConversationMobile } from "./components/chat-conversation-presentation.ts";
+import { renderGuestWelcomeStatus } from "./components/chat-guest-welcome-status.tsx";
 import { WorkspaceConflictNotice } from "./components/chat-workspace-conflict.tsx";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
-import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../styles/chat/conversation-notices.css";
+import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 
-registerNewSessionSetupEnglish();
+registerEnglishCatalog(registerChatSessionEnglish);
+
+registerNewSessionRuntimeEnglish();
 
 export type ChatPlacementStartupNoticeProps = {
   placementStartup?: ApplicationPlacementStartupStatus | null;
   onRetrySessionPlacementStartup?: () => void;
+  /** App-wide guest welcome setup, shown beside the composer of the route's chat. */
+  guestWelcome?: GuestWelcomeHandle;
 };
 
 type ChatViewNoticesProps = {
@@ -355,6 +362,9 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
         messages={props.messages}
         onRetry={props.onRetrySessionPlacementStartup}
       />
+      <Show when={props.guestWelcome} keyed>
+        {(owner) => renderGuestWelcomeStatus(owner)}
+      </Show>
     </>
   );
 }

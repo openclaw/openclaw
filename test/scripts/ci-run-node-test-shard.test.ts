@@ -88,6 +88,14 @@ function group(
   return { kind: "group", name, plan: { configs, ...plan } };
 }
 
+function groupPlans(groups: ShardGroupPlan["plan"][], packed = false) {
+  return resolveShardPlans(
+    packed
+      ? { OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: encodeNodeTestGroups(groups) }
+      : { OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(groups) },
+  );
+}
+
 function machine(cpus: number, gib: number) {
   vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
   vi.spyOn(os, "availableParallelism").mockReturnValue(cpus);
@@ -393,16 +401,14 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     const runChild = vi.fn(async (_args: string[], _env: NodeJS.ProcessEnv) => 1);
     await expect(
       runShardPlans(
-        resolveShardPlans({
-          OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
-            {
-              configs: [bunConfig],
-              shard_name: "eligible",
-              includePatterns: [nodeTarget, vitestBunTarget, nativeBunTarget],
-            },
-            { configs: ["later.config.ts"], shard_name: "later" },
-          ]),
-        }),
+        groupPlans([
+          {
+            configs: [bunConfig],
+            shard_name: "eligible",
+            includePatterns: [nodeTarget, vitestBunTarget, nativeBunTarget],
+          },
+          { configs: ["later.config.ts"], shard_name: "later" },
+        ]),
         {
           concurrency: 1,
           env: { CI: "true", OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all" },
@@ -594,7 +600,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       return 0;
     });
     await expect(
-      runShardPlans(resolveShardPlans({ OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(groups) }), {
+      runShardPlans(groupPlans(groups), {
         concurrency: 1,
         env: {
           CI: "1",
@@ -655,23 +661,18 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         return 0;
       });
       await expect(
-        runShardPlans(
-          resolveShardPlans({
-            OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: encodeNodeTestGroups(groups),
-          }),
-          {
-            concurrency: 1,
-            env: {
-              CI: "1",
-              RUNNER_ENVIRONMENT: "self-hosted",
-              FROZEN_TARGET: "false",
-              OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
-              OPENCLAW_VITEST_MAX_WORKERS: "2",
-            },
-            scratchDir: makeScratchDir(),
-            runChild,
+        runShardPlans(groupPlans(groups, true), {
+          concurrency: 1,
+          env: {
+            CI: "1",
+            RUNNER_ENVIRONMENT: "self-hosted",
+            FROZEN_TARGET: "false",
+            OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
+            OPENCLAW_VITEST_MAX_WORKERS: "2",
           },
-        ),
+          scratchDir: makeScratchDir(),
+          runChild,
+        }),
       ).resolves.toBe(0);
       expect(runChild.mock.calls.map((call) => call[2])).toEqual(
         groups.map((entry) => entry.shard_name),
@@ -762,12 +763,10 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     const scratchDir = makeScratchDir();
     vi.spyOn(os, "tmpdir").mockReturnValue(scratchDir);
     const runChild = vi.fn(async (_args: string[], _env: NodeJS.ProcessEnv) => 0);
-    const plans = resolveShardPlans({
-      OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
-        { configs: ["one.config.ts"], includePatterns: ["src/one.test.ts"] },
-        { configs: ["two.config.ts"], env: { NODE_PATH: "different-loader" } },
-      ]),
-    });
+    const plans = groupPlans([
+      { configs: ["one.config.ts"], includePatterns: ["src/one.test.ts"] },
+      { configs: ["two.config.ts"], env: { NODE_PATH: "different-loader" } },
+    ]);
     const pending = runShardPlans(plans, {
       env: {},
       runChild,
@@ -792,17 +791,15 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     const configs = ["a.config.ts", "b.config.ts", gatewayCoreConfig, "c.config.ts", "d.config.ts"];
     const scratchDir = makeScratchDir();
     const pending = runShardPlans(
-      resolveShardPlans({
-        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
-          configs.map((config, index) => ({
-            configs: [config],
-            shard_name: String(index),
-            includePatterns: [`src/${index}.test.ts`],
-            fallbackMaxWorkers: 2,
-            env: { OPENCLAW_VITEST_MAX_WORKERS: "8" },
-          })),
-        ),
-      }),
+      groupPlans(
+        configs.map((config, index) => ({
+          configs: [config],
+          shard_name: String(index),
+          includePatterns: [`src/${index}.test.ts`],
+          fallbackMaxWorkers: 2,
+          env: { OPENCLAW_VITEST_MAX_WORKERS: "8" },
+        })),
+      ),
       {
         env: {
           CI: "1",
@@ -889,15 +886,13 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     await expect(
       runShardPlans(
-        resolveShardPlans({
-          OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
-            [gatewayCoreConfig, "b.config.ts", "c.config.ts"].map((config) => ({
-              configs: [config],
-              fallbackMaxWorkers: 2,
-              env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(scratchDir, "caller") },
-            })),
-          ),
-        }),
+        groupPlans(
+          [gatewayCoreConfig, "b.config.ts", "c.config.ts"].map((config) => ({
+            configs: [config],
+            fallbackMaxWorkers: 2,
+            env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(scratchDir, "caller") },
+          })),
+        ),
         {
           env: {
             CI: "true",
@@ -954,16 +949,17 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       vi.spyOn(os, "availableParallelism").mockReturnValue(cpus);
       vi.spyOn(os, "totalmem").mockReturnValue(gib * 1024 ** 3);
       const runChild = vi.fn(async (_args: string[], _env: NodeJS.ProcessEnv) => 0);
-      const plans = resolveShardPlans({
-        OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: encodeNodeTestGroups([
+      const plans = groupPlans(
+        [
           {
             configs: ["measured.config.ts"],
             fallbackMaxWorkers: 2,
             minTotalMemoryBytes: minGib === undefined ? undefined : minGib * 1024 ** 3,
           },
           { configs: ["ordinary.config.ts"] },
-        ]),
-      });
+        ],
+        true,
+      );
       await expect(
         runShardPlans(plans, {
           env: {
@@ -988,15 +984,13 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       "agentic-agents-support#selector-2-aaaa#generation-bbbb#part-1-of-2#include-1-cccc";
     const lines: string[] = [];
     const exitCode = await runShardPlans(
-      resolveShardPlans({
-        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
-          {
-            configs: [bunConfig],
-            shard_name: "agentic-agents-support-hosted-1",
-            timing_key: timingKey,
-          },
-        ]),
-      }),
+      groupPlans([
+        {
+          configs: [bunConfig],
+          shard_name: "agentic-agents-support-hosted-1",
+          timing_key: timingKey,
+        },
+      ]),
       {
         concurrency: 1,
         env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all" },
@@ -1043,15 +1037,13 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     const held = createDeferred();
 
     const pending = runShardPlans(
-      resolveShardPlans({
-        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
-          ["a", "b", "c"].map((name) => ({
-            configs: ["plugin.config.ts"],
-            includePatterns: [`extensions/fixture/${name}.test.ts`],
-            shard_name: `envelope:${name}`,
-          })),
-        ),
-      }),
+      groupPlans(
+        ["a", "b", "c"].map((name) => ({
+          configs: ["plugin.config.ts"],
+          includePatterns: [`extensions/fixture/${name}.test.ts`],
+          shard_name: `envelope:${name}`,
+        })),
+      ),
       {
         concurrency: 1,
         env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: persistentRoot },
@@ -1228,14 +1220,12 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       const error = new Error("second child rejected");
       let settled = false;
       const pending = runShardPlans(
-        resolveShardPlans({
-          OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
-            ["a", "b", "c", "d"].map((name) => ({
-              configs: [`${name}.config.ts`],
-              shard_name: name,
-            })),
-          ),
-        }),
+        groupPlans(
+          ["a", "b", "c", "d"].map((name) => ({
+            configs: [`${name}.config.ts`],
+            shard_name: name,
+          })),
+        ),
         {
           concurrency: 2,
           env: {},

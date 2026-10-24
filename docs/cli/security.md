@@ -59,8 +59,8 @@ Run `openclaw doctor --fix` to rotate a persisted reused `hooks.token`, then upd
 - Warns when `gateway.nodes.commands.allow` explicitly enables dangerous node commands.
 - Warns when global `tools.profile="minimal"` is overridden by agent tool profiles.
 - Warns when write/edit tools are disabled but `exec` is still available without a constraining sandbox filesystem boundary.
-- Warns when open DMs or groups expose runtime/filesystem tools without sandbox/workspace guards.
-- Warns when installed plugin tools may be reachable under permissive tool policy.
+- Warns when open DMs or groups expose runtime/filesystem tools without sandbox/workspace guards. Summary and exposure findings share channel-owned DM policy precedence, including named accounts and nested scopes.
+- Warns when installed plugin tools may be reachable under permissive tool policy, including restrictive profiles widened with `tools.alsoAllow: ["group:plugins"]`.
 
 ### Sandbox browser
 

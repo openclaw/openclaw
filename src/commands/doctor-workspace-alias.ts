@@ -33,6 +33,8 @@ function describeRepointedWorkspaceAlias(facts: RepointedWorkspaceAliasFacts): s
 export type WorkspaceAliasFinding = {
   checkId: string;
   severity: "warning";
+  category: "fix-now";
+  docsUrl: string;
   message: string;
   fixHint: string;
 };
@@ -75,6 +77,8 @@ export async function collectRepointedWorkspaceAliasFindings(
       findings.push({
         checkId: WORKSPACE_ALIAS_CHECK_ID,
         severity: "warning",
+        category: "fix-now",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/state-migrations",
         message,
         fixHint: REPAIR_HINT,
       });

@@ -489,7 +489,6 @@ it("projects native lifecycle snapshots and admits the next backend after produc
       buildGatewaySessionSnapshot({
         sessionRow: { key: sessionKey, sessionId, kind: "direct", updatedAt: 1, status: "done" },
         activeRunState: state(),
-        includeSession: true,
       }),
     ).toMatchObject({ status, hasActiveRun, session: { status, hasActiveRun } });
   const operation = run.reply();
@@ -527,7 +526,6 @@ it("preserves an independent running worker over a queued native snapshot", asyn
     buildGatewaySessionSnapshot({
       sessionRow: { key: sessionKey, sessionId, kind: "direct", updatedAt: 1, status: "done" },
       activeRunState: resolveState(sessionKey, { sessionId }),
-      includeSession: true,
     });
   registerAgentRunContext("worker-overlap-run", {
     projectSessionActive: true,
@@ -854,7 +852,6 @@ it("preserves the completed foreground row while hidden embedded maintenance rem
         runtimeMs: 273_418,
       },
       activeRunState: state(),
-      includeSession: true,
     });
   let settled = false;
   const cleanup = waitForSessionRunEnd(sessionId, null).then((ended) => {

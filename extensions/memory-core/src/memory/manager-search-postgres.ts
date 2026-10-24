@@ -123,6 +123,10 @@ export async function searchPostgresMemoryVector(
       value !== null &&
       "dist" in value &&
       typeof value.dist === "number",
+    candidates: ({ match, distance, limit }) =>
+      query.candidateIds && query.candidateIds.length <= limit
+        ? undefined
+        : scoped().select("v.id").where(match).orderBy(distance).orderBy("v.id").limit(limit),
     query: ({ match, distance }) =>
       scoped()
         .select([
@@ -135,7 +139,7 @@ export async function searchPostgresMemoryVector(
           distance.as("dist"),
         ])
         .where(match)
-        .orderBy(distance)
+        .orderBy("dist")
         .orderBy("c.id")
         .limit(query.limit),
   });

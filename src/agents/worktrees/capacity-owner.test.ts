@@ -1,17 +1,14 @@
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeEach, expect, it, vi } from "vitest";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../../state/openclaw-state-db.js";
 import { withWorktreeAllocationLease } from "./allocation.js";
 import { createWorktreeCapacityOwner } from "./capacity-owner.js";
 import { evictManagedWorktree } from "./eviction.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
 import type { GitWorktreeOperation, WorktreeEvictionReason } from "./git-worktree-operations.js";
 import { worktreeRunLeaseScope } from "./run-lease-owner.js";
+import { makeWorktreeRecord } from "./service.test-support.js";
+import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const inventory = vi.hoisted(
@@ -85,13 +82,7 @@ vi.mock("./eviction.js", async (importOriginal) => ({
   ),
 }));
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanupTempDirs) => {
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanupTempDirs();
-  });
-});
+const tempDirs = useWorktreeStateRoots();
 let env: NodeJS.ProcessEnv;
 
 function record(
@@ -99,11 +90,8 @@ function record(
   lastActiveAt: number,
   ownerKind: ManagedWorktreeRecord["ownerKind"] = "session",
 ): ManagedWorktreeRecord {
-  return {
-    id,
-    name: id,
+  return makeWorktreeRecord("/source", id, {
     repoFingerprint: "repository",
-    repoRoot: "/source",
     path: `/worktrees/${id}`,
     branch: `openclaw/${id}`,
     baseRef: "main",
@@ -111,7 +99,7 @@ function record(
     ownerId: `owner-${id}`,
     createdAt: 0,
     lastActiveAt,
-  };
+  });
 }
 
 beforeEach(() => {

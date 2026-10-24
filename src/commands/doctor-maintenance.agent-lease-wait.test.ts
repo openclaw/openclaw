@@ -82,7 +82,7 @@ function holdState(databasePath: string, gateway = false) {
   });
 }
 
-function startDoctor() {
+function startDoctor(waitForMaintenance = false) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
   let now = 0;
   vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -93,6 +93,7 @@ function startDoctor() {
   let settled = false;
   const result = beginDoctorMaintenance({
     options: { repair: true, nonInteractive: true },
+    waitForMaintenance,
     root: null,
     runtime: { log, error: vi.fn(), exit: vi.fn() },
   }).then(
@@ -140,33 +141,53 @@ const refusalMessage = (detail = "An agent database is in use.") =>
   `Doctor could not enter maintenance. ${detail} Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.`;
 
 it.each([
-  { name: "update Doctor", externalPolicy: false },
-  { name: "a published updater's activation Doctor", externalPolicy: true },
-])("waits for foreign agent leases without owning state ($name)", async ({ externalPolicy }) => {
-  const holder = holdForeignLease({ update: true, externalPolicy });
-  const doctor = startDoctor();
-  await doctor.firstWait;
-  expect(doctor.log).toHaveBeenCalledWith(
-    `Waiting up to 1200 s for OpenClaw process ${holder.holderPid} to close an agent database before Doctor maintenance. Let it finish, or stop it to continue sooner.`,
-  );
-  // The holder must write shared state to close; Doctor's ownership would refuse it.
-  expect(fs.existsSync(holder.ownerPath)).toBe(false);
-  await doctor.advanceTo(45_000);
-  expect(doctor.log).toHaveBeenCalledWith(
-    `Still waiting for OpenClaw process ${holder.holderPid} to close an agent database (45 s of 1200 s).`,
-  );
-  await doctor.advanceTo(FALLBACK_DEADLINE_MS - 10_000);
-  expect(doctor.isSettled()).toBe(false);
-  expect(fs.existsSync(holder.ownerPath)).toBe(false);
-  holder.release();
-  await doctor.advanceTo(FALLBACK_DEADLINE_MS - 8_000);
-  const completed = await doctor.result;
-  expect(completed).toHaveProperty("maintenance");
-  expect(doctor.log).toHaveBeenCalledWith(
-    "Agent databases closed after 1192 s; continuing Doctor maintenance.",
-  );
-  await ("maintenance" in completed ? completed.maintenance?.finish({}) : undefined);
-});
+  { name: "update Doctor", update: true, externalPolicy: false, waitForMaintenance: false },
+  {
+    name: "a published updater's activation Doctor",
+    update: true,
+    externalPolicy: true,
+    waitForMaintenance: false,
+  },
+  {
+    name: "startup credential preparation",
+    update: false,
+    externalPolicy: false,
+    waitForMaintenance: true,
+  },
+  {
+    name: "externally managed startup credential preparation",
+    update: false,
+    externalPolicy: true,
+    waitForMaintenance: true,
+  },
+])(
+  "$name waits, holding no state ownership, for another process to close its agent database",
+  async ({ update, externalPolicy, waitForMaintenance }) => {
+    const holder = holdForeignLease({ update, externalPolicy });
+    const doctor = startDoctor(waitForMaintenance);
+    await doctor.firstWait;
+    expect(doctor.log).toHaveBeenCalledWith(
+      `Waiting up to 1200 s for OpenClaw process ${holder.holderPid} to close an agent database before Doctor maintenance. Let it finish, or stop it to continue sooner.`,
+    );
+    // The holder must write shared state to close; Doctor's ownership would refuse it.
+    expect(fs.existsSync(holder.ownerPath)).toBe(false);
+    await doctor.advanceTo(45_000);
+    expect(doctor.log).toHaveBeenCalledWith(
+      `Still waiting for OpenClaw process ${holder.holderPid} to close an agent database (45 s of 1200 s).`,
+    );
+    await doctor.advanceTo(FALLBACK_DEADLINE_MS - 10_000);
+    expect(doctor.isSettled()).toBe(false);
+    expect(fs.existsSync(holder.ownerPath)).toBe(false);
+    holder.release();
+    await doctor.advanceTo(FALLBACK_DEADLINE_MS - 8_000);
+    const completed = await doctor.result;
+    expect(completed).toHaveProperty("maintenance");
+    expect(doctor.log).toHaveBeenCalledWith(
+      "Agent databases closed after 1192 s; continuing Doctor maintenance.",
+    );
+    await ("maintenance" in completed ? completed.maintenance?.finish({}) : undefined);
+  },
+);
 
 it.each([false, true])(
   "shares the state/agent wait deadline (state wait=%s)",
@@ -208,18 +229,27 @@ it.each([
   { name: "manual doctor --fix", update: false },
   { name: "a lease held by Doctor's own process", update: true, own: true },
   { name: "a live Gateway under the external policy", update: true, gateway: true },
-])("refuses active agent leases immediately ($name)", async ({ update, own, gateway }) => {
-  const holder = holdForeignLease({ update, own, externalPolicy: gateway });
-  // The serving Gateway may own the lease; its lifecycle lock would mask the refusal.
-  const serving = gateway ? holdState(holder.databasePath, true) : undefined;
-  try {
-    const doctor = startDoctor();
-    const completed = await doctor.result;
-    expect(
-      collectUpdateDoctorFailureFacts("error" in completed ? completed.error : undefined),
-    ).toEqual(failureFacts(refusalMessage()));
-    expect(doctor.log).not.toHaveBeenCalledWith(expect.stringContaining("Waiting up to"));
-  } finally {
-    serving?.release();
-  }
-});
+  {
+    name: "startup with a live Gateway under the external policy",
+    update: false,
+    gateway: true,
+    waitForMaintenance: true,
+  },
+])(
+  "refuses active agent leases immediately ($name)",
+  async ({ update, own, gateway, waitForMaintenance }) => {
+    const holder = holdForeignLease({ update, own, externalPolicy: gateway });
+    // The serving Gateway may own the lease; its lifecycle lock would mask the refusal.
+    const serving = gateway ? holdState(holder.databasePath, true) : undefined;
+    try {
+      const doctor = startDoctor(waitForMaintenance);
+      const completed = await doctor.result;
+      expect(
+        collectUpdateDoctorFailureFacts("error" in completed ? completed.error : undefined),
+      ).toEqual(failureFacts(refusalMessage()));
+      expect(doctor.log).not.toHaveBeenCalledWith(expect.stringContaining("Waiting up to"));
+    } finally {
+      serving?.release();
+    }
+  },
+);
