@@ -76,6 +76,13 @@ experimental AOT compiler. Selecting `--compile-aot` with a Bun that lacks that
 capability stops with a diagnostic; it does not silently fall back to JIT or
 bytecode. An AOT artifact needs its own runtime and signing qualification.
 
+AOT artifacts select the `embedded-aot` [runtime execution profile](/concepts/runtime-profiles).
+Host Code Mode using the Node executor, QA expressions, and plugins fetched after
+the build require dynamic execution and report an actionable error before
+evaluating code. Run those features with a Node/Bun installation or a JIT/bytecode
+standalone. An embedded guest runtime has its own qualification requirements;
+OpenClaw does not silently switch executors.
+
 ### WebAssembly in AOT builds
 
 AOT builds import the retained host WebAssembly assets at compile time, including
@@ -312,7 +319,9 @@ executable metadata supplies bundled plugin source checks and Doctor contract
 hashes. Installed plugins keep their normal filesystem admission and loading
 rules and live in the configured state directory.
 
-Installed TypeScript plugins use the embedded Jiti loader and Babel transformer.
+In JIT and bytecode builds, installed TypeScript plugins use the embedded Jiti
+loader and Babel transformer. AOT builds admit only compiler-embedded plugin
+modules; an install does not add code to the executable.
 On-demand plugin installs use the declared npm runtime in `runtime/npm/` through
 the standalone executable's Bun mode. This preserves npm registry authentication,
 configuration, lockfile integrity checks, and the installer's disabled lifecycle

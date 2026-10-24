@@ -2,6 +2,11 @@
 // logger wiring, runtime env shims, and global verbose console helpers.
 
 export type { RuntimeEnv } from "../runtime.js";
+export {
+  assertRuntimeSupportsDynamicExecution,
+  getRuntimeExecutionProfile,
+  type RuntimeExecutionProfile,
+} from "../infra/runtime-profile.js";
 export { createNonExitingRuntime, defaultRuntime } from "../runtime.js";
 export {
   danger,
