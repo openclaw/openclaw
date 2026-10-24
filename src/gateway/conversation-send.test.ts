@@ -341,7 +341,6 @@ describe("runGatewayConversationSend", () => {
       gatewayOwnedDelivery: true,
       forceCoreDelivery: true,
       requireQueuePersistence: true,
-      suppressTranscriptMirror: true,
       sessionKey: "agent:main:telegram:direct:operator",
     });
     expect(deps.runMessageAction.mock.calls[0]?.[0]?.params).not.toHaveProperty("accountId");

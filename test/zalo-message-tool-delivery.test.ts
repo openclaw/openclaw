@@ -72,7 +72,7 @@ describe("Zalo core message delivery", () => {
               media: "   ",
             },
             skipQueue: true,
-            suppressTranscriptMirror: true,
+            callerRecordsDestinationHistory: true,
             assertDirectAdapterHandoff,
           });
           if (fail) {
@@ -125,7 +125,7 @@ describe("Zalo core message delivery", () => {
           media: "https://example.com/photo.jpg",
         },
         skipQueue: true,
-        suppressTranscriptMirror: true,
+        callerRecordsDestinationHistory: true,
         assertDirectAdapterHandoff: () => {
           if (!current) {
             throw authorityError;

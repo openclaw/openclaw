@@ -108,8 +108,7 @@ describe("outbound audit projection", () => {
         }),
       {
         ...baseContext,
-        session: { conversationKind: "channel" },
-        mirror: { sessionKey: "secret-session", agentId: "mirror-agent", isGroup: true },
+        session: { conversationKind: "channel", key: "secret-session", agentId: "audit-agent" },
       },
       "queue-1",
     );
@@ -120,8 +119,8 @@ describe("outbound audit projection", () => {
         outcome: "suppressed",
         status: "blocked",
         actorType: "agent",
-        actorId: "mirror-agent",
-        agentId: "mirror-agent",
+        actorId: "audit-agent",
+        agentId: "audit-agent",
         conversationKind: "channel",
         resultCount: 0,
       },
@@ -260,7 +259,6 @@ describe("outbound audit projection", () => {
     key: string | undefined,
     expected: string,
     session?: Parameters<typeof conversationKindFor>[0]["session"],
-    originGroup?: boolean,
   ];
   it.each<ConversationCase>([
     ["matrix", "@user:server", "agent:main:matrix:default:direct:@user:server", "direct"],
@@ -287,21 +285,10 @@ describe("outbound audit projection", () => {
         conversationType: "direct",
       },
     ],
-    ["matrix", "!room:server", undefined, "group", undefined, true],
-    ["matrix", "!room:server", undefined, "unknown", undefined, false],
-  ])(
-    "classifies only destination-proven routes: %s %s",
-    (channel, to, key, expected, session, originGroup) => {
-      const mirror =
-        originGroup === undefined
-          ? undefined
-          : {
-              sessionKey: "control-session",
-              agentId: "a",
-              isGroup: originGroup,
-            };
-      const ctx = { channel, to, session: key ? { key, ...session } : session, mirror };
-      expect(conversationKindFor(ctx)).toBe(expected);
-    },
-  );
+    ["matrix", "!room:server", undefined, "group", { conversationType: "group" }],
+    ["matrix", "!room:server", undefined, "unknown", { conversationType: "direct" }],
+  ])("classifies only destination-proven routes: %s %s", (channel, to, key, expected, session) => {
+    const ctx = { channel, to, session: key ? { key, ...session } : session };
+    expect(conversationKindFor(ctx)).toBe(expected);
+  });
 });
