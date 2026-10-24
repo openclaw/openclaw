@@ -37,14 +37,14 @@ const DEFLATE_LEVEL = 1;
 const MIN_OUTPUT_CHUNK_BYTES = 1024;
 const MAX_OUTPUT_CHUNK_BYTES = 64 * 1024;
 
-// SAFETY: node:zlib's own sync helpers drive this native handle through
-// _handle.writeSync and read [availOutAfter, availInAfter] from _writeState.
+// SAFETY: node:zlib's sync helpers pass ArrayBufferViews to _handle.writeSync
+// and read [availOutAfter, availInAfter] from _writeState.
 type NativeZlibStream = {
   readonly destroyed: boolean;
   _handle?: {
     writeSync?: (
       flush: number,
-      input: Buffer,
+      input: Uint8Array,
       inputOffset: number,
       inputLength: number,
       output: Buffer,
@@ -66,7 +66,7 @@ type NativeZlibStream = {
  */
 function sharedZlib(open: () => NativeZlibStream) {
   let stream: NativeZlibStream | undefined;
-  return (input: Buffer, maxOutputLength: number): Buffer | null => {
+  return (input: Uint8Array, maxOutputLength: number): Buffer | null => {
     if (!stream) {
       stream = open();
       // Failures surface through `destroyed`; the deferred error event needs a listener.
@@ -224,10 +224,8 @@ export function installGatewayDeflateCodec(socket: WebSocket):
     deflate = sharedZlib(() => createDeflateRaw(deflateOptions));
     deflateShared.set(windowBits, deflate);
   }
-  const compressPiece = (bytes: Uint8Array): Buffer => {
-    const input = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    return deflate(input, kMaxLength) ?? deflateRawSync(input, deflateOptions);
-  };
+  const compressPiece = (input: Uint8Array): Buffer =>
+    deflate(input, kMaxLength) ?? deflateRawSync(input, deflateOptions);
   const compress = (
     frame: Buffer | SerializedGatewayFrame,
   ): Buffer | SerializedGatewayFrame | undefined => {
@@ -240,7 +238,8 @@ export function installGatewayDeflateCodec(socket: WebSocket):
       let small: Uint8Array[] = [];
       const flushSmall = () => {
         if (small.length > 0) {
-          pieces.push(compressPiece(Buffer.concat(small)));
+          const input = small.length === 1 ? small[0]! : Buffer.concat(small);
+          pieces.push(compressPiece(input));
           small = [];
         }
       };

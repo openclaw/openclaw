@@ -59,6 +59,10 @@ conversation. Reaction
 execution still requires the current prompt's live authority; an advertised
 action does not grant permission to execute it.
 
+Isolated settled-turn finalization uses a separate cache key scoped to the run.
+Its tool-free prompt and full transcript differ from the conversation request,
+so it does not replace the conversation's cache or history-diagnostic baseline.
+
 ## Keep replayed tool results stable
 
 OpenClaw applies the same tool-result text cap before the first model request

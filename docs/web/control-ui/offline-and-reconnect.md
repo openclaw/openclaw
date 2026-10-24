@@ -175,10 +175,30 @@ account checks still decide whether cached conversations may appear. No
 Gateway-rendered private HTML, API responses, or authorization tickets are
 added to this shell cache.
 
+Once the shell is ready and the browser is online and idle, the service worker
+downloads the remaining built-in JavaScript and styles in the background. After
+this first download, offline-capable menus and actions can open even if you have
+not used them since the update. This includes the interface code for drafts,
+queued chat sends, session changes, and reactions; each action keeps its existing
+connection and authorization requirements. Downloading the interface does not
+make live-only actions or uncached conversation data available offline.
+
+Each update downloads only missing or changed files. Background downloads yield
+to page requests, check file integrity, and retain completed files if interrupted;
+startup and resume checks can continue the download. Save-Data and slow-2g/2g
+connections skip this background download and record the reason in the service
+worker console. The critical shell still prepares normally, and files opened
+online still cache on use. Connection-speed and Save-Data changes automatically
+recheck the background download policy. English interface code is included; other language
+catalogs, the isolated Mermaid diagram renderer, and plugin-hosted assets are
+excluded from the background inventory and keep their existing loading behavior.
+
 Reloads reuse cached build-versioned fonts, themes, and the web manifest without
 contacting the Gateway. The service worker keeps the current complete build and
 one complete previous generation, so older open documents can still load their
 cached chunks. An incomplete replacement does not discard the last complete shell.
+Unchanged files referenced by the new inventory are retained before older caches
+are removed, so an update does not need to download those files again.
 After an update, open tabs reload automatically unless unsaved-work protection
 blocks recovery; then save or discard the protected work and use the **Reload**
 banner. Uploaded profile avatars use private browser caching only when the URL
@@ -193,7 +213,9 @@ authentication paths do not receive the offline shell. Plugin catalog detail
 links under `/plugins/` remain network-dependent because that namespace also
 hosts plugin HTTP endpoints. An open tab remains the
 most reliable way to keep working through intermittent service.
-Unvisited views and uncached external resources may still need a connection.
+Until the background download finishes, unvisited views may still need a
+connection. Excluded optional assets and uncached external resources may also
+need a connection.
 
 ## Gateway updates and suspended tabs
 

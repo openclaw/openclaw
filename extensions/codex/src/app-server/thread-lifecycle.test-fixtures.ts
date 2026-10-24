@@ -48,6 +48,7 @@ export function createLifecycleRequest(
 }
 
 export const DEFAULT_CODEX_RUNTIME_THREAD_CONFIG = {
+  "features.reasoning_effort_override": true,
   project_doc_max_bytes: 131_072,
   "features.tool_suggest": false,
   "features.recommended_plugins": false,

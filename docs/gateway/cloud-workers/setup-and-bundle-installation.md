@@ -55,6 +55,10 @@ The worker bundle includes the pinned Windows permission-inspection helper along
 
 Archives and successful installs are verified by content digest, rather than version alone, and reused when they match. A snapshot fork tops up an older runtime before enrollment. Native dependencies install for the destination OS and CPU, so registry access is still required; this is not an offline dependency bundle. Enrollment and archive-download credentials are not passed to npm or the node process.
 
+Each prepared runtime archive also gets a best-effort npm project lock, generated once by the Gateway and transferred separately from the lockless runtime tarball. Fresh workers use `npm ci --omit=dev` with that lock, while npm still selects and installs native optional packages for the worker's OS and CPU. A missing lock, failed download, or rejected locked install falls back to the ordinary unlocked install with a warning. Lock-generation failures are cached with the prepared archive, so each worker does not retry generation.
+
+Successful worker starts log the `openclaw-bootstrap-*` phase durations at info level in the Gateway log, including download, installation, and verification. The installation phase can overlap the independent worker-bundle download. Unlocked-install fallback warnings also appear in the Gateway log.
+
 Concurrent workspace installs on the same node share an in-progress integrity scan of the same already prewarmed bundle. Later requests scan the installed files again, so edits or damage still trigger repair. Retention and replacement separate scans; each request keeps its own cancellation and download credentials.
 
 For source builds, run `pnpm build` and restart the Gateway before dispatching. Bootstrap does not compile an unbuilt checkout or copy raw edits over the running build. Missing or mismatched build metadata gives a rebuild-and-restart error. Private QA-only build chunks are excluded only when build metadata verifies their ownership; incomplete metadata or imports fail preparation.

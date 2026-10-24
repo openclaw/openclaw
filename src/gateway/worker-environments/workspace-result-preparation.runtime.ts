@@ -161,7 +161,11 @@ export async function buildWorkspaceStageInput(
     ref: stagedResultRef,
     entries: compared.entries,
     message: stagedResultMessage({ ...source, gitHistory: params.gitHistory }),
-    parentCommit: params.gitHistory?.descendsFromBase ? params.gitHistory.headCommit : undefined,
+    parentCommit:
+      params.parentCommit ??
+      (params.gitHistory?.descendsFromBase && !params.gitHistory.unavailableReason
+        ? params.gitHistory.headCommit
+        : undefined),
     readVerifiedContent: source.readVerifiedContent,
   });
   return null;

@@ -26,6 +26,7 @@ const performanceSources = [
     "control-ui-i18n-config.ts",
     "control-ui-i18n-config.json",
     "control-ui-module-attribution.mts",
+    "control-ui-optional-assets.ts",
     "record-shared.mjs",
     "regexp.mjs",
   ].map((name) => `scripts/lib/${name}`),

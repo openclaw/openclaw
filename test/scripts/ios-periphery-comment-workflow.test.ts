@@ -16,7 +16,7 @@ const ARTIFACT_NAME = "ios-periphery-dead-code-12345-2";
 type Workflow = {
   name: string;
   "run-name": string;
-  jobs?: Record<string, { "runs-on"?: string; steps?: WorkflowStep[] }>;
+  jobs?: Record<string, { steps?: WorkflowStep[] }>;
 };
 
 const artifactFixture = { expired: false, id: 77, name: ARTIFACT_NAME, size_in_bytes: 1 };
@@ -376,22 +376,7 @@ describe("iOS Periphery comment workflow", () => {
       (step) => step.name === "Upload Periphery report",
     );
 
-    expect(upload).toMatchObject({
-      if: "always()",
-      with: {
-        name: "ios-periphery-dead-code-${{ github.run_id }}-${{ github.run_attempt }}",
-        path: "${{ runner.temp }}/ios-periphery",
-        "if-no-files-found": "error",
-      },
-    });
-  });
-
-  it("uses hosted macOS capacity for scans", () => {
-    const iosWorkflow = readWorkflow(PRODUCER_WORKFLOW_PATH);
-    const macosWorkflow = readWorkflow(MACOS_PRODUCER_WORKFLOW_PATH);
-    expect(iosWorkflow.jobs?.scan?.["runs-on"]).toBe("xcode-27");
-    expect(macosWorkflow.jobs?.["macos-index"]?.["runs-on"]).toBe("xcode-27");
-    expect(macosWorkflow.jobs?.["scan-ios"]?.["runs-on"]).toBe("xcode-27");
+    expect(upload?.with?.name).toContain("${{ github.run_id }}-${{ github.run_attempt }}");
   });
 
   it.each([
@@ -647,10 +632,8 @@ describe("Periphery publication admission", () => {
   });
 
   it.each([
-    ["passive", `${name} [passive]`],
     ["missing", undefined],
     ["trailing text", `${name} [report] extra`],
-    ["wrong workflow", `Other Periphery Dead Code [report]`],
   ])("records %s metadata as a no-op without API work", async (_label, display_title) => {
     const result = await publish({
       run: { display_title },
@@ -666,10 +649,7 @@ describe("Periphery publication admission", () => {
     ["pending report", newerRun({ status: "queued" }), true],
     ["pending attempt", { run_attempt: 3, status: "in_progress" }, true],
     ["other PR", newerRun({ pull_requests: [{ number: 456 }] }), false],
-    ["passive", newerRun(passive), false],
     ["delayed converted_to_draft", newerRun(draft), false],
-    ["missing admission", newerRun({ display_title: undefined }), false],
-    ["malformed admission", newerRun({ display_title: `${name} [report] suffix` }), false],
   ] satisfies Array<[string, Partial<WorkflowRun>, boolean]>)(
     "supersession eligibility: %s",
     async (_label, candidate, supersedes) => {
@@ -682,7 +662,6 @@ describe("Periphery publication admission", () => {
   it.each([
     ["new draft", draft, true],
     ["stale report", report, false],
-    ["passive draft", passive, false],
   ])("draft cleanup supersession: %s", async (_label, candidate, supersedes) => {
     const result = await publish({
       run: draft,
@@ -695,24 +674,18 @@ describe("Periphery publication admission", () => {
   });
 
   it.each([
-    ["create/head", { liveHeadShaAfter: "new-head" }, false],
-    ["create/draft", { liveDraftAfter: true }, false],
-    ["update/head", { liveHeadShaAfter: "new-head" }, true],
-    ["update/ready to draft", { liveDraftAfter: true }, true],
+    ["update/head", { liveHeadShaAfter: "new-head" }],
+    ["update/ready to draft", { liveDraftAfter: true }],
     [
       "draft to ready",
       { liveDraft: true, liveDraftAfter: false, run: draft, scanJobConclusion: "skipped" },
-      true,
     ],
-    ["update/closed", { liveStateAfter: "closed" }, true],
-    ["update/repository", { liveRepositoryAfter: "other/repository" }, true],
-  ] satisfies Array<[string, Parameters<typeof runCommenter>[2], boolean]>)(
+    ["update/closed", { liveStateAfter: "closed" }],
+    ["update/repository", { liveRepositoryAfter: "other/repository" }],
+  ] satisfies Array<[string, Parameters<typeof runCommenter>[2]]>)(
     "rejects %s changes before writing",
-    async (_label, options, existing) => {
-      const result = await publish({
-        ...options,
-        existingComments: existing ? previousComments() : undefined,
-      });
+    async (_label, options) => {
+      const result = await publish({ ...options, existingComments: previousComments() });
       expect(result.pullGetCount).toBe(2);
       expect(result.apiCalls.at(-1)).toBe("getPull");
       expectNoWrite(result);

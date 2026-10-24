@@ -53,7 +53,7 @@ export function admitStoreSearchExtension(
     );
   }
   db.runTransaction(() => {
-    admitPostgresSearch(db, definition, facts.namespace);
+    admitPostgresSearch(db, definition, facts.namespace, base.postgresVectorSearchVersion);
     const existing = [base.search, ...Object.values(base.searchExtensions ?? {})].filter(
       (item) => item !== undefined,
     );
@@ -79,6 +79,7 @@ export function admitStoreSearchExtension(
           ),
         },
         base.postgresVectorDecoderVersion,
+        base.postgresVectorSearchVersion,
       ),
     );
     if (!Object.keys(base.searchExtensions ?? {}).length) {
@@ -101,7 +102,7 @@ export function admitStoreSearchExtension(
     for (const item of [next.search, ...Object.values(next.searchExtensions)].filter(
       (candidate) => candidate !== undefined,
     )) {
-      publishPostgresSearch(db, item);
+      publishPostgresSearch(db, item, base.postgresVectorSearchVersion);
     }
   });
   return bindStoreSearch(db, definition);

@@ -25,7 +25,7 @@ type SetupCommandRunner = NonNullable<Parameters<typeof runE2eGlobalSetup>[0]>;
 type ProcessExit = { code: number | null; signal: NodeJS.Signals | null };
 
 const posixIt = process.platform === "win32" ? it.skip : it;
-const aiBuild = ["--import", "tsx", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"];
+const prepareBuild = ["scripts/prepare-vitest-runtime.mjs", "--with-ai-package"];
 
 function readFixturePid(file: string): number {
   const pid = Number(fs.readFileSync(file, "utf8"));
@@ -40,32 +40,22 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
-it("runs both build commands sequentially with their exact environments", async () => {
+it("joins the preparation owner with the caller's exact environment", async () => {
   const firstCommand = createDeferred<number>();
-  const runCommand = vi
-    .fn<SetupCommandRunner>()
-    .mockReturnValueOnce(firstCommand.promise)
-    .mockResolvedValueOnce(0);
+  const runCommand = vi.fn<SetupCommandRunner>().mockReturnValueOnce(firstCommand.promise);
 
-  const setupPromise = runE2eGlobalSetup(runCommand);
+  const env = { ...process.env, OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" };
+  const setupPromise = runE2eGlobalSetup(runCommand, env);
   expect(runCommand).toHaveBeenCalledTimes(1);
   firstCommand.resolve(0);
   await setupPromise;
-  const prepareEnv = {
-    ...process.env,
-    OPENCLAW_BUILD_PRIVATE_QA: "1",
-    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
-  };
-  expect(runCommand.mock.calls).toEqual([
-    [["scripts/prepare-vitest-runtime.mjs"], prepareEnv],
-    [aiBuild, process.env],
-  ]);
+  expect(runCommand.mock.calls).toEqual([[prepareBuild, env]]);
 });
 
 it("propagates a nonzero command status", async () => {
-  const runCommand = vi.fn<SetupCommandRunner>().mockResolvedValueOnce(0).mockResolvedValueOnce(23);
+  const runCommand = vi.fn<SetupCommandRunner>().mockResolvedValueOnce(23);
   await expect(runE2eGlobalSetup(runCommand)).rejects.toThrow(
-    `E2E setup command failed with exit code 23: ${aiBuild.join(" ")}`,
+    `E2E setup command failed with exit code 23: ${prepareBuild.join(" ")}`,
   );
 });
 

@@ -677,25 +677,10 @@ export async function runE2eGlobalSetup(
   if (isE2eBuildSkipped(env)) {
     return;
   }
-  const commands = [
-    {
-      args: ["scripts/prepare-vitest-runtime.mjs"],
-      env: {
-        ...env,
-        OPENCLAW_BUILD_PRIVATE_QA: "1",
-        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
-      },
-    },
-    {
-      args: ["--import", "tsx", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"],
-      env,
-    },
-  ];
-  for (const { args, env: commandEnv } of commands) {
-    const status = await runCommand(args, commandEnv);
-    if (status !== 0) {
-      throw new Error(`E2E setup command failed with exit code ${status}: ${args.join(" ")}`);
-    }
+  const args = ["scripts/prepare-vitest-runtime.mjs", "--with-ai-package"];
+  const status = await runCommand(args, env);
+  if (status !== 0) {
+    throw new Error(`E2E setup command failed with exit code ${status}: ${args.join(" ")}`);
   }
 }
 
