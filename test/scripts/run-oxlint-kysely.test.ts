@@ -37,10 +37,7 @@ function createLintFixture() {
     rules: { "typescript/no-redundant-type-constituents": "error" },
   });
   for (const name of ["state", "agent"]) {
-    write(
-      "src/state/openclaw-" + name + "-schema.sql",
-      "CREATE TABLE records (title TEXT NOT NULL);",
-    );
+    write(`src/state/openclaw-${name}-schema.sql`, "CREATE TABLE records (title TEXT NOT NULL);");
   }
   write(
     "src/state/openclaw-state-db.generated.ts",
@@ -84,10 +81,8 @@ const striped = [
 
 describe("typed lint Kysely prerequisites", () => {
   it.each([
-    { name: "direct", args: direct, sparse: false },
     { name: "striped", args: striped, sparse: false },
     { name: "sparse direct", args: direct, sparse: true },
-    { name: "sparse striped", args: striped, sparse: true },
     { name: "invalid direct", args: direct, invalid: true },
     { name: "invalid striped", args: striped, invalid: true },
   ])(

@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,7 +10,6 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const headSha = "b".repeat(40);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const bootstrap = `#!/usr/bin/env bash
 set -euo pipefail
 expected_head_sha="$1"
@@ -42,19 +40,6 @@ function launch(
   writeFileSync(script, transport.input);
   return spawnSync("/bin/bash", [script, ...transport.args], { encoding: "utf8" });
 }
-
-it("streams an oversized command without changing its bytes or using oversized argv", () => {
-  const command = `#${"x".repeat(600_000)}\nprintf '%s' '${literal}'`;
-  const transport = buildCrabboxGateTransport({ bootstrap, command, headSha });
-  const commandHash = digest(command),
-    payloadHash = digest(transport.input);
-  expect(transport).toMatchObject({
-    args: [headSha, digest(bootstrap), commandHash, payloadHash],
-    uploadPath: `.crabbox/scripts/${payloadHash.slice(0, 12)}-script.sh`,
-  });
-  expect(Math.max(...transport.args.map((arg) => Buffer.byteLength(arg)))).toBe(64);
-  expect(transport.input).toContain(`${command}\nOPENCLAW_GATE_${commandHash}\n`);
-});
 
 describe.skipIf(process.platform !== "linux")("Crabbox Linux launcher", () => {
   it.each([

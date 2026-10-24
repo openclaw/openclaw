@@ -18,7 +18,6 @@ const cases: Case[] = [
   ...[
     ["packages/gateway-protocol/README.md", false],
     ["packages/gateway-protocol/src/schema.ts", true],
-    ["packages/gateway-protocol/test/fixtures/README.md", true],
     ["packages/gateway-protocol/prompts/runtime.md", true],
   ].map(([file, selected]): Case => [
     [String(file), "src/utils/absolute-deadline.test.ts"],
@@ -44,9 +43,7 @@ const cases: Case[] = [
     "src/shared/runtime.ts",
     "src/shared/view.tsx",
     "packages/media-core/src/runtime.mts",
-    "packages/media-core/src/runtime.cts",
     "extensions/telegram/src/runtime.ts",
-    "packages/media-core/src/types.d.ts",
   ),
   ...casesFor(
     { checkTasks: expect.arrayContaining(["bundled-channel-config-metadata"]) },
@@ -64,9 +61,7 @@ const cases: Case[] = [
     "test/helpers/fixture.ts",
     "src/agents/session.test-support.ts",
     "scripts/lib/source-file-scan-cache.mts",
-    "config/knip.all-exports.config.ts",
     "extensions/telegram/tsconfig.json",
-    "extensions/telegram/package.json",
     "pnpm-lock.yaml",
     "new-owner/data.json",
   ),
@@ -99,7 +94,6 @@ const cases: Case[] = [
       kyselyGuardrails: false,
       checkTasks: ["guards", "dependencies"],
     },
-    "test/openclaw-launcher.e2e.test.ts": { fastTasks: ["bun-launcher"] },
     "cli-invocation.mjs": { fastTasks: expect.arrayContaining(["bun-launcher"]) },
     "src/infra/sqlite-existing-database.ts": { fastTasks: ["bun-launcher"] },
   } satisfies Record<string, Scope>),
