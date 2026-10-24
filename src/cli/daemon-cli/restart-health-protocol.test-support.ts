@@ -34,6 +34,7 @@ export async function withProtocolGateway<T>(
     observed: ConnectParams[];
     failures: string[];
     httpRequests: string[];
+    requests: string[];
   }) => Promise<T>,
   options: { beforeChallenge?: () => Promise<void> } = {},
 ): Promise<T> {
@@ -58,6 +59,7 @@ export async function withProtocolGateway<T>(
   const config = { gateway: { mode: "local" as const, auth, port } };
   const observed: ConnectParams[] = [];
   const failures: string[] = [];
+  const requests: string[] = [];
   gateway.on("connection", (socket, upgradeReq) => {
     let scopes: string[] = [];
     const handleMessage = async (data: RawData) => {
@@ -65,6 +67,7 @@ export async function withProtocolGateway<T>(
       if (!request.id || !request.method) {
         return;
       }
+      requests.push(request.method);
       const reject = (code: string, message: string, errorOptions?: object) => {
         socket.send(
           JSON.stringify({
@@ -186,7 +189,7 @@ export async function withProtocolGateway<T>(
     });
   });
   try {
-    return await run({ port, config, observed, failures, httpRequests });
+    return await run({ port, config, observed, failures, httpRequests, requests });
   } finally {
     await closeMinimalGatewayServer(gateway);
     http.closeAllConnections();

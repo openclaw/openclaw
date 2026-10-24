@@ -104,7 +104,16 @@ it.each(["none", "token"] as const)(
 );
 
 const executorFixture = useExecutorFixture("readiness-connection-authority-");
-it("sends no credentials when the admitted updater lease changes before challenge", async () => {
+it.each([
+  {
+    authority: "current",
+    effect: "current lease sends authenticated connect and health; readiness succeeds",
+  },
+  {
+    authority: "reassigned",
+    effect: "reassigned lease sends no connect or health; readiness rejects",
+  },
+] as const)("real executor readiness: $effect", async ({ authority }) => {
   const { root, control } = executorFixture();
   let revoked = false;
   await withOpenClawTestState(
@@ -112,12 +121,12 @@ it("sends no credentials when the admitted updater lease changes before challeng
     async (state) =>
       withProtocolGateway(
         "token",
-        async ({ port, config, observed }) => {
+        async ({ port, config, observed, requests }) => {
           let callError: unknown;
           const outcome = await withUpdateCommandExecutor(randomUUID(), async (owner) => {
             const fence = await owner.enter(root);
             try {
-              await confirmGatewayReachable({
+              return await confirmGatewayReachable({
                 config,
                 auth: config.gateway.auth,
                 env: state.env,
@@ -130,9 +139,25 @@ it("sends no credentials when the admitted updater lease changes before challeng
               throw error;
             }
           }).then(
-            () => ({ ok: true }),
+            (value) => ({ value }),
             (error: unknown) => ({ error }),
           );
+          if (authority === "current") {
+            expect(requests).toEqual(["connect", "health"]);
+            expect(observed).toHaveLength(1);
+            expect(Boolean(observed[0]?.auth?.token)).toBe(true);
+            expect(outcome).toMatchObject({
+              value: {
+                reachable: true,
+                gatewayVersion: "2026.10.23",
+                gatewayBuildId: "fixture-target",
+              },
+            });
+            expect(callError).toBeUndefined();
+            expect(revoked).toBe(false);
+            return;
+          }
+          expect(requests).toEqual([]);
           expect(observed).toEqual([]);
           expect(revoked).toBe(true);
           expect(callError).toMatchObject({
@@ -142,6 +167,9 @@ it("sends no credentials when the admitted updater lease changes before challeng
         },
         {
           beforeChallenge: async () => {
+            if (authority === "current") {
+              return;
+            }
             // Reassign the real admitted lease while the live socket awaits its challenge.
             const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
             try {
