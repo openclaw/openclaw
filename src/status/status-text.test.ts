@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
@@ -26,6 +27,7 @@ import * as transcriptTail from "../gateway/session-transcript-readers.js";
 import * as transcriptUsage from "../gateway/session-transcript-usage.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -313,6 +315,7 @@ describe("prepared status", () => {
       storePath: state.statePath("status.sqlite"),
     };
     const sessionEntry = entry({ sessionId: target.sessionId });
+    const readUsage = vi.spyOn(transcriptUsage, "readRecentSessionUsageFromTranscriptAsync");
     await replaceSessionEntry(target, sessionEntry);
     const appendUsage = async (content: string, input: number, output: number) => {
       await appendTranscriptMessage(target, {
@@ -325,6 +328,18 @@ describe("prepared status", () => {
       await waitForSessionTranscriptProjection(target);
     };
     await appendUsage("x".repeat(300_000), 10, 2);
+    openOpenClawAgentDatabase({ agentId: target.agentId, path: target.storePath });
+    const reads: string[] = [];
+    observeHostDataSql((sql, database) => {
+      if (
+        !database &&
+        /\b(?:transcript_events|session_transcript_active_events|transcript_event_identities)\b/iu.test(
+          sql,
+        )
+      ) {
+        reads.push(sql);
+      }
+    });
     const renderUsage = (value = sessionEntry) =>
       prepared({
         sessionEntry: value,
@@ -334,8 +349,11 @@ describe("prepared status", () => {
       });
     setRuntimeConfigSnapshot({});
     expect((await renderUsage()).text).toContain("Tokens: 10 in / 2 out");
+    expect(reads).toEqual([]);
     await appendUsage("New usage", 30, 4);
+    reads.length = 0;
     expect((await renderUsage()).text).toContain("Tokens: 30 in / 4 out");
+    expect(reads).toEqual([]);
     const committed = {
       ...sessionEntry,
       ...modelEntry(selected),
@@ -347,7 +365,9 @@ describe("prepared status", () => {
       totalTokens: 60,
     } satisfies Entry;
     await replaceSessionEntry(target, committed);
+    readUsage.mockClear();
     expect((await renderUsage(committed)).text).toContain("Tokens: 60 in / 6 out");
+    expect(readUsage).not.toHaveBeenCalled();
   });
 
   it.each([
