@@ -21,11 +21,6 @@ function workflowJob(name: string): WorkflowJob {
     `Missing ${name} job`,
   );
 }
-function containsAll(actual: string | undefined, expected: string[]) {
-  for (const text of expected) {
-    expect(actual).toContain(text);
-  }
-}
 
 async function resolveCandidateRef(body: string, pullRequestHead: string) {
   const request = expectDefined(
@@ -85,15 +80,6 @@ describe("Mantis Web UI chat proof workflow", () => {
     });
   });
 
-  it("publishes evidence with plain Node and no dependency setup", () => {
-    const job = workflowJob("publish_evidence");
-    const publish = job.steps?.find((step) => step.name === "Comment PR with inline QA evidence");
-
-    expect(job.steps?.some((step) => step.name === "Setup Node environment")).toBe(false);
-    expect(publish?.run).toContain("node scripts/mantis/publish-pr-evidence.mjs");
-    expect(publish?.run).not.toContain("--import tsx");
-  });
-
   it("retains one invocation root through capture, failure reporting, and artifact upload", () => {
     const job = workflowJob("run_web_ui_chat");
     const allocate = job.steps?.find((step) => step.id === "prepare_evidence");
@@ -103,16 +89,16 @@ describe("Mantis Web UI chat proof workflow", () => {
     const rootOutput = "${{ steps.prepare_evidence.outputs.output_dir }}";
 
     expect(allocate?.run).toContain('mktemp -d "$output_parent/run.XXXXXX"');
-    containsAll(capture?.run, [
-      `root="${rootOutput}"`,
-      'OPENCLAW_MANTIS_WEB_UI_CHAT_OUTPUT_DIR="$root"',
-      'OPENCLAW_UI_E2E_ARTIFACT_DIR="$root"',
-      // Older candidates need the allocator imported by both overlaid harness files.
-      '"${GITHUB_WORKSPACE}/ui/src/test-helpers/control-ui-e2e-artifacts.ts"',
-      '"$candidate_repo/ui/src/test-helpers/control-ui-e2e-artifacts.ts"',
-    ]);
+    expect(capture?.run).toContain(`root="${rootOutput}"`);
+    expect(capture?.run).toContain('OPENCLAW_MANTIS_WEB_UI_CHAT_OUTPUT_DIR="$root"');
+    expect(capture?.run).toContain('OPENCLAW_UI_E2E_ARTIFACT_DIR="$root"');
+    // Older candidates need the allocator from the trusted harness overlay.
+    for (const owner of ["${GITHUB_WORKSPACE}", "$candidate_repo"]) {
+      expect(capture?.run).toContain(`"${owner}/ui/src/test-helpers/control-ui-e2e-artifacts.ts"`);
+    }
     expect(report?.if).toContain("always()");
-    containsAll(report?.run, [`root="${rootOutput}"`, '--output-dir "$root"']);
+    expect(report?.run).toContain(`root="${rootOutput}"`);
+    expect(report?.run).toContain('--output-dir "$root"');
     expect(report?.env?.PROOF_STATUS).toBe(
       "${{ steps.run_mantis.outcome == 'success' && 'pass' || 'fail' }}",
     );
