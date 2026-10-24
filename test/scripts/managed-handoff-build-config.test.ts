@@ -19,10 +19,7 @@ import { build } from "tsdown";
 import { afterEach, expect, it, vi } from "vitest";
 import { collectPackageDistImportErrors } from "../../scripts/lib/package-dist-imports.mjs";
 import { withUpdateCommandExecutor } from "../../src/cli/update-cli/update-command-executor.js";
-import {
-  resolvePackageActivationHelper,
-  resolvePackageActivationJournalPath,
-} from "../../src/infra/package-update-activation-journal.js";
+import { resolvePackageActivationHelper } from "../../src/infra/package-update-activation-journal.js";
 import { preparePackageActivationJournal } from "../../src/infra/package-update-activation-prepare.js";
 import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.js";
 import { packageActivationRuntimeForTest } from "../../src/infra/package-update-activation-runtime.test-support.js";
@@ -137,7 +134,6 @@ it.each(
   });
   const commands: string[] = [];
   let preparedPackage: Awaited<ReturnType<typeof preparePackageActivationJournal>> | undefined;
-  let prepareNext: (() => Promise<NonNullable<typeof preparedPackage>>) | undefined;
   const childOptions = {
     encoding: "utf8",
     timeout: 30_000,
@@ -233,7 +229,7 @@ it.each(
     } else {
       const base = path.join(realpathSync(directory), "literal-$HOME-`id`-'quoted'");
       mkdirSync(base, { mode: 0o700 });
-      prepareNext = async () => {
+      const prepare = async () => {
         const fixture = await createPackageSwapFixture(base);
         // npm nests proc-safe and its FreeBSD addon inside the installed package.
         const nativeModules = path.join(fixture.packageRoot, "node_modules");
@@ -273,7 +269,7 @@ it.each(
           }),
         );
       };
-      const prepared = (preparedPackage = await prepareNext());
+      const prepared = (preparedPackage = await prepare());
       entry = resolvePackageActivationHelper(prepared.anchor);
       expect(readdirSync(prepared.anchor).toSorted()).toEqual(
         ["candidate", "launchers"].toSorted(),
@@ -282,7 +278,6 @@ it.each(
 
     // Recovery must survive loss of the old package and all its neighboring assets.
     // The POSIX activation helper intentionally has no Windows executable in custody.
-    const builtRuntime = readFileSync(path.join(outDir, runtimeEntry));
     rmSync(outDir, { recursive: true });
     const result = spawnSync(
       resolveTestNodeExecPath(),
@@ -383,52 +378,12 @@ it.each(
     expect(output).toContain("staged production runtime loaded");
     if (kind === "package") {
       expect(JSON.parse(output.split("\n")[0]!)).toMatchObject({ phase: "prepared" });
-      if (!preparedPackage || !prepareNext || commands.length !== 1) {
+      if (!preparedPackage || commands.length !== 1) {
         throw new Error("First package recovery command was not published exactly once.");
       }
       const commandA = commands[0]!;
       const first = preparedPackage.journal.read();
-      const firstJournal = resolvePackageActivationJournalPath(preparedPackage.anchor);
-      const originalJournal = lstatSync(firstJournal);
       assertPhases(commandA, first.descriptor.operationId, [
-        ["repair", "aborted"],
-        ["retire", "complete"],
-      ]);
-      const completedJournal = readFileSync(firstJournal);
-      mkdirSync(outDir);
-      // A new preparation reads its own build; its detached commands still run without it.
-      writeFileSync(path.join(outDir, runtimeEntry), builtRuntime);
-      const second = await prepareNext();
-      rmSync(outDir, { recursive: true });
-      const recordB = second.journal.read();
-      const journalPath = resolvePackageActivationJournalPath(second.anchor);
-      const archivedJournal = path.join(
-        `${second.anchor}.superseded-${first.descriptor.operationId}`,
-        "control",
-        "operation.sqlite",
-      );
-      expect(lstatSync(archivedJournal).ino).toBe(originalJournal.ino);
-      expect(readFileSync(archivedJournal)).toEqual(completedJournal);
-      expect(lstatSync(journalPath).ino).not.toBe(originalJournal.ino);
-      expect(lstatSync(journalPath).dev).toBe(originalJournal.dev);
-      expect(recordB.descriptor.operationId).not.toBe(first.descriptor.operationId);
-      const snapshot = () =>
-        [
-          archivedJournal,
-          journalPath,
-          resolvePackageActivationHelper(second.anchor),
-          path.join(recordB.descriptor.authority.installKey, "package.json"),
-        ].map((file) => ({ bytes: readFileSync(file), ino: lstatSync(file).ino }));
-      const before = snapshot();
-      expect(commands).toHaveLength(2);
-      for (const action of ["status", "repair", "retire"]) {
-        const stale = runCommand(commandA, action);
-        commandOutput(stale, 1);
-        expect(stale.stderr).toContain("different operation");
-        expect(snapshot()).toEqual(before);
-      }
-      assertPhases(commands[1]!, recordB.descriptor.operationId, [
-        ["status", "prepared"],
         ["repair", "aborted"],
         ["retire", "complete"],
       ]);

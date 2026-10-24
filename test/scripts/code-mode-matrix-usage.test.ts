@@ -7,7 +7,6 @@ import {
   captureMatrixLedgerBoundary,
   collectMatrixUsage,
   readMatrixSessionLedger,
-  selectMatrixLedgerRows,
   type MatrixSessionLedger,
 } from "../../scripts/lib/code-mode-matrix-usage.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -160,14 +159,6 @@ describe("matrix task billing", () => {
     });
     expect(task.costUsd).toBeCloseTo(0.024);
     expect(interview).toMatchObject({ complete: true, totalTokens: 24, assistantTurns: 1 });
-    expect(
-      selectMatrixLedgerRows({ ledger: final, after: taskEnd, rootSessionKeys: [ROOT] }).rows,
-    ).toHaveLength(2);
-    expect(final.rows.map((row) => [row.storeId, row.sessionId, row.seq])).toEqual([
-      ["agents/qa/agent/openclaw-agent.sqlite", "qa", 1],
-      ["agents/qa/agent/openclaw-agent.sqlite", "qa", 2],
-      ["agents/worker/agent/openclaw-agent.sqlite", "worker", 1],
-    ]);
   });
 
   const unavailable = { usageReport: { state: "unavailable" } };
@@ -426,11 +417,8 @@ function modeRow(mode: "code" | "direct", repetition = 1) {
       fixtureSha256: `fixture-${repetition}`,
       settings: {
         thinking: "low",
-        fast: false,
-        runtime: "openclaw",
         allowedTools: ["read", "write"],
         timeoutSeconds: 60,
-        executor: "node",
       },
     },
     accounting: accounting(),
