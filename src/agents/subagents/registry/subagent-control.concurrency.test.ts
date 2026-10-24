@@ -23,6 +23,7 @@ import {
   retireSessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
@@ -50,22 +51,18 @@ const requesterKey = "agent:main:main";
 const { writeSession, register, seed } = createControlRunFixture(() => fixture.stateDir);
 
 async function block(enabled: boolean, scope: string, identities: string[]) {
-  const entered = createDeferred();
-  const release = createDeferred();
+  const mutationGate = createEnteredGate();
   const pending = enabled
     ? runSessionMutation({
         scope,
         identities,
-        run: async () => {
-          entered.resolve();
-          await release.promise;
-        },
+        run: mutationGate.wait,
       })
     : Promise.resolve();
   if (enabled) {
-    await entered.promise;
+    await mutationGate.entered;
   }
-  return { pending, release: release.resolve };
+  return { pending, release: mutationGate.release };
 }
 
 it("does not transfer a selected task cancellation to an admitted follow-up generation", async () => {
@@ -561,8 +558,7 @@ it("full child Stop preserves later and foreign sources while joining captured q
     incarnation: sessionId,
   });
   const interrupted = createDeferred();
-  const cleaning = createDeferred();
-  const cleanupFinish = createDeferred();
+  const cleanupGate = createEnteredGate();
   const admission = await beginSessionEffect({
     target,
     assertAllowed: () => {},
@@ -572,10 +568,7 @@ it("full child Stop preserves later and foreign sources while joining captured q
     target,
     policy: { mode: "followup" },
     adapter: {
-      onSettled: async () => {
-        cleaning.resolve();
-        await cleanupFinish.promise;
-      },
+      onSettled: cleanupGate.wait,
     },
   });
   const foreign = reserveSessionControllerSource(sessionKey, {
@@ -594,17 +587,17 @@ it("full child Stop preserves later and foreign sources while joining captured q
     await interrupted.promise;
     later = reserveSessionControllerSource(sessionKey, { target, policy: { mode: "followup" } });
     admission.release();
-    await cleaning.promise;
+    await cleanupGate.entered;
     expect(own.abortSignal.aborted).toBe(true);
     expect(later.abortSignal.aborted).toBe(false);
     expect(foreign.abortSignal.aborted).toBe(false);
     expect(completed).toBe(false);
-    cleanupFinish.resolve();
+    cleanupGate.release();
     expect(await pending).toMatchObject({ found: true, killed: true });
     await own.settlement.promise;
     expect(later.abortSignal.aborted).toBe(false);
   } finally {
-    cleanupFinish.resolve();
+    cleanupGate.release();
     admission.release();
     await pending;
     const inputs = [own, foreign, ...(later ? [later] : [])];

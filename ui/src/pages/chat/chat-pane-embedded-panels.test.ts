@@ -18,6 +18,7 @@ import {
 } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
@@ -50,12 +51,12 @@ import {
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
 import { createChatSidebarContainer } from "./components/chat-sidebar.test-support.ts";
 import { ChatThread } from "./components/chat-thread-view.tsx";
+import "./components/chat-sidebar-region.runtime.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
   threadProps,
 } from "./components/chat-transcript.test-support.ts";
-import "./components/chat-sidebar-region.runtime.tsx";
 import {
   closeSlot,
   ensureSidebarConversation,
@@ -152,11 +153,7 @@ it("navigates an existing file tab to an explicit line without resetting its edi
     const descriptor = Object.getOwnPropertyDescriptor(Range.prototype, key);
     Object.defineProperty(Range.prototype, key, { configurable: true, value });
     onTestFinished(() => {
-      if (descriptor) {
-        Object.defineProperty(Range.prototype, key, descriptor);
-      } else {
-        Reflect.deleteProperty(Range.prototype, key);
-      }
+      restorePropertyDescriptor(Range.prototype, key, descriptor);
     });
   }
   const { file, mount, renderPanels, state, sessions, query } = createReviewFixture();

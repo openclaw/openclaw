@@ -36,6 +36,7 @@ function createEmbeddingQueryRetryHarness(
   // memory index or acquiring an external embedding provider.
   return Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
     provider,
+    settings: {},
     resolveEmbeddingTimeout: () => timeoutMs,
     markLocalEmbeddingProviderDegraded: vi.fn(),
   }) as EmbeddingQueryRetryHarness;
@@ -58,7 +59,7 @@ function createEmbeddingBatchRetryHarness(embedBatch: EmbeddingProvider["embedBa
 }
 
 describe("memory model input formatting", () => {
-  it.each([
+  it.each<[string, string, boolean, string?]>([
     [
       "local",
       "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
@@ -72,52 +73,64 @@ describe("memory model input formatting", () => {
     ["openai-compatible", "nomic-embed-text", false],
     ["openai-compatible", "other/embeddinggemmax", false],
     ["gemini", "gemini-embedding-2", false],
-  ])("formats query and document inputs for %s/%s", async (id, model, prefixed) => {
-    const embed = vi.fn<EmbeddingProvider["embed"]>(async () => [1, 0]);
-    const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) =>
-      inputs.map(() => [0, 1]),
-    );
-    const manager = createEmbeddingBatchRetryHarness(embedBatch);
-    Object.assign(manager.provider, { id, model, embed });
-    const document = {
-      text: "first second",
-      parts: [
-        { type: "text" as const, text: "first" },
-        { type: "text" as const, text: " second" },
-      ],
-    };
+    ["local", "embeddinggemma", true, "custom: "],
+  ])(
+    "formats query and document inputs for %s/%s",
+    async (id, model, prefixed, queryInstruction) => {
+      const embed = vi.fn<EmbeddingProvider["embed"]>(async () => [1, 0]);
+      const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) =>
+        inputs.map(() => [0, 1]),
+      );
+      const manager = createEmbeddingBatchRetryHarness(embedBatch);
+      Object.assign(manager.provider, { id, model, embed });
+      Object.assign(manager, { settings: { queryInstruction } });
+      const document = {
+        text: "first second",
+        parts: [
+          { type: "text" as const, text: "first" },
+          { type: "text" as const, text: " second" },
+        ],
+      };
 
-    await expect(manager.embedQueryWithRetry("find this")).resolves.toEqual([1, 0]);
-    await expect(manager.embedBatchWithRetry(["remember this", document])).resolves.toEqual([
-      [0, 1],
-      [0, 1],
-    ]);
+      await expect(manager.embedQueryWithRetry("find this")).resolves.toEqual([1, 0]);
+      await expect(manager.embedBatchWithRetry(["remember this", document])).resolves.toEqual([
+        [0, 1],
+        [0, 1],
+      ]);
 
-    expect(embed.mock.calls[0]?.[0]).toBe(
-      prefixed ? "task: search result | query: find this" : "find this",
-    );
-    expect(embedBatch.mock.calls[0]?.[0]).toEqual(
-      prefixed
-        ? [
-            "title: none | text: remember this",
-            {
-              text: "title: none | text: first second",
-              parts: [
-                { type: "text", text: "title: none | text: first" },
-                { type: "text", text: " second" },
-              ],
-            },
-          ]
-        : ["remember this", document],
-    );
-    expect(document).toEqual({
-      text: "first second",
-      parts: [
-        { type: "text", text: "first" },
-        { type: "text", text: " second" },
-      ],
-    });
-  });
+      expect(embed.mock.calls[0]?.[0]).toBe(
+        queryInstruction
+          ? `${queryInstruction}find this`
+          : prefixed
+            ? "task: search result | query: find this"
+            : "find this",
+      );
+      expect(embed.mock.calls[0]?.[1]?.queryInstructionApplied).toBe(
+        queryInstruction ? true : undefined,
+      );
+      expect(embedBatch.mock.calls[0]?.[0]).toEqual(
+        prefixed
+          ? [
+              "title: none | text: remember this",
+              {
+                text: "title: none | text: first second",
+                parts: [
+                  { type: "text", text: "title: none | text: first" },
+                  { type: "text", text: " second" },
+                ],
+              },
+            ]
+          : ["remember this", document],
+      );
+      expect(document).toEqual({
+        text: "first second",
+        parts: [
+          { type: "text", text: "first" },
+          { type: "text", text: " second" },
+        ],
+      });
+    },
+  );
 });
 
 describe("memory embedding query retry cancellation", () => {

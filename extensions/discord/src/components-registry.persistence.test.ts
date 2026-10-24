@@ -1,6 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
+import { trackPromiseFulfillment as track } from "../../test-support/async-gate.test-support.js";
 import {
   discordComponentRegistryState as registry,
   type DiscordRegistryStore,
@@ -34,17 +35,6 @@ function gate<T = void>() {
 
 function register(entries: DiscordComponentEntry[], modals: DiscordModalEntry[] = []) {
   return registerDiscordComponentEntries({ entries, modals });
-}
-
-function track<T>(promise: Promise<T>) {
-  const work = {
-    completed: false,
-    promise: promise.then((value) => {
-      work.completed = true;
-      return value;
-    }),
-  };
-  return work;
 }
 
 it("retires unclicked expired component and modal entries during registration", async () => {
@@ -98,11 +88,11 @@ it("waits for both component and modal registration before completing", async ()
     for (const pending of [componentDone, modalDone]) {
       await pending.started;
       await setImmediate();
-      expect(registration.completed).toBe(false);
+      expect(registration.settled).toBe(false);
       pending.resolve();
     }
     await registration.promise;
-    expect(registration.completed).toBe(true);
+    expect(registration.settled).toBe(true);
   } finally {
     componentDone.resolve();
     modalDone.resolve();
@@ -137,7 +127,7 @@ it.each([false, true])(
       await deleted.started;
       sibling = resolveComponent({ id: "cancel" });
       await setImmediate();
-      expect(first.completed).toBe(false);
+      expect(first.settled).toBe(false);
       deleted.resolve();
       expect((await first.promise)?.id).toBe("confirm");
       expect(await sibling).toBeNull();
@@ -159,7 +149,7 @@ it("awaits modal deletion and keeps in-memory fallback when persistence rejects"
   try {
     await deletion.started;
     await setImmediate();
-    expect(consumed.completed).toBe(false);
+    expect(consumed.settled).toBe(false);
     deletion.reject(new Error("synthetic persistence failure"));
     expect((await consumed.promise)?.id).toBe("modal");
     expect(registry.persistentRegistryDisabled).toBe(true);

@@ -50,6 +50,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../cron-creator-authority-context.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createRequesterTranscriptWriter } from "../../test-helpers/requester-transcript-writer.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
@@ -963,22 +964,18 @@ describe("subagent registry lifecycle hardening", () => {
 
   it("settles admitted cleanup and resource retirement during restart drain", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
-    const browserStarted = createDeferredCore();
-    const releaseBrowserCleanup = createDeferredCore();
+    const browserCleanupGate = createEnteredGate();
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockImplementationOnce(
-      async () => {
-        browserStarted.resolve();
-        await releaseBrowserCleanup.promise;
-      },
+      browserCleanupGate.wait,
     );
     const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
     const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
     const completion = completeAndJoinCleanup(controller, entry, { triggerCleanup: true });
     try {
-      await browserStarted.promise;
+      await browserCleanupGate.entered;
       markGatewayRestartDraining();
       expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
-      releaseBrowserCleanup.resolve();
+      browserCleanupGate.release();
       await completion;
       expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
       expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
@@ -986,7 +983,7 @@ describe("subagent registry lifecycle hardening", () => {
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
     } finally {
-      releaseBrowserCleanup.resolve();
+      browserCleanupGate.release();
       await completion;
       resetGatewayWorkAdmission();
     }
@@ -1320,12 +1317,8 @@ describe("subagent registry lifecycle hardening", () => {
       execution: { status: "running", startedAt: 6_000 },
     });
     const runs = new Map([ancestor, descendant].map((entry) => [entry.runId, entry]));
-    const timingEntered = createDeferredCore();
-    const timingRelease = createDeferredCore();
-    helperMocks.persistSubagentSessionTiming.mockImplementationOnce(async () => {
-      timingEntered.resolve();
-      await timingRelease.promise;
-    });
+    const timingGate = createEnteredGate();
+    helperMocks.persistSubagentSessionTiming.mockImplementationOnce(timingGate.wait);
     const wake = vi.fn(async (params: RequesterSettleWakeParams) => {
       const endedAt = runs.get(descendant.runId)?.execution.endedAt;
       if (endedAt === undefined || Date.now() < endedAt + 300_000) {
@@ -1346,7 +1339,7 @@ describe("subagent registry lifecycle hardening", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(wake).toHaveBeenCalledOnce();
       completion = completeRun(controller, descendant, { endedAt: 10_000, triggerCleanup: false });
-      await timingEntered.promise;
+      await timingGate.entered;
       await vi.advanceTimersByTimeAsync(0);
       expect(
         [...controller.waitingRequesterSettleWakes.values()].map(({ deadline }) => deadline),
@@ -1356,7 +1349,7 @@ describe("subagent registry lifecycle hardening", () => {
       expect(runs.get(ancestor.runId)?.requesterSettleWake).toBeUndefined();
       expect(runs.get(descendant.runId)?.cleanupCompletedAt).toBeUndefined();
     } finally {
-      timingRelease.resolve();
+      timingGate.release();
       await completion;
       controller.clearRuntimeState();
       vi.useRealTimers();
@@ -3799,19 +3792,15 @@ describe("subagent registry lifecycle hardening", () => {
       execution: { status: "running", startedAt: 5_000 },
     });
     const controller = createLifecycleController({ entry, runs });
-    const firstCleanupEntered = createDeferredCore();
-    const firstCleanupRelease = createDeferredCore();
+    const firstCleanupGate = createEnteredGate();
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockImplementationOnce(
-      async () => {
-        firstCleanupEntered.resolve();
-        await firstCleanupRelease.promise;
-      },
+      firstCleanupGate.wait,
     );
 
     const firstCompletion = completeRun(controller, entry, {
       triggerCleanup: true,
     });
-    await firstCleanupEntered.promise;
+    await firstCleanupGate.entered;
     const staleRecovery = controller.completeSubagentRun(
       makeInterruptedSubagentCompletion(entry, {
         expectedEntry: entry,
@@ -3822,7 +3811,7 @@ describe("subagent registry lifecycle hardening", () => {
     );
     runs.set(entry.runId, successor);
 
-    firstCleanupRelease.resolve();
+    firstCleanupGate.release();
     const results = await Promise.allSettled([firstCompletion, staleRecovery]);
     expect(results[0]).toMatchObject({ status: "fulfilled" });
     expect(results[1]).toMatchObject({

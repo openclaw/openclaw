@@ -5716,7 +5716,8 @@ try {
   const wholeWorkloadDiagnostics = await finishWholeWorkloadDiagnostics?.();
   if (workerHeapDoneFile && workerHeapPeerDoneFile) {
     writeFileSync(workerHeapDoneFile, String(Date.now()));
-    const deadline = Date.now() + 120_000;
+    // Long captures need room for a slower peer before either side forces GC.
+    const deadline = Date.now() + Math.max(120_000, Date.now() - measurementStartedAt);
     while (!existsSync(workerHeapPeerDoneFile)) {
       if (Date.now() >= deadline) {
         throw new Error("Worker heap peer did not finish its timing window");

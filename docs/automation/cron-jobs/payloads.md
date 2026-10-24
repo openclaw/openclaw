@@ -328,11 +328,14 @@ the content instead of overwriting another edit.
 
 Use a normal final reply for a visible result and `NO_REPLY` for silence.
 `record_result` accepts one outcome (`no_change`, `progress`, `done`, `blocked`,
-or `needs_attention`) and a nonempty summary capped at 2000 characters. It records
-the result without sending a notification by itself. Meaningful outcomes are
-retained in ordinary run history and bounded session context, including when the
-final reply is silent; this is not a delivery retry queue. `no_change` keeps
-runner delivery silent without hiding execution failures. Adaptive scheduling still uses `next_check` on a paced
+or `needs_attention`). `no_change` needs no summary; every other outcome requires
+a trimmed summary of 1–2000 characters. It records the result without sending a
+notification by itself. Structured results are retained in run history. After a
+successful run, the last meaningful result is saved with the job and included as
+bounded context in its next prompt, even when the final reply is silent. Quiet
+checks and execution failures do not overwrite that result or append result
+boilerplate to the conversation. This is not a delivery retry queue. `no_change`
+keeps runner delivery silent without hiding execution failures. Adaptive scheduling still uses `next_check` on a paced
 job. Scratch is context, not another scheduler:
 runtime does not parse `tasks:` blocks or read `HEARTBEAT.md`.
 
@@ -479,7 +482,7 @@ With `announce`, agent, command, and script results belong to the chat or topic 
     A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
   </Accordion>
   <Accordion title="Unattended run contract">
-    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `NO_REPLY` when nothing needs doing. When the task failed or is blocked, the reply explains what failed and what it tried in ordinary prose.
+    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent records `no_change` without a summary and returns `NO_REPLY` when nothing needs doing. Unchanged state and repeated known blockers stay quiet; new blockers and changes that need action get a concise result. Explicitly requested recurring reports and digests still run and deliver at their requested cadence. Execution failures remain visible rather than being treated as no change. For machine-checkable conditions, use an existing deterministic condition trigger or script to skip inference when nothing changed, instead of paying for a model turn to rediscover that fact.
 
     A completed model run is not proof that the requested task succeeded. The scheduler does not classify assistant prose as an execution error: a blocker report remains ordinary output, including a subagent's settled final answer. It follows the job's delivery policy and does not itself trigger retries, error backoff, failure alerts, or owner-conversation repair. Runtime failures, such as provider errors or execution timeouts, still fail the run and use the normal scheduler failure policy. Required delivery failures are tracked separately; see [Failure notifications](/automation/cron-jobs/delivery#failure-notifications).
 

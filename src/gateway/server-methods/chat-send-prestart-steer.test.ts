@@ -33,6 +33,7 @@ import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.tes
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { initializeRepository } from "../server.sessions.create.projects.test-support.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { dispatchInboundMessageMock, testState } from "../test-helpers.js";
 import {
@@ -60,12 +61,7 @@ function createRequestClients() {
       scopes: ["operator.write"],
     }),
     usesSharedGatewayAuth: true,
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
+    authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
     internal: {
       authenticatedOperator: true as const,
       operatorRoleActor: { kind: "system" as const },

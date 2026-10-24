@@ -32,6 +32,7 @@ import { registerChatAbortController } from "../chat-abort.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
@@ -634,19 +635,8 @@ it.each(["unchanged", "cached-success", "new-admission"] as const)(
       session.storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
       const client: NonNullable<Parameters<typeof runChatSendPreAdmission>[0]["client"]> = {
         connId: "profile-recovery",
-        authenticatedUserProfile: {
-          profileId: source.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: source.updatedAt,
-        },
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          role: "operator",
-          scopes: ["operator.admin"],
-          client: { id: "test", version: "1", platform: "test", mode: "test" },
-        },
+        authenticatedUserProfile: gatewayProfile(source.id, null, source.updatedAt),
+        connect: gatewayConnect(["operator.admin"], { id: "test", version: "1", mode: "test" }),
       };
       params.client = client;
       const mismatch = new SessionMutationAuthorizationChangedError({

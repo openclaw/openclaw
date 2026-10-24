@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
@@ -339,12 +340,11 @@ describe.each(["image", "music", "video"] as const)(
             image: referencePath,
           });
           try {
-            await Promise.race([
+            await awaitGateBeforeSettlement(
               waiting.promise,
-              outcome.then(() => {
-                throw new Error("Media preflight finished before workspace readiness");
-              }),
-            ]);
+              outcome,
+              "Media preflight finished before workspace readiness",
+            );
             expect(readReference).not.toHaveBeenCalled();
             expect(createTask).not.toHaveBeenCalled();
             const inline = await tool!.execute("inline-reference", {
@@ -447,12 +447,11 @@ describe.each(["image", "music", "video"] as const)(
                 (error: unknown) => ({ value: undefined, error }),
               );
             try {
-              await Promise.race([
+              await awaitGateBeforeSettlement(
                 preflightPaused.promise,
-                outcome.then(() => {
-                  throw new Error(`Media preflight settled before ${pause}`);
-                }),
-              ]);
+                outcome,
+                `Media preflight settled before ${pause}`,
+              );
               await first.release();
               await prepared.release();
               resumePreflight.resolve();
@@ -560,31 +559,28 @@ describe.each(["image", "music", "video"] as const)(
             }
             fixture.resumeProvider.resolve();
             if (phase === "lookup") {
-              await Promise.race([
+              await awaitGateBeforeSettlement(
                 fixture.lookupStarted.promise,
-                completion.then(() => {
-                  throw new Error("Video task settled before model capability lookup");
-                }),
-              ]);
+                completion,
+                "Video task settled before model capability lookup",
+              );
               await first.release();
               await prepared.release();
               expect(connection.database.isOpen).toBe(true);
               expect(connection.generated).toBe(0);
               fixture.resumeLookup.resolve();
             }
-            await Promise.race([
+            await awaitGateBeforeSettlement(
               fixture.generated.promise,
-              completion.then(() => {
-                throw new Error("Media task settled without invoking its prepared provider");
-              }),
-            ]);
+              completion,
+              "Media task settled without invoking its prepared provider",
+            );
             fixture.resumeGeneration.resolve();
-            await Promise.race([
+            await awaitGateBeforeSettlement(
               saveStarted.promise,
-              completion.then(() => {
-                throw new Error("Media task settled before persisting its output");
-              }),
-            ]);
+              completion,
+              "Media task settled before persisting its output",
+            );
             if (kind !== "video" || phase !== "rollback") {
               await first.release();
               await prepared.release();

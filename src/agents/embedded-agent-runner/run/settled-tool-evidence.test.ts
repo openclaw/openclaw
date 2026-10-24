@@ -61,6 +61,21 @@ function makeSettledIdleWriteAttempt(options?: {
   });
 }
 
+function failedToolInput(assistant: ReturnType<typeof toolAssistant>) {
+  return {
+    assistantTexts: [],
+    toolMetas: [{ toolName: "exec", isError: true }],
+    itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+    messagesSnapshot: [
+      assistant,
+      { role: "toolResult", toolCallId: "tool_1", toolName: "exec", isError: true },
+    ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    lastToolError: { toolName: "exec", error: "post-processing error" },
+  };
+}
+
 describe("runEmbeddedAgent incomplete-turn safety", () => {
   it("marks incomplete-turn retries as replay-invalid abandoned runs", () => {
     const attempt = makeAttempt({
@@ -285,13 +300,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   ])(
     "recognizes successful and failed current-batch tools with $label (#118274)",
     ({ lastToolError, failedToolTerminate }) => {
-      const toolUseAssistant = textAssistant(undefined, {
-        stopReason: "toolUse",
-        content: [
-          { type: "toolCall", id: "tool_ok", name: "read", arguments: {} },
-          { type: "toolCall", id: "tool_failed", name: "exec", arguments: {} },
-        ],
-      });
+      const toolUseAssistant = toolAssistant(["tool_ok", "read"], ["tool_failed", "exec"]);
       const instruction = continuation({
         assistantTexts: [],
         toolMetas: [
@@ -375,10 +384,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       lastErrorToolName: "exec",
     },
   ])("does not finalize $label (#118274)", ({ resultToolName, lastErrorToolName }) => {
-    const toolUseAssistant = textAssistant(undefined, {
-      stopReason: "toolUse",
-      content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
-    });
+    const toolUseAssistant = toolAssistant(["tool_1", "exec"]);
     const instruction = continuation({
       assistantTexts: [],
       toolMetas: [{ toolName: resultToolName, isError: true }],
@@ -401,25 +407,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("does not settle same-name terminal calls from one failed result (#118274)", () => {
-    const toolUseAssistant = textAssistant(undefined, {
-      stopReason: "toolUse",
-      content: [
-        { type: "toolCall", id: "tool_1", name: "exec", arguments: {} },
-        { type: "toolCall", id: "tool_2", name: "exec", arguments: {} },
-      ],
-    });
-    const instruction = continuation({
-      assistantTexts: [],
-      toolMetas: [{ toolName: "exec", isError: true }],
-      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-      messagesSnapshot: [
-        toolUseAssistant,
-        { role: "toolResult", toolCallId: "tool_1", toolName: "exec", isError: true },
-      ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
-      lastAssistant: toolUseAssistant,
-      currentAttemptAssistant: toolUseAssistant,
-      lastToolError: { toolName: "exec", error: "post-processing error" },
-    });
+    const toolUseAssistant = toolAssistant(["tool_1", "exec"], ["tool_2", "exec"]);
+    const instruction = continuation(failedToolInput(toolUseAssistant));
 
     expect(instruction).toBeNull();
   });
@@ -484,21 +473,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attemptOverrides: { didSendDeterministicApprovalPrompt: true },
     },
   ])("does not finalize a failed terminal tool when $label (#118274)", ({ attemptOverrides }) => {
-    const toolUseAssistant = textAssistant(undefined, {
-      stopReason: "toolUse",
-      content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
-    });
+    const toolUseAssistant = toolAssistant(["tool_1", "exec"]);
     const instruction = continuation({
-      assistantTexts: [],
-      toolMetas: [{ toolName: "exec", isError: true }],
-      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-      messagesSnapshot: [
-        toolUseAssistant,
-        { role: "toolResult", toolCallId: "tool_1", toolName: "exec", isError: true },
-      ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
-      lastAssistant: toolUseAssistant,
-      currentAttemptAssistant: toolUseAssistant,
-      lastToolError: { toolName: "exec", error: "post-processing error" },
+      ...failedToolInput(toolUseAssistant),
       ...attemptOverrides,
     });
 

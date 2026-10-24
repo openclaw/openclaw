@@ -6,6 +6,10 @@ import {
   closeOpenAICodexWebSocketSessions,
   resetOpenAICodexWebSocketStateForTest,
 } from "../../../../packages/ai/src/providers/openai-chatgpt-responses.js";
+import {
+  createJwt,
+  completedResponse as completedFrame,
+} from "../../../../packages/ai/src/providers/openai-chatgpt-responses.test-helpers.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 // Installs the same transport host as the runtime.
 import "../../../llm/stream.js";
@@ -29,12 +33,6 @@ import {
   resolveLlmIdleTimeoutMs,
   streamWithIdleTimeout,
 } from "./llm-idle-timeout.js";
-
-function createJwt(payload: Record<string, unknown>): string {
-  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return `${header}.${body}.signature`;
-}
 
 const apiKey = createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } });
 
@@ -92,18 +90,6 @@ class ControlledWebSocket extends EventTarget {
   fail(): void {
     this.dispatchEvent(Object.assign(new Event("error"), { message: "WebSocket error" }));
   }
-}
-
-function completedFrame(id: string): Frame {
-  return {
-    type: "response.completed",
-    response: {
-      id,
-      status: "completed",
-      output: [],
-      usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-    },
-  };
 }
 
 function startWatchdog(label: string) {

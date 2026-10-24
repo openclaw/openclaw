@@ -30,6 +30,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
 }));
 
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { collectEventTypes } from "../transports/openai-stream-cases.test-support.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
   anthropicTerminalFallbackCases,
@@ -87,10 +88,7 @@ function startStream(
   });
 }
 async function consumeStream(stream: ReturnType<typeof streamAnthropic>) {
-  const eventTypes: string[] = [];
-  for await (const event of stream) {
-    eventTypes.push(event.type);
-  }
+  const eventTypes = await collectEventTypes(stream);
   return { eventTypes, result: await stream.result() };
 }
 
@@ -940,10 +938,7 @@ describe("Anthropic provider", () => {
         name,
         provider,
       });
-      const eventTypes: string[] = [];
-      for await (const event of stream) {
-        eventTypes.push(event.type);
-      }
+      const eventTypes = await collectEventTypes(stream);
       const result = await stream.result();
 
       expect(eventTypes).toEqual(["error"]);
@@ -1515,10 +1510,7 @@ describe("Anthropic provider", () => {
 
     const stream = startStream(client, {}, conversation(user("hi")));
 
-    const eventTypes: string[] = [];
-    for await (const event of stream as AsyncIterable<{ type: string }>) {
-      eventTypes.push(event.type);
-    }
+    const eventTypes = await collectEventTypes(stream);
 
     // error must be the first event — no start emitted before it
     expect(eventTypes[0]).toBe("error");

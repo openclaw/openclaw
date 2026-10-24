@@ -1,8 +1,8 @@
 import { createMemo, createRoot, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
 import "./components/chat-sidebar-region.runtime.tsx";
 import "../../components/browser/browser-panel.ts";
-import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   createBrowserClient,
@@ -23,6 +23,7 @@ import {
   type SessionPanelToggleSlot,
 } from "../../components/session-panel-toggle-buffer.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createNoopSidebarRegionCallbacks } from "../../test-helpers/sidebar-region-callbacks.ts";
 import { flush as flushSolid } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
@@ -464,16 +465,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
               };
             },
             availableWidth: 1400,
-            callbacks: {
-              activatePanel: () => undefined,
-              togglePanelExpanded: () => undefined,
-              setDock: () => undefined,
-              closeSlot: () => undefined,
-              openSlot: () => undefined,
-              reorderPanel: () => undefined,
-              resizePanel: () => undefined,
-              setOpen: () => undefined,
-            },
+            callbacks: createNoopSidebarRegionCallbacks(),
             layout: snapshot().layout,
             narrow: false,
             panelDefinitions: definitions,

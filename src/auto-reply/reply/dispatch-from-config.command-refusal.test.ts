@@ -22,6 +22,7 @@ import type { ReplyPayload } from "../types.js";
 import type * as CommandsStatus from "./commands-status.js";
 import { dispatchReplyFromConfig } from "./dispatch-from-config.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
+import { createReplyAgentDefaults } from "./get-reply-config.test-support.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { getReplyFromConfig } from "./get-reply.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
@@ -78,12 +79,7 @@ beforeEach(async ({ onTestFinished }) => {
   });
   cfg = withFullRuntimeReplyConfig({
     agents: {
-      defaults: {
-        workspace: state.workspaceDir,
-        skipBootstrap: true,
-        model: { primary: "mock-openai/gpt-5.6-luna" },
-        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-      },
+      defaults: createReplyAgentDefaults(state.workspaceDir),
     },
     commands: { ownerAllowFrom: [`${channel}:owner`] },
     plugins: { enabled: false },

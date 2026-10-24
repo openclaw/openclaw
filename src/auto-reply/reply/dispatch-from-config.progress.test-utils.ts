@@ -22,6 +22,7 @@ import {
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-support.js";
 import { createDispatchVerboseSession } from "./dispatch-from-config.verbose-session.test-support.js";
+import { withVerboseDefault } from "./get-reply-config.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 function inspectPatchPlan(): Parameters<NonNullable<GetReplyOptions["onPlanUpdate"]>>[0] {
@@ -41,10 +42,7 @@ beforeAll(globalBeforeAll0);
 describe("dispatchReplyFromConfig", () => {
   beforeEach(describe0BeforeEach0);
 
-  const verboseConfig = {
-    ...emptyConfig,
-    agents: { defaults: { verboseDefault: "on" } },
-  } satisfies OpenClawConfig;
+  const verboseConfig = withVerboseDefault(emptyConfig);
   const createDirectCtx = (overrides: Partial<MsgContext> = {}) =>
     buildTestCtx({ Provider: "telegram", ChatType: "direct", ...overrides });
 
@@ -63,11 +61,7 @@ describe("dispatchReplyFromConfig", () => {
       };
       const dispatcher = createDispatcher();
       await dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          Provider: "telegram",
-          ChatType: "direct",
-          SessionKey: "agent:main:telegram:direct:U1",
-        }),
+        ctx: createDirectCtx({ SessionKey: "agent:main:telegram:direct:U1" }),
         cfg: emptyConfig,
         dispatcher,
         replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
@@ -97,11 +91,7 @@ describe("dispatchReplyFromConfig", () => {
     );
     const dispatcher = createDispatcher();
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "telegram",
-        ChatType: "direct",
-        SessionKey: "agent:main:telegram:direct:U1",
-      }),
+      ctx: createDirectCtx({ SessionKey: "agent:main:telegram:direct:U1" }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver: async (_ctx, opts) => {
@@ -443,14 +433,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("delivers tool summaries in forum topic sessions when verbose is enabled", async () => {
     setNoAbort();
-    const cfg = {
-      ...automaticGroupReplyConfig,
-      agents: {
-        defaults: {
-          verboseDefault: "on",
-        },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = withVerboseDefault(automaticGroupReplyConfig);
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -491,11 +474,7 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const cfg = verboseConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-      CommandSource: "native",
-    });
+    const ctx = createDirectCtx({ CommandSource: "native" });
 
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       const onToolResult = requireToolResultHandler(opts?.onToolResult);
@@ -571,10 +550,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("keeps prepared notes in drafts and the generic receipt in verbose notices", async () => {
     setNoAbort();
-    const cfg = {
-      ...emptyConfig,
-      agents: { defaults: { verboseDefault: "on" } },
-    } satisfies OpenClawConfig;
+    const cfg = withVerboseDefault(emptyConfig);
     const dispatcher = createDispatcher();
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({ Provider: "telegram", ChatType: "direct" }),
@@ -1116,11 +1092,7 @@ describe("dispatchReplyFromConfig", () => {
     };
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "telegram",
-        ChatType: "direct",
-        SessionKey: "agent:main:main",
-      }),
+      ctx: createDirectCtx({ SessionKey: "agent:main:main" }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver,

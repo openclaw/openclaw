@@ -1,9 +1,9 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { callGateway } from "../../../gateway/call.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import * as internalSessionEffects from "../../internal-session-effects.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import type { SubagentRegistryHarness } from "../../subagent-test-fixtures.test-helpers.js";
@@ -274,17 +274,13 @@ export function registerArchiveCancellationTests({
       generation: 2,
       createdAt: now - 60_000,
     });
-    const entered = createDeferred();
-    const released = createDeferred();
+    const cleanupGate = createEnteredGate();
     const cleanup = vi
       .spyOn(internalSessionEffects, "removeInternalSessionEffectsSession")
-      .mockImplementationOnce(async () => {
-        entered.resolve();
-        await released.promise;
-      });
+      .mockImplementationOnce(cleanupGate.wait);
     const pending = mod.testing.sweepOnceForTests();
     try {
-      await entered.promise;
+      await cleanupGate.entered;
       await mutateSubagentRuns([runId, successorRunId], (rows) => {
         const current = rows.get(runId)!;
         return {
@@ -308,7 +304,7 @@ export function registerArchiveCancellationTests({
         };
       });
     } finally {
-      released.resolve();
+      cleanupGate.release();
       await pending;
       cleanup.mockRestore();
     }

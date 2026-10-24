@@ -58,6 +58,17 @@ function resolveWithStoredEntry(params?: {
   });
 }
 
+it.each([true, false])(
+  "initializes recency only for a new scheduled session (existing=%s)",
+  (existing) => {
+    const result = resolveWithStoredEntry({
+      sessionKey: "agent:main:dashboard:scheduled-check",
+      ...(existing ? { entry: { updatedAt: NOW_MS - 1_000 } } : {}),
+    });
+    expect(result.sessionEntry.updatedAt).toBe(existing ? NOW_MS - 1_000 : NOW_MS);
+  },
+);
+
 const delivery = {
   lastChannel: "slack",
   lastTo: "channel:C0XXXXXXXXX",

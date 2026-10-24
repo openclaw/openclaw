@@ -1,7 +1,7 @@
 // A `canDeliverSourceReply` tool that authored a final reply ends the turn once the
 // whole tool batch settles; progress replies, errors and ordinary tools keep the
 // model turn going. These tests drive the real agent loop and count provider requests.
-import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -14,22 +14,12 @@ import {
 import { createQueuedAssistantStream } from "../../test-helpers/assistant-event-stream.test-support.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { installToolAuthoredSourceReplyTerminalHook } from "./message-tool-terminal.js";
+import { createTerminalTestModel } from "./message-tool-terminal.test-support.js";
 
 const finalReply = { ok: true, sourceReply: { text: "Pedido creado." } };
 const progressReply = { sourceReply: { text: "Comprobando…", final: false } };
 
-const model: Model = {
-  id: "test-model",
-  name: "Test Model",
-  api: "openai-responses",
-  provider: "test-provider",
-  baseUrl: "https://example.test",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1_000,
-  maxTokens: 1_000,
-};
+const model = createTerminalTestModel();
 
 type ToolPlan = {
   name: string;

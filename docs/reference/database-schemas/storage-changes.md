@@ -70,6 +70,19 @@ writes and validates the exact serialized row before persisting it. Offline
 migration and repair retain explicit pending work and invalidate session-validation
 receipts; they never reuse readiness to admit unvalidated imports.
 
+Unknown persisted and imported session entries admit optional numeric metadata, including spawn
+depth, usage counters, timestamps, and costs, before typed consumers use it.
+Wrong types and non-finite values stop admission with a repair diagnostic rather
+than being coerced or discarded. Existing snooze normalization keeps its own
+deadline policy, and extensible plugin and nested payload contracts are unchanged.
+With the Gateway stopped, `openclaw doctor --fix` converts supported legacy
+numeric strings; spawn depth requires a nonnegative decimal integer. Unusable
+values remain available for offline repair or restoration. This uses the existing
+backed-up Doctor path and requires no schema-version change. Trusted internal
+projections and writes reuse admitted numeric fields without revalidating them.
+Doctor commits converted archive, activity, and run-timing query columns with the
+repaired JSON in the same transaction, preserving unrelated indexed facts.
+
 The pending table remains derived and stores no authority or copied payloads.
 Migration validates the prior schema, retires its validation triggers, queues all
 existing nodes, and clears the old session-validation receipt atomically with version

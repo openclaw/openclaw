@@ -180,11 +180,7 @@ describe("preemptive-compaction", () => {
 
   it("does not scan past a zero unavailable context marker", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [
-        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
-        makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
-        makeUnavailableAssistant({ totalTokens: 0 }),
-      ],
+      messages: createUnavailableUsageHistory({ totalTokens: 0 }),
       prompt: "continue",
       contextTokenBudget: 210_000,
       reserveTokens: 20_000,
@@ -196,11 +192,7 @@ describe("preemptive-compaction", () => {
 
   it("treats legacy CLI usage without context provenance as a barrier", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [
-        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
-        makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
-        makeUnavailableAssistant({ totalTokens: 1_000, legacyCli: true }),
-      ],
+      messages: createUnavailableUsageHistory({ totalTokens: 1_000, legacyCli: true }),
       prompt: "continue",
       contextTokenBudget: 210_000,
       reserveTokens: 20_000,
@@ -212,11 +204,7 @@ describe("preemptive-compaction", () => {
 
   it("can reuse an older provider boundary past nonzero unavailable billing usage", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [
-        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
-        makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
-        makeUnavailableAssistant({ totalTokens: 927_907 }),
-      ],
+      messages: createUnavailableUsageHistory({ totalTokens: 927_907 }),
       prompt: "continue",
       contextTokenBudget: 210_000,
       reserveTokens: 20_000,
@@ -600,3 +588,11 @@ describe("preemptive-compaction", () => {
     expect(Number.isFinite(result.estimatedPromptTokens)).toBe(true);
   });
 });
+
+function createUnavailableUsageHistory(params: Parameters<typeof makeUnavailableAssistant>[0]) {
+  return [
+    { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
+    makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
+    makeUnavailableAssistant(params),
+  ];
+}

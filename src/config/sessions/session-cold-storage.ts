@@ -64,6 +64,7 @@ import {
   SessionTranscriptWriterClaimReboundError,
 } from "./session-transcript-writer-claim-error.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
+import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 const operations = new Map<string, StoreWriterQueue>();
@@ -563,10 +564,13 @@ export async function runSessionColdStorageMaintenance(params: {
     externalizedTranscripts: 0,
   };
   const config = params.config.session?.maintenance?.coldStorage;
-  if (!config?.enabled) {
+  const maintenance = resolveMaintenanceConfigFromInput(params.config.session?.maintenance);
+  const retentionMs = maintenance.mode === "enforce" ? maintenance.resetArchiveRetentionMs : null;
+  if (!config?.enabled && retentionMs == null) {
     return result;
   }
-  const beforeMs = Date.now() - (config.afterDays ?? 30) * 24 * 60 * 60 * 1000;
+  const nowMs = Date.now();
+  const beforeMs = nowMs - (config?.afterDays ?? 30) * 24 * 60 * 60 * 1000;
   const { stores, assertCurrent } = await prepareSessionColdStorageTargets(
     params.config,
     params.assertCurrent,
@@ -580,8 +584,21 @@ export async function runSessionColdStorageMaintenance(params: {
     ...stores.slice(start),
     ...stores.slice(0, start),
   ]) {
-    if (remainingTranscripts <= 0 || remainingBytes <= 0) {
-      break;
+    if (retentionMs != null) {
+      const { prunePublishedSessionArchivesByRetention } =
+        await import("./session-accessor.sqlite-archive-store.js");
+      await prunePublishedSessionArchivesByRetention({
+        scope: databaseOptions,
+        rules: [
+          { reason: "deleted", olderThanMs: retentionMs },
+          { reason: "reset", olderThanMs: retentionMs },
+        ],
+        nowMs,
+        assertCurrent,
+      });
+    }
+    if (!config?.enabled || remainingTranscripts <= 0 || remainingBytes <= 0) {
+      continue;
     }
     assertCurrent();
     const batch = await archiveSessionColdBatch({

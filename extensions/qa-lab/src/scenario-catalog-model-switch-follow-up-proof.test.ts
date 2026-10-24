@@ -1,24 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { normalizeModelRef, splitModelRef } from "./model-switch.test-support.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
-
-function splitModelRef(raw: string) {
-  const [provider, ...model] = raw.split("/");
-  return provider && model.length
-    ? { provider: provider.toLowerCase(), model: model.join("/") }
-    : null;
-}
-
-function normalizeModelRef(raw: string) {
-  const split = splitModelRef(raw);
-  if (!split) {
-    return null;
-  }
-  return split.provider === "openai" && split.model.toLowerCase() === "alternate-alias"
-    ? { provider: "openai", model: "alternate-model" }
-    : split;
-}
 
 function terminalReceipt(params: {
   runId: string;

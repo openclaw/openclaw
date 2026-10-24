@@ -2,6 +2,7 @@
 import { createComponent, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsDesktopComposition } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
@@ -152,19 +153,13 @@ it("keeps an empty Environment absent while its owner reads, and admits each rea
   view.update({
     selectedSession: {
       ...view.initial.selectedSession!,
-      placement: {
-        state: "active",
-        generation: 1,
-        createdAtMs: 1,
+      placement: createActiveSessionPlacement({
         updatedAtMs: 2,
         stateChangedAtMs: 2,
-        environmentId: "worker:device",
-        activeOwnerEpoch: 1,
-        workerBundleHash: "a".repeat(64),
         workspaceBaseManifestRef: "base-manifest",
         remoteWorkspaceDir: "/worker/repo",
         runner: { kind: "device", status: "available" },
-      },
+      }),
     },
   });
   expect(view.group("environment")?.textContent).toContain("worker:device");

@@ -80,6 +80,7 @@ import { cleanupProvisionalSession } from "./subagent-spawn-cleanup.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 import { registerNativeCancellationCases } from "./subagent-spawn.cancellation.test-support.js";
 import { registerCollectorResultSpawnCases } from "./subagent-spawn.collector-results.test-support.js";
+import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
 import { registerGuestSpawnCases } from "./subagent-spawn.guest.test-support.js";
 import { registerParticipantSpawnCases } from "./subagent-spawn.participants.test-support.js";
 import { registerNativePluginSpawnCases } from "./subagent-spawn.plugin-native.test-support.js";
@@ -566,13 +567,7 @@ describe("recursive spawn production boundary", () => {
       failures.push(error);
     } finally {
       childProof.restore();
-      modelRun.resolve({
-        payloads: [{ text: "descendant complete" }],
-        meta: {
-          durationMs: 1,
-          terminalReply: { disposition: "visible", text: "descendant complete" },
-        },
-      });
+      modelRun.resolve(visibleResult("descendant complete"));
       failures.push(...(await closeBoundGateway(bound, runtime, childRunId)));
       throwBoundFailures(failures);
     }
@@ -797,13 +792,7 @@ describe("recursive spawn production boundary", () => {
         } catch (error) {
           failures.push(error);
         }
-        modelRun.resolve({
-          payloads: [{ text: "collector complete" }],
-          meta: {
-            durationMs: 1,
-            terminalReply: { disposition: "visible", text: "collector complete" },
-          },
-        });
+        modelRun.resolve(visibleResult("collector complete"));
         failures.push(
           ...(await closeBoundGateway(bound, runtime, childRunId, () =>
             releaseAgentRunDelegatedAuthority(releaserAuthority),

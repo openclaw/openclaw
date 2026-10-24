@@ -24,11 +24,11 @@ import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { resolveMcpLoopbackScopedTools } from "../../../gateway/mcp-http.runtime.js";
 import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
 import { readAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { buildCliMcpGrantContext } from "../../cli-runner/mcp-grant-context.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { spawnAcpDirect } from "./acp-spawn.js";
@@ -342,13 +342,9 @@ it("inherits accepted human credit when participant persistence is still queued"
   const storePath = resolveOpenClawAgentSqlitePath({ agentId });
   const scope = { agentId, sessionKey, storePath };
   await upsertSessionEntryCore(scope, { sessionId: "parent-id", updatedAt: 1 });
-  const releaseWriter = createDeferredCore();
-  const writerStarted = createDeferredCore();
-  const heldWriter = runOpenClawAgentWriteAdmission({ agentId, path: storePath }, async () => {
-    writerStarted.resolve();
-    await releaseWriter.promise;
-  });
-  await writerStarted.promise;
+  const writerGate = createEnteredGate();
+  const heldWriter = runOpenClawAgentWriteAdmission({ agentId, path: storePath }, writerGate.wait);
+  await writerGate.entered;
   const work = new AsyncWorkScope();
   const errors: unknown[] = [];
   try {
@@ -367,7 +363,7 @@ it("inherits accepted human credit when participant persistence is still queued"
       { task: "inherit accepted credit", context: "isolated" },
       { agentSessionKey: sessionKey, gitContributorProfileId: "human-requester" },
     );
-    releaseWriter.resolve();
+    writerGate.release();
     await heldWriter;
     const result = await creation;
     expect(result).toMatchObject({ status: "accepted" });
@@ -379,7 +375,7 @@ it("inherits accepted human credit when participant persistence is still queued"
       { identity: { type: "profile", id: "human-requester" } },
     ]);
   } finally {
-    releaseWriter.resolve();
+    writerGate.release();
     await heldWriter;
     await work.drain();
   }

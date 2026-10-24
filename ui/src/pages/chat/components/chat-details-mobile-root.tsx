@@ -19,6 +19,8 @@ export type ChatDetailsMobileEntry = {
   label: string;
   description?: string;
   descriptionLeading?: JSX.Element;
+  /** Supplementary status rendered by the domain owner. */
+  status?: JSX.Element;
   /** Note-only progress is the one root summary that uses ellipsis. */
   truncateDescription?: boolean;
   accessibleLabel?: string;
@@ -168,6 +170,7 @@ function RootEntry(props: {
             </span>
           </span>
         </Show>
+        {props.entry.status}
       </span>
       <Show when={props.entry.metadata != null}>
         <span class="chat-details-mobile-root__metadata">{props.entry.metadata}</span>

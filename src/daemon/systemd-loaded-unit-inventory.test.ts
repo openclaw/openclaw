@@ -39,14 +39,10 @@ vi.mock("./systemd-user-transport.js", async (original) => ({
 }));
 
 import { discoverManagedGatewayBindings } from "./managed-gateway-bindings.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import { listLoadedSystemdUnits } from "./systemd-loaded-unit-inventory.js";
 
-const success = (stdout: string): ExecResult => ({
-  code: 0,
-  termination: "exit",
-  stdout,
-  stderr: "",
-});
+const success = (stdout: string): ExecResult => nativeExit(stdout);
 const programArguments = ["/usr/bin/node", "/opt/openclaw/dist/entry.js", "gateway"];
 const buses = {
   DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/user-bus",

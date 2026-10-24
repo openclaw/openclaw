@@ -1019,8 +1019,32 @@
               "type": "integer"
             },
             "outcome": {
-              "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
-              "type": "string"
+              "anyOf": [
+                {
+                  "const": "no_change",
+                  "type": "string"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "const": "progress",
+                      "type": "string"
+                    },
+                    {
+                      "const": "done",
+                      "type": "string"
+                    },
+                    {
+                      "const": "blocked",
+                      "type": "string"
+                    },
+                    {
+                      "const": "needs_attention",
+                      "type": "string"
+                    }
+                  ]
+                }
+              ]
             },
             "runId": {
               "description": "Run id from action=\"run\" to read with action=\"runs\"",
@@ -1038,6 +1062,7 @@
             "summary": {
               "maxLength": 2000,
               "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
             },
             "text": {
@@ -1057,12 +1082,22 @@
       },
       {
         "deferLoading": true,
-        "description": "Read gateway config/schema. update.run: owner request or operator schedule; automatic restart + completion notice. Never via shell. Other system changes: use openclaw tool.",
+        "description": "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup. Use runtime-owned actions. Other system changes: use openclaw tool.",
         "inputSchema": {
           "properties": {
             "action": {
-              "enum": ["config.get", "config.schema.lookup", "update.run"],
+              "enum": [
+                "config.get",
+                "config.schema.lookup",
+                "update.run",
+                "restart",
+                "update.cleanup"
+              ],
               "type": "string"
+            },
+            "dryRun": {
+              "description": "update.cleanup only: preview without removing recovery copies.",
+              "type": "boolean"
             },
             "gatewayToken": {
               "type": "string"
@@ -1071,7 +1106,7 @@
               "type": "string"
             },
             "note": {
-              "description": "Short human note for the post-update restart notice.",
+              "description": "Short human note for the update or post-restart notice.",
               "type": "string"
             },
             "path": {

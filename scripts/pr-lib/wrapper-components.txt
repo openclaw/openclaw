@@ -35,6 +35,8 @@ packages/gateway-protocol/src/plugin-ui-capabilities.ts
 packages/gateway-protocol/src/protocol-validator.ts
 packages/gateway-protocol/src/protocol-value-normalization.ts
 packages/gateway-protocol/src/schema/closed-object.ts
+packages/gateway-protocol/src/schema/cron-automation-result.ts
+packages/gateway-protocol/src/schema/cron-shared.ts
 packages/gateway-protocol/src/schema/failover-reason.ts
 packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts
 packages/gateway-protocol/src/schema/presence-activity.ts
@@ -42,6 +44,7 @@ packages/gateway-protocol/src/schema/presence.ts
 packages/gateway-protocol/src/schema/primitives.ts
 packages/gateway-protocol/src/schema/session-placement-state.ts
 packages/gateway-protocol/src/schema/since.ts
+packages/gateway-protocol/src/schema/string-literal-union.ts
 packages/gateway-protocol/src/schema/user-profile-constants.ts
 packages/gateway-protocol/src/schema/validation-invariants.ts
 packages/gateway-protocol/src/schema/worker-admission.ts
@@ -702,6 +705,7 @@ src/config/sessions/session-entry-codec.ts
 src/config/sessions/session-entry-write-policy.ts
 src/config/sessions/session-entry-cohort.worker.ts
 src/config/sessions/session-entry-json.ts
+src/config/sessions/session-entry-numeric-snapshot.ts
 src/config/sessions/session-entry-snapshot-values.ts
 src/config/sessions/session-entry-snapshots.ts
 src/config/sessions/session-entry-state-format.ts
@@ -823,6 +827,7 @@ src/config/zod-schema.session.ts
 src/config/zod-schema.storage.ts
 src/config/zod-schema.telemetry.ts
 src/config/zod-schema.ts
+src/cron/automation-result.ts
 src/cron/completion-status.ts
 src/cron/execution-error-constants.ts
 src/cron/run-diagnostics-normalize.ts
@@ -2196,8 +2201,10 @@ src/config/sessions/session-transcript-worker.types.ts
 src/config/sessions/transcript-assistant-delivery-read.ts
 src/config/sessions/transcript-entry-anchor.ts
 src/config/sessions/transcript-header.ts
+src/config/sessions/transcript-json.ts
 src/config/sessions/transcript-message-identity.ts
 src/config/sessions/transcript-navigation-fields.ts
+src/config/sessions/transcript-snapshot.ts
 src/config/sessions/transcript-tree.ts
 src/shared/chat-message-content.ts
 src/shared/model-fallback-notice.ts
@@ -2571,6 +2578,7 @@ src/shared/text/escape-markdown.ts
 src/shared/text/final-tags.ts
 src/shared/text/glm-arg-key-payload.ts
 src/shared/text/model-special-tokens.ts
+src/shared/text/native-tool-marker.ts
 src/shared/text/reasoning-tags.ts
 src/shared/text/tag-name-probe.ts
 src/shared/text/text-projection.ts

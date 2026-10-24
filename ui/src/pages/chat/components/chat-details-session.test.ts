@@ -12,6 +12,7 @@ import {
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatContextPanel } from "./chat-context-panel.tsx";
 import { ChatDetailsEnvironmentMobile } from "./chat-details-environment-mobile.tsx";
@@ -538,19 +539,14 @@ it("demands mobile changes only while presented and retires native navigation ca
   setSession({
     key: "agent:main:details",
     kind: "direct",
-    placement: {
-      state: "active",
-      generation: 1,
+    placement: createActiveSessionPlacement({
       createdAtMs: 100_000,
       updatedAtMs: 300_000,
       stateChangedAtMs: 300_000,
-      environmentId: "worker:device",
-      activeOwnerEpoch: 1,
-      workerBundleHash: "a".repeat(64),
       workspaceBaseManifestRef: "base-manifest",
       remoteWorkspaceDir: "/worker/repo",
       runner: { kind: "device", status: "available" },
-    },
+    }),
   });
   flush();
   const buttons = Array.from(view.container.querySelectorAll<HTMLButtonElement>("button"));

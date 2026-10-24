@@ -1,7 +1,6 @@
-/** Tests materializing MCP catalog tools into agent tool definitions and results. */
-
-import "../test-utils/prepare-compiled-subprocesses.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+/** Tests materializing MCP catalog tools into agent tool definitions and results. */
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +24,7 @@ import type {
   McpToolCatalog,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
+import { createEnteredGate } from "./entered-gate.test-support.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
@@ -108,18 +108,14 @@ describe("createBundleMcpToolRuntime", () => {
   });
 
   it("joins concurrent disposal without releasing the captured lease twice", async () => {
-    const closing = createDeferred();
-    const started = createDeferred();
+    const disposal = createEnteredGate();
     const releaseLease = vi.fn();
     const runtime = makeToolRuntime();
     runtime.acquireLease = () => releaseLease;
-    const disposeRuntime = vi.fn(async () => {
-      started.resolve();
-      await closing.promise;
-    });
+    const disposeRuntime = vi.fn(disposal.wait);
     const materialized = await materializeBundleMcpToolsForRun({ runtime, disposeRuntime });
     const first = materialized.dispose();
-    await started.promise;
+    await disposal.entered;
     let joined = false;
     const second = materialized.dispose().then(() => {
       joined = true;
@@ -131,7 +127,7 @@ describe("createBundleMcpToolRuntime", () => {
       expect(joined).toBe(false);
       expect(releaseLease).toHaveBeenCalledOnce();
     } finally {
-      closing.resolve();
+      disposal.release();
       await Promise.all([first, second]);
     }
     expect(disposeRuntime).toHaveBeenCalledOnce();

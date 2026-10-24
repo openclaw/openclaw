@@ -1,3 +1,4 @@
+import type { RecoveryCleanupReport } from "../commands/doctor-session-sqlite-recovery-inventory.js";
 import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
@@ -10,27 +11,26 @@ import type { UpdateStepResult } from "../infra/update-step-result.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
-const pending = new Map<string, Promise<UpdateStepResult | undefined>>();
+const pending = new Map<string, Promise<unknown>>();
 
 /** Serving-state cleanup stays with its real owner and off the Gateway main thread. */
-export function cleanupGatewayUpdateRecovery(
-  runId: string,
-  env: NodeJS.ProcessEnv = process.env,
-  assertCallerCurrent: () => void = () => {},
-): Promise<UpdateStepResult | undefined> {
+function runGatewayRecoveryCleanup<T>(
+  selection: Pick<AutomaticCleanupInput, "runId" | "dryRun">,
+  env: NodeJS.ProcessEnv,
+  assertCallerCurrent: () => void,
+  settle?: (work: Promise<T>, assertCurrent: () => void) => Promise<T>,
+): Promise<T> {
   const databasePath = resolveOpenClawStateSqlitePath(env);
   const owner = captureGatewayStateOwner(databasePath);
   if (!owner || owner.role !== "gateway") {
-    return Promise.resolve(
-      automaticRecoveryCleanupWarning(new Error("Gateway does not own the selected state")),
-    );
+    return Promise.reject(new Error("Gateway does not own the selected state"));
   }
   const assertCurrent = () => {
     assertCallerCurrent();
     owner.assertCurrent();
   };
   const previous = pending.get(databasePath);
-  const operation = (async () => {
+  const work = (async () => {
     await previous?.catch(() => undefined);
     assertCurrent();
     const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
@@ -39,23 +39,17 @@ export function cleanupGatewayUpdateRecovery(
         throw new Error("Recovery cleanup authority expired");
       }
     });
-    const pool = new WorkerTaskPool<AutomaticCleanupInput, UpdateStepResult | undefined>({
+    const pool = new WorkerTaskPool<AutomaticCleanupInput, T>({
       workerUrl: resolveRuntimeProcessEntrypointUrl("updateAutomaticCleanup"),
       maxWorkers: 1,
       maxPendingTasks: 1,
       restartOnError: false,
     });
-    let result: UpdateStepResult | undefined;
     try {
-      result = await pool.run(
-        { runId, env: { ...env }, authority: admission.port },
-        {
-          transferList: (input) => [input.authority],
-          signal: owner.signal,
-        },
+      return await pool.run(
+        { ...selection, env: { ...env }, authority: admission.port },
+        { transferList: (input) => [input.authority], signal: owner.signal },
       );
-    } catch (error) {
-      result = automaticRecoveryCleanupWarning(error);
     } finally {
       try {
         await pool.close();
@@ -63,15 +57,39 @@ export function cleanupGatewayUpdateRecovery(
         admission.finish();
       }
     }
-    return result;
-  })()
-    .catch((error: unknown) => automaticRecoveryCleanupWarning(error))
-    .then((result) => recordAutomaticRecoveryCleanup(runId, result, env, assertCurrent));
+  })();
+  const operation = settle ? settle(work, assertCurrent) : work;
   pending.set(databasePath, operation);
-  void operation.finally(() => {
+  const release = () => {
     if (pending.get(databasePath) === operation) {
       pending.delete(databasePath);
     }
-  });
+  };
+  void operation.then(release, release);
   return operation;
+}
+
+export async function cleanupGatewayUpdateRecovery(
+  runId: string,
+  env: NodeJS.ProcessEnv = process.env,
+  assertCallerCurrent: () => void = () => {},
+): Promise<UpdateStepResult | undefined> {
+  return runGatewayRecoveryCleanup<UpdateStepResult | undefined>(
+    { runId },
+    env,
+    assertCallerCurrent,
+    (work, assertCurrent) =>
+      work
+        .catch(automaticRecoveryCleanupWarning)
+        .then((result) => recordAutomaticRecoveryCleanup(runId, result, env, assertCurrent)),
+  ).catch(automaticRecoveryCleanupWarning);
+}
+
+/** Explicit cleanup uses manual verification and never invents a successful update run. */
+export function cleanupGatewayRecovery(
+  dryRun: boolean,
+  env: NodeJS.ProcessEnv,
+  assertCurrent: () => void,
+): Promise<RecoveryCleanupReport> {
+  return runGatewayRecoveryCleanup<RecoveryCleanupReport>({ dryRun }, env, assertCurrent);
 }

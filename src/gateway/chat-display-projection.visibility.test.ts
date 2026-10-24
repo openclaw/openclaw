@@ -216,6 +216,45 @@ const provenance = {
   sourcePromptPrefix: `[cron:${jobId} Old report]`,
 };
 
+it("keeps scheduled inputs quiet without hiding historical announcements, lookalikes, or delivered media", () => {
+  const input = {
+    ...userTextMessage("[cron:daily Daily check] Check the queue."),
+    provenance: { ...provenance, sourceTool: "cron_execution" },
+  };
+  const announcement = {
+    ...userTextMessage("The historical scheduled result is ready.", 2),
+    provenance,
+  };
+  const human = {
+    ...userTextMessage("[cron:daily Daily check] This is my example.", 3),
+    provenance: { kind: "external_user", sourceTool: "cron_execution" },
+  };
+  const delivered = {
+    ...assistantTextMessage("The new scheduled result is ready.", 4),
+    provenance: input.provenance,
+    content: [
+      { type: "text", text: "The new scheduled result is ready." },
+      { type: "image", source: { type: "url", url: "/api/chat/media/outgoing/report.png" } },
+    ],
+  };
+  const failure = assistantTextMessage("The check failed; action is needed.", 5);
+  const approval = assistantTextMessage("Approval is required to continue.", 6);
+  const original = structuredClone(input);
+  expectProjection(
+    [input, announcement, human, delivered, failure, approval],
+    [
+      expect.objectContaining({ role: "assistant", content: announcement.content, provenance }),
+      human,
+      delivered,
+      failure,
+      approval,
+    ],
+    { resolveCronJobName: () => "Daily check" },
+  );
+  expectProjection([input], [], { resolveCronJobName: () => "Daily check" });
+  expect(input).toEqual(original);
+});
+
 it("projects only recorded cron envelopes and current labels without changing model input", () => {
   const body = "Check the queue.\n    Keep indentation.";
   const renamedPrefix = `[cron:${jobId} Daily\nreport]]`;

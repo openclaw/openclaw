@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
 import type { SessionCostSummary } from "../../infra/session-cost-usage.types.js";
 import type { AssistantMessage } from "../../llm/types.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import type { GatewayClient } from "./types.js";
@@ -142,21 +143,11 @@ export const usageRoleConfig = (
 });
 
 export const usageClient = (profileId?: string): GatewayClient => ({
-  connect: {
-    minProtocol: 1,
-    maxProtocol: 1,
-    role: "operator",
-    client: {
-      id: profileId ? "openclaw-control-ui" : "gateway-client",
-      version: "test",
-      platform: "test",
-      mode: profileId ? "webchat" : "backend",
-    },
-    scopes: profileId ? ["operator.read", "operator.write"] : ["operator.read"],
-  },
-  authenticatedUserProfile: profileId
-    ? { profileId, displayName: null, hasAvatar: false, updatedAt: 1 }
-    : undefined,
+  connect: gatewayConnect(profileId ? ["operator.read", "operator.write"] : ["operator.read"], {
+    id: profileId ? "openclaw-control-ui" : "gateway-client",
+    mode: profileId ? "webchat" : "backend",
+  }),
+  authenticatedUserProfile: profileId ? gatewayProfile(profileId) : undefined,
   // Only host-internal dispatch receives system authority without a profile.
   internal: profileId ? undefined : { operatorRoleActor: { kind: "system" } },
 });

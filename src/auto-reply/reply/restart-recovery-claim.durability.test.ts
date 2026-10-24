@@ -132,6 +132,57 @@ it.each(["new input", "accepted input"] as const)(
     }),
 );
 
+it.each([true, false])("keeps scheduled recovery bookkeeping quiet (scheduled=%s)", (scheduled) =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const scope = recoveryScope(state.sessionsDir(), "quiet-recovery");
+    const entry: InternalSessionEntry = { sessionId: "quiet-session", updatedAt: 1 };
+    let observed: number[];
+    {
+      await using fixture = await createRecoveryControllerFixture(scope, entry);
+      const controller = fixture.controller({
+        admissionRunId: "quiet-recovery-run",
+        requesterOrigin: { sessionKey: scope.sessionKey, operatorProfileId: "test-operator" },
+        inputProvenance: scheduled
+          ? { kind: "internal_system", sourceTool: "cron_execution" }
+          : { kind: "external_user" },
+      });
+      await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+      const admitted = expectDefined(loadSessionEntry(scope), "recovery admitted");
+      expect(admitted.restartRecoveryDeliveryRunId).toBe("quiet-recovery-run");
+      expect(admitted.startedAt).toBeGreaterThan(1);
+      await controller.beginBeforeAgentReply();
+      const pending = expectDefined(loadSessionEntry(scope), "hook pending");
+      expect(pending.restartRecoveryBeforeAgentReplyState).toBe("pending");
+      await controller.checkpointBeforeAgentReply({
+        state: "handled-reply",
+        pendingFinalDelivery: {
+          intentId: "quiet-intent",
+          text: "Review is ready.",
+          deliveries: [{ id: "quiet-delivery", state: "prepared" }],
+        },
+      });
+      const checkpoint = expectDefined(loadSessionEntry(scope), "hook checkpoint persisted");
+      expect(checkpoint.restartRecoveryBeforeAgentReplyState).toBe("handled-reply");
+      expect(checkpoint.pendingFinalDelivery).toMatchObject({
+        intentId: "quiet-intent",
+        text: "Review is ready.",
+        createdAt: expect.any(Number),
+      });
+      expect(checkpoint.pendingFinalDelivery?.createdAt).toBeGreaterThan(1);
+      observed = [admitted.updatedAt, pending.updatedAt, checkpoint.updatedAt];
+    }
+    const persisted = await reopen(scope, state.root);
+    expect(persisted.restartRecoveryDeliveryRunId).toBe("quiet-recovery-run");
+    expect(persisted.pendingFinalDelivery?.intentId).toBe("quiet-intent");
+    if (scheduled) {
+      expect([...observed, persisted.updatedAt]).toEqual([1, 1, 1, 1]);
+    } else {
+      expect(observed.every((timestamp) => timestamp > 1)).toBe(true);
+      expect(persisted.updatedAt).toBe(observed.at(-1));
+    }
+  }),
+);
+
 it("keeps an authenticated peer follow-up internal while retaining its operator source", () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot({});

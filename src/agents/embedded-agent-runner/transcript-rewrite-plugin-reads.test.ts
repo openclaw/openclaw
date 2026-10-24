@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { resetSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import {
@@ -19,14 +20,20 @@ let rewriteTranscriptEntriesInSessionManager: typeof import("./transcript-rewrit
 const createPersistedRewriteTarget = useTranscriptRewriteTargets(afterEach);
 
 function createToolResultReplacement(toolName: string, text: string, timestamp: number) {
-  return asAppendMessage({
-    role: "toolResult",
-    toolCallId: "call_1",
-    toolName,
-    content: createTextContent(text),
-    isError: false,
-    timestamp,
-  });
+  return asAppendMessage(makeTextToolResult("call_1", toolName, text, false, timestamp));
+}
+
+function createRewriteHistory() {
+  return [
+    asAppendMessage({ role: "user", content: "read file", timestamp: 1 }),
+    asAppendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      timestamp: 2,
+    }),
+    asAppendMessage(createToolResultReplacement("read", "large original result", 3)),
+    asAppendMessage({ role: "assistant", content: createTextContent("summary"), timestamp: 4 }),
+  ];
 }
 
 beforeAll(async () => {
@@ -50,16 +57,7 @@ describe("plugin transcript reads after rewrites", () => {
       return markers(visible);
     };
     const manager = SessionManager.open(target, directory);
-    const [userId, callId, toolId, tailId] = appendSessionMessages(manager, [
-      asAppendMessage({ role: "user", content: "read file", timestamp: 1 }),
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-        timestamp: 2,
-      }),
-      asAppendMessage(createToolResultReplacement("read", "large original result", 3)),
-      asAppendMessage({ role: "assistant", content: createTextContent("summary"), timestamp: 4 }),
-    ]);
+    const [userId, callId, toolId, tailId] = appendSessionMessages(manager, createRewriteHistory());
     await rewriteTranscriptEntriesInSessionManager({
       sessionManager: manager,
       replacements: [
@@ -112,16 +110,7 @@ describe("plugin transcript reads after rewrites", () => {
   it("reports a reset after a rewrite as session_reset to reset-window cursors", async () => {
     const { directory, target } = await createPersistedRewriteTarget("rewrite-then-reset");
     const manager = SessionManager.open(target, directory);
-    const toolId = appendSessionMessages(manager, [
-      asAppendMessage({ role: "user", content: "read file", timestamp: 1 }),
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-        timestamp: 2,
-      }),
-      asAppendMessage(createToolResultReplacement("read", "large original result", 3)),
-      asAppendMessage({ role: "assistant", content: createTextContent("summary"), timestamp: 4 }),
-    ])[2];
+    const toolId = appendSessionMessages(manager, createRewriteHistory())[2];
     await waitForSessionTranscriptProjection(target);
     const drained = await readSessionTranscriptVisibleMessageDelta({
       ...target,

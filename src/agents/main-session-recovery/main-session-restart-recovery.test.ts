@@ -168,6 +168,7 @@ import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js"
 import { registerReplayBoundaryRecoveryCases } from "./main-session-recovery-replay-boundary.test-harness.js";
 import {
   createRecoveryRuntimeFixture,
+  observeRecoveryRoots,
   runRecoveryCommandDuringStop,
 } from "./main-session-recovery-runtime.test-support.js";
 import * as recoveryStore from "./main-session-recovery-store.js";
@@ -510,38 +511,6 @@ async function loadTestTranscript(
     sessionKey,
     storePath,
   })) as Array<{ message?: Record<string, unknown> }>;
-}
-
-function observeRecoveryRoots(
-  expectedOrigin: "main-session:startup-recovery" | "main-session:restart-recovery",
-  expectedCount: number,
-) {
-  const requested = createDeferred();
-  const completed = createDeferred();
-  const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
-  let count = 0;
-  const spy = vi
-    .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
-    .mockImplementation(
-      async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal): Promise<T> => {
-        try {
-          const result = admit(run, origin, signal);
-          if (origin === expectedOrigin) {
-            requested.resolve();
-          }
-          return await result;
-        } finally {
-          if (origin === expectedOrigin && ++count === expectedCount) {
-            completed.resolve();
-          }
-        }
-      },
-    );
-  return {
-    requested: requested.promise,
-    completed: completed.promise,
-    restore: () => spy.mockRestore(),
-  };
 }
 
 async function deliverRecoveryReply(

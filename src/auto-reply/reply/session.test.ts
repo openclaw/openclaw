@@ -152,6 +152,15 @@ async function makeStorePath(prefix: string, agentId?: string): Promise<string> 
   return path.join(sessionsDir, "sessions.json");
 }
 
+function exhaustedThreadRecovery() {
+  return {
+    cycleId: "old-cycle",
+    revision: 4,
+    chargedAttempts: 3,
+    tombstone: { reason: "old transcript exhausted" },
+  };
+}
+
 const TEST_NATIVE_MODEL_PROFILE_ID = "openai:secondary@example.test";
 
 function requireMockCallArg(
@@ -869,12 +878,7 @@ describe("initSessionState thread forking", () => {
         totalTokensFresh: true,
         abortedLastRun: true,
         restartRecoveryRuns: [{ runId: "old-run", lifecycleGeneration: "old-generation" }],
-        mainRestartRecovery: {
-          cycleId: "old-cycle",
-          revision: 4,
-          chargedAttempts: 3,
-          tombstone: { reason: "old transcript exhausted" },
-        },
+        mainRestartRecovery: exhaustedThreadRecovery(),
       },
     });
     await appendTranscriptMessage(
@@ -951,12 +955,7 @@ describe("initSessionState thread forking", () => {
               pluginExtensions: { codex: { threadId: "codex-thread-1" } },
             }
           : {}),
-        mainRestartRecovery: {
-          cycleId: "old-cycle",
-          revision: 4,
-          chargedAttempts: 3,
-          tombstone: { reason: "old transcript exhausted" },
-        },
+        mainRestartRecovery: exhaustedThreadRecovery(),
       };
       await writeSessionStoreFast(storePath, {
         [parentSessionKey]: { sessionId: "parent-session", updatedAt: Date.now() },
@@ -1009,12 +1008,7 @@ describe("initSessionState thread forking", () => {
       [threadSessionKey]: {
         sessionId: "tombstoned-thread-session",
         updatedAt: Date.now(),
-        mainRestartRecovery: {
-          cycleId: "old-cycle",
-          revision: 4,
-          chargedAttempts: 3,
-          tombstone: { reason: "old transcript exhausted" },
-        },
+        mainRestartRecovery: exhaustedThreadRecovery(),
       },
     });
 
@@ -1059,12 +1053,7 @@ describe("initSessionState thread forking", () => {
       [threadSessionKey]: {
         sessionId: "tombstoned-thread-session",
         updatedAt: Date.now(),
-        mainRestartRecovery: {
-          cycleId: "old-cycle",
-          revision: 4,
-          chargedAttempts: 3,
-          tombstone: { reason: "old transcript exhausted" },
-        },
+        mainRestartRecovery: exhaustedThreadRecovery(),
       },
     });
     sessionForkMocks.forkSessionFromParent.mockResolvedValueOnce(undefined);
@@ -2686,17 +2675,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       const result = await admission.run(
         async () =>
           await initSessionState({
-            ctx: {
-              Body: "/reset",
-              RawBody: "/reset",
-              CommandBody: "/reset",
-              From: "user-rollover-initiator",
-              To: "bot",
-              ChatType: "direct",
-              SessionKey: sessionKey,
-              Provider: "telegram",
-              Surface: "telegram",
-            },
+            ctx: telegramTurn(sessionKey, "/reset", "user-rollover-initiator"),
             cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
           }),
       );
@@ -2835,14 +2814,8 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     });
     releaseReplacementAdmission = replacementAdmission.release;
 
-    let signalMutationStarted = () => {};
-    const mutationStarted = new Promise<void>((resolve) => {
-      signalMutationStarted = resolve;
-    });
-    let releaseMutation = () => {};
-    const mutationGate = new Promise<void>((resolve) => {
-      releaseMutation = resolve;
-    });
+    const { resolve: signalMutationStarted, promise: mutationStarted } = createDeferred();
+    const { resolve: releaseMutation, promise: mutationGate } = createDeferred();
     const blockingMutation = runSessionMutation({
       scope: storePath,
       identities: [sessionKey, staleSessionId],
@@ -2994,17 +2967,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       } as OpenClawConfig;
       const initialization = runWithReplyOperationLifecycleAdmission(operation, () =>
         initSessionState({
-          ctx: {
-            Body: "hello after boundary",
-            RawBody: "hello after boundary",
-            CommandBody: "hello after boundary",
-            From: "user-queued-stale",
-            To: "bot",
-            ChatType: "direct",
-            SessionKey: sessionKey,
-            Provider: "telegram",
-            Surface: "telegram",
-          },
+          ctx: telegramTurn(sessionKey, "hello after boundary", "user-queued-stale"),
           cfg,
         }),
       );
@@ -3056,17 +3019,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
       } as OpenClawConfig;
       const result = await initSessionState({
-        ctx: {
-          Body: "hello after boundary",
-          RawBody: "hello after boundary",
-          CommandBody: "hello after boundary",
-          From: "user-active-other-stale",
-          To: "bot",
-          ChatType: "direct",
-          SessionKey: sessionKey,
-          Provider: "telegram",
-          Surface: "telegram",
-        },
+        ctx: telegramTurn(sessionKey, "hello after boundary", "user-active-other-stale"),
         cfg,
       });
 

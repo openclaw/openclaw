@@ -8,9 +8,7 @@ import {
   loadPublishedGatewayReplyDispatchRuntime,
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
-import { captureSessionEventTargetForHost } from "../../auto-reply/reply/session-event-target.js";
 import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
-import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionModelOverrideSource } from "../../config/sessions/model-override-provenance.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
@@ -29,7 +27,7 @@ import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { CronWorkspaceLease } from "../run-workspace.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
-import { isDetachedCronSessionTarget, resolveCronDeliverySessionKey } from "../session-target.js";
+import { isDetachedCronSessionTarget } from "../session-target.js";
 import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import {
   resolveCronModelSelection,
@@ -155,16 +153,6 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
   });
   await using runtimeResources = new AsyncDisposableStack();
   let runtimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
-  const resultSessionKey =
-    (input.job.sessionTarget === "isolated"
-      ? input.job.sourceConversation?.sessionKey
-      : undefined) ??
-    resolveCronDeliverySessionKey(input.job) ??
-    resolveAgentMainSessionKey({ cfg: requestedRuntimeCfg, agentId: initialAgentId });
-  const resultTarget = await captureSessionEventTargetForHost(initialAgentId, resultSessionKey, {
-    assertCaptureCurrent: input.assertCurrent,
-  });
-  input.assertCurrent?.();
   const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
     agentId: initialAgentId,
     demand: "scheduled",
@@ -316,8 +304,6 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         agentId,
         agentSessionKey,
         assertCurrent: input.assertCurrent,
-        resultTarget,
-        cronSession,
       });
       const persistSessionEntry = createPersistCronSessionEntry({
         cronSession,
@@ -569,7 +555,6 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       if (!params.isFastTestEnv && skillsSnapshot !== cronSession.sessionEntry.skillsSnapshot) {
         cronSession.sessionEntry = {
           ...cronSession.sessionEntry,
-          updatedAt: Date.now(),
           skillsSnapshot,
         };
       }
@@ -663,7 +648,6 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           agentCfg,
           agentDir,
           agentSessionKey,
-          resultTarget,
           sourceSessionKey: input.job.sourceConversation?.sessionKey ?? sourceSessionKey,
           sourceSessionGeneration,
           runSessionId,

@@ -12,6 +12,18 @@ import {
 import type { CronRunLogEntry } from "./run-log-types.js";
 import type { CronRunRecord } from "./store/run-history.types.js";
 const BASE = { ts: 100, jobId: "history-job", action: "finished" } as const;
+
+it.each([
+  { outcome: "no_change" },
+  { outcome: "blocked", summary: "Awaiting the requested approval." },
+] as const)("round-trips structured $outcome through event and persisted history", (result) => {
+  const entry = cronRunLogEntryFromEvent(
+    { jobId: BASE.jobId, action: "finished", status: "ok", result },
+    100,
+  );
+  expect(entry.result).toEqual(result);
+  expect(cronRunRecordToRunLogEntry(recordFromEntry(entry))?.result).toEqual(result);
+});
 const parse = (fields: object) => parseCronRunLogEntryObject({ ...BASE, ...fields });
 const undefinedFields = (keys: string) =>
   Object.fromEntries(keys.split(" ").map((key) => [key, undefined]));

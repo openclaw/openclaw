@@ -1364,8 +1364,6 @@ class NodeRuntime internal constructor(
   private var tlsProbeJob: Job? = null
   private var operatorAgentBootstrapJob: Job? = null
 
-  @Volatile private var operatorConnectionEpoch = 0L
-
   internal class GatewayConnectionOperation(
     private val isCurrent: () -> Boolean,
   ) : () -> Boolean {
@@ -1385,7 +1383,6 @@ class NodeRuntime internal constructor(
       identityStore = identityStore,
       deviceAuthStore = deviceAuthStore,
       onConnected = { hello ->
-        val connectionEpoch = synchronized(gatewayStatusLock) { ++operatorConnectionEpoch }
         recordConnectedGateway()
         _serverName.value = hello.serverName
         _remoteAddress.value = hello.remoteAddress
@@ -1408,53 +1405,21 @@ class NodeRuntime internal constructor(
           operatorReady = true,
           browserFocusAvailable = hello.capabilities?.contains("control-ui-browser-focus") == true,
         )
-        operatorAgentBootstrapJob?.cancel()
-        // Older gateways do not advertise roster discovery. Retain their established
-        // default binding rather than leaving Chat permanently uninitialized.
-        if (selectedChatAgentId == null && gatewayAdvertisesMethod("agents.list") == true) {
-          // The hello default can be outside this caller's operator role. Discover the
-          // accessible roster before Chat creates or patches its first gateway session.
-          operatorAgentBootstrapJob =
-            scope.launch {
-              val gatewayScope = captureGatewayDataScope() ?: return@launch
-              var retryDelayMs = 250L
-              while (operatorConnectionEpoch == connectionEpoch && isGatewayDataScopeCurrent(gatewayScope)) {
-                val bound = refreshAgentsFromGateway(gatewayScope, requireConnected = false, bindMainSession = false)
-                if (operatorConnectionEpoch != connectionEpoch || !isGatewayDataScopeCurrent(gatewayScope)) return@launch
-                if (bound) {
-                  synchronized(gatewayDataScopeLock) {
-                    if (operatorConnectionEpoch != connectionEpoch || !isGatewayDataScopeCurrent(gatewayScope)) return@launch
-                    chat.onGatewayConnected(mainSessionBinding(mainSessionKey.value))
-                  }
-                  completeOperatorConnection(connectionEpoch)
-                  return@launch
-                }
-                // Keep Agent discovery failures visible and retry on the live socket rather
-                // than publishing readiness for a Chat that was never initialized.
-                val status = "Couldn't load accessible agents; retrying…"
-                updateStatus {
-                  operatorConnected = false
-                  operatorConnectionProblem = null
-                  operatorStatusText = status
-                }
-                publishOperatorConnection(connected = false, status = status)
-                delay(retryDelayMs)
-                retryDelayMs = (retryDelayMs * 2).coerceAtMost(5_000L)
-              }
-            }
-        } else {
+        if (selectedChatAgentId != null) {
+          completeOperatorConnection()
           synchronized(gatewayDataScopeLock) {
-            val mainSessionKey =
-              prepareMainSessionKey(selectedChatAgentId ?: resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
+            val mainSessionKey = prepareMainSessionKey(selectedChatAgentId)
             // Create/adopt before history refresh; this keeps the first connected read on the
             // device-owned session without changing the shipped key or its existing transcript.
             chat.onGatewayConnected(mainSessionBinding(mainSessionKey))
           }
-          completeOperatorConnection(connectionEpoch)
+        } else {
+          // Hello describes Gateway routing, not the agents this operator may use.
+          publishAgentDiscoveryUnavailable("Loading available agents…")
         }
+        refreshAgents()
       },
       onDisconnected = { message ->
-        synchronized(gatewayStatusLock) { operatorConnectionEpoch += 1 }
         operatorAgentBootstrapJob?.cancel()
         operatorAgentBootstrapJob = null
         if (wearRealtimeTalkControllerLazy.isInitialized()) wearRealtimeTalkController.abort()
@@ -1470,7 +1435,6 @@ class NodeRuntime internal constructor(
         publishOperatorConnection(connected = false, status = message, failure = { wearFailure })
       },
       onConnectFailure = { error, pauseReconnect ->
-        synchronized(gatewayStatusLock) { operatorConnectionEpoch += 1 }
         operatorAgentBootstrapJob?.cancel()
         operatorAgentBootstrapJob = null
         if (wearRealtimeTalkControllerLazy.isInitialized()) wearRealtimeTalkController.abort()
@@ -1496,20 +1460,13 @@ class NodeRuntime internal constructor(
     wearProxyBridge()?.publishConnection(connected = connected, status = status, failure = failure())
   }
 
-  private fun completeOperatorConnection(connectionEpoch: Long) {
-    synchronized(gatewayStatusLock) {
-      if (operatorConnectionEpoch != connectionEpoch) return
-      updateStatus {
-        operatorConnectionProblem = null
-        operatorConnected = true
-        operatorStatusText = "Connected"
-      }
-      // Publish under the lifecycle lock so a concurrent disconnect cannot be followed by
-      // a stale Connected publication from the superseded physical connection.
-      publishOperatorConnection(connected = true, status = "Connected")
+  private fun completeOperatorConnection() {
+    updateStatus {
+      operatorConnectionProblem = null
+      operatorConnected = true
+      operatorStatusText = "Connected"
     }
-    // Revalidate removals even when no screen refreshes metadata after reconnect.
-    if (selectedChatAgentId != null) refreshAgents()
+    publishOperatorConnection(connected = true, status = "Connected")
     // Bootstrap can connect the node before operator access is ready.
     refreshNodesDevices()
     scope.launch {
@@ -1526,6 +1483,15 @@ class NodeRuntime internal constructor(
         voiceReplySpeaker.refreshConfig()
       }
     }
+  }
+
+  private fun publishAgentDiscoveryUnavailable(message: String) {
+    updateStatus {
+      operatorConnected = false
+      operatorConnectionProblem = null
+      operatorStatusText = message
+    }
+    publishOperatorConnection(connected = false, status = message)
   }
 
   private val sessionObserverVisibility =
@@ -1981,6 +1947,7 @@ class NodeRuntime internal constructor(
         ChatController(
           scope = scope,
           session = operatorSession,
+          isGatewayReady = { operatorConnected },
           json = json,
           transcriptCache = chatTranscriptCache,
           cacheScope = ::chatCacheScope,
@@ -2442,7 +2409,13 @@ class NodeRuntime internal constructor(
 
   fun refreshTalkSetupReadiness() = launchGatewayRefresh { refreshTalkSetupReadinessFromGateway() }
 
-  fun refreshAgents() = launchGatewayRefresh { refreshAgentsFromGateway() }
+  fun refreshAgents() {
+    if (mode == NodeRuntimeMode.ScreenshotFixture || (!operatorConnected && !gatewayMethodCatalogPresent)) return
+    val gatewayScope = captureGatewayDataScope() ?: return
+    val methods = captureGatewayMethods()
+    operatorAgentBootstrapJob?.cancel()
+    operatorAgentBootstrapJob = scope.launch { refreshAgentsFromGateway(gatewayScope, methods) }
+  }
 
   fun refreshCronJobs() = launchGatewayRefresh { refreshCronFromGateway() }
 
@@ -6452,47 +6425,44 @@ class NodeRuntime internal constructor(
   private fun workspaceAgentId(): String = resolveActiveAgentId().ifEmpty { "main" }
 
   private suspend fun refreshAgentsFromGateway(
-    gatewayScope: GatewayDataScope? = captureGatewayDataScope(),
-    requireConnected: Boolean = true,
-    bindMainSession: Boolean = true,
-  ): Boolean {
-    if (gatewayScope == null || (requireConnected && !operatorConnected)) return false
+    gatewayScope: GatewayDataScope,
+    methods: GatewayMethodsSnapshot,
+  ) {
     val selectionSequence = chatSelectionSeq.get()
     try {
-      val root = requestGatewayObject(gatewayScope, "agents.list", "{}") ?: return false
+      val root = requestGatewayObject(gatewayScope, "agents.list", "{}") ?: error("Invalid agent roster")
       val defaultAgentId = root["defaultId"].asStringOrNull()?.trim().orEmpty()
-      val mainKey = normalizeMainKey(root["mainKey"].asStringOrNull())
       val agents = parseGatewayAgentSummaries(root)
-      if (agents.isEmpty()) return false
-
-      var bound = false
-      val published =
-        publishGatewayData(
-          gatewayScope,
-        ) {
-          if (chatSelectionSeq.get() != selectionSequence) return@publishGatewayData
-          updateGatewayDefaultAgentId(defaultAgentId)
-          _gatewayAgents.value = agents
-          val selectedAgentId = selectedChatAgentId?.takeIf { id -> agents.any { it.id == id } }
-          selectedChatAgentId = selectedAgentId
-          val fallbackAgentId =
-            resolveAgentIdFromMainSessionKey(mainKey)?.takeIf { id -> agents.any { it.id == id } }
-              ?: defaultAgentId.takeIf { id -> id.isNotEmpty() && agents.any { it.id == id } }
-              ?: agents.selectableAgents().firstOrNull()?.id
-          val targetAgentId = selectedAgentId ?: fallbackAgentId
-          if (targetAgentId != null) {
-            prepareMainSessionKey(
-              targetAgentId,
-              if (bindMainSession) MainSessionUpdate.Sync else MainSessionUpdate.Prepare,
-            )
-            bound = true
-          }
+      publishGatewayData(gatewayScope) {
+        if (!isGatewayMethodsSnapshotCurrent(methods) || chatSelectionSeq.get() != selectionSequence) return@publishGatewayData
+        updateGatewayDefaultAgentId(defaultAgentId)
+        _gatewayAgents.value = agents
+        val selectable = agents.selectableAgents()
+        selectedChatAgentId = selectedChatAgentId?.takeIf { id -> selectable.any { it.id == id } }
+        val targetAgentId =
+          selectedChatAgentId
+            ?: defaultAgentId.takeIf { id -> selectable.any { it.id == id } }
+            ?: selectable.firstOrNull()?.id
+        if (targetAgentId == null) {
+          publishAgentDiscoveryUnavailable("No agents available for this role")
+          return@publishGatewayData
         }
-      return published && bound
+        val initializing = !operatorConnected
+        val key = prepareMainSessionKey(targetAgentId, if (initializing) MainSessionUpdate.Prepare else MainSessionUpdate.Sync)
+        if (initializing) {
+          completeOperatorConnection()
+          // A retry must adopt and recover Chat even when its canonical key did not change.
+          chat.onGatewayConnected(mainSessionBinding(key))
+        }
+      }
     } catch (err: CancellationException) {
       throw err
     } catch (_: Throwable) {
-      return false
+      publishGatewayData(gatewayScope) {
+        if (!operatorConnected && isGatewayMethodsSnapshotCurrent(methods)) {
+          publishAgentDiscoveryUnavailable("Couldn't load available agents. Retry the Gateway connection.")
+        }
+      }
     }
   }
 
