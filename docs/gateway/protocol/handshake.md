@@ -87,7 +87,7 @@ checks.
   "ok": true,
   "payload": {
     "type": "hello-ok",
-    "protocol": 4,
+    "protocol": 5,
     "server": { "version": "…", "connId": "…" },
     "features": { "methods": ["…"], "events": ["…"] },
     "snapshot": { "…": "…" },

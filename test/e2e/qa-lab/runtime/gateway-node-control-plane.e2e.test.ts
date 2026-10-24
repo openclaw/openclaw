@@ -571,10 +571,33 @@ describe("Gateway node control plane", () => {
 
         // The client is constrained to N-1; hello reports the current server protocol.
         expect(constrainedHello?.protocol).toBe(PROTOCOL_VERSION);
-        expect(constrainedHello?.pluginSurfaceUrls).toBeUndefined();
-        const legacyListed = await waitForApprovedNode(operator, identity.deviceId, gateway.logs);
-        expect(legacyListed.caps).toEqual(["camera"]);
-        expect(legacyListed.commands).toEqual(["camera.list"]);
+        const previousSurfaceUrl = constrainedHello?.pluginSurfaceUrls?.[FIXTURE_CAPABILITY];
+        if (!previousSurfaceUrl) {
+          throw new Error("previous-protocol hello omitted the fixture plugin surface URL");
+        }
+        expect(new URL(previousSurfaceUrl).pathname).toMatch(/^\/__openclaw__\/cap\//);
+        const previousSurfaceResponse = await fetch(`${previousSurfaceUrl}${FIXTURE_ROUTE}`, {
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+        expect(previousSurfaceResponse.status).toBe(204);
+        const previousListed = await waitForApprovedNode(operator, identity.deviceId, gateway.logs);
+        expect(previousListed.caps?.toSorted()).toEqual(declaredCaps.toSorted());
+        expect(previousListed.commands?.toSorted()).toEqual(declaredCommands.toSorted());
+
+        const previousPluginParams = { message: "previous-protocol-compatible" };
+        expect(
+          await invokeNodeCommand({
+            operator,
+            nodeId: identity.deviceId,
+            command: FIXTURE_COMMAND,
+            params: previousPluginParams,
+          }),
+        ).toMatchObject({
+          ok: true,
+          nodeId: identity.deviceId,
+          command: FIXTURE_COMMAND,
+          payload: { echoed: previousPluginParams },
+        });
 
         const cameraParams = { includeUnavailable: false };
         const cameraResult = await invokeNodeCommand({
@@ -656,6 +679,11 @@ describe("Gateway node control plane", () => {
           },
         });
         expect(invocations).toMatchObject([
+          {
+            nodeId: identity.deviceId,
+            command: FIXTURE_COMMAND,
+            params: previousPluginParams,
+          },
           {
             nodeId: identity.deviceId,
             command: "camera.list",

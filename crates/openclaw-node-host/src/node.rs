@@ -1,4 +1,5 @@
 use openclaw_gateway_client::{
+    protocol::{MIN_NODE_PROTOCOL_VERSION, PROTOCOL_VERSION},
     ClientError as GatewayClientError, ConnectAttempt as GatewayConnectAttempt, GatewayClient,
     GatewayClientConfig, GatewaySession, TlsTrust,
 };
@@ -16,8 +17,6 @@ use thiserror::Error;
 
 use crate::identity::{DeviceSigningRequest, IdentityError, NodeIdentity};
 
-const PROTOCOL_VERSION: u32 = 4;
-const MINIMUM_NODE_PROTOCOL_VERSION: u32 = 3;
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_CHALLENGE_TIMEOUT: Duration = Duration::from_secs(15);
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -28,17 +27,17 @@ const DEFAULT_MAX_EVENT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 /// Node wire dialect selected for one Gateway session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NodeProtocolVersion {
-    /// Released legacy node envelope with direct invocation `params`.
-    V3,
-    /// Current node envelope with serialized invocation `paramsJSON`.
+    /// Previous node protocol with serialized invocation `paramsJSON`.
     V4,
+    /// Current node protocol with serialized invocation `paramsJSON`.
+    V5,
 }
 
 impl NodeProtocolVersion {
     const fn number(self) -> u32 {
         match self {
-            Self::V3 => MINIMUM_NODE_PROTOCOL_VERSION,
-            Self::V4 => PROTOCOL_VERSION,
+            Self::V4 => MIN_NODE_PROTOCOL_VERSION,
+            Self::V5 => PROTOCOL_VERSION,
         }
     }
 }
@@ -278,7 +277,7 @@ impl NodeConnectOptions {
     #[must_use]
     pub fn new(version: impl Into<String>, platform: impl Into<String>) -> Self {
         Self {
-            min_protocol: MINIMUM_NODE_PROTOCOL_VERSION,
+            min_protocol: MIN_NODE_PROTOCOL_VERSION,
             max_protocol: PROTOCOL_VERSION,
             client: ClientInfo {
                 id: "node-host",
@@ -390,12 +389,11 @@ impl NodeConnectOptions {
         public_key: [u8; 32],
         challenge: &ConnectChallenge,
     ) -> Result<DeviceSigningRequest, IdentityError> {
-        let (platform, device_family) = self.identity_metadata(challenge.protocol);
         DeviceSigningRequest::new(
             public_key,
             &challenge.nonce,
-            &platform,
-            device_family.as_deref(),
+            &self.client.platform,
+            self.client.device_family.as_deref(),
             self.auth.as_ref().and_then(ConnectAuth::signature_token),
             challenge.issued_at_ms,
         )
@@ -422,22 +420,7 @@ impl NodeConnectOptions {
     fn for_protocol(mut self, protocol: NodeProtocolVersion) -> Self {
         self.min_protocol = protocol.number();
         self.max_protocol = protocol.number();
-        if protocol == NodeProtocolVersion::V3 {
-            self.client.platform = legacy_node_platform(&self.client.platform);
-            self.client.device_family = None;
-        }
         self
-    }
-
-    fn identity_metadata(&self, protocol: NodeProtocolVersion) -> (String, Option<String>) {
-        if protocol == NodeProtocolVersion::V3 {
-            (legacy_node_platform(&self.client.platform), None)
-        } else {
-            (
-                self.client.platform.clone(),
-                self.client.device_family.clone(),
-            )
-        }
     }
 
     fn finalize_identity(mut self, nonce: &str, issued_at_ms: u64) -> Result<Self, IdentityError> {
@@ -458,14 +441,6 @@ impl NodeConnectOptions {
             issued_at_ms,
         )?);
         Ok(self)
-    }
-}
-
-fn legacy_node_platform(platform: &str) -> String {
-    match platform {
-        "macos" => "darwin".to_string(),
-        "windows" => "win32".to_string(),
-        _ => platform.to_string(),
     }
 }
 
@@ -660,7 +635,10 @@ impl NodeClient {
             let max = params["maxProtocol"]
                 .as_u64()
                 .ok_or("missing maximum protocol")?;
-            if min < 3 || max > 4 || min > max {
+            if min < u64::from(MIN_NODE_PROTOCOL_VERSION)
+                || max > u64::from(PROTOCOL_VERSION)
+                || min > max
+            {
                 return Err("unsupported signed node protocol range".to_owned());
             }
             *offered_protocols_ref = (min, max);
@@ -689,16 +667,17 @@ impl NodeClient {
         })
         .await
         .map_err(map_gateway_error)?;
-        let negotiated = gateway.hello()["protocol"].as_u64().unwrap_or(0);
-        if negotiated < offered_protocols.0 || negotiated > offered_protocols.1 {
+        // Hello reports the server version, which can exceed a compatible node's range.
+        let server_protocol = gateway.hello()["protocol"].as_u64().unwrap_or(0);
+        if server_protocol < offered_protocols.0 || server_protocol > u64::from(PROTOCOL_VERSION) {
             gateway.close().await;
             return Err(ClientError::InvalidFrame(
-                "hello protocol is outside the signed range".into(),
+                "hello protocol does not support the signed range".into(),
             ));
         }
-        let protocol = match gateway.hello()["protocol"].as_u64() {
-            Some(3) => NodeProtocolVersion::V3,
-            Some(4) => NodeProtocolVersion::V4,
+        let protocol = match server_protocol.min(offered_protocols.1) {
+            version if version == u64::from(MIN_NODE_PROTOCOL_VERSION) => NodeProtocolVersion::V4,
+            version if version == u64::from(PROTOCOL_VERSION) => NodeProtocolVersion::V5,
             _ => {
                 gateway.close().await;
                 return Err(ClientError::InvalidFrame(
@@ -747,19 +726,19 @@ impl NodeClient {
         let connection_surface = Arc::new(Mutex::new((
             false,
             BTreeSet::new(),
-            NodeProtocolVersion::V4,
+            NodeProtocolVersion::V5,
         )));
         let surface_for_connect = Arc::clone(&connection_surface);
         let mut make_options = make_options;
         let gateway = GatewayClient::connect_with_protocol_fallback(
             gateway_config,
-            MINIMUM_NODE_PROTOCOL_VERSION,
+            MIN_NODE_PROTOCOL_VERSION,
             move |challenge, attempt| {
                 let protocol = match attempt {
-                    GatewayConnectAttempt::Current => NodeProtocolVersion::V4,
+                    GatewayConnectAttempt::Current => NodeProtocolVersion::V5,
                     GatewayConnectAttempt::ProtocolFallback { expected_protocol } => {
-                        debug_assert_eq!(expected_protocol, MINIMUM_NODE_PROTOCOL_VERSION);
-                        NodeProtocolVersion::V3
+                        debug_assert_eq!(expected_protocol, MIN_NODE_PROTOCOL_VERSION);
+                        NodeProtocolVersion::V4
                     }
                 };
                 let challenge = ConnectChallenge {
@@ -796,9 +775,11 @@ impl NodeClient {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        if gateway.hello()["protocol"].as_u64() != Some(u64::from(protocol.number())) {
+        if !gateway.hello()["protocol"].as_u64().is_some_and(|version| {
+            (u64::from(protocol.number())..=u64::from(PROTOCOL_VERSION)).contains(&version)
+        }) {
             return Err(ClientError::InvalidFrame(
-                "Gateway hello protocol did not match the node connect envelope".into(),
+                "Gateway hello protocol does not support the node connect envelope".into(),
             ));
         }
         Ok(NodeSession {
@@ -1330,24 +1311,26 @@ mod tests {
         let public_key = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
             .verifying_key()
             .to_bytes();
-        let request = options
-            .external_signing_request(
-                public_key,
-                &ConnectChallenge {
-                    nonce: "nonce-1".into(),
-                    issued_at_ms: 1_700_000_000_000,
-                    protocol: NodeProtocolVersion::V4,
-                },
-            )
-            .expect("external signing request");
-        assert_eq!(
-            request.payload(),
-            format!(
-                "v3|{}|node-host|node|node||{}|test-token|nonce-1|windows|desktop",
-                request.device_id(),
-                request.signed_at()
-            )
-        );
+        for protocol in [NodeProtocolVersion::V4, NodeProtocolVersion::V5] {
+            let request = options
+                .external_signing_request(
+                    public_key,
+                    &ConnectChallenge {
+                        nonce: "nonce-1".into(),
+                        issued_at_ms: 1_700_000_000_000,
+                        protocol,
+                    },
+                )
+                .expect("external signing request");
+            assert_eq!(
+                request.payload(),
+                format!(
+                    "v3|{}|node-host|node|node||{}|test-token|nonce-1|windows|desktop",
+                    request.device_id(),
+                    request.signed_at()
+                )
+            );
+        }
     }
     #[test]
     fn invocation_accepts_gateway_null_params_and_session_key() {

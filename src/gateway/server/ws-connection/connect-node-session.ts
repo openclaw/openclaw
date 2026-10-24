@@ -10,7 +10,6 @@ import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING } from "../../auth-rate-limit.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../../method-scopes.js";
 import { resolveEffectiveComputerUseDescriptor } from "../../node-computer-use-descriptor.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
-import { filterLegacyNodeProtocolFeatures } from "../../node-legacy-protocol-filter.js";
 import type { NodeSessionConnectParams } from "../../node-registry.js";
 import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
 import type {
@@ -31,12 +30,7 @@ export async function prepareGatewayNodeConnect(
   if (state.role !== "node") {
     return true;
   }
-  const {
-    pluginNodeCapabilities = [],
-    nodeReapprovalCoordinator,
-    buildRequestContext,
-    logGateway,
-  } = context.handler;
+  const { nodeReapprovalCoordinator, buildRequestContext, logGateway } = context.handler;
   const {
     connectParams,
     reportedClientIp,
@@ -46,7 +40,7 @@ export async function prepareGatewayNodeConnect(
     releasePendingNodePairingCleanup,
     broadcastNodePairingResult,
   } = context;
-  const { device, devicePublicKey, usesLegacyNodeProtocol, rejectUnauthorized } = state;
+  const { device, devicePublicKey, rejectUnauthorized } = state;
   const nodeId = connectParams.device?.id ?? connectParams.client.id;
   const nodePairingSnapshot = await beginNodePairingConnect(nodeId);
   const pairedNode = nodePairingSnapshot.pairedNode;
@@ -188,32 +182,16 @@ export async function prepareGatewayNodeConnect(
   nodeConnectParams.withheldCommands = reconciliation.withheldCommands;
   nodeConnectParams.declaredComputerUse = reconciliation.declaredComputerUse;
   nodeConnectParams.declaredPermissions = reconciliation.declaredPermissions;
-  const pluginSurfaces = pluginNodeCapabilities.map((surface) => surface.surface);
   // Policy may later restore an approved command, but neither config nor an
-  // approval can exceed the declaration or this connection's protocol ceiling.
-  const declaredFeatures = {
-    caps: normalizeNodeApprovalSurfaceList(connectParams.caps),
-    commands: normalizeNodeApprovalSurfaceList(connectParams.commands),
-  };
-  const sessionCeiling = usesLegacyNodeProtocol
-    ? filterLegacyNodeProtocolFeatures({ ...declaredFeatures, pluginSurfaces })
-    : declaredFeatures;
-  nodeConnectParams.sessionCapsCeiling = sessionCeiling.caps;
-  nodeConnectParams.sessionCommandsCeiling = sessionCeiling.commands;
-  const effectiveFeatures = usesLegacyNodeProtocol
-    ? filterLegacyNodeProtocolFeatures({
-        caps: reconciliation.effectiveCaps,
-        commands: reconciliation.effectiveCommands,
-        pluginSurfaces,
-      })
-    : {
-        caps: reconciliation.effectiveCaps,
-        commands: reconciliation.effectiveCommands,
-      };
-  connectParams.caps = effectiveFeatures.caps;
-  connectParams.commands = effectiveFeatures.commands;
+  // approval can exceed this connection's declaration.
+  nodeConnectParams.sessionCapsCeiling = normalizeNodeApprovalSurfaceList(connectParams.caps);
+  nodeConnectParams.sessionCommandsCeiling = normalizeNodeApprovalSurfaceList(
+    connectParams.commands,
+  );
+  connectParams.caps = reconciliation.effectiveCaps;
+  connectParams.commands = reconciliation.effectiveCommands;
   connectParams.computerUse = resolveEffectiveComputerUseDescriptor({
-    commands: effectiveFeatures.commands,
+    commands: reconciliation.effectiveCommands,
     declared: reconciliation.declaredComputerUse,
   });
   connectParams.permissions = reconciliation.effectivePermissions;

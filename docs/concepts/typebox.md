@@ -111,7 +111,7 @@ Hello-ok response:
   "ok": true,
   "payload": {
     "type": "hello-ok",
-    "protocol": 4,
+    "protocol": 5,
     "server": { "version": "dev", "connId": "ws-1" },
     "features": { "methods": ["health"], "events": ["tick"] },
     "snapshot": {

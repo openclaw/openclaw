@@ -23,9 +23,8 @@ Which protocol versions a client may negotiate, and the constants a reference cl
 - Authenticated clients with both `role: "node"` and `client.mode: "node"`
   may use the N-1 node protocol (v4). Lightweight restart checks use
   the same N-1 window. Device auth, pairing, scopes, command policy, and exec
-  approvals are unchanged by this compatibility window. Plugin-owned node
-  capabilities and commands are withheld until the node upgrades to the current
-  protocol because their hosted surfaces are not part of the N-1 contract.
+  approvals are unchanged by this compatibility window. Supported v4 nodes retain
+  their approved plugin capabilities, commands, and hosted surface URLs.
 - Schemas and models are generated from TypeBox definitions:
   - `pnpm protocol:gen`
   - `pnpm protocol:gen:swift`
