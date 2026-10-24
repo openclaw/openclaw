@@ -4,7 +4,10 @@ import {
   type PreparedProviderFailoverOwner,
 } from "./provider-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
-export { isUnclassifiedNoBodyHttpSignal } from "./classification-rules.js";
+export {
+  isUnclassifiedNoBodyHttpSignal,
+  isRedactionDestroyedHttpBody,
+} from "./classification-rules.js";
 export { isLikelyContextOverflowError } from "./context-overflow.js";
 export {
   isAuthErrorMessage,

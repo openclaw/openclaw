@@ -5,6 +5,7 @@ import {
   classifyFailoverSignal,
   isAuthErrorMessage,
   isBillingErrorMessage,
+  isRedactionDestroyedHttpBody,
   isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./classify.js";
@@ -100,6 +101,47 @@ describe("failover classification", () => {
     expect(
       classifyFailoverReason(
         '404 {"error":{"type":"invalid_request_error","message":"Unsupported parameter: logprobs"}}',
+      ),
+    ).toBe("format");
+  });
+
+  it("does not collapse a redaction-destroyed 400 body into format", () => {
+    // The diagnostic redactor replaces an oversized/malformed JSON body with a
+    // placeholder. No classifiable signal survives, so the 400 must read as
+    // null — not "format", which would drive a terminal model-swap recovery
+    // instead of the token-budget overflow recovery that fits it.
+    const placeholders = [
+      "[Malformed diagnostic JSON redacted]",
+      "[Oversized diagnostic JSON redacted]",
+      "[Unserializable]",
+    ];
+    for (const placeholder of placeholders) {
+      expect(classifyWithoutPlugin(`400: ${placeholder}`)).toBeNull();
+      expect(classifyWithoutPlugin(`400 ${placeholder}`)).toBeNull();
+      expect(classifyWithoutPlugin(placeholder)).toBeNull();
+      expect(
+        classifyFailoverSignal({ status: 400, message: `400: ${placeholder}` }, noPlugin),
+      ).toBeNull();
+    }
+    // 422 shares the ambiguous-body path.
+    expect(classifyWithoutPlugin(`422: [Malformed diagnostic JSON redacted]`)).toBeNull();
+    // The helper is scoped to 400/422 and to a full-body placeholder only.
+    expect(isRedactionDestroyedHttpBody("400: [Malformed diagnostic JSON redacted]", 400)).toBe(
+      true,
+    );
+    expect(isRedactionDestroyedHttpBody("400: [Malformed diagnostic JSON redacted]", 500)).toBe(
+      false,
+    );
+    expect(
+      isRedactionDestroyedHttpBody(
+        '400 {"error":{"message":"max_tokens cannot be greater than max_model_len"}}',
+        400,
+      ),
+    ).toBe(false);
+    // A real classifiable 400 body must keep its semantics (format for a schema rejection).
+    expect(
+      classifyWithoutPlugin(
+        '400 {"error":{"type":"invalid_request_error","message":"Unsupported parameter: logprobs"}}',
       ),
     ).toBe("format");
   });

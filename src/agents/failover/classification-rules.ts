@@ -52,6 +52,22 @@ export function isUnclassifiedNoBodyHttpSignal(signal: FailoverSignal): boolean 
   const message = signal.message?.trim();
   return !message || isExplicitNoBodyHttpMessage(message, status);
 }
+// The diagnostic redactor replaces a whole provider body with one of these
+// placeholders when it is oversized or not cleanly parseable. A placeholder
+// carries no classifiable signal, so a 400/422 whose body was destroyed this
+// way must not be collapsed into "format" (which drives a terminal model-swap
+// recovery instead of the token-budget overflow recovery that fits it).
+const REDACTION_DESTROYED_BODY_RE =
+  /^\[(?:Malformed|Oversized) diagnostic JSON redacted\]$|^\[Unserializable\]$/;
+export function isRedactionDestroyedHttpBody(message: string | undefined, status: number): boolean {
+  if (status !== 400 && status !== 422) {
+    return false;
+  }
+  const candidate = stripErrorPrefix(message?.trim() ?? "");
+  const leading = extractLeadingHttpStatus(candidate);
+  const rest = (leading ? leading.rest : candidate).trim();
+  return REDACTION_DESTROYED_BODY_RE.test(rest);
+}
 type PaymentRequiredFailoverReason = Extract<FailoverReason, "billing" | "rate_limit">;
 // Provider SDKs often keep semantic error fields outside Error.message.
 // These bounded candidates feed classification only; user-facing copy still
@@ -293,6 +309,14 @@ export function classifyFailoverClassificationFromHttpStatus(
     // "format". These shapes are likely transient proxy issues — classifying
     // them as "format" triggers a compaction loop that cannot recover.
     if (isUnclassifiedNoBodyHttpSignal({ status, message })) {
+      return null;
+    }
+    // When the body was destroyed by the diagnostic redactor (oversized or
+    // malformed JSON), no classifiable signal survives. Defaulting it to
+    // "format" hides the real error and forces a terminal model-swap recovery
+    // instead of the token-budget overflow recovery that fits it. Treat it
+    // like the no-body case: return null and let the caller decide.
+    if (isRedactionDestroyedHttpBody(message, status)) {
       return null;
     }
     // Body exists but couldn't be classified — still treat as format error
