@@ -19,6 +19,7 @@ a named [storage location](/concepts/storage-locations). SQLite snapshots and Gi
 history provide database-focused alternatives.
 
 ```bash
+openclaw backup status --json
 openclaw backup create
 openclaw backup create --output ~/Backups
 openclaw backup create --dry-run --json
@@ -637,10 +638,10 @@ naming the location and `openclaw storage test <name>` as the next check. Offsit
 health matches both the location and the schedule's namespace. Older records
 without a namespace remain readable but cannot satisfy a namespaced schedule.
 
-Gateway RPC `backup.status` requires operator read scope. It returns the newest
+`openclaw backup status` (and Gateway RPC `backup.status`) require operator read scope. They return the newest
 attempt and success per backup kind, target, and offsite namespace from the whole retained ledger,
 configured backup schedules with their next run, and the configured storage
-locations. Local archives and SQLite snapshots without a named target use one
+locations. Prefer the first-class CLI over `openclaw gateway call backup.status`. Local archives and SQLite snapshots without a named target use one
 status group per kind, displaying the newest attempt's archive path.
 Listing configuration does not check storage. The Control UI's
 Backups section on the Systems landing and Gateway host views uses this status and provides a **Check** action per location
@@ -658,6 +659,17 @@ its `backup.recordOutcome` RPC with operator admin scope. With the Gateway stopp
 recording takes exclusive local ownership until the write settles. An unavailable,
 outdated, or unauthenticated Gateway produces a warning; the command never retries
 the write directly or replays an outcome whose delivery is uncertain.
+
+### `backup status`
+
+Show the Gateway backup ledger, configured schedules, and storage locations:
+
+```bash
+openclaw backup status --json
+openclaw backup status --url ws://127.0.0.1:18789 --token $TOKEN --json
+```
+
+Requires a reachable Gateway with `operator.read`. JSON matches the Control UI Backups payload: `targets`, `schedules`, and `locations`. Recording an external outcome with `backup record` appears under `targets` on the next status call.
 
 ### Record external backup jobs
 
