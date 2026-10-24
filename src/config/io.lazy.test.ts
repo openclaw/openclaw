@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
+// mock-isolation: fail if a valid config read crosses into optional migration code.
 vi.mock("../commands/doctor/shared/legacy-config-migrations.js", () => {
   throw new Error("valid config reads must not load Doctor migration implementations");
 });
