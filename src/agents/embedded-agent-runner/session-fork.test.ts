@@ -262,6 +262,47 @@ it("keeps a captured prefix across suffix retries and replaces it after full-his
   expectText(recovered, ["Recovered full history"], ["Original full prefix"]);
 });
 
+it.each(["plain", "toJSON", "symbol", "hidden index"] as const)(
+  "detaches %s requests at capture and preserves their JSON meaning across forks",
+  async (kind) => {
+    const metadata = {
+      text: "Captured 🦞",
+      missing: undefined,
+      values: [Number.NaN, undefined, -0],
+    };
+    let resolutions = 0;
+    const value =
+      kind === "toJSON"
+        ? { toJSON: () => ({ ...metadata, resolutions: ++resolutions }) }
+        : kind === "symbol"
+          ? { ...metadata, omitted: Symbol("not on wire") }
+          : metadata;
+    const { parent, payloads } = captureParent(async (requestModel, _context, options) => {
+      const input = [{ role: "user", content: "Captured prefix" }];
+      if (kind === "hidden index") {
+        Object.defineProperty(input, "0", { enumerable: false });
+      }
+      await options?.onPayload?.({ input, metadata: value }, requestModel);
+      return createAssistantMessageEventStream();
+    });
+    await parent(model, context, {});
+    metadata.text = "Changed after send";
+    metadata.values[0] = 42;
+    for (let index = 0; index < 2; index++) {
+      await expect(fork()).resolves.toBe("Answer");
+      expect(payloads.at(-1)?.metadata).toEqual({
+        text: "Captured 🦞",
+        values: [null, null, 0],
+        ...(kind === "toJSON" ? { resolutions: 1 } : {}),
+      });
+      expect(payloads.at(-1)?.input).toEqual(
+        expect.arrayContaining([{ role: "user", content: "Captured prefix" }]),
+      );
+    }
+    expect(resolutions).toBe(kind === "toJSON" ? 1 : 0);
+  },
+);
+
 it.each([false, true])(
   "prepares the next parent without reviving cleared state (cleared: %s)",
   async (cleared) => {
@@ -859,7 +900,7 @@ it("retains the full parent prefix when HTTP continuation sends only a suffix", 
     options,
   );
   spy.mockRestore();
-  expect(fullHistoryEncodings).toBe(2);
+  expect(fullHistoryEncodings).toBe(1);
   const continuationBody = await request(1).text();
   const continuation = JSON.parse(continuationBody);
   expect(continuationBody).toBe(

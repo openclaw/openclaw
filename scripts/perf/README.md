@@ -4704,3 +4704,47 @@ replay checks run after measurement. `--expect-released` asserts no request grap
 survives; `--snapshot <path>` captures the synthetic heap with non-enumerable
 `__forkClosureProbe` markers for tracing strong retainers. This is owner retention
 evidence, not a Gateway latency, CPU, allocation-rate, or promotion measurement.
+
+### Session-fork capture work
+
+`session-fork-capture-measure.ts` drives the real fork wrapper and OpenAI Responses
+transport against a synthetic loopback HTTP peer. Its default workload has 16
+sessions, 16 turns per session, and 128 initial 1 KiB messages. Two warmup sessions
+are excluded. Fork replay verification runs outside timing and checks the complete
+prepared prefix and request envelope byte-for-byte after JSON encoding.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/session-fork-capture-measure.ts \
+  --owner /path/to/session-fork-baseline.ts --immutable-owner /path/to/immutable-data-baseline.ts \
+  --port 41668 \
+  --start-at <common-future-epoch-ms> --output /path/to/baseline.json
+```
+
+Omit `--owner` for the checkout's current implementation. The owner override keeps
+its original module URL and dependencies; the output records both owner source SHA256 hashes.
+`--immutable-owner` selects the matching plain-data inspection owner when that
+module differs between revisions.
+Use the same installed source tree for both sides. `--counts` is a separate
+attribution pass: it counts committed captures, fork reads, JSON bytes attributed
+to the fork owner, and V8 payload bytes when present. It rewrites only validated
+counter anchors and must not be used for timing comparisons. The normal workload
+makes zero fork reads during measurement; that ratio describes this synthetic
+traffic, not production fork frequency. `--unicode` adds one non-Latin1 character
+to each padded history message, exposing the V8 UTF-16 versus JSON UTF-8 storage
+tradeoff in a separate count pass.
+
+`--gateway --counts --state-dir /path/to/new-synthetic-state --turns 8` runs actual
+`chat.send` and `agent.wait` RPCs through an isolated Gateway, with the HTTP peer at
+`--port` and Gateway at `--port + 1`. This is a capture-count smoke, not a paired
+Gateway timing benchmark. All fixtures and credentials are synthetic.
+
+Run on the authorized benchmark host, with fresh isolated HOME/OPENCLAW_HOME/TMPDIR,
+separate ports and output files, synchronized starts, the shared quiet lock/guard,
+and swapped interleaved CPU sets. Preparation runs on CPUs 0–63 with the campaign's
+resource weights. Uninstrumented results include CPU per turn, total and per-kind
+natural GC counts/tails/maxima, GC time per turn, and event-loop sample counts and
+tails. Apply the campaign's absolute materiality and matched-control rules before
+classifying adverse GC/tail results. No collections are forced; this harness does
+not measure promotion or whole-Gateway throughput. Accept exact replay parity and
+a consistent material CPU/allocation improvement, or neutral results with a net
+production simplification; report both absolute and relative paired deltas.

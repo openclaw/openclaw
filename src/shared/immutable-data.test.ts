@@ -19,6 +19,17 @@ describe("immutable plain data", () => {
     expect([isPlainData(value), Object.isFrozen(value)]).toEqual([false, false]);
   });
 
+  it("freezes hidden array entries without admitting them as serializable plain data", () => {
+    const child = { text: "Included by JSON" };
+    const value = [child];
+    Object.defineProperty(value, "0", { enumerable: false });
+    expect(isPlainData(value)).toBe(false);
+    freezeJson(value);
+    expect([Object.isFrozen(value), Object.isFrozen(child)]).toEqual([true, true]);
+    expectClassification(false, value);
+    expect(isPlainData(value)).toBe(false);
+  });
+
   it.each(["inspected", "trusted", "shallow trusted"])("freezes %s shared cycles", (mode) => {
     const freeze = mode === "inspected" ? freezeJson : freezeTrusted;
     const child = { value: 1 };

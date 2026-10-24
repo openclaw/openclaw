@@ -54,10 +54,18 @@ function inspectPlainData(value: unknown, freeze: boolean, requireFrozen = true)
       return false;
     }
     inspected.add(candidate);
+    const array = Array.isArray(candidate);
     // Direct members disprove the container before queued child graphs are inspected.
     for (const key of Reflect.ownKeys(candidate)) {
       const descriptor = Object.getOwnPropertyDescriptor(candidate, key)!;
       const member: unknown = descriptor.value;
+      // JSON includes hidden array indices; clone/serialization APIs can drop them.
+      if (array && key !== "length" && !descriptor.enumerable) {
+        if (!freeze) {
+          return false;
+        }
+        plain = false;
+      }
       if (!("value" in descriptor) || typeof member === "function") {
         if (!freeze) {
           return false;
