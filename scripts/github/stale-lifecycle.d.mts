@@ -51,8 +51,17 @@ export function runStaleLifecycle(options: {
 }>;
 
 export function policyFor(item: unknown): { lane: string; inactiveDays: number; graceDays: number };
-export function noticeBody(item: unknown): string;
-export function closeBody(item: unknown, warning?: number, activity?: number): string;
+export function policyFor(
+  item: unknown,
+  lane: "age-cap",
+): { lane: "age-cap"; ageDays: number; graceDays: number };
+export function noticeBody(item: unknown, lane?: string): string;
+export function closeBody(
+  item: unknown,
+  warning?: number,
+  activity?: number,
+  lane?: string,
+): string;
 export function auditRecentBugClosures(
   options: unknown,
 ): Promise<{ inspected: number; violations: number[] }>;
