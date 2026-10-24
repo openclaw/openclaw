@@ -1,4 +1,5 @@
-import { expect, test } from "vitest";
+import { beforeAll, expect, test } from "vitest";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
 import {
@@ -6,7 +7,44 @@ import {
   expectPatchError,
   expectPatchOk,
   mainStoreEntry,
+  runPatch,
 } from "./sessions-patch.test-support.js";
+
+beforeAll(async () => {
+  await prepareSharedAuthStoreOwnership();
+});
+
+test("accepts xhigh for a native Muse model before Meta runtime registration", async () => {
+  const result = await runPatch({
+    cfg: {
+      agents: {
+        defaults: {
+          model: { primary: "meta/muse-spark-1.3" },
+          models: {
+            "meta/muse-spark-1.3": { agentRuntime: { id: "muse" } },
+          },
+        },
+      },
+    },
+    patch: {
+      key: MAIN_SESSION_KEY,
+      thinkingLevel: "xhigh",
+    },
+    loadGatewayModelCatalog: async () => [
+      {
+        provider: "meta",
+        id: "muse-spark-1.3",
+        name: "Muse Spark 1.3",
+        nativeRuntime: "muse",
+      },
+    ],
+  });
+
+  if (!result.ok) {
+    throw new Error(result.error.message);
+  }
+  expect(result.entry.thinkingLevel).toBe("xhigh");
+});
 
 // The selected runtime route row owns effort support, but the logical row's configured
 // reasoning flag still decides whether the model reasons at all.
