@@ -10,10 +10,8 @@ describe("SettingsSelect", () => {
   it("retains the native control while options, selection, and handlers change", () => {
     const first = vi.fn();
     const second = vi.fn();
-    const options = [
-      { value: "one", label: "One" },
-      { value: "two", label: "Two", disabled: true },
-    ];
+    const firstOption = { value: "one", label: "One" };
+    const options = [firstOption, { value: "two", label: "Two", disabled: true }];
     const view = mountSolid(SettingsSelect, {
       "aria-label": "Target",
       value: "one",
@@ -28,19 +26,19 @@ describe("SettingsSelect", () => {
     expect(select.className).toBe("settings-select");
     expect(select.getAttribute("aria-label")).toBe("Target");
     expect(select.value).toBe("one");
-    expect(select.options[1].disabled).toBe(true);
-    const retained = select.options[1];
+    const retained = select.options.item(1)!;
+    expect(retained.disabled).toBe(true);
 
     view.update({
       "aria-label": "Target",
       value: "two",
-      options: [options[0], { value: "two", label: "Renamed" }],
+      options: [firstOption, { value: "two", label: "Renamed" }],
       onChange: second,
     });
     expect(view.container.querySelector("select")).toBe(select);
     expect(select.options[1]).toBe(retained);
-    expect(select.options[1].textContent).toBe("Renamed");
-    expect(select.options[1].disabled).toBe(false);
+    expect(retained.textContent).toBe("Renamed");
+    expect(retained.disabled).toBe(false);
     expect(select.value).toBe("two");
     select.value = "one";
     select.dispatchEvent(new Event("change", { bubbles: true }));
