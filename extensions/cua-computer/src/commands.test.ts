@@ -159,7 +159,9 @@ describe("cua-computer provider", () => {
   it("lazily owns one session and closes it when node-host availability stops", async () => {
     const { session, dispose } = driver();
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const clearInterval = vi.spyOn(globalThis, "clearInterval");
     onTestFinished(() => clearInterval.mockRestore());
     const createDriver = vi.mocked(createCuaDriver);
@@ -570,9 +572,9 @@ describe("cua-computer desktop frames", () => {
         commands
           .find((entry) => entry.command === command)!
           .handle(JSON.stringify({ executionId, ...params }));
-      onTestFinished(() =>
-        invoke("computer.act", { action: "__close_execution", reason: "completion" }),
-      );
+      onTestFinished(async () => {
+        await invoke("computer.act", { action: "__close_execution", reason: "completion" });
+      });
       const screen = JSON.parse(
         await invoke("screen.snapshot", { format: "png", maxWidth: cap }),
       ) as {
