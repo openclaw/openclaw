@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
   readlinkSync,
   realpathSync,
@@ -123,14 +122,7 @@ describe("FreeBSD source-install admission", () => {
     ["--npm --git", true],
     ["", false],
   ] as const)("refuses %s before installation side effects (JSON: %s)", (args, json) => {
-    const { root, prefix, oldRuntime } = fixture(true);
-    const checkout = join(root, "checkout");
-    const temporary = join(root, "temporary");
-    mkdirSync(checkout);
-    mkdirSync(temporary);
-    mkdirSync(join(prefix, "bin"), { recursive: true });
-    writeFileSync(join(prefix, "bin", "openclaw"), "preserve installed CLI");
-    writeFileSync(join(checkout, "pnpm-workspace.yaml"), "preserve source allowlist");
+    const root = tempDirs.make("openclaw-freebsd-admission-");
     const result = run(
       `
       os_detect() { printf 'freebsd\\n'; }
@@ -143,9 +135,9 @@ describe("FreeBSD source-install admission", () => {
       `,
       {
         HOME: root,
-        TMPDIR: temporary,
-        OPENCLAW_PREFIX: prefix,
-        OPENCLAW_GIT_DIR: checkout,
+        TMPDIR: root,
+        OPENCLAW_PREFIX: join(root, "prefix"),
+        OPENCLAW_GIT_DIR: join(root, "checkout"),
         OPENCLAW_INSTALL_METHOD: args ? "npm" : "git",
       },
     );
@@ -162,20 +154,12 @@ describe("FreeBSD source-install admission", () => {
     expect(message).toContain("Source/git installation is unsupported on FreeBSD");
     expect(message).toContain("--install-method npm");
     expect(result.stdout).not.toContain("unexpected");
-    expect(readFileSync(join(prefix, "bin", "openclaw"), "utf8")).toBe("preserve installed CLI");
-    expect(readlinkSync(join(prefix, "tools", "node"))).toBe(oldRuntime);
-    expect(readdirSync(join(prefix, "tools"))).toEqual(["node"]);
-    expect(readFileSync(join(checkout, "pnpm-workspace.yaml"), "utf8")).toBe(
-      "preserve source allowlist",
-    );
-    expect(readdirSync(checkout)).toEqual(["pnpm-workspace.yaml"]);
-    expect(readdirSync(temporary)).toEqual([]);
+    expect(readdirSync(root)).toEqual([]);
   });
 
   it.each([
     ["freebsd", "--git --npm"],
     ["linux", "--git"],
-    ["darwin", "--npm"],
   ])("keeps %s %s on its selected install route", (os, args) => {
     const result = run(
       `

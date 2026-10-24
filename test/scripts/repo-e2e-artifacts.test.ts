@@ -6,6 +6,7 @@ import { parse } from "yaml";
 import { transferRepoE2eArtifacts } from "../../scripts/repo-e2e-artifacts.mts";
 import { resolveBuildRequirement } from "../../scripts/run-node.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const workflowHarnesses = new Map<string, string>();
@@ -71,11 +72,8 @@ function transferThroughWorkflowHarness(
 
 function fixture() {
   const root = fs.realpathSync(tempDirs.make("repo-e2e-artifacts-"));
+  const { write, read, json } = fixtureFiles(root);
   const artifact = path.join(root, "artifacts");
-  const write = (file: string, contents: string) => {
-    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-    fs.writeFileSync(path.join(root, file), contents);
-  };
   const assets = {
     "extensions/demo/assets/.bundle.hash": "generated-hash\n",
     "extensions/demo/assets/runtime.js": "generated-runtime\n",
@@ -89,15 +87,12 @@ function fixture() {
     write(file, contents);
   }
   const asset = "assets/runtime.js";
-  write(
-    "extensions/demo/package.json",
-    JSON.stringify({
-      openclaw: {
-        assetScripts: { build: "fixture-build", buildOutputs: ["assets/.bundle.hash"] },
-        build: { staticAssets: [{ source: asset, output: asset }] },
-      },
-    }),
-  );
+  json("extensions/demo/package.json", {
+    openclaw: {
+      assetScripts: { build: "fixture-build", buildOutputs: ["assets/.bundle.hash"] },
+      build: { staticAssets: [{ source: asset, output: asset }] },
+    },
+  });
   git(root, "init", "-q");
   git(root, "add", ".");
   git(
@@ -126,7 +121,6 @@ function fixture() {
   }
   const configTime = new Date(Date.now() - 10_000);
   fs.utimesSync(path.join(root, "package.json"), configTime, configTime);
-  const read = (file: string) => fs.readFileSync(path.join(root, file), "utf8");
   const mtime = (file: string) => fs.statSync(path.join(root, file)).mtimeMs;
   const transfer = (op: "pack" | "restore") => transferRepoE2eArtifacts(op, artifact, "full", root);
   const remove = (...files: string[]) => {

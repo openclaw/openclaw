@@ -1,20 +1,16 @@
 // Qualification of the package Codex harness public audit inspection boundary.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { inspectCodexAudit } from "../../scripts/e2e/lib/codex-npm-plugin-live/audit-inspection.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT =
   "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs";
 const auditTempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function writeJson(filePath: string, value: unknown) {
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
 
 function runAssertions(root: string, args: string[], env: NodeJS.ProcessEnv = {}) {
   return spawnSync(process.execPath, [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, ...args], {
@@ -135,13 +131,14 @@ describe("Codex package audit qualification", () => {
 describe("Codex audit package CLI boundary", () => {
   it("enables audit identity only in the opted-in package fixture and queries the public CLI", () => {
     const root = auditTempDirs.make("openclaw-codex-audit-");
-    const configPath = path.join(root, "state", "openclaw.json");
+    const { file, read, write, json } = fixtureFiles(root);
+    const configPath = file("state/openclaw.json");
     const configure = (auditIdentity = "0") =>
       runAssertions(root, ["configure"], {
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_CODEX_NPM_PLUGIN_AUDIT_IDENTITY: auditIdentity,
       });
-    const readConfig = () => JSON.parse(readFileSync(configPath, "utf8"));
+    const readConfig = () => JSON.parse(read("state/openclaw.json"));
     const defaultConfig = configure();
     expect(defaultConfig.status, defaultConfig.stderr).toBe(0);
     expect(readConfig()).not.toHaveProperty("logging.audit.executionIdentity");
@@ -168,10 +165,9 @@ describe("Codex audit package CLI boundary", () => {
     } finally {
       database.close();
     }
-    writeJson(path.join(root, "replies.json"), Object.fromEntries(fixture.replies));
-    const cliPath = path.join(root, "openclaw-fixture.cjs");
-    writeFileSync(
-      cliPath,
+    json("replies.json", Object.fromEntries(fixture.replies));
+    const cliPath = write(
+      "openclaw-fixture.cjs",
       `const fs = require("node:fs");
 const path = require("node:path");
 const [command, ...args] = process.argv.slice(2);
