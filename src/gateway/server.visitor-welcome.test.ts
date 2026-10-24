@@ -3,11 +3,10 @@ import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import type { GatewayOperatorRolesConfig } from "../config/types.gateway.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
@@ -25,6 +24,22 @@ import {
 import { setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 installGatewayTestHooks({ scope: "suite" });
+
+// Runs when the production transcript append starts, after the last pre-append caller check.
+const transcriptAppend = vi.hoisted(() => ({ onStart: undefined as (() => void) | undefined }));
+vi.mock("./server-methods/chat-transcript-inject.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./server-methods/chat-transcript-inject.js")>();
+  return {
+    ...actual,
+    appendInjectedAssistantMessageToTranscript: (
+      ...args: Parameters<typeof actual.appendInjectedAssistantMessageToTranscript>
+    ) => {
+      transcriptAppend.onStart?.();
+      return actual.appendInjectedAssistantMessageToTranscript(...args);
+    },
+  };
+});
 
 // The Team guest shape: a default role bound to visitor-access, viewing others' sessions.
 const roles: GatewayOperatorRolesConfig = {
@@ -64,7 +79,6 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
   setDisplayName(staff.id, "Staff");
   const guest = ensureProfileForEmail("visitor@example.com");
   let visitorGrant = new AbortController();
-  const paused = { entered: createDeferredCore(), release: createDeferredCore() };
   const { config, registry } = createPluginRegistryFixture();
   registerTestPlugin({
     registry,
@@ -100,10 +114,6 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
                 agentId: "main",
                 displayName: "Welcome, Visitor",
               });
-            }
-            if (params.pause === true) {
-              paused.entered.resolve();
-              await paused.release.promise;
             }
             const appended = await api.runtime.gateway.appendAgentMessage({
               sessionKey,
@@ -195,17 +205,19 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
       });
       expect(staffHistory.payload?.messages).toEqual([]);
 
-      // Revoking the grant while setup awaits stops the message and Inbox effects.
+      // Revoking the real visitor grant after the transcript append has started stops
+      // the durable message and its Inbox entry.
       const revokedKey = `agent:main:dashboard:${randomUUID()}`;
-      const pending = rpcReq<Welcome>(guestWs, "visitor-access.probe", {
+      transcriptAppend.onStart = () => {
+        transcriptAppend.onStart = undefined;
+        visitorGrant.abort(new Error("Grant revoked"));
+      };
+      const revoked = await rpcReq<Welcome>(guestWs, "visitor-access.probe", {
         key: revokedKey,
         create: true,
-        pause: true,
       }).catch(() => undefined);
-      await paused.entered.promise;
-      visitorGrant.abort(new Error("Grant revoked"));
-      paused.release.resolve();
-      await pending;
+      expect(revoked?.payload?.messageId).toBeUndefined();
+      expect(transcriptAppend.onStart).toBeUndefined();
       visitorGrant = new AbortController();
       const revokedHistory = await rpcReq<{ messages: unknown[] }>(staffWs, "chat.history", {
         sessionKey: revokedKey,
