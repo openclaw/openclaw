@@ -5666,7 +5666,6 @@
 ["src/gateway/server/ws-connection/message-handler.suspension-admission.test.ts","../../../config/config.js","a3837f9471845a0e3a40c19a9a77f6164c2ee903df3b485470192203f58b6868",1]
 ["src/gateway/server/ws-connection/message-handler.suspension-admission.test.ts","../../../config/io.js","356e54841975612bf099a5ab6111da36f767a46ed69c9d86c78af03531b0d518",1]
 ["src/gateway/server/ws-connection/message-handler.suspension-admission.test.ts","../../../infra/system-presence.js","458f192a4f7d1e5b3afd77df1d6fc2da64ee659040e6a9534ac0f33c92edcaf8",1]
-["src/gateway/server/ws-connection/message-handler.suspension-admission.test.ts","../health-state.js","e6bfcad2e04f2860ae03831eb657a39e2f9f10553bc78afb9f4179f22ba12d8b",1]
 ["src/gateway/session-access-authority.test.ts","../state/user-channel-identity-operations.js","2b6f2ec1d34c605b958de02fe04444637f797f33435b6af4c5785c65ed6cb927",1]
 ["src/gateway/session-access-authority.test.ts","./session-resource-tool-policy.js","ac3fa91f3f2af23948e6bdd6e530a54ec6295c122051f128c8caf83b6be9bea6",1]
 ["src/gateway/session-cold-storage-maintenance.test.ts","../config/sessions.js","36f80702222407490e8dec8f7e31b6f106428266018a05904eb8de65b9816dc2",1]

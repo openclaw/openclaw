@@ -32,7 +32,8 @@ vi.mock("../../../infra/system-presence.js", () => ({
   upsertPresence: upsertPresenceMock,
   listSystemPresence: vi.fn(() => []),
 }));
-vi.mock("../health-state.js", () => ({
+vi.mock("../health-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../health-state.js")>()),
   buildGatewaySnapshot: vi.fn(() => createGatewaySnapshotFixture()),
   getHealthCache: vi.fn(() => null),
   getHealthVersion: vi.fn(() => 1),
