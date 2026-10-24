@@ -57,7 +57,8 @@ scaling without exporting snapshot payloads.
 ### Main-isolate module census
 
 `scripts/gateway-heap-rig.mjs --module-census` records each loaded main-isolate
-script's URL, hash, UTF-8 source bytes, and V8 code statistics after seeding and
+script's URL, hash, UTF-8 source bytes (or separate WebAssembly binary bytes), and
+V8 code statistics after seeding and
 after the mixed-turn workload. It uses the rig's private child IPC descriptor;
 workers are excluded and no inspector network listener is opened. Run the dist
 build on the authorized benchmark host with a fresh synthetic root, for example:

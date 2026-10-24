@@ -104,7 +104,8 @@ it("counts source bytes and separates executed and idle functions in the main ce
   const root = tempDirs.make("main-module-census-");
   const fixture = join(root, "fixture.mjs");
   const source =
-    'export function called() { return "🦞"; }\nexport function idle() { return 42; }\n';
+    'export function called() { return "🦞"; }\nexport function idle() { return 42; }\n' +
+    "export const wasm = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));\n";
   await writeFile(fixture, source);
   const driver = join(root, "driver.mjs");
   await writeFile(
@@ -149,6 +150,8 @@ it("counts source bytes and separates executed and idle functions in the main ce
     const census = JSON.parse(await readFile(output, "utf8"));
     const script = census.scripts.find((row: { url: string }) => row.url.endsWith("/fixture.mjs"));
     expect(script.sourceBytes).toBe(Buffer.byteLength(source));
+    const wasm = census.scripts.find((row: { url: string }) => row.url.startsWith("wasm:"));
+    expect(wasm).toMatchObject({ sourceBytes: 0, bytecodeBytes: 8 });
     const coverage = census.execution.find(
       (row: { scriptId: string }) => row.scriptId === script.scriptId,
     );

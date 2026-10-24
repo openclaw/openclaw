@@ -41,10 +41,13 @@ if (isMainThread) {
             : undefined;
           await session.post("Debugger.enable");
           for (const script of scripts) {
-            const { scriptSource } = await session.post("Debugger.getScriptSource", {
+            const { scriptSource, bytecode } = await session.post("Debugger.getScriptSource", {
               scriptId: script.scriptId,
             });
             script.sourceBytes = Buffer.byteLength(scriptSource);
+            if (bytecode !== undefined) {
+              script.bytecodeBytes = Buffer.byteLength(bytecode, "base64");
+            }
           }
           writeFileSync(
             message.output,
