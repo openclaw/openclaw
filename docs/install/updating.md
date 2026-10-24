@@ -47,6 +47,13 @@ stopped backup and identify the changed file. This repair must
 be present in the runtime performing the snapshot, including the candidate worker
 when the installed updater delegates capture to it.
 
+Candidate Doctor also accepts an empty WAL index appearing or disappearing
+between an older updater's capture and migration admission, provided the database
+identity and committed contents still match and the index contains no write
+evidence. This preserves the installed updater's original fingerprint format.
+Changed committed data or write evidence still refuses migration and automatic
+restoration. The candidate must contain this repair.
+
 Update snapshots and database backups accept a database whose only integrity
 findings are `malformed inverted index` reports on canonical, schema-validated
 agent FTS tables. A Node upgrade that changes SQLite tokenization (for example,
