@@ -129,7 +129,7 @@ export async function runBtwSessionFork(
   const { params, runtimeModel, apiKey, sessionId, workspaceDir, assertCurrent } = input;
   const delivery = params.sessionEntry.delivery;
   const externalDelivery = delivery?.kind === "external" ? delivery : undefined;
-  const { context, promptCacheKey } = await prepareEmbeddedSessionForkContext({
+  const context = await prepareEmbeddedSessionForkContext({
     target: {
       agentId: params.agentId,
       sessionId,
@@ -142,6 +142,7 @@ export async function runBtwSessionFork(
     config: params.cfg,
     workspaceDir,
     agentId: params.agentId,
+    agentDir: params.agentDir,
     chatType: params.chatType ?? params.sessionEntry.chatType,
     accountId: params.agentAccountId ?? externalDelivery?.route.accountId,
     peerId: externalDelivery?.origin.nativeDirectUserId,
@@ -152,7 +153,6 @@ export async function runBtwSessionFork(
   return runEmbeddedSessionFork({
     context,
     streamFn: resolveSideQuestionStream(input),
-    options: { promptCacheKey },
     question: params.question,
     model: runtimeModel,
     apiKey,

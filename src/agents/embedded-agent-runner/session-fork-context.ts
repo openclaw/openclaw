@@ -7,11 +7,16 @@ import { readSessionEntrySummariesInWorker } from "../../config/sessions/session
 import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Context, Model } from "../../llm/types.js";
+import {
+  attachRuntimePromptMediaFacts,
+  readRuntimePromptMediaFacts,
+} from "../../media/media-facts.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
+import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
 import { resolveBootstrapFilesForPreparation } from "../bootstrap-files.js";
 import { resolveUserTimezone } from "../date-time.js";
 import { buildBootstrapContextForFiles } from "../embedded-agent-helpers/bootstrap.js";
-import { convertToLlm } from "../sessions/messages.js";
+import { convertToLlm, convertToLlmWithBlockImages } from "../sessions/messages.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
@@ -20,6 +25,9 @@ import { isCurrentEmbeddedRunAttachment } from "./run-state.js";
 import { normalizeMessagesForLlmBoundary } from "./run/attempt-llm-boundary.js";
 import { applyRuntimeContextCarrierRetention } from "./run/runtime-context-prompt.js";
 import { resolveActiveEmbeddedRunBySessionFile } from "./runs.js";
+import { createToolResultPromptProjectionState } from "./session-prompt-state.js";
+import { replayToolResultPromptProjections } from "./tool-result-projection-replay.js";
+import { restoreCacheTtlToolResultProjections } from "./tool-result-truncation.js";
 
 function matchesModelRoute(routeKey: unknown, model: Model): boolean {
   if (typeof routeKey !== "string") {
@@ -48,6 +56,7 @@ export async function prepareEmbeddedSessionForkContext(params: {
   config?: OpenClawConfig;
   workspaceDir: string;
   agentId: string;
+  agentDir: string;
   bootstrapUserProfileId?: string;
   chatType?: ChatType;
   accountId?: string;
@@ -55,7 +64,7 @@ export async function prepareEmbeddedSessionForkContext(params: {
   directApiKey?: boolean;
   signal?: AbortSignal;
   assertCurrent: () => void;
-}): Promise<{ context: Context; promptCacheKey?: string }> {
+}): Promise<Context> {
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent();
@@ -79,19 +88,34 @@ export async function prepareEmbeddedSessionForkContext(params: {
     live.model.api === params.model.api &&
     live.model.baseUrl === params.model.baseUrl
   ) {
-    const messages = convertToLlm(
-      normalizeMessagesForLlmBoundary(live.messages, {
+    const messages = normalizeMessagesForLlmBoundary(
+      live.projectMessages?.(live.messages) ?? live.messages,
+      {
         ...live.boundary,
         sessionVersion: live.sessionVersion,
-      }),
+      },
     );
-    const context = structuredClone({
+    const cloned = structuredClone({
       systemPrompt: live.systemPrompt,
       tools: live.tools,
       messages,
     });
+    // Structured clone omits the runtime media symbol; preserve its current owner facts.
+    messages.forEach((message, index) => {
+      const media = readRuntimePromptMediaFacts(message);
+      if (media) {
+        attachRuntimePromptMediaFacts(cloned.messages[index]!, structuredClone(media));
+      }
+    });
+    const context: Context = {
+      ...cloned,
+      messages: convertToLlmWithBlockImages(cloned.messages, live.blockImages ?? false),
+    };
+    if (live.projectMessages) {
+      context.messages = convertToLlm(live.projectMessages(context.messages));
+    }
     applyRuntimeContextCarrierRetention(context.messages, live.boundary?.appendOnlyRuntimeContext);
-    return { context, promptCacheKey: live.promptCacheKey };
+    return context;
   }
 
   const marker = parseSqliteSessionFileMarker(params.sessionFile);
@@ -127,6 +151,30 @@ export async function prepareEmbeddedSessionForkContext(params: {
   });
   assertCurrent();
   const entries = manager.getBranch();
+  const reader = prepareSessionTranscriptHydration(target, undefined, params.signal);
+  const toolResultProjectionState = createToolResultPromptProjectionState();
+  if (
+    entries.some((entry) => entry.type === "custom" && entry.customType === "openclaw.cache-ttl")
+  ) {
+    const result = await reader.readMaintenance({
+      operation: "custom-branch",
+      leafEntryId: manager.getLeafId(),
+      customType: "openclaw.cache-ttl",
+    });
+    reader.assertCurrent();
+    assertCurrent();
+    if (!result.events) {
+      throw new Error("Session fork transcript changed while preparing its model context.");
+    }
+    const projections = new Map(
+      result.events.filter(isIndexedSessionEntry).map((entry) => [entry.id, entry]),
+    );
+    // Model navigation retains pre-compaction ancestry and resets, but omits custom payloads.
+    restoreCacheTtlToolResultProjections(
+      toolResultProjectionState,
+      entries.map((entry) => projections.get(entry.id) ?? entry),
+    );
+  }
   const markerIndex = entries.findLastIndex(
     (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
   );
@@ -134,7 +182,6 @@ export async function prepareEmbeddedSessionForkContext(params: {
   const version = manager.getTranscriptSnapshotVersion();
   if (checkpointEntry && version) {
     // The model view keeps custom-entry navigation only; hydrate this one owner's checkpoint.
-    const reader = prepareSessionTranscriptHydration(target, undefined, params.signal);
     const result = await reader.readCurrentTurnEntry({
       entryId: checkpointEntry.id,
       version,
@@ -198,15 +245,24 @@ export async function prepareEmbeddedSessionForkContext(params: {
     workspaceDir: params.workspaceDir,
     directApiKey: params.directApiKey,
   });
-  const messages = convertToLlm(
+  const settings = createPreparedEmbeddedAgentSettingsManager({
+    sessionId: params.target.sessionId,
+    cwd: params.workspaceDir,
+    agentDir: params.agentDir,
+    cfg: params.config,
+  });
+  let messages = convertToLlmWithBlockImages(
     normalizeMessagesForLlmBoundary(
-      limitHistoryTurns(
-        manager.buildSessionContext().messages,
-        getHistoryLimitFromSessionKey(sessionKey, params.config, {
-          accountId: params.accountId,
-          peerId: params.peerId,
-          chatType: params.chatType,
-        }),
+      replayToolResultPromptProjections(
+        limitHistoryTurns(
+          manager.buildSessionContext().messages,
+          getHistoryLimitFromSessionKey(sessionKey, params.config, {
+            accountId: params.accountId,
+            peerId: params.peerId,
+            chatType: params.chatType,
+          }),
+        ),
+        toolResultProjectionState,
       ),
       {
         sessionVersion: manager.getHeader()?.version,
@@ -215,9 +271,9 @@ export async function prepareEmbeddedSessionForkContext(params: {
         timezone: resolveUserTimezone(params.config?.agents?.defaults?.userTimezone),
       },
     ),
+    settings.getBlockImages(),
   );
+  messages = convertToLlm(replayToolResultPromptProjections(messages, toolResultProjectionState));
   applyRuntimeContextCarrierRetention(messages, policy.appendOnlyRuntimeContext);
-  return {
-    context: { systemPrompt, tools, messages },
-  };
+  return { systemPrompt, tools, messages };
 }

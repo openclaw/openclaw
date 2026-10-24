@@ -290,8 +290,8 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, "live-parent-key"])(
-    "isolates a native session fork without replacing the parent's continuation (affinity=%s)",
+  it.each([undefined, "parent-key"])(
+    "omits native fork affinity without replacing the parent's continuation (source key=%s)",
     async (promptCacheKey) => {
       const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock);
@@ -333,7 +333,8 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
           { role: "user", content: [{ type: "input_text", text: "Review independently" }] },
         ],
       });
-      expect(requests[1]?.prompt_cache_key).toBe(promptCacheKey);
+      expect(requests[0]?.prompt_cache_key).toBe(identity.sessionId);
+      expect(requests[1]).not.toHaveProperty("prompt_cache_key");
       expect(requests[2]).toMatchObject({
         previous_response_id: "resp_native_1",
         input: [{ role: "user", content: [{ type: "input_text", text: "Continue parent" }] }],

@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
@@ -106,6 +107,7 @@ type PrepareEmbeddedAttemptStreamInput = {
   ) => Promise<void>;
   onModelUsage?: Parameters<typeof subscribeEmbeddedAgentSession>[0]["onModelUsage"];
   readSessionForkBoundary?: () => LlmBoundaryOptions;
+  projectSessionForkMessages?: (messages: AgentMessage[]) => AgentMessage[];
   runtimeChannel?: string;
   hookAgentId: string;
   diagnosticTrace: DiagnosticTraceContext;
@@ -617,9 +619,10 @@ function prepareStream(
           ...(async === false ? { async } : {}),
         })),
         messages: activeSession.messages.slice(),
+        projectMessages: input.projectSessionForkMessages,
         sessionVersion: activeSession.sessionManager.getHeader()?.version,
         boundary: input.readSessionForkBoundary?.(),
-        promptCacheKey: attempt.promptCacheKey,
+        blockImages: activeSession.settingsManager.getBlockImages(),
       };
     },
     isAborted: () => input.getRunState().aborted,

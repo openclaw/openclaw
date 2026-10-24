@@ -10,7 +10,7 @@ import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createWorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
 import { stagePlacementWorkspaceJournalWorkerPublication } from "../gateway/worker-environments/placement-turn-authority.js";
-import type { AssistantMessage, Model, ToolCall } from "../llm/types.js";
+import type { AssistantMessage, ImageContent, Model, ToolCall } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
@@ -82,10 +82,28 @@ it.each([
         path.join(state.workspaceDir, "AGENTS.md"),
         "Answer review requests using the REVIEW_CONTEXT_1672 convention.\n",
       );
+      const image: ImageContent = {
+        type: "image",
+        mimeType: "image/png",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+      };
+      const imagePath = path.join(state.workspaceDir, "private-fork-image.png");
+      if (api === "openai-responses") {
+        await fs.mkdir(state.agentDir(), { recursive: true });
+        await fs.writeFile(
+          path.join(state.agentDir(), "settings.json"),
+          JSON.stringify({ images: { blockImages: true } }),
+        );
+        await fs.writeFile(imagePath, Buffer.from(image.data, "base64"));
+      }
       const toolEntered = createDeferredCore();
       const releaseTool = createDeferredCore();
       let holdParentTool = false;
+      let imageResultMode = false;
       const executeTool = vi.fn(async () => {
+        if (imageResultMode) {
+          return { content: [{ type: "text", text: "PRIVATE_TOOL_IMAGE" }, image], details: {} };
+        }
         if (!holdParentTool) {
           throw new Error("FORK TOOL EXECUTED");
         }
@@ -117,7 +135,7 @@ it.each([
         pluginId: "fork-proof",
         pluginDir,
         apiKey: "synthetic-fork-key",
-        input: ["text"],
+        input: ["text", "image"],
         tools: ["fork_probe", ...(api === "openai-responses" ? ["web_search"] : [])],
         modelSettings: {
           agentRuntime: { id: "openclaw" },
@@ -187,7 +205,7 @@ it.each([
           resolvedReasoningLevel: "off",
           opts: { onBlockReply, abortSignal },
         });
-      const runParent = async (prompt: string, runId: string) => {
+      const runParent = async (prompt: string, runId: string, includeImages = false) => {
         const admission = prepareSystemAgentRunAdmission(config, runId, "main", "fork-proof");
         try {
           const parent = await runEmbeddedAgent({
@@ -196,6 +214,9 @@ it.each([
               target: { ...target, sessionEntry: undefined },
               input: {
                 text: prompt,
+                ...(includeImages
+                  ? { media: [{ path: imagePath, contentType: "image/png" }] }
+                  : {}),
                 timestamp: 1,
                 idempotencyKey: `${runId}:user`,
               },
@@ -217,6 +238,7 @@ it.each([
             runId,
             timeoutMs: 60_000,
             prompt,
+            ...(includeImages ? { images: [image] } : {}),
             transcriptPrompt: prompt,
             skillsSnapshot: {
               prompt: "<available_skills>stable skill context</available_skills>",
@@ -340,6 +362,20 @@ it.each([
         expect(payloads.length - beforeDenied).toBe(3);
         expect(await readTranscript()).toEqual(parentTranscript);
         if (api === "openai-responses") {
+          imageResultMode = true;
+          toolsRemaining = 1;
+          await runParent("Inspect private images", "fork-parent-images", true);
+          imageResultMode = false;
+          const assertImagesBlocked = () => {
+            const body = JSON.stringify(payloads.at(-1));
+            expect(body).toContain("Image reading is disabled.");
+            expect(body).toContain("PRIVATE_TOOL_IMAGE");
+            expect(body).not.toContain(image.data);
+            expect(body).not.toContain('"input_image"');
+            expect(body).not.toContain('"image_url"');
+          };
+          await expect(fork()).resolves.toEqual({ text: "Review answer" });
+          assertImagesBlocked();
           holdParentTool = true;
           toolsRemaining = 1;
           const activeParent = runParent("Run the lookup", "fork-parent-active");
@@ -351,13 +387,13 @@ it.each([
               }),
             ]);
             const whileRunning = await readTranscript();
-            const activeParentPayload = payloads.at(-1)!;
             await expect(fork()).resolves.toEqual({ text: "Review answer" });
-            expect(payloads.at(-1)?.prompt_cache_key).toBe(activeParentPayload.prompt_cache_key);
+            expect(payloads.at(-1)?.prompt_cache_key).toBeUndefined();
             expect(JSON.stringify(payloads.at(-1))).toContain("This tool call is still running");
             expect(JSON.stringify(payloads.at(-1))).not.toContain("LIVE_TOOL_RESULT_1672");
             expect(await readTranscript()).toEqual(whileRunning);
-            expect(executeTool).toHaveBeenCalledTimes(1);
+            expect(executeTool).toHaveBeenCalledTimes(2);
+            assertImagesBlocked();
           } finally {
             releaseTool.resolve();
             await activeParent;

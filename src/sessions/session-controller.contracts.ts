@@ -738,9 +738,10 @@ export type EmbeddedAgentQueueHandle = {
         systemPrompt: string;
         tools: Context["tools"];
         messages: AgentMessage[];
+        projectMessages?: (messages: AgentMessage[]) => AgentMessage[];
         sessionVersion?: number;
         boundary?: LlmBoundaryOptions;
-        promptCacheKey?: string;
+        blockImages?: boolean;
       }
     | undefined;
   isStopped?: () => boolean;

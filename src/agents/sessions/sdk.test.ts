@@ -5,7 +5,10 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import type { ImageContent, Model, SimpleStreamOptions } from "../../llm/types.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
-import { readRuntimePromptMediaFacts } from "../../media/media-facts.js";
+import {
+  attachRuntimePromptMediaFacts,
+  readRuntimePromptMediaFacts,
+} from "../../media/media-facts.js";
 import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import type { AgentTool, AgentMessage } from "../runtime/index.js";
@@ -188,6 +191,48 @@ describe("AgentSession getLastAssistantText", () => {
 
     expect(session.getLastAssistantText()).toBe("previous answer");
   });
+});
+
+it("applies changing image settings to inline and deferred images without altering parent facts", async () => {
+  const settingsManager = SettingsManager.inMemory();
+  const { session } = await createSdkSession({ settingsManager });
+  const image: ImageContent = { type: "image", data: "cHJpdmF0ZQ==", mimeType: "image/png" };
+  const user = attachRuntimePromptMediaFacts(makeUserMessage("Deferred attachment", 1), [
+    { path: "/synthetic/private.png", contentType: "image/png" },
+    { path: "/synthetic/video.mp4", contentType: "video/mp4" },
+  ]);
+  const messages: AgentMessage[] = [
+    user,
+    {
+      role: "toolResult",
+      toolCallId: "read-image",
+      toolName: "read",
+      isError: false,
+      content: [image, image],
+      timestamp: 2,
+    },
+    { role: "user", content: [image], timestamp: 3 },
+  ];
+  expect((await session.agent.convertToLlm(messages))[0]).toBe(user);
+  settingsManager.applyOverrides({ images: { blockImages: true } });
+  const blocked = await session.agent.convertToLlm(messages);
+  expect(blocked.map((message) => message.content)).toEqual([
+    [
+      { type: "text", text: "Deferred attachment" },
+      { type: "text", text: "Image reading is disabled." },
+    ],
+    [{ type: "text", text: "Image reading is disabled." }],
+    [{ type: "text", text: "Image reading is disabled." }],
+  ]);
+  expect(readRuntimePromptMediaFacts(blocked[0]!)).toEqual([
+    expect.objectContaining({ path: "/synthetic/private.png", hydrationSuppressed: true }),
+    expect.objectContaining({ path: "/synthetic/video.mp4", kind: "video" }),
+  ]);
+  expect(readRuntimePromptMediaFacts(blocked[0]!)?.[1]?.hydrationSuppressed).toBeUndefined();
+  expect(readRuntimePromptMediaFacts(user)?.[0]?.hydrationSuppressed).toBeUndefined();
+  expect(messages[1]).toMatchObject({ content: [image, image] });
+  settingsManager.applyOverrides({ images: { blockImages: false } });
+  expect((await session.agent.convertToLlm(messages))[1]?.content).toEqual([image, image]);
 });
 
 describe("AgentSession queued user turns", () => {

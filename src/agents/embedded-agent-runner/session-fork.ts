@@ -99,10 +99,8 @@ export async function runEmbeddedSessionFork(params: {
           delete payload.tool_choice;
         }
         delete payload.previous_response_id;
-        // Transport wrappers can derive this from sessionId; only live preparation owns affinity.
-        if (!params.options?.promptCacheKey) {
-          delete payload.prompt_cache_key;
-        }
+        // Reconstruction does not share the parent's one-shot request preparation.
+        delete payload.prompt_cache_key;
         return payload;
       },
     };
