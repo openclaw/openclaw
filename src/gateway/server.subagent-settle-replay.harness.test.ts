@@ -34,6 +34,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { markTestRpcSourceExecutionStarted } from "./agent-turn/rpc-source.test-support.js";
 import { readUserTurnCompletionForTest } from "./pending-input-commit.test-support.js";
 import * as inProcessDispatch from "./server-plugin-in-process-dispatch.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { runPublicSettleRecoveryCase } from "./server.subagent-settle-replay-recovery.test-support.js";
 import {
@@ -81,18 +82,10 @@ describe("public yielded settle replay with real Gateway admission", () => {
   });
 
   async function start() {
-    const module = await import("./server-kernel.js");
-    const create = module.createGatewayKernel;
-    const capture = vi.spyOn(module, "createGatewayKernel").mockImplementation(async (...args) => {
-      kernel = await create(...args);
-      return kernel;
-    });
-    try {
+    kernel = await captureGatewayKernel(async () => {
       harness = await startGatewayServerHarness();
       resetClient = await harness.openClient({ scopes: ["operator.admin"] });
-    } finally {
-      capture.mockRestore();
-    }
+    });
   }
   installGatewayTestHooks({ scope: "suite", setup: start, cleanup: async () => harness?.close() });
 
