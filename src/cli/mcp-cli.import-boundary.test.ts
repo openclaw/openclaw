@@ -87,6 +87,7 @@ it.each<[string, RegExp, string]>([
   ],
   [
     "registry reads",
+
     /\/src\/agents\/agent-bundle-mcp-materialize\.(?:ts|js)(?:[?#].*)?$/u,
     String.raw`
       ${registerCli}
@@ -106,6 +107,6 @@ it.each<[string, RegExp, string]>([
 ])("keeps %s imports within their boundary", async (name, forbidden, workload) => {
   const stdout = await runImportBoundaryChild(forbidden, workload);
   if (name === "client and catalog") {
-    expect(stdout).toContain("Disposed cached MCP runtimes.");
+    expect(stdout).toContain("Disposed cached CLI-local MCP runtimes.");
   }
 });
