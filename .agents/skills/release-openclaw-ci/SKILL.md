@@ -308,7 +308,8 @@ until their dependent enforcement changes land.
   child, an artifact producer (use `continue --failed`), and a child past its
   attempt budget: the default 2 allows one rerun; pass `--max-attempts 3` only
   for a confirmed flake. When a failed-jobs rerun would re-execute an
-  install-smoke candidate-payload consumer (#161317), it reruns the green
+  attempt-bound install-smoke payload consumer (`installer_smoke_update`,
+  `installer_smoke_nonroot`; #161317), it reruns the green
   producer job and its dependents instead, or the whole child when another
   failed job is outside that set. `continue --failed` applies the same choice.
   Reseal with `continue --failed`.

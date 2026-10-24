@@ -73,11 +73,11 @@ state can repeat notifications, but cannot authorize a retry or publication.
 `rerun --child` waits for one failed child, sends exactly one retry request,
 confirms the new attempt has no duplicate jobs, and
 records an audit line. It refuses children past `--max-attempts` (default 2,
-which allows one rerun). Install-smoke jobs that consume the candidate payload
-bind the green producer's run attempt. When a failed-jobs rerun would re-execute
-one of them (a failed consumer, or a failed upstream job such as an installer
-image build), it reruns the producer and its dependents instead (`mode:
-producer`). If a failed job sits outside that dependent set, it reruns the whole
+which allows one rerun). The install-smoke update and non-root installer jobs
+verify the candidate payload against the current run attempt. When a failed-jobs
+rerun would re-execute one of them (the job itself failed, or an upstream job
+such as its installer image build failed), it reruns the green producer and its
+dependents instead (`mode: producer`). If a failed job sits outside that dependent set, it reruns the whole
 child (`mode: all-jobs`), because a job rerun cannot also retry it. It returns
 after the new attempt starts; `continue --failed` still owns the final reseal.
 
@@ -89,8 +89,8 @@ and still requires `continue --failed` plus strict verification before reporting
 qualification accepted. A metadata retry starting is not qualification success.
 
 `continue --failed` reruns each failed child's jobs as soon as that child is
-terminal (choosing the same producer or all-jobs mode for install-smoke payload
-consumers), while sibling children and the original parent may still run. It
+terminal (choosing the same producer or all-jobs mode for attempt-bound install-smoke
+payload consumers), while sibling children and the original parent may still run. It
 adopts active attempts without duplicating them and leaves green child
 workflows untouched. After the resulting child evidence is green and the
 original parent finishes, it reruns the parent once. The original Decision and

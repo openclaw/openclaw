@@ -13,6 +13,7 @@ import {
   watchRelease,
 } from "../../scripts/frv.mjs";
 import {
+  INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS,
   INSTALL_SMOKE_CALLER_DEPENDENTS,
   INSTALL_SMOKE_JOB_NEEDS,
   planReleaseChildRerun,
@@ -2104,17 +2105,34 @@ describe("FRV child rerun", () => {
   it("pins the payload rerun graph to the install-smoke workflow and its Release Checks caller", () => {
     const workflow = (file: string) =>
       parseYaml(readFileSync(`.github/workflows/${file}`, "utf8")) as {
-        jobs: Record<string, { name?: string; needs?: string | string[]; uses?: string }>;
+        jobs: Record<
+          string,
+          {
+            name?: string;
+            needs?: string | string[];
+            steps?: { run?: string }[];
+            uses?: string;
+          }
+        >;
       };
     const needs = (entry: { needs?: string | string[] }) => [entry.needs ?? []].flat();
+    const installSmoke = Object.entries(workflow("install-smoke-reusable.yml").jobs);
+    expect(Object.fromEntries(installSmoke.map(([id, entry]) => [id, needs(entry)]))).toEqual(
+      INSTALL_SMOKE_JOB_NEEDS,
+    );
     expect(
-      Object.fromEntries(
-        Object.entries(workflow("install-smoke-reusable.yml").jobs).map(([id, entry]) => [
-          id,
-          needs(entry),
-        ]),
+      new Set(
+        installSmoke
+          .filter(([, entry]) =>
+            entry.steps?.some(
+              (step) =>
+                step.run?.includes("install-smoke-candidate-payload.mts verify") &&
+                step.run.includes('--run-attempt "$GITHUB_RUN_ATTEMPT"'),
+            ),
+          )
+          .map(([id]) => id),
       ),
-    ).toEqual(INSTALL_SMOKE_JOB_NEEDS);
+    ).toEqual(INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS);
     const caller = Object.values(workflow("openclaw-release-checks.yml").jobs).filter((entry) =>
       needs(entry).includes("install_smoke_release_checks"),
     );
@@ -2136,7 +2154,16 @@ describe("FRV child rerun", () => {
       ["installer_smoke_update_image", "root_dockerfile_image", "installer_smoke"],
       "all-jobs",
     ],
-    ["only non-consumer failures", ["qr_package_install_smoke"], "failed-jobs"],
+    [
+      "a failed root image whose rerun reaches only the status aggregate",
+      ["root_dockerfile_image", "root_dockerfile_image_ready", "installer_smoke"],
+      "failed-jobs",
+    ],
+    [
+      "a failed Bun consumer that verifies the producer attempt",
+      ["bun_global_install_smoke"],
+      "failed-jobs",
+    ],
   ])("plans the install-smoke rerun for %s", (_case, failed, mode) => {
     const jobs = [
       job(producer),

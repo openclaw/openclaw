@@ -1506,6 +1506,12 @@ export const INSTALL_SMOKE_JOB_NEEDS = {
   bun_only_runtime_smoke: ["preflight", "installer_smoke_candidate_payload"],
   "docker-e2e-fast": ["preflight"],
 };
+// Consumers whose payload verification binds GITHUB_RUN_ATTEMPT rather than the producer's
+// recorded attempt (#161317); frv.test.ts pins them to the workflow.
+export const INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS = new Set([
+  "installer_smoke_update",
+  "installer_smoke_nonroot",
+]);
 // Release Checks jobs that need install_smoke_release_checks, so a producer job rerun
 // re-executes them too; frv.test.ts pins them to openclaw-release-checks.yml.
 export const INSTALL_SMOKE_CALLER_DEPENDENTS = new Set([
@@ -1545,16 +1551,15 @@ export function planReleaseChildRerun({ childKey, jobs }) {
   if (producerJob?.status === "completed" && producerJob.conclusion === "success") {
     const local = (name) =>
       name.startsWith(INSTALL_SMOKE_JOB_PREFIX) ? name.slice(INSTALL_SMOKE_JOB_PREFIX.length) : "";
-    const consumers = installSmokeDependents([local(INSTALL_SMOKE_PAYLOAD_PRODUCER)]);
-    consumers.delete(local(INSTALL_SMOKE_PAYLOAD_PRODUCER));
     const failedJobsRerun = installSmokeDependents(failed.map(local).filter(Boolean));
-    // Payload consumers bind the producer's run attempt, so any rerun that re-executes a
-    // consumer without the producer stays red (#161317).
-    if ([...failedJobsRerun].some((name) => consumers.has(name))) {
+    // A failed-jobs rerun that re-executes an attempt-bound consumer without the
+    // producer stays red, whether the consumer or an upstream image job failed.
+    if ([...failedJobsRerun].some((name) => INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS.has(name))) {
       // A job rerun only re-executes the producer and its dependents; failures outside
       // that closure (for example an upstream image build) need the whole run.
+      const producerDependents = installSmokeDependents([local(INSTALL_SMOKE_PAYLOAD_PRODUCER)]);
       return failed.every(
-        (name) => consumers.has(local(name)) || INSTALL_SMOKE_CALLER_DEPENDENTS.has(name),
+        (name) => producerDependents.has(local(name)) || INSTALL_SMOKE_CALLER_DEPENDENTS.has(name),
       )
         ? { failed, mode: "producer", producer: INSTALL_SMOKE_PAYLOAD_PRODUCER }
         : { failed, mode: "all-jobs" };
