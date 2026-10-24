@@ -18,7 +18,6 @@ import {
   createAuthProfileStoreFixture,
 } from "./auth-profiles/credential-fixtures.test-support.js";
 import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "./code-mode-runtime.js";
-import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import type {
@@ -212,22 +211,10 @@ describe("ClawRouter cold prepared catalog", () => {
   }
 
   it.each([
-    {
-      label: "publishes metadata with a sibling catalog=false",
-      sibling: false,
-      refreshedAuth: false,
-    },
-    {
-      label: "publishes metadata with a sibling catalog=true",
-      sibling: true,
-      refreshedAuth: false,
-    },
-    {
-      label: "discovers a provider introduced by refreshed auth",
-      sibling: true,
-      refreshedAuth: true,
-    },
-  ])("$label", async ({ sibling, refreshedAuth }) => {
+    [false, false],
+    [true, false],
+    [true, true],
+  ])("publishes metadata (sibling=%s, refreshed auth=%s)", async (sibling, refreshedAuth) => {
     const { agentId, baseUrl, config, pluginMetadataSnapshot, result } = await publishCatalog({
       sibling,
       refreshedAuth,
@@ -299,7 +286,7 @@ describe("ClawRouter cold prepared catalog", () => {
           : [],
       models: upstreams.map((upstream) => ({ id: `${id}/${upstream}`, upstream, capabilities })),
     });
-    const { agentId, config, pluginMetadataSnapshot, result } = await publishCatalog({
+    const { agentId, config, result } = await publishCatalog({
       sibling: false,
       refreshedAuth: false,
       catalogProviders: [
@@ -307,55 +294,28 @@ describe("ClawRouter cold prepared catalog", () => {
         routedProvider("anthropic", ["claude-opus-5-5", "claude-haiku-4-5"], ["llm.messages"]),
       ],
     });
-    // Only ClawRouter is enabled: the native rows are manifest facts, not activated plugins.
     expect(config.plugins?.allow).toEqual(["clawrouter"]);
-    // Registry models drive Code Mode and request shaping. Image limits are resolved per
-    // turn; clawrouter-native-model-facts.test.ts covers that runtime path.
-    const routed = (id: string) => {
+    // Native parity and image policy belong to clawrouter-native-model-facts.test.ts;
+    // here prove those decisions survive the actual catalog worker publication.
+    for (const [id, codeModeEngaged, supportsTemperature] of [
+      ["openai/gpt-6.1-sol", true, false],
+      ["anthropic/claude-opus-5-5", true, undefined],
+      ["anthropic/claude-haiku-4-5", false, undefined],
+      ["openai/gpt-6-unknown", false, undefined],
+    ] as const) {
       const model = result.runtimeModels.get("clawrouter")?.find((entry) => entry.id === id);
       if (!model) {
         throw new Error(`catalog worker did not publish clawrouter/${id}`);
       }
-      return model;
-    };
-    const decisions = (provider: string, model: { id: string; compat?: unknown }) => ({
-      codeModeEngaged: isCodeModeEngagedForModel(
-        resolveCodeModeConfig(config, agentId, { provider, modelId: model.id }),
-        model,
-      ),
-      supportsTemperature: (model.compat as { supportsTemperature?: boolean } | undefined)
-        ?.supportsTemperature,
-    });
-
-    for (const [nativeProvider, upstream] of [
-      ["openai", "gpt-6.1-sol"],
-      ["anthropic", "claude-opus-5-5"],
-      ["anthropic", "claude-haiku-4-5"],
-    ] as const) {
-      const native = resolveBundledStaticCatalogModel({
-        provider: nativeProvider,
-        modelId: upstream,
-        includeRuntimeDiscovery: true,
-        metadataSnapshot: pluginMetadataSnapshot,
-      });
-      if (!native) {
-        throw new Error(`missing native ${nativeProvider}/${upstream}`);
+      expect(
+        isCodeModeEngagedForModel(
+          resolveCodeModeConfig(config, agentId, { provider: "clawrouter", modelId: id }),
+          model,
+        ),
+      ).toBe(codeModeEngaged);
+      if (id.startsWith("openai/")) {
+        expect(model.compat?.supportsTemperature).toBe(supportsTemperature);
       }
-      const id = `${nativeProvider}/${upstream}`;
-      expect(decisions("clawrouter", routed(id))).toEqual(decisions(nativeProvider, native));
     }
-    // Default tools.codeMode "auto" engages for preferred models and not for capable Haiku 4.5.
-    expect(decisions("clawrouter", routed("openai/gpt-6.1-sol"))).toEqual({
-      codeModeEngaged: true,
-      supportsTemperature: false,
-    });
-    expect(decisions("clawrouter", routed("anthropic/claude-opus-5-5")).codeModeEngaged).toBe(true);
-    expect(decisions("clawrouter", routed("anthropic/claude-haiku-4-5")).codeModeEngaged).toBe(
-      false,
-    );
-    expect(decisions("clawrouter", routed("openai/gpt-6-unknown"))).toEqual({
-      codeModeEngaged: false,
-      supportsTemperature: undefined,
-    });
   });
 });
