@@ -116,6 +116,7 @@ const db = database.openOpenClawStateDatabase();
 store.persistDevicePairingStoreState(
   { pendingById: {}, pairedByDeviceId: Object.fromEntries(devices.map((d) => [d.deviceId, d])) },
   stateDir,
+  "both",
 );
 const inspector = new Session();
 const loop = monitorEventLoopDelay({ resolution: 1 });
