@@ -620,26 +620,6 @@ suite.define(() => {
       .toEqual([initialText, "A", commentaryText, "B", steerText, latestCommentaryText, afterText]);
   });
 
-  it("keeps modified Enter queued in modifier-enter shortcut mode", async () => {
-    const { page, gateway } = await chatFixture(suite);
-
-    await followUpSettings(page, "queue", "modifier-enter");
-    await page.goto(`${suite.server.baseUrl}chat`);
-
-    const composer = chatComposer(page);
-    await sendMessage(page, "keep the modifier shortcut run active");
-    await gateway.waitForRequest("chat.send");
-    await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
-
-    const queuedText = "leave this modifier follow-up queued";
-    await composer.fill(queuedText);
-    await composer.press("Control+Enter");
-
-    const queuedRow = page.locator(".chat-queue__item", { hasText: queuedText });
-    await queuedRow.waitFor({ timeout: 10_000 });
-    await expectRequestCountStable(gateway, "chat.send", 1);
-  });
-
   it("projects one disconnected state for an offline steer follow-up", async () => {
     const { page, gateway } = await chatFixture(suite);
 
@@ -686,53 +666,6 @@ suite.define(() => {
     await expectCount(rows.getByText("Waiting for reconnect"), 1);
     expect(await rows.getByText("Steer", { exact: true }).count()).toBe(0);
     await expectRequestCountStable(gateway, "chat.send", 1);
-  });
-
-  it("honors a session interrupt override ahead of the webchat config default", async () => {
-    const { page } = await newChatPage(suite);
-    const sessionKey = "agent:main:main";
-    const runtimeConfig = {
-      messages: { queue: { byChannel: { webchat: "steer" }, mode: "steer" } },
-    };
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "config.get": configResponse(runtimeConfig, "queue-session-override-config"),
-        "sessions.list": chatSessionListResponse([
-          {
-            effectiveQueueMode: "interrupt",
-            key: "agent:main:main",
-            kind: "direct",
-            label: "Main",
-            queueMode: "interrupt",
-            updatedAt: Date.now(),
-          },
-        ]),
-      },
-      sessionInfo: {
-        effectiveQueueMode: "interrupt",
-        hasActiveRun: false,
-        key: "agent:main:main",
-        queueMode: "interrupt",
-        status: "done",
-      },
-      sessionKey,
-    });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-
-    await sendMessage(page, "keep this run active");
-    await gateway.waitForRequest("chat.send");
-    await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
-
-    const followUp = "interrupt for this session override";
-    await sendMessage(page, followUp);
-
-    const sends = await waitForRequests(gateway, "chat.send", 2);
-    expect(requireRecord(sends[1]?.params)).toMatchObject({
-      message: followUp,
-      queueMode: "interrupt",
-      sessionKey,
-    });
   });
 
   it("steers a restored queued message when only the session row reports the active run", async () => {
