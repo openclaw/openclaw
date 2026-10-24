@@ -206,43 +206,14 @@ describe("server-runtime-services", () => {
     },
   );
 
-  it("joins upstream monitoring and delivery recovery before scheduled-service shutdown completes", async () => {
-    vi.useFakeTimers();
-    const upstream = createDeferredCore();
-    const recovery = createDeferredCore();
-    hoisted.stopSessionUpstreamMonitor.mockReturnValueOnce(upstream.promise);
-    hoisted.recoverPendingDeliveries.mockImplementationOnce(async () => {
-      await recovery.promise;
-      return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 };
-    });
-    const { services } = activateScheduledServicesForTest();
-    const stopped = vi.fn();
-    try {
-      await vi.dynamicImportSettled();
-      const first = services.stopScheduledServices();
-      const second = services.stopScheduledServices();
-      expect(second).toBe(first);
-      void first.then(stopped);
-      recovery.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(stopped).not.toHaveBeenCalled();
-      upstream.resolve();
-      await first;
-      expect(stopped).toHaveBeenCalledOnce();
-      expect(hoisted.stopSessionUpstreamMonitor).toHaveBeenCalledOnce();
-    } finally {
-      upstream.resolve();
-      recovery.resolve();
-      await services.stopScheduledServices();
-    }
-  });
-
   it.each(["neither", "legacy", "recovery"] as const)(
-    "joins legacy diagnostics and current recovery before stop when %s fails",
+    "joins upstream monitoring, legacy diagnostics and current recovery when %s fails",
     async (failing) => {
       vi.useFakeTimers();
       const legacy = createDeferredCore<number>();
       const recovery = createDeferredCore();
+      const upstream = createDeferredCore();
+      hoisted.stopSessionUpstreamMonitor.mockReturnValueOnce(upstream.promise);
       hoisted.countPendingDeliveryQueueEntries.mockReturnValueOnce(legacy.promise);
       hoisted.recoverPendingDeliveries.mockImplementationOnce(async () => {
         await recovery.promise;
@@ -260,15 +231,27 @@ describe("server-runtime-services", () => {
         } else if (failing === "recovery") {
           recovery.reject(failure);
         }
+        const deliveryStopped = vi.fn();
+        const deliveryStopping = services.stopDeliveryRecovery().then(deliveryStopped);
         const stopped = vi.fn();
-        stopPromise = services.stopDeliveryRecovery().then(stopped);
+        const stopping = services.stopScheduledServices();
+        expect(services.stopScheduledServices()).toBe(stopping);
+        stopPromise = stopping.then(stopped);
         await vi.advanceTimersByTimeAsync(0);
+        expect(deliveryStopped).not.toHaveBeenCalled();
         expect(stopped).not.toHaveBeenCalled();
         expect(getActiveGatewayRootWorkCount()).toBe(1);
         legacy.resolve(0);
         recovery.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        await deliveryStopping;
+        expect(deliveryStopped).toHaveBeenCalledOnce();
+        expect(stopped).not.toHaveBeenCalled();
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        upstream.resolve();
         await stopPromise;
         expect(stopped).toHaveBeenCalledOnce();
+        expect(hoisted.stopSessionUpstreamMonitor).toHaveBeenCalledOnce();
         expect(getActiveGatewayRootWorkCount()).toBe(0);
         if (failing !== "neither") {
           expect(log.error).toHaveBeenCalledWith(`Delivery recovery failed: ${String(failure)}`);
@@ -276,7 +259,8 @@ describe("server-runtime-services", () => {
       } finally {
         legacy.resolve(0);
         recovery.resolve();
-        await (stopPromise ?? services.stopDeliveryRecovery());
+        upstream.resolve();
+        await (stopPromise ?? services.stopScheduledServices());
         await services.stopScheduledServices();
       }
     },
