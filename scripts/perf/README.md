@@ -1964,6 +1964,16 @@ or change production worker limits. These are sampled lower bounds, not an exact
 allocation total; per-parse sampling adds overhead, so compare equally instrumented
 pairs and keep uninstrumented RPC acceptance timing separate.
 
+The same observer records constructor-to-first-task startup milliseconds for each
+transcript isolate, including host dispatch delay, with the first task kind. Direct
+parent-port pools do not emit a separate ready reply. Add `--worker-snapshots` only in a separate diagnostic pass
+lasting at least 120 seconds. After 90 seconds it captures one idle isolate per
+observed history, context, usage, and other task category, serializing snapshots
+across workers. Each `snapshot-<category>.json` records the thread, last task,
+before/after memory, and heap-snapshot path. Snapshots force GC and block the
+isolate; exclude this pass from latency and GC acceptance. Both sides include
+the same TypeScript observer overhead, including its parser source.
+
 For a focused cold-process bounded-hydration diagnostic on that same fixture:
 
 ```sh
@@ -2215,7 +2225,15 @@ owners and refuses missing source shapes; production imports remain unchanged.
 The nested `session-preparation` stage covers options admission's session reader,
 while `publication-session` records durable session preparation inside the
 publication owner. Use these stages to distinguish admission work from repeated
-session reads during target qualification.
+session reads during target qualification. `state-read-source` includes source preparation
+and the worker query; its nested `state-read-query` excludes snapshot preparation and
+cleanup. Source workers also log `GITHUB_RECEIPT_IMPORT` for fallback-handler imports
+taking at least 10 ms, with thread, command, source module, and epoch timing. These
+records distinguish cold command loading from database work without logging request
+contents. All compared sides must enable the same observer.
+Failed observed runs save their collected stages, upstream timings, and options
+observations in `github-options-failure.json`; this partial snapshot is diagnostic
+evidence, not a completed measurement.
 These durations overlap, and stale refresh work may finish after its originating
 handler. Use request IDs and timestamps to distinguish the critical path from
 background work; never add stage totals together. Gateway diagnostics separately
@@ -2229,6 +2247,12 @@ records their loaded paths and override flags in `githubObservation.owner` and
 `githubObservation.availabilityOwner`, and rejects a run unless both owners loaded
 and the handler was observed. Both sides must
 enable identical observation and use separate fixtures, ports, and CPU sets.
+When comparing shared-state command routing, also preserve the baseline
+`src/state/openclaw-state-read-handlers.ts` and `src/state/github-publication.read.worker.ts`
+beside their owners and pass their paths with `--github-state-handlers` and
+`--github-publication-reader` on A. Pair them with the baseline receipt owner so its
+original command reaches its original handler; the import records identify the
+selected handler module. This keeps both sides on one dependency installation.
 
 Connected options use one additional socket per viewer granted only
 `operator.sessions.read`: broad dashboard grants skip repository qualification.

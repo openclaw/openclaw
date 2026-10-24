@@ -9,7 +9,6 @@ import {
   shouldSuppressGoogleChatManualExecApprovalFollowupText,
 } from "./approval-card-actions.js";
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
-import { buildGoogleChatCanonicalApprovalTerminalCards } from "./approval-terminal-card.js";
 import type { WebhookTarget } from "./monitor-types.js";
 import type { GoogleChatEvent } from "./types.js";
 
@@ -124,8 +123,9 @@ it.each([
   [{ status: "denied", decision: "deny", reason: "user" }, "Denied"],
   [{ status: "expired", reason: "timeout" }, "Expired"],
   [{ status: "cancelled", reason: "run-aborted" }, "Cancelled"],
-] as const)("renders canonical result %j as %s", (outcome, title) => {
-  const cards = buildGoogleChatCanonicalApprovalTerminalCards({
+] as const)("renders canonical result %j as %s", async (outcome, title) => {
+  registerCardBinding("token-terminal", "approval-terminal");
+  resolveApprovalOverGateway.mockResolvedValueOnce({
     applied: false,
     approval: {
       id: "approval-terminal",
@@ -141,7 +141,8 @@ it.each([
       ...outcome,
     },
   });
-
+  await expect(click("token-terminal")).resolves.toBe(true);
+  const cards = updateGoogleChatMessage.mock.calls[0]?.[0].cardsV2;
   expect(cards[0]?.card.header?.title).toBe(`Exec Approval: ${title}`);
 });
 

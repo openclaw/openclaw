@@ -22,13 +22,15 @@ import {
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import type { SqliteSessionArtifactPreparationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
-import { readSessionEntryStore } from "./session-accessor.sqlite-entry-store.js";
-import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import { readSessionEntryStore } from "./session-accessor.sqlite-entry-inventory.js";
 import type {
   LifecycleArtifactCleanupInput,
   LifecycleArtifactCleanupPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
-import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
+import {
+  collectSessionStateIdsForEntry,
+  readReferencedSessionIds,
+} from "./session-accessor.sqlite-references.js";
 import { getSessionKysely, withSqliteSessionDatabase } from "./session-accessor.sqlite-scope.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,

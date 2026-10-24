@@ -1,5 +1,5 @@
 diff --git a/build/src/McpPage.js b/build/src/McpPage.js
-index 3be93a33ad4afb206223290c96fd8749cd49a131..f6887160eb88fb0d19792d20ca6466496ca48b9c 100644
+index 1a41395e7df34a09a3c4461ed7c3e2f6b3c8b93e..11e24750d4be1b17b546c1696d74bbefb0e9bdef 100644
 --- a/build/src/McpPage.js
 +++ b/build/src/McpPage.js
 @@ -1,3 +1,4 @@
@@ -7,16 +7,16 @@ index 3be93a33ad4afb206223290c96fd8749cd49a131..f6887160eb88fb0d19792d20ca646649
  /**
   * @license
   * Copyright 2025 Google LLC
-@@ -105,7 +106,7 @@ import { DevToolsCommentBridge } from './devtools/DevToolsCommentBridge.js';
+@@ -59,7 +60,7 @@ import { DevToolsCommentBridge } from './devtools/DevToolsCommentBridge.js';
  import { createTargetUniverse, } from './devtools/DevtoolsUtils.js';
  import { ConsoleCollector, NetworkCollector, } from './collectors/PageCollector.js';
  import { TextSnapshot } from './TextSnapshot.js';
 -import { PredefinedNetworkConditions, DevTools, } from './third_party/index.js';
 +import { PredefinedNetworkConditions, DevTools, CdpFrame, } from './third_party/index.js';
- const DEFAULT_TIMEOUT = 5_000;
- const NAVIGATION_TIMEOUT = 10_000;
  import { logger } from './utils/logger.js';
-@@ -549,7 +550,7 @@ export class McpPage {
+ import { getNetworkMultiplierFromString, WaitForHelper, } from './utils/WaitForHelper.js';
+ export function replaceHtmlElementsWithUids(schema) {
+@@ -756,7 +757,7 @@ export class McpPage {
                  logger?.(`No backendNodeId for stashed DOM element with index ${index}`);
                  return `stashed-${index}`;
              }
@@ -25,7 +25,7 @@ index 3be93a33ad4afb206223290c96fd8749cd49a131..f6887160eb88fb0d19792d20ca646649
              if (!cdpElementId) {
                  logger?.(`Could not get cdpElementId for backend node ${backendNodeId}`);
                  return `stashed-${index}`;
-@@ -639,44 +640,62 @@ export class McpPage {
+@@ -858,44 +859,62 @@ export class McpPage {
          }
      }
      async getMatchedStylesForUid(uid) {
@@ -124,20 +124,20 @@ index 3be93a33ad4afb206223290c96fd8749cd49a131..f6887160eb88fb0d19792d20ca646649
          try {
 diff --git a/build/src/OPENCLAW_PATCH_NOTICE.md b/build/src/OPENCLAW_PATCH_NOTICE.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..abdbc42e09793bf885493afc41be15a28d0fe432
+index 0000000000000000000000000000000000000000..a4368f7be10460561cdcd2c8f32ebe3a9f852e33
 --- /dev/null
 +++ b/build/src/OPENCLAW_PATCH_NOTICE.md
 @@ -0,0 +1,27 @@
 +# Temporary OpenClaw snapshot identity patch
 +
-+This package remains `chrome-devtools-mcp@1.10.1`. OpenClaw modifies two
++This package remains `chrome-devtools-mcp@1.11.0`. OpenClaw modifies two
 +published runtime files to backport the snapshot identity repair proposed in
 +https://github.com/ChromeDevTools/chrome-devtools-mcp/pull/2788.
 +
 +The reviewed upstream source is commit
 +`06c8d4bc44f68bde8bd3fcd97dcc47375df81fe9`, forward-ported onto the
-+`chrome-devtools-mcp-v1.10.1` source tag at
-+`e52c6b59b476c5e04d8dd9fd4bd017ba3b3d65df`.
++`chrome-devtools-mcp-v1.11.0` source tag at
++`a878bcad39584337e055778353246820deafa7c0`.
 +
 +- `TextSnapshot.js` carries the reviewed snapshot-owner implementation.
 +- `McpPage.js` supplies the known element frame for DOM-result reverse lookup
@@ -145,18 +145,18 @@ index 0000000000000000000000000000000000000000..abdbc42e09793bf885493afc41be15a2
 +  lookup stays within the captured renderer and fails closed when the embedded
 +  DevTools target cannot represent a cross-renderer frame.
 +
-+Version 1.10.1 already exports its bundled `CdpFrame` implementation, so this
++Version 1.11.0 already exports its bundled `CdpFrame` implementation, so this
 +patch does not modify third-party bundle code.
 +
-+The original package is the published npm 1.10.1 tarball with integrity
-+`sha512-Klw6HWDqHC/XS1JwZldd2r49aUhbUJN9m9Mvcx4SEueIPXtzuQX+QelxAViobv8YUkDZ7HWDrmViR6LeYK0wAw==`.
++The original package is the published npm 1.11.0 tarball with integrity
++`sha512-CytJ/5tnzrS+J/74be2P5aCOsS/mmGRHys/Si+IYC4ucrbnWAmES/dYdxGJjeUCECRcoFUilZAysdjlwqUjXIA==`.
 +The original `LICENSE` and `build/src/third_party/THIRD_PARTY_NOTICES` remain
 +unchanged.
 +
 +Remove this patch and notice after adopting a published upstream release that
 +contains the repair and passes the same snapshot/stdio regression proof.
 diff --git a/build/src/TextSnapshot.js b/build/src/TextSnapshot.js
-index fe2bae7bc287e43d8a7f41f5886496a4f82c0cd7..5b2671a4b416633710886c9089762e0b9018ff66 100644
+index 8f7caebc467b80ced834d9fa7574f6591a306487..256c6ae718b2fac18fe6ee53e2dbcc383c631a3d 100644
 --- a/build/src/TextSnapshot.js
 +++ b/build/src/TextSnapshot.js
 @@ -1,3 +1,4 @@
@@ -345,7 +345,7 @@ index fe2bae7bc287e43d8a7f41f5886496a4f82c0cd7..5b2671a4b416633710886c9089762e0b
          });
          const data = options.devtoolsData ?? (await page.getDevToolsData());
          if (data?.cdpBackendNodeId) {
-@@ -150,65 +243,88 @@ export class TextSnapshot {
+@@ -150,66 +243,89 @@ export class TextSnapshot {
          }
          return snapshot;
      }
@@ -361,8 +361,8 @@ index fe2bae7bc287e43d8a7f41f5886496a4f82c0cd7..5b2671a4b416633710886c9089762e0b
 +        }
 +        let match;
          const queue = [this.root];
-         while (queue.length) {
-             const current = queue.pop();
+         let current = queue.pop();
+         while (current) {
              if (current.backendNodeId === cdpBackendNodeId) {
 -                return current.id;
 +                if (match !== undefined) {
@@ -373,6 +373,7 @@ index fe2bae7bc287e43d8a7f41f5886496a4f82c0cd7..5b2671a4b416633710886c9089762e0b
              for (const child of current.children) {
                  queue.push(child);
              }
+             current = queue.pop();
          }
 -        return;
 +        return match;
@@ -467,7 +468,7 @@ index fe2bae7bc287e43d8a7f41f5886496a4f82c0cd7..5b2671a4b416633710886c9089762e0b
                  while (ancestorHandle) {
                      stack.use(ancestorHandle);
                      const ancestorElement = ancestorHandle.asElement();
-@@ -217,9 +333,9 @@ export class TextSnapshot {
+@@ -218,9 +334,9 @@ export class TextSnapshot {
                      }
                      const ancestorBackendId = await ancestorElement.backendNodeId();
                      if (ancestorBackendId) {
@@ -480,7 +481,7 @@ index fe2bae7bc287e43d8a7f41f5886496a4f82c0cd7..5b2671a4b416633710886c9089762e0b
                          if (ancestorNode) {
                              return ancestorNode;
                          }
-@@ -229,40 +345,37 @@ export class TextSnapshot {
+@@ -230,40 +346,37 @@ export class TextSnapshot {
                  }
                  return null;
              }
@@ -542,7 +543,7 @@ index fe2bae7bc287e43d8a7f41f5886496a4f82c0cd7..5b2671a4b416633710886c9089762e0b
              }
              catch (e) {
                  logger?.(`Failed to collect descendants for backend node ${backendNodeId}`, e);
-@@ -302,8 +415,15 @@ export class TextSnapshot {
+@@ -303,8 +416,15 @@ export class TextSnapshot {
                  continue;
              }
              idToNode.set(extraNode.id, extraNode);

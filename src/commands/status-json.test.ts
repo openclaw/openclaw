@@ -157,6 +157,70 @@ describe("statusJsonCommand", () => {
     expect(payload).not.toHaveProperty("pluginCompatibility");
   });
 
+  it("builds remote gateway JSON payloads consistently", async () => {
+    const { runtime, logs } = createRuntimeCapture();
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({
+      ...createScanResult(),
+      gatewayMode: "remote",
+      gatewayConnection: { url: "wss://gateway.example.com", urlSource: "config" },
+      gatewayReachable: true,
+      gatewayProbe: { connectLatencyMs: 123, error: null },
+      gatewaySelf: { host: "gateway", version: "1.2.3" },
+      gatewayProbeAuthWarning: "warn",
+    });
+
+    await statusJsonCommand({}, runtime);
+
+    const payload = JSON.parse(logs[0] ?? "{}");
+    expect(payload.gateway).toEqual({
+      mode: "remote",
+      url: "wss://gateway.example.com",
+      urlSource: "config",
+      misconfigured: false,
+      reachable: true,
+      connectLatencyMs: 123,
+      self: { host: "gateway", version: "1.2.3" },
+      error: null,
+      authWarning: "warn",
+    });
+  });
+
+  it("redacts credential-bearing Gateway URLs from JSON status", async () => {
+    const { runtime, logs } = createRuntimeCapture();
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({
+      ...createScanResult(),
+      gatewayMode: "remote",
+      gatewayConnection: {
+        url: "wss://user:password@gateway.example/ws?token=secret&key=api-key&X-Amz-Signature=signed",
+        urlSource: "cli --url",
+      },
+      gatewayProbe: { error: "unreachable" },
+    });
+
+    await statusJsonCommand({}, runtime);
+
+    const payload = JSON.parse(logs[0] ?? "{}");
+    expect(payload.gateway.url).toContain("gateway.example/ws");
+    expect(JSON.stringify(payload.gateway)).not.toMatch(/password|secret|api-key|signed/);
+  });
+
+  it("reports startup phase without an unreachable error in JSON", async () => {
+    const { runtime, logs } = createRuntimeCapture();
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({
+      ...createScanResult(),
+      gatewayProbe: { startupPhase: "plugins", error: null },
+    });
+
+    await statusJsonCommand({}, runtime);
+
+    const payload = JSON.parse(logs[0] ?? "{}");
+    expect(payload.gateway).toMatchObject({
+      readiness: "still-starting",
+      startupPhase: "plugins",
+      error: null,
+    });
+  });
+
   it.each([
     { engine: "postgres" },
     { engine: "sqlite", families: { agent: { engine: "postgres" } } },

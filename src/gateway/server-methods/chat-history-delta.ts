@@ -15,6 +15,11 @@ import {
   createCurrentUserProfileMessageProjector,
   isAssistantTtsSupplementMessage,
 } from "../chat-display-projection.js";
+import {
+  chatHistoryActivityBytes,
+  createChatHistoryActivityProjection,
+  createChatHistoryDeltaByteCounter,
+} from "../chat-history-budget.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
   createPreparedSessionHistorySubagentProjection,
@@ -27,11 +32,6 @@ import {
   type SessionMessageProjectionState,
 } from "../session-transcript-message.js";
 import type { SubagentCoordinationDisplayResolver } from "../session-transcript-read.types.js";
-import {
-  chatHistoryActivityBytes,
-  createChatHistoryActivityProjection,
-  createChatHistoryDeltaByteCounter,
-} from "./chat-history-budget.js";
 
 const CHAT_HISTORY_DELTA_MAX_EVENTS = 200;
 const CHAT_HISTORY_DELTA_MAX_BYTES = 1_000_000;

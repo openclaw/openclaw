@@ -73,6 +73,7 @@ const { values } = parseArgs({
     "list-filter-churn": { type: "boolean", default: false },
     "trace-gc": { type: "boolean", default: false },
     "worker-memory": { type: "boolean", default: false },
+    "worker-snapshots": { type: "boolean", default: false },
     "baseline-owners": { type: "boolean", default: false },
     "stress-tools": { type: "boolean", default: false },
     "stress-session-store": { type: "boolean", default: false },
@@ -88,6 +89,8 @@ const { values } = parseArgs({
     "github-options-observe": { type: "boolean", default: false },
     "github-observation-owner": { type: "string" },
     "github-availability-owner": { type: "string" },
+    "github-state-handlers": { type: "string" },
+    "github-publication-reader": { type: "string" },
     "stream-start-diagnostics": { type: "boolean", default: false },
     "stream-start-allocations": { type: "boolean", default: false },
     "active-work-diagnostics": { type: "boolean", default: false },
@@ -148,7 +151,10 @@ if (!values["state-dir"]) {
 if (
   (values["github-options-observe"] &&
     (!values["dashboard-rpc"] || path.resolve(values.entry) !== path.resolve("src/entry.ts"))) ||
-  ((values["github-observation-owner"] || values["github-availability-owner"]) &&
+  ((values["github-observation-owner"] ||
+    values["github-availability-owner"] ||
+    values["github-state-handlers"] ||
+    values["github-publication-reader"]) &&
     !values["github-options-observe"])
 ) {
   throw new Error(
@@ -562,6 +568,9 @@ const recordListRequests =
 let startAt = values["start-at"] ? integer(values["start-at"], "--start-at") : undefined;
 if (startAt !== undefined && values["start-file"]) {
   throw new Error("Use only one of --start-at and --start-file");
+}
+if (values["worker-snapshots"] && !values["worker-memory"]) {
+  throw new Error("--worker-snapshots requires --worker-memory; use a separate diagnostic pass");
 }
 if (values["session-envelope-refs"] && !values["session-row-deltas"]) {
   throw new Error("--session-envelope-refs requires --session-row-deltas");
@@ -1892,6 +1901,7 @@ const env = {
     ? { OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE: sessionProjectionSource }
     : {}),
   ...(values["worker-memory"] ? { OPENCLAW_BENCH_WORKER_MEMORY_DIR: output } : {}),
+  ...(values["worker-snapshots"] ? { OPENCLAW_BENCH_WORKER_SNAPSHOTS: "1" } : {}),
   ...(values["baseline-owners"] ? { OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS: "1" } : {}),
   ...(values["github-observation-owner"]
     ? { OPENCLAW_BENCH_GITHUB_OBSERVATION_OWNER: path.resolve(values["github-observation-owner"]) }
@@ -1899,6 +1909,14 @@ const env = {
   ...(values["github-availability-owner"]
     ? {
         OPENCLAW_BENCH_GITHUB_AVAILABILITY_OWNER: path.resolve(values["github-availability-owner"]),
+      }
+    : {}),
+  ...(values["github-state-handlers"]
+    ? { OPENCLAW_BENCH_GITHUB_STATE_HANDLERS: path.resolve(values["github-state-handlers"]) }
+    : {}),
+  ...(values["github-publication-reader"]
+    ? {
+        OPENCLAW_BENCH_GITHUB_PUBLICATION_READER: path.resolve(values["github-publication-reader"]),
       }
     : {}),
 };
@@ -4596,7 +4614,9 @@ try {
         : undefined;
       try {
         streamStart = await runScenario(round);
-        await drainEvents();
+        if (!values["dashboard-rpc"]) {
+          await drainEvents();
+        }
         if (values["dashboard-rpc"]) {
           // Dashboards keep polling between bursts of agent work.
           const pacedUntil = Math.min(
@@ -5542,6 +5562,18 @@ try {
   };
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));
   console.log(`RESULT ${path.join(output, "result.json")}`);
+} catch (error) {
+  if (values["github-options-observe"]) {
+    writeFileSync(
+      path.join(output, "github-options-failure.json"),
+      JSON.stringify({
+        stages: githubStages,
+        upstreamRequests: githubFixtureRequests,
+        observations: githubOptionsObservations,
+      }),
+    );
+  }
+  throw error;
 } finally {
   await cleanup();
 }

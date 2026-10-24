@@ -10,7 +10,7 @@ import { labelRuntimeContextText } from "../../llm/types.js";
 import type { CliBackendConfig, CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
-import { buildCliSessionDriftNote } from "../cli-session.js";
+import { buildCliSessionDriftNote } from "../cli-session-drift.js";
 import { buildTemporalContextText } from "../date-time.js";
 import type { ResolvedPromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
