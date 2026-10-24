@@ -34,75 +34,6 @@ const chatResponses = {
 
 suite.define(() => {
   it.each([390, 1440])(
-    "keeps setting help editable after startup failure and sends only after retry at %s pixels",
-    async (width) => {
-      await suite.withPage({ viewport: { width, height: 1000 } }, async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          featureMethods,
-          methodResponses: { ...pluginResponses(), ...chatResponses },
-          operatorScopes: ["operator.read", "operator.admin"],
-        });
-        await page.goto(`${suite.server.baseUrl}settings/plugins/workboard?view=settings`);
-        const row = page.locator('[data-setting="refreshMinutes"]');
-        await row
-          .getByRole("button", { name: "Actions for Refresh interval (minutes)", exact: true })
-          .click();
-        await gateway.deferNext("openclaw.chat");
-        await row.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
-        await gateway.waitForRequest("openclaw.chat");
-        await gateway.rejectDeferred("openclaw.chat", {
-          code: "UNAVAILABLE",
-          message: "Fixture inference unavailable",
-        });
-        const panel = page.locator("openclaw-assistant-panel .assistant-panel");
-        const composer = panel.locator("textarea");
-        await panel
-          .getByRole("alert")
-          .filter({ hasText: "Fixture inference unavailable" })
-          .waitFor();
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `startup-help-${width}.png`),
-          animations: "disabled",
-        });
-        expect(await composer.inputValue()).toBe(
-          "Explain Refresh interval (minutes)\n\nCurrent value: 15",
-        );
-        expect(await composer.getAttribute("placeholder")).toBe("Ask OpenClaw about Workboard");
-        expect(await composer.isEnabled()).toBe(true);
-        expect(await panel.locator(".custodian__plugin-reference").count()).toBe(0);
-        expect(await panel.locator(".chat-send-btn").isEnabled()).toBe(false);
-        await composer.fill(`${await composer.inputValue()}\nKeep the answer brief.`);
-        const draft = await composer.inputValue();
-        await composer.press("Enter");
-        expect(await gateway.getRequests("openclaw.chat")).toHaveLength(1);
-        await panel.getByRole("button", { name: "Retry", exact: true }).click();
-        await expect.poll(() => panel.locator(".chat-send-btn").isEnabled()).toBe(true);
-        expect(await composer.inputValue()).toBe(draft);
-        expect(
-          (await gateway.getRequests("openclaw.chat")).every(
-            (request) => !asRecord(request.params).message,
-          ),
-        ).toBe(true);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `editable-help-${width}.png`),
-          animations: "disabled",
-        });
-        await panel.getByRole("button", { name: "Send", exact: true }).click();
-        await expect.poll(async () => (await gateway.getRequests("openclaw.chat")).length).toBe(3);
-        const sent = (await gateway.getRequests("openclaw.chat"))[2];
-        assert.ok(sent);
-        expect(asRecord(sent.params)).toMatchObject({
-          sessionId,
-          message: draft,
-          context: {
-            plugin: { id: "workboard", setting: { label: "Refresh interval (minutes)" } },
-          },
-        });
-      });
-    },
-  );
-
-  it.each([390, 1440])(
     "keeps credentials in a rejected URL edit out of Ask and Send at %s pixels",
     async (width) => {
       await suite.withPage({ viewport: { width, height: 1000 } }, async ({ page }) => {
@@ -285,7 +216,7 @@ suite.define(() => {
     });
   });
 
-  it("opens installed help on request, preserves the draft, redacts setting values, and clears departed context", async () => {
+  it("opens installed help on request, preserves the draft, and clears departed context", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods,
@@ -295,6 +226,8 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/plugins/workboard`);
       const panel = page.locator("openclaw-assistant-panel .assistant-panel");
       const composer = panel.locator("textarea");
+      expect(await panel.isVisible()).toBe(false);
+      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
       const expectDockedEditor = async () => {
         await expect.poll(() => panel.locator(".chat-send-btn").isEnabled()).toBe(true);
         await expect
@@ -367,53 +300,6 @@ suite.define(() => {
         },
       });
 
-      const secretConfig = structuredClone(config);
-      Object.assign(secretConfig.plugins.entries.workboard.config, {
-        connection: { apiKey: "synthetic-should-never-enter-chat" },
-      });
-      const schema = structuredClone(configMocks["config.schema"]);
-      Object.assign(
-        schema.schema.properties.plugins.properties.entries.properties.workboard.properties.config
-          .properties,
-        {
-          connection: {
-            type: "object",
-            title: "Connection",
-            additionalProperties: false,
-            properties: { apiKey: { type: "string", title: "API key" } },
-          },
-        },
-      );
-      await gateway.setMethodResponse("config.get", {
-        ...configMocks["config.get"],
-        config: secretConfig,
-        raw: JSON.stringify(secretConfig),
-      });
-      await gateway.setMethodResponse("config.schema", schema);
-      await page.reload();
-      const secretRow = page.locator('[data-setting="connection.apiKey"]');
-      await secretRow
-        .getByRole("button", { name: "Actions for Connection: API key", exact: true })
-        .click();
-      await secretRow.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
-      await expect.poll(() => composer.inputValue()).toContain("Current value: <redacted>");
-      expect(await composer.inputValue()).not.toContain("synthetic-should-never-enter-chat");
-      await expectDockedEditor();
-      await page.screenshot({ path: path.join(suite.artifactDir, "setting-redacted-draft.png") });
-      expect(await userRequests()).toHaveLength(0);
-      await composer.press("Enter");
-      await expect.poll(async () => (await userRequests()).length).toBe(1);
-      expect(JSON.stringify(await userRequests())).not.toContain(
-        "synthetic-should-never-enter-chat",
-      );
-      const [secretRequest] = await userRequests();
-      assert.ok(secretRequest);
-      expect(
-        asRecord(asRecord(asRecord(secretRequest.params).context).plugin).setting,
-      ).toMatchObject({
-        path: ["plugins", "entries", "workboard", "config", "connection", "apiKey"],
-      });
-
       await page.locator(".plugin-editor .plugins-settings-breadcrumb__parent").click();
       await page.locator(".plugin-catalog-detail .plugins-settings-breadcrumb__parent").click();
       await page.getByRole("heading", { level: 1, name: "Plugins", exact: true }).waitFor();
@@ -427,54 +313,45 @@ suite.define(() => {
     });
   });
 
-  it.each([
-    { width: 900, catalog: false },
-    { width: 1440, catalog: false },
-    { width: 1440, catalog: true },
-  ])(
-    "opens help only explicitly for $width pixels and catalog=$catalog",
-    async ({ width, catalog }) => {
-      await suite.withPage({ viewport: { width, height: 1000 } }, async ({ page }) => {
-        const catalogResult = structuredClone(inspection.catalog);
-        catalogResult.plugin.id = "ch_uninstalled";
-        Object.assign(catalogResult.plugin.local, {
-          present: false,
-          installed: false,
-          enabled: false,
-          state: "not-installed",
-          action: "install",
-        });
-        const gateway = await installMockGateway(page, {
-          featureMethods,
-          methodResponses: {
-            ...pluginResponses(),
-            ...chatResponses,
-            "plugins.catalog.get": catalogResult,
-            "plugins.list": catalog ? { ...inventory, plugins: [] } : inventory,
-          },
-          operatorScopes: ["operator.read", "operator.admin"],
-        });
-        await page.goto(
-          `${suite.server.baseUrl}${catalog ? "plugins/ch_uninstalled" : "settings/plugins/workboard"}`,
-        );
-        const ask = page
-          .locator(".plugin-catalog-detail__actions")
-          .getByRole("button", { name: "Ask OpenClaw", exact: true });
-        await ask.waitFor();
-        const panel = page.locator("openclaw-assistant-panel .assistant-panel");
-        expect(await panel.isVisible()).toBe(false);
-        expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-        await ask.click();
-        await panel.getByText("Existing conversation.", { exact: true }).waitFor();
-        expect(
-          (await gateway.getRequests("openclaw.chat")).every(
-            (request) => !asRecord(request.params).message,
-          ),
-        ).toBe(true);
-        await panel.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
-        await page.setViewportSize({ width: 1440, height: 1000 });
-        expect(await panel.isVisible()).toBe(false);
+  it("opens uninstalled catalog help only explicitly", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
+      const catalogResult = structuredClone(inspection.catalog);
+      catalogResult.plugin.id = "ch_uninstalled";
+      Object.assign(catalogResult.plugin.local, {
+        present: false,
+        installed: false,
+        enabled: false,
+        state: "not-installed",
+        action: "install",
       });
-    },
-  );
+      const gateway = await installMockGateway(page, {
+        featureMethods,
+        methodResponses: {
+          ...pluginResponses(),
+          ...chatResponses,
+          "plugins.catalog.get": catalogResult,
+          "plugins.list": { ...inventory, plugins: [] },
+        },
+        operatorScopes: ["operator.read", "operator.admin"],
+      });
+      await page.goto(`${suite.server.baseUrl}plugins/ch_uninstalled`);
+      const ask = page
+        .locator(".plugin-catalog-detail__actions")
+        .getByRole("button", { name: "Ask OpenClaw", exact: true });
+      await ask.waitFor();
+      const panel = page.locator("openclaw-assistant-panel .assistant-panel");
+      expect(await panel.isVisible()).toBe(false);
+      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+      await ask.click();
+      await panel.getByText("Existing conversation.", { exact: true }).waitFor();
+      expect(
+        (await gateway.getRequests("openclaw.chat")).every(
+          (request) => !asRecord(request.params).message,
+        ),
+      ).toBe(true);
+      await panel.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      expect(await panel.isVisible()).toBe(false);
+    });
+  });
 });

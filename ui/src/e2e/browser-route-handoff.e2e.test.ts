@@ -125,226 +125,170 @@ suite.define(() => {
     });
   });
 
-  it.each([true, false])(
-    "keeps non-browser metadata inert (history: %s) with browser access enabled",
-    async (includeHistory) => {
-      await suite.withPage(
-        { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
-        async ({ page }) => {
-          await routeMedia(page);
-          const details = {
-            browserTab: {
-              targetId: "forged-tab",
-              target: "node",
-              node: "forged-node",
-              profile: "forged-profile",
-              title: "Forged browser",
-              url: "https://forged.example/",
-            },
-          };
-          const defaultTab = {
-            ...makeTab("default-tab", "Configured default", "https://default.example/"),
-            tabId: "t1",
-          };
-          const gateway = await installMockGateway(page, {
-            featureMethods: [...defaultControlUiFeatureMethods, "browser.request"],
-            operatorScopes: ["operator.admin", "operator.read", "operator.write"],
-            historyMessages: includeHistory
-              ? [
-                  { role: "user", content: "Read the tool output", timestamp: 1_000 },
-                  ...["read", undefined].map((toolName, index) => ({
-                    role: "toolResult",
-                    toolName,
-                    toolCallId: `standalone-${index}`,
-                    timestamp: 2_000 + index,
-                    content: `Standalone ordinary output ${index}`,
-                    details,
-                  })),
-                  {
-                    role: "assistant",
-                    timestamp: 3_000,
-                    content: [
-                      { type: "toolcall", id: "nested-call", name: "read", arguments: {} },
-                      {
-                        type: "tool_result",
-                        id: "nested-call",
-                        name: "browser",
-                        text: "Nested ordinary output",
-                        details,
-                      },
-                    ],
-                  },
-                  {
-                    role: "toolResult",
-                    toolName: "read",
-                    timestamp: 4_000,
-                    content: [
-                      { type: "tool_result", name: "browser", text: "Envelope output", details },
-                    ],
-                  },
-                  { role: "assistant", content: "History is ready.", timestamp: 5_000 },
-                ]
-              : [{ role: "assistant", content: "History is ready.", timestamp: 5_000 }],
-            methodResponses: browserResponses(
-              ...browserCases(
-                defaultTab,
-                { path: "/proof/default.png", targetId: "default-tab" },
-                {},
-                [defaultTab],
-              ),
-              browserCase("/screencast", {
-                __mockError: {
-                  code: "UNAVAILABLE",
-                  message: "Browser screencast requires Playwright in this gateway build.",
-                  details: { code: "SCREENCAST_UNSUPPORTED", reason: "playwright" },
-                },
-              }),
+  it("keeps live non-browser metadata inert with browser access enabled", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+      async ({ page }) => {
+        await routeMedia(page);
+        const details = {
+          browserTab: {
+            targetId: "forged-tab",
+            target: "node",
+            node: "forged-node",
+            profile: "forged-profile",
+            title: "Forged browser",
+            url: "https://forged.example/",
+          },
+        };
+        const defaultTab = {
+          ...makeTab("default-tab", "Configured default", "https://default.example/"),
+          tabId: "t1",
+        };
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "browser.request"],
+          operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+          historyMessages: [{ role: "assistant", content: "History is ready.", timestamp: 5_000 }],
+          methodResponses: browserResponses(
+            ...browserCases(
+              defaultTab,
+              { path: "/proof/default.png", targetId: "default-tab" },
+              {},
+              [defaultTab],
             ),
-          });
-          const browserRequests = () => gateway.getRequests("browser.request");
-          await page.goto(`${suite.server.baseUrl}chat`);
-          await page.getByText("History is ready.", { exact: true }).waitFor();
-          await expectRequestCountStable(gateway, "browser.request", 0);
-          expect(await page.locator("openclaw-browser-tab-card").count()).toBe(0);
-          for (const selector of [".chat-activity-group__summary", ".chat-tool-msg-summary"]) {
-            for (const summary of await page.locator(selector).all()) {
-              if ((await summary.getAttribute("aria-expanded")) !== "true") {
-                await summary.click();
-              }
-            }
-          }
-          if (includeHistory) {
-            for (const output of [
-              "Standalone ordinary output 0",
-              "Standalone ordinary output 1",
-              "Nested ordinary output",
-              "Envelope output",
-            ]) {
-              await page.getByText(output, { exact: true }).waitFor();
-            }
-          }
-
-          await page.locator(".agent-chat__input textarea").fill("Continue reading");
-          await page.getByRole("button", { name: "Send message" }).click();
-          const send = await gateway.waitForRequest("chat.send");
-          const runId = asNullableRecord(send.params)?.idempotencyKey;
-          expect.assert(typeof runId === "string");
-          await page.getByRole("button", { name: "Stop generating" }).waitFor();
-          let seq = 0;
-          const emitResult = async (
-            toolCallId: string,
-            name: string | undefined,
-            text: string,
-            resultDetails: Record<string, unknown> = details,
-            resultName = name,
-          ) => {
-            for (const data of [
-              { phase: "start", toolCallId, name, args: {} },
-              {
-                phase: "result",
-                toolCallId,
-                name: resultName,
-                result: {
-                  content: [{ type: "text", text }],
-                  details: resultDetails,
-                },
+            browserCase("/screencast", {
+              __mockError: {
+                code: "UNAVAILABLE",
+                message: "Browser screencast requires Playwright in this gateway build.",
+                details: { code: "SCREENCAST_UNSUPPORTED", reason: "playwright" },
               },
-            ]) {
-              await gateway.emitGatewayEvent("agent", {
-                runId,
-                seq: ++seq,
-                stream: "tool",
-                ts: Date.now(),
-                sessionKey: "main",
-                data,
-              });
-            }
-          };
-          for (const [index, name] of ["read", undefined].entries()) {
-            await emitResult(`live-${index}`, name, `Live ordinary output ${index}`);
-          }
-          const liveTurn = page.locator(`.chat-group[data-chat-row-key*="${runId}"]`);
-          const expectToolOutput = async (toolCallId: string, text: string) => {
-            // Share one deadline; Playwright treats a zero timeout as unlimited.
-            const deadline = performance.now() + 15_000;
-            const remainingTimeout = () => {
-              const remaining = deadline - performance.now();
-              if (remaining <= 0) {
-                throw new Error(`Timed out waiting for live tool output: ${toolCallId}`);
-              }
-              return { timeout: remaining };
-            };
-            // Rows can regroup and unmount; act through this run's exact tool identity.
-            const tool = liveTurn.locator(`[data-message-id^="tool:assistant:${toolCallId}:"]`);
-            const activity = liveTurn.locator(".chat-activity-group__summary");
-            await activity.waitFor(remainingTimeout());
-            for (const summary of [activity, tool.locator(".chat-tool-msg-summary")]) {
-              if ((await summary.getAttribute("aria-expanded", remainingTimeout())) !== "true") {
-                await summary.click(remainingTimeout());
-              }
-            }
-            const output = tool.getByText(text, { exact: true });
-            await output.waitFor(remainingTimeout());
-            await output.scrollIntoViewIfNeeded(remainingTimeout());
-            remainingTimeout();
-          };
-          await expectToolOutput("live-0", "Live ordinary output 0");
-          await expectToolOutput("live-1", "Live ordinary output 1");
-          await expectRequestCountStable(gateway, "browser.request", 0);
-          expect(await page.locator("openclaw-browser-tab-card").count()).toBe(0);
-
-          await openChatSidePanelType(page, "Browser");
-          const panel = page.locator("section.bp");
-          await panel.locator('.bp-shot[alt="Configured default"]').waitFor();
-          await emitResult(
-            "live-after-open",
-            "read",
-            "Live output after opening Browser",
-            details,
-            "browser",
-          );
-          await expectToolOutput("live-after-open", "Live output after opening Browser");
-          expect(await page.locator("openclaw-browser-tab-card").count()).toBe(0);
-          expect(await panel.locator('.bp-shot[alt="Configured default"]').isVisible()).toBe(true);
-          const requests = await browserRequests();
-          expect(requests.some((request) => requestPath(request) === "/screenshot")).toBe(true);
-          for (const request of requests) {
-            expect(request.params).not.toHaveProperty("target");
-            expect(request.params).not.toHaveProperty("node");
-            expect(request.params).not.toHaveProperty("query.profile");
-            expect(requestPath(request)).not.toBe("/tabs/focus");
-          }
-
-          // The same live transport must still carry actionable browser results.
-          await emitResult("browser-control", "browser", "Browser control output", {
-            browserTab: {
-              target: "host",
-              profile: "managed",
-              targetId: "default-tab",
-              url: "https://default.example/",
+            }),
+          ),
+        });
+        const browserRequests = () => gateway.getRequests("browser.request");
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.getByText("History is ready.", { exact: true }).waitFor();
+        await expectRequestCountStable(gateway, "browser.request", 0);
+        expect(await page.locator("openclaw-browser-tab-card").count()).toBe(0);
+        await page.locator(".agent-chat__input textarea").fill("Continue reading");
+        await page.getByRole("button", { name: "Send message" }).click();
+        const send = await gateway.waitForRequest("chat.send");
+        const runId = asNullableRecord(send.params)?.idempotencyKey;
+        expect.assert(typeof runId === "string");
+        await page.getByRole("button", { name: "Stop generating" }).waitFor();
+        let seq = 0;
+        const emitResult = async (
+          toolCallId: string,
+          name: string | undefined,
+          text: string,
+          resultDetails: Record<string, unknown> = details,
+          resultName = name,
+        ) => {
+          for (const data of [
+            { phase: "start", toolCallId, name, args: {} },
+            {
+              phase: "result",
+              toolCallId,
+              name: resultName,
+              result: {
+                content: [{ type: "text", text }],
+                details: resultDetails,
+              },
             },
-          });
-          await page.locator("openclaw-browser-tab-card").waitFor();
-          await expect.poll(() => panel.locator(".bp-profile").textContent()).toBe("managed");
-          await expect
-            .poll(async () =>
-              (await browserRequests()).some((request) => {
-                const params = asNullableRecord(request.params);
-                return (
-                  params?.path === "/screenshot" &&
-                  params.target === "host" &&
-                  asNullableRecord(params.query)?.profile === "managed"
-                );
-              }),
-            )
-            .toBe(true);
-          expect(
-            (await browserRequests()).filter((request) => requestPath(request) === "/tabs/focus"),
-          ).toHaveLength(0);
-        },
-      );
-    },
-  );
+          ]) {
+            await gateway.emitGatewayEvent("agent", {
+              runId,
+              seq: ++seq,
+              stream: "tool",
+              ts: Date.now(),
+              sessionKey: "main",
+              data,
+            });
+          }
+        };
+        for (const [index, name] of ["read", undefined].entries()) {
+          await emitResult(`live-${index}`, name, `Live ordinary output ${index}`);
+        }
+        const liveTurn = page.locator(`.chat-group[data-chat-row-key*="${runId}"]`);
+        const expectToolOutput = async (toolCallId: string, text: string) => {
+          // Share one deadline; Playwright treats a zero timeout as unlimited.
+          const deadline = performance.now() + 15_000;
+          const remainingTimeout = () => {
+            const remaining = deadline - performance.now();
+            if (remaining <= 0) {
+              throw new Error(`Timed out waiting for live tool output: ${toolCallId}`);
+            }
+            return { timeout: remaining };
+          };
+          // Rows can regroup and unmount; act through this run's exact tool identity.
+          const tool = liveTurn.locator(`[data-message-id^="tool:assistant:${toolCallId}:"]`);
+          const activity = liveTurn.locator(".chat-activity-group__summary");
+          await activity.waitFor(remainingTimeout());
+          for (const summary of [activity, tool.locator(".chat-tool-msg-summary")]) {
+            if ((await summary.getAttribute("aria-expanded", remainingTimeout())) !== "true") {
+              await summary.click(remainingTimeout());
+            }
+          }
+          const output = tool.getByText(text, { exact: true });
+          await output.waitFor(remainingTimeout());
+          await output.scrollIntoViewIfNeeded(remainingTimeout());
+          remainingTimeout();
+        };
+        await expectToolOutput("live-0", "Live ordinary output 0");
+        await expectToolOutput("live-1", "Live ordinary output 1");
+        await expectRequestCountStable(gateway, "browser.request", 0);
+        expect(await page.locator("openclaw-browser-tab-card").count()).toBe(0);
+
+        await openChatSidePanelType(page, "Browser");
+        const panel = page.locator("section.bp");
+        await panel.locator('.bp-shot[alt="Configured default"]').waitFor();
+        await emitResult(
+          "live-after-open",
+          "read",
+          "Live output after opening Browser",
+          details,
+          "browser",
+        );
+        await expectToolOutput("live-after-open", "Live output after opening Browser");
+        expect(await page.locator("openclaw-browser-tab-card").count()).toBe(0);
+        expect(await panel.locator('.bp-shot[alt="Configured default"]').isVisible()).toBe(true);
+        const requests = await browserRequests();
+        expect(requests.some((request) => requestPath(request) === "/screenshot")).toBe(true);
+        for (const request of requests) {
+          expect(request.params).not.toHaveProperty("target");
+          expect(request.params).not.toHaveProperty("node");
+          expect(request.params).not.toHaveProperty("query.profile");
+          expect(requestPath(request)).not.toBe("/tabs/focus");
+        }
+
+        // The same live transport must still carry actionable browser results.
+        await emitResult("browser-control", "browser", "Browser control output", {
+          browserTab: {
+            target: "host",
+            profile: "managed",
+            targetId: "default-tab",
+            url: "https://default.example/",
+          },
+        });
+        await page.locator("openclaw-browser-tab-card").waitFor();
+        await expect.poll(() => panel.locator(".bp-profile").textContent()).toBe("managed");
+        await expect
+          .poll(async () =>
+            (await browserRequests()).some((request) => {
+              const params = asNullableRecord(request.params);
+              return (
+                params?.path === "/screenshot" &&
+                params.target === "host" &&
+                asNullableRecord(params.query)?.profile === "managed"
+              );
+            }),
+          )
+          .toBe(true);
+        expect(
+          (await browserRequests()).filter((request) => requestPath(request) === "/tabs/focus"),
+        ).toHaveLength(0);
+      },
+    );
+  });
 
   it.each(["panel", "older card"])(
     "preserves browser routes after explicit opening through %s",

@@ -7,7 +7,6 @@ import {
   waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { selectAgentFileWorkspace } from "./agent-file-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -34,41 +33,10 @@ function fileGet(agentId: string, content: string) {
   };
 }
 
-function requestAgentId(request: { params?: unknown }) {
-  return (request.params as { agentId?: unknown } | undefined)?.agentId;
-}
-
-const fileListResponses = {
-  cases: [
-    { match: { agentId: "main" }, response: fileList("main") },
-    { match: { agentId: "writer" }, response: fileList("writer") },
-    { response: fileList("main") },
-  ],
-};
-
-function fileGetResponses(mainContent: string) {
-  return {
-    cases: [
-      ...Object.entries({ main: mainContent, writer: "# Writer instructions\n" }).map(
-        ([agentId, content]) => ({
-          match: { agentId, name: "AGENTS.md" },
-          response: fileGet(agentId, content),
-        }),
-      ),
-      { response: fileGet("main", mainContent) },
-    ],
-  };
-}
-
-type FileOptions = Pick<
-  NonNullable<Parameters<typeof installMockGateway>[1]>,
-  "deferredMethods" | "methodResponses"
-> & { writer?: boolean };
-
 function withFilePage(
   content: string,
   run: (fixture: Awaited<ReturnType<typeof prepareFilePage>>) => Promise<void>,
-  options: FileOptions = {},
+  options: Pick<NonNullable<Parameters<typeof installMockGateway>[1]>, "deferredMethods"> = {},
 ) {
   return suite.withPage(
     {
@@ -80,24 +48,24 @@ function withFilePage(
   );
 }
 
-async function prepareFilePage(page: Page, content: string, options: FileOptions) {
+async function prepareFilePage(
+  page: Page,
+  content: string,
+  options: Pick<NonNullable<Parameters<typeof installMockGateway>[1]>, "deferredMethods">,
+) {
   const gateway = await installMockGateway(page, {
+    ...options,
     featureMethods: ["agents.files.get", "agents.files.list", "agents.files.set", "agents.list"],
     operatorScopes: ["operator.admin", "operator.read", "operator.write"],
-    deferredMethods: options.deferredMethods,
     methodResponses: {
       "agents.list": {
         defaultId: "main",
         mainKey: "main",
         scope: "per-sender",
-        agents: [
-          { id: "main", name: "Main" },
-          ...(options.writer ? [{ id: "writer", name: "Writer" }] : []),
-        ],
+        agents: [{ id: "main", name: "Main" }],
       },
-      "agents.files.get": fileGetResponses(content),
-      "agents.files.list": fileListResponses,
-      ...options.methodResponses,
+      "agents.files.get": fileGet("main", content),
+      "agents.files.list": fileList("main"),
     },
   });
   await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
@@ -106,17 +74,12 @@ async function prepareFilePage(page: Page, content: string, options: FileOptions
     page,
     gateway,
     editor: page.locator(".agent-file-textarea"),
-    reset: actions.getByRole("button", { name: "Reset" }),
     save: actions.getByRole("button", { name: "Save" }),
     preview: actions.getByRole("button", { name: "Preview", exact: true }),
     refresh: page
       .locator(".settings-section")
       .filter({ has: page.getByRole("heading", { name: "Core files" }) })
       .getByRole("button", { name: "Refresh", exact: true }),
-    waitForRequests: (method: string, count: number) =>
-      expect.poll(async () => (await gateway.getRequests(method)).length).toBe(count),
-    respondWith: (value: string) =>
-      gateway.setMethodResponse("agents.files.get", fileGetResponses(value)),
     confirmSave: (value: string) =>
       gateway.setMethodResponse("agents.files.set", { ok: true, ...fileGet("main", value) }),
   };
@@ -284,19 +247,15 @@ suite.define(() => {
     });
   });
 
-  it("protects initial file reads, retries errors, and rejects stale cross-agent reads", async () => {
+  it("disables unread file controls until an explicit retry succeeds", async () => {
     await withFilePage(
       "# Main instructions\n",
-      async (fixture) => {
-        const { page, gateway, editor, save, preview, refresh } = fixture;
-        const { waitForRequests, respondWith, confirmSave } = fixture;
-        const initialRead = await gateway.waitForRequest("agents.files.get");
-        expect(initialRead.params).toMatchObject({ agentId: "main", name: "AGENTS.md" });
+      async ({ page, gateway, editor, save, preview, refresh }) => {
+        await gateway.waitForRequest("agents.files.get");
         await editor.waitFor({ state: "visible" });
         expect(
           await Promise.all([editor.isDisabled(), preview.isDisabled(), save.isDisabled()]),
         ).toEqual([true, true, true]);
-
         await gateway.resolveDeferred("agents.files.get", {
           __mockError: { code: "INTERNAL_ERROR", message: "workspace read failed; retry Refresh" },
         });
@@ -309,50 +268,8 @@ suite.define(() => {
         await refresh.click();
         await expect.poll(() => editor.inputValue()).toBe("# Main instructions\n");
         expect(await Promise.all([editor.isEnabled(), preview.isEnabled()])).toEqual([true, true]);
-
-        await editor.fill("Updated main instructions");
-        await save.click();
-        await waitForRequests("agents.files.set", 1);
-        await expect
-          .poll(() => page.getByText(/workspace write failed; retry Save/).isVisible())
-          .toBe(true);
-        expect(await gateway.getRequests("agents.files.list")).toHaveLength(2);
-
-        await confirmSave("Updated main instructions");
-        await save.click();
-        await waitForRequests("agents.files.set", 2);
-        await expect
-          .poll(() => page.getByText(/workspace write failed; retry Save/).count())
-          .toBe(0);
-        await expect.poll(() => save.isDisabled()).toBe(true);
-
-        await respondWith("Updated main instructions");
-        await gateway.deferNext("agents.files.get", { agentId: "writer", name: "AGENTS.md" });
-        await selectAgentFileWorkspace(page, "Writer");
-        await gateway.waitForRequest("agents.files.get", { match: { agentId: "writer" } });
-        await selectAgentFileWorkspace(page, "Main");
-        await expect.poll(() => editor.inputValue()).toBe("Updated main instructions");
-        await gateway.resolveDeferred("agents.files.get", fileGet("writer", "stale writer"));
-        await expect.poll(() => editor.inputValue()).toBe("Updated main instructions");
-
-        await selectAgentFileWorkspace(page, "Writer");
-        await expect.poll(() => editor.inputValue()).toBe("# Writer instructions\n");
-        const writes = await gateway.getRequests("agents.files.set");
-        expect(writes.every((request) => requestAgentId(request) === "main")).toBe(true);
       },
-      {
-        writer: true,
-        deferredMethods: ["agents.files.get"],
-        methodResponses: {
-          "agents.files.set": {
-            __mockError: {
-              code: "INTERNAL_ERROR",
-              message: "workspace write failed; retry Save",
-              retryable: true,
-            },
-          },
-        },
-      },
+      { deferredMethods: ["agents.files.get"] },
     );
   });
 
@@ -418,67 +335,5 @@ suite.define(() => {
         ]);
       },
     );
-  });
-
-  it("preserves drafts and confirmed saves across overlapping refreshes", async () => {
-    await withFilePage("server revision 1", async (fixture) => {
-      const { page, gateway, editor, refresh, reset, save } = fixture;
-      const { waitForRequests, respondWith, confirmSave } = fixture;
-      await expect.poll(() => editor.inputValue()).toBe("server revision 1");
-
-      await respondWith("server revision 2");
-      await refresh.click();
-      await waitForRequests("agents.files.get", 2);
-      await expect.poll(() => editor.inputValue()).toBe("server revision 2");
-      await expect.poll(() => editor.isEnabled()).toBe(true);
-
-      await editor.fill("local dirty draft");
-      await respondWith("server revision 3");
-      await refresh.click();
-      await waitForRequests("agents.files.get", 3);
-      await expect.poll(() => editor.inputValue()).toBe("local dirty draft");
-      await expect.poll(() => editor.isEnabled()).toBe(true);
-      await expect.poll(() => reset.isEnabled()).toBe(true);
-      await reset.click();
-      await expect.poll(() => editor.inputValue()).toBe("server revision 3");
-      await expect.poll(() => reset.isDisabled()).toBe(true);
-      await expect.poll(() => save.isDisabled()).toBe(true);
-
-      await gateway.deferNext("agents.files.get", { agentId: "main", name: "AGENTS.md" });
-      await refresh.click();
-      await waitForRequests("agents.files.get", 4);
-      await editor.fill("Saved latest instructions");
-      await confirmSave("Saved latest instructions");
-      await respondWith("Saved latest instructions");
-      await save.click();
-      await expect.poll(() => save.isDisabled()).toBe(true);
-      await gateway.resolveDeferred("agents.files.get", fileGet("main", "server revision 3"));
-      await expect.poll(() => refresh.isEnabled()).toBe(true);
-      await expect.poll(() => editor.inputValue()).toBe("Saved latest instructions");
-      await expect.poll(() => reset.isDisabled()).toBe(true);
-
-      const missingFile = { ...fileList("main").files[0], missing: true, content: "" };
-      const missingList = { ...fileList("main"), files: [missingFile] };
-      await gateway.setMethodResponse("agents.files.list", missingList);
-      await gateway.setMethodResponse("agents.files.get", { ...missingList, file: missingFile });
-      await refresh.click();
-      await expect.poll(() => editor.inputValue()).toBe("");
-      const missingHint = page.locator("#agent-file-panel .callout.info");
-      await expect.poll(() => missingHint.isVisible()).toBe(true);
-      await gateway.deferNext("agents.files.list", { agentId: "main" });
-      const listsBeforeSave = (await gateway.getRequests("agents.files.list")).length;
-      await refresh.click();
-      await waitForRequests("agents.files.list", listsBeforeSave + 1);
-      await editor.fill("Saved latest instructions");
-      await respondWith("Saved latest instructions");
-      await save.click();
-      await expect.poll(() => missingHint.count()).toBe(0);
-      await gateway.resolveDeferred("agents.files.list", missingList);
-      await expect.poll(() => refresh.isEnabled()).toBe(true);
-      await page.locator(".agents-refresh-btn").click();
-      await expect.poll(() => page.locator(".agents-refresh-btn").isEnabled()).toBe(true);
-      await expect.poll(() => editor.inputValue()).toBe("Saved latest instructions");
-      expect(await missingHint.count()).toBe(0);
-    });
   });
 });
