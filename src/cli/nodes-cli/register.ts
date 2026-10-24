@@ -60,6 +60,30 @@ function parseNodeInvokeParams(value = "{}"): unknown {
   }
 }
 
+function normalizeCameraDevice(device: Record<string, unknown>): Record<string, unknown> {
+  const normalized = { ...device };
+  const id = typeof device.id === "string" ? device.id : device.DeviceId;
+  const name = typeof device.name === "string" ? device.name : device.Name;
+  const position = typeof device.position === "string" ? device.position : device.Position;
+
+  if (typeof id === "string") {
+    normalized.id = id;
+  }
+  if (typeof name === "string") {
+    normalized.name = name;
+  }
+  if (typeof position === "string") {
+    normalized.position = position;
+  }
+
+  // Older Windows nodes return `cameras` with PascalCase fields. Keep the
+  // CLI and JSON output on the documented devices/id/name contract.
+  delete normalized.DeviceId;
+  delete normalized.Name;
+  delete normalized.Position;
+  return normalized;
+}
+
 /** Register the `nodes` command group and lazy plugin-provided node commands. */
 export async function registerNodesCli(program: Command, argv: readonly string[] = process.argv) {
   const nodes = program
@@ -250,7 +274,12 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
           );
 
           const payload = asRecord(asRecord(raw).payload);
-          const devices = Array.isArray(payload.devices) ? payload.devices.filter(isRecord) : [];
+          const rawDevices = Array.isArray(payload.devices)
+            ? payload.devices
+            : Array.isArray(payload.cameras)
+              ? payload.cameras
+              : [];
+          const devices = rawDevices.filter(isRecord).map(normalizeCameraDevice);
 
           if (opts.json) {
             defaultRuntime.writeJson(devices);
