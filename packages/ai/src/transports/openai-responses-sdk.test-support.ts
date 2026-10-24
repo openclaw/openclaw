@@ -6,6 +6,19 @@ type ClientOptions = {
   defaultHeaders?: Record<string, string>;
 };
 
+type MockClient = {
+  apiKey: string;
+  baseURL: string;
+  responses: {
+    create: (
+      request: Record<string, unknown>,
+      options?: { signal?: AbortSignal },
+    ) => { withResponse: () => Promise<SdkResponse | undefined> };
+  };
+  withOptions: (options: { apiKey?: string }) => MockClient;
+};
+type MockClientConstructor = new (options?: ClientOptions) => MockClient;
+
 export function createResponsesSdkMock(
   state: { outcomes: Array<Error | SdkResponse>; requests?: Array<Record<string, unknown>> },
   hooks: {
@@ -15,7 +28,7 @@ export function createResponsesSdkMock(
     dequeueOnResponse?: boolean;
     unexpectedRequest?: string;
   } = {},
-) {
+): { default: MockClientConstructor; AzureOpenAI: MockClientConstructor } {
   const takeOutcome = () =>
     state.outcomes.shift() ?? new Error(hooks.unexpectedRequest ?? "Unexpected SSE request");
   const createClient = (provider: "openai" | "azure") =>
