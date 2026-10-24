@@ -5,7 +5,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
-import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/io.js";
 import { captureAuthenticatedNodePairingState } from "../../../infra/device-pairing-node-state.js";
 import { compareOpenClawReleaseVersions } from "../../../infra/npm-registry-spec.js";
@@ -112,6 +112,9 @@ export async function attachAuthenticatedGatewayConnect(
     releasePendingNodePairingCleanup,
   } = context;
   const {
+    minProtocol,
+    maxProtocol,
+    usesLegacyNodeProtocol,
     role,
     scopes: deviceScopes,
     device,
@@ -285,7 +288,7 @@ export async function attachAuthenticatedGatewayConnect(
     expiresAtMs: number;
   }> = [];
   const effectiveNodeCaps = role === "node" ? new Set(connectParams.caps ?? []) : undefined;
-  if (pluginSurfaceBaseUrl) {
+  if (pluginSurfaceBaseUrl && !usesLegacyNodeProtocol) {
     for (const pluginCapabilitySurface of Object.values(pluginNodeCapabilitySurfaces)) {
       // Node reconciliation replaces declared caps with the approved surface.
       // Issuing a route capability for a withheld cap would bypass node.pair.approve.
@@ -391,13 +394,18 @@ export async function attachAuthenticatedGatewayConnect(
       isLocalClient,
     });
   const localUserIngress = prepareLocalUserIngress();
+  if (usesLegacyNodeProtocol) {
+    logWsControl.warn(
+      `legacy node protocol accepted conn=${connId} client=${formatForLog(clientLabel)} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} current=${PROTOCOL_VERSION}; upgrade recommended`,
+    );
+  }
   const nextClient: GatewayWsClient = {
     remoteControlUiIngress: getRemoteControlUiIngressContext(context.handler.upgradeReq),
     socket,
     connect: connectParams,
     connId,
     connectionKind: "gateway",
-    ...(pluginSurfaceBaseUrl ? { pluginSurfaceBaseUrl } : {}),
+    ...(!usesLegacyNodeProtocol && pluginSurfaceBaseUrl ? { pluginSurfaceBaseUrl } : {}),
     isDeviceTokenAuth: authMethod === "device-token",
     pairedClientId: isBrowserCopilotClient(connectParams.client)
       ? connectParams.client.id

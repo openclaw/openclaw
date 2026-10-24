@@ -121,15 +121,9 @@ it("starts expensive standalone UI work early without crossing serial phase barr
       },
     });
   });
-  const stats = new Map(
-    specs.map((file, index) => [
-      `${file.project.name}:${path.relative(repoRoot, file.moduleId).replaceAll("\\", "/")}`,
-      { size: sizes[index]! },
-    ]),
-  );
   const context = {
     config: { root: repoRoot },
-    cache: { getFileTestResults: () => undefined, getFileStats: (key: string) => stats.get(key) },
+    cache: { getTestSpecificationResult: () => undefined },
   };
   const sequencer = new UiE2eSequencer(
     context as unknown as ConstructorParameters<typeof UiE2eSequencer>[0],
@@ -165,14 +159,11 @@ it("keeps native failed-first and observed-duration ordering for warm UI runs", 
     });
   });
   const results = new Map(
-    specs.map((file, index) => [
-      `${file.project.name}:${path.relative(repoRoot, file.moduleId).replaceAll("\\", "/")}`,
-      { failed: index === 1, duration: [500, 1, 90][index]! },
-    ]),
+    specs.map((file, index) => [file, { failed: index === 1, duration: [500, 1, 90][index]! }]),
   );
   const context = {
     config: { root: repoRoot },
-    cache: { getFileTestResults: (key: string) => results.get(key), getFileStats: () => undefined },
+    cache: { getTestSpecificationResult: (file: TestSpecification) => results.get(file) },
   };
   const sequencer = new UiE2eSequencer(
     context as unknown as ConstructorParameters<typeof UiE2eSequencer>[0],

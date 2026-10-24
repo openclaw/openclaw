@@ -163,9 +163,7 @@ export const MOBILE_PAIRING_NODE_PERMISSIONS = Object.freeze({
 const MOBILE_PAIRING_OPERATOR_CAPS = Object.freeze(["inline-widgets"]);
 export const MOBILE_PAIRING_APPROVAL_SCOPES = Object.freeze(["operator.pairing", "operator.admin"]);
 
-// Span the published driver and candidate; each selects its supported version.
-const GATEWAY_PROTOCOL_VERSION = 5;
-const GATEWAY_MIN_OPERATOR_PROTOCOL_VERSION = 4;
+const GATEWAY_PROTOCOL_VERSION = 4;
 const GATEWAY_MIN_NODE_PROTOCOL_VERSION = 3;
 const PAIRING_AUDIT_SCOPES = ["operator.pairing"];
 const EXPECTED_UPGRADE_COMMAND_ADDITIONS = ["watch.notify", "watch.status"];
@@ -353,9 +351,7 @@ export function buildConnectRequest(params: {
     id: params.id ?? `connect-${randomUUID()}`,
     method: "connect",
     params: {
-      minProtocol: isNode
-        ? GATEWAY_MIN_NODE_PROTOCOL_VERSION
-        : GATEWAY_MIN_OPERATOR_PROTOCOL_VERSION,
+      minProtocol: isNode ? GATEWAY_MIN_NODE_PROTOCOL_VERSION : GATEWAY_PROTOCOL_VERSION,
       maxProtocol: GATEWAY_PROTOCOL_VERSION,
       client: { ...params.client, mode: params.mode },
       caps: isNode ? [...MOBILE_PAIRING_NODE_CAPS] : [...MOBILE_PAIRING_OPERATOR_CAPS],
