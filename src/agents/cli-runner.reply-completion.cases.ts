@@ -3,6 +3,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
@@ -10,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { markMcpLoopbackToolCallStarted } from "../gateway/mcp-http.loopback-runtime.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { supervisorSpawnMock, type createManagedRun } from "./cli-runner.test-support.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { applyCliSessionBindingResult, getCliSessionBinding } from "./cli-session.js";
@@ -60,7 +62,10 @@ export function registerCliReplyCompletionTests({
       setActivePluginRegistry,
     } = await import("../plugins/runtime.js");
     const { createTestRegistry } = await import("../test-utils/channel-plugins.js");
-    const { whatsappPlugin } = await import("../../extensions/whatsapp/channel-plugin-api.js");
+    const { whatsappPlugin } = await loadBundledPluginFacade<{ whatsappPlugin: ChannelPlugin }>({
+      pluginId: "whatsapp",
+      artifactBasename: "channel-plugin-api.js",
+    });
     const to = "+15551234567";
     const sessionKey = `agent:main:whatsapp:direct:${to}`;
     const { dir } = createSessionFixture({ sessionKey });
