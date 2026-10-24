@@ -1,0 +1,44 @@
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { getCachedPluginModuleLoader, preparePluginModule } from "./plugin-module-loader-cache.js";
+
+vi.mock("../../cli-invocation.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../cli-invocation.mjs")>()),
+  getStandaloneRuntimeBuild: () => ({ mode: "aot" }),
+}));
+
+const temp = useAutoCleanupTempDirTracker(afterEach);
+
+describe("plugin loading in the embedded AOT profile", () => {
+  it.each(["cjs", "ts"])("rejects fetched %s code before evaluation", (extension) => {
+    const root = temp.make("plugin-runtime-profile-");
+    const entry = path.join(root, `index.${extension}`);
+    const marker = path.join(root, "executed");
+    fs.writeFileSync(
+      entry,
+      `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "executed"); module.exports = { value: 42 };`,
+    );
+    withPluginCache(createPluginCache(), () => {
+      const load = getCachedPluginModuleLoader({
+        modulePath: entry,
+        importerUrl: import.meta.url,
+        aliasMap: {},
+        tryNative: true,
+      });
+      expect(() => load(entry)).toThrow(/not embedded.*dynamic-execution/);
+      expect(fs.existsSync(marker)).toBe(false);
+      expect(() =>
+        preparePluginModule({
+          modulePath: entry,
+          boundaryRoot: root,
+          boundaryLabel: "plugin root",
+          rejectHardlinks: true,
+          surfaceLabel: "plugin public surface",
+        }),
+      ).toThrow(/Rebuild the complete standalone artifact with this plugin/);
+    });
+  });
+});

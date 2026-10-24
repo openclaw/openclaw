@@ -74,6 +74,8 @@ if (isMainThread) {
   const sessionProjectionCounts = process.env.OPENCLAW_BENCH_SESSION_PROJECTION_COUNTS === "1";
   const sessionProjectionSource = process.env.OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE;
   const historySource = process.env.OPENCLAW_BENCH_HISTORY_SOURCE;
+  const retainToolContext = process.env.OPENCLAW_BENCH_RETAIN_TOOL_CONTEXT === "1";
+  const toolExecutionSource = process.env.OPENCLAW_BENCH_TOOL_EXECUTION_SOURCE;
   let broadcastTimingInstalled = false;
   let sessionProjectionCountsInstalled = false;
   if (
@@ -81,7 +83,9 @@ if (isMainThread) {
     sessionProjectionCounts ||
     sessionProjectionSource ||
     workerAttribution ||
-    historySource
+    historySource ||
+    retainToolContext ||
+    toolExecutionSource
   ) {
     const entry = new URL("../../src/entry.ts", import.meta.url);
     if (!process.argv[1] || realpathSync(process.argv[1]) !== realpathSync(entry)) {
@@ -132,10 +136,51 @@ if (isMainThread) {
       "../../src/gateway/session-event-projection.ts",
       import.meta.url,
     ).href;
+    const toolContextOwner = new URL(
+      "../../packages/agent-core/src/tool-execution-context.ts",
+      import.meta.url,
+    ).href;
+    const toolExecutionOwner = new URL(
+      "../../packages/agent-core/src/agent-loop-tool-execution.ts",
+      import.meta.url,
+    ).href;
 
     registerHooks({
       load(url, context, nextLoad) {
         const loaded = nextLoad(url, context);
+        if (toolExecutionSource && url === toolExecutionOwner) {
+          return {
+            ...loaded,
+            format: "module-typescript",
+            source: readFileSync(toolExecutionSource, "utf8"),
+          };
+        }
+        if (retainToolContext && url === toolContextOwner) {
+          const source = readFileSync(new URL(url), "utf8");
+          const anchor = "return activeToolExecution.run(context, run);";
+          if (source.split(anchor).length !== 2) {
+            throw new Error("Tool context retention anchor changed; update the benchmark observer");
+          }
+          // Model a long-lived socket/timer inheriting a tool's async context, without retaining
+          // its producer, result, or session directly. Attribution remains available after settlement.
+          return {
+            ...loaded,
+            format: "module-typescript",
+            source: `const benchmarkToolContexts = new WeakSet<object>();
+const benchmarkToolSnapshots: ReturnType<typeof AsyncLocalStorage.snapshot>[] = [];
+${source.replace(
+  anchor,
+  `return activeToolExecution.run(context, () => {
+    if (!benchmarkToolContexts.has(context)) {
+      benchmarkToolContexts.add(context);
+      benchmarkToolSnapshots.push(AsyncLocalStorage.snapshot());
+      console.log("BENCH_RETAINED_TOOL_CONTEXTS " + benchmarkToolSnapshots.length);
+    }
+    return run();
+  });`,
+)}`,
+          };
+        }
         const workerOwner = workerAttribution && workerOwners.get(url);
         if (workerOwner) {
           const source = instrumentGatewayBenchWorkerSource(

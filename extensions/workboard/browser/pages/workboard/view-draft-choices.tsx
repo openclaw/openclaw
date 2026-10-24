@@ -21,7 +21,7 @@ export function DraftChoices<Value extends string>(props: {
       disabled={props.disabled}
     >
       <legend>{props.label}</legend>
-      <div class={`workboard-segments workboard-segments--${props.name}`}>
+      <div class={["workboard-segments", `workboard-segments--${props.name}`]}>
         <For each={props.options} keyed={(option) => option.value}>
           {(option) => (
             <label

@@ -23,6 +23,7 @@ import {
   createLegacyStateMigrationStepReceipt,
   DoctorStateMigrationRefusalError,
 } from "../infra/state-migrations.messages.js";
+import { AgentDatabaseMaintenanceRequiredError } from "../state/openclaw-agent-db-maintenance-authority.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "../state/openclaw-agent-db-migration-required.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -154,6 +155,7 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
         (params.deferToMediaPreparation ||
           (params.deferSchemaRepair &&
             (error instanceof SqliteSchemaMismatchError ||
+              error instanceof AgentDatabaseMaintenanceRequiredError ||
               error instanceof OpenClawAgentDatabaseMediaMigrationRequiredError)))
       ) {
         const owner = params.deferToMediaPreparation

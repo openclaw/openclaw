@@ -1,4 +1,5 @@
 import { isOwnedTranscriptPayload } from "../config/sessions/transcript-json.js";
+import { projectModelContextMessages } from "../shared/model-context-message.js";
 import type { PluginHookName } from "./types.js";
 
 export class HookIsolationError extends Error {}
@@ -101,6 +102,66 @@ export function cloneHookIsolationValue<T>(hookName: PluginHookName, value: T): 
     }
     return cloned;
   } catch (cause) {
+    throw new HookIsolationError(`[hooks] ${hookName} mutable input isolation failed`, { cause });
+  }
+}
+
+/** Copy dispatch envelopes while retaining only payloads sealed by the transcript owner. */
+export function clonePromptHookEvent<T extends { messages: unknown[] }>(
+  hookName: PluginHookName,
+  event: T,
+): T {
+  try {
+    const shared: Array<{ index: number; key: string; value: object }> = [];
+    const messages = projectModelContextMessages(event.messages);
+    for (let index = 0; index < messages.length; index++) {
+      const message = messages[index];
+      if (!message || typeof message !== "object") {
+        continue;
+      }
+      const prototype = Object.getPrototypeOf(message);
+      // Preserve native cloning for non-record values, including Error.cause.
+      if (prototype !== Object.prototype && prototype !== null) {
+        continue;
+      }
+      const original = event.messages[index];
+      const ownedMessage =
+        original && typeof original === "object" && isOwnedTranscriptPayload(original)
+          ? original
+          : undefined;
+      const envelope: Record<string, unknown> = { ...message };
+      for (const key of Object.keys(envelope)) {
+        const value = envelope[key];
+        // Entry normalization owns the whole message. Projection can replace metadata,
+        // so only unchanged fields inherit that owner's deep-freeze guarantee.
+        if (
+          value &&
+          typeof value === "object" &&
+          ((ownedMessage && Reflect.get(ownedMessage, key) === value) ||
+            isOwnedTranscriptPayload(value))
+        ) {
+          shared.push({ index, key, value });
+          envelope[key] = undefined;
+        }
+      }
+      messages[index] = envelope;
+    }
+    // Clone the remaining graph with the existing native-value and shared-memory checks.
+    const snapshot = cloneHookIsolationValue(hookName, { ...event, messages });
+    for (const { index, key, value } of shared) {
+      // Each recorded position is an own property of a plain cloned envelope.
+      Object.defineProperty(snapshot.messages[index], key, {
+        value,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
+    return snapshot;
+  } catch (cause) {
+    if (cause instanceof HookIsolationError) {
+      throw cause;
+    }
     throw new HookIsolationError(`[hooks] ${hookName} mutable input isolation failed`, { cause });
   }
 }

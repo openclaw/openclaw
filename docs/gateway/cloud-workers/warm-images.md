@@ -142,7 +142,23 @@ Status identifies the capture selector, source lease, checkpoint references, and
 
 A paused capture does not prevent source-lease cleanup, but enrollment on its uncertain source remains blocked until recovery clears the reservation.
 
-Before recovery, stop the owning Gateway, any original capture processes, and the recovered worker. Use the source lease and capture time to reconcile the uncertain operation in Crabbox's checkpoint catalog, and resolve any untracked provider artifact. Only after those steps, copy the exact capture selector from status:
+Gateway warm-image maintenance runs at startup and during the periodic worker
+environment sweep (every minute by default). It retries uncertain captures until
+their source lease is absent, stopped, released, or expired. Released and expired
+leases cannot start another checkpoint; lease teardown still owns physical resource
+cleanup. Maintenance matches the exact recorded lease ID in Crabbox's checkpoint
+catalog. If no checkpoint exists, it
+clears the capture reservation. If exactly one exists, it deletes that unvalidated
+checkpoint before clearing the reservation, and logs the outcome. It never adopts
+an interrupted capture's snapshot.
+
+Multiple matching checkpoints, checkpoints already referenced by a published image
+or allocation, failed lookups or deletions, unexpected responses,
+and sources that are still running or unconfirmed keep the capture paused for
+manual recovery. Doctor and warm-image inspection include the candidate checkpoint
+IDs discovered during maintenance; warnings explain why automatic recovery stopped.
+
+Before manual recovery, stop the owning Gateway, any original capture processes, and the recovered worker. Inspect the reported candidate checkpoint IDs, or use the source lease and capture time to reconcile the uncertain operation in Crabbox's checkpoint catalog, and resolve any untracked provider artifact. Only after those steps, copy the exact capture selector from status:
 
 ```bash
 openclaw crabbox warm-images --recover <capture-selector> --acknowledge-provider-cleanup

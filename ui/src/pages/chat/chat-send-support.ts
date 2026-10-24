@@ -99,6 +99,7 @@ export function chatSendHoldReason(
   agentId?: string,
 ): string | null {
   return (
+    (host.gatewayWorkPaused ? t("chat.queue.states.waitingForReconnect") : null) ??
     chatSendAdmissionHoldReason(host, sessionKey, agentId) ??
     chatSendPendingReason(host, sessionKey, initialTurnPending)
   );

@@ -83,6 +83,7 @@ export async function inspectWithContext(
   params: LeaseCommandContext & {
     timeoutMs?: number;
     waitForReady?: boolean;
+    requireConfirmedAbsence?: boolean;
     signal?: AbortSignal;
   },
 ): Promise<ParsedInspect | undefined> {
@@ -126,8 +127,8 @@ export async function inspectWithContext(
     }
     return inspect;
   }
-  // Crabbox emits only text for these exact-ID lookups. Treat them as unknown, not
-  // stop proof: Gateway teardown still calls stop, which verifies complete absence.
+  // Ordinary callers accept lost-custody diagnostics; reconciliation requires
+  // provider-absence proof. Gateway teardown still verifies cleanup through stop.
   const unavailableResource =
     result.termination === "exit" &&
     result.stdout.trim() === "" &&
@@ -137,7 +138,10 @@ export async function inspectWithContext(
       (params.provider === "ascii-box" &&
         result.code === 1 &&
         /^ascii-box bx_[A-Za-z0-9_-]+ not found \(404\)$/u.test(result.stderr.trim())));
-  if (unavailableResource || isUnrecognizedLease(result, params.id, "inspect")) {
+  if (
+    (unavailableResource && !params.requireConfirmedAbsence) ||
+    isUnrecognizedLease(result, params.id, "inspect", params.requireConfirmedAbsence)
+  ) {
     return undefined;
   }
   // An inspect response may contain connection material, even on a failed

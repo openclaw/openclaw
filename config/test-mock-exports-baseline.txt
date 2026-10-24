@@ -2916,7 +2916,6 @@
 ["src/cli/command-secret-gateway.test.ts","../gateway/call.js","64011d40301330b379e7aea54e4e35d6dfa3da206700467657e3fa35f1e31c87",1]
 ["src/cli/command-secret-gateway.test.ts","../secrets/runtime-web-tools.js","1792ae4e142ab9bca4f7e1df35190d1f511170f7073b740291549381343465e3",1]
 ["src/cli/command-secret-gateway.test.ts","../utils/message-channel.js","a1f674ecece120882d4c71474bf42b0fcc6b2c016548e2d090b8ec4162bbac6f",1]
-["src/cli/command-secret-targets.agent-runtime.test.ts","../secrets/target-registry.js","087e966bdedcfab36859369a0aedefd3d720d42fbf991ddecfbd19edcd01919e",1]
 ["src/cli/command-secret-targets.import.test.ts","../channels/plugins/read-only.js","9c25189a5931b672343ae0336e0a23d7a754c0bd9edd4d88b8c6bb5d56c3de08",1]
 ["src/cli/command-secret-targets.import.test.ts","../secrets/target-registry.js","b842e091a53cfcb324df1582c8fdbb64064d879eeee48c4af4f31f64862e8faf",1]
 ["src/cli/config-cli-path.reference-intent.test.ts","../config/value-tree.js","54ac9ec653b28c1cfba5814b1cc227e90e01ff275c3e5f22a0e3ddfeb4d20594",1]

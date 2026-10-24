@@ -49,6 +49,7 @@ import {
   publishStandaloneArtifacts,
   STANDALONE_BUILD_MARKER,
 } from "./lib/bun-standalone-support.mjs";
+import { prepareStandaloneWasm } from "./lib/bun-standalone-wasm.mjs";
 import {
   discoverStandaloneWorkers,
   prepareStandaloneWorkers,
@@ -581,6 +582,14 @@ const resourcePlan = planStandaloneRuntime(
   declaredPluginAssets,
   metadata.directories,
 );
+const wasm =
+  mode === "aot"
+    ? prepareStandaloneWasm({
+        resources: resourcePlan.files,
+        outputRoot: path.join(outputRoot, "modules"),
+        parse,
+      })
+    : undefined;
 fs.writeFileSync(
   path.join(outputRoot, "native-resources.json"),
   JSON.stringify(nativeResources.files, null, 2),
@@ -592,10 +601,12 @@ for (const filename of compiledEntries) {
     nativeTables += 1;
     fs.writeFileSync(
       filename,
-      contents.replaceAll(
-        nativeResources.bootstrapReplacement.search,
-        nativeResources.bootstrapReplacement.replacement,
-      ),
+      // Every embedded worker imports this bootstrap before its library loaders.
+      (wasm?.registrationPath ? `import ${JSON.stringify(wasm.registrationPath)};\n` : "") +
+        contents.replaceAll(
+          nativeResources.bootstrapReplacement.search,
+          nativeResources.bootstrapReplacement.replacement,
+        ),
     );
   }
 }
@@ -722,6 +733,7 @@ await publishStandaloneArtifacts({
     plugins,
     nativeModules,
     embedded: {
+      ...(wasm ? { webAssembly: wasm.assets } : {}),
       workers: workerEntries.length,
       plugins: new Set(
         Object.keys(embeddedPaths)

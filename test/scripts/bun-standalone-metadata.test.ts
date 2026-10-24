@@ -11,6 +11,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { parse } from "acorn";
 import { transformSync } from "esbuild";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
 import { parseFrontmatterBlockResult } from "../../packages/markdown-core/src/frontmatter.js";
 import { rewriteStandaloneImports } from "../../scripts/lib/bun-standalone-imports.mjs";
 import { createStandaloneMetadataAdapter } from "../../scripts/lib/bun-standalone-metadata.mjs";
@@ -22,6 +23,7 @@ import {
   readFileDescriptorBoundedSync,
 } from "../../src/infra/boundary-file-read.js";
 import { readRootJsonObjectSync } from "../../src/infra/json-files.js";
+import { assertRuntimeSupportsPluginModule } from "../../src/infra/runtime-profile.js";
 import { tryProcessCwd } from "../../src/infra/safe-cwd.js";
 import {
   resolveImmutableInstallIdentity,
@@ -39,6 +41,7 @@ import { createPluginCacheSdk, getPluginSdkHostFacts } from "../../src/plugins/p
 
 const temporaryRoots: string[] = [];
 afterEach(() => {
+  vi.unstubAllGlobals();
   temporaryRoots.splice(0).forEach((root) => fs.rmSync(root, { recursive: true, force: true }));
 });
 
@@ -228,6 +231,7 @@ function fixture({
     getPluginCacheRoot: getRoot,
     getPluginCache: () => ({ sdk: sdkCache }),
     getPluginSdkHostFacts,
+    assertRuntimeSupportsPluginModule,
     isRecord,
     PUBLIC_SURFACE_SOURCE_EXTENSIONS,
     openClawRootFsSync: observedFs,
@@ -323,6 +327,19 @@ function fixture({
 }
 
 describe("standalone image metadata", () => {
+  it("distinguishes embedded modules from directories and later disk additions", () => {
+    const { runtime, entry, context } = fixture();
+    vi.stubGlobal(
+      "__openclawStandaloneIsEmbeddedModule",
+      // eslint-disable-next-line no-underscore-dangle -- Compiler bootstrap contract.
+      context.__openclawStandaloneIsEmbeddedModule,
+    );
+    expect(isEmbeddedStandaloneModule(pathToFileURL(entry).href)).toBe(true);
+    expect(isEmbeddedStandaloneModule(path.dirname(entry))).toBe(false);
+    const fetched = path.join(runtime, "later.js");
+    fs.writeFileSync(fetched, "export const value = 42;");
+    expect(isEmbeddedStandaloneModule(fetched)).toBe(false);
+  });
   it.each(
     [false, true].flatMap((physical) => [false, true].map((minified) => ({ physical, minified }))),
   )(

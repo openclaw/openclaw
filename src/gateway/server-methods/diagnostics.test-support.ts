@@ -5,7 +5,11 @@ import type { GatewayRequestOptions } from "./types.js";
 
 export function profileRequest(
   options: {
-    method?: "diagnostics.cpuProfile" | "diagnostics.heapProfile" | "diagnostics.heapSnapshot";
+    method?:
+      | "diagnostics.cpuProfile"
+      | "diagnostics.heapProfile"
+      | "diagnostics.heapSnapshot"
+      | "diagnostics.capabilities";
     scopes?: string[];
     role?: string;
     params?: unknown;

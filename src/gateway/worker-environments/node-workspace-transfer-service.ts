@@ -526,6 +526,9 @@ export function createNodeWorkspaceTransferService(options: {
       }
       const { context, route } = authorization;
       const snapshot = context.snapshots.get(route.manifestRef);
+      if (snapshot?.gitPackPath) {
+        return snapshot.gitPackPath;
+      }
       const { baseCommit } = context;
       if (!context.localPath || !baseCommit || snapshot?.manifest.baseCommit !== baseCommit) {
         return undefined;

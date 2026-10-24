@@ -456,20 +456,23 @@ it.each(["snapshot failure", "retired owner", "retired room introduced after sca
   },
 );
 
-it("refuses a failed raw scan without treating its store as clean", async () => {
-  state = await createOpenClawTestState({
-    prefix: "openclaw-entry-scan-refusal-",
-    scenario: "minimal",
-  });
-  const legacy = seedEntry("scan-failure", { pendingFinalDelivery: true });
-  vi.spyOn(entryRepairs, "scanDoctorSessionEntryRecords").mockImplementationOnce(() => {
-    throw new Error("synthetic database read failure");
-  });
-  await expect(
-    repairLegacySessionEntryStates({ apply: false, cfg: {}, env: state.env }),
-  ).rejects.toBeInstanceOf(DoctorStateMigrationRefusalError);
-  expect(legacy.readRaw()).toBe(legacy.raw);
-});
+it.each([false, true])(
+  "refuses a failed raw scan with schema deferral %s",
+  async (deferSchemaRepair) => {
+    state = await createOpenClawTestState({
+      prefix: "openclaw-entry-scan-refusal-",
+      scenario: "minimal",
+    });
+    const legacy = seedEntry("scan-failure", { pendingFinalDelivery: true });
+    vi.spyOn(entryRepairs, "scanDoctorSessionEntryRecords").mockImplementationOnce(() => {
+      throw new Error("synthetic database read failure");
+    });
+    await expect(
+      repairLegacySessionEntryStates({ apply: false, cfg: {}, env: state.env, deferSchemaRepair }),
+    ).rejects.toBeInstanceOf(DoctorStateMigrationRefusalError);
+    expect(legacy.readRaw()).toBe(legacy.raw);
+  },
+);
 
 it("normalizes only scalar state while leaving malformed identity for its repair owner", async () => {
   const legacy = seedEntry("malformed", { pendingFinalDelivery: true });
