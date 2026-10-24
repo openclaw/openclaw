@@ -32,6 +32,7 @@ import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { ADMIN_SCOPE, READ_SCOPE, SESSION_READ_SCOPE } from "../operator-scopes.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import * as sessionReads from "../session-utils-store.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
@@ -93,18 +94,7 @@ it("serves commands independently of another agent's remembered model list", asy
 });
 
 function metadataConnect(scopes: GatewayOperatorRoleDefinition["scopes"]) {
-  return {
-    minProtocol: 1,
-    maxProtocol: 1,
-    client: {
-      id: "openclaw-control-ui" as const,
-      version: "test",
-      platform: "test",
-      mode: "webchat" as const,
-    },
-    role: "operator" as const,
-    scopes: [...scopes],
-  };
+  return sharingPolicyClient({ scopes: [...scopes] }).connect;
 }
 
 function callMetadata(
