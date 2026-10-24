@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
@@ -98,6 +99,50 @@ describe("MCP App sandbox HTTP origin", () => {
       expect(response.headers.get("content-security-policy")).toContain("connect-src 'none'");
       await response.text();
       expect(buildMcpAppSandboxPath({ connectDomains: ["invalid"] })).toBe(paths[0]);
+    });
+  });
+
+  it("binds the browser-reported parent when the iframe request carries no referrer", async () => {
+    await withSandboxHost(async (origin) => {
+      const shell = await (await fetch(new URL(buildMcpAppSandboxPath(), origin))).text();
+      const bootstrap = expectDefined(
+        [...shell.matchAll(/<script>([\s\S]*?)<\/script>/gu)].at(-1)?.[1],
+        "sandbox bootstrap script",
+      );
+      // WebKit navigates an already attached iframe without the referrer the host requested.
+      const boot = (parentOrigin: string) => {
+        const posted: unknown[][] = [];
+        const location = { href: `${origin}/mcp-app-sandbox`, ancestorOrigins: [parentOrigin] };
+        const window = {
+          location,
+          top: {
+            get document(): never {
+              throw new Error("cross-origin");
+            },
+          },
+          parent: { postMessage: (...args: unknown[]) => posted.push(args) },
+          addEventListener: () => {},
+        };
+        runInNewContext(bootstrap, {
+          URL,
+          window: Object.assign(window, { self: window }),
+          location,
+          document: {
+            referrer: "",
+            body: { appendChild: () => {} },
+            createElement: () => ({ setAttribute: () => {} }),
+          },
+        });
+        return posted;
+      };
+
+      expect(boot("https://control.example")).toEqual([
+        [
+          expect.objectContaining({ method: "ui/notifications/sandbox-proxy-ready" }),
+          "https://control.example",
+        ],
+      ]);
+      expect(() => boot("null")).toThrow("invalid MCP App sandbox parent");
     });
   });
 
