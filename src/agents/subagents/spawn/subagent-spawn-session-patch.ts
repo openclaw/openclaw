@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { acquireSessionActorStorage } from "../../../config/sessions/session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../../../config/sessions/session-actor-storage-binding.js";

@@ -2464,6 +2464,7 @@ src/config/sessions/session-actor-memory-pending.ts
 src/config/sessions/session-actor-memory-publication.ts
 src/config/sessions/session-actor-memory-reactions.ts
 src/config/sessions/session-actor-memory-recovery.ts
+src/config/sessions/session-actor-memory-registry.ts
 src/config/sessions/session-actor-memory-reports.ts
 src/config/sessions/session-actor-memory-search.ts
 src/config/sessions/session-actor-memory-side-effects-contract.ts
@@ -2484,6 +2485,7 @@ src/config/sessions/session-actor-phase.ts
 src/config/sessions/session-actor-receipt.ts
 src/config/sessions/session-actor-read-error.ts
 src/config/sessions/session-actor-reducers.ts
+src/config/sessions/session-actor-storage-acquisition.ts
 src/config/sessions/session-actor-storage-binding.ts
 src/config/sessions/session-bounded-context-selection.ts
 src/config/sessions/session-cache-ttl-prefix-values.ts

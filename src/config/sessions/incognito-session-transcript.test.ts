@@ -28,8 +28,8 @@ import {
 } from "./session-accessor.js";
 import type { SessionAccessScope } from "./session-accessor.types.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
-  withSessionActorStorage,
   runWithSessionActorStorage,
   type SelectedSessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";

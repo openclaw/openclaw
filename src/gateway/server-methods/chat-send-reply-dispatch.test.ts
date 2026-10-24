@@ -29,7 +29,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import { acquireSessionInputActor } from "../../config/sessions/session-input-actor.js";
 import * as historyReaders from "../../config/sessions/session-transcript-worker-readers.js";
 import {

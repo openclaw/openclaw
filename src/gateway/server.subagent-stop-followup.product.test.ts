@@ -9,7 +9,6 @@ import {
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as announceOutput from "../agents/subagents/announce/subagent-announce-output.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "../agents/subagents/registry/subagent-registry-helpers.js";
-import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import * as sweepKill from "../agents/subagents/registry/subagent-registry-sweep-kill.js";
 import {
@@ -608,16 +607,19 @@ it.each([
       } else {
         // A requester-wide Stop: the parent already knows, so its children report nothing.
         await client.request("sessions.abort", { key: parentSessionKey });
-        // The Stop's own kill owner publishes the termination; the sweeper confirms it after
-        // the reconciliation window. Age the kill past that window and drive one sweep, so the
-        // confirmation decides delivery inside this test.
-        await waitForRun(child.runId, (row) => row.killReconciliation !== undefined);
-        await mutateSubagentRuns([child.runId], (rows) => {
-          const row = structuredClone(rows.get(child.runId)!);
-          row.killReconciliation!.killedAt -= PROVISIONAL_KILL_RECONCILIATION_MS;
-          return { value: undefined, postimages: new Map([[row.runId, row]]) };
-        });
-        await subagentRegistryTesting.sweepOnceForTests();
+        // Controller settlement may already have confirmed the Stop. Sweep after the
+        // reconciliation window without rewriting a kill record its owner can retire.
+        await waitForRunOrRemoval(
+          child.runId,
+          (row) => row.killReconciliation !== undefined || row.execution.status === "terminal",
+        );
+        const sweepAt = Date.now() + PROVISIONAL_KILL_RECONCILIATION_MS;
+        const clock = vi.spyOn(Date, "now").mockReturnValue(sweepAt);
+        try {
+          await subagentRegistryTesting.sweepOnceForTests();
+        } finally {
+          clock.mockRestore();
+        }
       }
       // Settled means the kill is confirmed and its cleanup finished, not just published.
       await waitForRunOrRemoval(

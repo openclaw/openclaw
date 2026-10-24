@@ -459,6 +459,26 @@ it("resolves runtime aliases and import/require conditions without following dec
 
 it.each([
   {
+    name: "combined session store topology reads",
+    dynamic: false,
+    entrypoints: ["src/config/sessions/combined-store-topology.worker.ts"],
+    deferredOwners: [
+      "src/config/sessions/session-actor-memory.ts",
+      "src/config/sessions/session-actor-memory-owner.ts",
+      "src/config/sessions/session-actor-storage-acquisition.ts",
+    ],
+  },
+  {
+    name: "session actor ownership reads",
+    dynamic: true,
+    entrypoints: ["src/config/sessions/session-actor-storage-binding.ts"],
+    deferredOwners: [
+      "src/config/sessions/session-actor-memory.ts",
+      "src/config/sessions/session-actor-memory-owner.ts",
+      "src/config/sessions/session-actor-storage-acquisition.ts",
+    ],
+  },
+  {
     name: "native update authority",
     dynamic: false,
     entrypoints: [

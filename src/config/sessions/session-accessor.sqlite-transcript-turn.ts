@@ -33,10 +33,10 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
-  withSessionActorStorage,
 } from "./session-actor-storage-binding.js";
 import { readWithCanonicalSessionAdmission } from "./session-canonical-key.js";
 import { getSessionInputActor } from "./session-input-actor.js";

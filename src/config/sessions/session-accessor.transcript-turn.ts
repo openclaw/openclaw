@@ -33,10 +33,10 @@ import type {
   SessionTranscriptTurnPersistOptions,
   SessionTranscriptTurnPersistResult,
 } from "./session-accessor.types.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
-  withSessionActorStorage,
 } from "./session-actor-storage-binding.js";
 import { getSessionInputActor } from "./session-input-actor.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owner.js";

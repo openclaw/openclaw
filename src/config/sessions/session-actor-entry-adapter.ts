@@ -12,8 +12,8 @@ import type {
   SessionEntryCreateWithTranscriptPrepareResult,
   SessionEntryCreateWithTranscriptResult,
 } from "./session-accessor.types.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
   type SessionActorStorageBinding,

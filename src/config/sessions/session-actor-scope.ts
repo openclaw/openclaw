@@ -11,9 +11,9 @@ import type {
   SessionActorOutcome,
   SessionActorTarget,
 } from "./session-actor-contract.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
-  acquireSessionActorStorage,
   runWithSessionActorStorage,
 } from "./session-actor-storage-binding.js";
 

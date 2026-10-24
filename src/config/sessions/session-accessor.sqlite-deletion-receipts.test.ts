@@ -42,7 +42,7 @@ import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
