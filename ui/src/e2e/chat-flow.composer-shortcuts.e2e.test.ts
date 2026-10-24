@@ -42,6 +42,60 @@ function quotedChat(role: string, quote: string, id: string) {
 }
 
 suite.define(() => {
+  it("lets keyboard users bypass transcript controls to reach the composer", async () => {
+    const { page, pane, composer } = await openChat({
+      sessionKey: defaultSessionKey,
+      historyMessages: [
+        chatMessage("assistant", "Review [OpenClaw](https://openclaw.ai) before replying."),
+      ],
+    });
+    const skip = pane.getByRole("link", { name: "Skip to message composer", exact: true });
+    const transcript = pane.getByRole("log");
+    const transcriptControl = transcript.getByRole("link", { name: "OpenClaw", exact: true });
+    await composer.waitFor({ state: "visible", timeout: 10_000 });
+    await transcriptControl.waitFor({ state: "visible", timeout: 10_000 });
+
+    expect(
+      await transcript.locator('a[href], button, input, textarea, select, [tabindex="0"]').count(),
+    ).toBeGreaterThan(0);
+    expect(
+      await pane.evaluate((root) => {
+        const skipLink = root.querySelector(".chat-composer-skip-link");
+        const transcriptElement = root.querySelector('[role="log"]');
+        return Boolean(
+          skipLink &&
+          transcriptElement &&
+          (skipLink.compareDocumentPosition(transcriptElement) &
+            Node.DOCUMENT_POSITION_FOLLOWING) !==
+            0,
+        );
+      }),
+    ).toBe(true);
+
+    expect(
+      await pane.evaluate((root) => {
+        const skipLink = root.querySelector(".chat-composer-skip-link");
+        const transcriptElement = root.querySelector('[role="log"]');
+        const focusable = Array.from(
+          root.ownerDocument.querySelectorAll<HTMLElement>(
+            'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          ),
+        ).filter((element) => element.getClientRects().length > 0);
+        const skipIndex = skipLink ? focusable.indexOf(skipLink as HTMLElement) : -1;
+        const previous = skipIndex > 0 ? focusable[skipIndex - 1] : undefined;
+        if (!previous || transcriptElement?.contains(previous)) {
+          return false;
+        }
+        previous.focus();
+        return root.ownerDocument.activeElement === previous;
+      }),
+    ).toBe(true);
+    await page.keyboard.press("Tab");
+    expect(await skip.evaluate((element) => document.activeElement === element)).toBe(true);
+    await page.keyboard.press("Enter");
+    expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
+  });
+
   it("persists the chat send shortcut and keeps multiline and IME input safe", async () => {
     const { page, gateway, composer } = await openChat();
     const expectUnsent = async (text: string) => {
