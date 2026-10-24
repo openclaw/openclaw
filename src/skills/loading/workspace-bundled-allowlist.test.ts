@@ -51,4 +51,40 @@ describe("buildWorkspaceSkillsPrompt", () => {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
+
+  it("treats an explicit empty bundled allowlist as deny all", async () => {
+    const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+    try {
+      setTestEnvValue("HOME", workspaceDir);
+      setTestEnvValue("USERPROFILE", workspaceDir);
+      deleteTestEnvValue("OPENCLAW_HOME");
+      deleteTestEnvValue("OPENCLAW_STATE_DIR");
+      const bundledDir = path.join(workspaceDir, ".bundled");
+      await writeSkill({
+        dir: path.join(bundledDir, "peekaboo"),
+        name: "peekaboo",
+        description: "Capture UI",
+        body: "# Peekaboo\n",
+      });
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "demo-skill"),
+        name: "demo-skill",
+        description: "Workspace version",
+        body: "# Workspace\n",
+      });
+
+      const prompt = await buildWorkspaceSkillsPrompt(workspaceDir, {
+        bundledSkillsDir: bundledDir,
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        config: { skills: { allowBundled: [] } },
+      });
+
+      expect(prompt).toContain("Workspace version");
+      expect(prompt).not.toContain("peekaboo");
+    } finally {
+      env.restore();
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
 });

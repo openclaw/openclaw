@@ -499,7 +499,7 @@ describe("buildWorkspaceSkillStatus", () => {
       config: {
         agents: { entries: { specialist: { skills } } },
         skills: {
-          allowBundled: ["some-other-bundled-skill"],
+          allowBundled: [],
           entries: { disabled: { enabled: false } },
           install: { nodeManager: "pnpm" },
         },
