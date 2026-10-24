@@ -396,7 +396,6 @@ export async function statusAllCommand(
     }
     lines.push(heading("OpenClaw status --all"));
     const report = { lines, heading, width: tableWidth };
-    const overviewColumns = [...statusOverviewTableColumns];
     // Prepare every styled row before table rendering so callbacks retain their existing order.
     const channelColumns = statusChannelsTableColumns.map((column) =>
       column.key === "Detail" ? Object.assign({}, column, { minWidth: 28 }) : column,
@@ -418,7 +417,7 @@ export async function statusAllCommand(
     const agentColumns = [...statusAgentsTableColumns];
     const agentRows = buildStatusAgentTableRows({ agentStatus, ok, warn });
 
-    appendStatusReportTable(report, "Overview", overviewColumns, overviewRows);
+    appendStatusReportTable(report, "Overview", [...statusOverviewTableColumns], overviewRows);
     appendStatusReportTable(report, "Channels", channelColumns, channelRows);
     for (const detail of details) {
       appendStatusReportTable(report, detail.title, detail.columns, detail.rows);
@@ -696,8 +695,9 @@ export async function statusAllCommand(
         diagnosis.channelIssues.length === 0 ? "ok" : "warn",
       );
       emitLimited(diagnosis.channelIssues, 12, (issue) => {
-        const fixText = issue.fix ? ` · fix: ${issue.fix}` : "";
-        return `  - ${issue.channel}[${issue.accountId}] ${issue.kind}: ${issue.message}${fixText}`;
+        return sanitizeTerminalText(
+          `  - ${issue.channel}[${issue.accountId}] ${issue.kind}: ${issue.message}${issue.fix ? ` · fix: ${issue.fix}` : ""}`,
+        );
       });
     } else if (diagnosis.nodeOnlyGateway) {
       emitCheck(

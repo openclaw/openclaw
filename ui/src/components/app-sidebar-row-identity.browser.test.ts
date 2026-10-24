@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "../test-helpers/load-styles.ts";
 
 afterEach(() => document.body.replaceChildren());
@@ -20,13 +21,20 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session row DOM iden
       createGatewayHarness({ instanceId: "self-instance" } as GatewayBrowserClient).gateway,
       harness.sessions,
     );
+    sidebar.style.cssText = "display:block;width:320px;height:600px";
     provider.setContext({ ...context, basePath: "/control" });
     sidebar.basePath = "/control";
     sidebar.connected = true;
     await sidebar.updateComplete;
+    sidebar.querySelector<HTMLElement>(".sidebar-shell__body")!.style.cssText =
+      "height:500px;flex:none;overflow:auto";
 
     const rowFor = (key: string) =>
       sidebar.querySelector<HTMLElement>(`[data-session-tree="${key}"]`);
+    await waitForSolid(() => {
+      expect(rowFor(alphaKey)).not.toBeNull();
+      expect(rowFor("agent:main:beta")).not.toBeNull();
+    });
     const alphaBefore = rowFor(alphaKey);
     const betaBefore = rowFor("agent:main:beta");
     expect(alphaBefore).not.toBeNull();

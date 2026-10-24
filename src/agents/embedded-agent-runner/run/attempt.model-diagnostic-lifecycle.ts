@@ -13,7 +13,7 @@ import {
   diagnosticHttpStatusCode,
   diagnosticProviderRequestIdHash,
 } from "../../../infra/diagnostic-error-metadata.js";
-import { hasInternalDiagnosticEventInterest } from "../../../infra/diagnostic-event-listener-presence.js";
+import { hasModelCallPromptStatsInterest } from "../../../infra/diagnostic-event-listener-presence.js";
 import {
   areDiagnosticsEnabledForProcess,
   type DiagnosticEventInput,
@@ -34,6 +34,7 @@ import {
 import { formatPropagatedDiagnosticTraceparent } from "../../../infra/diagnostic-trace-propagation.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
 import { withModelTransportContext } from "../../../llm/model-transport-context.js";
+import type { ModelRequestHeaders } from "../../../llm/types.js";
 import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { recordReasoningSuppressedDiagnostic } from "../../../logging/diagnostic-session-state.js";
@@ -211,10 +212,7 @@ export function createModelLifecycle(params: {
   };
   const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace));
   const observer = params.createObserver(
-    areDiagnosticsEnabledForProcess() &&
-      (hasInternalDiagnosticEventInterest("model.call.started", true) ||
-        hasInternalDiagnosticEventInterest("model.call.completed", true) ||
-        hasInternalDiagnosticEventInterest("model.call.error", true)),
+    areDiagnosticsEnabledForProcess() && hasModelCallPromptStatsInterest(),
   );
   const eventBase: ModelCallEventBase = {
     ...modelCallHookEventBase({ ...params.ctx, callId }),
@@ -281,7 +279,7 @@ export function createModelLifecycle(params: {
     return originalOnResponse?.(response, model);
   };
 
-  const headers: Record<string, string> = {};
+  const headers: ModelRequestHeaders = {};
   for (const [key, value] of Object.entries(options?.headers ?? {})) {
     if (key.toLowerCase() === TRACEPARENT_HEADER_NAME) {
       continue;

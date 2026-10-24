@@ -364,7 +364,7 @@ describe("sessions page lifecycle", () => {
   );
 
   it.each(["startup", "same-client reconnect"])(
-    "retains the current query when a route started before %s completes late",
+    "loads the current query before config settles on %s",
     async (ordering) => {
       const config = createDeferred();
       const sidebar = createDeferred<SessionsListResult>();
@@ -382,17 +382,28 @@ describe("sessions page lifecycle", () => {
         ordering === "startup" ? "connecting" : undefined,
       );
       context.runtimeConfig.ensureLoaded = () => config.promise;
-      const pendingRoute = sessionsRoute.loader!(context, {
-        signal: new AbortController().signal,
-        shouldRun: () => true,
-        revalidating: false,
-        location: { pathname: "/sessions", search: "", hash: "" },
-        deps: "",
-        cause: "navigation",
+      let routeData: SessionsRouteData | undefined;
+      const pendingRoute = Promise.resolve(
+        sessionsRoute.loader!(context, {
+          signal: new AbortController().signal,
+          shouldRun: () => true,
+          revalidating: false,
+          location: { pathname: "/sessions", search: "", hash: "" },
+          deps: "",
+          cause: "navigation",
+        }),
+      ).then((data) => {
+        routeData = data as SessionsRouteData;
+        return routeData;
       });
       connection.emit({ phase: "connected" });
-      const page = await createPage(context);
+      let mountedPage: Awaited<ReturnType<typeof createPage>> | undefined;
       try {
+        await waitForFast(() =>
+          expect(routeData).toEqual({ expandedSessionKey: null, statusFilter: "active" }),
+        );
+        const page = await createPage(context, routeData);
+        mountedPage = page;
         await waitForFast(() => expect(page.result?.sessions[0]?.key).toBe("agent:main:current-1"));
         if (ordering === "same-client reconnect") {
           connection.emit({ phase: "reconnecting" });
@@ -421,7 +432,7 @@ describe("sessions page lifecycle", () => {
       } finally {
         config.resolve();
         sidebar.resolve(result("agent:main:sidebar"));
-        page.remove();
+        mountedPage?.remove();
         sessions.dispose();
       }
     },

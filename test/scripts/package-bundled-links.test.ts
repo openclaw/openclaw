@@ -36,6 +36,15 @@ async function fixture() {
   const original = await fs.lstat(bundle);
   const link = await fs.readlink(bundle);
   const originalCliMode = (await fs.stat(path.join(store, "cli.js"))).mode;
+  const stage = (sourceDir = source) =>
+    materializeMissingBundledDependencies(sourceDir, packed, PACK_TIMEOUT_MS);
+  const writeManifest = (directory: string, value: unknown) =>
+    fs.writeFile(path.join(directory, "package.json"), JSON.stringify(value));
+  const rejectStage = async (error: string | RegExp) => {
+    await expect(stage()).rejects.toThrow(error);
+    await expect(fs.lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+    await assertSourceUnchanged();
+  };
   const assertSourceUnchanged = async () => {
     const current = await fs.lstat(bundle);
     expect(current.isSymbolicLink()).toBe(true);
@@ -46,7 +55,18 @@ async function fixture() {
     expect(await fs.readlink(path.join(modules, "unbundled"))).toBe(link);
     expect((await fs.readdir(modules)).toSorted()).toEqual(["fixture-bundle", "unbundled"]);
   };
-  return { source, store, packed, modules, bundle, destination, assertSourceUnchanged };
+  return {
+    source,
+    store,
+    packed,
+    modules,
+    bundle,
+    destination,
+    stage,
+    writeManifest,
+    rejectStage,
+    assertSourceUnchanged,
+  };
 }
 
 describe("bundled dependency links", () => {
@@ -79,7 +99,7 @@ describe("bundled dependency links", () => {
       for (const [name, content] of Object.entries(files)) {
         await fs.writeFile(path.join(f.store, name), content);
       }
-      await materializeMissingBundledDependencies(f.source, f.packed, PACK_TIMEOUT_MS);
+      await f.stage();
       expect((await fs.readdir(f.destination, { recursive: true })).toSorted()).toEqual(
         ["LICENSE", "README.md", "cli.js", "dist", "dist/kept.js", "main.js", "package.json"]
           .map((name) => name.split("/").join(path.sep))
@@ -97,22 +117,18 @@ describe("bundled dependency links", () => {
       for (const [name, content] of Object.entries(files)) {
         expect(await fs.readFile(path.join(f.store, name), "utf8")).toBe(content);
       }
+      expect((await fs.lstat(f.destination)).isDirectory()).toBe(true);
+      expect(await fs.readFile(path.join(f.destination, "cli.js"))).toEqual(
+        await fs.readFile(path.join(f.store, "cli.js")),
+      );
+      expect((await fs.stat(path.join(f.destination, "cli.js"))).mode).toBe(
+        (await fs.stat(path.join(f.store, "cli.js"))).mode,
+      );
+      expect(await fs.readdir(path.dirname(f.destination))).toEqual(["fixture-bundle"]);
+      await fs.writeFile(path.join(f.destination, "cli.js"), "staged modification");
       await f.assertSourceUnchanged();
     },
   );
-
-  it("copies only the missing declared payload into the archive with modes and independent bytes", async () => {
-    const f = await fixture();
-    const originalBytes = await fs.readFile(path.join(f.store, "cli.js"));
-    const originalMode = (await fs.stat(path.join(f.store, "cli.js"))).mode;
-    await materializeMissingBundledDependencies(f.source, f.packed, PACK_TIMEOUT_MS);
-    expect((await fs.lstat(f.destination)).isDirectory()).toBe(true);
-    expect(await fs.readFile(path.join(f.destination, "cli.js"))).toEqual(originalBytes);
-    expect((await fs.stat(path.join(f.destination, "cli.js"))).mode).toBe(originalMode);
-    expect(await fs.readdir(path.dirname(f.destination))).toEqual(["fixture-bundle"]);
-    await fs.writeFile(path.join(f.destination, "cli.js"), "staged modification");
-    await f.assertSourceUnchanged();
-  });
 
   it("keeps the original source link when interrupted during copying", async ({ signal }) => {
     const f = await fixture();
@@ -171,42 +187,28 @@ process.send('staged');`,
     }
   });
 
-  it.each(["dependencies", "optionalDependencies"])(
-    "rejects an incomplete %s closure without touching the link",
-    async (field) => {
-      const f = await fixture();
-      await fs.writeFile(
-        path.join(f.store, "package.json"),
-        JSON.stringify({ name: "fixture-bundle", [field]: { outside: "1.0.0" } }),
-      );
-      await expect(
-        materializeMissingBundledDependencies(f.source, f.packed, PACK_TIMEOUT_MS),
-      ).rejects.toThrow("dependency-closure staging");
-      await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: "ENOENT" });
-      await f.assertSourceUnchanged();
-    },
-  );
+  it("rejects an incomplete required dependency closure without touching the link", async () => {
+    const f = await fixture();
+    await f.writeManifest(f.store, {
+      name: "fixture-bundle",
+      version: "1.0.0",
+      dependencies: { outside: "1.0.0" },
+    });
+    await f.rejectStage("dependency-closure staging");
+  });
 
   it("rejects nested links without following them or mutating the source graph", async () => {
     const f = await fixture();
     await fs.symlink(f.modules, path.join(f.store, "external"), "junction");
-    await expect(
-      materializeMissingBundledDependencies(f.source, f.packed, PACK_TIMEOUT_MS),
-    ).rejects.toThrow("nested symlink");
-    await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: "ENOENT" });
-    await f.assertSourceUnchanged();
+    await f.rejectStage("nested symlink");
   });
 
   it("removes its copied destination when native package inventory fails", async () => {
     const f = await fixture();
     const invalidManifest = JSON.stringify({ name: "fixture-bundle" });
     await fs.writeFile(path.join(f.store, "package.json"), invalidManifest);
-    await expect(
-      materializeMissingBundledDependencies(f.source, f.packed, PACK_TIMEOUT_MS),
-    ).rejects.toThrow("npm pack inventory failed");
-    await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: "ENOENT" });
+    await f.rejectStage("npm pack inventory failed");
     expect(await fs.readFile(path.join(f.store, "package.json"), "utf8")).toBe(invalidManifest);
-    await f.assertSourceUnchanged();
   });
 
   it("keeps already packed materialized bundles without requiring their source", async () => {
@@ -214,11 +216,7 @@ process.send('staged');`,
     await fs.mkdir(f.destination, { recursive: true });
     await fs.writeFile(path.join(f.destination, "owned"), "packed payload");
     const original = await fs.lstat(f.destination);
-    await materializeMissingBundledDependencies(
-      path.join(f.source, "absent"),
-      f.packed,
-      PACK_TIMEOUT_MS,
-    );
+    await f.stage(path.join(f.source, "absent"));
     expect((await fs.lstat(f.destination)).ino).toBe(original.ino);
     expect(await fs.readFile(path.join(f.destination, "owned"), "utf8")).toBe("packed payload");
     await f.assertSourceUnchanged();
@@ -230,9 +228,7 @@ process.send('staged');`,
     await fs.mkdir(f.bundle);
     await fs.writeFile(path.join(f.bundle, "owned"), "source payload");
     const original = await fs.lstat(f.bundle);
-    await expect(
-      materializeMissingBundledDependencies(f.source, f.packed, PACK_TIMEOUT_MS),
-    ).rejects.toThrow("missing from a materialized source");
+    await expect(f.stage()).rejects.toThrow("missing from a materialized source");
     expect((await fs.lstat(f.bundle)).ino).toBe(original.ino);
     expect(await fs.readFile(path.join(f.bundle, "owned"), "utf8")).toBe("source payload");
   });
@@ -249,28 +245,21 @@ process.send('staged');`,
       } else {
         await fs.mkdir(path.join(f.packed, "node_modules"));
         if (location === "scope") {
-          await fs.writeFile(
-            path.join(f.packed, "package.json"),
-            '{"bundleDependencies":["@scope/bundle"]}',
-          );
+          await f.writeManifest(f.packed, { bundleDependencies: ["@scope/bundle"] });
           await fs.symlink(f.store, path.join(f.packed, "node_modules/@scope"), "junction");
         } else {
           await fs.symlink(f.store, f.destination, "junction");
         }
       }
-      await expect(
-        materializeMissingBundledDependencies(f.source, f.packed, PACK_TIMEOUT_MS),
-      ).rejects.toThrow(/destination is (?:not a directory|occupied)/);
+      await expect(f.stage()).rejects.toThrow(/destination is (?:not a directory|occupied)/);
       await f.assertSourceUnchanged();
     },
   );
 
   it("refuses bundle names that escape the private archive", async () => {
     const f = await fixture();
-    await fs.writeFile(path.join(f.packed, "package.json"), '{"bundleDependencies":["../store"]}');
-    await expect(
-      materializeMissingBundledDependencies(f.source, f.packed, PACK_TIMEOUT_MS),
-    ).rejects.toThrow("Invalid bundled dependency name");
+    await f.writeManifest(f.packed, { bundleDependencies: ["../store"] });
+    await expect(f.stage()).rejects.toThrow("Invalid bundled dependency name");
     await f.assertSourceUnchanged();
   });
 });

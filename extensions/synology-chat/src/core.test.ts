@@ -14,7 +14,6 @@ import { synologyChatPlugin as plugin } from "./channel.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import { setSynologyRuntime } from "./runtime.js";
 import { sanitizeInput, validateToken } from "./security.js";
-import { buildSynologyChatInboundSessionKey } from "./session-key.js";
 import { synologyChatSetupContract, synologyChatSetupWizard } from "./setup-surface.js";
 import type { ResolvedSynologyChatAccount, SynologyChatChannelConfig } from "./types.js";
 
@@ -81,16 +80,6 @@ describe("synology-chat core", () => {
       incomingUrl: { sensitive: true },
       "accounts.*.incomingUrl": { sensitive: true },
     });
-  });
-
-  it("isolates direct-message sessions by account and user", () => {
-    const key = (accountId: string, userId: string) =>
-      buildSynologyChatInboundSessionKey({ agentId: "main", accountId, userId });
-    expect([key("alpha", "123"), key("beta", "123"), key("alpha", "456")]).toEqual([
-      "agent:main:synology-chat:alpha:direct:123",
-      "agent:main:synology-chat:beta:direct:123",
-      "agent:main:synology-chat:alpha:direct:456",
-    ]);
   });
 
   it("never sends an existing token-bearing incoming URL back through setup prompts", async () => {

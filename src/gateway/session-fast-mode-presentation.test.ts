@@ -2,17 +2,17 @@ import { expect, it } from "vitest";
 import type { ModelChoice } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { projectOperatorModelRead } from "./operator-model-presentation.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { projectModelFastModeCatalog } from "./session-fast-mode-presentation.js";
 
 it("projects startup and decision catalog tiers per recipient without rewriting cached facts", () => {
   const legacy: GatewayClient = {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-ios", version: "2026.9.6", platform: "ios", mode: "ui" },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
+    connect: gatewayConnect(["operator.read"], {
+      id: "openclaw-ios",
+      version: "2026.9.6",
+      platform: "ios",
+      mode: "ui",
+    }),
   };
   const current: GatewayClient = { ...legacy, connect: { ...legacy.connect, caps: ["ultrafast"] } };
   const model: ModelChoice = {

@@ -53,6 +53,8 @@ function portSharedIdentity(snapshotPath: string, sharedPath: string) {
   return { engine: "sqlite" as const, identity: `${sharedPath}:${createdAt}` };
 }
 
+export class PortClientCredentialMismatchError extends Error {}
+
 /** Capture only receipt metadata; credential rows remain in their existing local owner. */
 export function capturePortClientCredentialBinding(options: {
   env: NodeJS.ProcessEnv;
@@ -73,7 +75,9 @@ export function capturePortClientCredentialBinding(options: {
         stored.receipt.source.engine !== identity.engine ||
         stored.receipt.source.identity !== identity.identity))
   ) {
-    throw new Error("Database port credentials do not match the captured shared database.");
+    throw new PortClientCredentialMismatchError(
+      "Database port credentials do not match the captured shared database.",
+    );
   }
   const localFile = readClientCredentialFileIdentity(owner.path);
   if (!localFile) {

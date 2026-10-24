@@ -425,6 +425,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         return;
       }
       this.activeCompactionItemIds.add(itemId);
+      this.usageProjection.beginCompaction();
     }
     await this.assistantProjection.recordItemStarted(item, itemId);
     if (
@@ -498,10 +499,12 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       this.activeItemIds.delete(itemId);
       this.completedItemIds.add(itemId);
     }
+    let tokensAfter: number | undefined;
     if (item?.type === "contextCompaction" && itemId) {
       // Native history is already installed; pending observers cannot undo completion.
       this.activeCompactionItemIds.delete(itemId);
       this.completedCompactionCount += 1;
+      tokensAfter = this.usageProjection.completeCompaction();
     }
     if (!this.asyncDeliveryProjection.allows(item, true)) {
       return;
@@ -538,6 +541,9 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         config: this.params.config,
         cwd: this.params.workspaceDir,
         runId: this.params.runId,
+        provider: this.params.provider,
+        model: this.params.modelId,
+        tokensAfter,
         threadId: this.threadId,
         turnId: this.turnId,
         itemId,

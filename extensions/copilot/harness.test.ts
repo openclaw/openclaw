@@ -22,6 +22,7 @@ import {
 } from "./harness.test-support.js";
 import type { CopilotAttemptDeps } from "./src/attempt-types.js";
 import type { resolvePoolAcquire } from "./src/attempt.js";
+import { createCopilotIsolatedCompletionParams } from "./src/isolated-completion.test-support.js";
 import type { CopilotClientPool, PoolKey } from "./src/runtime.js";
 
 type AgentHarnessIsolatedCompletionParams = Parameters<
@@ -68,40 +69,7 @@ const TEST_SESSION_CONFIG = {
   workingDirectory: "/workspace",
 };
 
-const ISOLATED_COMPLETION_PARAMS = {
-  provider: "github-copilot",
-  modelId: "gpt-4.1",
-  authorization: {
-    owner: "host",
-    model: {
-      id: "gpt-4.1",
-      name: "GPT-4.1",
-      api: "openai-responses",
-      provider: "github-copilot",
-      baseUrl: "https://api.githubcopilot.com",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 8_192,
-    },
-    auth: {
-      apiKey: "prepared-github-token",
-      profileId: "github:work",
-      source: "profile",
-      mode: "oauth",
-    },
-    sourceAuthFingerprint: "prepared-owner-fingerprint",
-  },
-  config: {},
-  agentId: "test",
-  agentDir: "/tmp/agent",
-  workspaceDir: "/workspace",
-  systemPrompt: "Answer only from the supplied prompt.",
-  prompt: "What is two plus two?",
-  timeoutMs: 30_000,
-  thinkLevel: "high",
-} satisfies AgentHarnessIsolatedCompletionParams;
+const ISOLATED_COMPLETION_PARAMS = createCopilotIsolatedCompletionParams({ thinkLevel: "high" });
 
 function createMockCopilotClient(overrides: Record<string, unknown> = {}): CopilotClient {
   return overrides as unknown as CopilotClient;

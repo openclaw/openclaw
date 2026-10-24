@@ -31,6 +31,7 @@ export function parseTeamShapeOptions(argv: string[]) {
       "transcript-mib": { type: "string" },
       "long-transcript-entries": { type: "string" },
       "long-transcript-sessions": { type: "string" },
+      "chat-startup-sessions": { type: "string" },
       "worktree-files": { type: "string" },
       "worktree-file-bytes": { type: "string" },
       "worktree-install-failure": { type: "boolean" },
@@ -72,6 +73,10 @@ export function parseTeamShapeOptions(argv: string[]) {
   }
   const longTranscriptEntries = integer("long-transcript-entries", 0);
   const longTranscriptSessions = Math.min(integer("long-transcript-sessions", 4, 1), sessions);
+  const chatStartupSessions = integer("chat-startup-sessions", 0);
+  if (chatStartupSessions > sessions) {
+    throw new Error("--chat-startup-sessions must not exceed --sessions");
+  }
   // Includes text, signatures and envelope headroom; keep opt-in stress writes bounded.
   if (
     longTranscriptEntries > 0 &&
@@ -120,6 +125,7 @@ export function parseTeamShapeOptions(argv: string[]) {
     transcriptBytes,
     longTranscriptEntries,
     longTranscriptSessions,
+    chatStartupSessions,
     worktreeFiles,
     worktreeFileBytes,
     worktreeColdCommits,
@@ -238,6 +244,7 @@ async function main() {
   --cron-announce-last     Seed disabled isolated cron jobs with announce/last delivery.
   --seed 967 --now <epoch-ms> --transcript-mib 64
   --long-transcript-entries 0 --long-transcript-sessions 4
+  --chat-startup-sessions 0  Seed UUID chat keys, model overrides, and retained pending inputs.
   --worktree-files 0 --worktree-file-bytes 0 --nested-repository
   --worktree-cold-commits 0  Add same-tree commits for cold dependency-template measurements.
   --worktree-install-failure  Add a synthetic pnpm package that cannot install in the probe image.

@@ -26,8 +26,8 @@ import {
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import { settleReplyMedia } from "./run-attempt-reply-media.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { beginCodexAttemptSettlement } from "./run-attempt-settlement.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import {
   canClearCodexBindingForRecovery,
   clearCodexBindingAfterInvalidImagePayload,
@@ -52,7 +52,7 @@ import {
 import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
 
 export async function finalizeCodexAttempt(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
   notifications: CodexAttemptNotificationController,

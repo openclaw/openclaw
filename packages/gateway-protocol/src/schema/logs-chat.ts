@@ -125,7 +125,7 @@ export const ChatInputConsumptionsSchema = Type.Array(
 );
 export type ChatInputConsumptions = Static<typeof ChatInputConsumptionsSchema>;
 
-/** Immutable execution receipts, scoped by the owning activity's message and run. */
+/** Legacy persisted activity receipts; retained so existing history still validates. */
 export const AgentActivityDelegationSchema = closedObject({
   runId: Type.String({ minLength: 1, maxLength: 256 }),
   childSessionKey: Type.String({ minLength: 1, maxLength: 1024 }),

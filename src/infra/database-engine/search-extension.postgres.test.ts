@@ -7,11 +7,10 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import { publishSqliteDatabaseSchemaChange } from "../sqlite-database-admission.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { admitStoreSearch } from "./adapters.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import type { SearchSchema, StoreSchema } from "./contract.js";
-import { openEngineStore, readEngineAnchor } from "./open.js";
+import { openPostgresEngineTestStore } from "./engine-store.test-support.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -98,17 +97,12 @@ describe.skipIf(!connection)("PostgreSQL search extension admission", () => {
         .where(search.fullText!.match(search.text.body!, { kind: "term", text })),
     ).rows;
   const open = () => {
-    const opened = openEngineStore({
+    const opened = openPostgresEngineTestStore({
       anchor,
       schema,
       input: { connection: connection!, schemaPrefix: "search_extension_test" },
       openSqlite: () => {
         throw new Error("Unexpected SQLite bootstrap");
-      },
-      prepareAnchor: () => {},
-      inspectSqlite: () => {
-        admitSqliteSchema(anchor);
-        return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
       },
     });
     if (!(opened instanceof PostgresSyncConnection)) {

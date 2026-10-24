@@ -47,7 +47,7 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
+import { activePlacement } from "../worker-environments/placement-suite.test-support.js";
 import { createChatMetadataOwner } from "./chat-metadata-runtime.test-support.js";
 import {
   createModelsListTestContext,
@@ -364,28 +364,12 @@ it("matches session model admission for the exact active worker placement", asyn
       () => ({ authProfileOverride: undefined, authProfileOverrideSource: undefined }),
       { skipMaintenance: true },
     );
-    const placement = {
-      sessionId,
+    const placement = activePlacement(sessionId, {
       sessionKey,
-      agentId: "main",
-      state: "active",
-      executionMode: "worker-turn",
       environmentId: "device-environment",
       activeOwnerEpoch: 7,
       generation: 1,
-      workspaceBaseManifestRef: "manifest",
-      remoteWorkspaceDir: "/workspace",
-      workerBundleHash: "a".repeat(64),
-      lastTranscriptAckCursor: null,
-      lastLiveEventAckCursor: null,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-      turnClaim: null,
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      stateChangedAtMs: 1,
-    } satisfies WorkerSessionPlacementRecord;
+    });
     const environment = {
       environmentId: placement.environmentId,
       ownerEpoch: 7,

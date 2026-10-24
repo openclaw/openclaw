@@ -4,14 +4,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import vm from "node:vm";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createGitHubReadIdentity } from "../../agents/github-read-identity.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -22,10 +15,10 @@ import {
 import {
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_PREPARED_WORKSPACE_VERSION,
-  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import type { NodeWorkerPreparedWorkspaceResult } from "../../worker/node-workspace-prepared-protocol.js";
 import {
   createNodeRegistryRuntime,
@@ -37,8 +30,10 @@ import type { GatewayWsClient } from "../server/ws-types.js";
 import { sessionLog } from "../session-log.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import type { EnvironmentRecipe } from "./environment-recipe.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
 import type { WorkerPlacementExecutionMode } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
@@ -65,10 +60,7 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
 }));
 
 const PREPARATION_KEY = "c".repeat(64);
-const FEATURES = [
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-];
+const FEATURES = [...WORKER_PROTOCOL_FEATURES];
 
 async function preparedHarness(
   options: {
@@ -256,14 +248,7 @@ async function preparedHarness(
             },
           },
         });
-        return {
-          stdout: "",
-          stderr,
-          code: process.exitCode,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        return createCommandResult({ stderr, code: process.exitCode });
       });
     }
     return { ...tunnel, environmentId: request.environmentId };
@@ -278,16 +263,12 @@ async function preparedHarness(
   if (!reserve) {
     vi.mocked(harness.environments.createWithRequest).mockResolvedValue(projected);
   }
-  const node: NodeWorkerSupervisorNodeProof = {
+  const node: NodeWorkerSupervisorNodeProof = createNodeWorkerBundleTestNode({
     nodeId: "prepared-node",
     connId: "prepared-connection",
     pairingIdentity: "prepared-identity",
     pairingGeneration: "prepared-generation",
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-    clientMode: GATEWAY_CLIENT_MODES.NODE,
-    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: {
-      enabled: true,
       capacity: { total: 1, available: 1 },
       environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
       preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION,
@@ -295,7 +276,7 @@ async function preparedHarness(
       promptContext: 1,
     },
     commands: ["codex.exec-server.stdio.v1"],
-  };
+  });
   const { nodeRegistry, nodeWorkerSupervisorTransport: transport } = createNodeRegistryRuntime(
     () => new NodeRegistry({ getConfig: getRuntimeConfig }),
   );

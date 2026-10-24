@@ -37,16 +37,16 @@ import {
   type WorktreeBasePreparation,
 } from "./base-ref.js";
 import { readRepositoryBranches } from "./branches.runtime.js";
-import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
+import {
+  createWorktreeCapacityStatfs,
+  useInProcessWorktreeCapacityTransport,
+} from "./capacity.test-support.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
+import { git } from "./git-fixture.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-}
 
 function trackBaseLookupCallers(repo: string, count: number) {
   const current = new AsyncLocalStorage<number>();
@@ -455,16 +455,9 @@ describe("ManagedWorktreeService branch discovery", () => {
   it("discovers a renamed remote default without substituting local HEAD", async () => {
     useInProcessWorktreeCapacityTransport();
     const disk = fsSync.statfsSync(root);
-    vi.spyOn(fsSync, "statfsSync").mockReturnValue({
-      type: disk.type,
-      files: disk.files,
-      frsize: disk.frsize,
-      ffree: disk.ffree,
-      bsize: 4096,
-      blocks: 1024 ** 4 / 4096,
-      bavail: (100 * 1024 ** 3) / 4096,
-      bfree: (100 * 1024 ** 3) / 4096,
-    });
+    vi.spyOn(fsSync, "statfsSync").mockReturnValue(
+      createWorktreeCapacityStatfs(disk, 100 * 1024 ** 3),
+    );
     const remote = await createRemote();
     await git(repo, "fetch", "origin");
     await git(repo, "remote", "set-head", "origin", "-a");

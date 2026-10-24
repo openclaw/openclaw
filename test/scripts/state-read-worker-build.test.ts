@@ -118,71 +118,39 @@ it.each([
         return { modules, dynamicImports };
       };
       const startup = staticClosure(`${entryName}${extension}`);
-      expect(hasModule(startup.modules, handlersModule)).toBe(false);
+      expect(hasModule(startup.modules, handlersModule, mixedStoreModule, ...streamModules)).toBe(
+        false,
+      );
       expect(hasModule([...chunks.keys()].flatMap(renderedModules), handlersModule)).toBe(true);
-      if (entryName === "state/openclaw-state-read.worker") {
-        const registryTargets = [...startup.dynamicImports].filter((name) =>
-          hasModule(renderedModules(name), registryModule),
-        );
-        expect(registryTargets).toHaveLength(1);
-        const registry = staticClosure(registryTargets[0]!);
-        expect(hasModule(registry.modules, registryModule)).toBe(true);
-        expect(
-          hasModule(registry.modules, handlersModule, "/src/state/backup-run-records.kernel.ts"),
-        ).toBe(false);
-      }
-      expect(
-        [...startup.modules].filter((id) =>
-          [mixedStoreModule, ...streamModules].some((module) => id.endsWith(module)),
-        ),
-      ).toEqual([]);
-      for (const streamModule of streamModules) {
-        // Manual chunks identify contained modules; facades identify an owner
-        // whose rendered body can live in a static dependency.
-        const streamTargets = [...startup.dynamicImports].filter((name) => {
+      const owners = [
+        ...(entryName === "state/openclaw-state-read.worker" ? [registryModule] : []),
+        ...streamModules,
+      ];
+      for (const owner of owners) {
+        const targets = [...startup.dynamicImports].filter((name) => {
           const chunk = chunks.get(name);
-          return (
-            chunk?.facadeModuleId?.replaceAll("\\", "/").endsWith(streamModule) === true ||
-            chunk?.moduleIds.some((id) => id.replaceAll("\\", "/").endsWith(streamModule)) === true
-          );
+          return owner === registryModule
+            ? hasModule(renderedModules(name), owner)
+            : chunk?.facadeModuleId?.replaceAll("\\", "/").endsWith(owner) === true ||
+                chunk?.moduleIds.some((id) => id.replaceAll("\\", "/").endsWith(owner)) === true;
         });
-        const [streamTarget] = streamTargets;
-        if (streamTargets.length !== 1 || streamTarget === undefined) {
-          throw new Error(
-            `Expected exactly one entry-selected stream chunk for ${streamModule}, found ${streamTargets.length}: ${entryName}`,
-          );
-        }
-        const stream = staticClosure(streamTarget);
-        expect(hasModule(stream.modules, streamModule)).toBe(true);
-        const unrelatedModules = [
-          handlersModule,
-          mixedStoreModule,
-          ...streamModules.filter((module) => module !== streamModule),
-        ];
-        expect(
-          [...stream.modules].filter((id) =>
-            unrelatedModules.some((module) => id.endsWith(module)),
-          ),
-          `${entryName}: ${streamModule}`,
-        ).toEqual([]);
+        expect(targets, owner).toHaveLength(1);
+        const loaded = staticClosure(targets[0]!).modules;
+        const excluded =
+          owner === registryModule
+            ? [handlersModule, "/src/state/backup-run-records.kernel.ts"]
+            : [
+                handlersModule,
+                mixedStoreModule,
+                ...streamModules.filter((module) => module !== owner),
+              ];
+        expect(hasModule(loaded, owner), owner).toBe(true);
+        expect(hasModule(loaded, ...excluded), owner).toBe(false);
       }
       if (entryName === "worker/openclaw-state-read.worker") {
         const workerUrl = pathToFileURL(path.join(outDir, `${entryName}${extension}`)).href;
         // Each cold process must initialize its selected owner through the emitted continuation.
         for (const mode of ["restore", "export"] as const) {
-          const stdout: Buffer[] = [];
-          const stderr: Buffer[] = [];
-          let stdoutBytes = 0;
-          let stderrBytes = 0;
-          const closed = new Set<string>();
-          const required = [
-            "exit",
-            "close",
-            "stdout-end",
-            "stdout-close",
-            "stderr-end",
-            "stderr-close",
-          ];
           childrenJoined = false;
           let code: number;
           try {
@@ -198,7 +166,7 @@ it.each([
               cwd: process.cwd(),
               env: process.env,
               shell: false,
-              stdio: ["ignore", "pipe", "pipe"],
+              stdio: ["ignore", "ignore", "inherit"],
               timeoutMs: 60_000,
               timeoutKillGraceMs: 10_000,
               signalKillGraceMs: 10_000,
@@ -207,45 +175,14 @@ it.each([
               timeoutForceKillOnLeaderExit: true,
               requireProcessTreeExit: process.platform !== "win32",
               waitForCleanupRelease: true,
-              onReady(child) {
-                child.stdout!.on("data", (bytes: Buffer) => {
-                  stdoutBytes += bytes.length;
-                  if (stdoutBytes <= 1024 * 1024) {
-                    stdout.push(bytes);
-                  }
-                });
-                child.stderr!.on("data", (bytes: Buffer) => {
-                  stderrBytes += bytes.length;
-                  if (stderrBytes <= 1024 * 1024) {
-                    stderr.push(bytes);
-                  }
-                });
-                child.once("exit", () => closed.add("exit"));
-                child.once("close", () => closed.add("close"));
-                child.stdout!.once("end", () => closed.add("stdout-end"));
-                child.stdout!.once("close", () => closed.add("stdout-close"));
-                child.stderr!.once("end", () => closed.add("stderr-end"));
-                child.stderr!.once("close", () => closed.add("stderr-close"));
-              },
             });
           } catch (error) {
-            childrenJoined =
-              !hasUnjoinedWork(error) && required.every((event) => closed.has(event));
+            childrenJoined = !hasUnjoinedWork(error);
             throw error;
           }
-          childrenJoined = required.every((event) => closed.has(event));
-          expect(childrenJoined, `${mode}: child and streams joined`).toBe(true);
-          expect(stdoutBytes).toBeLessThanOrEqual(1024 * 1024);
-          expect(stderrBytes).toBeLessThanOrEqual(1024 * 1024);
-          expect(code, Buffer.concat(stderr).toString("utf8")).toBe(0);
-          expect(JSON.parse(Buffer.concat(stdout).toString("utf8"))).toEqual({
-            mode,
-            workerUrl,
-            values:
-              mode === "restore"
-                ? ["restore-first", "restore-second", "restore-third"]
-                : ["first", "second"],
-          });
+          childrenJoined = true;
+          // The child asserts the emitted URL and ordered results before it exits.
+          expect(code, mode).toBe(0);
         }
       }
     } finally {

@@ -1,16 +1,11 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import { swarmSnapshot } from "./chat-swarm.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({
-  name: "Inline delegated work",
-  startServerBeforeBrowser: true,
-});
+const suite = createControlUiE2eSuite({ name: "Delegated work history" });
 const sessionKey = "agent:main:dashboard:11111111-2222-4333-8444-555555555555";
 const groupId = "release-review";
 const labels = [
@@ -21,173 +16,197 @@ const labels = [
   "Review accessibility",
   "Verify mobile layout",
 ];
-const launches = labels.map((label, index) => ({
-  runId: "child-" + index,
-  childSessionKey: "agent:main:subagent:review-" + index,
-  label,
-  groupId,
-  status: "accepted",
-}));
-const message = (id: string, role: string, content: string, runId: string) => ({
+const message = (
+  id: string,
+  role: string,
+  content: unknown,
+  timestamp: number,
+  runId = "review",
+) => ({
   role,
   content,
   __openclaw: { id, runId },
-  timestamp: Number(id.replace(/\D/g, "")) || 1,
-});
-const launchMessage = (count: number) => ({
-  ...message("2", "assistant", "I’ll review the change before publishing it.", "review"),
-  activity: launches.slice(0, count).map((receipt, index) => ({
-    itemId: "tool:spawn-" + index,
-    toolCallId: "spawn-" + index,
-    name: "sessions_spawn",
-    kind: "tool",
-    title: receipt.label,
-    phase: "end",
-    status: "completed",
-    delegation: [receipt],
-  })),
-});
-const completionMessage = (count: number, failure: boolean) => ({
-  ...message("3", "assistant", "The checks are finished.", "review"),
-  activity: [
-    {
-      itemId: "tool:collect",
-      toolCallId: "collect",
-      name: "agents_wait",
-      kind: "tool",
-      title: "Collect review results",
-      phase: "end",
-      status: "completed",
-      delegation: launches.slice(0, count).map((receipt, index) => ({
-        runId: receipt.runId,
-        childSessionKey: receipt.childSessionKey,
-        status: failure && index === count - 1 ? "timeout" : "done",
-      })),
-    },
-  ],
+  timestamp,
 });
 
 suite.define(() => {
   it.each([
     { name: "desktop", width: 1440, height: 900, count: 6, failure: false },
     { name: "mobile", width: 390, height: 844, count: 1, failure: true },
-  ])("keeps delegated work inline through completion and reload on $name", async (viewport) => {
-    const proofDir = createControlUiE2eArtifactDir("inline-delegation-" + viewport.name);
-    await suite.withPage({ viewport }, async ({ page }) => {
-      const children = launches.slice(0, viewport.count).map((receipt, index) => ({
-        key: receipt.childSessionKey,
-        kind: "direct",
-        sessionId: receipt.runId,
-        label: receipt.label,
-        parentSessionKey: sessionKey,
-        spawnedBy: sessionKey,
-        swarmGroupId: groupId,
-        status: index < 4 ? "done" : "running",
-        runtimeMs: 42000,
-        updatedAt: 1,
-      }));
-      const parent = {
-        updatedAt: 1,
-        key: sessionKey,
-        kind: "direct",
-        label: "Review and publish",
-        sessionId: "parent",
-        swarm: {
-          otherActiveGroups: 0,
-          groups: [
-            {
-              groupId,
-              createdAt: 1,
-              queued: 0,
-              running: Math.max(0, viewport.count - 4),
-              done: Math.min(viewport.count, 4),
-              failed: 0,
-              children: children.map((row) => ({ sessionKey: row.key, status: row.status })),
-            },
-          ],
-        },
-      };
-      const initial = [
-        message("1", "user", "Review the change and publish the PR.", "review"),
-        launchMessage(viewport.count),
-      ];
-      const gateway = await installMockGateway(page, {
-        sessionKey,
-        sessions: [parent, ...children],
-        historyMessages: initial,
-        methodResponses: {
-          "sessions.list": chatSessionListResponse([parent, ...children]),
-          "sessions.describe": { session: parent },
-        },
-      });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const activity = page.locator('[data-test-id="chat-delegation"]');
-      const summary = activity.locator(".chat-delegation__summary");
-      await activity.waitFor();
-      expect(await page.locator(".chat-footer [data-test-id=chat-delegation]").count()).toBe(0);
-      await expect
-        .poll(() => summary.getAttribute("aria-expanded"))
-        .toBe(viewport.count > 5 ? "true" : "false");
-      if (viewport.count > 5) {
-        await expect
-          .poll(() => activity.locator("[role=progressbar]").getAttribute("aria-valuenow"))
-          .toBe("4");
-        await expect.poll(() => activity.locator(".chat-delegation__task").count()).toBe(6);
-      }
-      const capture = async (name: string) => {
-        const frame = await takeControlUiScreenshotFrame(page, activity, [summary], {
-          scrollTo: activity,
-          animations: "disabled",
+  ])(
+    "retains launch and collector results after child expiry and reload on $name",
+    async (viewport) => {
+      await suite.withPage({ viewport, locale: "en-US" }, async ({ page }) => {
+        const children = labels.slice(0, viewport.count).map((label, index) => ({
+          key: "agent:main:subagent:review-" + index,
+          kind: "direct",
+          sessionId: "child-" + index,
+          label,
+          parentSessionKey: sessionKey,
+          spawnedBy: sessionKey,
+          swarmGroupId: groupId,
+          status: index < 4 ? "done" : "running",
+          hasActiveRun: index >= 4,
+          runtimeMs: 42_000,
+          updatedAt: 1,
+        }));
+        const parent = {
+          updatedAt: 1,
+          key: sessionKey,
+          kind: "direct",
+          label: "Review and publish",
+          sessionId: "parent",
+          childSessions: children.map((child) => child.key),
+          swarm: swarmSnapshot(groupId, 1, children),
+        };
+        const initial = [
+          message("request", "user", "Review the change and publish the PR.", 1),
+          message("intro", "assistant", "I’ll review the change before publishing it.", 2),
+          message(
+            "launch",
+            "assistant",
+            children.map((child, index) => ({
+              type: "toolCall",
+              id: "spawn-" + index,
+              name: "sessions_spawn",
+              arguments: { label: child.label, task: "Review the assigned area.", groupId },
+            })),
+            2,
+          ),
+          ...children.map((child, index) => ({
+            ...message(
+              "spawn-result-" + index,
+              "toolResult",
+              [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    status: "accepted",
+                    runId: child.sessionId,
+                    childSessionKey: child.key,
+                    groupId,
+                  }),
+                },
+              ],
+              3,
+            ),
+            toolCallId: "spawn-" + index,
+            toolName: "sessions_spawn",
+          })),
+        ];
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          sessions: [parent, ...children],
+          historyMessages: initial,
         });
-        await fs.writeFile(path.join(proofDir, name + ".png"), frame.png);
-      };
-      await capture("active");
-      const completed = [
-        ...initial,
-        completionMessage(viewport.count, viewport.failure),
-        message(
-          "4",
-          "assistant",
-          "Review complete. The result is attached to this turn.",
-          "review",
-        ),
-        message("5", "user", "Now look at the next change.", "next"),
-      ];
-      // Reload with only durable history. Registry summaries and child sessions have expired.
-      const retiredParent = {
-        updatedAt: 1,
-        key: sessionKey,
-        kind: "direct",
-        label: "Review and publish",
-        sessionId: "parent",
-      };
-      await gateway.setMethodResponse("chat.history", { messages: completed, sessionId: "parent" });
-      await gateway.setMethodResponse("sessions.describe", { session: retiredParent });
-      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([retiredParent]));
-      await page.reload();
-      await expect
-        .poll(() => summary.textContent())
-        .toContain(viewport.failure ? "1 needing attention" : "Completed");
-      await expect.poll(() => summary.getAttribute("aria-expanded")).toBe("false");
-      expect(await activity.count()).toBe(1);
-      const next = page.getByText("Now look at the next change.", { exact: true });
-      expect(await activity.evaluate((element) => !element.closest(".chat-footer"))).toBe(true);
-      await next.waitFor();
-      const beforeNext = await next.evaluate((target) => {
-        const element = document.querySelector('[data-test-id="chat-delegation"]');
-        return element
-          ? Boolean(element.compareDocumentPosition(target) & Node.DOCUMENT_POSITION_FOLLOWING)
-          : false;
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const pane = page.locator(".chat-pane-cache__pane--active");
+        await pane
+          .getByText("I’ll review the change before publishing it.", { exact: true })
+          .waitFor();
+        await selectChatLayoutAction(pane, "Subagents");
+        const panel = pane.locator("openclaw-chat-subagents-panel");
+        await expect.poll(() => panel.locator("[data-session-key]").count()).toBe(viewport.count);
+        await pane.getByRole("button", { name: "Close Subagents", exact: true }).click();
+        await panel.waitFor({ state: "hidden" });
+
+        const completed = [
+          ...initial,
+          message(
+            "collect",
+            "assistant",
+            [
+              {
+                type: "toolCall",
+                id: "collect",
+                name: "agents_wait",
+                arguments: { ids: children.map((child) => child.sessionId) },
+              },
+            ],
+            4,
+          ),
+          {
+            ...message(
+              "collect-result",
+              "toolResult",
+              [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    completed: children.map((child, index) => ({
+                      runId: child.sessionId,
+                      status: viewport.failure && index === viewport.count - 1 ? "timeout" : "done",
+                      result:
+                        viewport.failure && index === viewport.count - 1
+                          ? "Review timed out before completion."
+                          : "Review completed without findings.",
+                    })),
+                    pending: [],
+                  }),
+                },
+              ],
+              5,
+            ),
+            toolCallId: "collect",
+            toolName: "agents_wait",
+          },
+          message(
+            "answer",
+            "assistant",
+            "Review complete. The result is attached to this turn.",
+            6,
+          ),
+          message("next", "user", "Now look at the next change.", 7, "next"),
+        ];
+        // Child retention can expire independently of durable tool results.
+        const retiredParent = {
+          updatedAt: 1,
+          key: sessionKey,
+          kind: "direct",
+          label: "Review and publish",
+          sessionId: "parent",
+        };
+        await gateway.setMethodResponse("chat.history", {
+          messages: completed,
+          sessionId: "parent",
+        });
+        await gateway.setMethodResponse("sessions.describe", { session: retiredParent });
+        await gateway.setMethodResponse("sessions.list", chatSessionListResponse([retiredParent]));
+        await page.reload();
+        await pane.getByText("Now look at the next change.", { exact: true }).waitFor();
+        // Opening the turn disclosure mounts its nested raw tool disclosure.
+        const closedGroups = pane.locator('.chat-activity-group__summary[aria-expanded="false"]');
+        while (await closedGroups.count()) {
+          await closedGroups.first().click();
+        }
+        const tools = pane.locator(".chat-tool-msg-summary");
+        await expect.poll(() => tools.count()).toBe(viewport.count + 1);
+        await tools.first().click();
+        const launchResult = pane.locator(".chat-tool-msg-body").first();
+        await expect.poll(() => launchResult.textContent()).toContain("accepted");
+        expect(await launchResult.textContent()).toContain(children[0]!.key);
+        await tools.last().click();
+        const collectorResult = pane.locator(".chat-tool-msg-body").last();
+        await expect
+          .poll(() => collectorResult.textContent())
+          .toContain(
+            viewport.failure
+              ? "Review timed out before completion."
+              : "Review completed without findings.",
+          );
+        expect(await collectorResult.textContent()).toContain(
+          viewport.failure ? "timeout" : "done",
+        );
+        expect(await pane.locator('[data-test-id="chat-delegation"]').count()).toBe(0);
+        expect(await pane.locator(".chat-thread openclaw-chat-subagent-activity").count()).toBe(0);
+        // The retained tool stays with the completed request, before the next user turn.
+        const next = pane.getByText("Now look at the next change.", { exact: true });
+        const collectorBounds = await tools.last().boundingBox();
+        const nextBounds = await next.boundingBox();
+        expect(collectorBounds).not.toBeNull();
+        expect(nextBounds).not.toBeNull();
+        expect(collectorBounds!.y + collectorBounds!.height).toBeLessThan(nextBounds!.y);
       });
-      expect(beforeNext).toBe(true);
-      await capture("completed");
-      await summary.click();
-      await expect
-        .poll(() => activity.locator(".chat-delegation__task").count())
-        .toBe(viewport.count);
-      expect(await activity.getByRole("button", { name: labels[0], exact: true }).count()).toBe(0);
-      await capture("details");
-      console.info("Inline delegation proof: " + proofDir);
-    });
-  });
+    },
+  );
 });

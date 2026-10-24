@@ -5,6 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SkillStatusReport } from "../../api/types.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { configSnapshot } from "../config/config-snapshot.test-support.ts";
 import { createRuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 import { searchClawHub } from "./clawhub-search.ts";
 import { createDeferredRequestQueue, type TestRequest } from "./index.test-support.ts";
@@ -623,13 +624,7 @@ describe("skill mutations", () => {
     request.mockImplementation(async (method, params) => {
       methods.push(method);
       if (method === "config.get") {
-        return {
-          config: storedConfig,
-          raw: JSON.stringify(storedConfig),
-          hash,
-          valid: true,
-          issues: [],
-        };
+        return configSnapshot(storedConfig, hash, JSON.stringify(storedConfig));
       }
       if (method === "config.set") {
         storedConfig = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
@@ -666,13 +661,7 @@ describe("skill mutations", () => {
     request.mockImplementation((method) => {
       methods.push(method);
       if (method === "config.get") {
-        return Promise.resolve({
-          config: { count: 1 },
-          raw: '{"count":1}',
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        });
+        return Promise.resolve(configSnapshot({ count: 1 }, "hash-1", '{"count":1}'));
       }
       if (method === "config.set") {
         return firstSet.promise;

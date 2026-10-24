@@ -1,10 +1,9 @@
-import {
-  createAssistantMessageEventStream,
-  type AssistantMessage,
-  type AssistantMessageEvent,
-  type Context,
-  type Model,
-  type ToolCall,
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  Context,
+  Model,
+  ToolCall,
 } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
 import {
@@ -12,6 +11,7 @@ import {
   mergePluginTextTransforms,
   wrapStreamFnTextTransforms,
 } from "./plugin-text-transforms.js";
+import { createQueuedAssistantStream } from "./test-helpers/assistant-event-stream.test-support.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 const model = {
@@ -42,14 +42,11 @@ function transformFixture(
     ...transforms,
     streamFn: (_model, context) => {
       input = context;
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
+      return createQueuedAssistantStream((push) => {
         for (const event of events) {
-          stream.push(event);
+          push(event);
         }
-        stream.end();
       });
-      return stream;
     },
   });
   return {

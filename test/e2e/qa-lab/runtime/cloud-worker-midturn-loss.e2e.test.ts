@@ -89,16 +89,12 @@ it.skipIf(process.platform === "win32")(
           async (request, response, rawBody) => {
             if (request.url === "/tool-entered") {
               heldTools.push(response);
-              process.stderr.write("[midtool-node-loss] physical exec reached HTTP barrier\n");
               toolEntered.resolve();
               return;
             }
             const body = JSON.parse(rawBody) as (typeof requests)[number];
             expect(request.url).toBe("/v1/chat/completions");
             requests.push(body);
-            process.stderr.write(
-              `[midtool-node-loss] provider request ${requests.length}; tool results: ${JSON.stringify(body.messages?.filter((message) => message.role === "tool").map((message) => ({ id: message.tool_call_id, content: String(message.content).slice(0, 500) })))}\n`,
-            );
             const unknown = body.messages?.find(
               (message) =>
                 message.role === "tool" &&
@@ -224,7 +220,6 @@ it.skipIf(process.platform === "win32")(
               };
               if (payload.stream === "lifecycle") {
                 if (payload.data?.phase === "start") {
-                  process.stderr.write(`[midtool-node-loss] lifecycle start ${payload.runId}\n`);
                   runStarts.add(payload.runId);
                 }
                 if (payload.data?.phase === "end" || payload.data?.phase === "error") {
@@ -237,9 +232,6 @@ it.skipIf(process.platform === "win32")(
                   } else if (payload.runId === RUN_ID) {
                     originalTerminal.resolve();
                   }
-                  process.stderr.write(
-                    `[midtool-node-loss] lifecycle ${payload.data.phase} ${payload.runId}\n`,
-                  );
                   terminals.push({
                     runId: payload.runId,
                     phase: payload.data.phase,

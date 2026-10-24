@@ -52,6 +52,7 @@ import { captureEnv } from "../test-utils/env.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import * as workerStartup from "./server-worker-environment-startup.js";
 import {
+  browserProxyAuth,
   connectReq,
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
@@ -106,14 +107,7 @@ describe("session portal fixture", () => {
 
 async function createSessionPortalProof() {
   const origin = "https://control.example.test";
-  const auth = {
-    mode: "trusted-proxy" as const,
-    trustedProxy: {
-      userHeader: "x-forwarded-user",
-      requiredHeaders: ["x-forwarded-proto"],
-      allowLoopback: true,
-    },
-  };
+  const auth = browserProxyAuth();
   testState.gatewayAuth = auth;
   testState.gatewayControlUi = { allowedOrigins: [origin] };
   await writeConfigFile({

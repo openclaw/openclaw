@@ -1,5 +1,5 @@
-import "../test-utils/prepare-compiled-subprocesses.js";
 import os from "node:os";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
 
 let createOpenClawCodingTools: typeof import("./agent-tools.js").createOpenClawCodingTools;
 
@@ -47,16 +48,7 @@ const { mockExecApprovals, supervisorSpawnMock } = vi.hoisted(() => {
           pid: 1234,
           startedAtMs: Date.now(),
           stdin: undefined,
-          wait: async () => ({
-            reason: "exit" as const,
-            exitCode: 0,
-            exitSignal: null,
-            durationMs: 1,
-            stdout: "",
-            stderr: "",
-            timedOut: false,
-            noOutputTimedOut: false,
-          }),
+          wait: async () => createRunExit(),
           cancel: vi.fn(),
         };
       },

@@ -190,11 +190,6 @@ export type SessionEntryLifecycleUpsert = {
     }
 );
 
-export type SessionArchivedTranscriptCleanupRule = {
-  reason: "deleted" | "reset";
-  olderThanMs: number;
-};
-
 export type SessionEntryLifecycleMutationResult = {
   beforeCount: number;
   removedEntries: number;

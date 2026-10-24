@@ -4,15 +4,125 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import type { ModelFallbackAvailability } from "./agent-scope.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
+import { modelDefinition } from "./model-auth.fixtures.test-support.js";
+import type { ModelFallbackStepFields } from "./model-fallback-observation.js";
+import type { ModelFallbackAttemptProvenance } from "./model-fallback.types.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
+
+type Workspace = { agentDir: string; workspaceDir: string };
+const enqueue: NonNullable<RunEmbeddedAgentParams["enqueue"]> = async (task) => await task();
+
+export function embeddedParams(
+  { agentDir, workspaceDir, runId, sessionKey }: Workspace & { runId: string; sessionKey: string },
+  config: OpenClawConfig,
+  sessionId = `session:${runId}`,
+) {
+  return {
+    agentDir,
+    workspaceDir,
+    runId,
+    sessionKey,
+    sessionId,
+    config,
+    prompt: "hello",
+    authProfileIdSource: "auto" as const,
+    timeoutMs: 5_000,
+    enqueue,
+  };
+}
+
+/** Bind the real entry/admission owners after the suite installs its transport mocks. */
+export function createEmbeddedFallbackEntryRunner({
+  runEmbeddedAgent,
+  runEmbeddedAgentEntry,
+  createModelRoutingTestAdmission,
+}: {
+  runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
+  runEmbeddedAgentEntry: typeof import("./embedded-agent-runner/run-entry.js").runEmbeddedAgentEntry;
+  createModelRoutingTestAdmission: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").createModelRoutingTestAdmission;
+}) {
+  return async function runEmbeddedEntryFallback(
+    workspace: Workspace,
+    name: string,
+    options: {
+      runId?: string;
+      config?: OpenClawConfig;
+      fallbacksOverride?: string[];
+      modelFallbackAvailability?: ModelFallbackAvailability;
+      onFallbackStep?: (step: ModelFallbackStepFields) => void;
+      onModelRoutingProvenance?: (value: ModelFallbackAttemptProvenance) => void;
+    } = {},
+  ) {
+    const { agentDir, workspaceDir } = workspace;
+    const { fallbacksOverride, modelFallbackAvailability, onFallbackStep } = options;
+    const runId = options.runId ?? `run:${name}`;
+    const sessionKey = `agent:test:${name}`;
+    const cfg = options.config ?? makeModelFallbackConfig();
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const sessionId = `session:${runId}`;
+    const preparedRunAdmission = createModelRoutingTestAdmission({
+      cfg: { ...cfg, logging: { audit: { executionIdentity: true } } },
+      runId,
+      boundary: "model-fallback-e2e",
+    });
+    try {
+      return await runEmbeddedAgentEntry({
+        selection: {
+          cfg,
+          provider: "openai",
+          model: "mock-1",
+          agentDir,
+          manifestPlugins: [],
+          fallbacksOverride,
+        },
+        identity: { runId, agentId: "test", sessionId, sessionKey },
+        harness: {
+          workspaceDir,
+          sessionKey,
+          preparation: { kind: "direct" },
+          resolveRuntimeOverride: () => undefined,
+          resolveContextEngineHost: (provider, model) => ({
+            id: `embedded-e2e:${provider}/${model}`,
+            label: "embedded runner e2e",
+            capabilities: [],
+          }),
+        },
+        behavior: { kind: "maintenance" },
+        sessionOverride: { kind: "preserve" },
+        onFallbackStep,
+        runCandidate: (provider, model, attemptOptions) => {
+          options.onModelRoutingProvenance?.(attemptOptions.modelRoutingProvenance);
+          return runEmbeddedAgent({
+            ...embeddedParams({ ...workspace, runId, sessionKey }, cfg, sessionId),
+            preparedRunAdmission,
+            ...(modelFallbackAvailability ? { modelFallbackAvailability } : {}),
+            provider,
+            model,
+            modelRoutingProvenance: attemptOptions.modelRoutingProvenance,
+            isFinalFallbackAttempt: attemptOptions.isFinalFallbackAttempt,
+            contextEngineLogicalTurnLease: attemptOptions.contextEngineLogicalTurnLease,
+            onContextEngineTurnCandidate: attemptOptions.onContextEngineTurnCandidate,
+          });
+        },
+      });
+    } finally {
+      preparedRunAdmission.close();
+    }
+  };
+}
 
 export function makeModelFallbackConfig(primaryProvider = "openai"): OpenClawConfig {
   const apiKeyField = ["api", "Key"].join("");
@@ -33,15 +143,12 @@ export function makeModelFallbackConfig(primaryProvider = "openai"): OpenClawCon
           [apiKeyField]: `${primaryProvider}-test-key`, // pragma: allowlist secret
           baseUrl: `https://example.com/${primaryProvider}`,
           models: [
-            {
-              id: "mock-1",
+            modelDefinition("mock-1", {
               name: "Mock 1",
               reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: 16_000,
               maxTokens: 2048,
-            },
+            }),
           ],
         },
         groq: {
@@ -49,15 +156,12 @@ export function makeModelFallbackConfig(primaryProvider = "openai"): OpenClawCon
           [apiKeyField]: "groq-test-key", // pragma: allowlist secret
           baseUrl: "https://example.com/groq",
           models: [
-            {
-              id: "mock-2",
+            modelDefinition("mock-2", {
               name: "Mock 2",
               reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: 16_000,
               maxTokens: 2048,
-            },
+            }),
           ],
         },
       },

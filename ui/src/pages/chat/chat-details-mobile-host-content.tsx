@@ -309,9 +309,6 @@ function MobileHostContent(
             case "people":
               open(destination, t("chat.sessionHeader.people"));
               break;
-            case "context":
-              open(destination, t("chat.sessionDetails.context"));
-              break;
             case "outputs":
               open(destination, t("chat.mobileDetails.outputs"));
               break;
@@ -372,7 +369,6 @@ function MobileHostContent(
       { kind: "sharing", content: sharing },
       { kind: "session-access", content: sharing },
       { kind: "outputs" },
-      { kind: "context" },
       {
         kind: "automations",
         content: {

@@ -75,6 +75,45 @@ it("hides private yield inputs without changing canonical arguments", () => {
   expect(args.message).toBe("PRIVATE_YIELD_CONTEXT");
 });
 
+it.each(["<", "<tool_"])(
+  "hides a standalone %j before a native call in refreshed history",
+  (fragment) => {
+    const call = {
+      type: "toolCall",
+      id: "read-prelude",
+      name: "read",
+      arguments: { path: "literal-<tool_.txt" },
+    };
+    const message = assistant([text(fragment), call], { stopReason: "toolUse" });
+    const original = structuredClone(message);
+    const projected = sanitizeChatHistoryMessages([message]);
+    expect(projected).toEqual([
+      expect.objectContaining({
+        content: expect.arrayContaining([call]),
+      }),
+    ]);
+    expect(projected).toEqual([
+      expect.objectContaining({
+        content: expect.not.arrayContaining([expect.objectContaining(text(fragment))]),
+      }),
+    ]);
+    expect(message).toEqual(original);
+    expect(sanitizeChatHistoryMessages(projected)).toEqual(projected);
+  },
+);
+
+it("preserves literal, user, and text-only marker content in refreshed history", () => {
+  const call = { type: "toolCall", id: "read-controls", name: "read", arguments: {} };
+  const messages = [
+    assistant([text("<tool_")], {}),
+    assistant([text("a < b"), call], {}),
+    assistant([text("Use `<tool_` literally."), call], {}),
+    assistant([text("```xml\n"), text("<tool_"), text("\n```"), call], {}),
+    { role: "user", content: [text("<tool_"), call] },
+  ];
+  expect(sanitizeChatHistoryMessages(messages)).toEqual(messages);
+});
+
 it("strips attachment capabilities even after another field changed", () => {
   const attachment = {
     artifactId: "artifact_managed_media_11111111-1111-4111-8111-111111111111",

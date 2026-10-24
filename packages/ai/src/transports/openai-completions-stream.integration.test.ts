@@ -5,6 +5,7 @@ import {
   markDiagnosticRunProgress,
   resetDiagnosticRunActivityForTest,
 } from "../../../../src/logging/diagnostic-run-activity.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import { createLlmRuntime } from "../stream.js";
@@ -230,10 +231,7 @@ describe("openai completions stream", () => {
       const runId = `hidden-${reasoningField}-run`;
       let hiddenReasoningElapsedMs = 0;
       let crossedSessionProgressThreshold = false;
-      let resolveSessionProgressThreshold!: () => void;
-      const sessionProgressThresholdReached = new Promise<void>((resolve) => {
-        resolveSessionProgressThreshold = resolve;
-      });
+      const sessionProgressThresholdReached = createDeferred();
       await withServer(
         (_req, res) => {
           startSse(res, true);
@@ -249,7 +247,7 @@ describe("openai completions stream", () => {
               hiddenReasoningElapsedMs > sessionProgressStaleMs + 100
             ) {
               crossedSessionProgressThreshold = true;
-              resolveSessionProgressThreshold();
+              sessionProgressThresholdReached.resolve();
             }
             if (hiddenReasoningElapsedMs < hiddenReasoningDurationMs) {
               const reasoningChunk = {
@@ -296,7 +294,7 @@ describe("openai completions stream", () => {
           );
           const stream = streamFn(model, replyContext("Reply OK"), { apiKey: "test-key" } as never);
           const collecting = captureStream(stream);
-          await sessionProgressThresholdReached;
+          await sessionProgressThresholdReached.promise;
           const activity = getDiagnosticSessionActivitySnapshot({ sessionId: runId });
           expect(activity.lastProgressAgeMs).toBeLessThan(sessionProgressStaleMs);
           expect(activity.lastProgressReason).toBe("model_call:stream_progress");

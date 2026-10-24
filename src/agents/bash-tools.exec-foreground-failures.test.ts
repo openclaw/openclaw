@@ -7,6 +7,7 @@ import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { getBashShellConfig } from "./shell-utils.js";
 
@@ -50,17 +51,7 @@ function mockSpawn(exit: Partial<RunExit> = {}) {
     runId: input.runId ?? "call",
     pid: 1234,
     startedAtMs: Date.now(),
-    wait: vi.fn(async () => ({
-      reason: "exit" as const,
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 1,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
-      ...exit,
-    })),
+    wait: vi.fn(async () => createRunExit(exit)),
     cancel: vi.fn(),
   }));
 }
@@ -100,6 +91,7 @@ function createBackendSandboxTool(
   });
   return {
     buildExecSpec,
+    tool,
     validateWorkdir,
     execute: (command = "echo ok", workdir = "/remote/workspace/generated") =>
       tool.execute("sandbox-workdir", { command, workdir }),
@@ -270,6 +262,27 @@ describe("exec foreground failures", () => {
       cwdSpy.mockRestore();
     }
   });
+
+  it.each([true, false])(
+    "explains sandbox PTY downgrades only when requested (pty=%s)",
+    async (pty) => {
+      const { tool } = createBackendSandboxTool();
+      mockSpawn();
+
+      const result = await tool.execute("sandbox-pty", { command: "echo ok", pty });
+
+      expect(result.details.status).toBe("completed");
+      expect(supervisorMock.spawn).toHaveBeenCalledOnce();
+      expect(supervisorMock.spawn.mock.calls[0]?.[0]?.mode).toBe("child");
+      const text = requireTextContent(result);
+      if (pty) {
+        expect(text).toContain("Warning: PTY is unavailable in sandbox mode");
+        expect(text).toContain("running without a PTY. Use a noninteractive command");
+      } else {
+        expect(text).not.toMatch(/PTY/i);
+      }
+    },
+  );
 
   it("finalizes backend sandbox exec tokens when process spawn fails", async () => {
     const finalizeToken = { session: "remote-session" };

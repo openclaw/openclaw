@@ -583,6 +583,24 @@ function attachSourceTurnRecorder(params: {
   });
 }
 
+function createRecordedSessionRun(
+  text: string,
+  params: NonNullable<Parameters<typeof createMinimalRun>[0]> &
+    Pick<
+      Parameters<typeof attachSourceTurnRecorder>[0],
+      "sessionEntry" | "sessionStore" | "storePath"
+    >,
+) {
+  const fixture = createMinimalRun(params);
+  attachSourceTurnRecorder({
+    ...params,
+    followupRun: fixture.followupRun,
+    sourceTurnId: fixture.sourceTurnId,
+    text,
+  });
+  return fixture;
+}
+
 function requireBuiltChannelSourceTurnId(
   params: Parameters<typeof buildChannelSourceTurnId>[0],
 ): string {
@@ -1396,7 +1414,7 @@ describe("runReplyAgent active steering", () => {
       resetTriggered: false,
     });
     active.setPhase("running");
-    const { followupRun, run, sourceTurnId } = createMinimalRun({
+    const { followupRun, run } = createRecordedSessionRun("steering rejected before admission", {
       opts: { turnAdoptionLifecycle: { onAdopted } },
       isActive: true,
       shouldSteer: true,
@@ -1412,14 +1430,6 @@ describe("runReplyAgent active steering", () => {
       sessionStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId,
-      storePath,
-      text: "steering rejected before admission",
     });
 
     try {
@@ -2191,7 +2201,7 @@ describe("runReplyAgent pending final delivery capture", () => {
         }
         return { payloads: [{ text: "visible final" }], meta: {} };
       });
-      const { followupRun, run, sourceTurnId } = createMinimalRun({
+      const { run, sourceTurnId } = createRecordedSessionRun("durable discord request", {
         sessionCtx: {
           Provider: "discord",
           OriginatingChannel: "discord",
@@ -2205,14 +2215,6 @@ describe("runReplyAgent pending final delivery capture", () => {
         sessionStore,
         sessionKey: "main",
         storePath,
-      });
-      attachSourceTurnRecorder({
-        followupRun,
-        sessionEntry,
-        sessionStore,
-        sourceTurnId,
-        storePath,
-        text: "durable discord request",
       });
       expect(sourceTurnId).toBe(expectedSourceTurnId);
 
@@ -2275,21 +2277,13 @@ describe("runReplyAgent pending final delivery capture", () => {
       TransportThreadId: deliveryContext.threadId,
       SessionKey: sessionKey,
     } as const;
-    const interrupted = createMinimalRun({
+    const interrupted = createRecordedSessionRun("recover this private topic", {
       sessionCtx: { ...topicContext, MessageSid: "telegram-topic-message-1" },
       runOverrides: { messageProvider: "telegram" },
       sessionEntry,
       sessionStore,
       sessionKey,
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun: interrupted.followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId: interrupted.sourceTurnId,
-      storePath,
-      text: "recover this private topic",
     });
 
     await expect(interrupted.run()).resolves.toEqual(
@@ -2299,21 +2293,13 @@ describe("runReplyAgent pending final delivery capture", () => {
     const completed = requireStoredSessionEntry(storePath, sessionKey);
     expect(completed.restartRecoveryDeliveryRunId).toBeUndefined();
     const nextStore = { [sessionKey]: completed };
-    const followup = createMinimalRun({
+    const followup = createRecordedSessionRun("accept the next private-topic message", {
       sessionCtx: { ...topicContext, MessageSid: "telegram-topic-message-2" },
       runOverrides: { messageProvider: "telegram" },
       sessionEntry: completed,
       sessionStore: nextStore,
       sessionKey,
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun: followup.followupRun,
-      sessionEntry: completed,
-      sessionStore: nextStore,
-      sourceTurnId: followup.sourceTurnId,
-      storePath,
-      text: "accept the next private-topic message",
     });
 
     await expect(followup.run()).resolves.toEqual(expect.objectContaining({ text: "final" }));
@@ -2347,7 +2333,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       };
     });
 
-    const { followupRun, run, sourceTurnId } = createMinimalRun({
+    const { run, sourceTurnId } = createRecordedSessionRun("maybe send a terminal reply", {
       sessionCtx: {
         Provider: "discord",
         OriginatingChannel: "discord",
@@ -2359,14 +2345,6 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId,
-      storePath,
-      text: "maybe send a terminal reply",
     });
     expect(sourceTurnId).toBe(expectedSourceTurnId);
 
@@ -2531,21 +2509,13 @@ describe("runReplyAgent pending final delivery capture", () => {
       OriginatingTo: "channel:24680",
       MessageSid: "redelivered-terminal-message",
     } as const;
-    const first = createMinimalRun({
+    const first = createRecordedSessionRun("execute once", {
       sessionCtx,
       runOverrides: { messageProvider: "discord" },
       sessionEntry,
       sessionStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun: first.followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId: first.sourceTurnId,
-      storePath,
-      text: "execute once",
     });
 
     await first.run();
@@ -2555,7 +2525,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     state.runEmbeddedAgentMock.mockClear();
     const onAdopted = vi.fn();
     const completedStore = { main: completedEntry };
-    const duplicate = createMinimalRun({
+    const duplicate = createRecordedSessionRun("execute once", {
       opts: { turnAdoptionLifecycle: { onAdopted } },
       sessionCtx,
       runOverrides: { messageProvider: "discord" },
@@ -2563,14 +2533,6 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionStore: completedStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun: duplicate.followupRun,
-      sessionEntry: completedEntry,
-      sessionStore: completedStore,
-      sourceTurnId: duplicate.sourceTurnId,
-      storePath,
-      text: "execute once",
     });
 
     // Retire the completed turn's automatic maintenance before observing cold redelivery.
@@ -2625,7 +2587,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       },
     });
     const onAdopted = vi.fn();
-    const duplicate = createMinimalRun({
+    const duplicate = createRecordedSessionRun("execute once", {
       isActive: true,
       shouldSteer: true,
       opts: { turnAdoptionLifecycle: { onAdopted } },
@@ -2635,14 +2597,6 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun: duplicate.followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId: duplicate.sourceTurnId,
-      storePath,
-      text: "execute once",
     });
 
     await expect(duplicate.run()).resolves.toBeUndefined();
@@ -2859,7 +2813,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       };
     });
 
-    const { followupRun, run, sourceTurnId } = createMinimalRun({
+    const { run, sourceTurnId } = createRecordedSessionRun("durable discord request", {
       opts: {
         turnAdoptionLifecycle: { onAdopted },
         sourceReplyDeliveryMode: "message_tool_only",
@@ -2878,14 +2832,6 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId,
-      storePath,
-      text: "durable discord request",
     });
     expect(sourceTurnId).toBe(expectedSourceTurnId);
 
@@ -2917,7 +2863,7 @@ describe("runReplyAgent pending final delivery capture", () => {
         (await readStoredMainSession(storePath)).restartRecoverySameChannelThreadRequired,
       ).toBe(true);
     });
-    const { followupRun, run, sourceTurnId } = createMinimalRun({
+    const { run } = createRecordedSessionRun("durable slack request", {
       opts: {
         turnAdoptionLifecycle: { onAdopted },
         sourceReplyDeliveryMode: "message_tool_only",
@@ -2934,14 +2880,6 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId,
-      storePath,
-      text: "durable slack request",
     });
 
     await run();
@@ -2982,7 +2920,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       return { handled: true, reply: { text: "hook reply" } };
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
-    const { followupRun, run, sourceTurnId } = createMinimalRun({
+    const { run, sourceTurnId } = createRecordedSessionRun("hook-owned request", {
       opts: {
         turnAdoptionLifecycle: {
           onAdopted: async () => {
@@ -3001,14 +2939,6 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId,
-      storePath,
-      text: "hook-owned request",
     });
     expect(sourceTurnId).toBe(expectedSourceTurnId);
 
@@ -3052,7 +2982,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       reply: { text: "private hook reply" },
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
-    const { followupRun, run, sourceTurnId } = createMinimalRun({
+    const { run, sourceTurnId } = createRecordedSessionRun("private hook request", {
       opts: {
         sourceReplyDeliveryMode: "message_tool_only",
         [REPLY_OPERATION_RUN_STATE]: receipt,
@@ -3068,14 +2998,6 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId,
-      storePath,
-      text: "private hook request",
     });
 
     await expect(run()).resolves.toEqual(expect.objectContaining({ text: "private hook reply" }));
@@ -3110,7 +3032,7 @@ describe("runReplyAgent pending final delivery capture", () => {
         ).toBeUndefined();
         return result;
       });
-      const { followupRun, run, sourceTurnId } = createMinimalRun({
+      const { run } = createRecordedSessionRun("model-owned request", {
         sessionCtx: {
           Provider: "discord",
           OriginatingChannel: "discord",
@@ -3122,14 +3044,6 @@ describe("runReplyAgent pending final delivery capture", () => {
         sessionStore,
         sessionKey: "main",
         storePath,
-      });
-      attachSourceTurnRecorder({
-        followupRun,
-        sessionEntry,
-        sessionStore,
-        sourceTurnId,
-        storePath,
-        text: "model-owned request",
       });
 
       await expect(run()).resolves.toEqual(expect.objectContaining({ text: "model reply" }));

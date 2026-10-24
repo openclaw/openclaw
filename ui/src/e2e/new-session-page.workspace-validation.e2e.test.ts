@@ -7,7 +7,9 @@ import {
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { holdModuleResponse, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
+import { cliAgentCatalog } from "./new-session-page.native-terminal.test-support.ts";
 import {
+  LOCAL_GIT_WORKSPACE_RESPONSES,
   NEW_SESSION_MODEL_CATALOG,
   SOURCE_REPO,
   TARGET_REPO,
@@ -154,9 +156,9 @@ suite.define(() => {
       const gateway = await openNewPage(
         page,
         {
-          "agents.list": mainAgentList(),
+          "agents.list": LOCAL_GIT_WORKSPACE_RESPONSES["agents.list"],
           "worktrees.branches": {
-            ...branchList(),
+            ...LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
             branches: [
               { kind: "local", name: "main" },
               { kind: "local", name: "release/next" },
@@ -395,8 +397,11 @@ suite.define(() => {
           },
           ...workspaceResponses(sessionKey),
           "sessions.list": createdSessionListResult(sessionKey),
-          "sessions.dispatch": { placement: { state: "active", generation: 1 } },
-          "sessions.send": { runId: "run-cleared-source", status: "started" },
+          "sessions.dispatch": {
+            sessionId: `session:${sessionKey}`,
+            placement: { state: "active", generation: 1 },
+          },
+          "chat.send": { runId: "run-cleared-source", status: "started" },
         },
         { workspace: WORKSPACE, workspaceGit: true },
       );
@@ -463,8 +468,10 @@ suite.define(() => {
         agentId: "main",
         profileId: "aws",
       });
-      expect((await gateway.waitForRequest("sessions.send")).params).toMatchObject({
-        key: sessionKey,
+      expect((await gateway.waitForRequest("chat.send")).params).toMatchObject({
+        sessionKey,
+        sessionId: `session:${sessionKey}`,
+        expectedLeafEntryId: null,
         message: "do not run directly",
       });
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
@@ -694,8 +701,8 @@ suite.define(() => {
     async (change) => {
       await suite.withPage(DESKTOP_CONTEXT, async ({ page }) => {
         const gateway = await openNewPage(page, {
-          "agents.list": mainAgentList(),
-          "worktrees.branches": branchList(),
+          "agents.list": LOCAL_GIT_WORKSPACE_RESPONSES["agents.list"],
+          "worktrees.branches": LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
         });
         await page.getByRole("heading", { name: "Main" }).waitFor();
         await waitForGatewayRecoveryScope(page);
@@ -770,29 +777,9 @@ suite.define(() => {
             mainKey: "main",
             scope: "agent",
           },
-          "worktrees.branches": branchList(),
+          "worktrees.branches": LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
           "sessions.catalog.list": {
-            catalogs: [
-              {
-                id: "claude",
-                label: "Claude Code",
-                capabilities: {
-                  continueSession: true,
-                  archive: false,
-                  startTerminal: true,
-                },
-                hosts: [
-                  {
-                    hostId: "gateway:local",
-                    label: "Local Claude Code",
-                    kind: "gateway",
-                    connected: true,
-                    canStartTerminal: true,
-                    sessions: [],
-                  },
-                ],
-              },
-            ],
+            catalogs: [cliAgentCatalog(true)],
           },
           "sessions.catalog.startTerminal": {
             sessionId: "claude-retarget",

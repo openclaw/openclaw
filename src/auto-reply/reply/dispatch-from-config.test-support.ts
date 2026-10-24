@@ -29,6 +29,7 @@ import {
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { createMockAcpRunTurn } from "./dispatch-from-config.acp-abort.test-support.js";
 import {
   acpManagerRuntimeMocks,
   acpMocks,
@@ -38,6 +39,7 @@ import {
   hookMocks,
   internalHookMocks,
   messageAuditMocks,
+  mockPluginBinding,
   mocks,
   noAbortResult,
   parseGenericThreadSessionInfo,
@@ -54,6 +56,7 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
+import { createAcpTestObservabilitySnapshot } from "./test-fixtures/acp-runtime.js";
 
 export type ResolveInboundConversationParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
@@ -149,18 +152,7 @@ export function resetDeliverySettlementFixture() {
   sessionStoreMocks.updateSessionEntry.mockClear();
   acpManagerRuntimeMocks.getAcpSessionManager.mockImplementation(() => ({
     resolveSessionAsync: async () => ({ kind: "none" as const }),
-    getObservabilitySnapshot: () => ({
-      runtimeCache: { activeSessions: 0, idleTtlMs: 0, evictedTotal: 0 },
-      turns: {
-        active: 0,
-        queueDepth: 0,
-        completed: 0,
-        failed: 0,
-        averageLatencyMs: 0,
-        maxLatencyMs: 0,
-      },
-      errorsByCode: {},
-    }),
+    getObservabilitySnapshot: createAcpTestObservabilitySnapshot,
     runTurn: vi.fn(),
   }));
   runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(
@@ -235,74 +227,9 @@ function createMockAcpSessionManager() {
             ...target,
           };
     },
-    getObservabilitySnapshot: () => ({
-      runtimeCache: {
-        activeSessions: 0,
-        idleTtlMs: 0,
-        evictedTotal: 0,
-      },
-      turns: {
-        active: 0,
-        queueDepth: 0,
-        completed: 0,
-        failed: 0,
-        averageLatencyMs: 0,
-        maxLatencyMs: 0,
-      },
-      errorsByCode: {},
-    }),
-    runTurn: vi.fn(
-      async (params: {
-        cfg: OpenClawConfig;
-        sessionKey: string;
-        agentId?: string;
-        text?: string;
-        attachments?: unknown[];
-        mode: string;
-        requestId: string;
-        signal?: AbortSignal;
-        onEvent: (event: Record<string, unknown>) => Promise<void>;
-      }) => {
-        const entry = acpMocks.readAcpSessionEntry({
-          cfg: params.cfg,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-        }) as {
-          acp?: {
-            agent?: string;
-            mode?: string;
-          };
-        } | null;
-        const runtimeBackend = acpMocks.requireAcpRuntimeBackend() as {
-          runtime?: ReturnType<typeof createAcpRuntime>;
-        };
-        if (!runtimeBackend.runtime) {
-          throw new Error("ACP runtime backend not mocked");
-        }
-        const handle = await runtimeBackend.runtime.ensureSession({
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          mode: (entry?.acp?.mode || "persistent") as AcpRuntimeEnsureInput["mode"],
-          agent: entry?.acp?.agent || "codex",
-        });
-        const stream = runtimeBackend.runtime.runTurn({
-          handle,
-          text: params.text ?? "",
-          attachments: params.attachments as AcpRuntimeTurnInput["attachments"],
-          mode: params.mode as AcpRuntimeTurnInput["mode"],
-          requestId: params.requestId,
-          signal: params.signal,
-        });
-        for await (const event of stream) {
-          await params.onEvent(event);
-        }
-        if (entry?.acp?.mode === "oneshot") {
-          await runtimeBackend.runtime.close({
-            handle,
-            reason: "oneshot-complete",
-          });
-        }
-      },
+    getObservabilitySnapshot: createAcpTestObservabilitySnapshot,
+    runTurn: createMockAcpRunTurn((runtime, handle, mode) =>
+      mode === "oneshot" ? runtime.close({ handle, reason: "oneshot-complete" }) : undefined,
     ),
   };
 }
@@ -635,6 +562,16 @@ export const describe0BeforeEach0 = () => {
     () => getActivePluginRegistry() ?? runtimePluginMocks.pluginRegistry,
   );
 };
+
+export function mockPluginBoundDiscordBinding({
+  conversationId = "channel:1481858418548412579",
+  ...params
+}: Omit<Parameters<typeof mockPluginBinding>[0], "conversation"> & { conversationId?: string }) {
+  return mockPluginBinding({
+    ...params,
+    conversation: { channel: "discord", accountId: "default", conversationId },
+  });
+}
 
 export const createHookCtx = (overrides: Partial<MsgContext> = {}) =>
   buildTestCtx({

@@ -3,6 +3,7 @@ import http from "node:http";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 
 const mocks = vi.hoisted(() => ({
   dataDir: vi.fn<() => string>(),
@@ -168,15 +169,9 @@ it("reports the missing OpenSSL runtime through embedding errors and status fact
   const server = http.createServer((_request, response) => {
     response.writeHead(503).end();
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const port = await listenOnLoopback(server);
   try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing fixture server address");
-    }
-    provider.baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    provider.baseUrl = `http://127.0.0.1:${port}/v1`;
     const detail =
       "llama-server: error while loading shared libraries: libssl.so.3: cannot open shared object file: No such file or directory";
     mocks.genericCreate.mockResolvedValue({

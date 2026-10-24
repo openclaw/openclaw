@@ -79,6 +79,7 @@ const OWNED_DATABASE_SELECTION = new Set([
   "agent exec",
   "plugins build",
   "plugins validate",
+  "plugins lint",
   "plugins init",
   "claws create",
   "claws validate",

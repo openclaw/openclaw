@@ -101,3 +101,35 @@ it.each<Partial<Parameters<typeof resolveChatPaneWorkspace>[0]>>([
     }).canReveal,
   ).toBe(false);
 });
+
+it.each([{}, { spawnedCwd: agentWorkspace }, { spawnedWorkspaceDir: agentWorkspace }])(
+  "omits the default agent workspace from header identity: %j",
+  (placement) => {
+    const workspace = resolveChatPaneWorkspace({
+      session: { key: "agent:main:default-workspace", kind: "direct", ...placement },
+      agentWorkspace,
+      worktreePaths: new Map(),
+      branches: new Map(),
+      methodAdvertised: true,
+      hasAdminAccess: true,
+    });
+    expect(workspace).toEqual({ root: agentWorkspace, label: null, branch: null, canReveal: true });
+  },
+);
+
+it("preserves a real project even when it uses the agent workspace directory", () => {
+  const workspace = resolveChatPaneWorkspace({
+    session: {
+      key: "agent:main:project",
+      kind: "direct",
+      spawnedCwd: agentWorkspace,
+      worktree: { id: "project", repoRoot: agentWorkspace, branch: "feature" },
+    },
+    agentWorkspace,
+    worktreePaths: new Map(),
+    branches: new Map(),
+    methodAdvertised: true,
+    hasAdminAccess: true,
+  });
+  expect(workspace.label).toBe("default");
+});

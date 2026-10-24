@@ -8,7 +8,7 @@ title: "Control UI"
 sidebarTitle: "Control UI"
 ---
 
-The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
+The Control UI is a small **Vite + Solid** single-page app served by the Gateway:
 
 - default: `http://<host>:18789/`
 - optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
@@ -125,11 +125,23 @@ While the initial connection or a route loads, shimmer placeholders reserve the 
 
 The selected chat loads before automatic sidebar session lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error. Accepted new sessions refresh the visible sidebar immediately, including **Involving me** and owner filters, without waiting for the chat to finish loading or the agent to finish working.
 
+After the current page and transcript are ready, the browser can prepare code for
+Pages, New Session, and common dialogs during idle time. Hovering or focusing a
+navigation link, the Settings menu item, the command-palette button, or the model picker prepares
+that destination sooner.
+Navigation preparation pauses while a page loads, the tab is hidden, or the
+connection is offline, and respects the browser's Save-Data setting. Page data
+still loads through its normal navigation flow. Hashed assets remain cached for
+repeat visits without revalidation; an update uses new asset URLs.
+The service worker owns [offline asset storage](/web/control-ui/offline-and-reconnect);
+navigation hints also prepare modules for the open page. These hints take priority
+over the worker's bulk download, which resumes after page requests settle.
+
 If the selected session changes while its message subscription is being admitted, chat retries that read with fresh access checks for up to one minute. Saved replies load after the subscription succeeds, without resending your message. Switching chats or losing access stops recovery; a persistent failure leaves **Retry** available.
 
 Use **Snooze → Choose another time** in a session menu to pick a future date and time in your browser’s local time zone. After a successful snooze, **Custom** shows that exact date and time in other session menus for one hour. Choosing another custom time replaces it; presets and Undo leave the remembered choice unchanged. The browser stores this choice separately for each Gateway and signed-in account, and removes it when it expires or the wake time passes. If browser storage is unavailable, the choice remains reusable only in the current page.
 
-The chat header’s **Details** panel groups session information into collapsible sections separated by subtle dividers. **Environment** shows the workspace name, branch, worktree, execution device, and model. Absolute workspace paths stay out of the panel text and tooltips; use **Copy path** when you need the full path, copy the branch, or open **Show session files** to browse the workspace. **Context** shows the current context usage and latest input/output token counts when available. Approximate usage keeps its `~` marker. **Changes** keeps pull requests, change totals, checks, and available publication actions together. Background tasks, automations, participants, and task progress retain their existing session-scoped actions. On wide conversations, Details docks beside the transcript; narrower conversations use a dismissible popover below the header. On desktop, use the **Details** toggle to open or close the panel; mobile keeps a close button inside the panel.
+The chat header’s **Details** panel groups session information into collapsible sections separated by subtle dividers. **Environment** shows the workspace name, branch, worktree, execution device, and model. Absolute workspace paths stay out of the panel text and tooltips; use **Copy path** when you need the full path, copy the branch, or open **Show session files** to browse the workspace. The composer's context ring shows a compact usage breakdown, latest-run tokens, and provider plan limits. **View context** opens the complete report, Refresh, and compaction action in one side panel. Approximate usage keeps its `~` marker. **Changes** keeps pull requests, change totals, checks, and available publication actions together. Background tasks, automations, participants, and task progress retain their existing session-scoped actions. On wide conversations, Details docks beside the transcript; narrower conversations use a dismissible popover below the header. On desktop, use the **Details** toggle to open or close the panel; mobile keeps a close button inside the panel.
 
 Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to a session reuses its details on the same connection, including updates received through complete session snapshots. Incomplete updates, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
 
@@ -289,7 +301,8 @@ with the call count. When only part of a long history is loaded, the count is a
 lower bound such as **40+ calls**. Avatar-free child transcripts do not reserve
 empty avatar columns, and narrow panes use compact horizontal insets while wide
 transcripts retain the reading-width limit. It does not add rows to the left
-sidebar. Delegated tasks appear inline with the turn that launched them, not above the composer. Batches of up to five tasks use a compact expandable row; larger active batches expand with progress and task details. Collected results stay with that turn after completion. A directly
+sidebar. Follow delegated work in the **Subagents** panel rather than a separate
+inline task tracker. A directly
 opened child page offers **Open parent session**. The `/subagents list`,
 `/subagents info <id|#>`, and `/subagents log <id|#>` commands remain available.
 

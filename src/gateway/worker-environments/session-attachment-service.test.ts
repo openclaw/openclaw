@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { createEnteredGate as barrier } from "../../agents/entered-gate.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
   ensureSessionEntrySync,
@@ -23,7 +24,9 @@ import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-cli
 import { makeGatewayClient } from "../server-request-context.test-support.js";
 import * as support from "./service.test-support.js";
 
-support.setupWorkerEnvironmentServiceSuite();
+support.setupWorkerEnvironmentServiceSuite((config, root) => {
+  config.session = { store: path.join(root, "sessions.json") };
+});
 const state = support.testState;
 const identity = {
   sessionId: "conversation-one",
@@ -47,18 +50,6 @@ const create = (
 ) =>
   service.createSessionAttachment({ ...request, ...overrides }, authorize, undefined, onReserved);
 const stop = () => service.destroySessionAttachment({ sessionId: identity.sessionId }, authorize);
-function barrier() {
-  const entered = createDeferredCore();
-  const released = createDeferredCore();
-  return {
-    entered: entered.promise,
-    release: released.resolve,
-    wait: async () => {
-      entered.resolve();
-      await released.promise;
-    },
-  };
-}
 const outcome = <T>(operation: Promise<T>) =>
   operation.then(
     (value) => ({ value }),
@@ -134,7 +125,6 @@ function expectReply(
 
 beforeEach(() => {
   provision = vi.fn(async () => ({ leaseId: "lease-1", ssh: support.SSH_ENDPOINT }));
-  state.config.session = { store: path.join(state.root, "sessions.json") };
   ensureSessionEntrySync(scope(), { sessionId: identity.sessionId, updatedAt: 1 });
   makeService();
 });

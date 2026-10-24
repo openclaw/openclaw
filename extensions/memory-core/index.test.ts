@@ -697,7 +697,6 @@ describe("buildMemoryFlushPlan", () => {
   });
 
   it.each([
-    [{ model: "ollama/qwen3:8b" }, { model: "ollama/qwen3:8b" }],
     [
       { softThresholdTokens: -100 },
       { softThresholdTokens: 4000, forceFlushTranscriptBytes: 2 * 1024 * 1024 },

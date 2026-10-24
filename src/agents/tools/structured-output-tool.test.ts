@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { validateStructuredOutputSchema } from "../subagents/swarm/swarm-output-schema.js";
 import { isToolResultError } from "../tool-result-error.js";
 import {
@@ -138,21 +139,17 @@ describe("structured_output", () => {
   });
 
   it("publishes one acknowledged result when tool calls overlap", async () => {
-    const entered = createDeferred();
-    const release = createDeferred();
-    const persist = vi.fn(async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const gate = createEnteredGate();
+    const persist = vi.fn(gate.wait);
     const { submit } = makeTool({ schema: {}, onStateChange: persist });
     const first = submit({ answer: "first" });
-    await entered.promise;
+    await gate.entered;
     const duplicate = expect(submit({ answer: "second" })).rejects.toThrow("already recorded");
     try {
       expect(peek(runId)).toBeUndefined();
       expect(persist).toHaveBeenCalledOnce();
     } finally {
-      release.resolve();
+      gate.release();
     }
     expect((await first).details).toEqual({ status: "recorded" });
     await duplicate;

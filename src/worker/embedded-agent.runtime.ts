@@ -10,6 +10,7 @@ import { wrapToolWithAbortSignal } from "../agents/agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.wrapper.js";
 import { projectMemoryFlushTools } from "../agents/agent-tools.memory-flush.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
+import type { ExecToolDefaults } from "../agents/bash-tools.exec-types.js";
 import { disposeAllCodeModeRuns } from "../agents/code-mode-state.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/defaults.js";
 import { classifyAssistantTurn } from "../agents/embedded-agent-runner/run/incomplete-turn-classification.js";
@@ -85,6 +86,7 @@ type RunWorkerEmbeddedTurnParams = Omit<
   toolSurface: WorkerToolSurface;
   allowedToolNames: readonly string[];
   execAuthority: WorkerLaunchPlan["assignment"]["toolAuthority"]["exec"];
+  createApprovalTransport?: ExecToolDefaults["createApprovalTransport"];
   browserRuntime?: WorkerBrowserRuntime;
   computer?: Omit<Parameters<typeof createWorkerComputerTool>[0], "runId" | "registerRunCleanup">;
   signal?: AbortSignal;

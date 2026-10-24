@@ -426,11 +426,13 @@ describe("Sessions page typing and detail ownership", () => {
       sessions: [{ ...before.sessions[0]!, label: "After rename", updatedAt: 2 }],
     };
     const patch = createDeferred<SessionPatchResult>();
+    const patchRequested = createDeferred();
     const older = createDeferred<SessionsListResult>();
     let pageRequests = 0;
     let mutationRefreshes = 0;
     const request = vi.fn(async (method: string, params?: { includeUnknown?: boolean }) => {
       if (method === "sessions.patch") {
+        patchRequested.resolve();
         return patch.promise;
       }
       expect(method).toBe("sessions.list");
@@ -460,7 +462,7 @@ describe("Sessions page typing and detail ownership", () => {
     const label = findInput(page, ".session-overrides-grid input");
     expect(label.disabled).toBe(false);
     editInput(label, "After rename", "change");
-    await advance();
+    await patchRequested.promise;
     expect(request).toHaveBeenCalledWith(
       "sessions.patch",
       expect.objectContaining({ key, label: "After rename" }),

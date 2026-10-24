@@ -374,6 +374,47 @@ openclaw gateway stability --bundle latest --export
 
 Persisted bundles live under `~/.openclaw/logs/stability/` when events exist.
 
+## Runtime capabilities
+
+Doctor displays a **Runtime capabilities (Doctor process)** note and exposes the
+corresponding structured lint finding. To inspect the serving Gateway's
+process instead of the Doctor process, an operator with `operator.read` can use:
+
+```bash
+openclaw gateway call diagnostics.capabilities --params '{}' --json
+```
+
+The report identifies Node/Bun, JIT/AOT flavor, platform and architecture, and
+standalone build ID, source commit, compiler, and embedded plugin selection when
+available. It separates executable-memory policy, code generation from strings,
+interpreter availability, debugger breakpoints, CPU profiling, heap allocation
+sampling, native snapshots, and target-selected native packages/backends.
+
+`unknown` means the capability has not been established. Diagnostics does not
+execute generated native code, evaluate strings, load optional addons, attach a
+debugger, or start profiling as a probe. Those probes can change AOT reachability,
+disturb an existing profiler, or terminate a hardened process. AOT's default Linux
+MDWE policy and macOS signing requirements are reported as declared policy, not
+as verification of the current kernel, signature, or sandbox. External child
+programs have their own policy; workers that re-execute the same AOT image use its
+restrictions again.
+
+CPU, heap sampling, and snapshot entries retain the outcome of their latest
+explicit capture in that process. A missing inspector method reports
+`unsupported` for that operation; transient admission failures such as `busy` or
+`conflict` remain distinct. Bun's local CPU profiler can work even when debugger
+breakpoints or heap sampling do not. Native snapshots use the native snapshot
+API without requiring the allocation-sampling inspector domain.
+
+Support exports include an egress-redacted `runtime/capabilities.json` for the
+exporting process and `runtime/gateway-capabilities.json` for the serving Gateway.
+An unreachable Gateway records a failed snapshot while preserving local diagnostics.
+No source maps, environment values, heap contents, or profiles
+are included. Use the matched JIT support artifact described in
+[Standalone builds](/install/standalone#matched-jit-support-build) when an AOT issue
+requires breakpoints. AOT inspector environment flags can fail before OpenClaw
+starts, so do not add them to the AOT launch configuration.
+
 ## CPU profile
 
 An operator with `operator.admin` can request one in-memory profile of the Gateway's
@@ -491,10 +532,11 @@ of known debuggers, profiling flags, coverage, and active Node tracing. These ad
 hard duration, output-size, or memory limit: synchronous `writeHeapSnapshot()`
 cannot be interrupted by a timeout, disconnection, or shutdown once started.
 A client timeout does not mean capture stopped; inspect the host directory before
-retrying. After capture, the diagnostic owner disables the heap profiler and
-disconnects its inspector session, releasing the runtime's retained snapshot metadata.
-On Node this also releases V8's object-ID map and object-move tracking, so later garbage
-collections do not keep paying snapshot tracking costs.
+retrying. On Node, the diagnostic owner disables the heap profiler and disconnects
+its inspector session after capture. This releases V8's object-ID map and
+object-move tracking, so later garbage collections do not keep paying snapshot
+tracking costs. Bun uses the native snapshot API without opening a heap-sampling
+inspector session.
 Failed captures remove partial files when possible; `cleanupFailed`
 reports whether profiler cleanup or file removal failed.
 

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { focusChatComposerFromPrintableKeydown } from "../chat-pane-shared.ts";
+import { focusChatComposerFromKeydown } from "../chat-pane-shared.ts";
 import { ChatQuestionPanel } from "./chat-question-panel.tsx";
 import type { QuestionPanelProps } from "./chat-question-types.ts";
 
@@ -33,8 +33,7 @@ async function mountQuestion() {
     },
     onSubmit,
   };
-  const capture = (event: KeyboardEvent) =>
-    focusChatComposerFromPrintableKeydown(root, event, composer);
+  const capture = (event: KeyboardEvent) => focusChatComposerFromKeydown(root, event, composer);
   document.addEventListener("keydown", capture, true);
   onTestFinished(() => {
     document.removeEventListener("keydown", capture, true);

@@ -51,6 +51,7 @@ describe("sandbox explain command", () => {
     {
       label: "canonical delivery before legacy key",
       session: "agent:builder:telegram:direct:peer",
+      sessionKey: "agent:builder:telegram:direct:peer",
       delivery: "slack",
       channel: "slack",
       mainKey: "main",
@@ -58,6 +59,7 @@ describe("sandbox explain command", () => {
     {
       label: "internal delivery without registration",
       session: "agent:builder:telegram:direct:peer",
+      sessionKey: "agent:builder:telegram:direct:peer",
       delivery: "webchat",
       channel: "webchat",
       mainKey: "main",
@@ -65,6 +67,7 @@ describe("sandbox explain command", () => {
     {
       label: "unknown delivery falls back to legacy key",
       session: "agent:builder:telegram:direct:peer",
+      sessionKey: "agent:builder:telegram:direct:peer",
       delivery: "unregistered-channel",
       channel: "telegram",
       mainKey: "main",
@@ -72,6 +75,7 @@ describe("sandbox explain command", () => {
     {
       label: "short configured main is not a channel",
       session: "telegram",
+      sessionKey: "agent:builder:telegram",
       delivery: undefined,
       channel: undefined,
       mainKey: "telegram",
@@ -79,13 +83,54 @@ describe("sandbox explain command", () => {
     {
       label: "blank session selects configured main",
       session: "   ",
+      sessionKey: "agent:builder:operator",
       delivery: undefined,
       channel: undefined,
       mainKey: "operator",
     },
+    {
+      label: "main alias selects configured main",
+      session: "main",
+      sessionKey: "agent:builder:operator",
+      delivery: undefined,
+      channel: undefined,
+      mainKey: "operator",
+    },
+    {
+      label: "unscoped slash alias without stored metadata",
+      session: "telegram:slash:123",
+      sessionKey: "agent:builder:telegram:slash:123",
+      delivery: undefined,
+      channel: "telegram",
+      mainKey: "main",
+    },
+    {
+      label: "scoped slash key without stored metadata",
+      session: "agent:builder:telegram:slash:123",
+      sessionKey: "agent:builder:telegram:slash:123",
+      delivery: undefined,
+      channel: "telegram",
+      mainKey: "main",
+    },
+    {
+      label: "stored delivery for an unscoped slash alias",
+      session: "telegram:slash:123",
+      sessionKey: "agent:builder:telegram:slash:123",
+      delivery: "slack",
+      channel: "slack",
+      mainKey: "main",
+    },
+    {
+      label: "unknown alias without channel or sender evidence",
+      session: "unregistered-channel:slash:123",
+      sessionKey: "agent:builder:unregistered-channel:slash:123",
+      delivery: undefined,
+      channel: undefined,
+      mainKey: "main",
+    },
   ])(
     "reports $label through the stored session",
-    async ({ session, delivery, channel, mainKey }) => {
+    async ({ session, sessionKey, delivery, channel, mainKey }) => {
       const previousRegistry = captureActivePluginRegistrySnapshot();
       try {
         setActivePluginRegistry(
@@ -99,9 +144,6 @@ describe("sandbox explain command", () => {
         );
         await withOpenClawTestState({ label: "sandbox-explain-channel" }, async (state) => {
           const storePath = path.join(state.sessionsDir("builder"), "sessions.json");
-          const sessionKey = session.includes(":")
-            ? session
-            : `agent:builder:${session.trim() || mainKey}`;
           if (delivery) {
             await replaceSessionEntry(
               { storePath, sessionKey },
@@ -125,7 +167,7 @@ describe("sandbox explain command", () => {
               tools: { elevated: { allowFrom: { telegram: ["*"], slack: ["*"], webchat: ["*"] } } },
             },
           );
-          const result = await explain({ agent: "builder", session });
+          const result = await explain({ session });
           expect(result.sessionKey).toBe(sessionKey);
           expect(result.elevated.channel).toBe(channel);
           expect(result.elevated.allowedByConfig).toBe(channel !== undefined);
@@ -283,6 +325,6 @@ describe("sandbox explain command", () => {
   it("rejects a fully qualified session from a different agent", async () => {
     mockCfg = config({ mode: "non-main" }, { main: {}, builder: {} });
     const execution = explain({ agent: "builder", session: "agent:main:main" });
-    await expect(execution).rejects.toThrow('agent "builder" does not match session agent "main"');
+    await expect(execution).rejects.toThrow('belongs to "main", not "builder"');
   });
 });

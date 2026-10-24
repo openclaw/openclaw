@@ -527,6 +527,11 @@ or a PostgreSQL privilege probe. It creates no manifest, migrated copy, or targe
 namespace. Add `--json` for machine-readable results without connection strings
 or row payloads.
 
+Local client credentials must be bound to the exact shared state database file,
+including its device and inode. A byte-identical copy with a new inode is refused.
+When moving state from a backup archive, use `openclaw backup restore` so the
+restore owner validates the shared/local pair and rebinds the credential receipt.
+
 The real operation retains exact original database and config captures under
 `<stateDir>/recovery/database-port/<operation-id>/`. SQLite originals are verified
 snapshots with WAL changes settled. PostgreSQL originals include a matched

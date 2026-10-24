@@ -6,6 +6,7 @@ import type {
 } from "@openclaw/libterminal/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import {
   disposeTerminalController,
   replaceTerminalController,
@@ -87,11 +88,7 @@ beforeEach(() => {
 
 afterEach(() => {
   document.body.replaceChildren();
-  if (originalFonts) {
-    Object.defineProperty(document, "fonts", originalFonts);
-  } else {
-    Reflect.deleteProperty(document, "fonts");
-  }
+  restorePropertyDescriptor(document, "fonts", originalFonts);
   runtimeMocks.create.mockReset();
   runtimeMocks.load.mockReset();
   runtimeMocks.proposeDimensions.mockReset();

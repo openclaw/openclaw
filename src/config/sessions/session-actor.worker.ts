@@ -21,6 +21,7 @@ import {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import { captureSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createSqliteWorkerTransferOwner } from "../../infra/sqlite-worker-transfer.js";
+import { captureSessionRowChanges } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { readStagedConversationPublications } from "./session-accessor.sqlite-conversation-publication.js";
@@ -58,6 +59,7 @@ import {
   withSessionActorTransactionState,
 } from "./session-actor-transaction.js";
 import { registerSessionActorTranscriptRewriteOwner } from "./session-actor-transcript-publication.worker.js";
+import { captureSessionEntryMetadataReceipts } from "./session-entry-metadata-receipt.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
@@ -536,7 +538,10 @@ export function createSessionActorWorker(
           };
           return withSessionActorTransactionState(opened, working, () => {
             phaseStarted = performance.now();
-            const applied = applySessionActorPhase(command, working, borrowed);
+            const changes = captureSessionRowChanges(opened.db, () =>
+              applySessionActorPhase(command, working, borrowed),
+            );
+            const applied = changes.result;
             recordPhase("actorApplyMs");
             const { value } = applied;
             working.hot.version = {
@@ -563,6 +568,7 @@ export function createSessionActorWorker(
               payloads: working.transcript.payloads,
               transcriptAuthority: readStagedSessionTranscriptAuthority(opened),
               conversationPublication: readStagedConversationPublications(opened),
+              entryMetadata: captureSessionEntryMetadataReceipts(changes.changes),
               applied,
             });
             if (

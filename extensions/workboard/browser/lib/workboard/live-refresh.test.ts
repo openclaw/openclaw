@@ -3,6 +3,7 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../test/wait-for.ts";
+import { createWorkboardCapability } from "./capability.ts";
 import { normalizeWorkboardChange } from "./change-payload.ts";
 import {
   configureWorkboardLiveRefresh,
@@ -10,7 +11,7 @@ import {
   resumeWorkboardLiveRefresh,
 } from "./live-refresh.ts";
 import { loadWorkboard } from "./loading.ts";
-import { stopWorkboardLiveRefresh, getWorkboardState } from "./runtime.ts";
+import { stopWorkboardLiveRefresh, getWorkboardState, subscribeWorkboard } from "./runtime.ts";
 import { createWorkboardCard, createWorkboardTestClient } from "./test/index-helpers.ts";
 
 function cardsResponse(title?: string) {
@@ -20,12 +21,15 @@ function cardsResponse(title?: string) {
   };
 }
 
-function setup(read: () => unknown = cardsResponse, requestUpdate?: () => void) {
+function setup(read: () => unknown = cardsResponse, onChange?: () => void) {
   const host = {};
   const client = createWorkboardTestClient((method) =>
     method === "workboard.cards.list" ? read() : { tasks: [] },
   );
-  configureWorkboardLiveRefresh({ host, client, requestUpdate });
+  if (onChange) {
+    subscribeWorkboard(host, onChange);
+  }
+  configureWorkboardLiveRefresh({ host, client });
   const listCalls = () =>
     client.request.mock.calls.filter(([method]) => method === "workboard.cards.list").length;
   return { host, client, state: getWorkboardState(host), listCalls };
@@ -36,6 +40,26 @@ afterEach(() => {
 });
 
 describe("Workboard live refresh", () => {
+  it("publishes read progress and completion through the owner's subscription", async () => {
+    const result = createDeferred<unknown>();
+    const host = createWorkboardCapability();
+    const state = host.state;
+    const client = createWorkboardTestClient(() => result.promise);
+    const seen: Array<{ loading: boolean; title: string | undefined }> = [];
+    const unsubscribe = host.subscribe(() => {
+      seen.push({ loading: state.loading, title: state.cards[0]?.title });
+    });
+    const pending = loadWorkboard({ host, client });
+    expect(seen).toEqual([{ loading: true, title: undefined }]);
+    result.resolve(cardsResponse("Admitted result"));
+    await pending;
+    expect(seen.at(-1)).toEqual({ loading: false, title: "Admitted result" });
+    unsubscribe();
+    const count = seen.length;
+    await loadWorkboard({ host, client, force: true });
+    expect(seen).toHaveLength(count);
+  });
+
   it("validates the bounded invalidation payload", () => {
     expect(normalizeWorkboardChange({ epoch: "epoch-a", revision: 1 })).toEqual({
       epoch: "epoch-a",
@@ -82,15 +106,15 @@ describe("Workboard live refresh", () => {
   });
 
   it("defers during edits and resumes after the local draft closes", async () => {
-    const requestUpdate = vi.fn();
-    const { host, client, state } = setup(cardsResponse, requestUpdate);
+    const onChange = vi.fn();
+    const { host, client, state } = setup(cardsResponse, onChange);
     state.draftOpen = true;
     state.editingCardId = "card-1";
 
     handleWorkboardChanged(host, { epoch: "epoch-a", revision: 1 });
     await Promise.resolve();
     expect(client.request).not.toHaveBeenCalled();
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
 
     state.draftOpen = false;
     state.editingCardId = null;

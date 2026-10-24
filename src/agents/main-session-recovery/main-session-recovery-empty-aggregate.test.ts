@@ -5,22 +5,12 @@ import type {
 } from "../../config/sessions.js";
 import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
 import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
+import {
+  recoveryEntry as entry,
+  recoveryState,
+} from "./main-session-recovery-state.test-support.js";
 
 const sessionKey = "agent:main:main";
-function recoveryState(
-  overrides: Partial<MainRestartRecoveryState> = {},
-): MainRestartRecoveryState {
-  return { cycleId: "cycle-1", revision: 1, chargedAttempts: 0, ...overrides };
-}
-function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return {
-    sessionId: "session-1",
-    updatedAt: 100,
-    abortedLastRun: false,
-    mainRestartRecovery: recoveryState(),
-    ...overrides,
-  };
-}
 function claimForeground(
   session: SessionEntry,
   options: { sessionId?: string; sessionKey?: string; runId?: string } = {},
@@ -203,11 +193,13 @@ describe("empty main session recovery aggregate", () => {
     expect(session).toEqual(before);
   });
 
-  it("preserves an empty aggregate on a non-candidate session", () => {
-    const session = entry({ restartRecoveryRuns: undefined, spawnDepth: 1 });
+  it("preserves an empty aggregate owned by cron", () => {
+    const session = entry({ restartRecoveryRuns: undefined });
     const before = structuredClone(session);
 
-    expect(claimForeground(session)).toEqual({ kind: "no_change" });
+    expect(claimForeground(session, { sessionKey: "agent:main:cron:nightly" })).toEqual({
+      kind: "no_change",
+    });
     expect(session).toEqual(before);
   });
 

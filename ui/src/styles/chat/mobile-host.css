@@ -297,8 +297,8 @@
 }
 
 /* Keyboard activation remains immediate; pointer openings reveal the sheet. */
-.sidebar-region--mobile-host:has(button:focus-visible, [role="button"]:focus-visible)
-  > .chat-mobile-host {
+.sidebar-region--mobile-host:has(:where(button, [role="button"]):focus-visible)
+  > .chat-mobile-host:not([hidden]) {
   transition: none;
   @starting-style {
     opacity: 1;

@@ -20,6 +20,7 @@ import {
 import type { NativeRuntime, NativeRuntimeResolved } from "./native-runtime.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
+import { createWorkerExecApprovalTransport } from "./worker-exec-approval.js";
 import { WorkerNodeLostError } from "./worker-node-loss.js";
 import type { WorkerRuntimeResult } from "./worker-process-protocol.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
@@ -390,6 +391,8 @@ export async function runWorkerDescriptor(
             },
           },
           gatewayTools: connection,
+          createApprovalTransport: (toolCallId, signal) =>
+            createWorkerExecApprovalTransport(connection, toolCallId, signal),
           signal: abortController.signal,
         });
       };

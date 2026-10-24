@@ -671,6 +671,21 @@ describe("resolveBuildAllSteps", () => {
       ).toEqual([false, false]);
     },
   );
+  it.each(["full", "runtime", "qaRuntime"])(
+    "stops %s before compilation when generated runtime scripts are stale",
+    async (profile) => {
+      const runner = buildRunner();
+      runner.runStep.mockImplementation((invocation) => ({
+        status: invocation.args.includes("scripts/generate-runtime-script-assets.mjs") ? 9 : 0,
+      }));
+      expect((await runner.run(profile)).exitCode).toBe(9);
+      const calls = runner.calls();
+      expect(
+        calls.some((call) => call.args.includes("scripts/generate-runtime-script-assets.mjs")),
+      ).toBe(true);
+      expect(calls.some((call) => call.args.includes("scripts/tsdown-build.mts"))).toBe(false);
+    },
+  );
   it.each([
     ["ordinary build", "full", {}, false, undefined],
     [

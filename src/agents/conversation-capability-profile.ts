@@ -136,11 +136,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       }),
       senderIsOwner,
     });
-  const trustedGroup = resolveTrustedGroupId({
-    sessionKey: params.sessionKey,
-    spawnedBy: params.spawnedBy,
-    groupId: params.groupId,
-  });
+  const trustedGroup = resolveTrustedGroupId(params);
   // Group channel/space labels have no session-bound counterpart to verify
   // against; mask them whenever the trust check dropped the caller group id.
   const trustedGroupChannel = trustedGroup.dropped ? null : params.groupChannel;

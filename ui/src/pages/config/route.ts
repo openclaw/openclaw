@@ -54,9 +54,9 @@ function loadConfigRoute(
           revision: context.settingsAgentSelection.intentRevision,
         }
       : undefined;
-  const primaryLoad = context.runtimeConfig.ensureLoaded();
+  void context.runtimeConfig.ensureLoaded().catch(() => undefined);
   if (pageId !== "updates") {
-    void primaryLoad.then(() => context.runtimeConfig.ensureSchemaLoaded()).catch(() => undefined);
+    void context.runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
   }
   return {
     ...route,

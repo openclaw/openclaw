@@ -502,9 +502,9 @@ it("authors through the node MCP proxy using the actual host capability without 
   const published = await readSkillLibrary(f.authority, entries[0]!.skillId);
   expect(published.content).toBe(content + "Updated on node.\n");
   expect(published.files[0]).toMatchObject({ path: "scripts/task.sh", executable: true });
-  expect(Buffer.from(published.files[0]!.content, "base64").toString()).toBe(
-    "#!/bin/sh\nprintf owned",
-  );
+  expect(
+    Buffer.from(published.files[0]!.content, published.files[0]!.encoding ?? "utf8").toString(),
+  ).toBe("#!/bin/sh\nprintf owned");
   expect(f.context.params.skillsSnapshot).toBeUndefined();
   expect(JSON.stringify(f.requests)).not.toContain(f.authority.profileId);
 });

@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 
 export function createRuntimeConfigStub(options?: {
@@ -33,17 +34,13 @@ export function createContext(
   },
 ): ApplicationContext {
   const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: gatewayHelloForMethods(options?.methods ?? [], options?.scopes),
     assistantAgentId: "research",
     sessionKey: "global",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const subscribe = () => () => undefined;
   const selectionListeners = new Set<() => void>();
   const selectionState = { selectedId: "research" };

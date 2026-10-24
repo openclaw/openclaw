@@ -226,6 +226,7 @@ suite.define(() => {
             scenario({
               "sessions.create": {
                 key: sessionKey,
+                entry: { sessionId: "session:" + sessionKey },
                 ...(destination === "local"
                   ? { runStarted: true, runId: "palette-local-run" }
                   : {}),
@@ -236,7 +237,7 @@ suite.define(() => {
                 sessionId: "session:" + sessionKey,
                 placement: { state: "active", generation: 1 },
               },
-              "sessions.send": { runId: "palette-device-run", status: "started" },
+              "chat.send": { runId: "palette-device-run", status: "started" },
             }),
           );
           const { composer, url, palette, input } = await openFromForeground(
@@ -357,13 +358,17 @@ suite.define(() => {
               agentId: "reviewer",
               deviceId: "palette-runner",
             });
-            expect((await gateway.waitForRequest("sessions.send")).params).toMatchObject({
-              key: sessionKey,
+            expect((await gateway.waitForRequest("chat.send")).params).toMatchObject({
+              sessionKey,
+              sessionId: "session:" + sessionKey,
+              expectedLeafEntryId: null,
               message: submittedPrompt,
             });
           }
           expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-          expect(await gateway.getRequests("chat.send")).toEqual([]);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(
+            destination === "device" ? 1 : 0,
+          );
           await page
             .locator(".app-toast")
             .getByRole("button", { name: "Open session", exact: true })

@@ -5,6 +5,7 @@ import {
   isGatewaySuspendUnavailableError,
 } from "@openclaw/gateway-protocol/restart-unavailable";
 import { isRetryableGatewayStartupUnavailableError } from "@openclaw/gateway-protocol/startup-unavailable";
+import { toStringifiedError } from "@openclaw/normalization-core";
 import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
@@ -144,7 +145,7 @@ export class GatewayPendingRequests {
       this.requestSequence += 1;
       id = `${this.requestSequence}:${this.opts.createRequestId()}`;
     } catch (error) {
-      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+      return Promise.reject(toStringifiedError(error));
     }
     const requestedTimeoutMs =
       options?.timeoutMs === null ? undefined : (options?.timeoutMs ?? this.opts.requestTimeoutMs);
@@ -261,7 +262,7 @@ export class GatewayPendingRequests {
             this.invoke("sent", () => options?.onSent?.(id));
           } catch (error) {
             if (retire("CLIENT_SEND_ERROR")) {
-              reject(error instanceof Error ? error : new Error(String(error)));
+              reject(toStringifiedError(error));
             }
           }
         };
@@ -288,7 +289,7 @@ export class GatewayPendingRequests {
         send();
       } catch (error) {
         if (retire("CLIENT_SEND_ERROR")) {
-          reject(error instanceof Error ? error : new Error(String(error)));
+          reject(toStringifiedError(error));
         }
       }
     });

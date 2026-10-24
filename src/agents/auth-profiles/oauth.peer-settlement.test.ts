@@ -3,9 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
+import { retainPersistedCredential } from "./credential-authority.test-support.js";
 import {
   candidate,
   expired,
@@ -29,11 +27,9 @@ import {
   settleOAuthRefreshPeerClaims,
 } from "./oauth-refresh-peers.js";
 import { storeWith } from "./oauth-test-utils.js";
-import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { removeAuthProfilesAcrossOwnerStores } from "./profiles.js";
 import { closeAuthProfileReadPool, resolveAuthProfileDatabasePath } from "./sqlite.js";
 import { saveAuthProfileStore } from "./store-runtime.js";
-import { captureAuthProfileStorePersistenceSnapshot } from "./store.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
 vi.mock("../../llm/oauth.js", () => ({
@@ -54,18 +50,6 @@ async function seedAccountConflict(identifiedPeer = false) {
     fx.mainDir,
   );
   return { ownerAgentDir, peerAgentDir };
-}
-function retainPersistedCredential(agentDir: string, selectedProfileId: string) {
-  const shared = openOpenClawStateDatabase();
-  const { databasePath } = captureAuthProfileStorePersistenceSnapshot(agentDir).owner;
-  const source = readDatabasePathIdentitySync(databasePath);
-  const authority = captureAuthProfileCredentialAuthority(
-    captureOpenClawStateWorkerContext({ path: shared.path }),
-    { databasePath, identity: `${source.key}:${source.birthtime ?? ""}` },
-    selectedProfileId,
-  );
-  authority.observe(loadPersistedAuthProfileStore(agentDir)?.profiles[selectedProfileId]);
-  return authority;
 }
 
 describe("OAuth refresh peer settlement", () => {

@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { NodePath } from "@babel/traverse";
@@ -9,9 +10,22 @@ import type {
   Node,
   Program as BabelProgram,
 } from "@babel/types";
-import { parse, type AnyNode, type Program } from "acorn";
+import type { AnyNode, Program } from "acorn";
 import { moduleResolve } from "import-meta-resolve";
 import type { createJiti } from "jiti";
+
+let parser: typeof import("acorn") | undefined;
+
+// Package captures and URL/package-map helpers do not parse source. Load the ESM
+// entry on demand so other host Acorn imports retain the same module identity.
+function parse(...args: Parameters<typeof import("acorn").parse>): Program {
+  if (!parser) {
+    const entry = moduleResolve("acorn", new URL(import.meta.url), new Set(["node", "import"]));
+    const loaded: typeof import("acorn") = createRequire(import.meta.url)(fileURLToPath(entry));
+    parser = loaded;
+  }
+  return parser.parse(...args);
+}
 
 export function capturedPluginModuleUrl(
   filename: string,

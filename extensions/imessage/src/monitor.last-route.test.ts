@@ -1,6 +1,5 @@
 // Imessage tests cover monitor.last route plugin behavior.
 import path from "node:path";
-import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -10,11 +9,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
-import {
-  createTestRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -24,10 +19,6 @@ import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
-import {
-  matchIMessageAcpConversation,
-  normalizeIMessageAcpConversationId,
-} from "./conversation-id.js";
 import {
   createChatDb,
   createChatDbMessage,
@@ -49,6 +40,7 @@ import {
   setCachedIMessagePrivateApiStatus,
 } from "./private-api-status.js";
 import type { probeIMessagePrivateApi } from "./probe.js";
+import { installIMessageConfiguredBindingRegistryForTest } from "./test-support/configured-binding.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 const ANCHOR_REPAIR_GUID = "11111111-1111-4111-8111-111111111111";
@@ -566,26 +558,7 @@ describe("iMessage monitor last-route updates", () => {
   function createConfiguredBindingMonitor(
     overrides: Omit<MonitorRunParams, "bindings"> = {},
   ): MonitorRunParams {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "imessage",
-          source: "test",
-          plugin: {
-            id: "imessage",
-            bindings: {
-              compileConfiguredBinding: ({ conversationId }) =>
-                normalizeIMessageAcpConversationId(conversationId),
-              matchInboundConversation: ({ compiledBinding, conversationId }) =>
-                matchIMessageAcpConversation({
-                  bindingConversationId: compiledBinding.conversationId,
-                  conversationId,
-                }),
-            } satisfies NonNullable<ChannelPlugin["bindings"]>,
-          },
-        },
-      ]),
-    );
+    installIMessageConfiguredBindingRegistryForTest();
     return {
       ...overrides,
       agents: { entries: { main: {}, codex: {} } },

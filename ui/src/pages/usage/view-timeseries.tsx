@@ -600,7 +600,7 @@ function TimeSeriesChart(props: {
             {model().formatAxisTimestamp(model().rangeStartTs)}–
             {model().formatAxisTimestamp(model().rangeEndTs)}
             {" · "}
-            {formatUsageTokens(model().totalTypeTokens)}
+            {formatUsageTokens(model().filteredTokens.totalTokens)}
             {" · "}
             {formatUsageCost(model().filteredCost)}
           </>

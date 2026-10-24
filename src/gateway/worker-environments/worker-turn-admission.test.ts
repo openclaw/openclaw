@@ -15,6 +15,7 @@ import type { PluginHookBeforeAgentRunEvent } from "../../plugins/hook-types.js"
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { prepareSkillBundle } from "../../skills/library/bundle.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { runWorkerEmbeddedTurn } from "../../worker/embedded-agent.runtime.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
@@ -220,14 +221,7 @@ describe("worker-side before_agent_run admission", () => {
                 }
               : undefined,
           });
-          return {
-            stdout: "",
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
+          return createCommandResult();
         },
       );
       const tunnel = createWorkerTurnTunnel({
@@ -311,6 +305,60 @@ describe("worker-side before_agent_run admission", () => {
       }
     },
   );
+
+  it.each([
+    {
+      result: { stdout: "", stderr: "Worker startup failed", code: 1 },
+      error: "Cloud worker process failed before completing the turn: Worker startup failed",
+    },
+    {
+      result: {
+        stdout: JSON.stringify({
+          status: "not-started",
+          reason: "admission-deadline",
+          errorText: "worker admission deadline exceeded: connect failed",
+        }),
+        stderr: "",
+        code: 0,
+      },
+      error: "worker admission deadline exceeded: connect failed",
+    },
+  ])("preserves a launch failure before input admission ($error)", async ({ result, error }) => {
+    const environment = attachedEnvironment();
+    const bootstrapReceipt = environment.bootstrapReceipt;
+    assert(bootstrapReceipt);
+    bootstrapReceipt.protocolFeatures.push(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE);
+    await seedActivePlacement();
+    const input = turn("worker-startup-failed");
+    const launch = vi.fn<NonNullable<ReturnType<typeof createWorkerTurnTunnel>["launchTurn"]>>(
+      async ({ onDispatchReady }) => {
+        onDispatchReady?.();
+        return { ...result, signal: null, killed: false, termination: "exit" };
+      },
+    );
+    const tunnel = createWorkerTurnTunnel({
+      launchTurn: launch,
+      reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      placements,
+      environments: {
+        ...unusedEnvironments(),
+        get: () => environment,
+        acquireTurnCredential: async () => credential(),
+        startTunnel: async () => tunnel,
+        acknowledgeCredentialDelivery: async () => true,
+      },
+    });
+    try {
+      await expect(
+        provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, vi.fn()),
+      ).rejects.toThrow(error);
+      expect(readWorkerTurnTranscriptStorageRows()).toEqual([]);
+    } finally {
+      input.preparedRunAdmission.close();
+    }
+  });
 
   it("rejects worker effects and successful launch results before admission", async () => {
     const environment = attachedEnvironment();
@@ -457,15 +505,14 @@ describe("worker-side before_agent_run admission", () => {
           kind: "lifecycle",
           payload: { phase: "finishing", endedAt: 1, aborted: true },
         });
-        // An apparently successful process must not let finalization persist unapproved input.
-        return {
-          stdout: JSON.stringify({ status: "completed" }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        // A valid successful result must not let finalization persist unapproved input.
+        return createCommandResult({
+          stdout: JSON.stringify({
+            status: "completed",
+            transcriptLeafId: null,
+            transcriptNextSeq: 1,
+          }),
+        });
       },
     );
     const tunnel = createWorkerTurnTunnel({

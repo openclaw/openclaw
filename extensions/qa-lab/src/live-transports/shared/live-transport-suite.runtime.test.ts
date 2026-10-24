@@ -24,7 +24,7 @@ vi.mock("./scenario-selection.js", async (importOriginal) => ({
 import type { QaSeedScenarioWithSource } from "../../scenario-catalog.js";
 import { runQaSuite } from "../../suite-launch.runtime.js";
 import { selectQaFlowSuiteScenarios } from "../../suite-planning.js";
-import { recordQaSuiteTestResults } from "../../suite-test-helpers.js";
+import { makeQaSuiteTestResult, recordQaSuiteTestResults } from "../../suite-test-helpers.js";
 import type { QaSuiteRunParams } from "../../suite.js";
 import { discordQaCliRegistration } from "../discord/cli.js";
 import { matrixQaCliRegistration } from "../matrix/cli.js";
@@ -179,20 +179,15 @@ describe("live transport suite runtime", () => {
     runFlowWorkers.mockImplementation(async (params, context) => {
       workersStarted.resolve();
       const scenarioIds = context.selectedScenarios.map((scenario) => scenario.id);
-      return {
-        ...recordQaSuiteTestResults(
+      return makeQaSuiteTestResult(
+        recordQaSuiteTestResults(
           params,
           context.selectedScenarios,
           scenarioIds.map((name) => ({ name, status: "pass", steps: [] })),
         ),
-        outputDir: context.outputDir,
-        evidencePath: path.join(context.outputDir, "qa-evidence.json"),
-        reportPath: path.join(context.outputDir, "qa-suite-report.md"),
-        summaryPath: path.join(context.outputDir, "qa-suite-summary.json"),
-        report: "# QA Suite Report\n",
-        startedScenarioIds: scenarioIds,
-        watchUrl: "http://127.0.0.1:43124",
-      };
+        context.outputDir,
+        scenarioIds,
+      );
     });
     const scenarioIds = [
       "matrix-allowbots-default-block",
