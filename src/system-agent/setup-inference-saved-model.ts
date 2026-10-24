@@ -11,12 +11,13 @@ export async function resolveCurrentModelRefForSavedAuth(params: {
   config: OpenClawConfig;
   agentId?: string;
   credentialProvider: string;
+  modelTarget: "primary" | "utility";
   configSnapshot?: SystemAgentConfigSnapshot;
 }): Promise<string | undefined> {
   const route = await resolveSystemAgentConfiguredRouteFromConfig(
     params.config,
     params.agentId,
-    {},
+    { modelTarget: params.modelTarget },
     params.configSnapshot,
   );
   const currentModelRef = route ? splitTrailingAuthProfile(route.modelLabel).model : "";

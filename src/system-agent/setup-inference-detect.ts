@@ -329,16 +329,18 @@ export async function detectSetupInference(agentId?: string): Promise<SetupInfer
             const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
             const candidates: SetupInferenceCandidate[] = [];
             const currentModelRefs = new Map<string, Promise<string | undefined>>();
-            const currentModelRefFor = (provider: string) => {
-              let currentModelRef = currentModelRefs.get(provider);
+            const currentModelRefFor = (provider: string, modelTarget: "primary" | "utility") => {
+              const key = `${provider}\0${modelTarget}`;
+              let currentModelRef = currentModelRefs.get(key);
               if (!currentModelRef) {
                 currentModelRef = resolveCurrentModelRefForSavedAuth({
                   config: params.cfg,
                   agentId: targetAgentId,
                   credentialProvider: provider,
+                  modelTarget,
                   configSnapshot: snapshot,
                 });
-                currentModelRefs.set(provider, currentModelRef);
+                currentModelRefs.set(key, currentModelRef);
               }
               return currentModelRef;
             };
@@ -346,7 +348,10 @@ export async function detectSetupInference(agentId?: string): Promise<SetupInfer
               params.signal.throwIfAborted();
               const saved = credential.setup;
               const choice = findSetupCredentialChoice(params.choices, credential);
-              const currentModelRef = await currentModelRefFor(credential.provider);
+              const currentModelRef = await currentModelRefFor(
+                credential.provider,
+                choice?.modelTarget ?? "primary",
+              );
               params.signal.throwIfAborted();
               let modelRef = currentModelRef ?? saved?.modelRef;
               if (!modelRef && choice) {

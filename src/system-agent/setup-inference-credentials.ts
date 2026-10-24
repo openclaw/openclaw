@@ -342,6 +342,7 @@ export async function stageSavedAuthCandidate(
       config: ctx.cfg,
       agentId: ctx.routeAgentId,
       credentialProvider: credential.provider,
+      modelTarget: choice?.modelTarget ?? "primary",
       configSnapshot: ctx.snapshot,
     });
     const savedModelRef = saved?.modelRef ?? loaded?.method.starterModel;

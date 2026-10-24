@@ -33,6 +33,7 @@ import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import * as pluginArtifactIdentity from "../plugins/plugin-runtime-artifact-identity.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import * as providerChoices from "../plugins/provider-auth-choices.js";
+import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
 import * as providerRuntime from "../plugins/providers.runtime.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -397,14 +398,14 @@ export async function fixture(
             ...codexRuntimeArtifactAuth,
           }
         : {}),
-      modelId: "gpt-5.4-mini",
+      modelId: params.model,
       modelApi: options.subscription ? "openai-chatgpt-responses" : "openai-responses",
     });
     return {
       payloads: [{ text: "OK" }],
       meta: {
         durationMs: 1,
-        executionTrace: { winnerProvider: "openai", winnerModel: "gpt-5.4-mini" },
+        executionTrace: { winnerProvider: "openai", winnerModel: params.model },
       },
     };
   };
@@ -496,4 +497,32 @@ export async function fixture(
     pluginRegistry,
     provider,
   };
+}
+
+type SetupFixture = Awaited<ReturnType<typeof fixture>>;
+
+export function expectActivateCalls(setup: SetupFixture, logins: number, probes: number) {
+  expect(setup.login).toHaveBeenCalledTimes(logins);
+  expect(setup.run).toHaveBeenCalledTimes(probes);
+}
+
+export function saveActivateProfile(
+  setup: SetupFixture,
+  profileId: string,
+  config = setup.config,
+  value: AuthProfileCredential = credential,
+) {
+  return persistProviderAuthProfilesAfterLogin({
+    config,
+    agentDir: setup.agentDir,
+    profiles: [{ profileId, credential: value }],
+  });
+}
+
+export async function writeActivateConfig(
+  setup: SetupFixture,
+  value: SetupFixture["config"] | string,
+) {
+  await fs.writeFile(setup.configPath, typeof value === "string" ? value : JSON.stringify(value));
+  clearConfigCache();
 }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { buildAuthHealthSummary } from "../agents/auth-health.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
@@ -28,44 +28,26 @@ import {
   computeDeclaredSurfaceHash,
   mergePluginDeclaredSurfaces,
 } from "../plugins/capability-summary.js";
-import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig as resolveConfiguredRoute } from "./inference-route.js";
-import { credential, fixture, modelRef } from "./setup-inference-activate.test-support.js";
+import {
+  credential,
+  expectActivateCalls as expectCalls,
+  fixture,
+  modelRef,
+  saveActivateProfile as saveProfile,
+  writeActivateConfig as writeConfig,
+} from "./setup-inference-activate.test-support.js";
 import {
   SetupInferenceActivationIndeterminateError,
   SetupInferenceActivationUnavailableError,
 } from "./setup-inference-core.js";
 import * as credentialActivation from "./setup-inference-credential-access.js";
 import { saveSetupCredential } from "./setup-inference-credentials.js";
-import { resetSetupInferenceState } from "./setup-inference-state.test-support.js";
 import * as activationTransition from "./setup-inference-transition.js";
 import { codexRuntimeArtifactAuth, pluginRecord } from "./verified-inference.test-support.js";
-
-type Setup = Awaited<ReturnType<typeof fixture>>;
-function expectCalls(setup: Setup, logins: number, probes: number) {
-  expect(setup.login).toHaveBeenCalledTimes(logins);
-  expect(setup.run).toHaveBeenCalledTimes(probes);
-}
-function saveProfile(
-  setup: Setup,
-  profileId: string,
-  config = setup.config,
-  value: AuthProfileCredential = credential,
-) {
-  return persistProviderAuthProfilesAfterLogin({
-    config,
-    agentDir: setup.agentDir,
-    profiles: [{ profileId, credential: value }],
-  });
-}
-async function writeConfig(setup: Setup, value: Setup["config"] | string) {
-  await fs.writeFile(setup.configPath, typeof value === "string" ? value : JSON.stringify(value));
-  clearConfigCache();
-}
-
-afterEach(resetSetupInferenceState);
+import "./setup-inference-activate-cleanup.test-support.js";
 
 describe("setup activation credentials and configuration", () => {
   it.each([
