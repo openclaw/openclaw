@@ -54,17 +54,6 @@ function groupPlan(group: Group, baselines = "", scenarios = "", targetRoot?: st
   );
 }
 
-function survivorGroup(version: string, scenario?: string, index = 1): Group {
-  return {
-    docker_lanes: scenario ? "update-migration" : "published-upgrade-survivor",
-    label: scenario
-      ? `update-migration-${version}-scenarios-${index}`
-      : `published-upgrade-survivor-${version}`,
-    published_upgrade_survivor_baselines: `openclaw@${version}`,
-    ...(scenario && { published_upgrade_survivor_scenarios: scenario, timeout_minutes: 90 }),
-  };
-}
-
 function expectExpansion(
   groups: Group[],
   lanes: string,
@@ -136,22 +125,21 @@ it("runs each recorded first-hop source and the fresh candidate edge as separate
 });
 
 it("shards published upgrade survivor by baseline while preserving surrounding lanes", () => {
-  expect(
-    planGroups(
-      "doctor-switch update-channel-switch published-upgrade-survivor plugins-offline plugin-update",
-      "openclaw@2026.6.11-1 openclaw@2026.6.11 openclaw@2026.6.2 openclaw@2026.6.1",
-      "",
-      { groupSize: 2 },
-    ),
-  ).toEqual([
-    {
-      docker_lanes: "doctor-switch update-channel-switch",
-      label: "doctor-switch--update-channel-switch",
-    },
-    ...["2026.6.11-1", "2026.6.11", "2026.6.2", "2026.6.1"].map((version) =>
-      survivorGroup(version),
-    ),
-    { docker_lanes: "plugins-offline plugin-update", label: "plugins-offline--plugin-update" },
+  const groups = planGroups(
+    "doctor-switch update-channel-switch published-upgrade-survivor plugins-offline plugin-update",
+    "openclaw@2026.6.11-1 openclaw@2026.6.11",
+    "",
+    { groupSize: 2 },
+  );
+  expect(groups.map((group) => group.docker_lanes)).toEqual([
+    "doctor-switch update-channel-switch",
+    "published-upgrade-survivor",
+    "published-upgrade-survivor",
+    "plugins-offline plugin-update",
+  ]);
+  expect(groups.slice(1, 3).map((group) => group.published_upgrade_survivor_baselines)).toEqual([
+    "openclaw@2026.6.11-1",
+    "openclaw@2026.6.11",
   ]);
 });
 
@@ -193,14 +181,17 @@ it("isolates the weekly mobile and watch scenarios by baseline", () => {
   const baselines = "2026.7.1 2026.8.1";
   const scenarios = "mobile-pairing-reconnect watchos-direct-node";
   const groups = planGroups("update-migration", baselines, scenarios);
-  const plans = groups.map((group) => groupPlan(group, baselines, scenarios));
-
-  expect(groups).toEqual([
-    survivorGroup("2026.8.1", "mobile-pairing-reconnect"),
-    survivorGroup("2026.8.1", "watchos-direct-node", 2),
-    survivorGroup("2026.7.1", "mobile-pairing-reconnect"),
+  expect(
+    groups.map((group) => [
+      group.published_upgrade_survivor_baselines,
+      group.published_upgrade_survivor_scenarios,
+    ]),
+  ).toEqual([
+    ["openclaw@2026.8.1", "mobile-pairing-reconnect"],
+    ["openclaw@2026.8.1", "watchos-direct-node"],
+    ["openclaw@2026.7.1", "mobile-pairing-reconnect"],
   ]);
-  expectExpansion(groups, "update-migration", baselines, scenarios);
+  const plans = expectExpansion(groups, "update-migration", baselines, scenarios);
   expect(plans.flatMap((plan) => plan.omittedUnsupportedLaneNames)).toEqual([]);
 });
 

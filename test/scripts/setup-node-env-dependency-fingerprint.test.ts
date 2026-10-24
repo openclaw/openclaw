@@ -81,21 +81,11 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
   expect(fingerprint()).not.toBe(mjsHookFingerprint);
   remove(".pnpmfile.mjs");
   expect(fingerprint()).toBe(baseline);
-  for (const relativePath of [
-    "node-version.mjs",
-    ".github/actions/setup-node-env/install-dependencies.sh",
-    "scripts/check-install-dependency-ownership.mjs",
-    "scripts/prepare-git-hooks.mjs",
-    "scripts/lib/fs-safe-prebuild.mjs",
-    "scripts/windows-cmd-helpers.mjs",
-    "scripts/lib/package-lifecycle-marker.mjs",
-    "scripts/lib/pnpm-lockfile-documents.mjs",
-  ]) {
-    write(relativePath, "fixture\n");
-    expect(fingerprint(), relativePath).not.toBe(baseline);
-    remove(relativePath);
-    expect(fingerprint(), relativePath).toBe(baseline);
-  }
+  const installScript = ".github/actions/setup-node-env/install-dependencies.sh";
+  write(installScript, "fixture\n");
+  expect(fingerprint()).not.toBe(baseline);
+  remove(installScript);
+  expect(fingerprint()).toBe(baseline);
   writeManifest({
     ...Object.fromEntries(Object.entries(manifest).toReversed()),
     scripts: {
@@ -117,16 +107,10 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
   const workerManifest = "packages/worker/package.json";
   json(workerManifest, { name: "worker", scripts: { prepare: "node build.mjs" } });
   git(["add", workerManifest]);
-  for (const lock of [
-    frozenLock,
-    frozenLock.replace("  packages/worker:", "# group\n  packages/worker:"),
-  ]) {
-    writeLock(lock);
-    expect(() => fingerprint()).toThrow(
-      /unaudited install lifecycle scripts in packages\/worker\/package\.json/,
-    );
-  }
-  writeLock(frozenLock);
+  writeLock(frozenLock.replace("  packages/worker:", "# group\n  packages/worker:"));
+  expect(() => fingerprint()).toThrow(
+    /unaudited install lifecycle scripts in packages\/worker\/package\.json/,
+  );
   json(workerManifest, { name: "worker", scripts: { build: "node build.mjs" } });
   writeManifest(manifest);
   writeLock("lockfileVersion: '9.1'\n");

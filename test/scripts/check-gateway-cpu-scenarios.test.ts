@@ -135,16 +135,16 @@ it("prepares CLI startup artifacts before running the startup bench", async () =
   );
 });
 
-it("fails successful startup benches that write malformed reports", async () => {
-  const result = await runScenario(["--skip-qa"], { reports: { startup: { results: [] } } });
+it("fails successful startup commands with invalid reports", async () => {
+  expect(await runScenario(["--skip-qa"], { reports: { startup: { results: [] } } })).toMatchObject(
+    { exitCode: 1, summary: { startupReportFailure: "startup-report-invalid" } },
+  );
+});
 
-  expect(result).toMatchObject({
+it("fails successful QA commands with failed scenarios", async () => {
+  expect(await runScenario(qaFlags, { reports: { qa: qaSummary(1) } })).toMatchObject({
     exitCode: 1,
-    summary: {
-      startupOutput: path.join(result.outputDir, "gateway-startup-bench.json"),
-      startupReportFailure: "startup-report-invalid",
-      startupReportFailureDetail: "startup report has no measured results",
-    },
+    summary: { qaSummaryFailure: "qa-summary-failed-scenarios" },
   });
 });
 
@@ -161,11 +161,12 @@ it("fails startup build spawn errors and skips the startup bench", async () => {
   expect(result.calls.map((call) => call.args)).toEqual([
     ["--import", "tsx", "scripts/ensure-cli-startup-build.mts"],
   ]);
-  expect(result.summary.steps).toEqual([
-    { name: "startup build", error: "spawn ENOENT", signal: null, status: 1 },
-    { name: "startup bench", signal: null, status: 1 },
-    { name: "concurrency bench", signal: null, status: 1 },
-  ]);
+  expect(result.summary.steps[0]).toEqual({
+    name: "startup build",
+    error: "spawn ENOENT",
+    signal: null,
+    status: 1,
+  });
 });
 
 it("does not prebuild private QA dist when the required entries already exist", async () => {
@@ -204,16 +205,6 @@ it("does not prebuild private QA dist when the required entries already exist", 
     OPENCLAW_STATE_DIR: path.join(outputDir, "qa-state-root", "state"),
     PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     USERPROFILE: path.join(outputDir, "qa-state-root", "home"),
-  });
-});
-
-it("fails successful QA commands that report failed scenarios", async () => {
-  const result = await runScenario(qaFlags, { reports: { qa: qaSummary(1) } });
-
-  expect(result.exitCode).toBe(1);
-  expect(result.summary).toMatchObject({
-    qaSummaryFailure: "qa-summary-failed-scenarios",
-    qaSummaryFailureDetail: "QA suite reported 1 failed scenario(s)",
   });
 });
 

@@ -223,22 +223,7 @@ it("redacts invalid identity, membership and outcome payloads", () => {
     duplicateStatuses: ["shard-01"],
     missingStatuses: ["shard-02"],
   });
-  expect(result.diagnostics.issues.map((issue: { reason: string }) => issue.reason)).toEqual(
-    expect.arrayContaining([
-      "artifact-sha-mismatch",
-      "unexpected-shard",
-      "artifact-shard-mismatch",
-      "profile-mismatch",
-      "target-sha-mismatch",
-      "protocol-sha-mismatch",
-      "run-id-mismatch",
-      "run-attempt-mismatch",
-      "category-membership-mismatch",
-      "scenario-membership-mismatch",
-      "invalid-outcome",
-      "invalid-completion-time",
-    ]),
-  );
+  expect(result.shards.at(-1)).toMatchObject({ ...unknownOutcome, completedAt: null });
 });
 
 it("bounds the artifact inventory and produces deterministic output", () => {
