@@ -1,5 +1,9 @@
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
+  WorkerTurnAdmissionParams,
+  WorkerTurnAdmissionResult,
+} from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
+import type {
   AdmittedRunOperatorAuthority,
   OperationalRunInstanceRef,
 } from "../../agents/admitted-run-context.js";
@@ -105,6 +109,7 @@ type BoundWorkerTurnOwner = {
     assertActive: () => void;
     toolSurface?: WorkerGatewayToolRuntime;
     inference?: WorkerInferenceExecutor;
+    admitTurn?: WorkerTurnAdmission;
     prepareReplyMedia?: WorkerReplyMediaPreparer;
     githubGrant?: WorkerGitHubBindingGrant;
     delegatedAuthority: AgentRunDelegatedAuthority;
@@ -122,6 +127,11 @@ type BoundWorkerTurnOwner = {
     stopWatchingAuthority?: () => void;
   };
 };
+
+type WorkerTurnAdmission = (
+  request: WorkerTurnAdmissionParams,
+  assertCurrent: () => void,
+) => Promise<WorkerTurnAdmissionResult>;
 
 const workerTurnOwners = resolveGlobalMap<string, Map<string, BoundWorkerTurnOwner>>(
   Symbol.for("openclaw.workerTurnExecutionIdentities"),
@@ -415,6 +425,7 @@ export function bindWorkerTurnCapabilities(
     toolSurface: WorkerGatewayToolRuntime;
     prepareReplyMedia?: WorkerReplyMediaPreparer;
     inference?: WorkerInferenceExecutor;
+    admitTurn?: WorkerTurnAdmission;
   },
 ): void {
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
@@ -476,6 +487,31 @@ export function assertWorkerTurnGitHubGrantCurrent(
 
 export function getWorkerTurnInference(identity: WorkerConnectionIdentity) {
   return resolveWorkerTurnRuntime(identity)?.inference;
+}
+
+export function getWorkerTurnAdmission(identity: WorkerConnectionIdentity) {
+  return resolveWorkerTurnRuntime(identity)?.admitTurn;
+}
+
+export async function admitWorkerTurnInput(
+  identity: WorkerConnectionIdentity,
+  request: WorkerTurnAdmissionParams,
+  validate: () => boolean,
+) {
+  const runtime = resolveWorkerTurnRuntime(identity);
+  if (!runtime?.admitTurn || !validate()) {
+    return { ok: false as const, closeReason: "placement-mismatch" as const };
+  }
+  const assertCurrent = () => {
+    if (!validate()) {
+      throw new Error("Worker turn admission authority changed");
+    }
+    runtime.assertActive();
+  };
+  assertCurrent();
+  const result = await runtime.admitTurn(request, assertCurrent);
+  assertCurrent();
+  return { ok: true as const, result };
 }
 
 /** Capture before buffering; delayed events must never bind to a replacement owner. */

@@ -13,6 +13,7 @@ import type {
   WorkerInferenceCancelParams,
   WorkerInferenceStartParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import type { WorkerTurnAdmissionParams } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { recordRuntimeActionDecision } from "../../audit/runtime-action-decision.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import {
@@ -27,6 +28,7 @@ import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import {
   acknowledgeWorkerTurnFinishing,
   getWorkerTurnToolSurface,
+  admitWorkerTurnInput,
   type WorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
 import type { WorkerGatewayToolSink } from "./worker-gateway-tool-contract.js";
@@ -282,6 +284,13 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     }
     return { ok: true };
   };
+
+  const admitTurn = (identity: WorkerConnectionIdentity, request: WorkerTurnAdmissionParams) =>
+    admitWorkerTurnInput(
+      identity,
+      request,
+      () => validateAttachedWorkerRequest(identity, request.runEpoch, { kind: "session-tool" }).ok,
+    );
 
   const commitTranscript = (
     identity: WorkerConnectionIdentity,
@@ -721,6 +730,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     cancelGatewayTool,
     executeComputer,
     startInference,
+    admitTurn,
     cancelInference,
     clear: () => {
       observedAckCursors.clear();
