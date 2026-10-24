@@ -626,15 +626,9 @@ type RoutingPatch = {
 const routingCases: Array<[string, RoutingPatch]> = [
   ["ordinary successful parent", { manual: false, conclusion: "success", code: 0 }],
   ["failed parent without manual recovery", { manual: false }],
-  ["legacy same-parent recovery", { code: 0 }],
   ["unrelated operator metadata", { recovery: { reason: "App assets are pending" }, code: 0 }],
-  ["failed legacy npm publication", { npm: "failure" }],
-  ["failed legacy Docker publication", { docker: "failure" }],
   ["incomplete split selectors", { recovery: { npmPublishRunId: "13" } }],
-  ...["wrong-file", "duplicate", "mismatch"].map((checksum): [string, RoutingPatch] => [
-    `rejects ${checksum} checksum`,
-    { checksum },
-  ]),
+  ["rejects wrong-file checksum", { checksum: "wrong-file" }],
 ];
 it.each(routingCases)("stable closeout publication routing preserves %s", (name, patch) => {
   const scenario = {

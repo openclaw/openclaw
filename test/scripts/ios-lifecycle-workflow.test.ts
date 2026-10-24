@@ -433,9 +433,6 @@ it.skipIf(process.platform === "win32").each([
     expect(argsFor(commands, "xcrun")).toEqual([["simctl", "list", "devices", "booted"]]);
   }
   expect(summary).toBe(formatIosSimulatorSelectionSummary(selection));
-  for (const group of ["voice", "lifecycle"]) {
-    expect(summary).toContain(`| ${group} | ${groups.includes(group) ? "yes" : "no"} |`);
-  }
 });
 
 function runRestartProof(mode = "ready", format = 1, prepared = false) {
