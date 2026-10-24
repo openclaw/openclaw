@@ -9,7 +9,6 @@ import type {
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import {
   createGeminiBackend,
-  createGeminiErrorFrames,
   createClaudeParser,
   createClaudeBackend,
   claudeBlockStart,
@@ -454,7 +453,22 @@ describe("createCliJsonlStreamingParser events", () => {
       onAssistantDelta: () => {},
     });
 
-    parser.push(joinJsonlFrames(...createGeminiErrorFrames()) + "\n");
+    parser.push(
+      joinJsonlFrames(
+        {
+          type: "error",
+          timestamp: "2026-06-16T19:36:48.000Z",
+          severity: "error",
+          message: "Invalid stream payload",
+        },
+        {
+          type: "result",
+          timestamp: "2026-06-16T19:36:49.000Z",
+          status: "error",
+          stats: { total_tokens: 1 },
+        },
+      ) + "\n",
+    );
     parser.finish();
 
     expect(parser.getOutput()).toEqual({

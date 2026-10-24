@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { extractCliErrorMessage, formatCliOutputError, parseCliOutput } from "./cli-output.js";
 import {
-  createGeminiResultErrorFrames,
   createGeminiBackend,
   createClaudeBackend,
   createPluginParser,
@@ -285,7 +284,23 @@ describe("createCliJsonlStreamingParser errors", () => {
       onAssistantDelta: (delta) => deltas.push(delta),
     });
 
-    parser.push(joinJsonlFrames(...createGeminiResultErrorFrames()) + "\n");
+    parser.push(
+      joinJsonlFrames(
+        {
+          type: "message",
+          timestamp: "2026-06-16T19:36:47.000Z",
+          role: "assistant",
+          content: "partial output",
+          delta: true,
+        },
+        {
+          type: "result",
+          timestamp: "2026-06-16T19:36:49.000Z",
+          status: "error",
+          error: { message: "Gemini stream failed" },
+        },
+      ) + "\n",
+    );
     parser.finish();
 
     expect(deltas).toEqual([

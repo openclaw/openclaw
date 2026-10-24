@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseCliOutput } from "./cli-output.js";
 import {
-  createCumulativeUsageFrames,
   createOpenAiCompatibleCliUsageCases,
   createClaudeParser,
   createClaudeBackend,
@@ -656,7 +655,30 @@ describe("parseCliJsonl record usage", () => {
       providerId: "local-cli",
     });
 
-    parser.push(joinJsonlFrames(...createCumulativeUsageFrames()));
+    parser.push(
+      joinJsonlFrames(
+        { type: "init", session_id: "session-stream" },
+        {
+          type: "assistant",
+          message: {
+            id: "msg-1",
+            usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
+          },
+        },
+        {
+          type: "assistant",
+          message: {
+            id: "msg-2",
+            usage: { input_tokens: 11, output_tokens: 6, cache_read_input_tokens: 125 },
+          },
+        },
+        {
+          type: "result",
+          result: "done",
+          usage: { input_tokens: 30, output_tokens: 15, cache_read_input_tokens: 300 },
+        },
+      ),
+    );
     parser.finish();
 
     const output = parser.getOutput();

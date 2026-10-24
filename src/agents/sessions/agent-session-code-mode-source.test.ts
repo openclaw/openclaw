@@ -34,7 +34,10 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
 } from "../../state/openclaw-agent-db.js";
-import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import {
+  cleanupSessionStateForTest,
+  drainSessionStateForTest,
+} from "../../test-utils/session-state-cleanup.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { createOpenClawReadTool } from "../agent-tools.read.js";
 import { createCodeModeHarness, resetCodeModeTestState } from "../code-mode.test-support.js";
@@ -59,12 +62,14 @@ import type { AgentSession } from "./agent-session.js";
 import type { MessageEndEvent, ToolDefinition } from "./extensions/types.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import { SessionManager } from "./session-manager.js";
-import { cleanupTrackedSessionState } from "./session-state-cleanup.test-support.js";
 import { createReadTool } from "./tools/read.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
-    await cleanupTrackedSessionState(tempDirs.dirs, cleanup);
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    cleanup();
   }),
 );
 let fixtureDir: string;

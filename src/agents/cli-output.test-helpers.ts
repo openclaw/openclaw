@@ -121,67 +121,6 @@ export function claudeTextDelta(text: string, index?: number | string) {
   return indexedEvent("content_block_delta", index, { delta: { type: "text_delta", text } });
 }
 
-export function createGeminiErrorFrames() {
-  return [
-    {
-      type: "error",
-      timestamp: "2026-06-16T19:36:48.000Z",
-      severity: "error",
-      message: "Invalid stream payload",
-    },
-    {
-      type: "result",
-      timestamp: "2026-06-16T19:36:49.000Z",
-      status: "error",
-      stats: { total_tokens: 1 },
-    },
-  ];
-}
-
-export function createCumulativeUsageFrames(resultFields: { session_id?: string } = {}) {
-  return [
-    { type: "init", session_id: "session-stream" },
-    {
-      type: "assistant",
-      message: {
-        id: "msg-1",
-        usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
-      },
-    },
-    {
-      type: "assistant",
-      message: {
-        id: "msg-2",
-        usage: { input_tokens: 11, output_tokens: 6, cache_read_input_tokens: 125 },
-      },
-    },
-    {
-      type: "result",
-      ...resultFields,
-      result: "done",
-      usage: { input_tokens: 30, output_tokens: 15, cache_read_input_tokens: 300 },
-    },
-  ];
-}
-
 export function createGeminiBackend(): CliJsonlStreamingParserOptions["backend"] {
   return { command: "gemini", output: "jsonl", jsonlDialect: "gemini-stream-json" };
-}
-
-export function createGeminiResultErrorFrames() {
-  return [
-    {
-      type: "message",
-      timestamp: "2026-06-16T19:36:47.000Z",
-      role: "assistant",
-      content: "partial output",
-      delta: true,
-    },
-    {
-      type: "result",
-      timestamp: "2026-06-16T19:36:49.000Z",
-      status: "error",
-      error: { message: "Gemini stream failed" },
-    },
-  ];
 }

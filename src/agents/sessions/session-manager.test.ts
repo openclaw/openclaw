@@ -23,15 +23,18 @@ import { replaceTranscriptEventsSync } from "../../config/sessions/session-acces
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { buildSessionContext, CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
-import { cleanupTrackedSessionState } from "./session-state-cleanup.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    await cleanupTrackedSessionState(tempDirs.dirs, cleanup);
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    cleanup();
   }),
 );
 
