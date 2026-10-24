@@ -154,6 +154,46 @@ import {
 } from "./prepare.test-support.js";
 import type { RunCliAgentParams } from "./types.js";
 
+function expectCall(mock: unknown, fields: object) {
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields));
+}
+
+function promptHook<T extends object>(result: T) {
+  return {
+    hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
+    runBeforePromptBuild: vi.fn(async () => ({ ...result })),
+  };
+}
+
+function catalogModel(
+  id: string,
+  name: string,
+  contextTokens: number,
+  maxTokens: number,
+  contextWindow: number,
+) {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow,
+    maxTokens,
+    contextTokens,
+  };
+}
+
+function setGeminiBackend(overrides: Partial<CliBackendPlugin>) {
+  setRawCliBackendForPrepareTest({
+    id: "google-gemini-cli",
+    pluginId: "google",
+    bundleMcp: false,
+    config: createArgBackendConfig("gemini", ["--prompt", "{prompt}"], "json"),
+    ...overrides,
+  });
+}
+
 function registerTestContextEngine(
   id: string,
   factory: Parameters<typeof registerContextEngineForOwner>[1],
@@ -336,6 +376,13 @@ describe("prepareCliRunContext", () => {
   const retainedStateDirs: string[] = [];
   let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
 
+  function saveProfiles(profiles: Parameters<typeof saveAuthProfileStore>[0]["profiles"]) {
+    const agentDir = path.join(fixture.session.dir, "agents", "main", "agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(createAuthProfileStoreFixture(profiles), agentDir);
+    return agentDir;
+  }
+
   async function withAuthenticatedHistory(
     provider: string,
     run: (
@@ -345,14 +392,14 @@ describe("prepareCliRunContext", () => {
     ) => Promise<void>,
   ) {
     const { dir, sessionTarget } = fixture.session;
-    const agentDir = path.join(dir, "agents", "main", "agent");
+
     const authProfileId = "history-test:account";
     const credential = {
       type: "token" as const,
       provider: provider === "claude-cli" ? "anthropic" : provider,
       token: "synthetic-history-account",
     };
-    saveAuthProfileStore({ version: 1, profiles: { [authProfileId]: credential } }, agentDir);
+    const agentDir = saveProfiles({ [authProfileId]: credential });
     const authEpoch = await resolveCliAuthEpoch({ provider, agentDir, authProfileId });
     const runId = "authenticated-history-fixture";
     await patchSessionEntryCore(sessionTarget, (entry) => ({ ...entry, activeWriterRunId: runId }));
@@ -513,48 +560,15 @@ describe("prepareCliRunContext", () => {
           providers: {
             "fixture-anthropic": {
               baseUrl: "https://api.anthropic.com",
-              models: [
-                {
-                  id: "claude-opus-4-7",
-                  name: "Claude Opus 4.7",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 200_000,
-                  maxTokens: 8_192,
-                  contextTokens: 100_000,
-                },
-              ],
+              models: [catalogModel("claude-opus-4-7", "Claude Opus 4.7", 100_000, 8_192, 200_000)],
             },
             "collision-provider": {
               baseUrl: "https://collision.invalid",
-              models: [
-                {
-                  id: "large",
-                  name: "Unrelated Large",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 32_000,
-                  maxTokens: 4_096,
-                  contextTokens: 32_000,
-                },
-              ],
+              models: [catalogModel("large", "Unrelated Large", 32_000, 4_096, 32_000)],
             },
             "claude-cli": {
               baseUrl: "https://runtime.invalid",
-              models: [
-                {
-                  id: "large",
-                  name: "Configured Alias Source",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 200_000,
-                  maxTokens: 8_192,
-                  contextTokens: 200_000,
-                },
-              ],
+              models: [catalogModel("large", "Configured Alias Source", 200_000, 8_192, 200_000)],
             },
           },
         },
@@ -563,9 +577,7 @@ describe("prepareCliRunContext", () => {
 
     expect(context.backendResolved.modelProvider).toBe("fixture-anthropic");
     expect(context.contextWindowInfo?.tokens).toBe(testCase.expectedContextTokens);
-    expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({ contextTokenBudget: testCase.expectedContextTokens }),
-    );
+    expectCall(prepareExecution, { contextTokenBudget: testCase.expectedContextTokens });
   });
 
   it.each([
@@ -610,9 +622,7 @@ describe("prepareCliRunContext", () => {
     });
 
     expect(context.contextWindowInfo?.tokens).toBe(testCase.expected);
-    expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({ contextTokenBudget: testCase.expected }),
-    );
+    expectCall(prepareExecution, { contextTokenBudget: testCase.expected });
   });
 
   beforeEach(() => {
@@ -746,17 +756,13 @@ describe("prepareCliRunContext", () => {
     });
 
     expect(context.effectiveAuthProfileId).toBe("test-cli:ops");
-    expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: modelOwnerAgentDir,
-        authProfileId: "test-cli:ops",
-      }),
-    );
+    expectCall(prepareExecution, {
+      agentDir: modelOwnerAgentDir,
+      authProfileId: "test-cli:ops",
+    });
   });
 
   it("passes expired Gemini CLI OAuth fields to CLI-owned refresh", async () => {
-    const { dir } = fixture.session;
-    const agentDir = path.join(dir, "agents", "main", "agent");
     const authProfileId = "google-gemini-cli:user@example.test";
     const prepareExecution = vi.fn(async () => ({
       env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
@@ -764,29 +770,19 @@ describe("prepareCliRunContext", () => {
     const resolveApiKeyForProfile = vi.fn(async () => {
       throw new Error("Gemini CLI OAuth must not enter core refresh");
     });
-    fs.mkdirSync(agentDir, { recursive: true });
-    saveAuthProfileStore(
-      createAuthProfileStoreFixture({
-        [authProfileId]: {
-          type: "oauth",
-          provider: "google-gemini-cli",
-          access: "raw-access-token",
-          refresh: "raw-refresh-token",
-          expires: 1,
-          projectId: "project-1",
-          email: "user@example.test",
-        },
-      }),
-      agentDir,
-    );
-    setRawCliBackendForPrepareTest({
-      id: "google-gemini-cli",
-      pluginId: "google",
-      bundleMcp: false,
-      authEpochMode: "profile-only",
-      prepareExecution,
-      config: createArgBackendConfig("gemini", ["--prompt", "{prompt}"], "json"),
+
+    const agentDir = saveProfiles({
+      [authProfileId]: {
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access: "raw-access-token",
+        refresh: "raw-refresh-token",
+        expires: 1,
+        projectId: "project-1",
+        email: "user@example.test",
+      },
     });
+    setGeminiBackend({ authEpochMode: "profile-only", prepareExecution });
     setCliRunnerPrepareTestDeps({
       resolveApiKeyForProfile,
     });
@@ -801,54 +797,40 @@ describe("prepareCliRunContext", () => {
     });
 
     expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
-    expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authProfileId,
-        authCredential: expect.objectContaining({
-          type: "oauth",
-          provider: "google-gemini-cli",
-          access: "raw-access-token",
-          refresh: "raw-refresh-token",
-          expires: 1,
-        }),
+    expectCall(prepareExecution, {
+      authProfileId,
+      authCredential: expect.objectContaining({
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access: "raw-access-token",
+        refresh: "raw-refresh-token",
+        expires: 1,
       }),
-    );
+    });
     expect(context.authBindingFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(context.authBindingSkipsLocalCredential).toBe(true);
   });
 
   it("preserves a selected Gemini profile when backend auth preparation fails", async () => {
-    const { dir } = fixture.session;
-    const agentDir = path.join(dir, "agents", "main", "agent");
     const authProfileId = "google-gemini-cli:legacy";
     const backendError = new CliBackendAuthProfilePreparationError(
       "Gemini CLI OAuth profile is incomplete and cannot be repaired by OpenClaw.",
     );
-    fs.mkdirSync(agentDir, { recursive: true });
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          [authProfileId]: {
-            type: "oauth",
-            provider: "google-gemini-cli",
-            access: "expired-access-token",
-            refresh: "",
-            expires: 0,
-          },
-        },
+
+    const agentDir = saveProfiles({
+      [authProfileId]: {
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access: "expired-access-token",
+        refresh: "",
+        expires: 0,
       },
-      agentDir,
-    );
-    setRawCliBackendForPrepareTest({
-      id: "google-gemini-cli",
-      pluginId: "google",
-      bundleMcp: false,
+    });
+    setGeminiBackend({
       authEpochMode: "profile-only",
       prepareExecution: vi.fn(async () => {
         throw backendError;
       }),
-      config: createArgBackendConfig("gemini", ["--prompt", "{prompt}"], "json"),
     });
 
     await expect(
@@ -870,17 +852,12 @@ describe("prepareCliRunContext", () => {
   });
 
   it("does not expose auth profile credentials to non-bundled prepare hooks", async () => {
-    const { dir } = fixture.session;
-    const agentDir = path.join(dir, "agents", "main", "agent");
     const authProfileId = "test-cli:secret";
     const prepareExecution = vi.fn(async (_ctx: unknown) => undefined);
-    fs.mkdirSync(agentDir, { recursive: true });
-    saveAuthProfileStore(
-      createAuthProfileStoreFixture({
-        [authProfileId]: createApiKeyCredential("test-cli", "secret-key"),
-      }),
-      agentDir,
-    );
+
+    saveProfiles({
+      [authProfileId]: createApiKeyCredential("test-cli", "secret-key"),
+    });
     setRawCliBackendForPrepareTest({
       id: "test-cli",
       pluginId: "test-plugin",
@@ -895,11 +872,9 @@ describe("prepareCliRunContext", () => {
       config: {},
     });
 
-    expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authProfileId,
-      }),
-    );
+    expectCall(prepareExecution, {
+      authProfileId,
+    });
     expect(prepareExecution.mock.calls[0]?.[0]).not.toHaveProperty("authCredential");
   });
 
@@ -936,9 +911,7 @@ describe("prepareCliRunContext", () => {
         });
         if (accountState === "connected") {
           await preparation;
-          expect(prepareExecution).toHaveBeenCalledWith(
-            expect.objectContaining({ authProfileId, authCredential: credential }),
-          );
+          expectCall(prepareExecution, { authProfileId, authCredential: credential });
         } else {
           await expect(preparation).rejects.toThrow(
             `could not materialize selected auth profile "${authProfileId}"`,
@@ -955,8 +928,6 @@ describe("prepareCliRunContext", () => {
   );
 
   it("persists and forwards a refreshed managed Anthropic OAuth profile", async () => {
-    const { dir } = fixture.session;
-    const agentDir = path.join(dir, "agents", "main", "agent");
     const authProfileId = "anthropic:openclaw-managed";
     const prepareExecution = vi.fn(async () => undefined);
     const refreshedCredential = {
@@ -966,19 +937,16 @@ describe("prepareCliRunContext", () => {
       refresh: "refreshed-refresh-token",
       expires: Date.now() + 60 * 60_000,
     };
-    fs.mkdirSync(agentDir, { recursive: true });
-    saveAuthProfileStore(
-      createAuthProfileStoreFixture({
-        [authProfileId]: {
-          type: "oauth",
-          provider: "anthropic",
-          access: "expired-access-token",
-          refresh: "stored-refresh-token",
-          expires: Date.now() - 60_000,
-        },
-      }),
-      agentDir,
-    );
+
+    const agentDir = saveProfiles({
+      [authProfileId]: {
+        type: "oauth",
+        provider: "anthropic",
+        access: "expired-access-token",
+        refresh: "stored-refresh-token",
+        expires: Date.now() - 60_000,
+      },
+    });
     setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
     const resolveApiKeyForProfile = vi.fn<typeof resolveApiKeyForProfileImpl>(async ({ store }) => {
       saveAuthProfileStore(
@@ -1013,86 +981,62 @@ describe("prepareCliRunContext", () => {
       config: {},
     });
 
-    expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authProfileId,
-        authCredential: expect.objectContaining({
-          type: "oauth",
-          provider: "anthropic",
-          access: refreshedCredential.access,
-          refresh: refreshedCredential.refresh,
-        }),
+    expectCall(prepareExecution, {
+      authProfileId,
+      authCredential: expect.objectContaining({
+        type: "oauth",
+        provider: "anthropic",
+        access: refreshedCredential.access,
+        refresh: refreshedCredential.refresh,
       }),
-    );
+    });
     expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[authProfileId]).toEqual(
       refreshedCredential,
     );
-    expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileId: authProfileId,
-        agentDir,
-        allowProfileFallback: false,
-      }),
-    );
+    expectCall(resolveApiKeyForProfile, {
+      profileId: authProfileId,
+      agentDir,
+      allowProfileFallback: false,
+    });
   });
 
-  it.each([
-    {
-      label: "OAuth under the Claude CLI provider",
-      credential: {
-        type: "oauth" as const,
+  it("runs an imported Claude CLI OAuth login natively without forwarding a credential", async () => {
+    const authProfileId = "anthropic:claude-cli";
+    const prepareExecution = vi.fn(async () => undefined);
+
+    const agentDir = saveProfiles({
+      [authProfileId]: {
+        type: "oauth",
         provider: "claude-cli",
         access: "expired-imported-access",
         refresh: "imported-refresh",
         expires: Date.now() - 60_000,
         email: "owner@example.com",
       },
-    },
-  ])(
-    "runs an imported Claude CLI login stored as $label natively without forwarding a credential",
-    async ({ credential }) => {
-      const { dir } = fixture.session;
-      const agentDir = path.join(dir, "agents", "main", "agent");
-      const authProfileId = "anthropic:claude-cli";
-      const prepareExecution = vi.fn(async () => undefined);
-      fs.mkdirSync(agentDir, { recursive: true });
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            [authProfileId]: credential,
-          },
-        },
-        agentDir,
-      );
-      setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
-      const resolveApiKeyForProfile = vi.fn<typeof resolveApiKeyForProfileImpl>(async () => null);
-      setCliRunnerPrepareTestDeps({
-        resolveApiKeyForProfile,
-      });
+    });
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    const resolveApiKeyForProfile = vi.fn<typeof resolveApiKeyForProfileImpl>(async () => null);
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile,
+    });
 
-      await fixture.prepare({
-        sessionKey: "agent:main:main",
-        agentDir,
-        provider: "claude-cli",
-        model: "sonnet",
-        authProfileId,
-        config: {},
-      });
+    await fixture.prepare({
+      sessionKey: "agent:main:main",
+      agentDir,
+      provider: "claude-cli",
+      model: "sonnet",
+      authProfileId,
+      config: {},
+    });
 
-      expect(prepareExecution).toHaveBeenCalledTimes(1);
-      expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({ authProfileId: undefined, authCredential: undefined }),
-      );
-      expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
-    },
-  );
+    expect(prepareExecution).toHaveBeenCalledTimes(1);
+    expectCall(prepareExecution, { authProfileId: undefined, authCredential: undefined });
+    expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
+  });
 
   it.each(["missing", "different-profile"] as const)(
     "rejects a selected credential when auth resolution returns %s",
     async (resolution) => {
-      const { dir } = fixture.session;
-      const agentDir = path.join(dir, "agents", "main", "agent");
       const authProfileId =
         resolution === "missing" ? "anthropic:openclaw-managed" : "anthropic:account-a";
       const fallbackProfileId = "anthropic:account-b";
@@ -1104,22 +1048,17 @@ describe("prepareCliRunContext", () => {
         expires: Date.now() + 60 * 60_000,
       };
       const prepareExecution = vi.fn(async () => undefined);
-      fs.mkdirSync(agentDir, { recursive: true });
-      saveAuthProfileStore(
-        createAuthProfileStoreFixture({
-          [authProfileId]: {
-            type: "oauth",
-            provider: "anthropic",
-            access: "expired-access-token",
-            refresh: "expired-refresh-token",
-            expires: Date.now() - 60_000,
-          },
-          ...(resolution === "different-profile"
-            ? { [fallbackProfileId]: fallbackCredential }
-            : {}),
-        }),
-        agentDir,
-      );
+
+      const agentDir = saveProfiles({
+        [authProfileId]: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "expired-access-token",
+          refresh: "expired-refresh-token",
+          expires: Date.now() - 60_000,
+        },
+        ...(resolution === "different-profile" ? { [fallbackProfileId]: fallbackCredential } : {}),
+      });
       setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
       setCliRunnerPrepareTestDeps({
         resolveApiKeyForProfile: vi.fn<typeof resolveApiKeyForProfileImpl>(async () =>
@@ -1173,21 +1112,16 @@ describe("prepareCliRunContext", () => {
       expectedAuthProfileId: undefined,
     },
   ])("$name", async (testCase) => {
-    const { dir } = fixture.session;
-    const agentDir = path.join(dir, "agents", "main", "agent");
     const authProfileId = "claude-cli:stored";
     const prepareExecution = vi.fn(async () => ({ env: { TEST_PREPARED_ENV: "1" } }));
-    fs.mkdirSync(agentDir, { recursive: true });
-    saveAuthProfileStore(
-      createAuthProfileStoreFixture({
-        [authProfileId]: {
-          type: "api_key",
-          provider: "claude-cli",
-          key: "stored-key",
-        },
-      }),
-      agentDir,
-    );
+
+    const agentDir = saveProfiles({
+      [authProfileId]: {
+        type: "api_key",
+        provider: "claude-cli",
+        key: "stored-key",
+      },
+    });
 
     setCliBackendForPrepareTest({
       prepareExecution,
@@ -1209,9 +1143,7 @@ describe("prepareCliRunContext", () => {
     });
 
     expect(context.effectiveAuthProfileId).toBe(testCase.expectedAuthProfileId);
-    expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({ authProfileId: testCase.expectedAuthProfileId }),
-    );
+    expectCall(prepareExecution, { authProfileId: testCase.expectedAuthProfileId });
   });
 
   it("lets Gemini CLI preparation override generated MCP system settings auth", async () => {
@@ -1223,13 +1155,10 @@ describe("prepareCliRunContext", () => {
         GEMINI_CLI_SYSTEM_SETTINGS_PATH: profileSystemSettingsPath,
       },
     }));
-    setRawCliBackendForPrepareTest({
-      id: "google-gemini-cli",
-      pluginId: "google",
+    setGeminiBackend({
       bundleMcp: true,
       bundleMcpMode: "gemini-system-settings",
       prepareExecution,
-      config: createArgBackendConfig("gemini", ["--prompt", "{prompt}"], "json"),
     });
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime,
@@ -1276,13 +1205,10 @@ describe("prepareCliRunContext", () => {
       throw new Error("Gemini auth profile was selected but no credential material was found");
     });
     const revokeMcpLoopbackClientGrant = vi.fn(() => true);
-    setRawCliBackendForPrepareTest({
-      id: "google-gemini-cli",
-      pluginId: "google",
+    setGeminiBackend({
       bundleMcp: true,
       bundleMcpMode: "gemini-system-settings",
       prepareExecution,
-      config: createArgBackendConfig("gemini", ["--prompt", "{prompt}"], "json"),
     });
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime,
@@ -1422,9 +1348,7 @@ describe("prepareCliRunContext", () => {
     expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
     expect(prepareClaudeCliSkillsPluginMock).not.toHaveBeenCalled();
     expect(mockGetGlobalHookRunner).not.toHaveBeenCalled();
-    expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({ executionMode: "side-question" }),
-    );
+    expectCall(prepareExecution, { executionMode: "side-question" });
     expect(context.systemPrompt).toBe("BTW system prompt");
     expect(context.params.prompt).toBe("side question prompt");
     expect(context.openClawHistoryPrompt).toBeUndefined();
@@ -1637,12 +1561,9 @@ describe("prepareCliRunContext", () => {
   });
 
   it("marks inter-session prompts after CLI prompt-build hook context is applied", async () => {
-    const hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
-      runBeforePromptBuild: vi.fn(async () => ({
-        prependContext: "trusted hook context",
-      })),
-    };
+    const hookRunner = promptHook({
+      prependContext: "trusted hook context",
+    });
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
     const context = await fixture.prepare({
@@ -2232,9 +2153,7 @@ describe("prepareCliRunContext", () => {
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
-    expect(resolveBootstrapContextForRun).toHaveBeenCalledWith(
-      expect.objectContaining({ chatType: testCase.expectedChatType }),
-    );
+    expectCall(resolveBootstrapContextForRun, { chatType: testCase.expectedChatType });
     expect(context.systemPrompt).toContain(SHARED_CHAT_MESSAGE_TOOL_ETIQUETTE);
   });
 
@@ -2365,13 +2284,10 @@ describe("prepareCliRunContext", () => {
       }),
     });
 
-    const hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
-      runBeforePromptBuild: vi.fn(async () => ({
-        systemPrompt: "hook system",
-        prependSystemContext: "hook prepend system",
-      })),
-    };
+    const hookRunner = promptHook({
+      systemPrompt: "hook system",
+      prependSystemContext: "hook prepend system",
+    });
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
     const prepareTurn = () =>
@@ -2764,9 +2680,9 @@ describe("prepareCliRunContext", () => {
       native: [],
       openClaw: ["write", "apply_patch"],
     });
-    expect(resolveMcpLoopbackPolicyTools).toHaveBeenCalledWith(
-      expect.objectContaining({ context: expect.objectContaining({ toolsAllow: ["write"] }) }),
-    );
+    expectCall(resolveMcpLoopbackPolicyTools, {
+      context: expect.objectContaining({ toolsAllow: ["write"] }),
+    });
   });
 
   it.each([
@@ -3053,9 +2969,7 @@ describe("prepareCliRunContext", () => {
     ).rejects.toThrow(
       "did not enforce exact per-run tool availability during execution preparation",
     );
-    expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({ toolAvailability: { native: [], openClaw: [] } }),
-    );
+    expectCall(prepareExecution, { toolAvailability: { native: [], openClaw: [] } });
     expect(cleanup).toHaveBeenCalledOnce();
     expect(cleanupScope.outcome).toBe("uncertain");
   });
@@ -3120,14 +3034,12 @@ describe("prepareCliRunContext", () => {
       cliToolAvailability: { native: [], openClaw: [] },
     });
 
-    expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({
-        isolatedCompletionCwd: dir,
-        isolatedCompletionModelId: "test-model",
-        isolatedCompletionPrompt: "latest ask",
-        isolatedCompletionSystemPrompt: "Return only valid JSON.",
-      }),
-    );
+    expectCall(prepareExecution, {
+      isolatedCompletionCwd: dir,
+      isolatedCompletionModelId: "test-model",
+      isolatedCompletionPrompt: "latest ask",
+      isolatedCompletionSystemPrompt: "Return only valid JSON.",
+    });
   });
 
   it("rejects a CLI backend that does not adopt isolated completion", async () => {
@@ -3198,21 +3110,17 @@ describe("prepareCliRunContext", () => {
       skillLibraryAuthoring,
     });
 
-    expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolAvailability: { native: ["Read"], openClaw: ["skill_workshop"] },
-      }),
-    );
+    expectCall(prepareExecution, {
+      toolAvailability: { native: ["Read"], openClaw: ["skill_workshop"] },
+    });
     expect(context.params.cliToolAvailability).toEqual({
       native: ["Read"],
       openClaw: ["skill_workshop"],
     });
 
-    expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
-      expect.objectContaining({
-        skillLibraryAuthoring: { ...skillLibraryAuthoring, defaultTarget: "personal" },
-      }),
-    );
+    expectCall(resolveMcpLoopbackScopedTools, {
+      skillLibraryAuthoring: { ...skillLibraryAuthoring, defaultTarget: "personal" },
+    });
     expect(context.nodeSkillWorkshop?.name).toBe("skill_workshop");
     expect(context.systemPromptReport.tools.entries.map((tool) => tool.name)).toContain(
       "skill_workshop",
@@ -3239,10 +3147,7 @@ describe("prepareCliRunContext", () => {
     async ({ cliToolAvailability, hookToolsAllow, projectedToolNames }) => {
       const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
       const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
-      const hookRunner = {
-        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
-        runBeforePromptBuild: vi.fn(async () => ({ toolsAllow: hookToolsAllow })),
-      };
+      const hookRunner = promptHook({ toolsAllow: hookToolsAllow });
       mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
       setRawCliBackendForPrepareTest({
         id: "claude-cli",
@@ -3285,11 +3190,9 @@ describe("prepareCliRunContext", () => {
         native: [],
         openClaw: ["read"],
       });
-      expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolAvailability: { native: [], openClaw: ["read"] },
-        }),
-      );
+      expectCall(prepareExecution, {
+        toolAvailability: { native: [], openClaw: ["read"] },
+      });
       expect(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.toolsAllow).toEqual(["read"]);
       expect(context.systemPromptReport.tools.entries.map((entry) => entry.name)).toEqual(["read"]);
       expect(finalizePromptForResolvedTools).toHaveBeenCalledWith({
@@ -3308,10 +3211,7 @@ describe("prepareCliRunContext", () => {
   );
 
   it("fails closed when a prompt hook restricts an always-on CLI backend", async () => {
-    const hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
-      runBeforePromptBuild: vi.fn(async () => ({ toolsAllow: ["read"] })),
-    };
+    const hookRunner = promptHook({ toolsAllow: ["read"] });
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
     setRawCliBackendForPrepareTest({
       id: "test-cli",
@@ -3611,15 +3511,12 @@ describe("prepareCliRunContext", () => {
 
   it("keeps old-account history private after replacement and native-session clear", async () => {
     const account = "test:b";
-    const { dir, sessionTarget } = fixture.session;
-    const agentDir = path.join(dir, "agents", "main", "agent");
-    saveAuthProfileStore(
-      createAuthProfileStoreFixture({
-        "test:a": { type: "token", provider: "test-cli", token: "synthetic-account-a" },
-        "test:b": { type: "token", provider: "test-cli", token: "synthetic-account-b" },
-      }),
-      agentDir,
-    );
+    const { sessionTarget } = fixture.session;
+
+    const agentDir = saveProfiles({
+      "test:a": { type: "token", provider: "test-cli", token: "synthetic-account-a" },
+      "test:b": { type: "token", provider: "test-cli", token: "synthetic-account-b" },
+    });
     const inputs: string[] = [];
     let turn = 0;
     const execute: CliBackendExecute = async function* (execution) {
