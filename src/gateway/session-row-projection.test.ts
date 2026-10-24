@@ -43,6 +43,7 @@ import {
   watchRowFacts as observeRowFacts,
 } from "./session-row-projection.read-fixture.test-support.js";
 import {
+  acpProjectionMeta,
   requestSessionRow,
   withSessionRowProjectionState as withProjectionState,
 } from "./session-row-projection.test-support.js";
@@ -542,14 +543,7 @@ it("searches cold archives with worker-prepared facts across publications and li
       seedCanonicalAcpSessionMeta({
         sessionKey: key,
         lifecycleRevision: "first",
-        meta: {
-          backend,
-          agent: "main",
-          runtimeSessionName: "archived",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 1,
-        },
+        meta: acpProjectionMeta(backend, "archived"),
       });
     publishAcp("fixture-runtime-first");
     using cleanup = new DisposableStack();
@@ -643,7 +637,7 @@ function sessionDescriber(context: ReturnType<typeof requestContext>, key: strin
 
 it("publishes local placement receipts without rereading or adopting another store's facts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { entries: { main: {} } } };
+    const cfg = mainConfig;
     const target = {
       agentId: "main",
       sessionKey: "agent:main:local-placement-receipt",
