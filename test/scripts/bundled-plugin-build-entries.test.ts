@@ -40,6 +40,14 @@ function collectBuildSources(params?: Parameters<typeof collectBundledPluginBuil
 }
 
 describe("bundled plugin build entries", () => {
+  it("does not classify extension dependency directories as omitted plugins", () => {
+    const cwd = tempDirs.make("openclaw-excluded-dependency-dir-");
+    write(cwd, "package.json", {
+      files: ["dist/**", "!dist/extensions/node_modules/**", "!dist/extensions/omitted-plugin/**"],
+    });
+    expect(collectRootPackageExcludedExtensionDirs({ cwd })).toEqual(new Set(["omitted-plugin"]));
+  });
+
   it("preserves tracked entry names and ignores deleted or untracked plugin inputs", () => {
     const cwd = tempDirs.make("openclaw-tracked-plugin-entries-");
     const writeFile = (name: string, contents?: unknown) => write(cwd, name, contents);
