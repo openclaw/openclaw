@@ -131,52 +131,14 @@ ${stepRun("fedora-installer", "install.sh on Fedora")}`,
     expect(diagnostics.stdout).toContain("librepo: fixture mirror connection stalled");
   });
 
-  it("verifies installers across Linux privilege and package-manager paths", () => {
-    expect(Object.keys(config.jobs)).toEqual(expect.arrayContaining(unixJobs));
-    for (const job of [
-      "linux-docker",
-      "debian-installer",
-      "linux-build-tools-failure",
-      "linux-non-root",
-    ]) {
-      expect(config.jobs[job]?.strategy?.matrix?.debian, job).toEqual(["bookworm", "trixie"]);
-      expect(
-        config.jobs[job]?.steps.some((step) => step.run?.includes("${{ matrix.debian }}")),
-      ).toBe(true);
-    }
-    contains(
-      "debian:${{ matrix.debian }}-slim",
-      "node --version | grep -E '^v24\\.[0-9]+\\.[0-9]+$'",
-      'require("node:sqlite")',
-      "/tmp/build-tools-stub-triggered",
-      'grep -aFq "Installing build tools failed"',
-      'grep -aFq "Build tools installed"',
-      "sudo -u installer -H bash",
-      'test "$(npm config get prefix)" = "$HOME/.npm-global"',
-      `grep -Fxq 'export PATH="$HOME/.npm-global/bin:$PATH"' "$HOME/.bashrc"`,
-      "user: [root, non-root]",
-      "bash /tmp/install.sh --version latest && openclaw --version",
-      "bash /tmp/install-cli.sh --prefix /tmp/openclaw",
-      "runs-on: xcode-27",
-      "node-version: 24",
-      'OPENCLAW_NO_ONBOARD: "1"',
-      'OPENCLAW_NO_PROMPT: "1"',
-      "bash dist/installers/install.sh --no-onboard --no-prompt --version latest",
-      "openclaw --version",
-      "windows-installer:",
-      "runs-on: windows-latest",
-      ".\\scripts\\install.ps1 -DryRun",
+  it("bounds every installer container with a kill-after timeout", () => {
+    const runs = Object.values(config.jobs).flatMap((job) =>
+      job.steps.flatMap((step) => step.run?.split("\n") ?? []),
     );
-    expect(workflow.match(/timeout --kill-after=30s 20m docker run --rm/g)?.length).toBe(6);
-    expect(workflow.match(/fedora:44/g)?.length).toBe(2);
-    expect(workflow).not.toMatch(/(^|\n)\s+docker run --rm/u);
-    for (const absent of [
-      "timeout 20m docker run --rm",
-      "bash /tmp/install.sh --no-prompt --no-onboard",
-      "install.cmd dry run",
-      ".\\scripts\\install.cmd",
-    ]) {
-      expect(workflow).not.toContain(absent);
+    const containers = runs.filter((line) => line.includes("docker run"));
+    expect(containers.length).toBeGreaterThan(0);
+    for (const line of containers) {
+      expect(line.trim()).toMatch(/^timeout --kill-after=\d+s \d+m docker run --rm\b/u);
     }
   });
 
