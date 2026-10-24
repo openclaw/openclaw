@@ -1,4 +1,3 @@
-import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { canPreload } from "../lib/route-preload.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -20,15 +19,7 @@ export function connectNavigationPrefetch(options: {
     return () => {};
   }
   const base = new URL(`${options.resourceBasePath.replace(/\/$/u, "")}/`, location.origin);
-  const pending = new Set<string>([
-    "new-session",
-    ...SIDEBAR_NAV_ROUTES,
-    "palette",
-    "model-picker",
-    "appearance",
-    "shortcuts",
-    "debug",
-  ]);
+  const pending = new Set<string>();
   const seen = new Set(performance.getEntriesByType("resource").map((entry) => entry.name));
   const links = new Map<HTMLLinkElement, () => void>();
   const abort = new AbortController();
@@ -60,7 +51,7 @@ export function connectNavigationPrefetch(options: {
   };
   const schedule = () => {
     cancel();
-    if (!available() || running || pending.size === 0) {
+    if (!available() || running || (manifest && pending.size === 0)) {
       return;
     }
     // Readiness can precede first paint. Leave a quiet window, then ask for idle
@@ -90,11 +81,13 @@ export function connectNavigationPrefetch(options: {
           priority: "low",
         });
         if (!response.ok) {
-          pending.clear();
+          manifest = {};
           return;
         }
         // The build owns this hashed descriptor and its same-origin asset paths.
-        manifest = await response.json();
+        const entries: Record<string, string[]> = await response.json();
+        manifest = entries;
+        Object.keys(entries).forEach((key) => pending.add(key));
       }
       if (!ready()) {
         return;
@@ -141,6 +134,7 @@ export function connectNavigationPrefetch(options: {
       await Promise.all(loads);
     } catch {
       // Speculation never triggers stale-chunk recovery; navigation owns failures.
+      manifest = {};
       pending.clear();
     } finally {
       running = false;
@@ -160,7 +154,7 @@ export function connectNavigationPrefetch(options: {
           : event.target.closest('[data-value="command:debug-overlay"]')
             ? "debug"
             : undefined;
-    if (key && pending.has(key)) {
+    if (key && (!manifest || pending.has(key))) {
       intent = key;
       if (!running && ready()) {
         cancel();
