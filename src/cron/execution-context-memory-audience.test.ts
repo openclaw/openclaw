@@ -124,7 +124,6 @@ async function runOccurrence(job: CronStoredJob) {
       agentId: "main",
       runId: "run-1",
       runSessionKey: RUN_KEY,
-      operatorAuthorityRestored: false,
     }),
   });
   const admitted = await admission.preparedRunAdmission.admit("embedded");
@@ -182,6 +181,43 @@ it("gives a non-owner requester only the conversation's memory", async () => {
   setParent("direct");
   profiles.revoked.add(OWNER_PROFILE);
   const run = await runOccurrence(storedJob());
+  for (const audience of run.audiences) {
+    expect(audience).toMatchObject({ kind: "conversation", sessionKey: PARENT_KEY });
+  }
+  run.settle();
+});
+
+it("gives a v2026.10.6 operator-linked trusted job owner-private memory", async () => {
+  // An operator's `cron.add --session-key` on v2026.10.6 stored a trusted policy and
+  // no requester; the job keeps operator authority (resolved decision 2, refined).
+  setParent("direct");
+  const run = await runOccurrence(
+    storedJob({
+      owner: undefined,
+      createdActor: undefined,
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+    }),
+  );
+  expect(run.audiences).toEqual([
+    { kind: "owner-private", agentId: "main" },
+    { kind: "owner-private", agentId: "main" },
+  ]);
+  run.settle();
+});
+
+it("gives an agent-created job without a recorded requester only the conversation's memory", async () => {
+  setParent("direct");
+  const run = await runOccurrence(
+    storedJob({
+      createdActor: undefined,
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: PARENT_KEY,
+        ownerAccountId: "default",
+      },
+    }),
+  );
   for (const audience of run.audiences) {
     expect(audience).toMatchObject({ kind: "conversation", sessionKey: PARENT_KEY });
   }

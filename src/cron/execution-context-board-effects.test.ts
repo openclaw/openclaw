@@ -129,7 +129,6 @@ async function admitChildRun() {
       runId: "run-1",
       runSessionKey: RUN_KEY,
       toolsAllow: ["dashboard", "show_widget"],
-      operatorAuthorityRestored: false,
     }),
   });
   const admitted = await admission.preparedRunAdmission.admit("embedded");

@@ -41,6 +41,7 @@ import {
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { resolveCronJobToolPolicyContext } from "../execution-context-admission.js";
+import { resolveScheduledSenderBit } from "../execution-context-registry.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { prepareCronRunInference } from "../run-inference.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
@@ -205,15 +206,19 @@ export function createCronPromptExecutor(
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
+    const scheduledExecution = params.occurrence.mint({
+      cfg: params.cfgWithAgentDefaults,
+      agentId: params.agentId,
+      runId,
+      runSessionKey: params.runSessionKey,
+      toolsAllow: params.agentPayload?.toolsAllow,
+      operatorAuthority: params.operatorAuthority,
+    });
+    // Embedded, Codex and CLI candidates share this one sender bit for the run;
+    // the CLI loopback reads the same decision from the run's context.
+    const scheduledSender = resolveScheduledSenderBit(scheduledExecution.result);
     const cronAdmission = prepareCronRunAdmission({
-      scheduledExecution: params.occurrence.mint({
-        cfg: params.cfgWithAgentDefaults,
-        agentId: params.agentId,
-        runId,
-        runSessionKey: params.runSessionKey,
-        toolsAllow: params.agentPayload?.toolsAllow,
-        operatorAuthorityRestored: params.operatorAuthority !== undefined,
-      }),
+      scheduledExecution,
       operatorAuthority: params.operatorAuthority,
       admissionSource: params.admissionSource,
       // A child running in its parent's workspace loses every effect once that parent resets.
@@ -451,6 +456,7 @@ export function createCronPromptExecutor(
             agentId: params.agentId,
             trigger,
             jobId: params.job.id,
+            ...scheduledSender,
             messageActionTurnCapability: cronAdmission.messageActionTurnCapability,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,
