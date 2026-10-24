@@ -110,7 +110,7 @@ async function loadAgentReplacementOperations() {
           const publication = candidate.publication;
           deferSqliteWorkerCommitReceipt(current.db, publication);
           context.admit("commit", publication);
-          return candidate;
+          return { maintenancePlans: candidate.maintenancePlans };
         },
       );
     },

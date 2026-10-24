@@ -123,6 +123,49 @@ Run at least five alternating samples at 100 and 1,000 reads on the approved
 benchmark host. This is forced-GC owner retention proof, not a latency, allocation,
 promotion, or production GC benchmark.
 
+## SQLite reply decoding
+
+Add `--sqlite-reply-census` to a synthetic `transcript-broadcast-measure.ts` run
+with `--workload-cpu-profile` or `--allocations`. Each active CPU/heap window writes
+`<profile>.sqlite-replies.json` with reply counts, total/max bytes, framed replies,
+and failures grouped by the real SQLite command. It also saves the first successful
+ordinary reply per method as `<profile>.reply-<method>.bin`, limited to 8 MiB per
+sample and 32 MiB per capture. Labels are bounded; admission messages are excluded.
+The preload retains the original deserializer so command attribution does not
+pollute the profile's existing `.deserialize.json` observer. Counts and samples
+are diagnostic evidence; these instrumented runs are not timing gates.
+
+Replay a captured synthetic `sessions.patch` reply without a source checkout:
+`node scripts/perf/sqlite-reply-transfer-measure.mjs --serialized-reply
+<profile>.reply-session.entries.replace.bin --operations 500000 --start-at <epoch-ms>`.
+The replay hashes its input and verifies the fixture's independently expected
+maintenance plan with empty work lists and zero counters. Compare captures with the same fixed
+operation count; this measures ordinary reply decoding and excludes producer, IPC,
+SQL, and Gateway work.
+
+`node scripts/perf/sqlite-reply-transfer-measure.mjs <source-root> --shape 16384
+--operations 500000 --start-at <epoch-ms>` exercises the complete transfer receiver
+with prepared synthetic session-entry frames. The source capsule needs the receiver,
+SQLite lifecycle errors, and normalization-core record helpers; it needs no
+dependency installation. The receiver remains whole; the two required cleanup
+functions are extracted between checked unique source anchors before TypeScript
+stripping. Complete input source hashes are included in each JSON result.
+Shapes are 1024, 16384, 131072, and 9437184 bytes of prompt content;
+the last shape protects fragmented-record behavior. Omit `--shape` to run all four.
+
+Run baseline and candidate in separate processes under the approved host's guard
+and exclusive slot, with the same start time and swapped interleaved CPUs in the
+next pair. Each side warms before the synchronized start and verifies the decoded
+values and record counts. Compare fixed-work process/main-thread CPU, elapsed time,
+GC totals and maxima, and event-loop distributions with their sample counts.
+Use the campaign's absolute-delta and control rules for acceptance.
+
+Use `--allocations` only in separate diagnostic passes. Inspector samples include
+collected objects but exclude external backing buffers; they cannot quantify the
+full byte-buffer allocation saved by avoiding reassembly. The reported payload
+size identifies the copy size for a single-frame record. This is receiver-owner
+proof, excluding producer serialization, IPC, SQL, and whole-Gateway latency.
+
 ## Session-fork snapshots
 
 `node --expose-gc scripts/perf/session-fork-retention-measure.mjs <source-root>

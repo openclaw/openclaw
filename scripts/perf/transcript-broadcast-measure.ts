@@ -74,6 +74,7 @@ const { values } = parseArgs({
     "prep-trace": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "workload-cpu-profile": { type: "boolean", default: false },
+    "sqlite-reply-census": { type: "boolean", default: false },
     "capture-responses": { type: "boolean", default: false },
     "list-filter-churn": { type: "boolean", default: false },
     "trace-gc": { type: "boolean", default: false },
@@ -632,6 +633,15 @@ if ((values["cpu-profile"] || values["stream-start-diagnostics"]) && !turnScenar
 }
 if (values["workload-cpu-profile"] && values["cpu-profile"]) {
   throw new Error("--workload-cpu-profile and --cpu-profile cannot capture CPU simultaneously");
+}
+if (
+  values["sqlite-reply-census"] &&
+  !values["workload-cpu-profile"] &&
+  !values["cpu-profile"] &&
+  !values.allocations &&
+  !values["stream-start-allocations"]
+) {
+  throw new Error("--sqlite-reply-census requires a CPU or allocation profile window");
 }
 if (
   values["workload-cpu-profile"] &&
@@ -4283,6 +4293,9 @@ try {
       ...(scenario === "chat.startup" ? ["--import", startupObserverPreload] : []),
       ...(values["authority-counts"] ? ["--import", authorityPreload] : []),
       ...(values["config-capture-counts"] ? ["--import", configCapturePreload] : []),
+      ...(values["sqlite-reply-census"]
+        ? ["--import", "./scripts/perf/sqlite-reply-census-preload.mjs"]
+        : []),
       "--import",
       "./scripts/lib/gateway-bench-profile-preload.ts",
       ...(values["transport-counts"]
