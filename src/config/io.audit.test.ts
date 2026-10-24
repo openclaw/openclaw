@@ -227,6 +227,33 @@ it.each([
     ["set", "--batch-json"],
     '[{"path":"channels.slack.token","value":"secret-value"}]',
   ),
+  configCase("sensitive config set value with a value option before the positionals", [
+    "set",
+    "--expect-current-json",
+    '{"theme":"dark"}',
+    "channels.slack.token",
+  ]),
+  [
+    "sensitive config set value with a value option after the positionals",
+    [
+      "openclaw",
+      "config",
+      "set",
+      "channels.slack.token",
+      "secret-value",
+      "--expect-current-json",
+      '{"theme":"dark"}',
+    ],
+    [
+      "openclaw",
+      "config",
+      "set",
+      "channels.slack.token",
+      "***",
+      "--expect-current-json",
+      '{"theme":"dark"}',
+    ],
+  ] as const,
 ])("redacts $0 in persisted audit process info", (_name, argv, expected) => {
   expect(createAuditRecordBase("/tmp/openclaw.json", [...argv]).argv).toEqual(expected);
 });
