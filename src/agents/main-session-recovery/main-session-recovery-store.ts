@@ -7,6 +7,7 @@ import {
 } from "../../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { isMainSessionCurrentGenerationStop } from "./main-session-recovery-interrupted-claim.js";
 import {
   isMainSessionRecoveryPending,
   isMainSessionRecoveryReconciliationCandidate,
@@ -284,11 +285,14 @@ export async function claimMainSessionRecoveryOwner(params: {
     // also lose its predecessor before admission. Either way, no row remains to fence.
     return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
   }
-  // Stop retains its outcome flag after recovery custody settles. Admit that
-  // same-session row without mistaking its cancelled outcome for unfinished work.
+  // Stop retains its outcome flag, and may still hold its delivery claim, in this
+  // generation. Admit that same-session row without mistaking its cancelled
+  // outcome for restart-interrupted work.
   const healthyExpectedSession =
     claim.entry &&
-    (claim.entry.abortedLastRun !== true || !hasMainSessionRecoveryClaim(claim.entry)) &&
+    (claim.entry.abortedLastRun !== true ||
+      !hasMainSessionRecoveryClaim(claim.entry) ||
+      isMainSessionCurrentGenerationStop(claim.entry, params.lifecycleGeneration)) &&
     claim.entry.restartRecoveryRuns === undefined &&
     claim.entry.mainRestartRecovery === undefined &&
     (claim.entry.sessionId === params.sessionId ||

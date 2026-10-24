@@ -15,6 +15,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { isMainSessionCurrentGenerationStop } from "./restart-recovery-current-generation-stop.js";
 import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidence,
@@ -644,6 +645,7 @@ export function canReplaceAbortedRestartRecoveryClaim(
   entry: SessionEntry,
   sessionKey: string,
   admissionRunId: string | undefined,
+  lifecycleGeneration: string,
 ): boolean {
   const activeClaimRunId = normalizeRunId(entry.restartRecoveryDeliveryRunId);
   return Boolean(
@@ -651,14 +653,15 @@ export function canReplaceAbortedRestartRecoveryClaim(
     activeClaimRunId &&
     admissionRunId !== activeClaimRunId &&
     entry.abortedLastRun === true &&
-    (entry.status === undefined || entry.status === "interrupted") &&
     entry.pendingFinalDelivery === undefined &&
     entry.restartRecoveryBeforeAgentReplyState === undefined &&
     entry.restartRecoveryDeliveryReceiptState === undefined &&
     // Session recovery resumes its claims before new input. Other lifecycle owners
     // must be able to replace an interrupted claim when admitting a new turn.
-    (entry.restartRecoverySourceIngress === "control-ui" ||
-      !isMainRestartRecoveryCandidate(entry, sessionKey)),
+    (((entry.status === undefined || entry.status === "interrupted") &&
+      (entry.restartRecoverySourceIngress === "control-ui" ||
+        !isMainRestartRecoveryCandidate(entry, sessionKey))) ||
+      isMainSessionCurrentGenerationStop(entry, lifecycleGeneration)),
   );
 }
 

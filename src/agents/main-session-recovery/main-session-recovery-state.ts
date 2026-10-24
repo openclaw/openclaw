@@ -19,6 +19,7 @@ import {
   removeMainSessionRecoveryForegroundClaim,
 } from "./main-session-recovery-clear.js";
 import { isMainRestartRecoveryAggregateEmptyAndUnowned } from "./main-session-recovery-empty-aggregate.js";
+import { isMainSessionRestartInterruptedClaim } from "./main-session-recovery-interrupted-claim.js";
 import type {
   MainSessionRecoveryCommand,
   MainSessionRecoveryConflict,
@@ -269,9 +270,7 @@ function inspectMainSessionRecoveryForAdmission(params: {
     return { status: "blocked" };
   }
   if (
-    hasMainSessionRecoveryClaim(params.entry) &&
-    params.entry.abortedLastRun === true &&
-    isMainRestartRecoveryCandidate(params.entry, params.sessionKey) &&
+    isMainSessionRestartInterruptedClaim(params.entry, params) &&
     !params.entry.mainRestartRecovery
   ) {
     // Only the Gateway owner may assign a cycle to an interrupted admission claim.
@@ -338,12 +337,7 @@ export function transitionMainSessionRecovery(
       };
     }
     case "observe": {
-      if (
-        hasMainSessionRecoveryClaim(entry) &&
-        entry.abortedLastRun === true &&
-        isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
-        !entry.mainRestartRecovery
-      ) {
+      if (isMainSessionRestartInterruptedClaim(entry, command) && !entry.mainRestartRecovery) {
         // Acquire recovery identity before scanning interrupted rows.
         entry.mainRestartRecovery = createCycle(command.cycleId);
       }
@@ -595,9 +589,7 @@ export function transitionMainSessionRecovery(
       }
       if (
         entry.sessionId !== command.sessionId ||
-        !hasMainSessionRecoveryClaim(entry) ||
-        entry.abortedLastRun !== true ||
-        !isMainRestartRecoveryCandidate(entry, command.sessionKey)
+        !isMainSessionRestartInterruptedClaim(entry, command)
       ) {
         return { kind: "no_change" };
       }

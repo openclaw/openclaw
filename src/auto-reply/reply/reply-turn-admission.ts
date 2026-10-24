@@ -1,3 +1,4 @@
+import { isMainSessionCurrentGenerationStop } from "../../agents/main-session-recovery/main-session-recovery-interrupted-claim.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
   claimMainSessionRecoveryOwner,
@@ -440,6 +441,7 @@ export async function admitReplyTurn(
           if (
             shouldClaimRecoveryOwner &&
             admittedSessionEntry?.abortedLastRun === true &&
+            !isMainSessionCurrentGenerationStop(admittedSessionEntry, lifecycleGeneration) &&
             !admittedSessionEntry.mainRestartRecovery?.tombstone &&
             gatewayContext &&
             recoveryRuntime

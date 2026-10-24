@@ -470,6 +470,7 @@ export function createReplyRestartRecoveryClaimController(
       entry,
       params.sessionKey,
       admissionRunId,
+      executionGeneration,
     );
     if (
       activeClaimRunId &&
@@ -598,8 +599,7 @@ export function createReplyRestartRecoveryClaimController(
                 ),
                 ...(pendingFinalDelivery.context ? { context: pendingFinalDelivery.context } : {}),
               },
-              // Hook-owned replies are already terminal. A restart may only deliver this
-              // checkpoint; it must never resume the model or broader tool surface.
+              // Hook-owned replies are terminal; restart may deliver only this checkpoint.
               restartRecoveryForceSafeTools: true,
             }
           : {}),

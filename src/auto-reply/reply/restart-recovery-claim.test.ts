@@ -581,6 +581,87 @@ describe("createReplyRestartRecoveryClaimController", () => {
     expect(persisted?.status).toBeUndefined();
   });
 
+  it.each(["killed", undefined] as const)(
+    "retires a current-generation stopped channel claim with status %s for the next turn",
+    async (status) => {
+      const generation = getAgentEventLifecycleGeneration();
+      await using fixture = await createStoredClaim(
+        {
+          abortedLastRun: true,
+          status,
+          restartRecoveryDeliveryRunId: "stopped-run",
+          restartRecoveryDeliverySourceRunId: "stopped-source",
+          restartRecoveryDeliveryContext: deliveryContext,
+          restartRecoverySourceIngress: "channel",
+          restartRecoverySourceReplyDeliveryMode: "message_tool_only",
+          restartRecoveryRuns: [{ runId: "stopped-run", lifecycleGeneration: generation }],
+        },
+        {
+          admissionRunId: "successor-run",
+          sourceTurnId: "successor-source",
+          resolveDeliveryContext: () => deliveryContext,
+        },
+      );
+      const recorder = fixture.recorder(userMessage("next room message", "successor-source"));
+      await expectAdmitted(fixture.controller, recorder);
+      expect(fixture.read()).toMatchObject({
+        abortedLastRun: false,
+        lifecycleRunId: "successor-run",
+        restartRecoveryDeliveryRunId: "successor-run",
+        restartRecoveryDeliverySourceRunId: "successor-source",
+        restartRecoveryTerminalRunIds: ["stopped-source"],
+      });
+      expect(fixture.read()?.status).toBeUndefined();
+      expect(fixture.read()?.restartRecoveryRuns).toEqual([
+        { runId: "stopped-run", lifecycleGeneration: generation },
+        { runId: "successor-run", lifecycleGeneration: generation },
+      ]);
+      await expect(fixture.begin()).resolves.toBe(true);
+      await fixture.checkpoint({ state: "handled-silent" });
+      await fixture.clear();
+      expect(fixture.read()).toMatchObject({
+        status: "done",
+        restartRecoveryTerminalRunIds: ["stopped-source", "successor-source"],
+      });
+      expect(fixture.read()?.restartRecoveryDeliveryRunId).toBeUndefined();
+    },
+  );
+
+  it.each(["interrupted", "older-generation", "marked-recovery"] as const)(
+    "keeps a genuine %s recovery claim from successor acquisition",
+    async (state) => {
+      const generation = getAgentEventLifecycleGeneration();
+      await using fixture = await createStoredClaim(
+        {
+          abortedLastRun: true,
+          status: state === "interrupted" ? "interrupted" : "killed",
+          restartRecoveryDeliveryRunId: "recovery-run",
+          restartRecoveryDeliverySourceRunId: "recovery-source",
+          restartRecoveryDeliveryContext: deliveryContext,
+          restartRecoverySourceIngress: "channel",
+          restartRecoveryRuns:
+            state === "older-generation"
+              ? [{ runId: "recovery-run", lifecycleGeneration: "prior-generation" }]
+              : undefined,
+          mainRestartRecovery:
+            state === "marked-recovery"
+              ? { cycleId: "recovery-cycle", revision: 1, chargedAttempts: 0 }
+              : undefined,
+        },
+        {
+          admissionRunId: "successor-run",
+          sourceTurnId: "successor-source",
+          resolveDeliveryContext: () => deliveryContext,
+          lifecycleGeneration: generation,
+        },
+      );
+      const before = fixture.read();
+      const recorder = fixture.recorder(userMessage("next room message", "successor-source"));
+      await expect(fixture.admit(recorder)).rejects.toThrow("restart recovery claim changed");
+      expect(fixture.read()).toEqual(before);
+    },
+  );
+
   it("adopts and settles acknowledged input through hook checkpoints without caller-thread SQL", async () => {
     await using fixture = await createAcknowledgedClaim();
     using persistApproved = vi.spyOn(fixture.recorder, "persistApproved");
