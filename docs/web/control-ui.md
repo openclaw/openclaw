@@ -8,7 +8,7 @@ title: "Control UI"
 sidebarTitle: "Control UI"
 ---
 
-The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
+The Control UI is a small **Vite + Solid** single-page app served by the Gateway:
 
 - default: `http://<host>:18789/`
 - optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
@@ -124,6 +124,18 @@ If the Gateway's request queue is full, automatic sidebar session discovery keep
 While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Drag the System busyness title bar to move the panel; its position is remembered in this browser. You can also focus the title bar and use the arrow keys (Shift moves farther). Compact/expanded transitions animate briefly, respect reduced motion, and keep the panel inside the window. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
 
 The selected chat loads before automatic sidebar session lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error. Accepted new sessions refresh the visible sidebar immediately, including **Involving me** and owner filters, without waiting for the chat to finish loading or the agent to finish working.
+
+After the current page and transcript are ready, the browser can prepare code for
+Pages, New Session, and common dialogs during idle time. Hovering or focusing a
+navigation link, the Settings menu item, the command-palette button, or the model picker prepares
+that destination sooner.
+Navigation preparation pauses while a page loads, the tab is hidden, or the
+connection is offline, and respects the browser's Save-Data setting. Page data
+still loads through its normal navigation flow. Hashed assets remain cached for
+repeat visits without revalidation; an update uses new asset URLs.
+The service worker owns [offline asset storage](/web/control-ui/offline-and-reconnect);
+navigation hints also prepare modules for the open page. These hints take priority
+over the worker's bulk download, which resumes after page requests settle.
 
 If the selected session changes while its message subscription is being admitted, chat retries that read with fresh access checks for up to one minute. Saved replies load after the subscription succeeds, without resending your message. Switching chats or losing access stops recovery; a persistent failure leaves **Retry** available.
 
@@ -289,7 +301,8 @@ with the call count. When only part of a long history is loaded, the count is a
 lower bound such as **40+ calls**. Avatar-free child transcripts do not reserve
 empty avatar columns, and narrow panes use compact horizontal insets while wide
 transcripts retain the reading-width limit. It does not add rows to the left
-sidebar. Delegated tasks appear inline with the turn that launched them, not above the composer. Batches of up to five tasks use a compact expandable row; larger active batches expand with progress and task details. Collected results stay with that turn after completion. A directly
+sidebar. Follow delegated work in the **Subagents** panel rather than a separate
+inline task tracker. A directly
 opened child page offers **Open parent session**. The `/subagents list`,
 `/subagents info <id|#>`, and `/subagents log <id|#>` commands remain available.
 

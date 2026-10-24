@@ -341,7 +341,7 @@ describe("Feishu inbound debounce regressions", () => {
     ]);
   });
 
-  it("releases pending text before a bare abort trigger instead of debouncing it", async () => {
+  it("dispatches a bare abort trigger without flushing pending text", async () => {
     setDedupPassThroughMocks();
     const dispatcher = await setupDebounceMonitor();
     await enqueueText(dispatcher, { messageId: "om_1", text: "first" });
@@ -350,10 +350,13 @@ describe("Feishu inbound debounce regressions", () => {
     await Promise.resolve();
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(0);
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
+    expect(dispatchedMessage().event.message.message_id).toBe("om_stop");
+    expect(JSON.parse(dispatchedMessage().event.message.content)).toEqual({ text: "stop" });
+    await vi.advanceTimersByTimeAsync(25);
     expect(handleFeishuMessageMock).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(dispatchedMessage().event.message.content)).toEqual({ text: "first" });
-    expect(dispatchedMessage(1).event.message.message_id).toBe("om_stop");
-    expect(JSON.parse(dispatchedMessage(1).event.message.content)).toEqual({ text: "stop" });
+    expect(dispatchedMessage(1).event.message.message_id).toBe("om_1");
+    expect(JSON.parse(dispatchedMessage(1).event.message.content)).toEqual({ text: "first" });
   });
 
   it("preserves only the bot mention across separate messages ending without mentions", async () => {

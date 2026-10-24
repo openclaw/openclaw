@@ -13,7 +13,7 @@ import {
   diagnosticHttpStatusCode,
   diagnosticProviderRequestIdHash,
 } from "../../../infra/diagnostic-error-metadata.js";
-import { hasInternalDiagnosticEventInterest } from "../../../infra/diagnostic-event-listener-presence.js";
+import { hasModelCallPromptStatsInterest } from "../../../infra/diagnostic-event-listener-presence.js";
 import {
   areDiagnosticsEnabledForProcess,
   type DiagnosticEventInput,
@@ -212,10 +212,7 @@ export function createModelLifecycle(params: {
   };
   const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace));
   const observer = params.createObserver(
-    areDiagnosticsEnabledForProcess() &&
-      (hasInternalDiagnosticEventInterest("model.call.started", true) ||
-        hasInternalDiagnosticEventInterest("model.call.completed", true) ||
-        hasInternalDiagnosticEventInterest("model.call.error", true)),
+    areDiagnosticsEnabledForProcess() && hasModelCallPromptStatsInterest(),
   );
   const eventBase: ModelCallEventBase = {
     ...modelCallHookEventBase({ ...params.ctx, callId }),

@@ -738,13 +738,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
   width: 12px;
   height: 12px;
 }
-.chat-details__caption > .chat-details__context-percent {
-  margin-inline-start: auto;
-  font-variant-numeric: tabular-nums;
-}
-.chat-details__context .chat-details__caption > svg {
-  margin-inline-start: 3px;
-}
 .chat-details__meter {
   width: 36px;
   height: 8px;
@@ -766,34 +759,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
   border-radius: 4px;
   background: currentColor;
 }
-.chat-details__context-budget {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 5px;
-  margin-top: 9px;
-  color: var(--muted);
-  font-size: 11px;
-}
-.chat-details__context-budget strong {
-  color: var(--text);
-  font-weight: 600;
-}
-.chat-details__stats {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin: 8px 0 2px;
-  font-size: 11px;
-}
-.chat-details__stats dt {
-  color: var(--muted);
-}
-.chat-details__stats dd {
-  margin: 3px 0 0;
-  font-variant-numeric: tabular-nums;
-}
-
 .chat-environment__action {
   display: flex;
   flex: 1;

@@ -87,7 +87,8 @@
   height: 16px;
 }
 
-.task-progress-details__menu-group:not(:empty) ~ .task-progress-details__menu-group:not(:empty) {
+.task-progress-details__menu-group:not(:empty) ~ .task-progress-details__menu-group:not(:empty),
+.task-progress-details__clear-group {
   margin-block-start: 4px;
   padding-block-start: 4px;
   border-block-start: 1px solid var(--border);
@@ -511,12 +512,6 @@
   inset-inline-start: auto;
   inset-inline-end: 3px;
   background: var(--bg);
-}
-
-.task-progress-details__clear-group {
-  margin-block-start: 4px;
-  padding-block-start: 4px;
-  border-block-start: 1px solid var(--border);
 }
 
 @media (prefers-reduced-motion: reduce) {

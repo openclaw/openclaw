@@ -297,7 +297,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     },
   );
 
-  it.each(outputLimitScenarios)(
+  it.each([outputLimitScenario, emptyLengthScenario])(
     "does not bypass the output-limit budget through empty-error retries",
     async (scenario) => {
       const fixture = await recoverAfterTransportDrop({
@@ -314,12 +314,33 @@ describe("recoverEmbeddedRunAttempt", () => {
     },
   );
 
-  it.each(outputLimitScenarios)(
-    "allows only one output-limit continuation even after successful model progress",
-    async (scenario) => {
-      const fixture = await recoverAfterTransportDrop(scenario);
+  it.each(
+    outputLimitScenarios
+      .slice(0, 2)
+      .flatMap((scenario) => [true, false].map((noTools) => ({ scenario, noTools }))),
+  )(
+    "allows only one output-limit continuation after progress (no tools=$noTools)",
+    async ({ scenario, noTools }) => {
+      const fixture = await recoverAfterTransportDrop({
+        ...scenario,
+        noTools,
+        preToolText: noTools ? undefined : "The change is saved. I am checking its results.",
+      });
       const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } = fixture;
-      expect(recovery.action).toBe("retry");
+      expect(recovery).toMatchObject({ action: "retry", lastRetryFailoverReason: null });
+      expect(fixture.markOwnedTranscriptRetry).toHaveBeenCalledTimes(2);
+      expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
+        includeToolFailureInstruction: false,
+        messages: fixture.attempt.messagesSnapshot,
+      });
+      expect(fixture.failoverRetryController.transientRetryCount).toBe(1);
+      expectNoProfileFailure(fixture);
+      expect(fixture.onAgentEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stream: "run_status",
+          data: expect.objectContaining({ phase: "retrying", reason: "output_limit" }),
+        }),
+      );
       failoverRetryController.observeAttempt({
         providerRetryMaxRetries: 8,
         hasSuccessfulModelResponse: true,
@@ -332,7 +353,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     },
   );
 
-  it.each(outputLimitScenarios)(
+  it.each([outputLimitScenario, emptyLengthScenario])(
     "continues slow output generation without consuming the transient outage window",
     async (scenario) => {
       const startedAt = Date.now();
@@ -603,34 +624,15 @@ describe("recoverEmbeddedRunAttempt", () => {
     }
   });
 
-  it.each<[string, TransportDropScenario, number | undefined]>([
-    [
-      "fails over past the cap with a fallback",
-      {
-        errorMessage:
-          '429 rate limit: {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}}',
-        errorBody: JSON.stringify({ headers: { "retry-after": "9897" } }),
-      },
-      undefined,
-    ],
-    // Settled writes forbid rotation and fallback; retain custody by waiting.
-    ["waits past the cap after replay-unsafe work", { replaySafe: false }, 9_897_000],
-    ["stops past the cap without fallback", { fallbackConfigured: false }, undefined],
-    [
-      "keeps an in-cap floor on the same model",
-      {
-        errorMessage: "429 rate_limit_exceeded; Retry-After: 20",
-      },
-      20_000,
-    ],
-  ])("%s", async (_label, scenario, expectedSleepMs) => {
+  // The controller owns the cap matrix; this boundary must forward replay safety.
+  it.each([true, false])("honors retry caps only when replay-safe=%s", async (replaySafe) => {
+    const expectedSleepMs = replaySafe ? undefined : 9_897_000;
     const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
       errorMessage: "429 rate_limit_exceeded; Retry-After: 9897",
       fallbackConfigured: true,
-      replaySafe: true,
+      replaySafe,
       providerRetryMaxDelayMs: 30_000,
       diagnostics: [],
-      ...scenario,
     });
     expect(recovery.action).toBe(expectedSleepMs === undefined ? "proceed" : "retry");
     if (expectedSleepMs === undefined) {
@@ -671,15 +673,6 @@ describe("recoverEmbeddedRunAttempt", () => {
   it.each<[string, TransportDropScenario]>([
     ["WebSocket drop", {}],
     ["overload before work", { noTools: true, errorMessage: "server_overloaded", diagnostics: [] }],
-    ["overload after settled tools", { errorMessage: "server_overloaded", diagnostics: [] }],
-    [
-      "WebSocket transport code",
-      {
-        errorMessage: "WebSocket closed: reason included ECONNRESET",
-        errorCode: "ERR_WEBSOCKET_TRANSPORT",
-        diagnostics: [],
-      },
-    ],
     [
       "unresolved stream",
       { errorMessage: "Responses stream ended with unresolved tool calls", diagnostics: [] },

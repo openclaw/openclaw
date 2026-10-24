@@ -14,7 +14,6 @@ const catalog = {
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
-      placeholderWithAttachments: "Add a message or paste more images...",
       preparingModel: "Preparing model...",
       responding: "{name} is responding...",
       sendingMessage: "Sending message...",

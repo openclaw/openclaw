@@ -91,6 +91,15 @@ function resetVideoMocks() {
   waitProviderOperationPollIntervalMock.mockClear();
 }
 
+function completedVideoJob(url = "/api/v1/videos/job-123/content?index=0") {
+  return {
+    id: "job-123",
+    polling_url: "/api/v1/videos/job-123",
+    status: "completed",
+    unsigned_urls: [url],
+  };
+}
+
 function releasedJson(value: unknown) {
   return {
     response: new Response(JSON.stringify(value), {
@@ -607,14 +616,7 @@ describe("openrouter video generation provider", () => {
   });
 
   it("clamps direct exact integer durations to static OpenRouter supported values", async () => {
-    postJsonRequestMock.mockResolvedValue(
-      releasedJson({
-        id: "job-123",
-        polling_url: "/api/v1/videos/job-123",
-        status: "completed",
-        unsigned_urls: ["/api/v1/videos/job-123/content?index=0"],
-      }),
-    );
+    postJsonRequestMock.mockResolvedValue(releasedJson(completedVideoJob()));
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
       releasedVideo({ contentType: "video/mp4", bytes: "mp4-bytes" }),
     );
@@ -631,14 +633,7 @@ describe("openrouter video generation provider", () => {
     { hint: [5], expected: 5 },
     { hint: [], expected: 6 },
   ])("uses live duration hint $hint and static values when empty", async ({ hint, expected }) => {
-    postJsonRequestMock.mockResolvedValue(
-      releasedJson({
-        id: "job-123",
-        polling_url: "/api/v1/videos/job-123",
-        status: "completed",
-        unsigned_urls: ["/api/v1/videos/job-123/content?index=0"],
-      }),
-    );
+    postJsonRequestMock.mockResolvedValue(releasedJson(completedVideoJob()));
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
       releasedVideo({ contentType: "video/mp4", bytes: "mp4-bytes" }),
     );
@@ -800,12 +795,7 @@ describe("openrouter video generation provider", () => {
 
   it("returns unsigned URL-only videos when downloads exceed the configured media cap", async () => {
     postJsonRequestMock.mockResolvedValue(
-      releasedJson({
-        id: "job-123",
-        polling_url: "/api/v1/videos/job-123",
-        status: "completed",
-        unsigned_urls: ["https://cdn.openrouter.test/video.mp4"],
-      }),
+      releasedJson(completedVideoJob("https://cdn.openrouter.test/video.mp4")),
     );
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
       releasedVideo({ contentType: "video/mp4", bytes: "too-large" }),
@@ -1027,12 +1017,7 @@ describe("openrouter generated video download", () => {
     "rejects a successful $name response as a downloaded OpenRouter video",
     async ({ contentType, bytes }) => {
       postJsonRequestMock.mockResolvedValue(
-        releasedJson({
-          id: "job-123",
-          polling_url: "/api/v1/videos/job-123",
-          status: "completed",
-          unsigned_urls: ["https://cdn.openrouter.test/video.mp4"],
-        }),
+        releasedJson(completedVideoJob("https://cdn.openrouter.test/video.mp4")),
       );
       const download = releasedVideo({ contentType, bytes });
       fetchWithTimeoutGuardedMock.mockResolvedValueOnce(download);

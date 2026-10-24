@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   hasInternalDiagnosticEventInterest,
+  hasModelCallPromptStatsInterest,
   onInternalDiagnosticEventInterest,
 } from "./diagnostic-event-listener-presence.js";
 import {
@@ -27,6 +28,31 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
   vi.restoreAllMocks();
 });
+
+it.each([onInternalDiagnosticEvent, onTrustedInternalDiagnosticEvent])(
+  "requests prompt stats only for interested subscribers over their lifetime (%#)",
+  (subscribe) => {
+    const listener = () => {};
+    subscribe(listener, { include: [started, completed], includePromptStats: false });
+    expect(hasInternalDiagnosticEventInterest(started, true)).toBe(true);
+    expect(hasModelCallPromptStatsInterest()).toBe(false);
+    subscribe(() => {}, { include: [log] });
+    subscribe(() => {}, { includeTrusted: [] });
+    expect(hasModelCallPromptStatsInterest()).toBe(false);
+    const stop = subscribe(() => {}, { includeTrusted: [completed] });
+    expect(hasModelCallPromptStatsInterest()).toBe(true);
+    stop();
+    expect(hasModelCallPromptStatsInterest()).toBe(false);
+    subscribe(listener);
+    expect(hasModelCallPromptStatsInterest()).toBe(true);
+    subscribe(listener, { exclude: [started, completed, "model.call.error"] });
+    expect(hasModelCallPromptStatsInterest()).toBe(false);
+    const stopBroad = subscribe(listener);
+    resetDiagnosticEventsForTest();
+    stopBroad();
+    expect(hasModelCallPromptStatsInterest()).toBe(false);
+  },
+);
 
 it("notifies only newly interested producers across filters, unsubscribe, and reset", () => {
   onInternalDiagnosticEvent(() => {}, { include: [queued] });

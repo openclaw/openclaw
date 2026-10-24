@@ -26,9 +26,11 @@ import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
-import { canReceiveSessionEvent, prepareProjectedSessionSharing } from "../session-sharing.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
-import { resolveSessionStoreIdentity } from "../session-store-key.js";
+import {
+  createProjectedSessionEventPredicate,
+  roleClient,
+  rolePolicyConfig,
+} from "../session-sharing.test-utils.js";
 import {
   adminRequestClient,
   broadcast,
@@ -264,31 +266,7 @@ it("fans out requester-only questions after draft visibility changes with no glo
     await projection.ensureMaterialized();
     const broadcaster = createGatewayBroadcaster({
       clients: new GatewayClientRegistry([owner.ws, viewer.ws, broad.ws]),
-      canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
-        canReceiveSessionEvent({
-          cfg: f.cfg,
-          client,
-          sessionKeys,
-          agentId,
-          event,
-          payload,
-          prepared: {
-            sharing: prepareProjectedSessionSharing({
-              cfg: f.cfg,
-              client,
-              isMember: (target, identityId) =>
-                projection.hasMembership(target.storePath, target.storeKey, identityId),
-            }),
-            target: (key, targetAgentId) => {
-              const { agentId: ownerAgentId } = resolveSessionStoreIdentity({
-                cfg: f.cfg,
-                sessionKey: key,
-                agentId: targetAgentId,
-              });
-              return projection.sharingTarget({ key, agentId: ownerAgentId });
-            },
-          },
-        }),
+      canReceiveSessionEvent: createProjectedSessionEventPredicate(f.cfg, projection),
     });
     broadcast.mockImplementation(broadcaster.broadcast);
     expect((await f.request())[0]).toBe(true);

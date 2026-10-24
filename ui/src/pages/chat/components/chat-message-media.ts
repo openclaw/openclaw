@@ -66,6 +66,7 @@ export type ImageRenderOptions = {
   policyKey?: string;
   canonicalMessageKey?: string;
   localSubmission?: boolean;
+  messageSendId?: string;
   connectionEpoch?: number;
   resourceBasePath?: string;
   authToken?: string | null;

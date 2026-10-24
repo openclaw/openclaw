@@ -1,16 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
   ErrorCodes,
   type EnvironmentSummary,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
@@ -27,11 +22,13 @@ import {
   bindDeviceWorkerAvailability,
   createDeviceWorkerRuntime,
 } from "../worker-environments/device-provider.js";
+import { createNodeWorkerBundleTestNode } from "../worker-environments/node-worker-bundle.test-support.js";
 import { coordinateWorkerPlacementDispatch } from "../worker-environments/placement-dispatch-coordinator.js";
 import { createHarness } from "../worker-environments/placement-dispatch-test-harness.js";
 import type { WorkerPlacementDispatchService } from "../worker-environments/placement-dispatch.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { activePlacement } from "../worker-environments/placement-suite.test-support.js";
 import { deriveEnvironmentIntent } from "../worker-environments/service-contract.js";
 import {
   dispatchTestSessionId,
@@ -92,49 +89,34 @@ function pairedNode(deviceId: string): PairedDevice {
 }
 
 function connectedNode(deviceId: string, available: number): NodeWorkerSupervisorNodeProof {
-  return {
+  return createNodeWorkerBundleTestNode({
     nodeId: deviceId,
     connId: `conn-${deviceId}`,
     pairingIdentity: `identity-${deviceId}`,
     pairingGeneration: `generation-${deviceId}`,
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-    clientMode: GATEWAY_CLIENT_MODES.NODE,
-    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: {
-      enabled: true,
       capacity: { total: Math.max(2, available), available },
       capturedExecPolicy: true,
       promptContext: 1,
     },
     commands: ["system.run"],
-  } satisfies NodeWorkerSupervisorNodeProof;
+  });
 }
 
 function activeDevicePlacement(
   deviceId: string,
 ): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
-  return {
-    sessionId: dispatchTestSessionId,
-    agentId: "main",
+  return activePlacement(dispatchTestSessionId, {
     sessionKey: dispatchTestSessionKey,
-    executionMode: "worker-turn",
-    state: "active",
     environmentId: `device-environment-${deviceId}`,
     generation: 1,
     activeOwnerEpoch: 2,
     workspaceBaseManifestRef: `sha256:${"a".repeat(64)}`,
     remoteWorkspaceDir: "/node/workspace",
     workerBundleHash: "b".repeat(64),
-    lastTranscriptAckCursor: null,
-    lastLiveEventAckCursor: null,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
-    turnClaim: null,
-    createdAtMs: 1,
     updatedAtMs: 2,
     stateChangedAtMs: 2,
-  };
+  });
 }
 
 function deviceEnvironments(

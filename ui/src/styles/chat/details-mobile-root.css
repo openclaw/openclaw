@@ -193,19 +193,6 @@
   border-top: 0;
 }
 
-.chat-details-mobile-context__summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.chat-details-mobile-context__summary .chat-details__meter {
-  flex: 1;
-  min-width: 0;
-}
-
 .chat-details-mobile-root__avatars {
   display: flex;
   padding-inline-start: 4px;

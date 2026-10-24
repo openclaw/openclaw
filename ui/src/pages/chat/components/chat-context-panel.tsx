@@ -1,17 +1,11 @@
 import { Show, createMemo } from "solid-js";
-import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
-import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
-import {
-  ChatDetailsContextContent,
-  ChatDetailsContextSummary,
-  type ChatDetailsContextContentProps,
-} from "./chat-details-context.tsx";
+import { ChatContextPage, ContextEmpty, type ContextPageDetails } from "./chat-context-page.tsx";
 
 export type ChatContextPanelProps = {
-  details?: ChatDetailsContextContentProps["details"];
+  details?: ContextPageDetails;
   presented: boolean;
   onScrollPortRef?: (element: HTMLElement) => void | (() => void);
 };
@@ -28,32 +22,24 @@ export const ChatContextPanel = defineSolidBridge<ChatContextPanelProps>(
       const session = details()?.selectedSession;
       return session && JSON.stringify([details()?.currentAgentId, session.key, session.sessionId]);
     });
-    const usage = createMemo(() => getContextNoticeViewModel(details()?.selectedSession));
     return (
-      <div class="chat-context-panel" ref={elementRef(props.onScrollPortRef)}>
+      <div class="chat-context-panel">
         <Show
-          when={usage()}
-          fallback={<p class="chat-context__note">{t("chat.sidePanel.contextEmpty")}</p>}
+          when={identity()}
+          keyed
+          fallback={<ContextEmpty message={t("chat.sidePanel.contextEmpty")} />}
         >
-          <Show when={identity()} keyed>
-            {(_sessionIdentity) => (
-              <Show when={details()}>
-                {(currentDetails) => (
-                  <>
-                    <div class="chat-context-panel__summary">
-                      <h2>{t("chat.sessionDetails.context")}</h2>
-                      <ChatDetailsContextSummary details={currentDetails()} />
-                    </div>
-                    <ChatDetailsContextContent
-                      details={currentDetails()}
-                      presented={props.presented}
-                      expanded
-                    />
-                  </>
-                )}
-              </Show>
-            )}
-          </Show>
+          {(_identity) => (
+            <Show when={details()}>
+              {(current) => (
+                <ChatContextPage
+                  details={current()}
+                  presented={props.presented}
+                  onScrollPortRef={props.onScrollPortRef}
+                />
+              )}
+            </Show>
+          )}
         </Show>
       </div>
     );

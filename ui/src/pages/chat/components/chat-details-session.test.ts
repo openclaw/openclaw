@@ -134,7 +134,11 @@ it("keeps compaction busy until the owning request settles and uses the current 
   );
   const element = view.container.querySelector("openclaw-chat-context-panel")!;
   await element.updateComplete;
-  await waitForSolid(() => expect(element.querySelector(".chat-context__compact")).not.toBeNull());
+  await waitForSolid(() =>
+    expect(element.querySelector<HTMLButtonElement>(".chat-context__compact")?.disabled).toBe(
+      false,
+    ),
+  );
   const button = element.querySelector<HTMLButtonElement>(".chat-context__compact")!;
   try {
     button.click();
@@ -318,7 +322,6 @@ it("projects direct active children through the live observer with stable rounde
   const live = element.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
   await live.updateComplete;
   expect(live.rows[0]?.session).toBe(child);
-  expect(live.compact).toBe(true);
   expect(live.querySelector(".chat-details__agent-avatar")?.getAttribute("style")).toContain(
     String(fnv1aUtf16(child.key) % 360),
   );

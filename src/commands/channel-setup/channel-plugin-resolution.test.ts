@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { makeCatalogEntry, makeMeta } from "../../flows/channel-setup.test-helpers.js";
 import { createPluginRuntimeStore } from "../../plugin-sdk/runtime-store.js";
 
 const mocks = vi.hoisted(() => ({
@@ -48,21 +49,17 @@ function createCatalogEntry(params: {
   pluginId: string;
   origin?: "workspace" | "bundled";
 }): ChannelPluginCatalogEntry {
-  return {
-    id: params.id,
+  return makeCatalogEntry(params.id, "Telegram", {
     pluginId: params.pluginId,
     origin: params.origin,
-    meta: {
-      id: params.id,
-      label: "Telegram",
-      selectionLabel: "Telegram",
+    meta: makeMeta(params.id, "Telegram", {
       docsPath: "/channels/telegram",
       blurb: "Telegram channel",
-    },
+    }),
     install: {
       npmSpec: params.pluginId,
     },
-  };
+  });
 }
 
 function createPlugin(id: string): ChannelPlugin {

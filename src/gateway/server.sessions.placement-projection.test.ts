@@ -37,6 +37,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementRecord,
 } from "./worker-environments/placement-store.js";
+import { activePlacement } from "./worker-environments/placement-suite.test-support.js";
 import {
   advancePlacementFixtureToActive,
   writePlacementEnvironmentFixture,
@@ -180,12 +181,8 @@ test.each([
 );
 
 function activePlacementRecord(): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
-  return {
-    sessionId: "sess-main",
-    agentId: "main",
+  return activePlacement("sess-main", {
     sessionKey: "agent:main:main",
-    executionMode: "worker-turn",
-    state: "active",
     environmentId: "env-placement",
     generation: 7,
     activeOwnerEpoch: 12,
@@ -194,14 +191,10 @@ function activePlacementRecord(): Extract<WorkerSessionPlacementRecord, { state:
     workerBundleHash: ["a", "b"].join("").repeat(32),
     lastTranscriptAckCursor: 23,
     lastLiveEventAckCursor: 9,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
-    turnClaim: null,
     createdAtMs: 100,
     updatedAtMs: 300,
     stateChangedAtMs: 200,
-  };
+  });
 }
 
 async function seedSessionRows(): Promise<void> {

@@ -2653,7 +2653,7 @@ describe("chat attachment picker", () => {
     }
   });
 
-  it("keeps the default placeholder only for internally generated pasted text", () => {
+  it("keeps the agent-aware placeholder with pasted text, files, images, and comments", () => {
     let pastedTextAttachments: ChatAttachment[] = [];
     const pasteTarget = renderChatView({
       draft: "Review the attachment",
@@ -2690,13 +2690,34 @@ describe("chat attachment picker", () => {
 
     const ordinaryTextFile = renderChatView({ attachments: [namedLikePaste] });
     expect(ordinaryTextFile.querySelector("textarea")?.getAttribute("placeholder")).toBe(
-      t("chat.composer.placeholderWithAttachments"),
+      t("chat.composer.placeholder", { name: "Val" }),
     );
     expect(ordinaryTextFile.querySelector(".chat-attachment-text-action")).toBeNull();
 
     const withImage = renderChatView({ attachments: [imageAttachment] });
     expect(withImage.querySelector("textarea")?.getAttribute("placeholder")).toBe(
-      t("chat.composer.placeholderWithAttachments"),
+      t("chat.composer.placeholder", { name: "Val" }),
+    );
+
+    const withComment = renderChatView({
+      assistantName: "Roboclaw",
+      attachments: [
+        {
+          id: "comment",
+          mimeType: "text/plain",
+          fileName: "selection-comment.txt",
+          selectionAnnotation: {
+            text: "Review this line",
+            comment: "Keep this context",
+            sessionKey: "agent:main:main",
+            start: 0,
+            end: 16,
+          },
+        },
+      ],
+    });
+    expect(withComment.querySelector("textarea")?.getAttribute("placeholder")).toBe(
+      t("chat.composer.placeholder", { name: "Roboclaw" }),
     );
   });
 
