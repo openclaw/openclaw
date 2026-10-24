@@ -424,6 +424,8 @@ tool profile must allow all native shell and filesystem capabilities: `coding`
 and `full` do, while `messaging` and `minimal` disable the native surface. Agent
 and provider profile overrides and explicit tool restrictions still apply.
 
+Codex-native file edits remain limited to the turn cwd; linked worktrees need OpenClaw file tools or a managed worktree (`worktree: true`).
+
 Selecting a managed GitHub Identity also uses OpenClaw's host-owned tools instead
 of native Code Mode. The same exec owner used by the built-in runtime binds the
 selected profile at child launch, preserves approval and caller lifetime checks,
