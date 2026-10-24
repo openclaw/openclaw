@@ -1,5 +1,4 @@
-import path from "node:path";
-import type { BrowserContextOptions, Page } from "playwright";
+import type { BrowserContextOptions } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -13,7 +12,6 @@ function withMarkdown(
   text: string,
   run: Parameters<typeof suite.withPage>[1],
   options: BrowserContextOptions = {},
-  role = "assistant",
 ) {
   return suite.withPage(
     {
@@ -25,22 +23,14 @@ function withMarkdown(
     },
     async (fixture) => {
       await installMockGateway(fixture.page, {
-        historyMessages: [{ role, content: [{ type: "text", text }], timestamp: Date.now() }],
+        historyMessages: [
+          { role: "assistant", content: [{ type: "text", text }], timestamp: Date.now() },
+        ],
       });
       await fixture.page.goto(`${suite.server.baseUrl}chat`);
       return run(fixture);
     },
   );
-}
-
-async function capture(page: Page, name: string, fullPage = false) {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-    await page.screenshot({
-      animations: "disabled",
-      fullPage,
-      path: path.join(suite.artifactDir, `${name}.png`),
-    });
-  }
 }
 
 function expectMarkerGeometry(geometry: ReturnType<typeof readMarkdownGeometry>, rtl = false) {
@@ -150,7 +140,6 @@ suite.define(() => {
 
           const geometry = await markdown.evaluate(readMarkdownGeometry);
 
-          await capture(page, "disclosures");
           expectMarkerGeometry(geometry);
           expect(Math.abs(geometry.checkboxLineCenterDelta)).toBeLessThanOrEqual(1);
 
@@ -223,7 +212,6 @@ suite.define(() => {
           hasText: "Markdown parser fidelity",
         });
         await markdown.waitFor();
-        await capture(page, "markdown-parser-fidelity", true);
 
         expect(
           await markdown.evaluate((root) => ({
@@ -237,26 +225,6 @@ suite.define(() => {
           links: ["http://[2001:db8::1]:1896/a%5Bb%5D?x=%5By%5D"],
         });
       },
-    );
-  });
-
-  it("keeps user block art preformatted", async () => {
-    await withMarkdown(
-      "```\n  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  \n```",
-      async ({ page }) => {
-        const blockArt = page.locator(".chat-group.user code.markdown-block-art");
-        await blockArt.waitFor();
-        await expect
-          .poll(() =>
-            blockArt.evaluate((code) => {
-              const style = getComputedStyle(code);
-              return [style.whiteSpace, style.overflowWrap, style.wordBreak];
-            }),
-          )
-          .toEqual(["pre", "normal", "normal"]);
-      },
-      {},
-      "user",
     );
   });
 

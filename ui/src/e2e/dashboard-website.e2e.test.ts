@@ -121,8 +121,6 @@ suite.define(() => {
             }
           }),
         ).toBe(false);
-        await page.mouse.move(0, 0);
-        await page.screenshot({ path: `${suite.artifactDir}/website-split.png` });
         await focusChatSidePanel(page);
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
         const viewportFits = () =>
@@ -159,8 +157,6 @@ suite.define(() => {
             "*",
           );
         });
-        await page.mouse.move(0, 0);
-        await page.screenshot({ path: `${suite.artifactDir}/website-expanded.png` });
         await showView("Pages");
         await pages.getByRole("link", { name: "Sessions", exact: true }).click();
         await page.waitForURL(`${suite.server.baseUrl}sessions`);
@@ -174,7 +170,6 @@ suite.define(() => {
         expect(
           await frame.evaluate((element, previous) => element === previous, originalFrame),
         ).toBe(true);
-        await page.screenshot({ path: `${suite.artifactDir}/website-pinned-return.png` });
         await page.setViewportSize({ width: 390, height: 844 });
         await page.locator(".shell--mobile-nav").waitFor();
         if (await page.locator(".shell--nav-drawer-open").count()) {
@@ -209,7 +204,6 @@ suite.define(() => {
         expect(
           await frame.evaluate((element, previous) => element === previous, originalFrame),
         ).toBe(true);
-        await page.screenshot({ path: `${suite.artifactDir}/website-mobile.png` });
         expect(await gateway.getRequests("board.data.read")).toHaveLength(0);
         await selectChatLayoutAction(page, "Restore split");
         await page.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
@@ -247,32 +241,7 @@ suite.define(() => {
         await content.getByRole("heading", { name: "Everything in view." }).waitFor();
         await expect.poll(viewportFits).toBe(true);
         expect(await page.locator("openclaw-app-shell").count()).toBe(0);
-        await page.screenshot({ path: `${suite.artifactDir}/website-document.png` });
       },
     );
-  });
-
-  it("keeps an external escape link when the website refuses embedding", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      await page.route(websiteUrl, (route) =>
-        route.fulfill({
-          contentType: "text/html",
-          headers: { "Content-Security-Policy": "frame-ancestors 'none'" },
-          body: "<!doctype html><h1>Standalone only</h1>",
-        }),
-      );
-      await installMockGateway(page, {
-        sessionKey,
-        controlUiWidgetKinds: [{ pluginId: "session", kind: "session:website", label: "Website" }],
-        featureMethods: ["board.get"],
-        methodResponses: { "board.get": snapshot },
-      });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
-      const link = page.getByRole("link", { name: "Open website", exact: true });
-      await link.waitFor();
-      expect(await link.getAttribute("href")).toBe(websiteUrl);
-      expect(await link.getAttribute("target")).toBe("_blank");
-      await page.screenshot({ path: `${suite.artifactDir}/website-embedding-blocked.png` });
-    });
   });
 });

@@ -50,63 +50,6 @@ async function receivedSessions(page: Page): Promise<unknown[]> {
 }
 
 suite.define(() => {
-  // Default rows show observer headlines only with previews on; roster rows
-  // always do.
-  it.each(["roster", "preview-on"] as const)(
-    "preserves the visible consumers in %s presentation",
-    async (mode) => {
-      await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-        const keys = [
-          first,
-          ...Array.from({ length: 6 }, (_, index) => `agent:main:background-${index}`),
-        ];
-        await seedStorage(page, {
-          [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
-            sidebarAgentsMode: mode === "roster" ? "roster" : "chip",
-          }),
-          "openclaw:sidebar:sessions:show-preview": "true",
-        });
-        const gateway = await installMockGateway(page, {
-          sessionKey: first,
-          sessions: keys.map((key, index) => liveRow(key, index)),
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, first));
-        if (mode === "roster") {
-          await page.locator(".sidebar-agent-roster__row").first().waitFor();
-        } else {
-          await page.locator(`[data-session-key="${keys[1]}"]`).first().waitFor();
-        }
-        await gateway.waitForRequest(subscribe, { match: { key: first } });
-        if (mode === "roster") {
-          const subscriptions = await gateway.getRequests(subscribe);
-          expect(subscriptions).toMatchObject([{ params: { key: first } }]);
-        } else {
-          await gateway.waitForRequest(subscribe, { match: { key: keys[1] } });
-          await gateway.emitGatewayEvent("session.observer", {
-            sessionKey: keys[1],
-            agentId: "main",
-            runId: "run-1",
-            revision: 1,
-            updatedAt: Date.now(),
-            health: "waiting-on-user",
-            headline: "Waiting for the next instruction",
-          });
-        }
-        await gateway.emitGatewayEvent(
-          "chat",
-          chatDelta(first, "run-0", "Visible chat stays live"),
-        );
-        await waitText(page.locator(".chat-thread-inner"), "Visible chat stays live");
-        if (mode === "preview-on") {
-          await waitText(
-            page.locator(`[data-session-key="${keys[1]}"]`),
-            "Waiting for the next instruction",
-          );
-        }
-      });
-    },
-  );
-
   it("delivers both split panes and sidebar narration while excluding unrelated streams across reconnect", async () => {
     await suite.withPage(
       { locale: "en-US", viewport: { width: 1440, height: 900 }, serviceWorkers: "block" },
@@ -234,6 +177,16 @@ suite.define(() => {
           });
         }
         expect(await narrationRow.locator(".sidebar-session-tool").count()).toBe(0);
+        await gateway.emitGatewayEvent("session.observer", {
+          sessionKey: narrated,
+          agentId: "main",
+          runId: "run-2",
+          revision: 1,
+          updatedAt: Date.now(),
+          health: "waiting-on-user",
+          headline: "Waiting for the next instruction",
+        });
+        await waitText(narrationRow, "Waiting for the next instruction");
         await send(second, "run-1", "Second pane resumed");
         await waitText(panes.nth(1), "Second pane resumed");
         await send(unrelated, "other-run", "Unrelated must stay off the socket");

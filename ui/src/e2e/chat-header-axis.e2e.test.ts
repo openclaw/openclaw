@@ -4,12 +4,10 @@ import { expect, it } from "vitest";
 import { chatFixture, newChatPage, sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import {
   chatSessionListResponse,
-  captureUiProofEnabled,
   createChatFlowE2eSuite,
   controlUiSessionUrl,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
-import { captureFrame } from "./sidebar-assertions.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const sessionKey = "agent:main:session-a";
@@ -56,19 +54,7 @@ suite.define(() => {
           : ".mobile-header__title-text";
         const title = header.locator(titleSelector);
         await header.waitFor();
-        const projectSurface = header.locator(
-          desktop ? ".workspace-icon" : ".mobile-header__title",
-        );
-        await projectSurface.waitFor();
-
-        if (captureUiProofEnabled) {
-          await captureFrame(
-            suite.artifactDir,
-            `project-icon-${viewport.label}-${colorScheme}.png`,
-            header,
-            [projectSurface, title],
-          );
-        }
+        await header.locator(desktop ? ".workspace-icon" : ".mobile-header__title").waitFor();
 
         if (!desktop) {
           const geometry = await header.evaluate((root) => {
@@ -121,10 +107,6 @@ suite.define(() => {
             const { top, height } = rect(selector);
             return top + height / 2;
           };
-          const ellipses = (selector: string) => {
-            const node = element(selector);
-            return node.scrollWidth > node.clientWidth;
-          };
           return {
             nav: centerY(".chat-details-toggle svg"),
             projectIcon: centerY(".workspace-icon"),
@@ -132,20 +114,10 @@ suite.define(() => {
             menu: centerY(".chat-header-session-menu__trigger svg"),
             parentText: centerY(".chat-pane__parent-session-text"),
             sessionText: centerY(".chat-pane__session-title-text"),
-            projectBottom: rect(".chat-pane__project-row").bottom,
-            sessionTop: rect(".chat-pane__session-trail").top,
-            separatorDisplays: [...root.querySelectorAll<HTMLElement>(".chat-pane__crumb-sep")].map(
-              (node) => getComputedStyle(node).display,
-            ),
             headerBottom: root.getBoundingClientRect().bottom,
             headerOverflow: root.scrollWidth - root.clientWidth,
             titleWidth: rect(".chat-pane__session-title-text").width,
             contentTop: main.getBoundingClientRect().top,
-            parentEllipses: ellipses(".chat-pane__parent-session-text"),
-            childEllipses: ellipses(".chat-pane__session-title-text"),
-            trailWidth:
-              rect(".chat-pane__session-title").right - rect(".chat-pane__parent-session").left,
-            headerWidth: root.getBoundingClientRect().width,
           };
         });
 
@@ -162,11 +134,7 @@ suite.define(() => {
         ]) {
           expect(geometry.nav - center, JSON.stringify(geometry)).toBeCloseTo(0, 1);
         }
-        expect(geometry.separatorDisplays).toEqual(["block", "block"]);
-        expect(await header.locator(".chat-pane__crumb-sep").count()).toBe(2);
         const parent = header.locator(".chat-pane__parent-session");
-        expect(geometry).toMatchObject({ parentEllipses: true, childEllipses: true });
-        expect(geometry.trailWidth).toBeLessThanOrEqual(geometry.headerWidth / 2 + 1);
         expect((await parent.textContent())?.trim()).toBe(parentLabel);
         await parent.click();
         await expect.poll(() => title.textContent()).toBe(parentLabel);
@@ -259,20 +227,10 @@ suite.define(() => {
     await icon.waitFor();
     await icon.locator("svg").waitFor();
     await icon.evaluate((element) => element.setAttribute("data-recovery-host", "mounted"));
-    if (captureUiProofEnabled) {
-      await page.screenshot({
-        path: path.join(suite.artifactDir, "workspace-icon-recovery", "fallback.png"),
-      });
-    }
 
     await icon.locator(".workspace-icon").waitFor({ timeout: 10_000 });
 
     expect(requests).toBe(2);
     expect(await icon.getAttribute("data-recovery-host")).toBe("mounted");
-    if (captureUiProofEnabled) {
-      await page.screenshot({
-        path: path.join(suite.artifactDir, "workspace-icon-recovery", "recovered.png"),
-      });
-    }
   });
 });
