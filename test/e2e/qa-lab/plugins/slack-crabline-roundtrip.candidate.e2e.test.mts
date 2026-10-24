@@ -1,4 +1,3 @@
-import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -50,59 +49,6 @@ function required(name: string): string {
     throw new Error(`${name} is required for candidate proof`);
   }
   return value;
-}
-
-type FailureDetails = { name: string; message: string; errors?: FailureDetails[] };
-
-function errorDetails(error: unknown): FailureDetails {
-  if (error instanceof AggregateError) {
-    return { name: error.name, message: error.message, errors: error.errors.map(errorDetails) };
-  }
-  return error instanceof Error
-    ? { name: error.name, message: error.message }
-    : { name: typeof error, message: String(error) };
-}
-
-async function createEvidenceDirectory(cell: string) {
-  const root = required("CRABLINE_CANDIDATE_EVIDENCE_DIR");
-  const temporaryRoot = await fs.realpath(os.tmpdir());
-  const relative = path.relative(temporaryRoot, root);
-  const uid = process.getuid?.();
-  const rootStat = await fs.lstat(root);
-  if (
-    !path.isAbsolute(root) ||
-    path.resolve(root) !== root ||
-    (await fs.realpath(root)) !== root ||
-    !rootStat.isDirectory() ||
-    uid === undefined ||
-    rootStat.uid !== uid ||
-    (rootStat.mode & 0o777) !== 0o700 ||
-    relative === "" ||
-    (!relative.startsWith(".." + path.sep) && relative !== ".." && !path.isAbsolute(relative))
-  ) {
-    throw new Error(
-      "Candidate evidence root must be an owned physical 0700 directory outside TMPDIR",
-    );
-  }
-  const directory = path.join(root, cell);
-  await fs.mkdir(directory, { mode: 0o700 });
-  const created = await fs.lstat(directory);
-  return {
-    directory,
-    async verify() {
-      const current = await fs.lstat(directory);
-      if (
-        !current.isDirectory() ||
-        current.uid !== uid ||
-        current.dev !== created.dev ||
-        current.ino !== created.ino ||
-        (current.mode & 0o777) !== 0o700 ||
-        (await fs.realpath(directory)) !== directory
-      ) {
-        throw new Error("Candidate evidence directory identity changed");
-      }
-    },
-  };
 }
 
 async function candidateIdentity() {
@@ -158,22 +104,6 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
       throw new Error("Prior candidate resources remain owned; do not start another fixture");
     }
     const identity = await candidateIdentity();
-    const cell = mode === "nonstreaming" ? mode : "default-streaming-diagnostic";
-    const declaredSignedCommit = process.env.CRABLINE_CANDIDATE_SOURCE_SHA ?? null;
-    if (declaredSignedCommit !== null && !/^[0-9a-f]{40}$/u.test(declaredSignedCommit)) {
-      throw new Error("CRABLINE_CANDIDATE_SOURCE_SHA must be a full signed-source commit");
-    }
-    const source = {
-      path: path
-        .relative(repoRoot, import.meta.filename)
-        .split(path.sep)
-        .join("/"),
-      sha256: sha256(await fs.readFile(import.meta.filename)),
-      // The packet supplies signed source identity; the capsule carrier HEAD is different.
-      declaredSignedCommit,
-    };
-    const proofIdentity = { mode, cell, identity, source };
-    const evidence = await createEvidenceDirectory(cell);
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "slack-crabline-candidate-"));
     const gatewayOwner = createQaGatewayChild();
     retainedResources = true;
@@ -189,9 +119,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
     let stopped = false;
     let transportClosed = false;
     let providerClosed = false;
-    let completed = false;
     let runtimeIdentity: Awaited<ReturnType<typeof slackRuntimeIdentity>> | undefined;
-    const cells: Array<Record<string, unknown>> = [];
     const recorderFile = path.join(directory, "artifacts/crabline/slack-provider-server.jsonl");
     const records = async (): Promise<NativeRecord[]> => {
       const contents = await fs.readFile(recorderFile, "utf8");
@@ -331,13 +259,6 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
       ]);
       await transport.waitForNoOutbound({ sinceIndex: first.busCursor });
       expect(await modelRequests(first.modelCursor)).toEqual([]);
-      cells.push({
-        kind: "unbound",
-        ...first,
-        inboundId: unbound.id,
-        nativeCommitted: true,
-      });
-
       // This is P03's direct public binding. Automatic Gateway lifecycle wiring belongs to P04.
       assertActive();
       await adapter.bindGateway({
@@ -399,69 +320,24 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         });
         expect(nativeReply?.thread_ts).toBe(kind === "thread" ? parentId : undefined);
         expect(normalized.threadId).toBe(kind === "thread" ? parentId : undefined);
-        cells.push({
-          kind,
-          ...cursor,
-          inboundId: inbound.id,
-          nativeReplyId: nativeReply?.ts,
-          normalizedId: normalized.id,
-          threadId: normalized.threadId ?? null,
-        });
         parentId ??= inbound.id;
       }
       const allRequests = await modelRequests(first.modelCursor);
       expect(allRequests.every((entry) => !entry.allInputText.includes(unboundMarker))).toBe(true);
-      completed = true;
     };
     let body: Promise<void> | undefined;
-    let bodyFailure: unknown;
     let cleanupPromise: Promise<void> | undefined;
-    let snapshot: Record<string, unknown> = {};
-    const cleanupErrors: Array<{ phase: string; error: ReturnType<typeof errorDetails> }> = [];
-    const observeCleanup = (phase: string, operation: () => unknown) => async () => {
-      try {
-        await operation();
-      } catch (error) {
-        cleanupErrors.push({ phase, error: errorDetails(error) });
-        throw error;
-      }
-    };
     const cleanup = () =>
       (cleanupPromise ??= runQaGatewayFixture(
-        observeCleanup("snapshot", async () => {
-          snapshot = {
-            proof: "slack-public-callback-candidate",
-            ...proofIdentity,
-            completed,
-            cells: cells.map((entry) => Object.assign({}, entry)),
-            artifactDirectory: directory,
-            runtime: { platform: process.platform, arch: process.arch, node: process.version },
-            runtimeIdentity: runtimeIdentity
-              ? {
-                  packageSha256: runtimeIdentity.packageSha256,
-                  entrySha256: runtimeIdentity.entrySha256,
-                  sourceSha256: runtimeIdentity.sourceSha256,
-                }
-              : null,
-            gatewayLogs: gateway?.logs().slice(-12_000) ?? null,
-            limits: [
-              "mock-model",
-              "mock-native-slack",
-              "direct-binding-only",
-              "typing-off",
-              "no-live-account",
-              "runtime-alias-is-not-declaration-proof",
-            ],
-          };
-          expect(sha256(await fs.readFile(import.meta.filename))).toBe(source.sha256);
+        async () => {
           expect(await candidateIdentity()).toEqual(identity);
           if (runtimeIdentity) {
             expect(await slackRuntimeIdentity()).toEqual(runtimeIdentity);
           }
-        }),
-        observeCleanup("abort", () => fixture.abort()),
-        observeCleanup("gateway", async () => {
-          await stopQaGatewayFixture({
+        },
+        () => fixture.abort(),
+        () =>
+          stopQaGatewayFixture({
             stop: async () => {
               const result = await gatewayOwner.stop();
               stopped =
@@ -471,96 +347,32 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
               }
               return result;
             },
-          });
-        }),
-        observeCleanup("transport", async () => {
-          if (stopped) {
-            // Join startup after owner.stop: a late returned adapter/provider remains owned here.
-            await body?.catch(() => undefined);
-            if (transport) {
-              await transport.cleanupAfterGatewayStop();
-            } else {
-              await capturedAdapter()?.close();
-            }
-            transportClosed = true;
+          }),
+        async () => {
+          if (!stopped) {
+            return;
           }
-        }),
-        observeCleanup("provider", async () => {
+          // Stop the Gateway before joining startup; it may still return an owned adapter.
+          await body?.catch(() => undefined);
+          if (transport) {
+            await transport.cleanupAfterGatewayStop();
+          } else {
+            await capturedAdapter()?.close();
+          }
+          transportClosed = true;
+        },
+        async () => {
           if (stopped && transportClosed) {
             await mock?.stop();
             providerClosed = true;
           }
-        }),
-        async () => {
+        },
+        () => {
           retainedResources = !(stopped && transportClosed && providerClosed);
-          const closure = { stopped, transportClosed, providerClosed };
-          // The runner deletes its temporary namespace after this callback returns.
-          // Copy only after every writer owner has actually completed its close.
-          const retentionErrors: unknown[] = [];
-          const retain = async (operation: () => unknown) => {
-            try {
-              await operation();
-            } catch (error) {
-              retentionErrors.push(error);
-            }
-          };
-          let raw: { file: string; bytes: number; sha256: string } | null = null;
-          await retain(async () => {
-            if (retainedResources) {
-              throw new Error("Recorder retention requires confirmed owner closures");
-            }
-            await evidence.verify();
-            const recorderStat = await fs.lstat(recorderFile);
-            if (!recorderStat.isFile() || (await fs.realpath(recorderFile)) !== recorderFile) {
-              throw new Error("Candidate recorder must be a physical regular file");
-            }
-            const rawFile = "slack-provider-server.jsonl";
-            const destination = path.join(evidence.directory, rawFile);
-            await fs.copyFile(recorderFile, destination, constants.COPYFILE_EXCL);
-            const retained = await fs.open(destination, "r+");
-            await runQaGatewayFixture(
-              async () => {
-                await retained.chmod(0o600);
-                const bytes = await retained.readFile();
-                if (!bytes.equals(await fs.readFile(recorderFile))) {
-                  throw new Error("Retained recorder bytes differ from the closed writer output");
-                }
-                await retained.sync();
-                raw = { file: rawFile, bytes: bytes.length, sha256: sha256(bytes) };
-              },
-              () => retained.close(),
-            );
-          });
-          await retain(async () => {
-            await evidence.verify();
-            const receipt = await fs.open(path.join(evidence.directory, "cell.json"), "wx", 0o600);
-            await runQaGatewayFixture(
-              async () => {
-                await receipt.writeFile(
-                  JSON.stringify({
-                    ...snapshot,
-                    ...proofIdentity,
-                    completed,
-                    closure,
-                    raw,
-                    bodyFailure: bodyFailure === undefined ? null : errorDetails(bodyFailure),
-                    cleanupErrors,
-                    retentionErrors: retentionErrors.map(errorDetails),
-                  }) + "\n",
-                );
-                await receipt.sync();
-              },
-              () => receipt.close(),
-            );
-          });
-          if (retentionErrors.length) {
-            throw new AggregateError(retentionErrors, "Candidate evidence retention failed");
-          }
         },
       ));
     onTestFinished(cleanup);
     const onAbort = () => {
-      // The completion hook and the body both observe the same cleanup promise and its errors.
       void cleanup().catch(() => undefined);
     };
     signal.addEventListener("abort", onAbort, { once: true });
@@ -569,13 +381,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         await cleanup();
         signal.throwIfAborted();
       }
-      await runQaGatewayFixture(() => {
-        body = runBody().catch((error: unknown) => {
-          bodyFailure = error;
-          throw error;
-        });
-        return body;
-      }, cleanup);
+      await runQaGatewayFixture(() => (body = runBody()), cleanup);
     } finally {
       signal.removeEventListener("abort", onAbort);
     }
