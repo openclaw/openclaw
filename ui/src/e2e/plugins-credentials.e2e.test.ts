@@ -34,41 +34,35 @@ const sourceConfig = {
     },
   },
 };
-const schema = {
+const objectSchema = (properties: Record<string, unknown>, closed = false) => ({
   type: "object",
-  properties: {
-    plugins: {
-      type: "object",
-      properties: {
-        entries: {
-          type: "object",
-          properties: {
-            workboard: {
-              type: "object",
-              properties: {
-                config: {
-                  type: "object",
-                  additionalProperties: false,
-                  properties: {
-                    search: {
-                      type: "object",
-                      additionalProperties: false,
-                      properties: {
-                        apiKey: { type: ["string", "object"] },
-                        mode: { type: "string" },
-                        otherSecret: { type: "string" },
-                      },
-                    },
-                  },
-                },
+  ...(closed ? { additionalProperties: false } : {}),
+  properties,
+});
+const schema = objectSchema({
+  plugins: objectSchema({
+    entries: objectSchema({
+      workboard: objectSchema({
+        config: objectSchema(
+          {
+            search: objectSchema(
+              {
+                apiKey: { type: ["string", "object"] },
+                mode: { type: "string" },
+                otherSecret: { type: "string" },
               },
-            },
+              true,
+            ),
           },
-        },
-      },
-    },
-  },
-};
+          true,
+        ),
+      }),
+    }),
+  }),
+});
+const configWithSearch = (search: Record<string, unknown>) => ({
+  plugins: { entries: { workboard: { enabled: true, config: { search } } } },
+});
 const prefix = "plugins.entries.workboard.config.search";
 const featureMethods = [
   "config.get",
@@ -210,21 +204,12 @@ suite.define(() => {
             await gateway.deferNext("config.set");
             await input.press("Enter");
             const request = await gateway.waitForRequest("config.set");
-            expect(JSON.parse(String(asRecord(request.params).raw))).toEqual({
-              plugins: {
-                entries: {
-                  workboard: {
-                    enabled: true,
-                    config: {
-                      search: {
-                        ...initial.plugins.entries.workboard.config.search,
-                        apiKey: "synthetic-new-key",
-                      },
-                    },
-                  },
-                },
-              },
-            });
+            expect(JSON.parse(String(asRecord(request.params).raw))).toEqual(
+              configWithSearch({
+                ...initial.plugins.entries.workboard.config.search,
+                apiKey: "synthetic-new-key",
+              }),
+            );
             await expect.poll(() => input.isDisabled()).toBe(true);
             await gateway.setMethodResponse("plugins.credentials.inspect", {
               baseHash: "mock-config-hash-1",
@@ -301,21 +286,12 @@ suite.define(() => {
             await dialog.getByRole("button", { name: "Saving…", exact: true }).isDisabled(),
           ).toBe(true);
           const changedRef = { ...originalRef, id: "/search/updated" };
-          expect(JSON.parse(String(asRecord(request.params).raw))).toEqual({
-            plugins: {
-              entries: {
-                workboard: {
-                  enabled: true,
-                  config: {
-                    search: {
-                      ...sourceConfig.plugins.entries.workboard.config.search,
-                      apiKey: changedRef,
-                    },
-                  },
-                },
-              },
-            },
-          });
+          expect(JSON.parse(String(asRecord(request.params).raw))).toEqual(
+            configWithSearch({
+              ...sourceConfig.plugins.entries.workboard.config.search,
+              apiKey: changedRef,
+            }),
+          );
           await gateway.setMethodResponse("plugins.credentials.inspect", {
             baseHash: "mock-config-hash-1",
             credential: { kind: "reference", ref: changedRef, unresolved: false },
@@ -406,23 +382,13 @@ suite.define(() => {
           const siblingWrite = await gateway.waitForRequest("config.set", {
             after: writesBeforeSibling,
           });
-          expect(JSON.parse(String(asRecord(siblingWrite.params).raw))).toEqual({
-            plugins: {
-              entries: {
-                workboard: {
-                  enabled: true,
-                  config: {
-                    search: {
-                      ...sourceConfig.plugins.entries.workboard.config.search,
-                      apiKey:
-                        width === 1174 ? { ...originalRef, id: "/search/failed" } : changedRef,
-                      mode: "llm-context",
-                    },
-                  },
-                },
-              },
-            },
-          });
+          expect(JSON.parse(String(asRecord(siblingWrite.params).raw))).toEqual(
+            configWithSearch({
+              ...sourceConfig.plugins.entries.workboard.config.search,
+              apiKey: width === 1174 ? { ...originalRef, id: "/search/failed" } : changedRef,
+              mode: "llm-context",
+            }),
+          );
           expect(
             await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
           ).toBe(true);

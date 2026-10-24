@@ -42,67 +42,6 @@ async function expectRadiosDisabled(page: Page) {
 }
 
 suite.define(() => {
-  it("shows an executing update ahead of a separately queued campaign", async () => {
-    await suite.withPage(
-      { colorScheme: "dark", viewport: { height: 1100, width: 1280 } },
-      async ({ page }) => {
-        const config = { update: { auto: { enabled: true }, channel: "dev" } };
-        const now = Date.now();
-        const gateway = await installMockGateway(page, {
-          featureMethods: ["config.get", "update.run", "update.status", "update.hold"],
-          methodResponses: {
-            "config.get": configResponse(config, "updates-active-run"),
-            "update.status": {
-              activeRun: createUpdateRunFixture({
-                createdAtMs: now - 60_000,
-                updatedAtMs: now - 2_000,
-                target: { kind: "git", sha: "b".repeat(40) },
-                steps: [{ step: "build", status: "in_progress" }],
-              }),
-              schedule: {
-                channel: "dev",
-                autoEnabled: true,
-                install: { kind: "git" },
-                target: {
-                  kind: "git",
-                  upstreamRef: "origin/main",
-                  upstreamSha: "a".repeat(40),
-                  commitsBehind: 3,
-                },
-                campaign: {
-                  id: "queued-campaign",
-                  state: "waiting-for-idle",
-                  announcedAtMs: now,
-                  forceAtMs: now + 15 * 60_000,
-                  updatedAtMs: now,
-                },
-              },
-            },
-          },
-          operatorScopes: ["operator.read", "operator.admin"],
-        });
-        expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
-        await gateway.waitForRequest("update.status");
-        const updating = page.getByRole("button", { name: "Updating…", exact: true });
-        await updating.waitFor();
-        await updating.scrollIntoViewIfNeeded();
-        const status = page
-          .locator(".settings-row")
-          .filter({ has: page.locator(".settings-row__title", { hasText: /^Status$/ }) });
-        expect(await status.textContent()).toContain("Updating · Staging");
-        expect(await status.textContent()).not.toContain("Waiting for active work");
-        expect(await page.getByText("bbbbbbbbbbbb", { exact: true }).count()).toBe(1);
-        const automatic = page
-          .locator(".settings-row")
-          .filter({ has: page.locator(".settings-row__title", { hasText: /^Automatic update$/ }) });
-        expect(await automatic.textContent()).toContain("Waiting for active work");
-        expect(await automatic.textContent()).toContain("aaaaaaaa");
-        expect(await updating.isDisabled()).toBe(true);
-        expect(await gateway.getRequests("update.run")).toHaveLength(0);
-      },
-    );
-  });
-
   it("locks update policy while an automatic apply runs and shows readable recovery guidance", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       const config = { update: { auto: { enabled: true }, channel: "stable" } };

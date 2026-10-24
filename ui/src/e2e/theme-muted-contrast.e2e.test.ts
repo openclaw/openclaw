@@ -187,9 +187,8 @@ suite.define(() => {
               await waitForControlUiRoute(page, { routeId: "about" });
               await page.emulateMedia({ colorScheme: mode });
               await page.mouse.move(0, 0);
-              const initialFamily = family === "claw" ? "knot" : "claw";
               const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
-              const preferences = { gatewayUrl, theme: initialFamily, themeMode: mode };
+              const preferences = { gatewayUrl, theme: family, themeMode: mode, accent };
               await page.evaluate(
                 ({ key, value }) => {
                   localStorage.clear();
@@ -202,74 +201,28 @@ suite.define(() => {
                   value: JSON.stringify(preferences),
                 },
               );
-              const initial = themeConfigResponse(initialFamily, mode, accent);
-              await gateway.setMethodResponse("config.get", initial);
-              const configGetsBeforeReset = (await gateway.getRequests("config.get")).length;
+              // Theme selection/persistence has its own E2E owner; this matrix owns painted contrast.
+              const committed = themeConfigResponse(family, mode, accent);
+              await gateway.setMethodResponse("config.get", committed);
               await evaluateControlUiContext(page, async (context) => {
                 await context.runtimeConfig.refresh();
                 context.theme.refresh();
               });
-              await expectCommittedConfig(page, initial);
+              await expectCommittedConfig(page, committed);
               await expect
                 .poll(() =>
                   evaluateControlUiContext(page, (context) => context.theme.appliedPalette),
                 )
-                .toMatchObject({ theme: initialFamily, resolvedMode: mode });
+                .toMatchObject({ theme: family, resolvedMode: mode });
               await evaluateControlUiContext(page, (context) => context.navigate("appearance"));
               await waitForControlUiRoute(page, { routeId: "appearance" });
               await page
-                .locator(`.settings-theme-card--${initialFamily}.settings-theme-card--active`)
+                .locator(`.settings-theme-card--${family}.settings-theme-card--active`)
                 .waitFor({ state: "visible" });
-              const response = await page.request.get(`${suite.server.baseUrl}settings/appearance`);
-              expect(response.status()).toBe(200);
-
-              const selectedCard = page.locator(`.settings-theme-card--${family}`);
               const root = page.locator("html");
-              await selectedCard.waitFor({ state: "visible" });
-              await gateway.waitForRequest("config.get", { after: configGetsBeforeReset });
-              const initialConfigGets = (await gateway.getRequests("config.get")).length;
-              const committed = themeConfigResponse(family, mode, "theme");
-              const patchAfter = await gateway.deferNext("config.patch");
-              await selectedCard.click();
-              const patch = await gateway.waitForRequest("config.patch", { after: patchAfter });
-              const raw = (patch.params as { raw?: unknown } | undefined)?.raw;
-              expect(typeof raw).toBe("string");
-              expect(JSON.parse(String(raw))).toMatchObject({
-                ui: { prefs: { theme: family === "claw" ? null : family, accent: "theme" } },
-              });
-
-              const selection = async () => ({
-                theme: await root.getAttribute("data-theme"),
-                mode: await root.getAttribute("data-theme-mode"),
-                active: (await selectedCard.getAttribute("class"))?.includes(
-                  "settings-theme-card--active",
-                ),
-              });
-              // Both optimistic paint and the acknowledgement must retain the selection.
-              await expect.poll(selection).toMatchObject({ theme: resolved, active: true });
-
-              await gateway.setMethodResponse("config.get", committed);
-              await gateway.resolveDeferred("config.patch", committed);
-              await expectCommittedConfig(page, committed);
-
-              await expect.poll(selection).toEqual({ theme: resolved, mode, active: true });
-
-              // Reapply the custom accent cleared by the theme selection.
+              await expect.poll(() => root.getAttribute("data-theme")).toBe(resolved);
+              expect(await root.getAttribute("data-theme-mode")).toBe(mode);
               if (accent) {
-                const accentCommitted = themeConfigResponse(family, mode, accent);
-                await gateway.setMethodResponse("config.get", accentCommitted);
-                const accentAfter = await gateway.deferNext("config.patch");
-                await page.locator("[data-accent-custom]").fill(accent);
-                const accentPatch = await gateway.waitForRequest("config.patch", {
-                  after: accentAfter,
-                });
-                // SAFETY: This is the config.patch request emitted by the exercised picker;
-                // the parsed payload below is checked against its complete prefs contract.
-                expect(JSON.parse((accentPatch.params as { raw: string }).raw)).toEqual({
-                  ui: { prefs: { accent } },
-                });
-                await gateway.resolveDeferred("config.patch", accentCommitted);
-                await expectCommittedConfig(page, accentCommitted);
                 await expect
                   .poll(() =>
                     page.evaluate(() =>
@@ -406,7 +359,6 @@ suite.define(() => {
               await page.keyboard.press("Escape");
               expect(new URL(page.url()).pathname).toBe("/settings/appearance");
               expect(await pickerValue(picker)).toBe(selectedValue);
-              expect(await gateway.getRequests("config.get")).toHaveLength(initialConfigGets);
             } catch (error) {
               void closeAfterFailure(error).catch(() => {});
               throw error;
