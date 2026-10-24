@@ -599,51 +599,18 @@ const oldListing = makeTuiSessionList({ defaults: oldDescription.defaults });
 const currentListing = makeTuiSessionList({ defaults: currentDescription.defaults });
 
 describe("GatewayChatClient session description lifetime", () => {
-  it("stops a disconnected metadata retry without dispatching on a later connection", async () => {
-    const entered = createDeferred();
-    const held = createDeferred<unknown>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.describe") {
-        entered.resolve();
-        return held.promise;
-      }
-      return oldListing;
-    });
-    await withGatewayChatConnection(request, async (client, callbacks) => {
-      callbacks.onHelloOk?.(hello());
-      const description = client.describeSession({ sessionKey: metadataSessionKey });
-      const rejected = expect(description).rejects.toMatchObject({ name: "AbortError" });
-      await entered.promise;
-      callbacks.onClose?.(1001, "reconnecting");
-      held.resolve({ session: oldDescription.session });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      await client.stop();
-      await rejected;
-      const completedCalls = request.mock.calls.length;
-      callbacks.onHelloOk?.(hello());
-      expect(request).toHaveBeenCalledTimes(completedCalls);
-      await expect(
-        client.describeSession({ sessionKey: metadataSessionKey }),
-      ).rejects.toMatchObject({
-        name: "AbortError",
-      });
-      expect(request).toHaveBeenCalledTimes(completedCalls);
-    });
-  });
-
   it.each([
-    { heldMethod: "sessions.describe", reconnect: true, failure: true },
-    { heldMethod: "sessions.list", reconnect: true, failure: false },
-    { heldMethod: "sessions.list", reconnect: false, failure: true },
+    { heldMethod: "sessions.describe", transition: "stop", failure: false },
+    { heldMethod: "sessions.describe", transition: "reconnect", failure: true },
+    { heldMethod: "sessions.list", transition: "reconnect", failure: false },
+    { heldMethod: "sessions.list", transition: "none", failure: true },
   ])(
-    "settles $heldMethod metadata (reconnect=$reconnect, failure=$failure)",
-    async ({ heldMethod, reconnect, failure }) => {
+    "settles $heldMethod metadata on $transition (failure=$failure)",
+    async ({ heldMethod, transition, failure }) => {
       const entered = createDeferred();
       const held = createDeferred<unknown>();
       const error = new Error("Metadata request failed");
-      let current = !reconnect;
+      let current = transition === "none";
       const response = (method: string) =>
         method === "sessions.describe"
           ? { session: (current ? currentDescription : oldDescription).session }
@@ -658,7 +625,7 @@ describe("GatewayChatClient session description lifetime", () => {
         } else {
           throw new Error(`Unexpected metadata request: ${method}`);
         }
-        if (method === heldMethod && (!reconnect || !current)) {
+        if (method === heldMethod && (transition === "none" || !current)) {
           entered.resolve();
           return held.promise;
         }
@@ -670,24 +637,43 @@ describe("GatewayChatClient session description lifetime", () => {
           sessionKey: metadataSessionKey,
           agentId: "work",
         });
-        const settled = reconnect
-          ? expect(description).resolves.toEqual(currentDescription)
-          : expect(description).rejects.toBe(error);
+        const settled =
+          transition === "stop"
+            ? expect(description).rejects.toMatchObject({ name: "AbortError" })
+            : transition === "reconnect"
+              ? expect(description).resolves.toEqual(currentDescription)
+              : expect(description).rejects.toBe(error);
         await entered.promise;
         const oldResponse = response(heldMethod);
-        if (reconnect) {
+        if (transition !== "none") {
           callbacks.onClose?.(1001, "reconnecting");
-          current = true;
-          callbacks.onHelloOk?.(hello());
+          if (transition === "reconnect") {
+            current = true;
+            callbacks.onHelloOk?.(hello());
+          }
         }
         if (failure) {
           held.reject(error);
         } else {
           held.resolve(oldResponse);
         }
+        if (transition === "stop") {
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          await client.stop();
+        }
         await settled;
-        if (!reconnect) {
+        if (transition === "none") {
           expect(request.mock.calls.filter(([method]) => method === heldMethod)).toHaveLength(1);
+        } else if (transition === "stop") {
+          const completedCalls = request.mock.calls.length;
+          callbacks.onHelloOk?.(hello());
+          expect(request).toHaveBeenCalledTimes(completedCalls);
+          await expect(
+            client.describeSession({ sessionKey: metadataSessionKey }),
+          ).rejects.toMatchObject({ name: "AbortError" });
+          expect(request).toHaveBeenCalledTimes(completedCalls);
         }
       });
     },
