@@ -294,7 +294,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: awaited web_search policy preparation for harnesses; the sync resolver stays.
       // +3: shared Decisions support/evaluation functions and the canonical capability schema.
       // +2: openRecord and ToolArgumentValidationError on the existing tool-plugin facade.
-      3815,
+      // +3: bounded command-status projection types (#76759).
+      3818,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
