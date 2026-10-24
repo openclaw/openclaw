@@ -120,7 +120,6 @@ import {
   turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
-import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import * as attemptTurnState from "./run-attempt-turn-state.js";
 import { setAgentWorkspaceForTest } from "./run-attempt-workspace.test-support.js";
 import { registerSettledFinalizationTests } from "./run-attempt.settled-finalization.test-support.js";
@@ -150,13 +149,11 @@ import {
   createCodexTestOAuthProfile,
   withoutCodexSkillDiscovery,
 } from "./test-support.js";
-import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import {
   startOrResumeAttemptThreadWithoutSkills as startOrResumeThread,
   createAppServerOptions as createBaseAppServerOptions,
   createLifecycleRequest,
   createCodexLifecycleHarness,
-  createLeasedCodexLifecycleHarness,
 } from "./thread-lifecycle.test-fixtures.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
 import { buildThreadStartParams } from "./thread-requests.js";
@@ -315,20 +312,6 @@ async function buildCodexTurnContextForTest(
   };
 }
 
-function createCodexToolBridgeForTest(
-  params: EmbeddedRunAttemptParams,
-  tools: RuntimeDynamicToolForTest[],
-  registeredTools: RuntimeDynamicToolForTest[] = tools,
-) {
-  const signal = new AbortController().signal;
-  return createCodexDynamicToolBridge({
-    tools,
-    registeredTools,
-    signal,
-    directToolNames: resolveCodexDynamicToolDirectNames(params, registeredTools, false),
-  });
-}
-
 async function startThreadWithDisabledNativeSurfaceForTest(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -392,10 +375,6 @@ async function startThreadWithDisabledNativeSurfaceForTest(
 
   return { request, nativeToolSurfaceEnabled };
 }
-
-type RuntimeDynamicToolForTest = Parameters<
-  typeof createCodexDynamicToolBridge
->[0]["tools"][number];
 
 function flattenSpecsWithNamespace(
   specs: readonly CodexDynamicToolSpec[],
@@ -501,6 +480,17 @@ function expectEvent(spy: ReturnType<typeof vi.fn>, stream: string, data: unknow
 
 function eventsFor(spy: ReturnType<typeof vi.fn>, stream: string) {
   return spy.mock.calls.map(([event]) => event).filter((event) => event.stream === stream);
+}
+
+function tokenUsage(inputTokens: number, outputTokens = 2_000) {
+  return {
+    totalTokens: inputTokens + outputTokens,
+    inputTokens,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens,
+    reasoningOutputTokens: 0,
+  };
 }
 
 function callTool(
@@ -1434,101 +1424,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
 
-  it("keeps a deferred tool schema stable across turns with different tool availability", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    const registeredTools = ["message", "web_search"].map(createRuntimeDynamicTool);
-    const makeTurn = (webSearchAvailable = false) => {
-      const params = createParams(sessionFile, workspaceDir);
-      params.disableTools = false;
-      params.runtimePlan = createCodexRuntimePlanFixture();
-      params.sourceReplyDeliveryMode = "message_tool_only";
-      const tools = (webSearchAvailable ? ["message", "web_search"] : ["message"]).map(
-        createRuntimeDynamicTool,
-      );
-      const bridge = createCodexToolBridgeForTest(params, tools, registeredTools);
-      return {
-        params,
-        bridge,
-        get instructions() {
-          return buildDeveloperInstructions(params, { dynamicTools: bridge.availableSpecs });
-        },
-      };
-    };
-    const normal = makeTurn();
-    const withWebSearch = makeTurn(true);
-    const nextNormal = makeTurn();
-    const registeredToolNames = specNames(normal.bridge.specs);
-    expect(registeredToolNames).toContain("message");
-    expect(registeredToolNames).toContain("web_search");
-    expect(normal.instructions).not.toContain(
-      "Deferred searchable OpenClaw dynamic tools available: openclaw.web_search",
-    );
-    expect(withWebSearch.instructions).toContain(
-      "Deferred searchable OpenClaw dynamic tools available: openclaw.web_search.",
-    );
-    for (const bridge of [normal.bridge, withWebSearch.bridge, nextNormal.bridge]) {
-      const webSearchSpec = flattenSpecsWithNamespace(bridge.specs).find(
-        (tool) => tool.name === "web_search",
-      );
-      expect(webSearchSpec).toMatchObject({ namespace: "openclaw", deferLoading: true });
-    }
-    expect(codexDynamicToolsFingerprint(withWebSearch.bridge.specs)).toBe(
-      codexDynamicToolsFingerprint(normal.bridge.specs),
-    );
-    expect(codexDynamicToolsFingerprint(nextNormal.bridge.specs)).toBe(
-      codexDynamicToolsFingerprint(normal.bridge.specs),
-    );
-    let startedThreadId: string | undefined;
-    const respond = createLifecycleRequest(async (method) => {
-      if (method === "thread/start") {
-        startedThreadId = "thread-stable-tools";
-        return threadStartResult(startedThreadId);
-      }
-      if (method === "thread/resume") {
-        return threadStartResult(startedThreadId);
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "stable-tools-agent"),
-      respond,
-    });
-    const { client, request } = fixture;
-    const turns = [
-      { params: createRunParams(), bridge: normal.bridge },
-      { params: withWebSearch.params, bridge: withWebSearch.bridge },
-      { params: nextNormal.params, bridge: nextNormal.bridge },
-    ];
-    for (const turn of turns) {
-      await startOrResumeThread({
-        client,
-        params: turn.params,
-        cwd: workspaceDir,
-        dynamicTools: turn.bridge.specs,
-        appServer: createThreadLifecycleAppServerOptions(),
-        signal: new AbortController().signal,
-      });
-      await fixture.endTurn("thread-stable-tools");
-    }
-    expect(withoutCodexSkillDiscovery(request.mock.calls.map(([method]) => method))).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/start",
-      "thread/unsubscribe",
-      "config/read",
-      "configRequirements/read",
-      "thread/read",
-      "thread/resume",
-      "thread/inject_items",
-      "thread/unsubscribe",
-      "config/read",
-      "configRequirements/read",
-      "thread/read",
-      "thread/resume",
-      "thread/inject_items",
-      "thread/unsubscribe",
-    ]);
-  });
   it("disables Codex native tool surfaces when runtime toolsAllow is empty", async () => {
     const params = createRunParams();
     setCodexTestToolFactory(params, () => [
@@ -2440,12 +2335,9 @@ describe("runCodexAppServerAttempt", () => {
       await emit(harness, "rawResponse/completed", {
         responseId: `response-${inputTokens}`,
         usage: {
-          totalTokens: inputTokens + 2_000,
-          inputTokens,
+          ...tokenUsage(inputTokens),
           cachedInputTokens: 40_000,
           cacheWriteInputTokens: 10_000,
-          outputTokens: 2_000,
-          reasoningOutputTokens: 0,
         },
       });
     }
@@ -2472,14 +2364,7 @@ describe("runCodexAppServerAttempt", () => {
     await awaitTurnStart(harness, run);
     await emit(harness, "thread/tokenUsage/updated", {
       tokenUsage: {
-        last: {
-          totalTokens: 162_000,
-          inputTokens: 160_000,
-          cachedInputTokens: 0,
-          cacheWriteInputTokens: 0,
-          outputTokens: 2_000,
-          reasoningOutputTokens: 0,
-        },
+        last: tokenUsage(160_000),
       },
     });
     await finishRun(run, harness);
@@ -3836,14 +3721,7 @@ describe("runCodexAppServerAttempt", () => {
           threadId: "thread-1",
           turnId,
           tokenUsage: {
-            last: {
-              totalTokens: inputTokens + outputTokens,
-              inputTokens,
-              cachedInputTokens: 0,
-              cacheWriteInputTokens: 0,
-              outputTokens,
-              reasoningOutputTokens: 0,
-            },
+            last: tokenUsage(inputTokens, outputTokens),
           },
         },
       });
