@@ -6,10 +6,10 @@ import { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
-import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { writeFixtureReply } from "./gateway-recovery.test-support.js";
 import { startMemoryProofProvider } from "./memory-product-proof.test-support.js";
+import { writeToolResponse } from "./tool-response.test-support.js";
 
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
 const RESPONSE_MARKER = "ACTIVE_MEMORY_TRIGGER_STALL_PROOF_OK";
@@ -50,41 +50,18 @@ function writeToolCallResponse(
   name: string,
   args: Record<string, unknown>,
 ): void {
-  const itemId = `fc_${randomUUID()}`;
-  const argumentsText = JSON.stringify(args);
-  const item = {
-    type: "function_call",
-    id: itemId,
-    call_id: `call_${randomUUID()}`,
-    name,
-    arguments: argumentsText,
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
+  writeToolResponse(
+    response,
     {
-      type: "response.function_call_arguments.delta",
-      item_id: itemId,
-      output_index: 0,
-      delta: argumentsText,
-    },
-    {
-      type: "response.function_call_arguments.done",
-      item_id: itemId,
-      output_index: 0,
+      id: `fc_${randomUUID()}`,
+      call_id: `call_${randomUUID()}`,
       name,
-      arguments: argumentsText,
+      arguments: JSON.stringify(args),
     },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `trigger-stall-proof-tool-${randomUUID()}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-      },
-    },
-  ]);
+    `trigger-stall-proof-tool-${randomUUID()}`,
+    { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+    true,
+  );
 }
 
 async function startMockProvider() {
@@ -143,16 +120,12 @@ async function readLogFiles(gateway: GatewayLogSource): Promise<Map<string, stri
   return new Map(entries);
 }
 
-async function snapshotLogOffsets(gateway: GatewayLogSource): Promise<Map<string, number>> {
-  return new Map([...(await readLogFiles(gateway))].map(([file, text]) => [file, text.length]));
-}
-
 async function readLogsSince(
   gateway: GatewayLogSource,
-  offsets: Map<string, number>,
+  snapshot: Map<string, string>,
 ): Promise<string> {
   return [...(await readLogFiles(gateway))]
-    .map(([file, text]) => text.slice(offsets.get(file) ?? 0))
+    .map(([file, text]) => text.slice(snapshot.get(file)?.length ?? 0))
     .join("\n");
 }
 
@@ -236,7 +209,7 @@ describe.runIf(process.env.OPENCLAW_ACTIVE_MEMORY_TRIGGER_STALL_PROOF === "1")(
         await gateway.runCli(["memory", "index", "--agent", "qa"]);
 
         const runTurn = async (label: string, releaseLockOnLaneOneFailure?: () => void) => {
-          const offsets = await snapshotLogOffsets(gateway);
+          const offsets = await readLogFiles(gateway);
           const requestsBefore = provider.requests.length;
           const sessionKey = `agent:qa:direct:trigger-stall-${label}-${randomUUID()}`;
           const startedAt = Date.now();
@@ -273,8 +246,7 @@ describe.runIf(process.env.OPENCLAW_ACTIVE_MEMORY_TRIGGER_STALL_PROOF === "1")(
           );
           const logText = await readLogsSince(gateway, offsets);
           const modelRequests = provider.requests.slice(requestsBefore);
-          const record = {
-            phase: label,
+          return {
             replyGrounded,
             terminalStatus: terminal.status,
             preflightTimedOut: logText.includes(PREFLIGHT_TIMEOUT_LINE),
@@ -282,7 +254,6 @@ describe.runIf(process.env.OPENCLAW_ACTIVE_MEMORY_TRIGGER_STALL_PROOF === "1")(
             recallRounds: modelRequests.filter((entry) => entry.kind !== "chat").length,
             contextInjected: modelRequests.some((entry) => entry.kind === "chat" && entry.injected),
           };
-          return record;
         };
 
         // Control turn: no lock, trigger lookup completes, grounded recall lands in the prompt.

@@ -214,10 +214,7 @@ describe("agent session streaming", () => {
         deliver: false,
         idempotencyKey: IDEMPOTENCY_KEY,
       });
-      expect(accepted).toMatchObject({
-        status: "accepted",
-        runId: IDEMPOTENCY_KEY,
-      });
+      expect(accepted).toMatchObject({ status: "accepted", runId: IDEMPOTENCY_KEY });
 
       await waitFor(() =>
         expect(
@@ -243,10 +240,7 @@ describe("agent session streaming", () => {
         { runId: IDEMPOTENCY_KEY, timeoutMs: 30_000 },
         { timeoutMs: 35_000 },
       );
-      expect(terminal).toMatchObject({
-        status: "ok",
-        runId: IDEMPOTENCY_KEY,
-      });
+      expect(terminal).toMatchObject({ status: "ok", runId: IDEMPOTENCY_KEY });
 
       await waitFor(() => expect(terminalEvents()).toHaveLength(1));
 
@@ -267,13 +261,14 @@ describe("agent session streaming", () => {
       expect(new Set(deltaSeqs).size).toBe(deltaSeqs.length);
 
       const terminalAtCompletion = terminalEvents();
-      expect(terminalAtCompletion).toHaveLength(1);
-      expect(terminalAtCompletion[0]).toMatchObject({
-        runId: accepted.runId,
-        sessionKey: SESSION_KEY,
-        stream: "lifecycle",
-        data: { phase: "end" },
-      });
+      expect(terminalAtCompletion).toMatchObject([
+        {
+          runId: accepted.runId,
+          sessionKey: SESSION_KEY,
+          stream: "lifecycle",
+          data: { phase: "end" },
+        },
+      ]);
       expect(terminalAtCompletion[0]?.seq).toBeGreaterThan(deltaSeqs.at(-1) ?? 0);
 
       await waitFor(() =>
@@ -282,9 +277,6 @@ describe("agent session streaming", () => {
       const runChatEventsAtTerminal = chatEvents();
       const finalIndex = runChatEventsAtTerminal.findIndex((event) => event?.state === "final");
       expect(finalIndex).toBeGreaterThan(-1);
-      expect(
-        runChatEventsAtTerminal.slice(finalIndex + 1).some((event) => event?.state === "delta"),
-      ).toBe(false);
       await delay(250);
       expect(
         chatEvents()

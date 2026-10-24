@@ -53,75 +53,44 @@ describe("qa-otel-smoke receiver bounds", () => {
     logsExporter: "otlp" | "stdout",
   ): Parameters<typeof testing.assertSmoke>[0] {
     const log = "diagnostics-otel: log payload contains OTEL-QA-SECRET";
-    const stdoutLogRecords = [
-      {
-        ts: "2026-06-18T00:00:00.000Z",
-        signal: "openclaw.diagnostic.log" as const,
-        "service.name": "openclaw-qa-lab-otel-smoke",
-        severityText: "INFO",
-        severityNumber: 9,
-        body: "log",
-        attributes: {},
-      },
-    ].filter(() => logsExporter === "stdout");
+    const stdoutLogRecords =
+      logsExporter === "stdout"
+        ? [
+            {
+              ts: "2026-06-18T00:00:00.000Z",
+              signal: "openclaw.diagnostic.log" as const,
+              "service.name": "openclaw-qa-lab-otel-smoke",
+              severityText: "INFO",
+              severityNumber: 9,
+              body: "log",
+              attributes: {},
+            },
+          ]
+        : [];
     return {
       bodyText: logsExporter === "otlp" ? { logs: [log] } : {},
       childExitCode: 0,
       disallowedBodyNeedles: ["OTEL-QA-SECRET"],
       logsExporter,
-      logRecords: [
-        {
-          body: "diagnostics-otel: logs exporter enabled",
-          traceId: "trace",
-          spanId: "span",
-        },
-      ].filter(() => logsExporter === "otlp"),
-      metrics: [{ name: "openclaw.harness.duration_ms" }],
-      requests: (["traces", "metrics", "logs"] as const)
-        .filter((signal) => logsExporter === "otlp" || signal !== "logs")
-        .map((signal) => ({
-          path: `/v1/${signal}`,
-          signal,
-          bytes: 16,
-          contentEncoding: undefined,
-          status: 200,
-          spanCount: signal === "traces" ? 5 : 0,
-          metricCount: signal === "metrics" ? 1 : 0,
-          logCount: signal === "logs" ? 1 : 0,
-        })),
+      // The producer test covers successful telemetry; this fixture isolates leak reporting.
+      logRecords: [],
+      metrics: [],
+      requests: [],
       stdoutLogLines: stdoutLogRecords.map((record) => JSON.stringify({ ...record, body: log })),
       stdoutLogRecords,
-      spans: [
-        ...["openclaw.run", "openclaw.harness.run"].map((name) => ({
-          name,
-          parent: name !== "openclaw.run",
-          attributes: { "openclaw.error": "QA OTEL provider stream failed OPENAI_API_KEY=***" },
-        })),
-        { name: "openclaw.context.assembled", parent: true, attributes: {} },
-        { name: "openclaw.message.delivery", parent: true, attributes: {} },
-        {
-          name: "chat gpt-5.6-luna",
-          parent: true,
-          attributes: {
-            "gen_ai.operation.name": "chat",
-            "gen_ai.request.model": "gpt-5.6-luna",
-            "openclaw.model": "gpt-5.6-luna",
-            "openclaw.provider": "openai",
-          },
-        },
-      ],
+      spans: [],
     };
   }
 
   it("rejects duplicate OTEL smoke CLI options", () => {
-    const duplicateCases = [
-      ["--collector", ["--collector", "local", "--collector", "docker"]],
-      ["--logs-exporter", ["--logs-exporter", "otlp", "--logs-exporter", "stdout"]],
-      ["--output-dir", ["--output-dir", ".artifacts/one", "--output-dir", ".artifacts/two"]],
-    ] satisfies Array<[string, string[]]>;
-
-    for (const [flag, args] of duplicateCases) {
-      expect(() => testing.parseArgs(args), flag).toThrow(`${flag} was provided more than once`);
+    for (const [flag, first, second] of [
+      ["--collector", "local", "docker"],
+      ["--logs-exporter", "otlp", "stdout"],
+      ["--output-dir", ".artifacts/one", ".artifacts/two"],
+    ] as const) {
+      expect(() => testing.parseArgs([flag, first, flag, second]), flag).toThrow(
+        `${flag} was provided more than once`,
+      );
     }
   });
 
@@ -212,14 +181,7 @@ describe("qa-otel-smoke receiver bounds", () => {
     try {
       await once(socket, "connect");
       socket.write(
-        [
-          "POST /v1/traces HTTP/1.1",
-          "Host: 127.0.0.1",
-          "Content-Type: application/x-protobuf",
-          "Content-Length: 1048576",
-          "",
-          "x",
-        ].join("\r\n"),
+        "POST /v1/traces HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/x-protobuf\r\nContent-Length: 1048576\r\n\r\nx",
       );
 
       await expectCloses(receiver.close(), "receiver");

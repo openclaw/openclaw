@@ -12,13 +12,11 @@ import {
   startQaBusServer,
 } from "../../../../extensions/qa-lab/api.js";
 import type { SessionsListResult } from "../../../../src/gateway/session-utils.types.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../../helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "../../../helpers/openai-responses-sse.js";
 import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { listenLoopback } from "./gateway-recovery.test-support.js";
 import { closeNativeProvider, createNativeProvider } from "./native-provider-proof-fixture.js";
+import { writeToolResponse } from "./tool-response.test-support.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const MODEL = "mock-openai/qa-parent";
@@ -185,32 +183,16 @@ function writeToolCall(
   callId: string,
   args: Record<string, unknown>,
 ): void {
-  const item = {
-    type: "function_call",
-    id: `fc_${callId}`,
-    call_id: callId,
-    name,
-    arguments: JSON.stringify(args),
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
+  writeToolResponse(
+    response,
     {
-      type: "response.function_call_arguments.delta",
-      item_id: item.id,
-      output_index: 0,
-      delta: item.arguments,
+      id: `fc_${callId}`,
+      call_id: callId,
+      name,
+      arguments: JSON.stringify(args),
     },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${callId}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
+    `resp_${callId}`,
+  );
 }
 
 function withModels(config: OpenClawConfig): OpenClawConfig {

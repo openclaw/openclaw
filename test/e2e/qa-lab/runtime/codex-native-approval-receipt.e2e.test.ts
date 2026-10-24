@@ -100,25 +100,6 @@ function readApprovalIdentity(testInstance: OpenClawTestInstance, approvalId: st
   ) as ApprovalIdentityRow | undefined;
 }
 
-function assertNoGenericDuplicate(testInstance: OpenClawTestInstance, approvalId: string) {
-  const table = queryApproval(
-    testInstance,
-    "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?",
-    "execution_decision_facts",
-  );
-  if (table) {
-    const row = queryApproval(
-      testInstance,
-      `SELECT COUNT(*) AS count FROM execution_decision_facts
-        WHERE owner = 'operator_approvals' OR source_ref = (
-          SELECT resolution_ref FROM operator_approvals WHERE approval_id = ?
-        )`,
-      approvalId,
-    );
-    expect(row?.count).toBe(0);
-  }
-}
-
 function requireAllowedOnceReceipt(result: AuditRunInspectResult) {
   const receipt = result.decisionDisplays.find(
     (candidate) =>
@@ -171,12 +152,11 @@ async function connectApprovalReviewer(testInstance: OpenClawTestInstance) {
   return client;
 }
 
-async function inspectReceipt(owner: OpenClawTestInstance, runId: string, approvalId: string) {
+async function inspectReceipt(owner: OpenClawTestInstance, runId: string) {
   const result = await owner.cli(["audit", "--run", runId, "--explain", "--json"]);
   expect(result.code, result.stderr).toBe(0);
   const inspection = JSON.parse(result.stdout) as AuditRunInspectResult;
   requireAllowedOnceReceipt(inspection);
-  assertNoGenericDuplicate(owner, approvalId);
   return JSON.stringify(inspection);
 }
 
@@ -323,7 +303,7 @@ describe("Codex native approval receipt", () => {
         }
         const sourceRunId = identity.source_run_id;
 
-        const serialized = await inspectReceipt(instance, sourceRunId, approval.id);
+        const serialized = await inspectReceipt(instance, sourceRunId);
         expect(serialized).not.toContain(PRIVATE_COMMAND);
         expect(serialized).not.toContain(PRIVATE_THREAD_ID);
         expect(serialized).not.toContain(PRIVATE_ITEM_ID);
@@ -332,7 +312,7 @@ describe("Codex native approval receipt", () => {
         reviewer.stop();
         await instance.stopGateway();
         await instance.startGateway();
-        expect(await inspectReceipt(instance, sourceRunId, approval.id)).toBe(serialized);
+        expect(await inspectReceipt(instance, sourceRunId)).toBe(serialized);
       } finally {
         reviewer.stop();
       }

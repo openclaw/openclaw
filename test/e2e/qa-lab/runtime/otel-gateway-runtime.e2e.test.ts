@@ -172,9 +172,8 @@ test("exports linked success and failed-read recovery spans from a real qa-chann
       `requests?after=${requestCursor.cursor}`,
     );
     const readPlans = scenarioRequests.filter((request) => request.plannedToolName === "read");
-    expect(readPlans).toHaveLength(1);
+    expect(readPlans).toMatchObject([{ plannedWireToolName: "exec" }]);
     expect(readPlans[0]?.plannedToolCallId).toBeTruthy();
-    expect(readPlans[0]?.plannedWireToolName).toBe("exec");
     expect(scenarioRequests).toHaveLength(2);
     const continuation = scenarioRequests[1]!;
     expect(continuation.toolOutputCallId).toBe(readPlans[0]?.plannedToolCallId);
@@ -253,6 +252,11 @@ test("exports linked success and failed-read recovery spans from a real qa-chann
       ),
     ).toBe(true);
 
+    const usageAttributes = {
+      "openclaw.tokens.input": 64,
+      "openclaw.tokens.output": 24,
+      "openclaw.tokens.total": 88,
+    };
     const llmTaskUsage = await waitFor(
       () =>
         activeReceiver.capturedSpans.find(
@@ -263,11 +267,7 @@ test("exports linked success and failed-read recovery spans from a real qa-chann
       45_000,
       () => activeReceiver.capturedSpans,
     );
-    expect(llmTaskUsage.attributes).toMatchObject({
-      "openclaw.tokens.input": 64,
-      "openclaw.tokens.output": 24,
-      "openclaw.tokens.total": 88,
-    });
+    expect(llmTaskUsage.attributes).toMatchObject(usageAttributes);
     expect(
       activeReceiver.capturedSpans
         .slice(llmTaskSpanCursor)
@@ -275,9 +275,7 @@ test("exports linked success and failed-read recovery spans from a real qa-chann
           (span) =>
             span.name === "openclaw.model.usage" &&
             span.attributes["openclaw.channel"] === "unknown" &&
-            span.attributes["openclaw.tokens.input"] === 64 &&
-            span.attributes["openclaw.tokens.output"] === 24 &&
-            span.attributes["openclaw.tokens.total"] === 88,
+            Object.entries(usageAttributes).every(([key, value]) => span.attributes[key] === value),
         )
         .map((span) => span.attributes["openclaw.plugin"]),
     ).toEqual(["llm-task"]);
