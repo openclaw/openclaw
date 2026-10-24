@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import type { ConfigSchemaResponse, CronJob } from "../../ui/src/api/types.ts";
-import { pathForRoute } from "../../ui/src/app-route-paths.ts";
+import { pathForAgentPanel, pathForRoute } from "../../ui/src/app-route-paths.ts";
+import { createSkill } from "../../ui/src/pages/skills/view.test-support.ts";
 import type { MockGatewayControls } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import {
   controlUiSessionPath,
@@ -9,6 +10,7 @@ import {
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../../ui/src/test-helpers/control-ui-navigation.ts";
 import { cronListResponseFixture } from "../../ui/src/test-helpers/cron.ts";
+import { meetingStatus } from "../../ui/src/test-helpers/transcripts.test-support.ts";
 
 const sessionKeys = ["agent:main:interaction-a", "agent:main:interaction-b"] as const;
 const sessionQuery = "Interaction 0999";
@@ -20,11 +22,20 @@ export type InteractionScenario = {
   id: string;
   route: string;
   expected: string;
+  /** Count newly inserted rows across the action, including transient replacements. */
+  rowSelector?: string;
   prepare: (page: Page, gateway: MockGatewayControls) => Promise<void>;
   run: (page: Page, gateway: MockGatewayControls) => Promise<void>;
 };
 
 export function createInteractionFixture(buildId: string, version: string) {
+  const captureSources = ["Alpha", "Beta"].map((title) => ({
+    providerId: "test-voice",
+    guildId: "guild",
+    channelId: title.toLowerCase(),
+    title,
+  }));
+  const config = { transcripts: { enabled: true, autoStart: captureSources } };
   const sessions = Array.from({ length: 1_000 }, (_, index) => ({
     key: sessionKeys[index] ?? `agent:main:interaction-${index}`,
     sessionId: `interaction-session-${index}`,
@@ -98,6 +109,71 @@ export function createInteractionFixture(buildId: string, version: string) {
         generatedAt: "2026-10-23T00:00:00.000Z",
       } satisfies ConfigSchemaResponse,
       "progressCard.get": { card: null },
+      "config.get": {
+        config,
+        sourceConfig: config,
+        hash: "interaction-config",
+        raw: JSON.stringify(config),
+        valid: true,
+        issues: [],
+      },
+      "transcripts.status": {
+        ...meetingStatus,
+        configuredSources: captureSources.map((source) =>
+          Object.assign({}, meetingStatus.configuredSources[0], { source, title: source.title }),
+        ),
+      },
+      "skills.status": {
+        workspaceDir: "/synthetic/workspace",
+        managedSkillsDir: "/synthetic/skills",
+        skills: ["Alpha", "Beta"].map((name) =>
+          createSkill({
+            name,
+            skillKey: name.toLowerCase(),
+            primaryEnv: undefined,
+            missing: { bins: ["synthetic-bin"], anyBins: [], env: [], config: [], os: [] },
+            blockedByAgentFilter: true,
+          }),
+        ),
+      },
+      "sessions.storage.status": {
+        agents: ["main", "research"].map((agentId) => ({
+          agentId,
+          storePath: `/synthetic/${agentId}.sqlite`,
+          hotTranscripts: 7,
+          coldTranscripts: 0,
+          databaseBytes: 4096,
+          walBytes: 0,
+          archiveBytes: 0,
+          embeddedArchiveBytes: 0,
+        })),
+        maintenance: {
+          running: false,
+          lastStartedAt: null,
+          lastCompletedAt: null,
+          lastError: null,
+          archivedTranscripts: 0,
+          externalizedTranscripts: 0,
+        },
+      },
+      "models.authStatus": {
+        ts: 1_800_000_000_000,
+        providers: [{ provider: "openai", displayName: "OpenAI", status: "ok", profiles: [] }],
+      },
+      "usage.status": {
+        updatedAt: 1_800_000_000_000,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: [
+              { label: "5h", usedPercent: 25 },
+              { label: "Weekly", usedPercent: 40 },
+            ],
+            billing: [{ type: "balance", amount: 12, unit: "credits" }],
+          },
+        ],
+      },
       "cron.list": cronListResponseFixture([
         ...cronCases,
         ...Array.from({ length: 10 }, (_, index) => ({
@@ -257,6 +333,16 @@ async function prepareSessions(page: Page, gateway: MockGatewayControls) {
   await frames(page);
 }
 
+async function refreshSessions(page: Page, gateway: MockGatewayControls) {
+  const after = (await gateway.getRequests("sessions.list", { source: "sessions-page" })).length;
+  await page.locator(".sessions-toolbar__refresh").click();
+  await gateway.waitForRequest("sessions.list", { after, match: { source: "sessions-page" } });
+  await page.waitForFunction(
+    () => !document.querySelector<HTMLButtonElement>(".sessions-toolbar__refresh")?.disabled,
+  );
+  await frames(page);
+}
+
 async function prepareCron(page: Page) {
   await page.locator(".cron-table__row").first().waitFor();
   const more = page.getByRole("button", { name: "Load more", exact: true });
@@ -306,9 +392,120 @@ async function searchModels(page: Page) {
 
 export const interactionScenarios: readonly InteractionScenario[] = [
   {
+    id: "agent-skills-refresh",
+    route: pathForAgentPanel("main", "skills"),
+    expected: "Refreshing the agent's skills retains both rows and their diagnostics.",
+    rowSelector: ".agent-skill-row, .agent-skill-row .settings-row__desc",
+    prepare: async (page) => {
+      await page.locator(".agent-skill-row").first().waitFor();
+    },
+    run: async (page, gateway) => {
+      const after = (await gateway.getRequests("skills.status")).length;
+      const section = page.locator(".settings-section").filter({
+        has: page.locator('input[name="agent-skills-filter"]'),
+      });
+      await section.getByRole("button", { name: "Refresh", exact: true }).click();
+      await gateway.waitForRequest("skills.status", { after });
+      await frames(page);
+    },
+  },
+  {
+    id: "meeting-health-refresh",
+    route: `${pathForRoute("communications")}?section=transcripts#settings-communications-meeting-capture`,
+    expected: "Refreshing capture health retains source controls and health rows.",
+    rowSelector: "openclaw-meeting-capture-settings .settings-row",
+    prepare: async (page) => {
+      await page
+        .locator('openclaw-meeting-capture-settings [aria-label="Edit source 1"]')
+        .waitFor();
+      await page.getByText("Applied source state", { exact: true }).waitFor();
+    },
+    run: async (page, gateway) => {
+      const after = (await gateway.getRequests("transcripts.status")).length;
+      await page
+        .locator("openclaw-meeting-capture-settings")
+        .getByRole("button", { name: "Refresh", exact: true })
+        .click();
+      await gateway.waitForRequest("transcripts.status", { after });
+      await frames(page);
+    },
+  },
+  {
+    id: "cron-refresh",
+    route: pathForRoute("cron"),
+    expected: "Refreshing the first automation page retains unchanged job rows.",
+    rowSelector: ".cron-table__row",
+    prepare: async (page, gateway) => inventoryReady(page, gateway, "cron"),
+    run: async (page, gateway) => {
+      const after = (await gateway.getRequests("cron.list")).length;
+      await page.locator(".cron-refresh").click();
+      await gateway.waitForRequest("cron.list", { after });
+      await page.waitForFunction(
+        () => document.querySelector(".cron-table")?.getAttribute("aria-busy") !== "true",
+      );
+      await frames(page);
+    },
+  },
+  {
+    id: "provider-usage-refresh",
+    route: pathForRoute("model-providers"),
+    expected: "Refreshing provider usage retains the plan windows and billing rows.",
+    rowSelector:
+      ".provider-usage__group, .provider-usage__window, .provider-usage__row, .provider-usage__chip",
+    prepare: async (page) => {
+      const summary = page.locator('[data-provider-id="openai"] .provider-row__summary');
+      await summary.waitFor();
+      if ((await summary.getAttribute("aria-expanded")) !== "true") {
+        await summary.click();
+      }
+      await page.locator(".provider-usage__window").first().waitFor();
+    },
+    run: async (page, gateway) => {
+      const after = (await gateway.getRequests("usage.status")).length;
+      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await gateway.waitForRequest("usage.status", { after });
+      await frames(page);
+    },
+  },
+  {
+    id: "storage-refresh",
+    route: `${pathForRoute("ai-agents")}?section=session#settings-session-storage`,
+    expected: "An unchanged storage refresh retains both agent rows and the open disclosure.",
+    rowSelector: "openclaw-session-storage-settings details > .settings-row",
+    prepare: async (page) => {
+      const details = page.locator(
+        "openclaw-session-storage-settings details.settings-row--stacked",
+      );
+      await details.locator("summary").click();
+      await details.getByText("research", { exact: true }).waitFor();
+    },
+    run: async (page, gateway) => {
+      const after = (await gateway.getRequests("sessions.storage.status")).length;
+      const section = page.locator("openclaw-session-storage-settings");
+      await section.getByRole("button", { name: "Refresh", exact: true }).click();
+      await gateway.waitForRequest("sessions.storage.status", { after });
+      await section.getByRole("button", { name: "Refresh", exact: true }).waitFor();
+      await frames(page);
+    },
+  },
+  {
+    id: "sessions-refresh",
+    route: pathForRoute("sessions"),
+    expected: "Refreshing retains all visible sessions and expanded detail statistics.",
+    rowSelector: ".sessions-table .session-data-row, .session-detail-stat",
+    prepare: async (page, gateway) => {
+      await prepareSessions(page, gateway);
+      await refreshSessions(page, gateway);
+      await page.locator(".session-details-toggle").first().click();
+      await page.locator(".session-detail-stat").first().waitFor();
+    },
+    run: refreshSessions,
+  },
+  {
     id: "session-switch",
     route: controlUiSessionPath(sessionKeys[0]),
     expected: "Both retained 400-message transcripts become visible in turn.",
+    rowSelector: "[data-virtual-row-key], .sidebar-recent-session",
     prepare: prepareSessionSwitch,
     run: async (page) => {
       await switchSession(page, 1);
