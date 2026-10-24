@@ -31,10 +31,6 @@ const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
 const collectTailscaleConfigWarningsMock = vi.hoisted(() =>
   vi.fn<typeof import("./doctor-tailscale.js").collectTailscaleConfigWarnings>(async () => []),
 );
-const unchangedConfig = vi.hoisted(() => <T>(config: T) => ({
-  config,
-  changes: [],
-}));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: terminalNoteMock }));
 
 vi.mock("../gateway/call.js", () => ({ callGateway: (opts: unknown) => callGatewayMock(opts) }));
@@ -95,11 +91,17 @@ vi.mock("./doctor/shared/channel-legacy-config-migrate.js", async (importOrigina
 });
 
 vi.mock("./doctor/shared/bundled-plugin-load-paths.js", () => ({
-  maybeRepairBundledPluginLoadPaths: vi.fn(unchangedConfig),
+  maybeRepairBundledPluginLoadPaths: vi.fn((cfg: Record<string, unknown>) => ({
+    config: cfg,
+    changes: [],
+  })),
 }));
 
 vi.mock("./doctor/shared/stale-plugin-config.js", () => ({
-  maybeRepairStalePluginConfig: vi.fn(unchangedConfig),
+  maybeRepairStalePluginConfig: vi.fn((cfg: Record<string, unknown>) => ({
+    config: cfg,
+    changes: [],
+  })),
 }));
 
 vi.mock("./doctor/shared/plugin-tool-allowlist-warnings.js", () => ({
@@ -108,12 +110,16 @@ vi.mock("./doctor/shared/plugin-tool-allowlist-warnings.js", () => ({
 }));
 
 vi.mock("./doctor/shared/context-engine-host-compat.js", () => ({
-  maybeRepairContextEngineHostCompatibility: vi.fn(async ({ cfg }) => unchangedConfig(cfg)),
+  maybeRepairContextEngineHostCompatibility: vi.fn(async ({ cfg }) => ({
+    config: cfg,
+    changes: [],
+  })),
 }));
 
 vi.mock("./doctor/shared/missing-configured-plugin-install.js", () => ({
   repairMissingConfiguredPluginInstalls: vi.fn(async ({ cfg }) => ({
-    ...unchangedConfig(cfg),
+    config: cfg,
+    changes: [],
     warnings: [],
     failedPluginIds: [],
   })),
@@ -135,9 +141,10 @@ vi.mock("../plugins/setup-registry.js", async (importOriginal) => {
       diagnostics: [],
     })),
     resolvePluginSetupAutoEnableReasons: actual.resolvePluginSetupAutoEnableReasons,
-    runPluginSetupConfigMigrations: vi.fn(({ config }: { config: unknown }) =>
-      unchangedConfig(config),
-    ),
+    runPluginSetupConfigMigrations: vi.fn(({ config }: { config: unknown }) => ({
+      config,
+      changes: [],
+    })),
   };
 });
 
