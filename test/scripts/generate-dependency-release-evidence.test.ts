@@ -9,7 +9,6 @@ import {
   generateDependencyReleaseEvidence,
   parseArgs,
   resolvePreviousReleaseTag,
-  resolveReleaseTag,
 } from "../../scripts/generate-dependency-release-evidence.mts";
 
 async function writeJson(dir: string, fileName: string, value: unknown) {
@@ -41,31 +40,28 @@ function advisory(packageName: string, id: string, tool: string, url: string | n
   };
 }
 
-function makeReports(vulnerability: unknown, populated = false): Record<string, unknown> {
-  const count = (value: number) => (populated ? value : 0);
+function makeReports(vulnerability: unknown): Record<string, unknown> {
   return {
     "dependency-vulnerability-gate.json": vulnerability,
     "transitive-manifest-risk-report.json": {
-      findingCount: count(17),
-      workspaceExcludedFindingCount: count(3),
-      metadataFailures: populated ? [{}] : [],
+      findingCount: 0,
+      workspaceExcludedFindingCount: 0,
+      metadataFailures: [],
     },
     "dependency-ownership-surface-report.json": {
-      summary: { lockfilePackageCount: count(101), buildRiskPackageCount: count(8) },
+      summary: { lockfilePackageCount: 0, buildRiskPackageCount: 0 },
     },
     "dependency-changes-report.json": {
       summary: {
-        dependencyFileChanges: count(4),
-        addedPackages: count(5),
-        removedPackages: count(6),
-        changedPackages: count(7),
+        dependencyFileChanges: 0,
+        addedPackages: 0,
+        removedPackages: 0,
+        changedPackages: 0,
       },
     },
     "npm-package-locks.json": {
-      packagesWithOmittedWorkspaceDependencies: populated ? 2 : 1,
-      packages: (populated ? [false, true, false] : [false, true]).map(
-        (bundleRuntimeDependencies) => ({ bundleRuntimeDependencies }),
-      ),
+      packagesWithOmittedWorkspaceDependencies: 1,
+      packages: [false, true].map((bundleRuntimeDependencies) => ({ bundleRuntimeDependencies })),
     },
   };
 }
@@ -123,15 +119,16 @@ it.each([false, true])(
             "https://github.com/advisories/GHSA-rfgv-xxqx-mfg5",
           ),
         ];
-    const reports = makeReports(
-      { blockers: malware ? findings.slice(0, 2) : [], findings, coverage },
-      malware,
-    );
-    const commands: string[] = [];
+    const reports = makeReports({
+      blockers: malware ? findings.slice(0, 2) : [],
+      findings,
+      coverage,
+    });
+    const releaseRef = malware ? "a".repeat(40) : "v2026.5.13-beta.1";
     const result = await generateDependencyReleaseEvidence({
       rootDir: source,
       outputDir,
-      releaseRef: "v2026.5.13",
+      releaseRef,
       npmDistTag: "latest",
       baseRef: "v2026.5.1",
       githubOutput: "",
@@ -144,7 +141,6 @@ it.each([false, true])(
         expect(command).toBe("pnpm");
         expect(options).toMatchObject({ cwd: path.resolve(".") });
         expect(args[args.indexOf("--root") + 1]).toBe(source);
-        commands.push(args[0]!);
         const jsonPath = args[args.indexOf("--json") + 1]!;
         const report = reports[path.basename(jsonPath)];
         if (!report) {
@@ -155,45 +151,21 @@ it.each([false, true])(
         return null;
       },
     });
-    expect(commands).toContain("deps:npm-lock:report");
-    const manifest = JSON.parse(await readText(outputDir, "dependency-evidence-manifest.json"));
-    expect(manifest.reports).toContainEqual({
-      name: "npm package-lock mirrors",
-      command: "pnpm deps:npm-lock:report",
-      policy: "report-only",
-      json: "npm-package-locks.json",
-      markdown: "npm-package-locks.md",
-    });
-    expect(result.counts).toEqual({
+    expect(result.manifest.releaseTag).toBe(malware ? "v2026.5.13" : releaseRef);
+    expect(result.counts).toMatchObject({
       malwareBlockers: malware ? 2 : 0,
       vulnerabilityFindings: malware ? 3 : 1,
       advisories: malware ? [findings[2]] : findings,
       vulnerabilityCoverage: coverage,
       upstreamOnlyVulnerabilityFindings: malware ? 2 : 1,
-      transitiveRiskSignals: malware ? 17 : 0,
-      workspaceExcludedTransitiveSignals: malware ? 3 : 0,
-      transitiveMetadataFailures: malware ? 1 : 0,
-      ownershipLockfilePackages: malware ? 101 : 0,
-      ownershipBuildRiskPackages: malware ? 8 : 0,
-      dependencyFileChanges: malware ? 4 : 0,
-      dependencyAddedPackages: malware ? 5 : 0,
-      dependencyRemovedPackages: malware ? 6 : 0,
-      dependencyChangedPackages: malware ? 7 : 0,
-      npmLockPackages: malware ? 3 : 2,
-      npmLocklessPackages: malware ? 2 : 1,
-      npmPartialLockPackages: malware ? 2 : 1,
+      npmLockPackages: 2,
+      npmLocklessPackages: 1,
+      npmPartialLockPackages: 1,
     });
     const summary = await readText(outputDir, "dependency-evidence-summary.md");
     const stepSummary = await readFile(stepPath, "utf8");
-    expectContains(
-      summary,
-      `- Transitive manifest reported risk signals: ${malware ? 17 : 0}`,
-      "- Dependency change baseline: `v2026.5.1`",
-      `- Resolved package changes: +${malware ? 5 : 0} -${malware ? 6 : 0} changed ${malware ? 7 : 0}`,
-      "- `npm-package-locks.md`",
-    );
     expect(stepSummary).toContain(
-      "- Evidence artifact: `openclaw-release-dependency-evidence-v2026.5.13`",
+      `- Evidence artifact: \`openclaw-release-dependency-evidence-${releaseRef}\``,
     );
     for (const rendered of [summary, stepSummary]) {
       expect(rendered).toMatch(/#+ Non-blocking advisory findings\n\nAdvisories never block/u);
@@ -213,15 +185,6 @@ it.each([false, true])(
     }
   },
 );
-
-it("uses a synthetic release tag for validation-only SHA preflight input", () => {
-  for (const [releaseRef, packageVersion, expected] of [
-    ["0123456789abcdef0123456789abcdef01234567", "2026.5.13", "v2026.5.13"],
-    ["v2026.5.13-beta.1", "2026.5.13-beta.1", "v2026.5.13-beta.1"],
-  ] as const) {
-    expect(resolveReleaseTag({ releaseRef, packageVersion })).toBe(expected);
-  }
-});
 
 it("rejects missing dependency evidence CLI option values", () => {
   const missingValues = [

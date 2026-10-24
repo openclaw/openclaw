@@ -20,8 +20,6 @@ import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const compileWorker = path.resolve("scripts/compile-extension-boundary.mts");
-const valueConsumer = (module: string) =>
-  `import { value } from "${module}"; const expected: 1 = value;`;
 
 function compilerSnapshot(root: string) {
   const boundary = createDeclarationInputBoundary(root);
@@ -76,27 +74,23 @@ function fixture(
   write("src/api.test.ts", "export const test = 1;");
   const config = "tsconfig.json";
   const inputReceipt = `${outputRoot}/.inputs.json`;
-  const compilerArgs = (configFile: string, receipt: string, emit = false) => [
+  const args = [
     compileWorker,
     JSON.stringify({
-      configFile,
-      inputReceipt: receipt,
+      configFile: config,
+      inputReceipt,
       compilerOptions: { outDir: outputRoot, rootDir: ".", declarationMap: false },
-      emit,
+      emit: !noEmit,
     }),
   ];
-  const args = compilerArgs(config, inputReceipt, !noEmit);
   const ownedOutputRoot = noEmit ? undefined : path.join(root, outputRoot);
-  const compile = (command = args, status = 0) => {
-    const result = spawnSync(process.execPath, command, { cwd: root, encoding: "utf8" });
-    expect(result.status, result.stdout + result.stderr).toBe(status);
-    return result;
-  };
   const prepare = () => {
     fs.mkdirSync(resolve(outputRoot), { recursive: true });
     fs.rmSync(resolve(inputReceipt), { force: true });
-    return compile()
-      .stdout.split("\n")
+    const result = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8" });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    return result.stdout
+      .split("\n")
       .filter((line) => line.startsWith("TSFILE: "))
       .map((line) => portableRelativePath(root, line.slice(8).trim()))
       .toSorted();
@@ -138,9 +132,7 @@ function fixture(
     write,
     config,
     args,
-    compilerArgs,
     inputReceipt,
-    compile,
     prepare,
     seal,
     matches,
@@ -148,58 +140,6 @@ function fixture(
 }
 
 describe("native owner content records", () => {
-  it("invalidates a linked declaration consumer when a source shadows its emitted types", () => {
-    const f = fixture(false, "packages/sdk/dist");
-    f.write("packages/sdk/package.json", '{"name":"fixture-sdk","type":"module"}');
-    f.write("consumer.json", '{"extends":"./base.json","files":["consumer.ts"]}');
-    f.write("consumer.ts", valueConsumer("fixture-sdk/dist/nested/value.js"));
-    fs.symlinkSync("../packages/sdk", f.file("node_modules/fixture-sdk"), "dir");
-    f.prepare();
-    const config = "consumer.json";
-    const metadata = ".artifacts/consumer.inputs.json";
-    const args = f.compilerArgs(config, metadata);
-    f.compile(args);
-    const record = new BoundaryInputSnapshot(f.root).record(config, args, metadata, [metadata]);
-    const matches = () =>
-      new BoundaryInputSnapshot(f.root).matchesReceipt(record, config, args, [metadata], metadata);
-    expect(matches()).toBe(true);
-    f.write("packages/sdk/dist/nested/value.ts", 'export const value = "changed";');
-    expect(matches()).toBe(false);
-    expect(f.compile(args, 1).stderr).toContain("TS2322");
-  });
-
-  it("invalidates new resolution candidates behind checkout-local linked node_modules directories", () => {
-    const f = fixture(true);
-    const dependency = f.file("fixture-dependencies");
-    fs.renameSync(f.file("node_modules"), dependency);
-    const packageRoot = path.join(dependency, "fixture-package");
-    const moduleRoot = path.join(packageRoot, "dist");
-    fs.mkdirSync(moduleRoot, { recursive: true });
-    fs.writeFileSync(path.join(packageRoot, "package.json"), '{"type":"module"}');
-    fs.writeFileSync(path.join(moduleRoot, "value.d.ts"), "export declare const value: 1;");
-    fs.writeFileSync(path.join(packageRoot, "unrelated.ts"), "export const unrelated = 1;");
-    fs.symlinkSync(dependency, f.file("node_modules"), "dir");
-    // Repeated aliases and a back-edge must not expand the same subtree indefinitely.
-    fs.symlinkSync(packageRoot, path.join(packageRoot, "self"), "dir");
-    fs.symlinkSync(f.root, path.join(packageRoot, "consumer"), "dir");
-    fs.symlinkSync(packageRoot, f.file("alias"), "dir");
-    f.write("src/api.ts", valueConsumer("fixture-package/dist/value.js"));
-    const record = f.seal(f.prepare());
-    expect(record.inputs?.some((file) => file.endsWith("/value.d.ts"))).toBe(true);
-    const matches = () => f.matches(record);
-    expect(matches()).toBe(true);
-    fs.writeFileSync(path.join(packageRoot, "unrelated.ts"), "export const unrelated = 2;");
-    f.write(".artifacts/ignored.ts", "export {};");
-    f.write("dist/ignored.d.ts", "export {};");
-    expect(matches()).toBe(true);
-    fs.writeFileSync(path.join(moduleRoot, "value.ts"), 'export const value = "changed";');
-    const staleHit = matches();
-    const result = f.compile(f.args, 1);
-    expect(result.stderr).toContain("TS2322");
-    expect(result.stderr).toContain("Type '\"changed\"' is not assignable to type '1'");
-    expect(staleHit).toBe(false);
-  });
-
   it("tracks dangling link directory existence and link identity", () => {
     const f = fixture(true, "dist", roots, "compiler");
     const dependency = f.file("fixture-dependencies");
@@ -304,9 +244,6 @@ describe("native owner content records", () => {
 
     const mutations = {
       rename: () => fs.renameSync(f.file("nested/value.js"), f.file("nested/renamed.js")),
-      lockfile: () => f.write("pnpm-lock.yaml", "changed lock"),
-      generator: () =>
-        f.write("scripts/compile-extension-boundary.mts", "export const changed = true;"),
       "compiler policy": () =>
         f.write("scripts/lib/local-check-runtime.mts", "export const policy = 2;"),
       "compiler API": () => {

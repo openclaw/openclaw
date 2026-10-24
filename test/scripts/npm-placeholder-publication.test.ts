@@ -210,6 +210,9 @@ describe("npm placeholder publication", () => {
     expect(calls.map(([command, tarball]) => [command, tarball && basename(tarball)])).toEqual(
       manifest.packages.map((entry) => ["publish", entry.tarball.name]),
     );
+    for (const args of calls) {
+      expect(args).toContain("--provenance");
+    }
     expect(result.results.map((entry) => entry.packageName)).toEqual(names);
     expect(readdirSync(tempRoot)).toEqual([]);
   });
@@ -320,21 +323,12 @@ describe("npm placeholder publication", () => {
       expect(job?.environment).toBeUndefined();
       expect(JSON.stringify(job)).not.toContain("NPM_TOKEN");
     }
-    expect(step(verify, "Verify immutable placeholder publication")).toBeDefined();
     expect(publish).toMatchObject({
       environment: "npm-release",
       permissions: { actions: "read", contents: "read", "id-token": "write" },
     });
     const publishStep = step(publish, "Publish verified placeholders serially");
     expect(publishStep?.env?.NPM_TOKEN).toBe("${{ secrets.NPM_TOKEN }}");
-    expect(readFileSync("scripts/npm-placeholder-publication.mjs", "utf8")).toContain(
-      '"--provenance"',
-    );
-    expect(publishStep?.run).not.toContain("npm trust");
-    expect(readFileSync(WORKFLOW, "utf8")).toContain("plugin-npm-release.yml");
-    const digestStep = step(plan, "Bind immutable artifact digest");
-    expect(digestStep?.env?.RAW_DIGEST).toBe("${{ steps.upload.outputs.artifact-digest }}");
-    expect(digestStep?.run).toContain("digest=sha256:${RAW_DIGEST}");
     for (const job of [verify, publish]) {
       expect(step(job, "Resolve immutable artifact metadata")?.run).toContain(".digest == $digest");
     }

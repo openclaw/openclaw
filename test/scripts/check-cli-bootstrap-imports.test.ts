@@ -9,6 +9,7 @@ import {
   GATEWAY_RUN_CHUNK_METADATA_PATH,
   readGatewayRunChunks,
 } from "../../scripts/lib/gateway-run-chunk-metadata.mts";
+import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../src/shared/worker-bundle-hash.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 function snapshotAcornParserPrototype() {
@@ -27,15 +28,6 @@ const {
 } = await import("../../scripts/check-cli-bootstrap-imports.mts");
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
-const workerDeployArtifactNames =
-  `client-credential.worker.mjs fs-safe-darwin-arm64.node fs-safe-darwin-x64.node
-code-mode-node.worker.mjs file-tool-planning.worker.mjs
-file-tool-read.worker.mjs gateway-state-owner-heartbeat.worker.mjs github-exec-launcher.mjs
-image-processor.worker.mjs openclaw-state-read.worker.mjs service-child-group-anchor.mjs
-service-child-relay.mjs sqlite-source-revision.worker.mjs sqlite-store.worker.mjs
-worker-native-lifecycle.worker.mjs worker.mjs workspace-rsync-receiver.mjs windows-security-helper.exe`.split(
-    /\s+/u,
-  );
 
 function makeTempRoot(files: Record<string, string> = {}): string {
   const root = tempRoots.make("openclaw-cli-bootstrap-imports-");
@@ -54,7 +46,7 @@ function writeFixture(root: string, relativePath: string, source: string): void 
 
 function workerFixture(files: Record<string, string> = {}) {
   const root = makeTempRoot();
-  for (const artifact of workerDeployArtifactNames) {
+  for (const artifact of WORKER_BUNDLE_ARTIFACT_PATHS) {
     writeFixture(root, `dist/worker/${artifact}`, "export {};\n");
   }
   for (const [file, source] of Object.entries(files)) {
