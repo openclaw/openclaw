@@ -181,8 +181,7 @@ export function connectNavigationPrefetch(options: {
     const anchor = event.target.closest<HTMLAnchorElement>("a[href]");
     const routeId = anchor ? routeIdFromPath(anchor.pathname, options.basePath) : null;
     const routeTarget =
-      anchor &&
-      (routeId === "new-session" || anchor.matches(".nav-item, .settings-sidebar__item"))
+      anchor && (routeId === "new-session" || anchor.matches(".nav-item, .settings-sidebar__item"))
         ? anchor
         : null;
     const leaving = event.type === "pointerout" || event.type === "focusout";
