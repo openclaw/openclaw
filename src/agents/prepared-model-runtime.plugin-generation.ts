@@ -56,28 +56,33 @@ const derivedGenerationBases = new WeakMap<
   PreparedModelRuntimePluginGeneration
 >();
 
-/** Borrowing may narrow a prepared selection, but cannot acquire a different plugin owner. */
+/** Borrowing may narrow a prepared selection, but cannot acquire a missing runtime owner. */
 export function preparedPluginGenerationSupportsSelections(
   generation: PreparedModelRuntimePluginGeneration,
   input: PreparedModelRuntimeInput,
 ): boolean {
-  if (!input.runtimePluginSelections) {
+  if (!input.runtimePluginOwnerIds && !input.runtimePluginSelections) {
     return true;
   }
   const registry = generation.pluginRegistry;
-  const selection = resolveAgentRuntimePluginSelectionOwners({
-    config: input.config,
-    workspaceDir:
-      generation.pluginMetadataSnapshot.workspaceDir ?? input.workspaceDir ?? process.cwd(),
-    selections: input.runtimePluginSelections,
-    metadataSnapshot: generation.pluginMetadataSnapshot,
-  });
+  const selectedPluginIds = input.runtimePluginSelections
+    ? resolveAgentRuntimePluginSelectionOwners({
+        config: input.config,
+        workspaceDir:
+          generation.pluginMetadataSnapshot.workspaceDir ?? input.workspaceDir ?? process.cwd(),
+        selections: input.runtimePluginSelections,
+        metadataSnapshot: generation.pluginMetadataSnapshot,
+      }).pluginIds
+    : [];
+  const requiredPluginIds = [
+    ...new Set([...(input.runtimePluginOwnerIds ?? []), ...selectedPluginIds]),
+  ];
   // Failed and disabled loads are recorded generation outcomes, not missing owners.
   // Borrowing preserves those outcomes; downstream model resolution owns availability.
   // Shared capabilities retain their admitted outcome, including context-engine fallback.
   return (
     registry !== undefined &&
-    selection.pluginIds.every(
+    requiredPluginIds.every(
       (id) =>
         registry.plugins.some(
           (plugin) =>

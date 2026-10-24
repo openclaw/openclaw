@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
@@ -355,6 +356,9 @@ export async function prepareAgentRunDispatch(
   let replyDispatchRuntime: PreparedReplyDispatchRuntime;
   let preparedModelRuntime: PreparedAgentRunModelRuntime;
   try {
+    const runtimePluginOwnerId = normalizeOptionalString(
+      params.client?.internal?.pluginRuntimeOwnerId,
+    );
     const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
       agentId: params.activeSessionAgentId,
       abortSignal: activeRunAbort.controller.signal,
@@ -380,6 +384,7 @@ export async function prepareAgentRunDispatch(
             agentId: replyDispatchRuntime.agentId,
             agentDir: replyDispatchRuntime.agentDir,
             allowGatewaySubagentBinding: true,
+            ...(runtimePluginOwnerId ? { runtimePluginOwnerIds: [runtimePluginOwnerId] } : {}),
             workspaceDir: workspaceDir ?? replyDispatchRuntime.workspaceDir,
             runtimePluginSelections: [
               {

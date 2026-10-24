@@ -327,11 +327,13 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       ownerKey({
         ...configuredOwner.input,
         loadRuntimePlugins: false,
+        runtimePluginOwnerIds: undefined,
         runtimePluginSelections: undefined,
       }) ===
         ownerKey({
           ...inventoryInput,
           loadRuntimePlugins: false,
+          runtimePluginOwnerIds: undefined,
           runtimePluginSelections: undefined,
         })
         ? configuredOwner

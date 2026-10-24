@@ -161,6 +161,8 @@ export type PreparedModelRuntimeInput = {
   skipCredentials?: boolean;
   env?: NodeJS.ProcessEnv;
   allowGatewaySubagentBinding?: boolean;
+  /** Authenticated plugin owners whose callbacks must accompany this executable run. */
+  runtimePluginOwnerIds?: readonly string[];
   runtimePluginSelections?: readonly AgentHarnessPluginSelection[];
   config: OpenClawConfig;
 };

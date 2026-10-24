@@ -53,6 +53,7 @@ export function preparedModelRuntimeWorkspaceFactsKey(input: PreparedModelRuntim
     runtimePluginPurpose: input.runtimePluginPurpose,
     workspaceDir: input.workspaceDir,
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
+    runtimePluginOwnerIds: input.runtimePluginOwnerIds,
     // Normalization already resolves each model to its runtime. The workspace
     // registry depends on provider/runtime ownership, not the model id itself.
     runtimePluginSelections: input.runtimePluginSelections?.map(({ provider, runtime }) => ({
@@ -179,7 +180,12 @@ export function prepareWorkspacePluginRegistries(
     | typeof loadAgentRuntimePluginRegistryHandleAsync = loadAgentRuntimePluginRegistryHandleAsync,
 ): PreparedWorkspacePluginRegistries | Promise<PreparedWorkspacePluginRegistries> {
   // Passive reads stay runtime-free; executable probes carry explicit scope.
-  if (input.readOnly && !input.loadRuntimePlugins && !input.runtimePluginSelections) {
+  if (
+    input.readOnly &&
+    !input.loadRuntimePlugins &&
+    !input.runtimePluginOwnerIds &&
+    !input.runtimePluginSelections
+  ) {
     return {};
   }
   // Resolve batch facts only for a registry load; read-only and reused registries need no scan.
@@ -205,16 +211,29 @@ export function prepareWorkspacePluginRegistries(
   primaryRegistry ??= reusableGeneration?.mediaCapabilityProviderSource?.registry ?? baseRegistry;
   let loadedPrimaryRegistry: PluginRegistry | undefined;
   const runtimePluginRegistry =
-    input.runtimePluginSelections || !baseRegistry
+    input.runtimePluginOwnerIds || input.runtimePluginSelections || !baseRegistry
       ? loadRuntimeRegistry(
           {
             ...(input.loadRuntimePlugins
-              ? { basePluginIds: [] }
+              ? { basePluginIds: input.runtimePluginOwnerIds ?? [] }
               : baseRegistry
-                ? { basePluginIds: listRuntimePluginIdsFromRegistry(baseRegistry) }
+                ? {
+                    basePluginIds: Array.from(
+                      new Set([
+                        ...listRuntimePluginIdsFromRegistry(baseRegistry),
+                        ...(input.runtimePluginOwnerIds ?? []),
+                      ]),
+                    ),
+                  }
                 : basePluginIds !== undefined
-                  ? { basePluginIds }
-                  : {}),
+                  ? {
+                      basePluginIds: Array.from(
+                        new Set([...basePluginIds, ...(input.runtimePluginOwnerIds ?? [])]),
+                      ),
+                    }
+                  : input.runtimePluginOwnerIds
+                    ? { basePluginIds: input.runtimePluginOwnerIds }
+                    : {}),
             // Inbound preparation already admitted this exact context. Let the runtime
             // planner check selected owners before acquiring another captured registry.
             ...(baseRegistry ? { reusableRegistry: baseRegistry } : {}),

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSnapshotMetadata,
@@ -234,6 +235,7 @@ export function normalizePreparedModelRuntimeInput(
   const {
     inheritedAuthDir: _inheritedAuthDir,
     readOnly,
+    runtimePluginOwnerIds: _runtimePluginOwnerIds,
     runtimePluginSelections: _runtimePluginSelections,
     skipCredentials,
     workspaceDir: _workspaceDir,
@@ -263,6 +265,9 @@ export function normalizePreparedModelRuntimeInput(
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([, entry]) => entry),
   );
+  const runtimePluginOwnerIds = Object.freeze(
+    normalizeSortedUniqueStringEntries(input.runtimePluginOwnerIds ?? []),
+  );
   return {
     ...rest,
     agentDir: path.resolve(input.agentDir),
@@ -272,6 +277,7 @@ export function normalizePreparedModelRuntimeInput(
     ...(workspaceDir ? { workspaceDir } : {}),
     ...(env ? { env } : {}),
     ...(input.allowGatewaySubagentBinding === true ? { allowGatewaySubagentBinding: true } : {}),
+    ...(runtimePluginOwnerIds.length > 0 ? { runtimePluginOwnerIds } : {}),
     ...(runtimePluginSelections?.length ? { runtimePluginSelections } : {}),
   };
 }
@@ -296,6 +302,7 @@ export function ownerKey(input: PreparedModelRuntimeInput): string {
     workspaceDir: input.workspaceDir,
     env: environmentFingerprint(input.env),
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
+    runtimePluginOwnerIds: input.runtimePluginOwnerIds,
     runtimePluginSelections: input.runtimePluginSelections,
     config: input.readOnly ? modelRuntimeConfigFingerprint(input.config) : undefined,
   });
@@ -377,6 +384,9 @@ export function resolvePublishedOwner(
       // rebuild a live ephemeral catalog per request.
       (input.allowGatewaySubagentBinding === undefined ||
         owner.input.allowGatewaySubagentBinding === input.allowGatewaySubagentBinding) &&
+      (input.runtimePluginOwnerIds === undefined ||
+        JSON.stringify(owner.input.runtimePluginOwnerIds) ===
+          JSON.stringify(input.runtimePluginOwnerIds)) &&
       (input.runtimePluginSelections === undefined ||
         JSON.stringify(owner.input.runtimePluginSelections) ===
           JSON.stringify(input.runtimePluginSelections)) &&
@@ -400,7 +410,8 @@ export function readPublishedModelRuntimeSnapshot(
     allowConfiguredWorkspaceFallback:
       rawInput.workspaceDir === undefined ||
       rawInput.agentId === undefined ||
-      rawInput.runtimePluginSelections === undefined,
+      (rawInput.runtimePluginOwnerIds === undefined &&
+        rawInput.runtimePluginSelections === undefined),
   });
   if (!owner?.snapshot || owner.needsRefresh || owner.pending) {
     return undefined;
@@ -427,6 +438,7 @@ export function hasSameLifecycleInput(
     environmentFingerprint(left.env) === environmentFingerprint(right.env) &&
     left.preserveWorkspaceDirOnRefresh === right.preserveWorkspaceDirOnRefresh &&
     left.allowGatewaySubagentBinding === right.allowGatewaySubagentBinding &&
+    JSON.stringify(left.runtimePluginOwnerIds) === JSON.stringify(right.runtimePluginOwnerIds) &&
     JSON.stringify(left.runtimePluginSelections) === JSON.stringify(right.runtimePluginSelections)
   );
 }

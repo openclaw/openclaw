@@ -323,3 +323,67 @@ it.each(["inbound", "selected", "inspection"] as const)(
     });
   },
 );
+
+it("loads an authenticated runtime owner into an otherwise narrower prepared generation", async () => {
+  using fixture = startupFixture(
+    "owned-output",
+    "selected/gateway",
+    (event) => `api.on("llm_output", () => process.emit(${JSON.stringify(event)}, "observed"));`,
+    true,
+  );
+  const { plugin, input, captures: calls } = fixture;
+  await using cache = createPluginCache();
+  await withPluginCache(cache, async () => {
+    const { root, metadata } = await fixture.start([]);
+    await using resources = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
+    let selected: PluginRegistry | undefined;
+    try {
+      const prepared = await withPluginRuntimeRegistryScope(root, () =>
+        prepareWorkspacePluginRegistries(
+          { ...input, runtimePluginOwnerIds: [plugin.id] },
+          metadata,
+          (registry) => resources.retainRegistry(registry),
+          undefined,
+          true,
+          {
+            remoteCatalog: null,
+            pluginMetadataSnapshot: metadata,
+            inlineProviderModels: [],
+            configuredCatalogEntries: [],
+            pluginRegistry: root,
+          },
+          () => [],
+          undefined,
+          resources.load.bind(resources),
+        ),
+      );
+      selected = prepared.runtimePluginRegistry;
+      expect(selected?.plugins).toEqual([
+        expect.objectContaining({ id: plugin.id, status: "loaded" }),
+      ]);
+      await createHookRunner(selected!, { catchErrors: false }).runLlmOutput(
+        {
+          runId: "owner-run",
+          sessionId: "owner-session",
+          provider: "selected",
+          model: "gateway",
+          assistantTexts: [],
+          usage: { input: 1, output: 1, total: 2 },
+        },
+        {
+          agentId: "worker",
+          sessionId: "owner-session",
+          sessionKey: "agent:worker:owner-session",
+          runId: "owner-run",
+        },
+      );
+      expect(calls).toEqual(["observed"]);
+    } finally {
+      await resources[Symbol.asyncDispose]();
+      if (selected && selected !== root) {
+        await disposePluginRegistryInstances(selected);
+      }
+      await disposePluginRegistryInstances(root);
+    }
+  });
+});

@@ -153,7 +153,8 @@ async function projectPublishedModelRuntimeOwner<T>(
     assertLifetime,
     rawInput.workspaceDir === undefined ||
       rawInput.agentId === undefined ||
-      rawInput.runtimePluginSelections === undefined,
+      (rawInput.runtimePluginOwnerIds === undefined &&
+        rawInput.runtimePluginSelections === undefined),
   );
 }
 
@@ -165,7 +166,7 @@ async function projectNormalizedModelRuntimeOwner<T>(
   assertLifetime: () => void,
   allowConfiguredWorkspaceFallback = input.workspaceDir === undefined ||
     input.agentId === undefined ||
-    input.runtimePluginSelections === undefined,
+    (input.runtimePluginOwnerIds === undefined && input.runtimePluginSelections === undefined),
 ): Promise<T> {
   let replacement = context.getPendingReplacement(input);
   // A superseded gate resolves early; follow its successors like lease admission does.
