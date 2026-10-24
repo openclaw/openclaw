@@ -80,6 +80,7 @@ import {
 import type { AgentAttemptParams } from "./attempt-execution.types.js";
 import { assertSandboxedDelegatedChildNotCli } from "./attempt-sandbox-cli-admission.js";
 import { buildCommandAttemptToolContext } from "./attempt-tool-context.js";
+import { readSessionRunSettings } from "./session-run-settings.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -683,8 +684,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     messageTo: params.opts.replyTo ?? params.opts.to,
     messageThreadId: params.opts.threadId,
     hasRepliedRef: params.runContext.hasRepliedRef,
-    permissionMode: params.sessionEntry?.permissionMode,
-    sessionRoot: params.sessionEntry?.sessionRoot,
+    ...readSessionRunSettings(params.sessionEntry),
     ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
     agentHarnessId: isRawModelRun ? undefined : resolveSessionPinnedHarnessId(params.sessionEntry),
     modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,

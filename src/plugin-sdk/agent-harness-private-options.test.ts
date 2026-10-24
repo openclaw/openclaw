@@ -41,6 +41,11 @@ it("keeps thinking provenance out of public attempt and tool inputs", () => {
   expectTypeOf<KeysIn<[Tools, AsyncTools], "requesterThinkingExplicit">>().toEqualTypeOf<never>();
 });
 
+it("keeps the host-owned blind prompt flag out of public attempts", () => {
+  expectTypeOf<KeysIn<Attempts, "blindPrompt">>().toEqualTypeOf<never>();
+  expectTypeOf<Pick<CoreAttempt, "blindPrompt">>().toEqualTypeOf<{ blindPrompt?: true }>();
+});
+
 it("accepts the optional host run trigger for tool presentation", () => {
   expectTypeOf<Pick<SurfaceParams, "trigger">>().toEqualTypeOf<{
     trigger?: Harness.AgentHarnessAttemptParamsV2["trigger"];

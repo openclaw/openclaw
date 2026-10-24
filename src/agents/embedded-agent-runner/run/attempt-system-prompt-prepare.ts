@@ -209,6 +209,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       },
       chatType: attempt.chatType,
       requesterProfileId: readAdmittedRunOperatorAuthority(attempt.admittedRunContext)?.profileId,
+      blind: attempt.blindPrompt,
     },
   );
   const promptMode =

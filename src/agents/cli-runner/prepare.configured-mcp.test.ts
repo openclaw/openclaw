@@ -366,7 +366,7 @@ describe("configured MCP servers on CLI turns", () => {
           ? {
               ...turns[0],
               result:
-                "probe__echo is outside the authority this completion turn carries from its requester. Do not retry probe__echo.",
+                "probe__echo is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry probe__echo.",
             }
           : turns[0],
       );

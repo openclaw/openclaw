@@ -1627,7 +1627,8 @@ async function prepareCliRunContextWithinReadFence(
             systemPromptWithReplacements.trim().length > 0
               ? ensureSystemPromptCacheBoundary(systemPromptWithReplacements)
               : systemPromptWithReplacements,
-          model: modelDisplay,
+          // A blind child's prompt never names its own model.
+          model: params.sessionEntry?.blindPrompt ? undefined : modelDisplay,
         });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",

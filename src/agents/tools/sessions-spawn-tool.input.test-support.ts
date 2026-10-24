@@ -71,6 +71,16 @@ export function registerSessionsSpawnInputTests({
       "lightContext is only supported for runtime='subagent'.",
     ],
     [
+      "ACP blind child",
+      { runtime: "acp", blind: true },
+      'blind=true requires a hidden runtime="subagent" child.',
+    ],
+    [
+      "visible blind child",
+      { visible: true, blind: true },
+      'blind=true requires a hidden runtime="subagent" child.',
+    ],
+    [
       "ACP managed worktree",
       { runtime: "acp", projectId: "example", worktree: true },
       'Managed worktree parameters are unavailable with runtime="acp"',
