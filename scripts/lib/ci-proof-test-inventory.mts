@@ -3710,6 +3710,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/scripts/check-extension-package-tsc-boundary.test.ts",
   "test/scripts/check-max-lines-ratchet.test.ts",
   "test/scripts/check-openclaw-installed-package-budget.test.ts",
+  "test/scripts/check-openclaw-package-tarball-control-ui.test.ts",
   "test/scripts/check-openclaw-package-tarball.bundled-mcp.test.ts",
   "test/scripts/check-openclaw-package-tarball.test.ts",
   "test/scripts/check-session-accessor-boundary.test.ts",

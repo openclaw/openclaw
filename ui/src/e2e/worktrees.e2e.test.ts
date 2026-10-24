@@ -8,6 +8,20 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
+const restorableWorktree = {
+  baseRef: "main",
+  branch: "openclaw/test",
+  createdAt: 1,
+  id: "worktree-1",
+  lastActiveAt: 2,
+  name: "restorable-test",
+  ownerKind: "manual",
+  path: "/tmp/repo/.worktrees/restorable-test",
+  removedAt: 3,
+  repoFingerprint: "0123456789abcdef",
+  repoRoot: "/tmp/repo",
+};
+
 suite.define(() => {
   it.each([1440, 390])("keeps the Worktrees title above left-aligned hub tabs at %ipx", (width) =>
     suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {

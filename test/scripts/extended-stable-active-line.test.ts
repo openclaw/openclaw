@@ -3,11 +3,19 @@ import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
+import { validateActiveExtendedStableLine } from "../../scripts/openclaw-npm-extended-stable-release.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const nodeExecutable = resolveTestNodeExecPath();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("keeps only the trailing completed month eligible across the year boundary", () => {
+  expect(() => validateActiveExtendedStableLine("2026.12.34", "2027.1.1")).not.toThrow();
+  expect(() => validateActiveExtendedStableLine("2026.12.34", "2027.2.1")).toThrow(
+    "only the trailing completed month",
+  );
+});
 
 it.skipIf(process.platform === "win32").each([
   ["2026.8.1", 42, ""],
