@@ -186,7 +186,7 @@ export class RestScheduler<TData> {
       },
       resolveTimerTimeoutMs(delayMs, 0, 0),
     );
-    this.drainTimer.unref?.();
+    this.drainTimer.unref();
   }
 
   private drainQueues(): void {
