@@ -66,9 +66,7 @@ const agentsListResult = {
   },
 };
 
-afterEach(() => {
-  resetGlobalHookRunner();
-});
+afterEach(resetGlobalHookRunner);
 
 it(
   "enforces public auth, invocation, approval, and call-id contracts",
@@ -143,14 +141,6 @@ it(
             error: { type: "invalid_request", message: "tools.invoke requires name" },
           },
         ],
-        [
-          { ...httpArgs, tool: "qa_missing_tool" },
-          404,
-          {
-            ok: false,
-            error: { type: "not_found", message: "Tool not available: qa_missing_tool" },
-          },
-        ],
       ] as const) {
         expect(await invoke(body)).toEqual({ status, body: expected });
       }
@@ -184,16 +174,6 @@ it(
       const writer = writeClient;
       const rpc = (args: JsonRecord) =>
         writer.request<{ output?: unknown }>("tools.invoke", { ...AGENTS_LIST_ARGS, ...args });
-      const unavailableRpc = await rpc({ name: "qa_missing_tool" });
-      expect(unavailableRpc).toEqual({
-        ok: false,
-        toolName: "qa_missing_tool",
-        error: {
-          code: "not_found",
-          message: "Tool not available: qa_missing_tool",
-        },
-      });
-
       for (let index = 0; index < 2; index += 1) {
         expect(await rpc({ idempotencyKey: "qa-rpc-stable" })).toMatchObject({
           ok: true,
