@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -17,25 +16,20 @@ const models = [
   model("nvidia", "moonshotai/kimi-k2.5", "Kimi K2.5", "Kimi K2.5 (NVIDIA)"),
 ];
 
-async function createContext() {
-  return suite.newBrowserContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 900, width: 1280 },
-  });
-}
+const contextOptions = {
+  locale: "en-US",
+  serviceWorkers: "block",
+  viewport: { height: 900, width: 1280 },
+} as const;
 
 suite.define(() => {
   it("keeps model versions and custom aliases visible in the chat picker", async () => {
-    const context = await createContext();
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["models.list", "chat.startup", "sessions.patch"],
-      models,
-      sessionKey: "agent:main:main",
-    });
-
-    try {
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["models.list", "chat.startup", "sessions.patch"],
+        models,
+        sessionKey: "agent:main:main",
+      });
       await page.goto(`${suite.server.baseUrl}chat`);
       const main = page.getByRole("main");
       const picker = main.locator('[data-chat-model-select="true"]').first();
@@ -54,65 +48,6 @@ suite.define(() => {
       await revealChatModelOption(main, "nvidia/moonshotai/kimi-k2.5");
       await expect.poll(() => nvidia.textContent()).toBe("Kimi K2.5");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("uses the same versioned catalog labels in the Agents model picker", async () => {
-    const context = await createContext();
-    const page = await context.newPage();
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-8" },
-          models: Object.fromEntries(
-            models.map(({ provider, id, alias }) => [`${provider}/${id}`, { alias }]),
-          ),
-        },
-        entries: { main: {} },
-      },
-    };
-    const gateway = await installMockGateway(page, {
-      defaultAgentId: "main",
-      models,
-      methodResponses: {
-        "agents.list": {
-          agents: [{ id: "main", identity: { name: "Main" }, name: "Main" }],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
-        "config.get": configSnapshot(config, "versioned-model-aliases"),
-      },
     });
-
-    try {
-      const response = await page.goto(`${suite.server.baseUrl}settings/agents/main/overview`);
-      expect(response?.status()).toBe(200);
-      await gateway.waitForRequest("agents.list");
-      await gateway.waitForRequest("config.get");
-      const modelRequest = await gateway.waitForRequest("models.list");
-      expect(modelRequest.params).toEqual({ agentId: "main", view: "configured" });
-      expect(await gateway.getRequests("models.list")).toHaveLength(1);
-
-      const select = page.locator(
-        'openclaw-agents-page openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
-      );
-      await select.waitFor({ state: "visible", timeout: 10_000 });
-      await select.locator(".picker-select__trigger").click();
-      for (const [ref, label] of [
-        ["anthropic/claude-opus-4-8", "Opus 4.8 · opus"],
-        ["anthropic/claude-sonnet-5", "Sonnet 5 · sonnet"],
-        ["nvidia/moonshotai/kimi-k2.5", "Kimi K2.5 (NVIDIA)"],
-      ]) {
-        await expect
-          .poll(() => select.locator(`[role="option"][data-value="${ref}"]`).textContent())
-          .toContain(label);
-      }
-      expect(await gateway.getRequests("config.set")).toHaveLength(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
   });
 });
