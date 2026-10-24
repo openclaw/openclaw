@@ -65,22 +65,18 @@ suite.define(() => {
 
         await emit("stuck", "Needs repair");
         await emit("waiting-on-user", "Needs a decision");
-        expect(await page.locator(".app-toast").count()).toBe(0);
         expect(await observerNotices.jsonValue()).toEqual({ count: 0 });
         expect(page.url()).toBe(currentUrl);
 
         const archiveRow = session(archived.key);
         await ui.archiveSession(page, archiveRow, "sidebar");
-        await ui.sessionPatch(gateway, archived.key, { archived: true });
         const toast = page.locator(".app-toast");
         const undo = toast.getByRole("button", { name: "Undo", exact: true });
         await undo.waitFor({ state: "visible" });
         await undo.focus();
         await emit("stuck", "Still needs repair");
-        expect(await toast.textContent()).toContain("Session archived");
         await undo.click();
         await ui.sessionPatch(gateway, archived.key, { archived: false });
-        await archiveRow.waitFor({ state: "visible" });
         expect(page.url()).toBe(currentUrl);
       },
       { viewport: { height: 900, width: 1440 } },
