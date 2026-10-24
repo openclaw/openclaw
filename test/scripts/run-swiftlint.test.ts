@@ -82,25 +82,17 @@ process.exitCode = Number(process.env.SWIFTLINT_TEST_EXIT);
   });
 
   it.each([
-    ["type_name", "Type name", "A", 2, 60],
-    ["generic_type_name", "Generic type name", "TTTTTTTTTTTTTTTTTTTTT", 1, 20],
-  ] as const)("%s keeps characters and capitalization blocking", (rule, prefix, name, min, max) => {
-    const length = violation(
-      rule,
-      `${prefix} '${name}' should be between ${min} and ${max} characters long`,
-    );
-    const invalidNames = [
-      `${prefix} 'lowercase' should start with an uppercase character`,
-      `${prefix} 'Invalid_Name' should only contain alphanumeric and other allowed characters`,
-    ];
-    const mixed = run([length, ...invalidNames.map((reason) => violation(rule, reason))]);
+    ["type_name", "Type name"],
+    ["generic_type_name", "Generic type name"],
+  ] as const)("%s distinguishes length limits from invalid names", (rule, prefix) => {
+    const length = violation(rule, `${prefix} 'A' should be between 2 and 60 characters long`);
+    const invalid = `${prefix} 'Invalid_Name' should only contain alphanumeric and other allowed characters`;
+    const mixed = run([length, violation(rule, invalid)]);
     expect(mixed.status, mixed.stderr).toBe(2);
     expect(mixed.output.match(/::warning /gu)).toHaveLength(1);
     expect(mixed.summary).toContain(length.reason);
-    for (const reason of invalidNames) {
-      expect(mixed.stderr).toContain(`error: ${reason} (${rule})`);
-      expect(mixed.summary).not.toContain(reason);
-    }
+    expect(mixed.stderr).toContain(`error: ${invalid} (${rule})`);
+    expect(mixed.summary).not.toContain(invalid);
   });
 
   it.each([

@@ -10,25 +10,15 @@ const fallback = "BBBBB22222";
 const script = path.resolve("scripts/ios-team-id.sh");
 
 it.each([
-  {
-    name: "prefers canonical Xcode metadata",
-    teams: [fallback, canonical],
-    explicit: "",
-    error: "",
-  },
-  {
-    name: "rejects fallback-only Xcode metadata",
-    teams: [fallback],
-    explicit: "",
-    error: `Official OpenClaw iOS Team ID '${canonical}' is not available`,
-  },
-  {
-    name: "rejects an explicit fallback team",
-    teams: [],
-    explicit: fallback,
-    error: "is not the official OpenClaw iOS team",
-  },
-])("$name", ({ teams, explicit, error }) => {
+  ["canonical", [fallback, canonical], "", ""],
+  [
+    "fallback only",
+    [fallback],
+    "",
+    `Official OpenClaw iOS Team ID '${canonical}' is not available`,
+  ],
+  ["explicit fallback", [], fallback, "is not the official OpenClaw iOS team"],
+] as const)("resolves signing team: %s", (_name, teams, explicit, error) => {
   const home = tempDirs.make("ios-team-id-");
   const bin = path.join(home, "bin");
   const preferences = path.join(home, "Library/Preferences");
