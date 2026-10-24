@@ -368,6 +368,36 @@ fixtures and ports, then swap interleaved CPU placements. Start deadlines must
 allow both preparation phases to finish. Apply the campaign's sample-count and
 paired-delta rules; the 70 first-read samples alone cannot qualify p95 or p99.
 
+Add `--startup-admission --waves 20` to the cold-row command to attribute the
+operator request-start backlog. This uses a fixed 20 batches per client instead
+of `--seconds`. Each batch sends an event-only `sessions.subscribe` and
+`models.list` first, immediately followed on the same socket by the
+sidebar, roster, Board, `sessions.resolve`, `sessions.messages.subscribe`, and
+keyed `chat.startup` requests. Batches await all replies and retain the
+`--poll-ms` pacing. There are no artificial handler delays or held preparations.
+The first batch remains separate from later warm traffic in the latency report.
+
+The `admission` result contains sample counts, total duration, p50/p90/p95/p99,
+and maxima for each method's queue wait, admission, handler, and first response.
+Queue wait is the operator RPC start scheduler, while admission also includes
+work before handler entry. Existing `gateway.chat.startup.*` timeline spans are
+sampled in memory through the private source loader; they do not enable timeline
+file writes. Additional `startup-boundary.*` samples cover pending-input reads
+and optional subagent snapshot preparation across all callers in the measured
+window; they are attribution context, not exclusive startup-handler phases.
+The difference between handler duration and its observed spans may
+include uninstrumented waits; overlapping spans must not be summed as exclusive
+time. All responses are checked, including roster pages, event enrollment, session
+resolution, message subscription, and startup history page. Diagnostics overflow
+or absent startup-handler evidence fails the run. This compact settled fixture
+measures reconnect contention, not interrupted agent-turn recovery or large
+transcript hydration. Keep identical instrumentation for A/A and A/B runs, use
+the campaign's untraced cost gates, and collect promotion separately with
+`--trace-gc` and its own controls.
+Use `--request-start-owner /path/to/request-start.ts` to compare scheduler
+revisions in the same installation. The source loader verifies the selected
+file's SHA-256 at load time and records it in the result.
+
 Use `scripts/bench-gateway-startup.ts` and `scripts/bench-gateway-restart.ts`
 against an exact-head build and isolated synthetic state. Record the Node version,
 source SHA, workload case, host load, and build command. The `default` case is the

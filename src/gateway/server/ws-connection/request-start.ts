@@ -139,11 +139,12 @@ export function scheduleGatewayRequestStart(
   return runOutsideGatewayRootWorkAdmission(() => {
     // Handshakes bypass this queue. Yield before each snapshot/replay start so
     // ready upgrade/hello I/O runs before another preparation resumes on the main thread.
+    const params = asOptionalRecord(request.params);
     const preparation =
-      request.method === "sessions.subscribe" ||
+      (request.method === "sessions.subscribe" &&
+        Object.keys(params ?? {}).some((key) => key !== "includeMessageBodies")) ||
       request.method === "models.list" ||
-      (request.method === "sessions.messages.subscribe" &&
-        asOptionalRecord(request.params)?.includeApprovals === true);
+      (request.method === "sessions.messages.subscribe" && params?.includeApprovals === true);
     const lifecycle =
       frameBytes <= MAX_CONTROL_FRAME_BYTES &&
       (request.method === "gateway.suspend.prepare" ||
@@ -155,6 +156,8 @@ export function scheduleGatewayRequestStart(
         request.method === "update.run");
     const independentRead =
       request.method === "chat.history" ||
+      request.method === "board.get" ||
+      request.method === "sessions.resolve" ||
       request.method === "sessions.list" ||
       request.method === "cron.list" ||
       request.method === "push.web.vapidPublicKey" ||
@@ -167,8 +170,7 @@ export function scheduleGatewayRequestStart(
       lifecycle ||
       (frameBytes <= MAX_CONTROL_FRAME_BYTES &&
         (request.method === "sessions.messages.unsubscribe" ||
-          (request.method === "sessions.messages.subscribe" &&
-            asOptionalRecord(request.params)?.includeApprovals !== true)));
+          (request.method === "sessions.messages.subscribe" && params?.includeApprovals !== true)));
     const budget = control ? controlBudget : workBudget;
     const connection = budget.connections.get(connId);
     // Parked preparations still consume waiting capacity, never a runnable start.

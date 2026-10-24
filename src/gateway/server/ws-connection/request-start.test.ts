@@ -15,6 +15,8 @@ const workRequest = { method: "chat.send" };
 const subscribeRequest = { method: "sessions.messages.subscribe", params: { key: "session" } };
 const independentReads = [
   "chat.history",
+  "board.get",
+  "sessions.resolve",
   "sessions.list",
   "cron.list",
   "push.web.vapidPublicKey",
@@ -37,7 +39,9 @@ function requestStart(
   return permission;
 }
 
-function holdPreparations(request = { method: "models.list" }) {
+function holdPreparations(
+  request: Parameters<typeof scheduleGatewayRequestStart>[1] = { method: "models.list" },
+) {
   const held = Array.from({ length: 4 }, heldCompletion);
   return {
     held,
@@ -62,7 +66,7 @@ afterEach(async () => {
 describe("Gateway request start fairness", () => {
   it("bounds concurrent reconnect preparations through settlement and yields before each start", async () => {
     const methods = [
-      { method: "sessions.subscribe" },
+      { method: "sessions.subscribe", params: { limit: 100 } },
       { method: "models.list" },
       { method: "sessions.messages.subscribe", params: { includeApprovals: true } },
     ];
@@ -125,11 +129,37 @@ describe("Gateway request start fairness", () => {
     expect(starts).toEqual([...independentReads, "sessions.create"]);
     held[0]!.resolve();
     await Promise.all([subscription, unsubscribe, mutation]);
-    expect(starts.slice(8)).toEqual([
+    expect(starts.slice(independentReads.length + 1)).toEqual([
       "sessions.messages.subscribe",
       "sessions.messages.unsubscribe",
       "chat.send",
     ]);
+  });
+
+  it("starts event-only roster subscriptions while snapshot preparation is saturated", async () => {
+    const { held, start } = holdPreparations();
+    await start();
+    const starts: string[] = [];
+    const eventOnly = requestStart(
+      100,
+      { method: "sessions.subscribe", params: {} },
+      "events",
+    ).then(() => starts.push("events"));
+    const messageBodies = requestStart(
+      100,
+      { method: "sessions.subscribe", params: { includeMessageBodies: true } },
+      "bodies",
+    ).then(() => starts.push("bodies"));
+    const snapshot = requestStart(
+      100,
+      { method: "sessions.subscribe", params: { limit: 100 } },
+      "snapshot",
+    ).then(() => starts.push("snapshot"));
+    await nextTurn();
+    expect(starts).toEqual(["events", "bodies"]);
+    held[0]!.resolve();
+    await Promise.all([eventOnly, messageBodies, snapshot]);
+    expect(starts.at(-1)).toBe("snapshot");
   });
 
   it("prioritizes lifecycle starts while preserving same-connection mutation order", async () => {
@@ -164,12 +194,15 @@ describe("Gateway request start fairness", () => {
   });
 
   it("releases a cancelled preparation waiter while earlier requests still own capacity", async () => {
-    const { held, start } = holdPreparations({ method: "sessions.subscribe" });
+    const { held, start } = holdPreparations({
+      method: "sessions.subscribe",
+      params: { limit: 100 },
+    });
     const started = start();
     const controller = new AbortController();
     const cancelled = scheduleGatewayRequestStart(
       100,
-      { method: "sessions.subscribe" },
+      { method: "sessions.subscribe", params: { limit: 100 } },
       "cancelled",
       Promise.resolve(),
       controller.signal,

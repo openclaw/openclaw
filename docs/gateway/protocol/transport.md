@@ -176,11 +176,12 @@ request allowance. The aggregate serialized-byte bound still applies.
 Small `sessions.messages.subscribe` requests without approval replay and
 `sessions.messages.unsubscribe` requests have separate bounded waiting capacity,
 including a per-connection limit. All requests share the same yielding budget.
-Roster subscriptions, catalog reads, and message subscriptions with approval
+Roster subscriptions requesting a snapshot, catalog reads, and message subscriptions with approval
 replay share four preparation slots. A slot remains occupied until its request
 settles, and each start yields to ready socket I/O. A request waiting for a
 preparation slot stays in the bounded queue while eligible requests start:
-`chat.history` and `sessions.list` reads can pass waiting preparations, as can
+Event-only `sessions.subscribe` calls do not reserve preparation slots.
+`chat.history`, `sessions.list`, `sessions.resolve`, and `board.get` reads can pass waiting preparations, as can
 ordinary requests on other connections. Other starts preserve FIFO order within
 each connection, including subscriptions and their later unsubscribe requests.
 WebSocket handshakes bypass the request queue, so reconnecting tabs cannot start
