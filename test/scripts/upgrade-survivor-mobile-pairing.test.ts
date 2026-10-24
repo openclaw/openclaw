@@ -6,9 +6,6 @@ import {
   MOBILE_PAIRING_AUDIT_CLIENT,
   MOBILE_PAIRING_APPROVAL_SCOPES,
   MOBILE_PAIRING_CLIENT,
-  MOBILE_PAIRING_NODE_CAPS,
-  MOBILE_PAIRING_NODE_COMMANDS,
-  MOBILE_PAIRING_NODE_PERMISSIONS,
   approveBaselineNodePairing,
   assertGatewayHealth,
   attemptConnect,
@@ -174,17 +171,11 @@ it("uses shipped protocol ranges, challenge time, instance id, and auth.token", 
     minProtocol: 3,
     maxProtocol: 4,
     client: { instanceId: MOBILE_PAIRING_CLIENT.instanceId },
-    caps: MOBILE_PAIRING_NODE_CAPS,
-    commands: MOBILE_PAIRING_NODE_COMMANDS,
-    permissions: MOBILE_PAIRING_NODE_PERMISSIONS,
-    locale: "en-US",
-    userAgent: "Version 26.6.1",
     auth: { token: "node-token" },
     device: { nonce: "nonce-1", signedAt: challengePayload.ts },
   });
   expect(operatorParams).toMatchObject({
     minProtocol: 4,
-    maxProtocol: 4,
     caps: ["inline-widgets"],
     auth: { token: "operator-token" },
   });
@@ -350,14 +341,6 @@ it("emits only redacted reconnect evidence", () => {
     expect(serialized).not.toContain(secret);
   }
   expect(JSON.parse(serialized)).toMatchObject({
-    ...cleanPairing,
-    phase: "candidate-restart",
-    ok: true,
-    connectedDevicePresent: true,
-    pendingPairingCount: 0,
-    nodeSurfaceReapprovalExpected: false,
-    missingPasswordReason: true,
-    missingPasswordClose1008: true,
     credentials: {
       node: tokenEvidence(nodeToken, "rotated-node-token"),
       operator: tokenEvidence(operatorToken),

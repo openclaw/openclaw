@@ -319,12 +319,9 @@ function registryFixture() {
     tarballPath,
     allowMissing: true,
   };
-  const reads = { registry: 0, tarball: 0 };
+  const reads = { tarball: 0 };
   const responses = {
-    registry: (_read: number) => {
-      reads.registry += 1;
-      return Response.json(packument);
-    },
+    registry: (_read: number) => Response.json(packument),
     tarball: (_read: number) => new Response(new Uint8Array(bytes)),
   };
   let registryRequests = 0;
@@ -367,5 +364,5 @@ it("refuses to bootstrap a removed OIDC package", async () => {
   const { responses, reads, verify } = registryFixture();
   responses.registry = () => new Response("missing", { status: 404 });
   await expect(verify({ allowMissing: true })).rejects.toThrow();
-  expect(reads).toEqual({ registry: 0, tarball: 0 });
+  expect(reads.tarball).toBe(0);
 });

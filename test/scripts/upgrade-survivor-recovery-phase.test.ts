@@ -184,7 +184,7 @@ it.skipIf(process.platform === "win32").each([
   ["auto-auth", "2026.10.11-first-hop.0"],
   ["manual", "2026.10.10-beta.3"],
 ])("asserts the plugin cohort selected by %s restart recovery", (mode, version) => {
-  const { result } = runFixture(
+  const { root, result } = runFixture(
     mode,
     `
 candidate_version=2026.10.10-beta.3
@@ -203,19 +203,7 @@ configured_plugin_installs_enabled() { return 1; }
 assert_prepublish_fixture_idle() { printf 'fixture-idle\\n'; }
 phase() { printf 'phase:%s\\n' "$1"; shift; "$@"; }
 node() {
-  [ "$1" = scripts/e2e/lib/upgrade-survivor/assertions.mjs ] || return 90
-  [ "$2" = assert-npm-plugin-install ] || return 91
-  [ "$3" = whatsapp ] || return 92
-  [ "$4" = @openclaw/whatsapp ] || return 93
-  [ "\${11}" = "$candidate_version" ] || return 98
-  if [ "$UPDATE_RESTART_MODE" = auto-auth ]; then
-    [ "$5" = "$restart_fixture_version" ] || return 94
-    [ "\${10}" = "$restart_plugin_fixture_dir/whatsapp.tgz" ] || return 95
-  else
-    [ "$5" = "$candidate_version" ] || return 96
-    [ -z "\${10}" ] || return 97
-  fi
-  printf 'npm-assert:%s:%s\\n' "$3" "$5"
+  printf '%s\\n' "$1" "$2" "$3" "$4" "$5" "\${10}" "\${11}"
 }
 ${section("assert_prepublish_plugin_install", "configure_plugin_registry")}
 ${section("repair_fixture_plugin_consent", "assert_volume_idempotence")}
@@ -225,7 +213,13 @@ repair_fixture_plugin_consent
   expectStatus(result, 0);
   expect(result.stdout.trim().split("\n")).toEqual([
     "phase:assert-prepublish-recovery-requests",
-    `npm-assert:whatsapp:${version}`,
+    "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
+    "assert-npm-plugin-install",
+    "whatsapp",
+    "@openclaw/whatsapp",
+    version,
+    mode === "auto-auth" ? `${root}/restart-plugins/whatsapp.tgz` : "",
+    "2026.10.10-beta.3",
     "fixture-idle",
   ]);
 });

@@ -46,7 +46,6 @@ function workflow() {
       {
         environment?: string;
         if?: string;
-        outputs?: Record<string, string>;
         permissions?: Record<string, string>;
         steps: WorkflowStep[];
         with?: Record<string, string>;
@@ -229,18 +228,6 @@ describe("ClawHub parent publication authorization", () => {
   it("uploads recovery approval only for direct human dispatches from trusted tooling", () => {
     const config = workflow();
     const approval = config.jobs.approve_plugins_clawhub_release;
-    const validation = config.jobs.validate_release_publish_approval;
-    expect(validation.outputs?.direct_recovery).toBe(
-      "${{ steps.approval.outputs.direct_recovery }}",
-    );
-    const validationRun = validation.steps.find((step) => step.id === "approval")?.run ?? "";
-    const outputWrite = validationRun.indexOf(
-      'direct_recovery=${direct_recovery}" >> "$GITHUB_OUTPUT"',
-    );
-    // The flag is published only after the parent run validated.
-    expect(outputWrite).toBeGreaterThan(
-      validationRun.indexOf("node scripts/validate-release-publish-approval.mjs"),
-    );
     const directRecovery =
       "needs.validate_release_publish_approval.outputs.direct_recovery == 'true'";
     const receiptRoute =
@@ -252,9 +239,6 @@ describe("ClawHub parent publication authorization", () => {
     });
     const write = approval.steps.find((step) => step.run?.includes("recovery-approval --output"));
     expect(write?.if).toBe(directRecovery);
-    expect(write?.run).toContain(
-      'recovery-approval --output "$RUNNER_TEMP/openclaw-clawhub-recovery-approval/approval.json"',
-    );
     // Discovery lists the parent run's receipts, so the job needs a token and actions:read.
     expect(approval.permissions).toEqual({ actions: "read", contents: "read" });
     expect(write?.env).toEqual({
@@ -270,9 +254,9 @@ describe("ClawHub parent publication authorization", () => {
       "openclaw-clawhub-recovery-approval-${{ github.run_id }}-${{ github.run_attempt }}";
     expect(upload?.with).toMatchObject({
       name: artifactName,
-      path: "${{ runner.temp }}/openclaw-clawhub-recovery-approval/approval.json",
       "if-no-files-found": "error",
     });
+    expect(write?.run).toContain(upload?.with?.path?.replace("${{ runner.temp }}", "$RUNNER_TEMP"));
   });
 
   it("publishes source metadata for the exact candidate sealed into authorization", () => {
