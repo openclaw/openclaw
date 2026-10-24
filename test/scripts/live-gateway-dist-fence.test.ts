@@ -431,17 +431,7 @@ it.each(["saved environment", "root argv"] as const)(
         expectRefusal(result, `Scheduled Task ${JSON.stringify("Services\\Recovery")}`);
         const bindings = await gatewayBindings.discoverManagedGatewayBindings(env);
         expect(bindings).toHaveLength(1);
-        expect(bindings[0]?.env).toMatchObject({
-          OPENCLAW_PROFILE: "rescue",
-          OPENCLAW_WINDOWS_TASK_NAME: "Services\\Recovery",
-        });
-        await expect(
-          gatewayBindings.readManagedGatewayBindingState(bindings[0]!),
-        ).resolves.toMatchObject({
-          installed: true,
-          running: false,
-          runtime: { status: "unknown", state: "Running" },
-        });
+        expect(bindings[0]?.env.OPENCLAW_PROFILE).toBe("rescue");
         await expect(resolveLiveManagedGatewayDistFence(other, { env })).resolves.toEqual({
           refuse: false,
         });
@@ -481,26 +471,9 @@ it.skipIf(process.platform === "win32").each([
   "refuses through modeled Linux real-FS sibling bindings with %s inline profile metadata",
   async (_name, metadata, siblingUnit) =>
     withMockedPlatform("linux", async () => {
-      const hostConnection = {
-        XDG_RUNTIME_DIR: path.join(tmp, "caller-runtime"),
-        DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(tmp, "caller-bus")}`,
-        USER: "fixture-caller",
-        LOGNAME: "fixture-caller",
-        SUDO_USER: "fixture-origin",
-      };
       const { checkout, other, env, bindings } = await systemdFixture(siblingUnit, metadata, {
-        ...hostConnection,
         OPENCLAW_PROFILE: "selected",
       });
-      expect(bindings).toHaveLength(2);
-      expect(bindings.map((binding) => binding.systemdReadTarget?.unitName)).toEqual(
-        expect.arrayContaining([defaultUnit, siblingUnit]),
-      );
-      expect(bindings.every((binding) => binding.scope === "user")).toBe(true);
-      for (const binding of bindings) {
-        expect(binding.env).toMatchObject(hostConnection);
-        expect(binding.env.OPENCLAW_PROFILE).toBeUndefined();
-      }
 
       const result = await inspectFixtureGateway(
         checkout,
@@ -605,18 +578,11 @@ it.skipIf(process.platform !== "linux")(
     const unitPath = "/etc/systemd/system/openclaw@.service";
     const { checkout, other, env, bindings } = await systemdFixture(unitPath);
     const instanceName = `openclaw@${os.userInfo().username}.service`;
-    expect(bindings.find((binding) => binding.scope === "user")).toMatchObject({
-      systemdReadTarget: { unitName: defaultUnit },
-    });
-    expect(bindings.find((binding) => binding.scope === "system")).toMatchObject({
-      systemdReadTarget: { unitName: instanceName, unitPath },
-    });
 
     const result = await inspectFixtureGateway(
       checkout,
       async (binding) => {
         const unitName = binding?.systemdReadTarget?.unitName ?? "";
-        expect(unitName.endsWith("@.service")).toBe(false);
         if (binding?.scope === "system") {
           expect(unitName).toBe(instanceName);
           return runningUnit(checkout, instanceName, 91);

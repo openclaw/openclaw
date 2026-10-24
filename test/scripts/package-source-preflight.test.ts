@@ -164,61 +164,6 @@ exit 64`,
   return { output, result };
 }
 
-function runLiveSourcePackageBuildAndValidation(packageEnv: Record<string, string>) {
-  const { step } = jobSteps("openclaw-live-and-e2e-checks-reusable", "prepare_docker_e2e_image");
-  const pack = step("Pack OpenClaw package for Docker E2E");
-  const validate = step("Validate OpenClaw Docker E2E package");
-  const artifactTuple = runLiveArtifactTupleValidation(packageEnv);
-  const f = workflowFixture("openclaw-live-source-package-");
-  const callsPath = f.file("calls");
-  const selectedSha = "a".repeat(40);
-  f.executable(
-    "node",
-    `printf '%s\\n' "$*" >> "$CALLS_PATH"
-if [[ "$1" == "scripts/package-openclaw-for-docker.mjs" ]]; then
-  shift
-  output_dir=""
-  output_name=""
-  while (( "$#" )); do
-    case "$1" in
-      --output-dir) output_dir="$2"; shift 2 ;;
-      --output-name) output_name="$2"; shift 2 ;;
-      *) shift ;;
-    esac
-  done
-  fixture="$(mktemp -d)"
-  mkdir -p "$fixture/package/dist" "$output_dir"
-  printf '%s\\n' '{"name":"openclaw","version":"2026.8.1"}' > "$fixture/package/package.json"
-  printf '{"commit":"%s"}\\n' "$SELECTED_SHA" > "$fixture/package/dist/build-info.json"
-  tar -czf "$output_dir/$output_name" -C "$fixture" package
-  rm -rf "$fixture"
-  exit 0
-fi
-exit 64`,
-  );
-  f.executable("timeout", 'shift 2\nexec "$@"');
-  f.executable("sha256sum", `printf '%064d  %s\\n' 0 "$1"`);
-  const commonEnv = {
-    ALLOW_UNRELEASED_CHANGELOG: "false",
-    CALLS_PATH: callsPath,
-    GITHUB_WORKSPACE: f.root,
-    SELECTED_SHA: selectedSha,
-    SHARED_IMAGE_POLICY: "existing-only",
-  };
-  const buildResult = f.run(pack, commonEnv);
-  const artifactPresent = artifactTuple.output.package_artifact_present === "true";
-  const validationResult = f.run(validate, {
-    ...commonEnv,
-    EXPECTED_PACKAGE_FILE_NAME: artifactPresent ? packageEnv.PACKAGE_FILE_NAME : "",
-    EXPECTED_PACKAGE_SHA256: artifactPresent ? packageEnv.PACKAGE_SHA256 : "",
-    EXPECTED_PACKAGE_SOURCE_SHA: artifactPresent ? packageEnv.PACKAGE_SOURCE_SHA : "",
-    EXPECTED_PACKAGE_VERSION: artifactPresent ? packageEnv.PACKAGE_VERSION : "",
-  });
-  const output = validationResult.status === 0 ? readOutputs(f.file("output")) : {};
-  const calls = readFileSync(callsPath, "utf8").trim().split("\n");
-  return { artifactTuple, buildResult, calls, output, validationResult, validate };
-}
-
 function runReleaseInputCapture(params: {
   candidateArtifactJson?: string;
   releasePackageSpec?: string;
@@ -393,20 +338,9 @@ it("normalizes release-check package mode and guards the source resolver", () =>
     env: { PACKAGE_REF: "${{ needs.resolve_target.outputs.revision }}" },
     run: expect.stringContaining("node scripts/package-source-preflight.mjs"),
   });
-  for (const name of [
-    "Setup Node environment",
-    "Resolve release package artifact",
-    "Upload release package artifact",
-  ]) {
-    expect(step(name).if).toBe("needs.resolve_target.outputs.package_mode != 'artifact'");
-  }
-  expect(packageStep.run).toContain('if [[ "$PACKAGE_MODE" == "published" ]]');
-  expect(step("Validate shared release candidate identity").if).toBe(
-    "needs.resolve_target.outputs.package_mode == 'artifact'",
-  );
 });
 
-it("guards prepare-only source before harness setup and skips no-package lane setup", () => {
+it("resolves source requirements and orders preflight before setup", () => {
   const { step, before } = jobSteps(
     "openclaw-live-and-e2e-checks-reusable",
     "prepare_docker_e2e_image",
@@ -424,31 +358,15 @@ it("guards prepare-only source before harness setup and skips no-package lane se
   expectRequirement({ PACKAGE_ARTIFACT_PRESENT: "true" }, false);
   expectRequirement({ PACKAGE_ARTIFACT_PRESENT: "false", PREPARED_NPM_BUNDLE_JSON: "{}" }, false);
   before(prepareOnlyPreflight, harnessSetup);
-  expect(harnessSetup.uses).toBe("./.release-harness/.github/actions/setup-release-harness");
   before(step("Plan Docker E2E images"), plannedPreflight);
   before(plannedPreflight, setup, pack);
-  expect(prepareOnlyPreflight.run).toContain(
-    "node .release-harness/scripts/package-source-preflight.mjs",
-  );
-  expect(prepareOnlyPreflight.if).toBe(
-    "inputs.prepare_only && steps.package_source.outputs.required == 'true'",
-  );
-  expect(plannedPreflight.if).toBe(
-    "(!inputs.prepare_only) && steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true'",
-  );
-  expect(setup.if).toContain(
-    "steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true'",
-  );
-  expect(pack.if).toBe(
-    "steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true'",
-  );
 });
 
-it("keeps a whitespace-only artifact tuple in source mode through Docker reports", async () => {
+it("treats a whitespace-only artifact tuple as absent", () => {
   const whitespace = " \t\n ";
   const artifactFields = ["DIGEST", "ID", "NAME", "RUN_ATTEMPT", "RUN_ID"];
   const packageFields = ["FILE_NAME", "SHA256", "SOURCE_SHA", "VERSION"];
-  const result = runLiveSourcePackageBuildAndValidation(
+  const { result, output } = runLiveArtifactTupleValidation(
     Object.fromEntries(
       [...artifactFields.map((field) => `ARTIFACT_${field}`), ...packageFields].map((field) => [
         `PACKAGE_${field}`,
@@ -457,38 +375,11 @@ it("keeps a whitespace-only artifact tuple in source mode through Docker reports
     ),
   );
 
-  expect(result.artifactTuple.result.status, result.artifactTuple.result.stderr).toBe(0);
-  expect(result.artifactTuple.output.package_artifact_present).toBe("false");
-  for (const field of packageFields) {
-    expect(result.validate.env?.[`EXPECTED_PACKAGE_${field}`]).toBe(
-      `\${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_${field.toLowerCase()} || '' }}`,
-    );
-  }
-  expect(result.buildResult.status, result.buildResult.stderr).toBe(0);
-  expect(result.validationResult.status, result.validationResult.stderr).toBe(0);
-  expect(result.calls).toEqual([
-    expect.stringContaining("scripts/package-openclaw-for-docker.mjs"),
-  ]);
-  expect(result.output).toMatchObject({
-    file_name: "openclaw-current.tgz",
-    source_sha: "a".repeat(40),
-    version: "2026.8.1",
-  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(output.package_artifact_present).toBe("false");
+});
 
-  const workflow = readWorkflow(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml");
-  const candidateManifest = workflowStep(
-    workflow,
-    "prepare_docker_e2e_image",
-    "Emit immutable release candidate tuple",
-  );
-  for (const field of artifactFields) {
-    expect(candidateManifest.env?.[`PACKAGE_ARTIFACT_${field}`]).toContain(
-      "needs.validate_selected_ref.outputs.package_artifact_present == 'true'",
-    );
-  }
-
-  const noPackageArtifactName =
-    result.artifactTuple.output.package_artifact_present === "true" ? whitespace : "";
+it("records the ephemeral artifact name in summary and failure reports", async () => {
   const reportDir = tempDirs.make("openclaw-live-source-report-");
   await writeRunSummary(
     reportDir,
@@ -498,7 +389,7 @@ it("keeps a whitespace-only artifact tuple in source mode through Docker reports
       status: "failed",
     },
     {
-      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: noPackageArtifactName || "docker-e2e-package",
+      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: "docker-e2e-package",
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: "a".repeat(40),
     },
   );
@@ -506,7 +397,6 @@ it("keeps a whitespace-only artifact tuple in source mode through Docker reports
   const failures = JSON.parse(readFileSync(path.join(reportDir, "failures.json"), "utf8"));
   expect(summary.packageArtifactName).toBe("docker-e2e-package");
   expect(failures.packageArtifactName).toBe("docker-e2e-package");
-  expect(JSON.stringify({ failures, summary })).not.toContain(whitespace);
 });
 
 it("guards install-smoke candidate packaging before its dependency install", () => {

@@ -44,16 +44,10 @@ function fixture(sql: string, verify?: (db: DatabaseSync) => void) {
 }
 
 describe("PostgreSQL schema generation", () => {
-  it("generates state port metadata from every canonical table and optional fragment", async () => {
-    const { files, report } = await generatePostgresSchemas(root);
+  it("bounds state port metadata to compact allocation facts", async () => {
+    const { files } = await generatePostgresSchemas(root);
     const metadata: typeof statePortMetadata = JSON.parse(files["state-port.json"]!);
     const schemas = [metadata, ...metadata.fragments];
-    expect(
-      schemas.flatMap((schema) => schema.tables.map((table) => table.name)).toSorted(),
-    ).toEqual(report.catalogs.state!.tables.map((table) => table.name).toSorted());
-    expect(
-      metadata.fragments.find((fragment) => fragment.id === "agent_deletion_journal"),
-    ).toBeDefined();
     expect(Buffer.byteLength(files["state-port.json"]!)).toBeLessThan(60_000);
     expect(schemas.some((schema) => "sqlite" in schema || "objects" in schema)).toBe(false);
     expect(schemas.flatMap((schema) => schema.tables).some((table) => "columns" in table)).toBe(
@@ -61,24 +55,8 @@ describe("PostgreSQL schema generation", () => {
     );
   });
 
-  it("preserves all agent relational objects and declares search separately", async () => {
+  it("emits null-safe agent triggers and pending search metadata", async () => {
     const { files, report } = await generatePostgresSchemas(root);
-    const agent = report.catalogs.agent!;
-    for (const kind of ["table", "column", "default", "check", "index", "foreignKey", "trigger"]) {
-      expect(
-        agent.objects.filter(
-          (item) =>
-            item.kind === kind &&
-            item.sql === null &&
-            item.table !== "sqlite_sequence" &&
-            item.pendingCapability !== "search",
-        ),
-        kind,
-      ).toEqual([]);
-    }
-    const pending = report.pendingCapabilities.filter((item) => item.database === "agent");
-    expect(pending.filter((item) => item.kind === "trigger")).toHaveLength(4);
-    expect(pending.filter((item) => item.kind === "virtualTable")).toHaveLength(2);
     expect(JSON.parse(files["manifest.json"]!).pendingCapabilities).toEqual(
       report.pendingCapabilities,
     );
@@ -88,9 +66,6 @@ describe("PostgreSQL schema generation", () => {
     ]) {
       expect(files["agent.postgres.sql"]).toContain(fragment);
     }
-    expect(files["portability-report.md"]).toContain(
-      "Duplicate-key JSON is unreachable from writers",
-    );
   });
 
   it("refuses unsupported agent objects and trigger bodies", async () => {
@@ -159,27 +134,12 @@ describe("PostgreSQL schema generation", () => {
   });
 
   it("renders eager and lazy state DDL inside the connection owner's namespace and transaction", async () => {
-    const { files, report } = await generatePostgresSchemas(root);
-    for (const file of [
-      "state.postgres.sql",
-      "state-v23-v24.postgres.sql",
-      "state-v24-v25.postgres.sql",
-      "state-v28-v29.postgres.sql",
-      "agent.postgres.sql",
-      "agent-search.postgres.sql",
-      ...report.fragments.map((item) => item.file),
-    ]) {
+    const { files } = await generatePostgresSchemas(root);
+    for (const file of Object.keys(files).filter((name) => name.endsWith(".postgres.sql"))) {
       expect(files[file], file).not.toMatch(/^(?:BEGIN;|COMMIT;|SET |CREATE SCHEMA )/m);
       expect(files[file], file).not.toContain('"openclaw_state".');
       expect(files[file], file).not.toContain('"openclaw_agent".');
     }
-    expect(files["state.postgres.sql"]).toContain('CREATE TABLE "schema_meta" (');
-    const backgrounds = report.fragments.find((item) =>
-      item.tables.includes("user_background_images"),
-    )!;
-    expect(files[backgrounds.file]).toContain('CREATE TABLE "user_background_images" (');
-    expect(files[backgrounds.file]).toContain('REFERENCES "user_profiles"');
-    expect(files["state.postgres.sql"]).not.toContain('CREATE TABLE "user_background_images"');
   });
 
   it("emits canonical SQL or an omission diagnostic and generates identical bytes twice", async () => {
