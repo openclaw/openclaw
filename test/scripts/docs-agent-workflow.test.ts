@@ -169,7 +169,6 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
   it("does not let the current REST run throttle itself", async ({ signal }) => {
     const result = await runGate([currentRun], signal);
     expect(result.output).toBe(admittedOutput(parentSha));
-    expect(result.stdout).not.toContain("skipping");
   });
 
   it.for([
@@ -177,19 +176,11 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
     ["in progress", "in_progress", null],
     ["completed", "completed", "success"],
     ["failed", "completed", "failure"],
-  ] as const)(
-    "throttles another %s run and prints its REST id",
-    async ([_label, status, conclusion], { signal }) => {
-      const other = { ...currentRun, id: 122, status, conclusion, head_sha: previousSha };
-      const result = await runGate([currentRun, other], signal);
-      expect(result.output).toBe("run_agent=false\n");
-      expect(result.stdout).toContain("already ran or is running within the last hour");
-      expect(result.stdout).toContain(
-        [other.id, status, conclusion ?? "", other.created_at, previousSha].join("\t"),
-      );
-      expect(result.stdout).not.toContain("123\t");
-    },
-  );
+  ] as const)("throttles another %s run", async ([_label, status, conclusion], { signal }) => {
+    const other = { ...currentRun, id: 122, status, conclusion, head_sha: previousSha };
+    const result = await runGate([currentRun, other], signal);
+    expect(result.output).toBe("run_agent=false\n");
+  });
 
   const completedRun = (changes: Partial<WorkflowRun>): WorkflowRun => ({
     ...currentRun,

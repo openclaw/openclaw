@@ -69,25 +69,6 @@ describe("candidate-owned full release dispatch entry point", () => {
     );
     expect(dispatches(f)).toEqual([P]);
   });
-  it("advances main-selected P to a verified descendant before the admission POST", () => {
-    const f = createDispatchFixture({ candidateOwned: true, advanceMainBeforeAdmission: 3 });
-    const result = f.run();
-    expect(result.status, result.stderr).toBe(0);
-    expect(dispatches(f)).toEqual([P, Q]);
-    const advancedP = runGit(f.origin, ["rev-parse", "refs/heads/main"]);
-    expect(advancedP).not.toBe(f.workflowSha);
-    expect(result.stdout.match(/Admission P advanced with main/gu)).toHaveLength(3);
-    const retained = f.record();
-    expect(retained.admission.workflowSha).toBe(advancedP);
-    expect(retained.request.workflowSha).toBe(f.targetSha);
-    const envelope = JSON.parse(
-      expectDefined(f.readPayload().body.inputs.trusted_workflow_json, "dispatched envelope"),
-    );
-    expect(envelope.qualificationAdmission).toMatchObject({
-      workflowSha: advancedP,
-      workflowFullRef: "refs/heads/main",
-    });
-  });
 
   it("refuses main that keeps moving past the admission advance bound", () => {
     const f = createDispatchFixture({ candidateOwned: true, advanceMainBeforeAdmission: 4 });
@@ -96,8 +77,18 @@ describe("candidate-owned full release dispatch entry point", () => {
     expect(dispatches(f)).toEqual([]);
   });
 
-  it("keeps divergent C=Q frozen while independent P admits and main advances", () => {
-    const f = createDispatchFixture({ candidateOwned: true, advanceMainAfterAdmission: true });
+  it("keeps C=Q frozen through bounded main advances and delayed witness discovery", () => {
+    const f = createDispatchFixture({
+      candidateOwned: true,
+      advanceMainBeforeAdmission: 3,
+      advanceMainAfterAdmission: true,
+      dispatchReturnsRunUrl: false,
+      parentRunStates: [
+        ...Array.from({ length: 6 }, () => ({ conclusion: null, status: "queued" })),
+        { conclusion: "success", status: "completed" },
+      ],
+      witnessMissingReads: 6,
+    });
     expect(f.targetSha).not.toBe(f.workflowSha);
     expect(() =>
       runGit(f.checkout, ["merge-base", "--is-ancestor", f.targetSha, "origin/main"]),
@@ -106,6 +97,12 @@ describe("candidate-owned full release dispatch entry point", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(dispatches(f)).toEqual([P, Q]);
     const retained = f.record();
+    const advancedP = runGit(f.origin, ["rev-parse", "refs/heads/main^"]);
+    expect(advancedP).not.toBe(f.workflowSha);
+    expect(result.stdout.match(/Admission P advanced with main/gu)).toHaveLength(3);
+    expect(result.stderr).toContain("dispatch=pending-witness: run 123 (queued)");
+    expect(f.readWaits()).toEqual([30_000, 60_000, 120_000, 120_000, 120_000, 120_000]);
+    expect(retained).toMatchObject({ phase: "observed", run: { id: 123, attempt: 1 } });
     const admitted = JSON.parse(readFileSync(f.admissionReceiptPath, "utf8"));
     const sent = f.readPayload().body;
     const envelope = JSON.parse(
@@ -113,7 +110,7 @@ describe("candidate-owned full release dispatch entry point", () => {
     );
     expect(sent.ref).toBe(retained.request.workflowRef);
     expect(retained.request).toMatchObject({ workflowSha: f.targetSha, targetSha: f.targetSha });
-    expect(retained.admission.workflowSha).toBe(f.workflowSha);
+    expect(retained.admission.workflowSha).toBe(advancedP);
     expect(envelope.trustedWorkflow).toEqual({
       ref: sent.ref,
       fullRef: "refs/heads/" + sent.ref,
@@ -122,7 +119,7 @@ describe("candidate-owned full release dispatch entry point", () => {
     expect(envelope.qualificationAdmission).toMatchObject({
       runId: 321,
       runAttempt: 1,
-      workflowSha: f.workflowSha,
+      workflowSha: advancedP,
       workflowFullRef: "refs/heads/main",
       artifactId: 9002,
     });
@@ -144,30 +141,6 @@ describe("candidate-owned full release dispatch entry point", () => {
     expect(() =>
       runGit(f.origin, ["merge-base", "--is-ancestor", f.targetSha, "refs/heads/main"]),
     ).toThrow();
-  });
-
-  it("waits for the candidate witness without redispatch or baseline resolution", () => {
-    const queued = { conclusion: null, status: "queued" };
-    const f = createDispatchFixture({
-      candidateOwned: true,
-      dispatchReturnsRunUrl: false,
-      parentRunStates: [
-        ...Array.from({ length: 6 }, () => queued),
-        { conclusion: "success", status: "completed" },
-      ],
-      witnessMissingReads: 6,
-    });
-    const result = f.run();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toContain("dispatch=pending-witness: run 123 (queued)");
-    expect(f.readWaits()).toEqual([30_000, 60_000, 120_000, 120_000, 120_000, 120_000]);
-    expect(dispatches(f)).toEqual([P, Q]);
-    expect(f.readCalls(f.npmCallsPath)).toEqual([npmVersionsArgs]);
-    expect(f.record()).toMatchObject({
-      phase: "observed",
-      request: { targetSha: f.targetSha, workflowSha: f.targetSha },
-      run: { id: 123, attempt: 1 },
-    });
   });
 
   it("reconciles an accepted uncertain admission response without another POST", () => {

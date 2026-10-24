@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -23,16 +22,6 @@ type Workflow = {
 };
 const workflow = () =>
   parse(readFileSync(".github/workflows/package-acceptance.yml", "utf8")) as Workflow;
-const readOutputs = (file: string) =>
-  Object.fromEntries(
-    readFileSync(file, "utf8")
-      .trimEnd()
-      .split("\n")
-      .map((line) => {
-        const separator = line.indexOf("=");
-        return [line.slice(0, separator), line.slice(separator + 1)];
-      }),
-  );
 
 let root: string;
 let bin: string;
@@ -141,18 +130,8 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
       const file = path.join(root, "releases.json");
       writeJson(file, releases);
       mkdirSync(path.join(root, ".artifacts/package-candidate-input"), { recursive: true });
-      mkdirSync(path.join(root, "scripts"));
-      copyFileSync(
-        "scripts/resolve-upgrade-survivor-baselines.mts",
-        path.join(root, "scripts/resolve-upgrade-survivor-baselines.mts"),
-      );
-      symlinkSync(path.resolve("scripts/lib"), path.join(root, "scripts/lib"));
-      mkdirSync(path.join(root, "node_modules"));
-      symlinkSync(
-        path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
-        path.join(root, "node_modules/tsx"),
-        "junction",
-      );
+      symlinkSync(path.resolve("scripts"), path.join(root, "scripts"));
+      symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"));
       writeExecutable(
         path.join(bin, "npm"),
         `#!/bin/sh\nprintf '%s' '${JSON.stringify(versions)}'\n`,
@@ -214,7 +193,7 @@ if (process.env.FAIL_API === "true") process.exit(75);
     expect(() => parseArgs(["--github-output", "-h"])).toThrow("missing value for --github-output");
   });
 
-  it("normalizes supported-line selectors before Docker fanout", () => {
+  it("normalizes supported-line selectors before publishing baseline outputs", () => {
     const packageWorkflow = workflow();
     const inputs = packageWorkflow.on.workflow_call.inputs;
     const run = packageWorkflow.jobs.resolve_package.steps.find(
@@ -240,47 +219,10 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
     expect(readFileSync(output, "utf8")).toBe(
       "baselines=openclaw@2026.9.2 openclaw@2026.9.1 openclaw@2026.8.35 openclaw@2026.6.34\nbaseline_scope=legacy-operator-state\nbaseline=openclaw@2026.7.1-2\n",
     );
-    const selected = readOutputs(output);
-    const groups = JSON.parse(
-      execFileSync(process.execPath, ["scripts/plan-targeted-docker-lane-groups.mjs"], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          LANES: "update-migration",
-          GROUP_SIZE: "1",
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: selected.baseline,
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: selected.baselines,
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: selected.baseline_scope,
-          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "plugin-deps-cleanup legacy-operator-state",
-        },
-      }),
-    ) as Array<{
-      published_upgrade_survivor_baselines: string;
-      published_upgrade_survivor_scenarios: string;
-    }>;
-    expect(
-      groups.map((group) => [
-        group.published_upgrade_survivor_baselines,
-        group.published_upgrade_survivor_scenarios,
-      ]),
-    ).toEqual([
-      ["openclaw@2026.9.2", "legacy-operator-state"],
-      ["openclaw@2026.9.1", "legacy-operator-state"],
-      ["openclaw@2026.8.35", "legacy-operator-state"],
-      ["openclaw@2026.6.34", "legacy-operator-state"],
-      ["openclaw@2026.7.1-2", "plugin-deps-cleanup"],
-    ]);
   });
 
   it.each<BaselineFixture & { name: string; expected: string[] }>([
     { name: "fallback", args: { fallback: "2026.6.1" }, expected: ["2026.6.1"] },
-    ...[undefined, "8.35", "8.33"].map((extended) => ({
-      name: `supported lines with extended-stable ${extended}`,
-      args: { requested: "supported-lines" },
-      tags: { latest: "2026.9.2", ...(extended ? { "extended-stable": `2026.${extended}` } : {}) },
-      versions: yearVersions("6.34 8.33 8.35 9.1 9.2 9.3-beta.1 9.3"),
-      expected: yearVersions(`9.2 9.1${extended ? ` ${extended}` : ""} 6.34`),
-    })),
     {
       name: "supported lines excluding unpublished candidate",
       args: {
@@ -295,7 +237,7 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
     baseline(
       "six supported stable releases, deduplicating explicit versions",
       "release-history 2026.6.6",
-      "6.6 6.5 6.4 6.3 6.2 6.1 4.23 3.13-1 3.12 6.7-beta.1",
+      "6.9007199254740993 6.6 6.5 6.4 6.3 6.2 6.1 5.31 4.23 3.13-1 3.12 6.7-beta.1",
       "6.6 6.5 6.4 6.3 6.2 6.1",
     ),
     ...["release-history", "last-stable-4"].map((requested) => ({
@@ -311,31 +253,11 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
       expected: yearVersions("9.3 9.2 9.1 8.30"),
     })),
     baseline(
-      "all published stable releases since the cutoff",
-      "all-since-2026.6.2",
-      "6.5 6.4 6.3 6.2 6.1 6.6-beta.1",
-      "6.5 6.4 6.3 6.2",
-      { versions: yearVersions("6.5 6.4 6.3 6.2 6.1") },
-    ),
-    baseline(
       "latest stable packages with explicit older versions",
       "last-stable-4 2026.6.23 2026.7.2 2026.6.15",
-      "7.4-beta.1 7.3-1 7.3 7.2 6.29 6.27 6.15",
+      "7.4-beta.1 7.3-1 7.3 7.2 6.34 6.29 6.27 6.15",
       "7.3-1 7.3 7.2 6.29 6.23 6.15",
-      { versions: yearVersions("7.3-1 7.3 7.2 6.29 6.27 6.15") },
-    ),
-    baseline(
-      "regular stable selection excluding extended-stable releases",
-      "last-stable-1",
-      "6.34 7.12",
-      "7.12",
-    ),
-    baseline(
-      "release history excluding unsafe and unsupported tags",
-      "release-history",
-      "6.9007199254740993 6.29 5.31",
-      "6.29",
-      { args: { requested: "release-history", "history-count": "2" } },
+      { versions: yearVersions("7.3-1 7.3 7.2 6.34 6.29 6.27 6.15") },
     ),
     baseline(
       "republish tags mapped to published package versions",

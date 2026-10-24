@@ -29,12 +29,12 @@ import {
 import { withinTest } from "../helpers/promise.js";
 import { withRuntimePreload } from "../helpers/runtime-preload.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureReadyBeforeSettlement } from "./run-process.test-support.js";
 
-const pendingChildCompletions = new Set<Promise<unknown>>();
+const pendingChildren = new Set<Promise<unknown>>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    // Timed-out bodies can still be joining installers and deleting worktrees in finally.
-    await Promise.allSettled(pendingChildCompletions);
+    await Promise.allSettled(pendingChildren);
     cleanup();
   }),
 );
@@ -136,10 +136,8 @@ function startCli(repo: string, base: string, env: NodeJS.ProcessEnv) {
       state.closed = true;
       resolveClose(code);
     });
-  }).finally(() => {
-    pendingChildCompletions.delete(close);
-  });
-  pendingChildCompletions.add(close);
+  }).finally(() => pendingChildren.delete(close));
+  pendingChildren.add(close);
   return Object.assign(state, { child, close });
 }
 
@@ -161,22 +159,6 @@ fixtureReceiptSocket.end();
 `,
   );
   return `'${process.execPath.replace(/'/gu, `'\\''`)}' '${receiptPath.replace(/'/gu, `'\\''`)}'`;
-}
-
-async function installBeforeSettlement(
-  marker: string,
-  close: PromiseLike<unknown>,
-  label = "Plugin SDK API diff child",
-): Promise<void> {
-  // The fixture writes its marker before reporting; socket delivery may follow CLI close.
-  await Promise.race([
-    receipts.waitFor(marker, "ready"),
-    Promise.resolve(close).then(() => {
-      if (!existsSync(marker)) {
-        throw new Error(`timed out waiting for ${label}`);
-      }
-    }),
-  ]);
 }
 
 it("finishes every revision install before starting declaration rendering", async ({ signal }) => {
@@ -201,7 +183,6 @@ if mkdir "$PNPM_MARKER" 2>/dev/null; then
   exit 0
 fi
 : > "$PNPM_BLOCKED"
-${writeInstallReceipt(binDir)} "$PNPM_BLOCKED"
 while [ ! -e "$PNPM_RELEASE" ]; do sleep 0.05; done
 `,
   );
@@ -251,10 +232,6 @@ if (process.argv.includes("--render-root")) {
 
   let exitCode: number | null = null;
   try {
-    await withinTest(
-      installBeforeSettlement(blockedMarker, close, "second revision install"),
-      signal,
-    );
     exitCode = await withinTest(close, signal);
   } finally {
     writeFileSync(releaseMarker, "release\n");
@@ -360,7 +337,7 @@ it("interrupts a running child and removes its registered worktree", async ({ si
   const { child, close } = tracked;
 
   try {
-    await withinTest(installBeforeSettlement(pnpmMarker, close), signal);
+    await withinTest(fixtureReadyBeforeSettlement(receipts, pnpmMarker, close), signal);
     expect(tracked.closed, tracked.stderr).toBe(false);
     const revisionRoot = git(repo, ["worktree", "list", "--porcelain", "-z"])
       .split("\0")
