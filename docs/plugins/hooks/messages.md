@@ -104,6 +104,11 @@ first-class fields before reading legacy metadata.
 `before_dispatch` receives the assigned inbound `messageId` in both its event
 and context.
 
+When a turn originates from an authenticated Control UI connection, its
+`before_dispatch` context also exposes `connId`. This is a correlation hint for
+one browser connection, not an authorization or delivery capability. The field
+is omitted for channel-originated turns.
+
 Prefer typed `threadId` and `replyToId` fields before using channel-specific
 metadata.
 
