@@ -4400,6 +4400,7 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt","kind":"ui-call","surface":"android","id":"native.android.75bfd90ef5f29c93","source":"No preview available"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt","kind":"ui-call","surface":"android","id":"native.android.a9d3eac603240e6a","source":"Open image preview"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt","kind":"ui-call","surface":"android","id":"native.android.84244f73da2b8e3b","source":"OpenClaw"},
+    {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt","kind":"ui-call","surface":"android","id":"native.android.4947e11ac1ebf9a6","source":"Photo"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt","kind":"ui-call","surface":"android","id":"native.android.84c148a01a8ef0cc","source":"Preview · $domain"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt","kind":"ui-call","surface":"android","id":"native.android.06ffbe86a1215adb","source":"Queued — sends when reconnected"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt","kind":"ui-call","surface":"android","id":"native.android.f48f5f2e61a7282d","source":"Retry"},

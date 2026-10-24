@@ -21,6 +21,7 @@ import ai.openclaw.app.chat.ChatFastMode
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatMessageCost
+import ai.openclaw.app.chat.ChatOutboxAttachment
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -189,6 +190,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -233,12 +235,14 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
@@ -297,6 +301,7 @@ private enum class ChatComposerPickerPage { Models, Permissions }
 internal object ChatUserMessageDisclosurePolicy {
   const val collapsedLineLimit = 12
   const val collapsedCharacterLimit = 700
+  const val viewportFraction = 0.6f
 
   fun collapsedPreview(text: String): String? {
     var end = minOf(text.length, collapsedCharacterLimit)
@@ -315,6 +320,47 @@ internal object ChatUserMessageDisclosurePolicy {
     if (end == text.length) return null
     return text.substring(0, end).trimEnd() + "…"
   }
+
+  fun viewportCollapsedPreview(
+    text: String,
+    viewportHeightPx: Int?,
+    maxWidthPx: Int,
+    measurer: TextMeasurer,
+    style: TextStyle,
+  ): String? {
+    val fixedPreview = collapsedPreview(text)
+    if (viewportHeightPx == null || viewportHeightPx <= 0 || maxWidthPx <= 0 || maxWidthPx == Constraints.Infinity) {
+      return fixedPreview
+    }
+    val candidate = fixedPreview?.removeSuffix("…") ?: text
+    val layout = measurer.measure(candidate, style = style, constraints = Constraints(maxWidth = maxWidthPx))
+    val heightLimit =
+      maxOf((viewportHeightPx * viewportFraction).toInt(), ceil(layout.getLineBottom(0)).toInt())
+    if (layout.size.height <= heightLimit) return fixedPreview
+
+    val lastLine = (0 until layout.lineCount).last { layout.getLineBottom(it) <= heightLimit.toFloat() }
+    val lastVisibleEnd = layout.getLineEnd(lastLine, visibleEnd = true)
+
+    fun preview(end: Int): String {
+      val safeEnd =
+        if (end in 1 until candidate.length && candidate[end - 1].isHighSurrogate() && candidate[end].isLowSurrogate()) end - 1 else end
+      return candidate.substring(0, safeEnd).trimEnd() + "…"
+    }
+
+    // The ellipsis itself can wrap onto another line. Fit the rendered preview,
+    // rather than only the unsuffixed source, inside the reader's height budget.
+    var low = 1
+    var high = lastVisibleEnd.coerceAtLeast(1)
+    while (low < high) {
+      val middle = (low + high + 1) / 2
+      if (measurer.measure(preview(middle), style = style, constraints = Constraints(maxWidth = maxWidthPx)).size.height <= heightLimit) {
+        low = middle
+      } else {
+        high = middle - 1
+      }
+    }
+    return preview(low)
+  }
 }
 
 internal fun shouldUseUserMessageDisclosure(
@@ -324,7 +370,7 @@ internal fun shouldUseUserMessageDisclosure(
   isUser &&
     content.isNotEmpty() &&
     content.all { it.type == "text" } &&
-    ChatUserMessageDisclosurePolicy.collapsedPreview(chatMessagePlainText(content)) != null
+    chatMessagePlainText(content).isNotBlank()
 
 private class ChatBranchOpening(
   val session: ChatModelPickerSession,
@@ -1047,6 +1093,7 @@ internal fun ChatScreen(
     loadSourceFavicon = viewModel::loadChatSourceFavicon,
     loadImageArtifact = viewModel::loadChatImageArtifact,
     loadMediaArtifact = viewModel::loadChatMediaArtifact,
+    loadOutboxImagePreview = viewModel::loadChatOutboxImagePreview,
     modifier = Modifier.fillMaxSize().imePadding(),
     tabletopPanes = tabletopPanes,
     features = features,
@@ -1765,6 +1812,7 @@ private fun ChatMessageList(
   loadSourceFavicon: suspend (GatewaySourcePreviewConfig, String) -> GatewayLoadedImage?,
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
   loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
+  loadOutboxImagePreview: suspend (ChatOutboxAttachment) -> ByteArray?,
   modifier: Modifier = Modifier,
   tabletopPanes: TabletopPaneBounds?,
   features: List<DisplayFeature>,
@@ -1914,6 +1962,7 @@ private fun ChatMessageList(
                     is ChatTimelineItem.OutboxCommand -> {
                       ChatOutboxBubble(
                         item = item.item,
+                        loadImagePreview = loadOutboxImagePreview,
                         onRetry = { onRetryOutbox(item.item.id) },
                         onDelete = { onDeleteOutbox(item.item.id) },
                       )
@@ -1922,6 +1971,7 @@ private fun ChatMessageList(
                     is ChatTimelineItem.RecoveryOutboxCommand -> {
                       ChatOutboxBubble(
                         item = item.item,
+                        loadImagePreview = loadOutboxImagePreview,
                         retryEnabled = false,
                         onRetry = { onRetryOutbox(item.item.id) },
                         onDelete = { onDeleteOutbox(item.item.id) },
@@ -2219,7 +2269,7 @@ internal fun ChatBubble(
       peerSenderLabel != null -> peerSenderLabel
       else -> null
     }
-  val displayableContent =
+  val visibleContent =
     content.filter { part ->
       when (part.type) {
         "text" -> {
@@ -2239,9 +2289,19 @@ internal fun ChatBubble(
         }
       }
     }
-  if (displayableContent.isEmpty()) return
+  // User turns keep one shape across composer, sent and transcribed states: attachments,
+  // the author's text without the "See attached." placeholder, then the voice transcript.
+  val attachmentMessage =
+    remember(visibleContent, isUser) {
+      if (isUser) splitChatAttachmentMessage(visibleContent) else ChatAttachmentMessageParts(visibleContent, null)
+    }
+  val displayableContent = attachmentMessage.content
+  val transcript = attachmentMessage.transcript
+  if (displayableContent.isEmpty() && transcript == null) return
 
   val messageText = chatMessagePlainText(displayableContent)
+  // Copy, Select text, Share and Reply act on what the bubble shows, transcript included.
+  val actionText = listOfNotNull(messageText.takeIf(String::isNotBlank), transcript).joinToString("\n\n")
   val reactionMessageId = entryId?.takeIf { !live && (isUser || normalizedRole == "assistant") }
   val canReact = reactionMessageId != null && onReact != null
   var reactionPickerOpen by remember(reactionMessageId, canReact) { mutableStateOf(false) }
@@ -2263,7 +2323,7 @@ internal fun ChatBubble(
     separateContent = true,
     messageActions = { modifier, body ->
       ChatMessageActionHost(
-        text = messageText,
+        text = actionText,
         onReply = onReplyMessage,
         showSessionActions = isUser && entryId != null && sessionActionsEnabled,
         onRewind = entryId?.let { value -> { onRewindMessage(value) } },
@@ -2294,6 +2354,7 @@ internal fun ChatBubble(
       }
     val groups = remember(orderedContent) { chatMessageContentGroups(orderedContent) }
     var imageOffset = 0
+    var transcriptShown = false
     caption?.let {
       Text(it, modifier = Modifier.padding(horizontal = CHAT_MESSAGE_TEXT_INSET_DP.dp), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
     }
@@ -2307,6 +2368,7 @@ internal fun ChatBubble(
           firstImageIndex = groupImageOffset,
           imagePage = currentImagePage,
           resolverReady = inlineWidgetResolverReady,
+          inboundMediaBasePath = sourcePreviewConfig?.basePath,
           loadImage = loadImageArtifact,
           loadMedia = loadMediaArtifact,
         )
@@ -2359,31 +2421,28 @@ internal fun ChatBubble(
               }
             }
           }
+          if (transcript != null && !transcriptShown) {
+            transcriptShown = true
+            ChatVoiceTranscriptBlock(transcript = transcript, stateKey = messageId)
+          }
         }
       }
     }
-    if (imageCount > CHAT_MESSAGE_IMAGE_WINDOW) {
-      val imageNavigation = rememberChatReaderAction()
-      FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        TextButton(onClick = {
-          imageNavigation.pause()
-          imagePage = currentImagePage - 1
-        }, enabled = currentImagePage > 0) { Text(nativeString("Previous images")) }
-        TextButton(onClick = {
-          imageNavigation.pause()
-          imagePage = currentImagePage + 1
-        }, enabled = currentImagePage < lastImagePage) { Text(nativeString("Next images")) }
-        Text(
-          nativeString("Images \$first–\$last of \$count", currentImagePage * CHAT_MESSAGE_IMAGE_WINDOW + 1, minOf((currentImagePage + 1) * CHAT_MESSAGE_IMAGE_WINDOW, imageCount), imageCount),
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textMuted,
-        )
+    if (transcript != null && !transcriptShown) {
+      ChatMessageTextSurface(isUser) {
+        ChatVoiceTranscriptBlock(transcript = transcript, stateKey = messageId)
       }
     }
+    ChatImagePageControls(
+      imageCount = imageCount,
+      currentPage = currentImagePage,
+      lastPage = lastImagePage,
+      onPageChange = { imagePage = it },
+    )
     Column(Modifier.padding(horizontal = CHAT_MESSAGE_TEXT_INSET_DP.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
       if (messageId != null) {
         ChatSourcePreviews(sourcePreviews, sourcePreviewConfig, loadSourceFavicon)
-        ChatMessageLinkPreview(messageId = messageId, role = normalizedRole, content = displayableContent, excludedUrls = sourcePreviews.flatMap { it.aliases }.toSet())
+        ChatMessageLinkPreview(messageId = messageId, role = normalizedRole, content = attachmentMessage.linkPreviewContent, excludedUrls = sourcePreviews.flatMap { it.aliases }.toSet())
       }
       disclosure()
       messageSpeech?.let { speech ->
@@ -2458,6 +2517,32 @@ private fun FullChatSpeechIndicator(
   }
 }
 
+/** Transcript of a voice note: a light quote under the voice row, collapsed only when tall. */
+@Composable
+internal fun ChatVoiceTranscriptBlock(
+  transcript: String,
+  stateKey: String?,
+) {
+  var expanded by rememberSaveable(stateKey, transcript) { mutableStateOf(false) }
+  val barColor = ClawTheme.colors.textMuted.copy(alpha = 0.35f)
+  Column(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .testTag("chat-voice-transcript")
+        .drawBehind { drawRect(barColor, size = Size(2.dp.toPx(), size.height)) }
+        .padding(start = 10.dp),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    ChatUserMessageText(
+      textParts = listOf(transcript),
+      plainText = transcript,
+      expanded = expanded,
+      onExpandedChange = { expanded = it },
+    )
+  }
+}
+
 @Composable
 private fun ChatUserMessageText(
   textParts: List<String>,
@@ -2465,57 +2550,76 @@ private fun ChatUserMessageText(
   expanded: Boolean,
   onExpandedChange: (Boolean) -> Unit,
 ) {
-  val preview = ChatUserMessageDisclosurePolicy.collapsedPreview(plainText)
+  val navigation = LocalChatReaderNavigation.current
+  val viewportHeightPx by remember(navigation) {
+    derivedStateOf { navigation?.viewportHeight(Int.MAX_VALUE)?.takeIf { it in 1 until Int.MAX_VALUE } }
+  }
+  val style = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal)
+  val measurer = rememberTextMeasurer()
   val action = key(plainText) { rememberChatReaderAction() }
   val requester = remember(action) { BringIntoViewRequester() }
   var pendingPlacement by remember(action) { mutableStateOf<CompletableDeferred<IntSize>?>(null) }
-  if (preview != null && !expanded) {
-    val anchor = rememberChatReaderAnchor(plainText)
-    Text(
-      text = preview,
-      modifier = anchor?.modifier ?: Modifier,
-      onTextLayout = anchor?.onTextLayout,
-      style = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal),
-      color = ClawTheme.colors.text,
-    )
-  } else {
-    Column(
-      modifier =
-        Modifier.bringIntoViewRequester(requester).onGloballyPositioned { coordinates ->
-          pendingPlacement?.let { pending ->
-            pendingPlacement = null
-            pending.complete(coordinates.size)
-          }
-        },
-      verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-      textParts.forEach { text ->
-        ChatMarkdown(
-          text = text,
-          textColor = ClawTheme.colors.text,
-          isStreaming = false,
-          bodyStyle = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal),
+  BoxWithConstraints {
+    val preview =
+      remember(plainText, viewportHeightPx, constraints.maxWidth, measurer, style) {
+        ChatUserMessageDisclosurePolicy.viewportCollapsedPreview(
+          text = plainText,
+          viewportHeightPx = viewportHeightPx,
+          maxWidthPx = constraints.maxWidth,
+          measurer = measurer,
+          style = style,
         )
       }
-    }
-  }
-
-  if (preview != null) {
-    val toggleLabel = if (expanded) nativeString("Close") else nativeString("View all")
-    ChatMessageDisclosureButton(toggleLabel) {
-      // Repeated actions from one render keep the same open/close intent.
-      onExpandedChange(!expanded)
-      if (expanded) {
-        pendingPlacement = null
-        action.pause()
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+      if (preview != null && !expanded) {
+        val anchor = rememberChatReaderAnchor(plainText)
+        Text(
+          text = preview,
+          modifier = anchor?.modifier ?: Modifier,
+          onTextLayout = anchor?.onTextLayout,
+          style = style,
+          color = ClawTheme.colors.text,
+        )
       } else {
-        // Only this tap requests a reveal. Restored expansion and ordinary re-layout
-        // keep their reading position; placement, not a guessed frame delay, admits it.
-        val placement = CompletableDeferred<IntSize>()
-        pendingPlacement = placement
-        action.launch {
-          val size = placement.await()
-          requester.bringIntoView(Rect(0f, 0f, size.width.toFloat(), action.viewportHeight(size.height).toFloat()))
+        Column(
+          modifier =
+            Modifier.bringIntoViewRequester(requester).onGloballyPositioned { coordinates ->
+              pendingPlacement?.let { pending ->
+                pendingPlacement = null
+                pending.complete(coordinates.size)
+              }
+            },
+          verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+          textParts.forEach { text ->
+            ChatMarkdown(
+              text = text,
+              textColor = ClawTheme.colors.text,
+              isStreaming = false,
+              bodyStyle = style,
+            )
+          }
+        }
+      }
+
+      if (preview != null) {
+        val toggleLabel = if (expanded) nativeString("Close") else nativeString("View all")
+        ChatMessageDisclosureButton(toggleLabel) {
+          // Repeated actions from one render keep the same open/close intent.
+          onExpandedChange(!expanded)
+          if (expanded) {
+            pendingPlacement = null
+            action.pause()
+          } else {
+            // Only this tap requests a reveal. Restored expansion and ordinary re-layout
+            // keep their reading position; placement, not a guessed frame delay, admits it.
+            val placement = CompletableDeferred<IntSize>()
+            pendingPlacement = placement
+            action.launch {
+              val size = placement.await()
+              requester.bringIntoView(Rect(0f, 0f, size.width.toFloat(), action.viewportHeight(size.height).toFloat()))
+            }
+          }
         }
       }
     }
@@ -4760,4 +4864,31 @@ internal fun chatThinkingOptionLabel(
       rawLabel
     }
   return localizedUppercase(localizedLabel.take(1), languageTag) + localizedLabel.drop(1)
+}
+
+/** Previous/next controls for one message's image window; shown only past a single window. */
+@Composable
+internal fun ChatImagePageControls(
+  imageCount: Int,
+  currentPage: Int,
+  lastPage: Int,
+  onPageChange: (Int) -> Unit,
+) {
+  if (imageCount <= CHAT_MESSAGE_IMAGE_WINDOW) return
+  val imageNavigation = rememberChatReaderAction()
+  FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    TextButton(onClick = {
+      imageNavigation.pause()
+      onPageChange(currentPage - 1)
+    }, enabled = currentPage > 0) { Text(nativeString("Previous images")) }
+    TextButton(onClick = {
+      imageNavigation.pause()
+      onPageChange(currentPage + 1)
+    }, enabled = currentPage < lastPage) { Text(nativeString("Next images")) }
+    Text(
+      nativeString("Images \$first–\$last of \$count", currentPage * CHAT_MESSAGE_IMAGE_WINDOW + 1, minOf((currentPage + 1) * CHAT_MESSAGE_IMAGE_WINDOW, imageCount), imageCount),
+      style = ClawTheme.type.caption,
+      color = ClawTheme.colors.textMuted,
+    )
+  }
 }

@@ -774,14 +774,20 @@ class ChatReaderScrollOwnershipLayoutTest {
     val first = layout.visibleItemsInfo.single { it.index == reader.listState.firstVisibleItemIndex }
     assertEquals("stream", first.key)
     composeRule.onNodeWithText("OpenClaw · Live", useUnmergedTree = true).assertIsDisplayed()
-    composeRule.onNode(hasText("S001 Synthetic", substring = true), useUnmergedTree = true).assertIsNotDisplayed()
+    if (!collapsedUserPrompt) {
+      // A viewport-sized user preview changes the row geometry in this variant.
+      composeRule.onNode(hasText("S001 Synthetic", substring = true), useUnmergedTree = true).assertIsNotDisplayed()
+    }
     assertTrue("The real timeline keeps Thinking between stream and older reply", layout.visibleItemsInfo.any { it.key == "thinking" })
     val olderKey = if (collapsedUserPrompt) "message:old user" else "message:assistant 59"
     val textMarker = if (collapsedUserPrompt) "U001" else "O001 Earlier"
     val older = layout.visibleItemsInfo.single { it.key == olderKey }
     val before = renderedReaderText(textMarker)
     if (collapsedUserPrompt) {
-      assertEquals("The actual user renderer must remain collapsed", ChatUserMessageDisclosurePolicy.collapsedPreview(collapsedPromptText()), before.second.layoutInput.text.text)
+      val previewText = before.second.layoutInput.text.text
+      assertTrue("The actual user renderer must remain collapsed", previewText.endsWith("…"))
+      assertTrue("The viewport preview must retain the beginning of the user prompt", previewText.startsWith("U001"))
+      assertTrue("The preview must remain shorter than the full prompt", previewText.length < collapsedPromptText().length)
       assertEquals("Only the original user message and the two transient rows belong to this timeline", 3, layout.totalItemsCount)
     }
     val marker =
