@@ -1,12 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer, type ServerResponse } from "node:http";
 import { Readable, Writable } from "node:stream";
-import {
-  ClientSideConnection,
-  PROTOCOL_VERSION,
-  ndJsonStream,
-  type SessionNotification,
-} from "@agentclientprotocol/sdk";
+import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream } from "@agentclientprotocol/sdk";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
@@ -35,12 +30,8 @@ function writeToolCall(response: ServerResponse): void {
     name: "session_status",
     arguments: JSON.stringify({ changesSince: "not-a-number" }),
   };
-  const events = [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...call, arguments: "" },
-    },
+  writeOpenAiResponsesSse(response, [
+    { type: "response.output_item.added", output_index: 0, item: { ...call, arguments: "" } },
     {
       type: "response.function_call_arguments.delta",
       item_id: call.id,
@@ -57,30 +48,7 @@ function writeToolCall(response: ServerResponse): void {
         usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30 },
       },
     },
-  ];
-  writeOpenAiResponsesSse(response, events);
-}
-
-async function connectOperator(instance: OpenClawTestInstance, signal: AbortSignal) {
-  return acquireGatewayTestClient(
-    {
-      url: instance.url,
-      token: instance.gatewayToken,
-      clientName: "cli",
-      mode: "cli",
-      role: "operator",
-      scopes: ["operator.write", "operator.admin"],
-      deviceIdentity: null,
-      env: instance.env,
-      sharedStateMode: "read-only",
-    },
-    {
-      timeoutMs: 120_000,
-      signal,
-      timeoutMessage: "operator connection timed out",
-      closeMessage: "operator connection closed",
-    },
-  );
+  ]);
 }
 
 async function stopChild(
@@ -114,7 +82,6 @@ it(
     let operator: GatewayClient | undefined;
     let acpProcess: ChildProcessWithoutNullStreams | undefined;
     let acpClosed = Promise.resolve();
-    const stalledResponses = new Set<ServerResponse>();
     let providerRequestCount = 0;
     let failedToolUpdate = false;
     const provider = createServer((request, response) => {
@@ -131,8 +98,6 @@ it(
           throw new Error("session_status tool missing from provider request");
         }
         if (providerRequestCount > 1) {
-          stalledResponses.add(response);
-          request.once("close", () => stalledResponses.delete(response));
           return;
         }
         writeToolCall(response);
@@ -176,7 +141,25 @@ it(
         },
       });
       await instance.startGateway();
-      operator = await connectOperator(instance, signal);
+      operator = await acquireGatewayTestClient(
+        {
+          url: instance.url,
+          token: instance.gatewayToken,
+          clientName: "cli",
+          mode: "cli",
+          role: "operator",
+          scopes: ["operator.write", "operator.admin"],
+          deviceIdentity: null,
+          env: instance.env,
+          sharedStateMode: "read-only",
+        },
+        {
+          timeoutMs: 120_000,
+          signal,
+          timeoutMessage: "operator connection timed out",
+          closeMessage: "operator connection closed",
+        },
+      );
 
       const entrypoint = await instance.entrypoint();
       const child = spawn(
@@ -194,8 +177,7 @@ it(
       const stream = ndJsonStream(Writable.toWeb(acpProcess.stdin), output);
       const client = new ClientSideConnection(
         () => ({
-          sessionUpdate: async (notification: SessionNotification) => {
-            const update = notification.update;
+          sessionUpdate: async ({ update }) => {
             if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
               timeline.push(update.content.text);
             }
@@ -207,9 +189,7 @@ it(
         }),
         stream,
       );
-      await client.initialize({
-        protocolVersion: PROTOCOL_VERSION,
-      });
+      await client.initialize({ protocolVersion: PROTOCOL_VERSION });
       const sessionKey = `agent:main:acp-abort-cause-${process.pid}`;
       const session = await client.newSession({
         cwd: process.cwd(),
@@ -236,9 +216,7 @@ it(
       expect(timeline).toContain(`[OpenClaw interruption] ${ABORT_CAUSE}`);
       expect(timeline.at(-1)).toBe("cancelled");
     } finally {
-      for (const response of stalledResponses) {
-        response.destroy();
-      }
+      provider.closeAllConnections();
       await stopChild(acpProcess, acpClosed, signal);
       await operator?.stopAndWait({ timeoutMs: 1_000 }).catch(() => operator?.stop());
       await instance?.cleanup();
