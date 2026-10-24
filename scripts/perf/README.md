@@ -4314,3 +4314,37 @@ at least four identical-source pairs before interpreting adverse GC/promotion/ma
 pause signals; noisy controls make the protocol inconclusive. Keep all valid
 samples and report both absolute and relative deltas under the campaign's sample
 count and maximum-pause rules.
+
+## Codex catalog file reconciliation
+
+Measure the real reconciliation owner and rollout scanner over 5,000 prepared,
+unchanged synthetic rollout files. Prepare each side's directory before taking
+measurement locks, then run fresh processes against separate directories:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/codex-catalog-reconcile-measure.ts \
+  --state-dir /path/to/side-a --prepare
+node --import ./scripts/tsx.mjs scripts/perf/codex-catalog-reconcile-measure.ts \
+  --state-dir /path/to/side-a --operations 5000 --warmup 100 \
+  --start-at <shared-future-epoch-ms> --output /path/to/result.json
+```
+
+For baseline comparisons, save the unchanged `session-catalog-index-files.ts`
+module beside the candidate module and pass its path with `--owner`; imports then
+resolve to the same source dependencies. Counterbalance launch order, swap CPU
+placements, and use identical work counts and a common post-warmup start time.
+The script fails if setup misses that time and records actual start/process age.
+No collection is forced in untraced timing runs. Reports include verified rows,
+reconciliation latency, CPU, per-kind GC counts/time/tails/maxima, and event-loop
+sample counts and tails. Apply the campaign's matched-control and paired-delta
+rules; this owner measurement does not include Gateway or native App Server
+latency, and it leaves the scanner's normal watcher/cache behavior enabled.
+
+Run promotion separately with `--expose-gc --trace-gc-nvp --gc-log /path/to/run.log`
+and redirect stdout to that log; the identification collection precedes warmup.
+Traced timing is attribution only. `--allocations` enables a separate collected
+object sampling pass and writes `allocation.heapprofile`; sampler teardown is
+outside GC capture. `--count-path-work` is another separate attribution mode:
+it counts `path.relative` calls from the sessions root after scanner warmup.
+These are the coverage checks for the unchanged-file workload; do not include
+this instrumentation in timing comparisons.
