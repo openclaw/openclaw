@@ -170,6 +170,8 @@ export function fingerprintMessage(
   };
   if (immutableMessage) {
     messageFingerprints.set(message, fingerprint);
+    // Content records may still be reused by other, mutable envelopes.
+    recordFingerprints.delete(message);
   }
   return fingerprint;
 }
