@@ -15,16 +15,14 @@ import {
 import { Icon } from "./solid/icon.tsx";
 import type { MenuItemBindings } from "./solid/menu.tsx";
 
-export type SidebarBuildChipProps = {
+export function SidebarBuildChip(props: {
   basePath: string;
   gatewayVersion: string | null;
   onNavigate?: (routeId: "about") => void;
   variant: "identity" | "settings";
   menuAttributes?: MenuItemBindings;
   copyButtonRef?: (element: HTMLButtonElement) => void;
-};
-
-export function SidebarBuildChip(props: SidebarBuildChipProps) {
+}) {
   const text = createMemo(() =>
     props.variant === "settings"
       ? formatSettingsBuildLabel(CONTROL_UI_BUILD_INFO, props.gatewayVersion)
