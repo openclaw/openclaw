@@ -219,6 +219,8 @@ export function openAgentEngineStore(
   pathname: string,
   existingOnly = false,
   closeOnFailure?: (db: PostgresSqlConnection, error: unknown) => never,
+  /** Short read-only leases may retain an idle PostgreSQL transport in this worker. */
+  reusePostgresConnection = false,
 ) {
   if (agentId === undefined && !existingOnly) {
     throw new Error("Creating an agent database requires an agent owner");
@@ -228,8 +230,7 @@ export function openAgentEngineStore(
     schema: agentEngineSchema,
     input: agentEngineInput(),
     existingOnly,
-    // Existing-only opens are short leases; owner and creation opens keep their own backend.
-    reusePostgresConnection: existingOnly,
+    reusePostgresConnection,
     closeOnFailure,
     assertMigrationCurrent: assertAgentDatabaseMaintenanceAuthority,
     prepareAnchor: () => {},

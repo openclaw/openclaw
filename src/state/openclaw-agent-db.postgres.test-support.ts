@@ -82,6 +82,7 @@ export async function loadOwners() {
     closeOpenClawAgentDatabaseByPath: database.closeOpenClawAgentDatabaseByPath,
     closeOpenClawAgentDatabaseByPathAsync: database.closeOpenClawAgentDatabaseByPathAsync,
     runOpenClawAgentWriteTransaction: database.runOpenClawAgentWriteTransaction,
+    openOpenClawAgentDatabaseReadOnly: readonly.openOpenClawAgentDatabaseReadOnly,
     retainOpenClawAgentDatabaseReadOnly: readonly.retainOpenClawAgentDatabaseReadOnly,
     upsertSessionEntryCore: sessions.upsertSessionEntryCore,
     appendTranscriptMessage: transcripts.appendTranscriptMessage,
