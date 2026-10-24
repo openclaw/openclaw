@@ -8,7 +8,6 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { collectSynchronousErrors } from "../../infra/error-graph-internal.js";
 import type {
   ReplyOperation,
   SessionControllerEntry,
@@ -409,15 +408,20 @@ function evictPriorLifecycleEmbeddedRuns(): void {
       ACTIVE_EMBEDDED_RUNS_BY_FILE.delete(key);
     }
   }
+  const abortErrors: unknown[] = [];
   // Remove stale ownership first so synchronous abort callbacks may register a
   // replacement without the cleanup above erasing that current-generation run.
-  const abortErrors = collectSynchronousErrors(staleHandles, (handle) => {
+  for (const handle of staleHandles) {
     if (controllerOwnedHandles.has(handle)) {
       // The controller cancels its attached backend; only detached/superseded abort here.
-      return;
+      continue;
     }
-    handle.abort("restart");
-  });
+    try {
+      handle.abort("restart");
+    } catch (error) {
+      abortErrors.push(error);
+    }
+  }
   if (abortErrors.length > 0) {
     throw new AggregateError(abortErrors, "Failed to abort stale embedded agent runs");
   }

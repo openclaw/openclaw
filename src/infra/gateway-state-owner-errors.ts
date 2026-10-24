@@ -5,16 +5,6 @@ export class StateDatabaseAccessError extends Error {
   override name = "StateDatabaseAccessError";
 }
 
-const createStateDatabasePathAccessError = () =>
-  class extends StateDatabaseAccessError {
-    constructor(
-      readonly databasePath: string,
-      message: string,
-    ) {
-      super(message);
-    }
-  };
-
 export const GatewayStateOwnerContentionError = resolveGlobalSingleton(
   Symbol.for("openclaw.gatewayStateOwnerContentionError"),
   () =>
@@ -54,11 +44,27 @@ export const StateDatabaseMaintenanceScopeError = resolveGlobalSingleton(
 
 export const StateDatabaseAdmissionPendingError = resolveGlobalSingleton(
   Symbol.for("openclaw.stateDatabaseAdmissionPendingError"),
-  createStateDatabasePathAccessError,
+  () =>
+    class extends StateDatabaseAccessError {
+      constructor(
+        readonly databasePath: string,
+        message: string,
+      ) {
+        super(message);
+      }
+    },
 );
 
 /** A live foreign process holds offline-maintenance custody of this database. */
 export const StateDatabaseOfflineMaintenanceError = resolveGlobalSingleton(
   Symbol.for("openclaw.stateDatabaseOfflineMaintenanceError"),
-  createStateDatabasePathAccessError,
+  () =>
+    class extends StateDatabaseAccessError {
+      constructor(
+        readonly databasePath: string,
+        message: string,
+      ) {
+        super(message);
+      }
+    },
 );

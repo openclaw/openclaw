@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { collectSynchronousErrors } from "../infra/error-graph-internal.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -36,7 +35,13 @@ export function withArtifactPreservingStateReads(
     privateRoots: new Set<string>(),
   };
   const finish = (value: unknown, errors: unknown[] = []) => {
-    errors.push(...collectSynchronousErrors(scope.readers, (close) => close()));
+    for (const close of scope.readers) {
+      try {
+        close();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
     throwSqliteLifecycleErrors(errors, "Artifact-preserving inspection and cleanup failed.");
     return value;
   };
