@@ -46,6 +46,10 @@ function versionFields(version: string) {
 }
 
 const fullValidation = { allowed_groups: ["all", "ci", "package"], profile: "full", soak: true };
+const rejectJson = (value: unknown, error: string) =>
+  expect(() => canonicalReleasePlanJson(value)).toThrow(error);
+const rejectLock = (text: string, error: string) =>
+  expect(() => parseReleasePlanLockJson(text)).toThrow(error);
 
 describe("release plan contract", () => {
   it("pins exact canonical source and lock bytes as the cross-repo golden fixture", () => {
@@ -67,28 +71,15 @@ describe("release plan contract", () => {
         '{"name":"ignored","name":"@openclaw/example","targets":',
       ],
     ] as const) {
-      expect(() => parseReleasePlanLockJson(lockText.replace(before, after))).toThrow(
-        "duplicate key",
-      );
+      rejectLock(lockText.replace(before, after), "duplicate key");
     }
-    expect(() =>
-      parseReleasePlanLockJson(
-        `${JSON.stringify({
-          schema: lockFixture.schema,
-          plan: lockFixture.plan,
-          digest: lockFixture.digest,
-        })}\n`,
-      ),
-    ).toThrow("canonical bytes");
-    expect(() => parseReleasePlanLockJson(`${JSON.stringify(lockFixture, null, 2)}\n`)).toThrow(
-      "compact printable ASCII",
+    rejectLock(
+      `${JSON.stringify({ schema: lockFixture.schema, plan: lockFixture.plan, digest: lockFixture.digest })}\n`,
+      "canonical bytes",
     );
-    expect(() => parseReleasePlanLockJson(lockText.replace(/\n$/u, "\r\n"))).toThrow(
-      "exactly one trailing LF",
-    );
-    expect(() =>
-      parseReleasePlanLockJson(lockText.replace("openclaw/openclaw", "opénclaw")),
-    ).toThrow("printable ASCII");
+    rejectLock(`${JSON.stringify(lockFixture, null, 2)}\n`, "compact printable ASCII");
+    rejectLock(lockText.replace(/\n$/u, "\r\n"), "exactly one trailing LF");
+    rejectLock(lockText.replace("openclaw/openclaw", "opénclaw"), "printable ASCII");
   });
 
   it("rejects values that JSON.stringify would erase or coerce", () => {
@@ -102,7 +93,7 @@ describe("release plan contract", () => {
       [1n, "canonical JSON"],
       [-0, "negative zero"],
     ] as const) {
-      expect(() => canonicalReleasePlanJson({ ...sourceFixture, ignored: value })).toThrow(error);
+      rejectJson({ ...sourceFixture, ignored: value }, error);
     }
   });
 
@@ -110,29 +101,21 @@ describe("release plan contract", () => {
     const sparseGroups = ["all"];
     sparseGroups.length = 3;
     sparseGroups[2] = "package";
-    expect(() =>
-      canonicalReleasePlanJson(plan({ validation: { allowed_groups: sparseGroups } })),
-    ).toThrow("must be dense");
+    rejectJson(plan({ validation: { allowed_groups: sparseGroups } }), "must be dense");
 
     const augmentedGroups = ["all", "ci", "package"];
     Object.defineProperty(augmentedGroups, "metadata", { enumerable: true, value: "ignored" });
-    expect(() =>
-      canonicalReleasePlanJson(plan({ validation: { allowed_groups: augmentedGroups } })),
-    ).toThrow("no extra properties");
+    rejectJson(plan({ validation: { allowed_groups: augmentedGroups } }), "no extra properties");
 
     const cyclic = { ...sourceFixture } as Record<string, unknown>;
     cyclic.self = cyclic;
-    expect(() => canonicalReleasePlanJson(cyclic)).toThrow("must not contain cycles");
-
-    const nonPlain = Object.assign(new Date(0), sourceFixture);
-    expect(() => canonicalReleasePlanJson(nonPlain)).toThrow("must be plain");
+    rejectJson(cyclic, "must not contain cycles");
+    rejectJson(Object.assign(new Date(0), sourceFixture), "must be plain");
 
     const accessor = { ...sourceFixture };
     Object.defineProperty(accessor, "hidden", { enumerable: true, get: () => "ignored" });
-    expect(() => canonicalReleasePlanJson(accessor)).toThrow("enumerable data properties");
-
-    const symbolKey = { ...sourceFixture, [Symbol("ignored")]: true };
-    expect(() => canonicalReleasePlanJson(symbolKey)).toThrow("must use string keys");
+    rejectJson(accessor, "enumerable data properties");
+    rejectJson({ ...sourceFixture, [Symbol("ignored")]: true }, "must use string keys");
   });
 
   it.each<[PlanOverrides, string]>([

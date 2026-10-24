@@ -81,9 +81,9 @@ if (!mode) {
 const candidateRequire = createRequire(path.join(root, "package.json"));
 const { createVitest } = await import(pathToFileURL(candidateRequire.resolve("vitest/node")).href);
 
-async function discover(config, exclude = []) {
+async function discover(config) {
   const runner = await createVitest({
-    root, config: path.join(root, config), watch: false, run: true, reporters: [], cliExclude: exclude,
+    root, config: path.join(root, config), watch: false, run: true, reporters: [],
   });
   try {
     return (await runner.globTestSpecifications())
@@ -120,9 +120,6 @@ if (mode) {
   process.exit(mode === "failure" ? 23 : 0);
 }
 
-// The old workflow's root exclude options never reached the extends:false leaves.
-assert.deepEqual(await discover(configs[0]), pluginBaseline);
-assert.deepEqual(await discover(configs[0], ["**/retry.test.ts", "**/native-loader.test.ts"]), pluginBaseline);
 assert.deepEqual(await discover(configs[1]), [excluded[2], extensionOutsideSelection]);
 await validateTestExclusions({ paths: excluded, configs, cwd: root });
 

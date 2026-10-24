@@ -139,51 +139,37 @@ fi`;
   });
 });
 
-type BurstEvent = {
+type BurstEvent = [
   name:
     | "pull_request_target"
     | "pull_request_review"
     | "pull_request_review_comment"
-    | "issue_comment";
-  action: string;
-  comment?: number;
-};
+    | "issue_comment",
+  action: string,
+  comment?: number,
+];
 
-// Replays admitted events for one PR through GitHub job concurrency: a group keeps one
-// running and one pending run, a newer run replaces the pending one, and cancel-in-progress
-// also stops the running one. Nothing finishes mid-burst, matching same-second webhooks.
-function replayBurst(events: BurstEvent[]) {
-  type Run = { cancelled: boolean };
+// Assert the workflow's group partition and cancellation policy, not a replica of GitHub's scheduler.
+function concurrencyPolicy(events: BurstEvent[]) {
   const concurrency = workflow.jobs.dispatch.concurrency;
-  const slots = new Map<string, { running?: Run; pending?: Run }>();
-  const runs = events.map((event, index) => {
+  const groups: unknown[] = [];
+  const cancel = events.map(([name, action, comment], index) => {
     const context = {
-      eventName: event.name,
+      eventName: name,
       repository: "openclaw/openclaw",
       runAttempt: 1,
       runId: 38349881260 + index,
       githubEvent: {
-        action: event.action,
-        issue: event.name === "issue_comment" ? { number: 170628 } : {},
-        pull_request: event.name === "issue_comment" ? {} : { number: 170628 },
-        comment: event.comment === undefined ? {} : { id: event.comment },
+        action,
+        issue: name === "issue_comment" ? { number: 170628 } : {},
+        pull_request: name === "issue_comment" ? {} : { number: 170628 },
+        comment: comment === undefined ? {} : { id: comment },
       },
     };
-    const group = String(evaluateWorkflowExpression(concurrency.group, context));
-    const run = { cancelled: false };
-    const { running, pending } = slots.get(group) ?? {};
-    if (pending) {
-      pending.cancelled = true;
-    }
-    if (running && evaluateWorkflowExpression(concurrency["cancel-in-progress"], context)) {
-      running.cancelled = true;
-      slots.set(group, { running: run });
-    } else {
-      slots.set(group, running ? { running, pending: run } : { running: run });
-    }
-    return run;
+    groups.push(evaluateWorkflowExpression(concurrency.group, context));
+    return evaluateWorkflowExpression(concurrency["cancel-in-progress"], context);
   });
-  return runs.map((run) => run.cancelled);
+  return { groups: groups.map((group) => groups.indexOf(group)), cancel };
 }
 
 describe("ClawSweeper dispatch concurrency", () => {
@@ -191,30 +177,33 @@ describe("ClawSweeper dispatch concurrency", () => {
     {
       name: "never cancels review runs on the PR head when comments arrive (#170628)",
       events: [
-        { name: "pull_request_review", action: "submitted" },
-        { name: "pull_request_review_comment", action: "created", comment: 11 },
-        { name: "pull_request_review_comment", action: "created", comment: 12 },
-        { name: "pull_request_review_comment", action: "created", comment: 13 },
-        { name: "issue_comment", action: "created", comment: 21 },
-        { name: "issue_comment", action: "created", comment: 22 },
-        { name: "pull_request_review", action: "edited" },
-        { name: "issue_comment", action: "edited", comment: 21 },
+        ["pull_request_review", "submitted"],
+        ["pull_request_review_comment", "created", 11],
+        ["pull_request_review_comment", "created", 12],
+        ["pull_request_review_comment", "created", 13],
+        ["issue_comment", "created", 21],
+        ["issue_comment", "created", 22],
+        ["pull_request_review", "edited"],
+        ["issue_comment", "edited", 21],
       ] satisfies BurstEvent[],
-      cancelled: [false, false, false, false, true, false, false, false],
+      policy: {
+        groups: [0, 1, 2, 3, 4, 5, 6, 4],
+        cancel: [false, false, false, false, false, false, true, true],
+      },
     },
     {
       name: "supersedes pull request runs only with newer pull request runs",
       events: [
-        { name: "pull_request_target", action: "opened" },
-        { name: "issue_comment", action: "edited", comment: 21 },
-        { name: "pull_request_review", action: "edited" },
-        { name: "pull_request_target", action: "labeled" },
-        { name: "pull_request_target", action: "labeled" },
-        { name: "pull_request_target", action: "ready_for_review" },
+        ["pull_request_target", "opened"],
+        ["issue_comment", "edited", 21],
+        ["pull_request_review", "edited"],
+        ["pull_request_target", "labeled"],
+        ["pull_request_target", "labeled"],
+        ["pull_request_target", "ready_for_review"],
       ] satisfies BurstEvent[],
-      cancelled: [true, false, false, true, true, false],
+      policy: { groups: [0, 1, 2, 0, 0, 0], cancel: [false, true, true, false, false, true] },
     },
-  ])("$name", ({ events, cancelled }) => {
-    expect(replayBurst(events)).toEqual(cancelled);
+  ])("$name", ({ events, policy }) => {
+    expect(concurrencyPolicy(events)).toEqual(policy);
   });
 });
