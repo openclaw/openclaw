@@ -546,7 +546,7 @@ export function createPlainTextToolCallProbe(): (delta: string) => boolean {
       if (scan && isActivatingScan(scan)) {
         active = true;
       } else {
-        const candidate =
+        const openingCandidate =
           scan?.kind === "prefix"
             ? scan.json.kind === "prefix"
               ? scan.json.candidate
@@ -556,7 +556,7 @@ export function createPlainTextToolCallProbe(): (delta: string) => boolean {
             : undefined;
         previousOpening =
           previousOpening === undefined &&
-          candidate?.nameComplete &&
+          openingCandidate?.nameComplete &&
           scan?.payloadStart === undefined
             ? line
             : undefined;
