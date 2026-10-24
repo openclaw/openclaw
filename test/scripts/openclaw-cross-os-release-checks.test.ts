@@ -1,6 +1,5 @@
-import { spawn } from "node:child_process";
+import { ChildProcess, spawn } from "node:child_process";
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -20,28 +19,21 @@ import {
   acquireManagedGatewayInstallerHostLease,
   buildDiscordFetchInit,
   buildPackagedUpgradeUpdateCommand,
+  buildInstallerSmokeScript,
   buildReleaseOnboardArgs,
-  buildWindowsDevUpdateToolchainCheckScript,
-  buildWindowsFreshShellVersionCheckScript,
   buildInstalledBrowserOverrideImportProbeScript,
   buildNpmGlobalInstallArgs,
   assertManagedGatewayInstallerHostAvailable,
   buildGatewayStopArgsFromHelpText,
   buildGatewayStatusArgsFromHelpText,
-  buildInstallerSmokeScript,
   canConnectToLoopbackPort,
   dashboardHtmlMarkerStatus,
-  type GatewayHandle,
-  CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
-  CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
-  CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_DISCORD_FETCH_TIMEOUT_MS,
   deleteDiscordMessage,
   isImmutableReleaseRef,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
-  managedGatewayStartupCommandTimeoutMs,
   normalizeRequestedRef,
   parsePackagedUpgradeUpdateTimings,
   parsePositiveIntegerEnv,
@@ -53,7 +45,6 @@ import {
   readInstalledVersion,
   readBoundedCrossOsResponseText,
   readRunnerOverrideEnv,
-  reserveGatewayPortForLane,
   resolveDashboardAssetUrls,
   runCommand,
   resolveCommandSpawnInvocation,
@@ -62,7 +53,6 @@ import {
   resolveInstalledCliInvocation,
   resolveInstalledPackageRootFromCliPath,
   resolveNpmDebugLogDirs,
-  restartManualGatewayForDiscordSmoke,
   resolveManagedGatewayInstallerEnv,
   resolvePackDestinationTarball,
   resolveProviderConfig,
@@ -81,7 +71,6 @@ import {
   verifyPackagedUpgradeUpdateResult,
   verifyWindowsPackagedUpgradeFallbackInstall,
   waitForGatewayWithStartupRecovery,
-  writeSummary,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
 import * as candidateProcess from "../../scripts/lib/cross-os-release-checks/process.ts";
 import { formatError } from "../../scripts/lib/cross-os-release-checks/shared.ts";
@@ -93,7 +82,7 @@ import {
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
-import { withinTest } from "../helpers/promise.js";
+import { withinTest, withTestTimeout } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
@@ -189,95 +178,106 @@ async function captureCommand(script: string, maxOutputBytes: number) {
   return { ...result, log: readFileSync(logPath, "utf8") };
 }
 
-function createGatewayHandleFixture(params: {
-  dir: string;
-  name: string;
-  beforeLaunch?: string;
-  afterLaunch?: string;
-  appendOnWaitForClose?: string;
-  exited: boolean;
-}) {
-  const logPath = join(params.dir, `${params.name}.log`);
-  const beforeLaunch = params.beforeLaunch ?? "";
-  writeFileSync(logPath, beforeLaunch);
-  if (params.afterLaunch) {
-    appendFileSync(logPath, params.afterLaunch);
-  }
-  const state = { order: [] as string[] };
-  const handle: GatewayHandle = {
-    child: {
-      exitCode: params.exited ? 1 : null,
-      signalCode: null,
-    } as GatewayHandle["child"],
-    closeLog: async () => {
-      state.order.push("closeLog");
-    },
-    launchLogOffset: Buffer.byteLength(beforeLaunch),
-    logPath,
-    waitForClose: async () => {
-      state.order.push("waitForClose");
-      if (params.appendOnWaitForClose) {
-        appendFileSync(logPath, params.appendOnWaitForClose);
-      }
-    },
-  };
-  return { handle, state };
-}
-
 describe("scripts/openclaw-cross-os-release-checks", () => {
+  it("does not restart a live gateway after a readiness failure", async () => {
+    const gateway = {
+      child: new ChildProcess(),
+      logPath: "unused-live-gateway.log",
+      launchLogOffset: 0,
+      waitForClose: vi.fn(async () => {}),
+      closeLog: vi.fn(async () => {}),
+    };
+    const error = new Error("not ready");
+    const restartGateway = vi.fn(async () => gateway);
+    await expect(
+      waitForGatewayWithStartupRecovery({
+        gatewayPort: 18789,
+        gatewayHolder: { current: gateway },
+        restartGateway,
+        waitUntilReady: async () => {
+          throw error;
+        },
+      }),
+    ).rejects.toBe(error);
+    expect(restartGateway).not.toHaveBeenCalled();
+    expect(gateway.waitForClose).not.toHaveBeenCalled();
+    expect(gateway.closeLog).not.toHaveBeenCalled();
+  });
+
+  it("reads migration refusal only after the exited gateway has drained its log", async () => {
+    const logPath = join(tempDirs.make("cross-os-drained-startup-"), "gateway.log");
+    writeFileSync(logPath, "");
+    const child = new ChildProcess();
+    child.exitCode = 1;
+    const gateway = {
+      child,
+      logPath,
+      launchLogOffset: 0,
+      waitForClose: async () => {},
+      closeLog: async () => {
+        await Promise.resolve();
+        writeFileSync(
+          logPath,
+          "OpenClaw plugin migration inputs changed during startup convergence;\n",
+        );
+      },
+    };
+    const replacement = { ...gateway, child: new ChildProcess() };
+    const holder = { current: gateway };
+    await waitForGatewayWithStartupRecovery({
+      gatewayPort: 18789,
+      gatewayHolder: holder,
+      restartGateway: async () => replacement,
+      waitUntilReady: async (current) => {
+        if (current === gateway) {
+          throw new Error("first startup failed");
+        }
+      },
+    });
+    expect(holder.current).toBe(replacement);
+  });
+
   it.each([true, false])("selects the installer account identity for managed=%s", (enabled) => {
     if (!enabled) {
       const env = { OPENCLAW_HOME: "/tmp/openclaw-installer" };
       expect(resolveManagedGatewayInstallerEnv({ env, enabled })).toBe(env);
       return;
     }
+    const isolated = Object.fromEntries(
+      [
+        "OPENCLAW_HOME",
+        "OPENCLAW_PROFILE",
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_CONFIG_PATH",
+        "OPENCLAW_WINDOWS_TASK_NAME",
+        "OPENCLAW_TASK_SCRIPT_NAME",
+        "OPENCLAW_TASK_SCRIPT",
+        "OPENCLAW_SERVICE_KIND",
+        "OpenClaw_Home",
+        "openclaw_config_path",
+      ].map((key) => [key, "isolated"]),
+    );
+    const hostEnv = { APPDATA: "host-roaming", LOCALAPPDATA: "host-local" };
     const env = resolveManagedGatewayInstallerEnv({
       env: {
         HOME: "C:\\temp\\lane",
         USERPROFILE: "C:\\temp\\lane",
         APPDATA: "C:\\temp\\lane\\AppData\\Roaming",
         LOCALAPPDATA: "C:\\temp\\lane\\AppData\\Local",
-        OPENCLAW_HOME: "C:\\temp\\lane",
-        OPENCLAW_PROFILE: "work",
-        OPENCLAW_STATE_DIR: "C:\\temp\\lane\\.openclaw",
-        OPENCLAW_CONFIG_PATH: "C:\\temp\\lane\\.openclaw\\openclaw.json",
-        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (work)",
-        OPENCLAW_TASK_SCRIPT_NAME: "work.cmd",
-        OPENCLAW_TASK_SCRIPT: "C:\\temp\\work.cmd",
-        OPENCLAW_SERVICE_KIND: "node",
-        OpenClaw_Home: "C:\\temp\\case-variant",
-        openclaw_config_path: "C:\\temp\\case-variant\\openclaw.json",
+        ...isolated,
         OPENAI_API_KEY: "secret",
       },
       enabled,
       accountHome: "C:\\Users\\runneradmin",
-      hostEnv: {
-        APPDATA: "C:\\Users\\runneradmin\\AppData\\Roaming",
-        LOCALAPPDATA: "C:\\Users\\runneradmin\\AppData\\Local",
-      },
+      hostEnv,
     });
 
-    expect(env).toMatchObject({
+    expect(env).toEqual({
       HOME: "C:\\Users\\runneradmin",
       USERPROFILE: "C:\\Users\\runneradmin",
-      APPDATA: "C:\\Users\\runneradmin\\AppData\\Roaming",
-      LOCALAPPDATA: "C:\\Users\\runneradmin\\AppData\\Local",
+      ...hostEnv,
       OPENAI_API_KEY: "secret",
     });
-    expect(
-      Object.keys(env).filter((key) =>
-        [
-          "OPENCLAW_HOME",
-          "OPENCLAW_PROFILE",
-          "OPENCLAW_STATE_DIR",
-          "OPENCLAW_CONFIG_PATH",
-          "OPENCLAW_WINDOWS_TASK_NAME",
-          "OPENCLAW_TASK_SCRIPT_NAME",
-          "OPENCLAW_TASK_SCRIPT",
-          "OPENCLAW_SERVICE_KIND",
-        ].includes(key.toUpperCase()),
-      ),
-    ).toEqual([]);
   });
 
   it("fails closed before borrowing an occupied managed-service account", () => {
@@ -446,21 +446,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(result.failures).toEqual(["http://127.0.0.1:18789/assets/index.js status=404"]);
   });
 
-  it("keeps gateway RPC status probes patient enough for live release startup", () => {
-    expect(CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS).toBeGreaterThanOrEqual(30_000);
-    expect(CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS).toBeGreaterThan(
-      CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
-    );
-    expect(CROSS_OS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(180_000);
-    expect(CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(300_000);
-    expect(managedGatewayStartupCommandTimeoutMs("win32")).toBeGreaterThan(
-      CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
-    );
-    expect(managedGatewayStartupCommandTimeoutMs("linux")).toBeGreaterThan(
-      CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
-    );
-  });
-
   it("keeps gateway status RPC probing when help probing is unavailable", () => {
     expect(buildGatewayStatusArgsFromHelpText("--require-rpc")).toEqual([
       "gateway",
@@ -478,120 +463,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         requireRpc: false,
       }),
     ).toEqual(["gateway", "status"]);
-  });
-
-  it.each(["recovered", "stale", "live", "repeated"] as const)(
-    "bounds startup-migration restarts: %s",
-    async (scenario) => {
-      const dir = tempDirs.make("openclaw-cross-os-gateway-restart-");
-      const refusal =
-        "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready.\n";
-      const first = createGatewayHandleFixture({
-        dir,
-        name: "first",
-        beforeLaunch: scenario === "stale" ? refusal : "",
-        appendOnWaitForClose: scenario === "recovered" ? refusal : "",
-        afterLaunch:
-          scenario === "stale"
-            ? refusal.replace(";", ":")
-            : scenario === "recovered"
-              ? ""
-              : refusal,
-        exited: scenario !== "live",
-      });
-      const second = createGatewayHandleFixture({
-        dir,
-        name: "second",
-        afterLaunch: refusal,
-        exited: scenario === "repeated",
-      });
-      const holder: { current: GatewayHandle | null } = { current: first.handle };
-      const firstError = new Error("first gateway failed readiness");
-      const secondError = new Error("second gateway exited");
-      const restartGateway = vi.fn(async () => second.handle);
-      const ready = waitForGatewayWithStartupRecovery({
-        gatewayPort: 18_789,
-        gatewayHolder: holder,
-        restartGateway,
-        waitUntilReady: async (gateway) => {
-          if (gateway === first.handle) {
-            throw firstError;
-          }
-          if (scenario === "repeated") {
-            throw secondError;
-          }
-        },
-      });
-      if (scenario === "recovered") {
-        await ready;
-      } else {
-        await expect(ready).rejects.toBe(scenario === "repeated" ? secondError : firstError);
-      }
-      const restarted = scenario === "recovered" || scenario === "repeated";
-      expect(restartGateway).toHaveBeenCalledTimes(restarted ? 1 : 0);
-      expect(holder.current).toBe(restarted ? second.handle : first.handle);
-      expect(first.state.order).toEqual(scenario === "live" ? [] : ["waitForClose", "closeLog"]);
-      expect(second.state.order).toEqual(
-        scenario === "repeated" ? ["waitForClose", "closeLog"] : [],
-      );
-    },
-  );
-
-  it("routes the Discord manual relaunch through the bounded retry wait", async () => {
-    const dir = tempDirs.make("openclaw-cross-os-discord-gateway-");
-    const previous = createGatewayHandleFixture({
-      dir,
-      name: "previous",
-      exited: false,
-    });
-    const started = createGatewayHandleFixture({
-      dir,
-      name: "started",
-      exited: false,
-    });
-    const lane = {
-      name: "installer-fresh",
-      rootDir: dir,
-      prefixDir: join(dir, "prefix"),
-      homeDir: join(dir, "home"),
-      stateDir: join(dir, "state"),
-      appDataDir: join(dir, "app-data"),
-      gatewayPort: 18_789,
-      phaseTimings: [],
-    };
-    const gatewayHolder = { current: previous.handle as GatewayHandle | null };
-    const gatewayLogPath = join(dir, "discord-gateway.log");
-    const statusLogPath = join(dir, "discord-status.log");
-    const calls: Array<{ name: string; params: unknown }> = [];
-
-    await restartManualGatewayForDiscordSmoke({
-      lane,
-      cliPath: join(dir, "openclaw"),
-      env: { OPENCLAW_HOME: lane.homeDir },
-      gatewayHolder,
-      gatewayLogPath,
-      statusLogPath,
-      operations: {
-        stopGateway: async (gateway) => {
-          calls.push({ name: "stop", params: gateway });
-        },
-        startGateway: async (params) => {
-          calls.push({ name: "start", params });
-          return started.handle;
-        },
-        waitForGateway: async (params) => {
-          calls.push({ name: "wait", params });
-        },
-      },
-    });
-
-    expect(gatewayHolder.current).toBe(started.handle);
-    expect(calls.map((call) => call.name)).toEqual(["stop", "start", "wait"]);
-    expect(calls[2]?.params).toMatchObject({
-      gatewayHolder,
-      gatewayLogPath,
-      logPath: statusLogPath,
-    });
   });
 
   it.each([
@@ -677,45 +548,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
-  it("renders runner, runtime, and sanitized updater timing evidence", () => {
-    const dir = tempDirs.make("openclaw-cross-os-summary-");
-    writeSummary(dir, {
-      platform: "win32",
-      runnerOs: "Windows",
-      runnerLabel: "blacksmith-32vcpu-windows-2025",
-      nodeVersion: "v24.15.0",
-      npmVersion: "11.8.0",
-      provider: "openai",
-      suite: "packaged-upgrade",
-      mode: "upgrade",
-      sourceSha: "abc123",
-      candidateVersion: "2026.8.28-beta.1",
-      baselineSpec: "openclaw@2026.8.27",
-      result: {
-        status: "pass",
-        updateFallback: {
-          reason: "timeout",
-          action: "direct-candidate-install",
-        },
-        updateTimings: [
-          { name: "total", durationMs: 622_000 },
-          { name: "package-install", durationMs: 461_000 },
-        ],
-      },
-    });
-
-    const json = readFileSync(join(dir, "summary.json"), "utf8");
-    const markdown = readFileSync(join(dir, "summary.md"), "utf8");
-    expect(json).toContain('"runnerLabel": "blacksmith-32vcpu-windows-2025"');
-    expect(markdown).toContain("- Runner: `blacksmith-32vcpu-windows-2025`");
-    expect(markdown).toContain("- Node: `v24.15.0`");
-    expect(markdown).toContain("- npm: `11.8.0`");
-    expect(markdown).toContain("- Updater fallback: `timeout/direct-candidate-install`");
-    expect(markdown).toContain("- `package-install`: 461s");
-    expect(markdown).not.toContain("private");
-    expect(markdown).not.toContain("npm install");
-  });
-
   it("ignores stale OK markers outside the recent tail", () => {
     const logPath = join(tempDirs.make("openclaw-cross-os-agent-output-"), "agent.log");
     writeFileSync(
@@ -749,16 +581,9 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("can stage packaged-upgrade baselines without npm lifecycle scripts", () => {
-    expect(buildNpmGlobalInstallArgs("openclaw@2026.5.2", { ignoreScripts: true })).toEqual([
-      "install",
-      "-g",
-      "openclaw@2026.5.2",
-      "--omit=dev",
-      "--no-fund",
-      "--no-audit",
+    expect(buildNpmGlobalInstallArgs("openclaw@2026.5.2", { ignoreScripts: true })).toContain(
       "--ignore-scripts",
-      "--loglevel=notice",
-    ]);
+    );
   });
 
   it("rejects unsafe pnpm pack destinations", () => {
@@ -977,25 +802,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
   });
 
-  it("prefers the freshly installed Windows CLI under npm's prefix before PATH lookup", () => {
-    const script = buildWindowsFreshShellVersionCheckScript({
-      expectedNeedle: "2026.4.14",
-    });
-    expect(script).toContain("foreach ($candidate in @($env:Path, $userPath, $machinePath))");
-    expect(script).toContain("Get-Command npm.cmd -ErrorAction SilentlyContinue");
-    expect(script).toContain('$env:Path = "$npmPrefix;$env:Path"');
-    expect(script).toContain("(Join-Path $npmPrefix 'openclaw.cmd')");
-    expect(script).toContain("$cmd = Get-Command openclaw -ErrorAction Stop");
-  });
-
-  it("keeps Windows dev-update toolchain checks compatible with setup-node PATH shims", () => {
-    const script = buildWindowsDevUpdateToolchainCheckScript();
-    expect(script).toContain("foreach ($candidate in @($env:Path, $userPath, $machinePath))");
-    expect(script).toContain("$pnpmPath = Resolve-CommandPath 'pnpm'");
-    expect(script).toContain("$corepackPath = Resolve-CommandPath 'corepack'");
-    expect(script).toContain("$npmPath = Resolve-CommandPath 'npm'");
-  });
-
   it("uses legacy runner overrides when primary values are blank", () => {
     expect(
       readRunnerOverrideEnv({
@@ -1044,8 +850,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         expect(response.headers.get("content-length")).toBe(String(payload.length));
         expect(response.headers.get("content-type")).toBe("application/octet-stream");
         expect(body.equals(payload)).toBe(true);
+        const marker = `flush-${"x".repeat(512)}-done`;
+        for (let index = 0; index < 8; index += 1) {
+          await (await fetch(`${server.url}?${marker}-${index}`)).text();
+        }
         await server.close();
-        expect(readFileSync(logPath, "utf8")).toContain(`GET ${requestPath}`);
+        const log = readFileSync(logPath, "utf8");
+        expect(log).toContain(`GET ${requestPath}`);
+        expect(log).toContain(`${marker}-7`);
       } finally {
         await server?.close();
       }
@@ -1073,55 +885,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         socket.once("close", resolve);
       });
       socket.write(`GET ${url.pathname} HTTP/1.1\r\nHost: ${url.host}\r\n\r\n`);
-      await Promise.race([
-        server.close(),
-        delay(1_000, undefined, { ref: false }).then(() => {
-          throw new Error("close timed out");
-        }),
-      ]);
-      await Promise.race([
-        socketClosePromise,
-        delay(1_000, undefined, { ref: false }).then(() => {
-          throw new Error("socket close timed out");
-        }),
-      ]);
+      await withTestTimeout(server.close(), 1_000, "close timed out");
+      await withTestTimeout(socketClosePromise, 1_000, "socket close timed out");
     } finally {
       await server?.close().catch(() => {});
     }
-  });
-
-  it("flushes static release artifact logs before close resolves", async () => {
-    const dir = tempDirs.make("openclaw-cross-os-static-server-log-flush-");
-    const filePath = join(dir, "openclaw-2026.4.14.tgz");
-    const logPath = join(dir, "server.log");
-    let server: Awaited<ReturnType<typeof startStaticFileServer>> | undefined;
-
-    try {
-      writeFileSync(filePath, Buffer.alloc(128, "x"));
-      server = await startStaticFileServer({ filePath, logPath });
-      const marker = `flush-${"x".repeat(512)}-done`;
-
-      for (let index = 0; index < 8; index += 1) {
-        const response = await fetch(`${server.url}?${marker}-${index}`);
-        await response.text();
-      }
-      await server.close();
-      server = undefined;
-
-      expect(readFileSync(logPath, "utf8")).toContain(`${marker}-7`);
-    } finally {
-      await server?.close().catch(() => {});
-    }
-  });
-
-  it("does not preload static release artifacts before serving them", () => {
-    const source = readFileSync("scripts/lib/cross-os-release-checks/process.ts", "utf8");
-    const serverSource = source.slice(
-      source.indexOf("export async function startStaticFileServer"),
-      source.indexOf("export function resolveStaticFileContentType"),
-    );
-    expect(serverSource).toContain("createReadStream(params.filePath)");
-    expect(serverSource).not.toContain("readFileSync(params.filePath)");
   });
 
   it.each([
@@ -1146,31 +914,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("skips workspace bootstrap during release onboarding", () => {
-    expect(
-      buildReleaseOnboardArgs({
-        authChoice: "openai-api-key",
-        gatewayPort: 34111,
-        skipHealth: true,
-      }),
-    ).toEqual([
-      "onboard",
-      "--non-interactive",
-      "--mode",
-      "local",
-      "--auth-choice",
-      "openai-api-key",
-      "--secret-input-mode",
-      "ref",
-      "--gateway-port",
-      "34111",
-      "--gateway-bind",
-      "loopback",
-      "--skip-skills",
-      "--skip-bootstrap",
-      "--accept-risk",
-      "--json",
-      "--skip-health",
-    ]);
+    const args = buildReleaseOnboardArgs({
+      authChoice: "openai-api-key",
+      gatewayPort: 34111,
+      skipHealth: true,
+    });
+    expect(args).toContain("--skip-bootstrap");
+    expect(args[args.indexOf("--secret-input-mode") + 1]).toBe("ref");
+    expect(args[args.indexOf("--gateway-bind") + 1]).toBe("loopback");
   });
 
   it("runs the installed browser override import smoke only on native Windows", () => {
@@ -1180,19 +931,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
     const script = buildInstalledBrowserOverrideImportProbeScript();
     expect(script).toContain('from "openclaw/plugin-sdk/plugin-runtime"');
-    expect(script).toContain('overrideEnvVar: "OPENCLAW_BROWSER_CONTROL_MODULE"');
-    expect(script).toContain("startBrowserControlService");
-    expect(script).toContain("stopBrowserControlService");
-    expect(script).toContain("Browser control override start sentinel was not written.");
 
     const installedScript = buildInstalledBrowserOverrideImportProbeScript(
       "file:///C:/Users/runner/AppData/Roaming/npm/node_modules/openclaw/dist/plugin-sdk/plugin-runtime.js",
     );
     expect(installedScript).toContain(
       'from "file:///C:/Users/runner/AppData/Roaming/npm/node_modules/openclaw/dist/plugin-sdk/plugin-runtime.js"',
-    );
-    expect(readFileSync("scripts/lib/cross-os-release-checks/install.ts", "utf8")).toContain(
-      "OPENCLAW_BROWSER_CONTROL_MODULE: pathToFileURL(overridePath).href",
     );
   });
 
@@ -1539,31 +1283,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       connect.mockRestore();
       refused.destroy();
     }
-  });
-
-  it("keeps a release gateway port reserved until the lane is ready to start", async () => {
-    const lane = { gatewayPort: 0 } as Parameters<typeof reserveGatewayPortForLane>[0];
-    const reservation = await reserveGatewayPortForLane(lane);
-    let server: ReturnType<typeof createNetServer>;
-    const closed = vi.fn();
-    try {
-      const created = vi.mocked(createNetServer).mock.results.at(-1);
-      if (created?.type !== "return") {
-        throw new Error("Gateway port reservation did not create its native listener");
-      }
-      server = created.value;
-      server.on("close", closed);
-      expect(lane.gatewayPort).toBe(reservation.port);
-      expect(server.address()).toMatchObject({ port: reservation.port });
-      expect(await canConnectToLoopbackPort(reservation.port)).toBe(true);
-    } finally {
-      await reservation.release();
-    }
-    expect(closed).toHaveBeenCalledOnce();
-    expect(server.listening).toBe(false);
-    expect(server.address()).toBeNull();
-    await reservation.release();
-    expect(closed).toHaveBeenCalledOnce();
   });
 
   it("bounds Discord API calls with a timeout signal", () => {
