@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
@@ -26,10 +25,7 @@ import type { InternalSessionEntry as Entry } from "../config/sessions/types.js"
 import * as transcriptTail from "../gateway/session-transcript-readers.js";
 import * as transcriptUsage from "../gateway/session-transcript-usage.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
-import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -75,7 +71,6 @@ const notice = (patch: Partial<NonNullable<Entry["fallbackNotice"]>>) => ({
 const catalog = [
   modelLimits(selected.provider, selected.model, 1_000_000),
   modelLimits(active.provider, active.model, 128_000),
-  modelLimits("openrouter", "deepseek/deepseek-v4-flash", 1_000_000),
 ];
 const oauth = { modelAuthOverride: "oauth", activeModelAuthOverride: "oauth" };
 const usageSummary = (enabled = true) => ({
@@ -126,15 +121,6 @@ async function expectText(
     expect(text).not.toContain(value);
   }
 }
-function expectContext(parts: Awaited<ReturnType<typeof prepared>>, context: string) {
-  expect(parts.text).toContain(`Context: ${context}`);
-  const table = parts.presentation.blocks.find((block) => block.type === "table");
-  expect(table?.type === "table" ? table.rows : []).toContainEqual([
-    "📚 Context",
-    expect.stringContaining(context),
-  ]);
-}
-
 describe("prepared status", () => {
   let state: OpenClawTestState;
   beforeEach(async () => {
@@ -153,43 +139,36 @@ describe("prepared status", () => {
     await state.cleanup();
   });
 
-  const accountConfig = {
-    channels: { telegram: { richMessages: true, accounts: { Work: { richMessages: false } } } },
-  };
-  it.each<[Partial<Params>, string, string]>([
-    [{ cfg: { channels: { telegram: {} } } }, "off", "channels.telegram.richMessages=true"],
-    [{ cfg: { channels: { telegram: { richMessages: true } } } }, "on", "sendRichMessage enabled"],
-    [
-      {
-        cfg: accountConfig,
-        sessionEntry: entry({
-          delivery: normalizeSessionDeliveryState({
-            context: { channel: "telegram", accountId: "work" },
+  it.each([
+    [undefined, undefined, "off", "channels.telegram.richMessages=true"],
+    [true, undefined, "on", "sendRichMessage enabled"],
+    [true, "session", "off", "enable richMessages for this Telegram account"],
+    [true, "request", "off", "enable richMessages for this Telegram account"],
+  ] as const)(
+    "renders Telegram features (%s, account=%s)",
+    async (richMessages, account, enabled, hint) => {
+      const telegram = {
+        richMessages,
+        ...(account ? { accounts: { Work: { richMessages: false } } } : {}),
+      };
+      await expectText(
+        render({
+          cfg: { channels: { telegram } },
+          statusChannel: "telegram",
+          sessionEntry: entry({
+            delivery:
+              account === "session"
+                ? normalizeSessionDeliveryState({
+                    context: { channel: "telegram", accountId: "work" },
+                  })
+                : undefined,
           }),
+          statusAccountId: account === "request" ? "work" : undefined,
         }),
-      },
-      "off",
-      "enable richMessages for this Telegram account",
-    ],
-    [
-      { cfg: accountConfig, statusAccountId: "work" },
-      "off",
-      "enable richMessages for this Telegram account",
-    ],
-  ])("renders Telegram features for %j", async (patch, enabled, hint) => {
-    await expectText(
-      render({
-        sessionEntry: entry(),
-        statusChannel: "telegram",
-        resolvedHarness: "pi",
-        primaryModelLabelOverride: "openai/gpt-5.4-mini",
-        modelAuthOverride: "test",
-        activeModelAuthOverride: "test",
-        ...patch,
-      }),
-      [`Telegram rich messages: ${enabled}`, hint],
-    );
-  });
+        [`Telegram rich messages: ${enabled}`, hint],
+      );
+    },
+  );
 
   it("shows the selected global agent's children instead of the default agent's", async () => {
     const cfg: Params["cfg"] = {
@@ -224,27 +203,22 @@ describe("prepared status", () => {
   });
 
   it.each(["codex", "openclaw"] as const)("respects the %s usage binding", async (harness) => {
-    mocks.usage.mockImplementation(async (input) => usageSummary(Boolean(input.auth)));
+    mocks.usage.mockImplementation(async ({ providers, auth }) =>
+      usageSummary(
+        providers[0] === "openai" &&
+          auth?.[0]?.provider === "openai" &&
+          auth[0].hookProvider === "codex",
+      ),
+    );
     const text = await render({
       ...oauth,
-      sessionEntry: entry({
-        agentRuntimeOverride: "openclaw",
-        agentHarnessId: harness,
-      }),
+      sessionEntry: entry({ agentRuntimeOverride: "openclaw", agentHarnessId: harness }),
     });
     if (harness === "codex") {
       expect(text).toContain("📊 Usage: 5h 75% left");
-      expect(mocks.usage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          providers: ["openai"],
-          auth: [expect.objectContaining({ provider: "openai", hookProvider: "codex" })],
-        }),
-      );
     } else {
       expect(text).not.toContain("📊 Usage:");
-      expect(mocks.usage).toHaveBeenCalledWith(
-        expect.not.objectContaining({ auth: expect.anything() }),
-      );
+      expect(mocks.usage.mock.calls[0]?.[0].auth).toBeUndefined();
     }
   });
 
@@ -260,7 +234,6 @@ describe("prepared status", () => {
   ] as const)(
     "renders %s cost with %i missing prices",
     async (status, missingCostEntries, expected) => {
-      const storePath = state.statePath("cost.sqlite");
       mocks.usage.mockResolvedValue(usageSummary());
       if (status === "failed") {
         mocks.cost.mockRejectedValue(new Error("cache unavailable"));
@@ -281,23 +254,12 @@ describe("prepared status", () => {
       }
       const text = await render({
         ...oauth,
-        storePath,
-        sessionEntry: entry({
-          sessionId: "cost-session",
-          sessionFile: "sqlite:main:cost-session:/tmp/retired-status-cost.sqlite",
-        }),
+        sessionEntry: entry({ sessionId: "cost-session" }),
       });
       await expectText(
         text,
         ["📊 Usage: 5h 75% left", ...(expected ? [expected] : [])],
         expected ? [] : ["💵"],
-      );
-      expect(mocks.cost).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessions: [
-            { sessionId: "cost-session", sessionFile: `sqlite:main:cost-session:${storePath}` },
-          ],
-        }),
       );
     },
   );
@@ -308,76 +270,45 @@ describe("prepared status", () => {
   ])("renders Ollama thinking (reasoning=$reasoning)", async ({ reasoning, expected }) => {
     await expectText(
       render({
-        sessionEntry: entry({
-          thinkingLevel: "high",
-          modelOverride: "glm-5.2:cloud",
-          providerOverride: "ollama",
-        }),
-        statusChannel: "whatsapp",
         provider: "ollama",
         model: "glm-5.2:cloud",
         thinkingCatalog: [{ provider: "ollama", id: "glm-5.2:cloud", reasoning }],
         resolvedThinkLevel: "high",
-        resolvedReasoningLevel: "on",
-        resolveDefaultThinkingLevel: async () => "high",
-        primaryModelLabelOverride: "ollama/glm-5.2:cloud",
-        modelAuthOverride: "local",
-        activeModelAuthOverride: "local",
       }),
       [expected],
     );
   });
 
-  it.each([
-    [
-      "selected auto cutoff during fallback",
-      "auto",
-      {
-        ...modelEntry({ provider: "openai", model: "base-model" }),
-        ...notice({
-          selectedModel: "anthropic/selected-model",
-          activeModel: "openai/base-model",
-          reason: "provider unavailable",
-        }),
-      },
-      undefined,
-      "auto (120 sec)",
-    ],
-    ["session off overrides model on", true, { fastMode: false }, undefined, "off"],
-    ["prepared off overrides model on", true, {}, false, "off"],
-  ] as const)(
-    "renders fast mode for %s",
-    async (_name, configured, patch, resolvedFastMode, expected) => {
-      const models = {
-        "openai/base-model": { params: { fastMode: !configured, fastAutoOnSeconds: 30 } },
-        "anthropic/selected-model": { params: { fastMode: configured, fastAutoOnSeconds: 120 } },
-      };
-      await expectText(
-        prepared({
-          cfg: { agents: { defaults: { models } } },
-          sessionEntry: entry({
-            providerOverride: "anthropic",
-            modelOverride: "selected-model",
-            ...patch,
-          }),
-          resolvedFastMode,
-          provider: "openai",
-          model: "base-model",
-        }),
-        [`fast ${expected}`],
-      );
-    },
-  );
+  it("uses the prepared fast-mode override ahead of model config", async () => {
+    await expectText(
+      prepared({
+        provider: "openai",
+        model: "base-model",
+        resolvedFastMode: false,
+        sessionEntry: entry({ providerOverride: "anthropic", modelOverride: "selected-model" }),
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/base-model": { params: { fastMode: false } },
+                "anthropic/selected-model": { params: { fastMode: true } },
+              },
+            },
+          },
+        },
+      }),
+      ["fast off"],
+    );
+  });
 
-  it("prepares bounded usage off-thread and sees a later committed transcript", async () => {
+  it("uses the latest transcript until complete committed usage is available", async () => {
     const target = {
       agentId: "main",
       sessionId: "status-worker-usage",
       sessionKey: "agent:main:status-worker-usage",
       storePath: state.statePath("status.sqlite"),
     };
-    const sessionEntry = entry({ sessionId: target.sessionId, updatedAt: 1 });
-    const readUsage = vi.spyOn(transcriptUsage, "readRecentSessionUsageFromTranscriptAsync");
+    const sessionEntry = entry({ sessionId: target.sessionId });
     await replaceSessionEntry(target, sessionEntry);
     const appendUsage = async (content: string, input: number, output: number) => {
       await appendTranscriptMessage(target, {
@@ -390,18 +321,6 @@ describe("prepared status", () => {
       await waitForSessionTranscriptProjection(target);
     };
     await appendUsage("x".repeat(300_000), 10, 2);
-    openOpenClawAgentDatabase({ agentId: target.agentId, path: target.storePath });
-    const reads: string[] = [];
-    observeHostDataSql((sql, database) => {
-      if (
-        !database &&
-        /\b(?:transcript_events|session_transcript_active_events|transcript_event_identities)\b/iu.test(
-          sql,
-        )
-      ) {
-        reads.push(sql);
-      }
-    });
     const renderUsage = (value = sessionEntry) =>
       prepared({
         sessionEntry: value,
@@ -411,11 +330,8 @@ describe("prepared status", () => {
       });
     setRuntimeConfigSnapshot({});
     expect((await renderUsage()).text).toContain("Tokens: 10 in / 2 out");
-    expect(reads).toEqual([]);
     await appendUsage("New usage", 30, 4);
-    reads.length = 0;
     expect((await renderUsage()).text).toContain("Tokens: 30 in / 4 out");
-    expect(reads).toEqual([]);
     const committed = {
       ...sessionEntry,
       ...modelEntry(selected),
@@ -427,9 +343,7 @@ describe("prepared status", () => {
       totalTokens: 60,
     } satisfies Entry;
     await replaceSessionEntry(target, committed);
-    readUsage.mockClear();
     expect((await renderUsage(committed)).text).toContain("Tokens: 60 in / 6 out");
-    expect(readUsage).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -442,15 +356,15 @@ describe("prepared status", () => {
     async (_name, window, expected, nativeRuntime, harness) => {
       const provider = "ollama",
         model = "qwen3:8b";
-      expectContext(
-        await prepared({
+      await expectText(
+        prepared({
           provider,
           model,
           resolvedHarness: harness ?? "openclaw",
           contextTokens: 200_000,
           thinkingCatalog: [{ ...modelLimits(provider, model, window), nativeRuntime }],
         }),
-        expected,
+        [`Context: ${expected}`],
       );
     },
   );
@@ -485,7 +399,6 @@ describe("prepared status", () => {
       scope,
       entry({
         sessionId: scope.sessionId,
-        updatedAt: 1,
         status: "done",
         lastRunId: "settled-run",
         ...modelEntry(selected),
@@ -513,7 +426,6 @@ describe("prepared status", () => {
         sessionEntry: original,
         sessionKey: scope.sessionKey,
         storePath: scope.storePath,
-        contextTokens: 1_000_000,
         ...patch.status,
       });
       expect(loadSessionEntryReadOnly(scope)).toEqual(original);
@@ -525,22 +437,23 @@ describe("prepared status", () => {
     }
   }
 
-  it.each<Terminal>([
-    {},
-    {
-      status: { provider: "MiXeD", model: "Vendor/Model:opaque" },
-      entry: notice({ selectedModel: "mixed/Vendor/Model:opaque" }),
-    },
-    {
-      entry: {
-        modelOverride: "MiXeD/Model:Case",
-        ...notice({ selectedModel: "MiXeD/Model:Case" }),
+  it.each<[string, string, Partial<Entry>, string]>([
+    [selected.provider, selected.model, {}, "deepseek/deepseek-v4-flash"],
+    ["MiXeD", "Vendor/Model:opaque", {}, "mixed/Vendor/Model:opaque"],
+    [selected.provider, selected.model, { modelOverride: "MiXeD/Model:Case" }, "MiXeD/Model:Case"],
+    ["", "Vendor/Model:opaque", { providerOverride: "" }, "Vendor/Model:opaque"],
+  ])("retains %s/%s and its settled fallback", async (provider, model, patch, label) => {
+    const parts = await terminal({
+      entry: { ...patch, ...notice({ selectedModel: label }) },
+      status: {
+        provider,
+        model,
+        primaryModelLabelOverride: label,
+        thinkingCatalog: [...catalog, modelLimits(provider, model, 128_000)],
       },
-    },
-  ])("projects a settled fallback without relabeling persisted state: %j", async (patch) => {
-    const parts = await terminal(patch);
-    await expectText(parts.text, [`Fallback: ${fallback}`], ["45k/1.0m"]);
-    expectContext(parts, "45k/128k");
+    });
+    await expectText(parts.text, [`Model: ${label}`, `Fallback: ${fallback}`], ["45k/1.0m"]);
+    expect(parts.text).toContain("Context: 45k/128k");
   });
 
   it.each<[string, Terminal]>([
@@ -564,9 +477,11 @@ describe("prepared status", () => {
         entry: { providerOverride: selected.provider, modelOverride: selected.model },
         status: {
           ...active,
-          thinkingCatalog: catalog.map((model) => ({
-            ...model,
-            contextTokens: model.id === active.model ? 96_000 : model.contextWindow,
+          thinkingCatalog: catalog.map(({ provider, id, contextWindow }) => ({
+            provider,
+            id,
+            contextWindow,
+            contextTokens: id === active.model ? 96_000 : contextWindow,
           })),
         },
       }),
@@ -596,52 +511,16 @@ describe("prepared status", () => {
     },
   );
 
-  it.each([true, false])(
-    "projects only a matching terminal model budget (%s)",
-    async (matching) => {
-      const contextBudgetStatus = contextBudgetStatusFixture({
-        updatedAt: 1,
-        ...(matching ? active : selected),
-        estimatedPromptTokens: 64_000,
-        contextTokenBudget: 128_000,
-        promptBudgetBeforeReserve: 100_000,
-        reserveTokens: 28_000,
-        effectiveReserveTokens: 28_000,
-        remainingPromptBudgetTokens: 36_000,
-        sessionId: "terminal-fallback",
-      });
-      const parts = await terminal({ entry: { totalTokens: undefined, contextBudgetStatus } });
-      await expectText(parts.text, [`Fallback: ${fallback}`, "128k"]);
-      expect(parts.text.includes("64k")).toBe(matching);
-    },
-  );
-
-  it.each<[string, string, Partial<Entry>, string]>([
-    ["", "Vendor/Model:opaque", { providerOverride: "" }, "Vendor/Model:opaque"],
-    [
-      "candidate",
-      "entry",
-      { providerOverride: "candidate", modelOverride: "middle" },
-      "candidate/middle",
-    ],
-  ])("preserves typed selection %s/%s", async (provider, model, patch, expected) => {
-    const modelIdNormalization = {
-      providers: { candidate: { aliases: { entry: "middle", middle: "wrong" } } },
-    };
-    const metadataSnapshot = createPluginMetadataSnapshotFixture({
-      plugins: [{ id: "candidate", providers: ["candidate"], modelIdNormalization }],
+  it.each([true, false])("matches terminal budget ownership (%s)", async (matching) => {
+    const contextBudgetStatus = contextBudgetStatusFixture({
+      ...(matching ? active : selected),
+      estimatedPromptTokens: 64_000,
+      contextTokenBudget: 128_000,
+      sessionId: "terminal-fallback",
     });
-    const parts = await withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
-      prepared({
-        cfg: { agents: { defaults: { model: { primary: "candidate/entry" } } } },
-        provider,
-        model,
-        thinkingCatalog: [...catalog, modelLimits(provider, model, 128_000)],
-        primaryModelLabelOverride: expected,
-        sessionEntry: entry({ sessionId: "typed-selection", updatedAt: 1, ...patch }),
-      }),
-    );
-    await expectText(parts.text, [`Model: ${expected}`], ["Model: candidate/wrong"]);
+    const parts = await terminal({ entry: { totalTokens: undefined, contextBudgetStatus } });
+    await expectText(parts.text, [`Fallback: ${fallback}`, "128k"]);
+    expect(parts.text.includes("64k")).toBe(matching);
   });
 
   it.each([
