@@ -384,13 +384,26 @@ export async function prepareDelegatedSystemAgentApproval(params: {
                       : !isAuthorityActive() || record.status === "cancelled"
                         ? "cancelled"
                         : undefined;
-                  params.session.pendingApproval = undefined;
                   try {
                     // Retire failures before releasing this task; a later run may propose the same hash.
-                    const appliedReply =
-                      (await withProposalFailureCleanup(() =>
-                        applyDecision(terminalStatus ? null : decision, terminalStatus),
-                      )) ?? cancelledReply;
+                    const appliedReply = await withProposalFailureCleanup(async () => {
+                      const decisionToApply = terminalStatus ? null : decision;
+                      if (decisionToApply === "allow-once") {
+                        assertLiveApprovalAuthority();
+                        if (
+                          !(await manager.consumeAllowOnce(record.id, `system-agent:${record.id}`))
+                        ) {
+                          await retireSystemAgentProposal(params.session, undefined, proposal.hash);
+                          return cancelledReply;
+                        }
+                      }
+                      // Redemption still requires this exact pending owner. Release it
+                      // only after the one-shot is durably consumed.
+                      params.session.pendingApproval = undefined;
+                      return (
+                        (await applyDecision(decisionToApply, terminalStatus)) ?? cancelledReply
+                      );
+                    });
                     return {
                       reply: appliedReply,
                       correction: await resolveCorrection(appliedReply),

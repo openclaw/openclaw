@@ -404,6 +404,7 @@ describe("Full Access delegated chat", () => {
 
   it.each([
     ["allow", "[openclaw] done: config.set", 1, []],
+    ["consume-failed", "cancelled", 0, []],
     ["deny", "Denied", 0, []],
     ["expired", "expired", 0, expiredGuidance],
     ["run-cancelled", "cancelled", 0, cancelledGuidance],
@@ -423,6 +424,9 @@ describe("Full Access delegated chat", () => {
       );
       const controller = new AbortController();
       const observation = new AsyncWorkScope();
+      if (outcome === "consume-failed") {
+        vi.spyOn(fixture.manager, "consumeAllowOnce").mockResolvedValueOnce(false);
+      }
       if (outcome === "expired") {
         vi.useFakeTimers();
         installTestApprovalClock();
@@ -545,6 +549,22 @@ describe("Full Access delegated chat", () => {
             false,
           );
         }
+        const consumesDecision =
+          outcome === "allow" ||
+          outcome === "apply-failed" ||
+          outcome === "precommit-cancelled" ||
+          outcome === "afterDecision-failed";
+        expect(await fixture.readApproval(record.id)).toMatchObject({
+          outcome: "found",
+          record: consumesDecision
+            ? {
+                decision: "allow-once",
+                status: "allowed",
+                consumedAtMs: expect.any(Number),
+                consumedBy: `system-agent:${record.id}`,
+              }
+            : { consumedAtMs: null, consumedBy: null },
+        });
         expect.soft(result.payload).toMatchObject({ reply: expect.stringContaining(expected) });
         expectReplyParts(result.payload, ...guidance);
         expect.soft(result.payload).not.toHaveProperty("needsApproval");
