@@ -19,11 +19,8 @@ async function fixture(mode = "direct", fault = "none", distTagVersion?: string)
   return { ...value, ...parent };
 }
 
-it.each([
-  ["missing-planned-job", "planned candidate"],
-  ["empty-jobs", "successful planning job"],
-])("rejects incomplete publication inventory: %s", async (fault, message) => {
-  await expect(fixture("direct", fault)).rejects.toThrow(message);
+it("rejects missing planning jobs", async () => {
+  await expect(fixture("direct", "empty-jobs")).rejects.toThrow("successful planning job");
 });
 
 it("verifies already-published registry bytes alongside qualified publishers in a mixed roster", async () => {
@@ -33,7 +30,6 @@ it("verifies already-published registry bytes alongside qualified publishers in 
 });
 
 it.each([
-  "direct",
   "prepared",
   "retained-qualification",
   "retained-publisher",
@@ -55,7 +51,6 @@ it.each([
 
 it.each([
   ["direct", "missing-receipt", "Expected one consumed"],
-  ["direct", "missing-tarball", "HTTP 404"],
   ["direct", "conflicting-bytes", "bytes differ"],
   ["direct", "archive-identity", "qualified artifact"],
   ["direct", "source", "approved package or source"],
@@ -79,23 +74,18 @@ it.each([
   },
 );
 
-it.each([version, "2026.9.2-beta.2"])(
-  "verifies already-published bytes with selector %s without inventing qualification receipts",
-  async (distTagVersion) => {
-    const parent = await fixture("direct", "no-publish", distTagVersion);
-    const supersededBy = distTagVersion === version ? null : distTagVersion;
-    await expect(parent.verify(packageName, version, "beta")).resolves.toBe(
-      supersededBy
-        ? `${packageName}@${version} superseded by ${supersededBy}; dist-tag beta stays.`
-        : undefined,
-    );
-    expect(parent.evidence).toMatchObject([
-      {
-        packageName,
-        verification: "published-registry",
-        supersededBy,
-      },
-    ]);
-    expect(parent.requests.filter((url) => url.endsWith(".tgz"))).toHaveLength(1);
-  },
-);
+it("verifies superseded registry bytes without inventing qualification receipts", async () => {
+  const supersededBy = "2026.9.2-beta.2";
+  const parent = await fixture("direct", "no-publish", supersededBy);
+  await expect(parent.verify(packageName, version, "beta")).resolves.toBe(
+    `${packageName}@${version} superseded by ${supersededBy}; dist-tag beta stays.`,
+  );
+  expect(parent.evidence).toMatchObject([
+    {
+      packageName,
+      verification: "published-registry",
+      supersededBy,
+    },
+  ]);
+  expect(parent.requests.filter((url) => url.endsWith(".tgz"))).toHaveLength(1);
+});

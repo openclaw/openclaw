@@ -7,24 +7,21 @@ import {
 
 function responseProbe(headers: Headers, readsBody = false) {
   const state = { readStarted: false, canceled: false };
-  const response = new Response(
-    new ReadableStream(
-      {
-        pull(controller) {
-          state.readStarted = true;
-          if (readsBody) {
-            controller.enqueue(new Uint8Array(17));
-          }
-        },
-        cancel() {
-          state.canceled = true;
-        },
+  const body = new ReadableStream(
+    {
+      pull(controller) {
+        state.readStarted = true;
+        if (readsBody) {
+          controller.enqueue(new Uint8Array(17));
+        }
       },
-      { highWaterMark: 0 },
-    ),
-    { headers },
+      cancel() {
+        state.canceled = true;
+      },
+    },
+    { highWaterMark: 0 },
   );
-  return { response, state };
+  return { response: new Response(body, { headers }), state };
 }
 
 describe("scripts bounded response reader", () => {

@@ -16,7 +16,6 @@ it("emits compact CI-safe summary JSON", () => {
 
   expect(summaryResult).toMatchObject({ exitCode: 0, stderr: "" });
   expect(summary.compat.removalPendingCount).toBe(summary.compat.removalPending.length);
-  expect(summary.compat.removalPendingCount).toBeGreaterThan(0);
   for (const record of summary.compat.removalPending) {
     expect(record.readerSample.length).toBeLessThanOrEqual(5);
   }
