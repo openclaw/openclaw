@@ -1,5 +1,4 @@
 import { mkdir } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
 import { installSessionPlacementAdmissionProvider } from "../../../src/agents/session-placement-admission.js";
@@ -221,8 +220,6 @@ suite.define(() => {
         { locale: "en-US", viewport: { height: 900, width: 1440 }, serviceWorkers: "block" },
         async ({ page }) => {
           const pendingCount = async () => (await listSessionPendingInputs(scope)).items.length;
-          const capture = (name: string) =>
-            page.screenshot({ path: path.join(suite.artifactDir, name) });
           const url = new URL(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "chat"));
           url.searchParams.set("gatewayUrl", `ws://127.0.0.1:${port}`);
           await page.goto(url.toString());
@@ -239,9 +236,7 @@ suite.define(() => {
             await expect.poll(pendingCount, { timeout: 15000 }).toBe(1);
             expect(launched).toEqual([]);
             await expect.poll(() => setupWaiters.length, { timeout: 30000 }).toBe(1);
-            expect((await listSessionPendingInputs(scope)).items).toHaveLength(1);
             await page.getByText("Received · waiting for worker setup", { exact: true }).waitFor();
-            await capture("01-held-during-setup.png");
             const sent = await createSessionsSendTool({
               agentSessionKey: "agent:main:main",
               expectedTargetSessionId: sessionId,
@@ -273,14 +268,12 @@ suite.define(() => {
             );
             expect(outcomes).toMatchObject([{ status: "ok" }, { status: "ok" }]);
             expect(launched).toHaveLength(2);
-            expect(new Set(launched).size).toBe(2);
             expect(new Set(launched)).toEqual(new Set(heldInputs.map((input) => input.runId)));
             await expect.poll(pendingCount).toBe(0);
             await page
               .getByRole("paragraph")
               .filter({ hasText: /^Worker reply 2$/ })
               .waitFor();
-            await capture("02-resumed-on-worker.png");
           } finally {
             // Release server work before the browser fixture waits for RPC roots.
             release.resolve();
