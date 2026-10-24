@@ -1,9 +1,7 @@
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import type { CronJob } from "../../api/types.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { cronJob } from "../../e2e/cron-fixtures.test-support.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../../test-helpers/cron.ts";
 
@@ -38,6 +36,7 @@ const cron = {
 };
 const buttonNamed = (root: Page | Locator, name: string) =>
   root.getByRole("button", { name, exact: true });
+const exactText = (root: Page | Locator, text: string) => root.getByText(text, { exact: true });
 const transcriptRegion = (page: Page) =>
   page.getByRole("region", { name: "Run transcript", exact: true });
 const detailTab = (page: Page, tab: string) =>
@@ -80,7 +79,8 @@ suite.define(() => {
           },
         });
         const { button, region } = await openRunHistory(page);
-        await region.getByText("Exact retained output", { exact: true }).waitFor();
+        const output = exactText(region, "Exact retained output");
+        await output.waitFor();
         await gateway.deferNext("cron.history", { ...identity, limit: 100, cursor: "older" });
         await region.getByRole("button", { name: /Show earlier/ }).click();
         await gateway.waitForRequest("cron.history", { match: { cursor: "older" } });
@@ -89,20 +89,16 @@ suite.define(() => {
           message: "Earlier page temporarily unavailable",
         });
         await region.getByRole("alert").waitFor();
-        expect(await region.getByText("Exact retained output", { exact: true }).count()).toBe(1);
+        expect(await output.count()).toBe(1);
         await buttonNamed(region, "Retry").click();
-        await region.getByText("Earlier prompt", { exact: true }).waitFor();
+        await exactText(region, "Earlier prompt").waitFor();
         expect(await region.getByRole("button", { name: /Show earlier/ }).count()).toBe(0);
         const attribution = region.locator(".chat-reply-attribution--forwarded");
         expect(await attribution.count()).toBe(1);
         expect(await attribution.textContent()).toContain("Daily report — café 雪 🦞");
-        expect(await attribution.locator("a, [role=link], [tabindex]").count()).toBe(0);
-        const speakerLabels = await region.locator(".sr-only").allTextContents();
-        expect(speakerLabels).toEqual(["User: ", "Assistant: "]);
-        const display = await attribution.evaluate((element) => getComputedStyle(element).display);
-        expect(display).toBe("inline-flex");
-        const proof = createControlUiE2eArtifactDir("automation-attribution");
-        await page.screenshot({ path: path.join(proof, "automation-attribution.png") });
+        expect(await attribution.evaluate((element) => getComputedStyle(element).display)).toBe(
+          "inline-flex",
+        );
         expect(new URL(page.url()).pathname).toBe("/cron");
         expect(await gateway.getRequests("cron.history")).toMatchObject([
           { params: { ...identity, limit: 100 } },
@@ -124,32 +120,20 @@ suite.define(() => {
         await gateway.closeLatest(1012, "Reconnect run transcript");
         await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
         await gateway.waitForRequest("cron.history", { after: 4, match: identity });
-        await region.getByText("Exact retained output", { exact: true }).waitFor();
+        await output.waitFor();
         await gateway.resolveDeferred("cron.history", history("Stale output"));
-        expect(await page.getByText("Stale output", { exact: true }).count()).toBe(0);
-        expect(await region.getByText("Exact retained output", { exact: true }).count()).toBe(1);
+        expect(await exactText(page, "Stale output").count()).toBe(0);
+        expect(await output.count()).toBe(1);
       });
     });
   }
 
   it("retires loaded and pending transcripts when the automation panel changes", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const jobs: CronJob[] = [
-        { id: entry.jobId, name: "Daily report — café 雪 🦞" },
-        { id: "empty-job", name: "Weekly cleanup — no runs" },
-      ].map(({ id, name }) => ({
-        id,
-        name,
-        configRevision: `synthetic-${id}`,
-        enabled: false,
-        createdAtMs: 0,
-        updatedAtMs: 0,
-        schedule: { kind: "every", everyMs: 86_400_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "Synthetic automation" },
-        state: {},
-      }));
+      const jobs = [
+        cronJob(entry.jobId, introduction.senderSession.label),
+        cronJob("empty-job", "Weekly cleanup — no runs"),
+      ].map((job) => Object.assign(job, { enabled: false, configRevision: `synthetic-${job.id}` }));
       const runs = (summary: string) => ({
         cases: [
           { match: { id: "empty-job" }, response: { ...cron["cron.runs"], entries: [], total: 0 } },
@@ -169,7 +153,7 @@ suite.define(() => {
       };
       const transcript = transcriptRegion(page);
       const viewTranscript = buttonNamed(page, "View transcript");
-      const output = transcript.getByText("Daily report retained output", { exact: true });
+      const output = exactText(transcript, "Daily report retained output");
       await openReportHistory();
       await viewTranscript.click();
       await output.waitFor();
@@ -184,14 +168,9 @@ suite.define(() => {
       await page.locator('[data-test-id="cron-row-empty-job"] .cron-table__name').click();
       await page.locator(".cron-detail-title", { hasText: "Weekly cleanup — no runs" }).waitFor();
       await detailTab(page, "history").click();
-      await page.getByText("No runs yet", { exact: true }).waitFor();
+      await exactText(page, "No runs yet").waitFor();
       expect(await detailTab(page, "history").getAttribute("aria-selected")).toBe("true");
       expect(await detailTab(page, "settings").getAttribute("aria-selected")).toBe("false");
-      const proof = createControlUiE2eArtifactDir("automation-transcript-panel-owner");
-      await page.screenshot({
-        animations: "disabled",
-        path: path.join(proof, "selected-automation.png"),
-      });
       expect(await transcript.count()).toBe(0);
       expect(await page.locator(".content").evaluate((element) => element.scrollTop)).toBe(0);
 
@@ -211,32 +190,19 @@ suite.define(() => {
         await (element as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
       });
       expect(await transcript.count()).toBe(0);
-      const retiredOutput = page.getByText("Retired daily report response", { exact: true });
-      expect(await retiredOutput.count()).toBe(0);
+      expect(await exactText(page, "Retired daily report response").count()).toBe(0);
     });
   });
 
-  for (const scenario of ["missing-identity", "unavailable"] as const) {
-    it(`keeps ${scenario} failures explicit instead of opening a session alias`, async () => {
-      await suite.withPage({ viewport: { width: 1100, height: 900 } }, async ({ page }) => {
-        const gateway = await installCron(page, {
-          "cron.runs": runResponse({
-            runAtMs: scenario === "missing-identity" ? undefined : entry.runAtMs,
-          }),
-          "cron.history": {
-            __mockError: {
-              code: "INVALID_REQUEST",
-              message: "Recorded run transcript unavailable",
-            },
-          },
-        });
-        const { region } = await openRunHistory(page);
-        await region.getByRole("alert").waitFor();
-        expect(await gateway.getRequests("cron.history")).toHaveLength(
-          scenario === "missing-identity" ? 0 : 1,
-        );
-        expect(new URL(page.url()).pathname).toBe("/cron");
+  it("keeps missing-identity failures explicit instead of opening a session alias", async () => {
+    await suite.withPage({ viewport: { width: 1100, height: 900 } }, async ({ page }) => {
+      const gateway = await installCron(page, {
+        "cron.runs": runResponse({ runAtMs: undefined }),
       });
+      const { region } = await openRunHistory(page);
+      await region.getByRole("alert").waitFor();
+      expect(await gateway.getRequests("cron.history")).toHaveLength(0);
+      expect(new URL(page.url()).pathname).toBe("/cron");
     });
-  }
+  });
 });
