@@ -879,7 +879,7 @@ export const zh_TW = {
       nextStepsMessage: "從你準備使用的手機向已連結的 WhatsApp 帳號傳送訊息：「Hello」。",
       nextStepsOpen: "DM 已開放，任何傳送者都可以向已連結的帳號傳送訊息。",
       nextStepsPairing:
-        "如果該手機已在 allowFrom 中，訊息會直接通過；否則請核准 DM 存取請求，然後重新傳送訊息。",
+        "如果該手機已在允許清單中或先前已獲核准，訊息會直接通過；否則請先傳送訊息，如出現 DM 存取請求，請核准後再重新傳送。",
       nextStepsTitle: "WhatsApp 後續步驟",
       nextStepsUnlinked: "請先完成此帳號的連結，再從你準備使用的手機傳送訊息。",
       numberTitle: "WhatsApp 號碼",

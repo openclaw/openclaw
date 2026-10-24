@@ -876,7 +876,7 @@ export const zh_CN = {
       nextStepsMessage: "从你准备使用的手机向已连接的 WhatsApp 账号发送消息：“Hello”。",
       nextStepsOpen: "DM 已开放，任何发送者都可以向已连接的账号发送消息。",
       nextStepsPairing:
-        "如果该手机已在 allowFrom 中，消息会直接通过；否则请批准 DM 访问请求，然后重新发送消息。",
+        "如果该手机已在允许列表中或此前已获批准，消息会直接通过；否则请先发送消息，如出现 DM 访问请求，请批准后再重新发送。",
       nextStepsTitle: "WhatsApp 后续步骤",
       nextStepsUnlinked: "请先完成此账号的绑定，再从你准备使用的手机发送消息。",
       numberTitle: "WhatsApp 号码",

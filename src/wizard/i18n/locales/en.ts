@@ -913,7 +913,7 @@ export const en = {
         'From the phone you plan to use, send a WhatsApp message to the linked account: "Hello".',
       nextStepsOpen: "DMs are open, so any sender can message the linked account.",
       nextStepsPairing:
-        "If that phone is already in allowFrom, it proceeds directly. Otherwise, approve the DM access request, then resend the message.",
+        "If that phone is already allowlisted or previously approved, it proceeds directly. Otherwise, send the message, and approve the DM access request if one appears before resending.",
       nextStepsTitle: "WhatsApp next steps",
       nextStepsUnlinked:
         "Finish linking this account first, then send a message from the phone you plan to use.",

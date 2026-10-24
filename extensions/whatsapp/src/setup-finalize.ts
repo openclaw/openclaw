@@ -200,6 +200,7 @@ export async function finalizeWhatsAppSetup(params: {
         if (persistenceGuardFailure) {
           throw persistenceGuardFailure.error;
         }
+        linked = hasWebCredsSync(authDir);
         params.runtime.error(`WhatsApp login failed: ${String(error)}`);
         await params.prompter.note(
           t("wizard.channels.docs", { link: formatDocsLink("/whatsapp", "whatsapp") }),

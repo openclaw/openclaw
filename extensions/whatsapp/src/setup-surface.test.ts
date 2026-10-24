@@ -296,7 +296,7 @@ describe("whatsapp setup wizard", () => {
 
     expectWhatsAppNextStepsNote(harness, "default", {
       linked: true,
-      guidance: "already in allowFrom",
+      guidance: "allowlisted or previously approved",
     });
   });
 
@@ -321,6 +321,18 @@ describe("whatsapp setup wizard", () => {
     await runFinalizeWithHarness({ harness, runtime });
 
     expect(runtime.error).toHaveBeenCalledWith("WhatsApp login failed: Error: QR expired");
+    expectWhatsAppNextStepsNote(harness, "default", { linked: false });
+  });
+
+  it("reports link readiness after failed re-linking clears credentials", async () => {
+    hoisted.hasWebCredsSync.mockReturnValueOnce(true).mockReturnValue(false);
+    hoisted.loginWeb.mockRejectedValueOnce(new Error("WhatsApp 401"));
+    const harness = createWhatsAppLinkingHarness(createQueuedWizardPrompter);
+    const runtime = createRuntimeSpies();
+
+    await runFinalizeWithHarness({ harness, runtime });
+
+    expect(runtime.error).toHaveBeenCalledWith("WhatsApp login failed: Error: WhatsApp 401");
     expectWhatsAppNextStepsNote(harness, "default", { linked: false });
   });
 
