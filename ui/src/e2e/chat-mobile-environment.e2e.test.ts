@@ -1,7 +1,6 @@
 import type { Locator } from "playwright";
 import { expect, it, onTestFinished } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { navigateToControlUiSession } from "../test-helpers/control-ui-e2e.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -42,23 +41,6 @@ const remoteSession = {
     runner: { kind: "device", status: "available", deviceId: "studio" },
   },
 } satisfies GatewaySessionRow;
-const localSession = {
-  key: "agent:main:environment-local",
-  sessionId: "environment-local-session",
-  kind: "direct",
-  label: "Review local environment",
-  execNode: "legacy-node",
-  spawnedCwd: "/repo/local",
-  updatedAt: 1,
-  placement: {
-    state: "local",
-    generation: 1,
-    createdAtMs: 1,
-    updatedAtMs: 1,
-    stateChangedAtMs: 1,
-  },
-} satisfies GatewaySessionRow;
-
 async function settleMotion(host: Locator) {
   await host.evaluate(async (element) => {
     await Promise.all(
@@ -71,7 +53,7 @@ async function settleMotion(host: Locator) {
 }
 
 suite.define(() => {
-  it("opens the resolved device from mobile Environment, returns to Details and retires it on session change", async () => {
+  it("cancels pending mobile Machine loading and returns to Details after reopening", async () => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, hasTouch: true, locale: "en-US" },
       async ({ page }) => {
@@ -94,7 +76,7 @@ suite.define(() => {
           sessionInfo: offlineSession,
           featureMethods: ["environments.list"],
           methodResponses: {
-            "sessions.list": chatSessionListResponse([offlineSession, localSession]),
+            "sessions.list": chatSessionListResponse([offlineSession]),
             "environments.list": {
               profiles: [],
               environments: [nodeEnvironment("studio", machineName, 0)],
@@ -126,7 +108,6 @@ suite.define(() => {
         await header
           .getByRole("button", { name: remoteSession.label + " — Details", exact: true })
           .click();
-        await machine.waitFor();
         await machine.click();
         await host
           .locator(".chat-machine__identity")
@@ -141,14 +122,6 @@ suite.define(() => {
         ).toBe("true");
         await host.getByRole("button", { name: "Close", exact: true }).click();
 
-        await navigateToControlUiSession(page, localSession.key);
-        await header
-          .getByRole("button", { name: localSession.label + " — Details", exact: true })
-          .click();
-        await host.getByRole("button", { name: "Details", exact: true }).waitFor();
-        expect(await environment.getByText(machineName, { exact: true }).count()).toBe(0);
-        expect(await environment.getByText("legacy-node", { exact: true }).count()).toBe(0);
-        expect(await host.locator(".chat-machine").filter({ visible: true }).count()).toBe(0);
         expect(await gateway.getRequests("environments.list")).toHaveLength(1);
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);

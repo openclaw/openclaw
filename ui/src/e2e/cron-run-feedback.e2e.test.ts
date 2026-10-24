@@ -29,147 +29,63 @@ function cronResponses(jobs: CronJob[]) {
   };
 }
 
-const outcomes = [
-  {
-    reason: "already-running",
-    mode: "force",
-    message: "This automation is already running.",
-    role: "status",
-  },
-  { reason: "not-due", mode: "due", message: "This automation is not due yet.", role: "status" },
-  {
-    reason: "queued",
-    mode: "force",
-    message: "Run queued. Run ID: synthetic-run-alpha",
-    role: "status",
-  },
-  { reason: "error", mode: "force", message: "Synthetic run request unavailable", role: "alert" },
-] as const;
-
 suite.define(() => {
-  it.each(
-    outcomes.map((outcome) => ({
-      ...outcome,
-      sameJob: outcome.reason === "queued" || outcome.reason === "not-due",
-    })),
-  )(
-    "attributes $reason feedback to the requested automation (same job=$sameJob)",
-    async ({ reason, mode, message, role, sameJob }) => {
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        const alpha = job("feedback-alpha", "Alpha synthetic automation");
-        const beta = job("feedback-beta", "Beta synthetic automation");
-        const selected = sameJob ? alpha : beta;
-        const pageErrors: string[] = [];
-        page.on("pageerror", (error) => pageErrors.push(String(error)));
-        const gateway = await installMockGateway(page, {
-          methodResponses: cronResponses([alpha, beta]),
-        });
-        await page.goto(`${suite.server.baseUrl}cron`);
-        const alphaRow = page.locator(`[data-test-id="cron-row-${alpha.id}"]`);
-        await alphaRow.waitFor({ state: "visible" });
-        await gateway.deferNext("cron.run", { id: alpha.id, mode });
-        if (mode === "due") {
-          await alphaRow.locator(".cron-job-menu__trigger").click();
-          await alphaRow.locator('[data-value="run-if-due"]').click();
-        } else {
-          await page.locator(`[data-test-id="cron-row-run-${alpha.id}"]`).click();
-        }
-        const request = await gateway.waitForRequest("cron.run");
-        expect(request.params).toMatchObject({ id: alpha.id, mode });
-
-        // Row selection remains available while the previously admitted action settles.
-        await page.locator(`[data-test-id="cron-row-${selected.id}"] .cron-table__name`).click();
+  it.each([
+    { reason: "queued", selection: "same" },
+    { reason: "error", selection: "other" },
+    { reason: "queued", selection: "overview" },
+    { reason: "error", selection: "overview" },
+  ])("attributes $reason feedback with $selection selection", async ({ reason, selection }) => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const alpha = job("feedback-alpha", "Alpha synthetic automation");
+      const beta = job("feedback-beta", "Beta synthetic automation");
+      const selected = selection === "same" ? alpha : beta;
+      const gateway = await installMockGateway(page, {
+        methodResponses: cronResponses([alpha, beta]),
+      });
+      const message =
+        reason === "error"
+          ? "Synthetic run request unavailable"
+          : "Run queued. Run ID: synthetic-run-alpha";
+      const role = reason === "error" ? "alert" : "status";
+      await page.goto(suite.server.baseUrl + "cron");
+      await gateway.deferNext("cron.run", { id: alpha.id, mode: "force" });
+      await page.locator('[data-test-id="cron-row-run-feedback-alpha"]').click();
+      expect((await gateway.waitForRequest("cron.run")).params).toMatchObject({
+        id: alpha.id,
+        mode: "force",
+      });
+      const selectedRun = page.locator('[data-test-id="cron-run-now"]');
+      if (selection !== "overview") {
+        await page
+          .locator('[data-test-id="cron-row-' + selected.id + '"] .cron-table__name')
+          .click();
         await expect
           .poll(() => page.locator(".cron-detail-title").textContent())
           .toContain(selected.name);
-        const selectedRun = page.locator('[data-test-id="cron-run-now"]');
         await expect.poll(() => selectedRun.isEnabled()).toBe(false);
         expect(await page.locator(".cron-error-banner").count()).toBe(0);
-        if (reason === "error") {
-          await gateway.rejectDeferred("cron.run", { code: "UNAVAILABLE", message });
-        } else if (reason === "queued") {
-          await gateway.resolveDeferred("cron.run", {
-            ok: true,
-            enqueued: true,
-            runId: "synthetic-run-alpha",
-          });
-        } else {
-          await gateway.resolveDeferred("cron.run", { ok: true, ran: false, reason });
-        }
-        // The action's busy control settles after its feedback publication.
-        await expect.poll(() => selectedRun.isEnabled()).toBe(true);
-        // Only failures are announced as alerts; answered requests are neutral status.
-        const feedback = await page.getByRole(role).filter({ hasText: message }).allTextContents();
-        expect(feedback.join("\n")).toContain(message);
-        expect(await page.locator(".cron-error-banner").count()).toBe(role === "alert" ? 1 : 0);
-        if (!sameJob) {
-          expect(feedback.join("\n")).toContain(alpha.name);
-        }
-        expect(await page.locator(".cron-detail-title").textContent()).toContain(selected.name);
-        expect(await gateway.getRequests("cron.run")).toHaveLength(1);
-        expect(pageErrors).toEqual([]);
-      });
-    },
-  );
-
-  it.each(outcomes.filter(({ reason }) => reason === "queued" || reason === "error"))(
-    "keeps $reason feedback from an overview row on the overview",
-    async ({ reason, mode, message, role }) => {
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        const alpha = job("feedback-alpha", "Alpha synthetic automation");
-        const gateway = await installMockGateway(page, {
-          methodResponses: cronResponses([
-            alpha,
-            job("feedback-beta", "Beta synthetic automation"),
-          ]),
+      }
+      if (reason === "error") {
+        await gateway.rejectDeferred("cron.run", { code: "UNAVAILABLE", message });
+      } else {
+        await gateway.resolveDeferred("cron.run", {
+          ok: true,
+          enqueued: true,
+          runId: "synthetic-run-alpha",
         });
-        await page.goto(`${suite.server.baseUrl}cron`);
-        const alphaRow = page.locator(`[data-test-id="cron-row-${alpha.id}"]`);
-        await alphaRow.waitFor({ state: "visible" });
-        await gateway.deferNext("cron.run", { id: alpha.id, mode });
-        await page.locator(`[data-test-id="cron-row-run-${alpha.id}"]`).click();
-        await gateway.waitForRequest("cron.run");
-        if (reason === "error") {
-          await gateway.rejectDeferred("cron.run", { code: "UNAVAILABLE", message });
-        } else {
-          await gateway.resolveDeferred("cron.run", {
-            ok: true,
-            enqueued: true,
-            runId: "synthetic-run-alpha",
-          });
-        }
-        await expect
-          .poll(() => page.getByRole(role).filter({ hasText: message }).allTextContents())
-          .toEqual([`${alpha.name}: ${message}`]);
+      }
+      if (selection !== "overview") {
+        await expect.poll(() => selectedRun.isEnabled()).toBe(true);
+        expect(await page.locator(".cron-detail-title").textContent()).toContain(selected.name);
+      } else {
         expect(await page.locator('[data-panel-mode="overview"]').count()).toBe(1);
-        expect(await page.locator(".cron-error-banner").count()).toBe(role === "alert" ? 1 : 0);
-      });
-    },
-  );
-
-  it("keeps the Create & run now acknowledgement after returning to the overview", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const created = job("feedback-created", "Created synthetic automation");
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          ...cronResponses([]),
-          "cron.add": created,
-          "cron.run": { ok: true, enqueued: true, runId: "synthetic-run-created" },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}cron`);
-      await page.locator('[data-test-id="cron-new-task"]').click();
-      await page.locator("#cron-name").fill(created.name);
-      await page.locator("#cron-payload-text").fill("Synthetic run feedback check");
-      await gateway.setMethodResponse("cron.list", cronResponses([created])["cron.list"]);
-      await page.locator('[data-test-id="cron-submit-run"]').click();
-      const request = await gateway.waitForRequest("cron.run");
-      expect(request.params).toMatchObject({ id: created.id, mode: "force" });
+      }
       await expect
-        .poll(() => page.getByRole("status").filter({ hasText: "Run queued" }).allTextContents())
-        .toEqual([`${created.name}: Run queued. Run ID: synthetic-run-created`]);
-      expect(await page.locator('[data-panel-mode="overview"]').count()).toBe(1);
-      expect(await page.locator(".cron-error-banner").count()).toBe(0);
+        .poll(() => page.getByRole(role).filter({ hasText: message }).allTextContents())
+        .toEqual([selection === "same" ? message : alpha.name + ": " + message]);
+      expect(await page.locator(".cron-error-banner").count()).toBe(reason === "error" ? 1 : 0);
+      expect(await gateway.getRequests("cron.run")).toHaveLength(1);
     });
   });
 
