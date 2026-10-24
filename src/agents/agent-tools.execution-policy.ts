@@ -124,8 +124,12 @@ export function createLocalBrowserLoopbackPreparation(params: BrowserLoopbackPar
   if (!canPrepareLocalBrowserLoopback(params)) {
     return undefined;
   }
-  const pending = {
-    assertCurrent: undefined as (() => void) | undefined,
+  const pending: {
+    assertCurrent: (() => void) | undefined;
+    sync(): void;
+    prepare(shared: PreparedToolConstruction): Promise<void>;
+  } = {
+    assertCurrent: undefined,
     sync() {
       try {
         const sandbox = params.options?.sessionKey

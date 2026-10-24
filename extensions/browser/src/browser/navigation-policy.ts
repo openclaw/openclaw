@@ -16,10 +16,11 @@ export function resolveBrowserNavigationPolicy(
   });
   const scope = getBrowserRequestScope();
   const assertInvocationCurrent = scope?.assertInvocationCurrent;
+  const assertLocalLoopbackCurrent = scope?.assertLocalLoopbackCurrent;
   if (
     scope?.allowLocalLoopback !== true ||
     !assertInvocationCurrent ||
-    !scope.assertLocalLoopbackCurrent ||
+    !assertLocalLoopbackCurrent ||
     resolved.ssrfPolicyConfigured !== false ||
     !isLocalManagedProfile(profile)
   ) {
@@ -50,7 +51,7 @@ export function resolveBrowserNavigationPolicy(
     ssrfPolicy: { ...resolved.ssrfPolicy, allowedHostnames: ["localhost", "127.0.0.1", "::1"] },
     assertNavigationCurrent: () => {
       assertInvocationCurrent();
-      scope.assertLocalLoopbackCurrent();
+      assertLocalLoopbackCurrent();
       if (!ownsLocalProcess()) {
         throw new Error(
           "Automatic loopback preview requires the current OpenClaw-owned local browser process",

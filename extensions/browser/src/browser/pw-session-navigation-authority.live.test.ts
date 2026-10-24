@@ -1,11 +1,8 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
+import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { chromium, type Browser } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  acquireTestPortBlock,
-  type TestPortClaim,
-} from "../../../../src/test-utils/port-claims.js";
 import { isLiveTestEnabled } from "../../test-support.js";
 import {
   gotoPageWithNavigationGuard,
@@ -16,7 +13,7 @@ import {
 // needs real Chromium and two HTTP endpoints, not synthetic route callbacks.
 describe.skipIf(!isLiveTestEnabled())("navigation authority on redirects (real Chromium)", () => {
   let browser: Browser;
-  let ports: TestPortClaim | undefined;
+  let ports: Awaited<ReturnType<typeof acquireTestPortBlock>> | undefined;
   let sourceUrl: string;
   let targetUrl: string;
   let current = true;

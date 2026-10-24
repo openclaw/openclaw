@@ -9,6 +9,11 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createLocalBrowserLoopbackAssertion } from "./agent-tools.execution-policy.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { projectEffectiveExecPolicy } from "./session-permission-exec-mode.js";
+
+const hostExecPolicy = projectEffectiveExecPolicy({
+  base: { host: "gateway", security: "full", ask: "off" },
+});
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -38,7 +43,7 @@ it("revokes an automatic preview when the execution-policy owner restricts host 
     {
       options: { config },
       capabilityProfile: resolveConversationCapabilityProfile({ config }),
-      effectiveExecPolicy: { host: "gateway", security: "full", ask: "off" },
+      effectiveExecPolicy: hostExecPolicy,
       sandboxed: false,
       workspaceOnly: false,
       execApprovals: readCurrent(),
@@ -64,7 +69,7 @@ it("revokes the native turn grant when its inner abort signal closes", () => {
     {
       options: { config, abortSignal: controller.signal },
       capabilityProfile: resolveConversationCapabilityProfile({ config }),
-      effectiveExecPolicy: { host: "gateway", security: "full", ask: "off" },
+      effectiveExecPolicy: hostExecPolicy,
       sandboxed: false,
       workspaceOnly: false,
       execApprovals: approvals,
@@ -90,7 +95,7 @@ it("retires the grant when the runtime config owner publishes a policy change", 
       {
         options: { config },
         capabilityProfile: resolveConversationCapabilityProfile({ config }),
-        effectiveExecPolicy: { host: "gateway", security: "full", ask: "off" },
+        effectiveExecPolicy: hostExecPolicy,
         sandboxed: false,
         workspaceOnly: false,
         execApprovals: approvals,

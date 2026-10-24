@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { Page } from "playwright-core";
 import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import {
@@ -39,12 +40,12 @@ export async function installNavigationAuthorityFence(
   const session = await page.context().newCDPSession(page);
   const states = new Map<NavigationTargetSession, TargetState>();
   const inFlight = new Set<Promise<void>>();
-  let stateChanged = Promise.withResolvers<void>();
+  let stateChanged = createDeferred<void>();
   let closing = false;
   let failed = false;
   const notify = () => {
     stateChanged.resolve();
-    stateChanged = Promise.withResolvers<void>();
+    stateChanged = createDeferred<void>();
   };
   const fail = (error: unknown) => {
     failed = true;
@@ -194,7 +195,7 @@ export async function installNavigationAuthorityFence(
     page.off("close", closed);
   };
   const dispose = async () => {
-    const deadline = Promise.withResolvers<never>();
+    const deadline = createDeferred<never>();
     const timer = setTimeout(() => {
       deadline.reject(new Error("Browser navigation did not settle before authority cleanup"));
     }, resolveBrowserNavigationTimeoutMs());
