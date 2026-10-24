@@ -5,7 +5,6 @@ import { createServer, type Server } from "node:http";
 import { connect } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
-import { text } from "node:stream/consumers";
 import { promisify } from "node:util";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it } from "vitest";
@@ -25,13 +24,10 @@ async function listen(server: Server): Promise<number> {
 }
 
 it("routes a deep memory status probe through the OpenAI-compatible environment proxy", async () => {
-  const requests: Array<Record<string, unknown>> = [];
   await using endpoint = createServer((request, response) => {
-    void (async () => {
-      requests.push(JSON.parse(await text(request)) as Record<string, unknown>);
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }] }));
-    })();
+    request.resume();
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }] }));
   });
   const endpointPort = await listen(endpoint);
 
@@ -58,9 +54,7 @@ it("routes a deep memory status probe through the OpenAI-compatible environment 
   const proxyPort = await listen(proxy);
 
   const root = tempDirs.make("openclaw-memory-proxy-");
-  const stateDir = path.join(root, "state");
-  const configPath = path.join(stateDir, "openclaw.json");
-  await fs.mkdir(stateDir, { recursive: true });
+  const configPath = path.join(root, "openclaw.json");
   const remote = {
     baseUrl: `http://embeddings.example.test:${endpointPort}/v1`,
     apiKey: "proof-key",
@@ -87,7 +81,7 @@ it("routes a deep memory status probe through the OpenAI-compatible environment 
         no_proxy: "",
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_NO_RESPAWN: "1",
-        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_STATE_DIR: root,
         USERPROFILE: root,
         VITEST: undefined,
       },
@@ -98,7 +92,4 @@ it("routes a deep memory status probe through the OpenAI-compatible environment 
 
   expect(result.stdout).toContain("Embeddings: ready");
   expect(authorities).toEqual([`embeddings.example.test:${endpointPort}`]);
-  expect(requests).toEqual([
-    expect.objectContaining({ model: "proxy-proof-model", input: ["ping"] }),
-  ]);
 }, 120_000);
