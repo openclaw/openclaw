@@ -686,6 +686,11 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: liquid":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/liquid/**"
+          - "docs/providers/liquid.md"
 "extensions: bifrost":
   - changed-files:
       - any-glob-to-any-file:

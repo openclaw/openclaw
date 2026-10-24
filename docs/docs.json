@@ -2268,6 +2268,10 @@
                     ]
                   },
                   {
+                    "group": "Decision models",
+                    "pages": ["providers/liquid"]
+                  },
+                  {
                     "group": "Speech and audio",
                     "pages": [
                       "providers/azure-speech",

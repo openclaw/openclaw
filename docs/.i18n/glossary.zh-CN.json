@@ -5146,5 +5146,21 @@
   {
     "source": "PostgreSQL operator guide",
     "target": "PostgreSQL 运维指南"
+  },
+  {
+    "source": "Liquid AI",
+    "target": "Liquid AI"
+  },
+  {
+    "source": "Liquid plugin reference",
+    "target": "Liquid 插件参考"
+  },
+  {
+    "source": "liquid",
+    "target": "liquid"
+  },
+  {
+    "source": "Liquid AI (Decision models)",
+    "target": "Liquid AI（决策模型）"
   }
 ]
