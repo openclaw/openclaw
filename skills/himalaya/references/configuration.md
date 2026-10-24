@@ -2,6 +2,11 @@
 
 Configuration file location: `~/.config/himalaya/config.toml`
 
+These examples use the Himalaya 2.1+ schema. Check `himalaya --version` before
+reusing configuration written for an older release. Himalaya can generate a
+discovered account with `himalaya configure`; providers that are not discovered
+can be configured manually as shown below.
+
 ## Minimal IMAP + SMTP Setup
 
 ```toml
@@ -10,47 +15,41 @@ email = "user@example.com"
 display-name = "Your Name"
 default = true
 
-# IMAP backend for reading emails
-backend.type = "imap"
-backend.host = "imap.example.com"
-backend.port = 993
-backend.encryption.type = "tls"
-backend.login = "user@example.com"
-backend.auth.type = "password"
-backend.auth.raw = "your-password"
+mailbox.alias.inbox = "INBOX"
 
-# SMTP backend for sending emails
-message.send.backend.type = "smtp"
-message.send.backend.host = "smtp.example.com"
-message.send.backend.port = 587
-message.send.backend.encryption.type = "start-tls"
-message.send.backend.login = "user@example.com"
-message.send.backend.auth.type = "password"
-message.send.backend.auth.raw = "your-password"
+# IMAP for reading email
+imap.server = "imaps://imap.example.com:993"
+imap.sasl.plain.username = "user@example.com"
+imap.sasl.plain.password.command = "pass show email/imap"
+
+# SMTP for sending email
+smtp.server = "smtp://smtp.example.com:587"
+smtp.starttls = true
+smtp.sasl.plain.username = "user@example.com"
+smtp.sasl.plain.password.command = "pass show email/smtp"
 ```
 
 ## Password Options
 
-### Raw password (testing only, not recommended)
-
-```toml
-backend.auth.raw = "your-password"
-```
+Password settings belong to a protocol and SASL mechanism. Prefer a command
+that reads the secret from a password manager.
 
 ### Password from command (recommended)
 
 ```toml
-backend.auth.cmd = "pass show email/imap"
-# backend.auth.cmd = "security find-generic-password -a user@example.com -s imap -w"
+imap.sasl.plain.password.command = "pass show email/imap"
+smtp.sasl.plain.password.command = "pass show email/smtp"
+# macOS Keychain examples:
+# imap.sasl.plain.password.command = "security find-generic-password -a user@example.com -s imap -w"
+# smtp.sasl.plain.password.command = "security find-generic-password -a user@example.com -s smtp -w"
 ```
 
-### System keyring (requires keyring feature)
+### Raw password (testing only, not recommended)
 
 ```toml
-backend.auth.keyring = "imap-example"
+imap.sasl.plain.password.raw = "your-password"
+smtp.sasl.plain.password.raw = "your-password"
 ```
-
-Then run `himalaya account configure <account>` to store the password.
 
 ## Gmail Configuration
 
@@ -60,21 +59,19 @@ email = "you@gmail.com"
 display-name = "Your Name"
 default = true
 
-backend.type = "imap"
-backend.host = "imap.gmail.com"
-backend.port = 993
-backend.encryption.type = "tls"
-backend.login = "you@gmail.com"
-backend.auth.type = "password"
-backend.auth.cmd = "pass show google/app-password"
+mailbox.alias.inbox = "INBOX"
+mailbox.alias.sent = "[Gmail]/Sent Mail"
+mailbox.alias.drafts = "[Gmail]/Drafts"
+mailbox.alias.trash = "[Gmail]/Trash"
+mailbox.alias.archive = "[Gmail]/All Mail"
 
-message.send.backend.type = "smtp"
-message.send.backend.host = "smtp.gmail.com"
-message.send.backend.port = 587
-message.send.backend.encryption.type = "start-tls"
-message.send.backend.login = "you@gmail.com"
-message.send.backend.auth.type = "password"
-message.send.backend.auth.cmd = "pass show google/app-password"
+imap.server = "imaps://imap.gmail.com:993"
+imap.sasl.plain.username = "you@gmail.com"
+imap.sasl.plain.password.command = "pass show google/app-password"
+
+smtp.server = "smtps://smtp.gmail.com:465"
+smtp.sasl.plain.username = "you@gmail.com"
+smtp.sasl.plain.password.command = "pass show google/app-password"
 ```
 
 **Note:** Gmail requires an App Password if 2FA is enabled.
@@ -83,38 +80,34 @@ message.send.backend.auth.cmd = "pass show google/app-password"
 
 ```toml
 [accounts.icloud]
-email = "you@icloud.com"
+email = "johnappleseed@icloud.com"
 display-name = "Your Name"
 
-backend.type = "imap"
-backend.host = "imap.mail.me.com"
-backend.port = 993
-backend.encryption.type = "tls"
-backend.login = "you@icloud.com"
-backend.auth.type = "password"
-backend.auth.cmd = "pass show icloud/app-password"
+mailbox.alias.inbox = "INBOX"
+mailbox.alias.sent = "Sent Messages"
 
-message.send.backend.type = "smtp"
-message.send.backend.host = "smtp.mail.me.com"
-message.send.backend.port = 587
-message.send.backend.encryption.type = "start-tls"
-message.send.backend.login = "you@icloud.com"
-message.send.backend.auth.type = "password"
-message.send.backend.auth.cmd = "pass show icloud/app-password"
+imap.server = "imaps://imap.mail.me.com:993"
+imap.sasl.plain.username = "johnappleseed"
+imap.sasl.plain.password.command = "pass show icloud/app-password"
+
+smtp.server = "smtp://smtp.mail.me.com:587"
+smtp.starttls = true
+smtp.sasl.plain.username = "johnappleseed@icloud.com"
+smtp.sasl.plain.password.command = "pass show icloud/app-password"
 ```
 
 **Note:** Generate an app-specific password at appleid.apple.com
 
-## Folder Aliases
+## Mailbox Aliases
 
 Map custom folder names:
 
 ```toml
-[accounts.default.folder.alias]
-inbox = "INBOX"
-sent = "Sent"
-drafts = "Drafts"
-trash = "Trash"
+[accounts.default]
+mailbox.alias.inbox = "INBOX"
+mailbox.alias.sent = "Sent"
+mailbox.alias.drafts = "Drafts"
+mailbox.alias.trash = "Trash"
 ```
 
 ## Multiple Accounts
@@ -123,11 +116,11 @@ trash = "Trash"
 [accounts.personal]
 email = "personal@example.com"
 default = true
-# ... backend config ...
+# ... protocol config ...
 
 [accounts.work]
 email = "work@company.com"
-# ... backend config ...
+# ... protocol config ...
 ```
 
 Switch accounts with `--account`:
@@ -136,27 +129,27 @@ Switch accounts with `--account`:
 himalaya --account work envelope list
 ```
 
-## Notmuch Backend (local mail)
+## Maildir Backend (local mail)
 
 ```toml
 [accounts.local]
 email = "user@example.com"
-
-backend.type = "notmuch"
-backend.db-path = "~/.mail/.notmuch"
+mailbox.alias.inbox = "INBOX"
+maildir.root = "~/.mail"
 ```
 
-## OAuth2 Authentication (for providers that support it)
+## OAuth 2.0 Tokens (for providers that support them)
 
 ```toml
-backend.auth.type = "oauth2"
-backend.auth.client-id = "your-client-id"
-backend.auth.client-secret.cmd = "pass show oauth/client-secret"
-backend.auth.access-token.cmd = "pass show oauth/access-token"
-backend.auth.refresh-token.cmd = "pass show oauth/refresh-token"
-backend.auth.auth-url = "https://provider.com/oauth/authorize"
-backend.auth.token-url = "https://provider.com/oauth/token"
+imap.sasl.oauthbearer.username = "user@example.com"
+imap.sasl.oauthbearer.token.command = "pass show oauth/access-token"
+
+smtp.sasl.oauthbearer.username = "user@example.com"
+smtp.sasl.oauthbearer.token.command = "pass show oauth/access-token"
 ```
+
+The command must return a usable access token. Himalaya does not perform the
+authorization or refresh flow for this SASL setting.
 
 ## Additional Options
 
@@ -181,4 +174,17 @@ Set via environment variable:
 
 ```bash
 export EDITOR="vim"
+```
+
+## Troubleshooting
+
+If `himalaya account check` reports `No backend matching \`auto\` is configured
+for this account`, first compare the configuration schema with the installed
+Himalaya version. Current releases ignore keys under `backend`,
+`message.send.backend`, and `folder.alias`. Use `imap`, `smtp`, and
+`mailbox.alias` instead, then confirm the configured protocols with:
+
+```bash
+himalaya account list
+himalaya account check
 ```
