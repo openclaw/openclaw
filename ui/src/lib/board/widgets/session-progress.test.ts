@@ -229,3 +229,79 @@ it("uses the exact target's live status even when it is outside the roster", asy
   await vi.waitFor(() => expect(runtime()).toContain(t("sessionProgressCard.runtime.idle")));
   expect(retry()).toBeNull();
 });
+
+it("follows a replacement session generation at the same dashboard target", async () => {
+  let row: GatewaySessionRow = {
+    key: "agent:main:progress-widget",
+    agentId: "main",
+    sessionId: "original-progress-session",
+    kind: "direct",
+    status: "running",
+    startedAt: 100,
+    updatedAt: 101,
+    snapshotAt: 101,
+    hasActiveRun: true,
+  };
+  const card = {
+    sessionKey: row.key,
+    revision: 1,
+    updatedAt: 101,
+    steps: [{ step: "Collect findings", status: "in_progress" as const }],
+  };
+  const owner = createContext(
+    async () => ({ card }),
+    async () => ({ session: row }),
+  );
+  const { element } = mount(owner.context);
+  const runtime = () => element.querySelector(".session-progress-card__runtime")?.textContent;
+  await vi.waitFor(() => expect(element.querySelector(".session-run-spinner")).not.toBeNull());
+
+  row = {
+    ...row,
+    sessionId: "replacement-progress-session",
+    status: "done",
+    hasActiveRun: false,
+    startedAt: 200,
+    endedAt: 210,
+    updatedAt: 210,
+    snapshotAt: 210,
+  };
+  owner.emitEvent({
+    type: "event",
+    event: "sessions.changed",
+    payload: { reason: "create", agentId: "main", session: row, ancestorSessions: [], ts: 210 },
+  });
+  await vi.waitFor(() => expect(runtime()).toContain(t("sessionProgressCard.runtime.idle")));
+  expect(element.querySelector(".session-run-spinner")).toBeNull();
+  expect(owner.subscriptions()).toEqual([1, 2]);
+
+  row = {
+    ...row,
+    status: "running",
+    hasActiveRun: true,
+    activeRunIds: ["replacement-run"],
+    lastRunId: "replacement-run",
+    startedAt: 220,
+    endedAt: undefined,
+    updatedAt: 220,
+    snapshotAt: 220,
+  };
+  owner.emitEvent({
+    type: "event",
+    event: "sessions.changed",
+    payload: {
+      reason: "run-capacity",
+      agentId: "main",
+      session: row,
+      ancestorSessions: [],
+      ts: 220,
+    },
+  });
+  await vi.waitFor(() => expect(runtime()).toContain(t("sessionProgressCard.runtime.working")));
+  // The retained plan predates this run, so only the runtime line becomes active.
+  expect(element.querySelector(".session-run-spinner")).toBeNull();
+  expect(owner.subscriptions()).toEqual([1, 2]);
+  element.remove();
+  await element.updateComplete;
+  expect(owner.subscriptions()[0]).toBe(0);
+});

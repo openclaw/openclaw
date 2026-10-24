@@ -652,3 +652,18 @@ it("counts only hydrated direct children and keeps current failures separate fro
       .children,
   ).toBeUndefined();
 });
+
+it("counts an interrupted child as stopped only for its current progress snapshot", () => {
+  const session = { ...parent, hasActiveSubagentRun: false };
+  const roster = {
+    subagentSessions: [
+      { ...child, status: "interrupted" as const, hasActiveRun: false, endedAt: 3000 },
+    ],
+    subagentSessionsHydrated: true,
+  };
+  expect(projectProgressCardRuntime(session, roster, 2000)).toMatchObject({
+    hasActiveSubagentRun: false,
+    children: { running: 0, queued: 0, waiting: 0, failed: 0, stopped: 1 },
+  });
+  expect(projectProgressCardRuntime(session, roster, 3001).children?.stopped).toBe(0);
+});

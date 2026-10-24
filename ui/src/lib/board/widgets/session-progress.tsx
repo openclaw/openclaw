@@ -118,41 +118,62 @@ function SessionProgressWidgetContent(
         }
         let alive = true;
         const observedTarget = { key: scope.sessionKey, agentId };
-        const current = () =>
-          alive && host.isConnected && host.active && observation?.isCurrent() === true;
+        const current = (observed: SessionRowObservation | undefined) =>
+          alive &&
+          host.isConnected &&
+          host.active &&
+          observation === observed &&
+          observed?.isCurrent() === true;
         const refresh = async () => {
-          if (reading || !current()) {
+          const observed = observation;
+          if (reading || !current(observed)) {
             return;
           }
           reading = true;
           notify();
-          const reconcile = observation!.captureReconcile();
+          const reconcile = observed!.captureReconcile();
           try {
             const result = await context.sessions.describe(observedTarget);
-            if (current() && reconcile(result.session ?? undefined).status === "current") {
+            if (current(observed) && reconcile(result.session ?? undefined).status === "current") {
               unavailable = false;
             }
           } catch {
-            if (current()) {
+            if (current(observed)) {
               unavailable = true;
             }
           } finally {
-            reading = false;
-            if (current()) {
-              notify();
+            if (observation === observed) {
+              reading = false;
+              if (current(observed)) {
+                notify();
+              }
             }
           }
         };
         retry = () => void refresh();
-        observation = context.sessions.observeRow(
-          observedTarget,
-          () => {
-            unavailable = false;
-            notify();
-          },
-          { onInvalidate: retry },
-        );
-        void refresh();
+        const bind = () => {
+          observation?.dispose();
+          // A held successor can be delivered synchronously while registering.
+          observation = undefined;
+          reading = false;
+          unavailable = false;
+          observation = context.sessions.observeRow(
+            observedTarget,
+            () => {
+              if (!alive || !host.isConnected || !host.active) {
+                return;
+              }
+              unavailable = false;
+              if (observation?.isCurrent() === false) {
+                bind();
+              }
+              notify();
+            },
+            { onInvalidate: retry },
+          );
+          void refresh();
+        };
+        bind();
         return () => {
           alive = false;
           observation?.dispose();

@@ -150,12 +150,13 @@ export function projectProgressCardRuntime(
       } else if (row.endedAt !== undefined && row.endedAt >= updatedAt) {
         // A newer authored snapshot has already had a chance to reconcile this
         // outcome. Never carry failures from an older task into a new card.
-        if (row.status === "failed" || row.status === "timeout") {
+        const outcome = endedWithoutFinishing(row);
+        if (outcome === "failed") {
           children.failed++;
           childError ??= row.lastRunError
             ? `${resolveSessionDisplayName(row.key, row)}: ${row.lastRunError}`
             : resolveSessionDisplayName(row.key, row);
-        } else if (row.status === "killed") {
+        } else if (outcome === "stopped") {
           children.stopped++;
         }
       }
