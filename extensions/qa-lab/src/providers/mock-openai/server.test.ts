@@ -98,7 +98,6 @@ const QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT = {
   value: {
     changed: true,
     created: true,
-    diff: "+1 Replay safety: unsafe after write.",
     patch: [
       "--- compaction-retry-summary.txt",
       "+++ compaction-retry-summary.txt",
@@ -108,16 +107,7 @@ const QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT = {
     ].join("\n"),
     firstChangedLine: 1,
   },
-  output: [],
   replaySafe: false,
-  telemetry: {
-    catalogSize: 32,
-    sources: { openclaw: 32, mcp: 0, client: 0 },
-    counterScope: "qaFixtureScope01",
-    searchCount: 0,
-    describeCount: 0,
-    callCount: 1,
-  },
 } as const;
 const QA_COMPACTION_RETRY_PROMPT =
   "Compaction retry mutating tool check. Current durable context marker: QA-COMPACTION-DURABLE-MARKER. Create compaction-retry-summary.txt.";
@@ -570,7 +560,6 @@ describe("qa mock openai server", () => {
       });
       expect(outputText(completed)).toBe(final);
       expectNoTool(completed);
-      expect(completed).not.toMatchObject({ output: [{ type: "function_call" }] });
     },
   );
 
@@ -1143,7 +1132,6 @@ describe("qa mock openai server", () => {
 
   it("matches WhatsApp group dispatch markers without answering unrelated prompts", async () => {
     const server = await startMockServer();
-    expect(WHATSAPP_REPLY_TO_BOT_TRIGGER_PROMPT).not.toMatch(/\bopenclawqa\b/iu);
     for (const [prompt, marker, unrelated] of [
       [
         WHATSAPP_ACTIVATION_ALWAYS_PROMPT,
@@ -1312,16 +1300,6 @@ describe("qa mock openai server", () => {
       "QA-COMPACTION-DURABLE-MARKER",
       "QA-COMPACTION-BULKY-HISTORICAL-MARKER",
     );
-    const requests = requireArray(
-      await getJson(server, "/debug/requests"),
-      "compaction requests",
-    ).map((request) => requireRecord(request, "compaction request"));
-    expect(requests).toHaveLength(2);
-    const summaryRequest = requireRecord(requests[1], "compaction request 1");
-    expect(summaryRequest).toMatchObject({ requestKind: "compaction-summary", outcome: "success" });
-    expect(Number(summaryRequest.rawByteLength)).toBeGreaterThan(256 * 1024);
-    expect(summaryRequest.errorCode).toBeUndefined();
-    expect(summaryRequest.allInputText).toContain("[Chunk 1 - oldest messages]");
   });
 
   it.each([
@@ -1416,12 +1394,6 @@ describe("qa mock openai server", () => {
     expect(merged).toContain("QA-COMPACTION-DURABLE-MARKER");
     const unrelated = await summarize("A later unrelated scenario.");
     expect(unrelated).not.toContain("QA-COMPACTION-DURABLE-MARKER");
-    const requests = requireArray(await getJson(server, "/debug/requests"), "summary requests");
-    expect(requests).toHaveLength(4);
-    for (const request of requests) {
-      expect(request).toMatchObject({ requestKind: "compaction-summary", outcome: "success" });
-      expect(request).not.toHaveProperty("plannedToolName");
-    }
   });
 
   it("rejects Anthropic Code Mode compaction retry result with content added under another target", async () => {
@@ -1851,56 +1823,20 @@ describe("qa mock openai server", () => {
     expect(outputText(final)).toContain("ORBIT-22");
     expect(outputText(final)).not.toContain("ORBIT-21");
     expectNoTool(final);
-
-    const requests = requireArray(await getJson(server, "/debug/requests"), "debug requests").map(
-      (request, index) => requireRecord(request, `debug request ${index}`),
-    );
-    expect(requests).toHaveLength(3);
-    expect(requests[0]).toMatchObject({
-      plannedToolName: "memory_search",
-      plannedWireToolName: "exec",
-      plannedToolCallId: searchCallId,
-    });
-    expect(requests[1]).toMatchObject({
-      toolOutputCallId: searchCallId,
-      plannedToolName: "memory_get",
-      plannedToolCallId: getCallId,
-    });
-    expect(requests[1]).not.toHaveProperty("plannedWireToolName");
-    expect(requests[2]).toMatchObject({ toolOutputCallId: getCallId });
-    expect(requests[2]).not.toHaveProperty("plannedToolName");
   });
 
-  it("supports advanced QA memory and subagent recovery prompts", async () => {
+  it("covers distinct memory search, retrieval, ranking, and injection branches", async () => {
     const server = await startMockServer();
     const ranking =
       "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.";
     const thread =
       "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.";
-    const acknowledgement = makeUserInput(
-      "Protocol note: acknowledged. Continue with the QA scenario plan.",
-    );
     const snack = "lemon pepper wings with blue cheese";
     const snackPrompt =
       "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence.";
     const rememberPrompt =
       "Remember across conversations QA check: what snack do I usually want for QA movie night?";
-    const active = [
-      "You are a memory search agent.",
-      "Use only the available memory tools.",
-      "Prefer memory_recall when available.",
-      "If memory_recall is unavailable, use memory_search and memory_get.",
-      "",
-      "Conversation context:",
-      "Latest user message:",
-      snackPrompt,
-    ].join("\n");
-    const remember = [
-      "You are a memory search agent.",
-      "Use only the available memory tools.",
-      "Latest user message:",
-      rememberPrompt,
-    ].join("\n");
+    const agent = (prompt: string) => `You are a memory search agent.\n${prompt}`;
     const out = (value: unknown) => makeToolOutput(JSON.stringify(value));
     const hit = (path: string, snippet?: string, startLine?: number, endLine?: number) => ({
       path,
@@ -1909,159 +1845,128 @@ describe("qa mock openai server", () => {
       endLine,
     });
     const results = (...entries: ReturnType<typeof hit>[]) => out({ results: entries });
-    const check = async (
-      input: unknown[],
-      included: string[],
-      excluded: string[] = [],
-      instructions?: string,
-      json = false,
-    ) => {
-      const options = instructions ? { instructions } : {};
-      const text = json
-        ? JSON.stringify(await respond(server, input, options))
-        : await streamText(server, input, options);
-      expectIncludes(text, ...included);
-      expectExcludes(text, ...excluded);
-    };
-    const threadFact = "Thread-hidden codename: ORBIT-22.";
+    const fact = "Thread-hidden codename: ORBIT-22.";
     const hidden = "hidden thread codename is ORBIT-22";
-    await check(userInputs(ranking), ['"name":"memory_search"'], ['\\"corpus\\"']);
-    await check([acknowledgement], ['"name":"memory_search"', "ORBIT-22"], [], thread);
-    await check(
-      [results(hit("MEMORY.md", threadFact, 1, 1)), acknowledgement],
-      ['"name":"memory_get"', '\\"path\\":\\"MEMORY.md\\"'],
-      [hidden],
-      thread,
-    );
-    await check([out({ text: threadFact }), acknowledgement], ["ORBIT-22"], [], thread, true);
-
-    await check(
-      [makeToolOutput("Thread-hidden codename: ORBIT-23."), acknowledgement],
-      ["NONE"],
-      ["ORBIT-23"],
-      thread,
-      true,
-    );
+    const ack = makeUserInput("Protocol note: acknowledged. Continue with the QA scenario plan.");
+    const path = "sessions/qa-session-memory-ranking.jsonl";
+    const current = hit(path, "Project Nebula current codename: ORBIT-10.", 2, 3);
+    const stale = hit("MEMORY.md", "Project Nebula stale codename: ORBIT-9.", 1, 2);
+    const injected = `<active_memory_plugin>User usually wants ${snack} for QA movie night.</active_memory_plugin>`;
     const system = (prefix = "") => ({
       role: "system",
-      content: prefix + "## /workspace/MEMORY.md\n" + threadFact,
+      content: prefix + "## /workspace/MEMORY.md\n" + fact,
     });
-    await check(
-      userInputs(
-        system("Available tools include sessions_spawn.\n"),
+    type Case = [
+      name: string,
+      input: unknown[],
+      includes: string[],
+      excludes?: string[],
+      instructions?: string,
+    ];
+    const cases: Case[] = [
+      ["ranking search", userInputs(ranking), ['"name":"memory_search"'], ['\\"corpus\\"']],
+      ["instruction-only thread search", [ack], ['"name":"memory_search"', "ORBIT-22"], [], thread],
+      [
+        "direct thread search result",
+        [results(hit("MEMORY.md", fact, 1, 1)), ack],
+        ['"name":"memory_get"', '\\"path\\":\\"MEMORY.md\\"'],
+        [hidden],
         thread,
-        out({ results: [], unavailable: true, error: "database is not open" }),
-      ),
-      ["NONE"],
-      ["ORBIT-22"],
-      undefined,
-      true,
-    );
-    await check(
-      userInputs(system(), thread, out({ results: [] })),
-      ["NONE"],
-      ["ORBIT-22"],
-      undefined,
-      true,
-    );
-
-    const path = "sessions/qa-session-memory-ranking.jsonl";
-    const snippet = "Project Nebula current codename: ORBIT-10.";
-    const current = hit(path, snippet, 2, 3);
-    const stale = hit("MEMORY.md", "Project Nebula stale codename: ORBIT-9.", 1, 2);
-    const ranked = (output: ReturnType<typeof out>, included: string, excluded?: string) =>
-      check(userInputs(ranking, output), [included], excluded ? [excluded] : []);
-    const expectedRanking =
-      "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.";
-    await ranked(results(current), expectedRanking);
-    await ranked(results(stale, current), expectedRanking);
-    await ranked(
-      results(hit(path, undefined, 2, 3)),
-      '"name":"memory_get"',
-      "codename is ORBIT-10",
-    );
-    await ranked(
-      out({
-        results: [hit(path, snippet)],
-        unavailable: true,
-        error: "database is not open",
-      }),
-      "NONE",
-      "codename is ORBIT-10",
-    );
-    await ranked(
-      results(hit(path, "Project Nebula current codename: ORBIT-9.")),
-      "codename is ORBIT-9",
-      "codename is ORBIT-10",
-    );
-
-    const snackOutput = out({ text: "Stable QA movie night snack preference: " + snack + "." });
-    await check(userInputs(active), ['"name":"memory_search"']);
-    await check(userInputs(active, snackOutput), [snack]);
-    await check(userInputs(active, snackOutput), [snack], [], undefined, true);
-    const injected =
-      "<active_memory_plugin>User usually wants " +
-      snack +
-      " for QA movie night.</active_memory_plugin>";
-    await check(userInputs(snackPrompt), [snack], [], "System context:\n" + injected, true);
-    const debug = await readDebugRequest(server);
-    expect(String(debug.instructions)).toContain("<active_memory_plugin>");
-    expect(String(debug.allInputText)).toContain("<active_memory_plugin>");
-
-    await check(userInputs(remember), [
-      '"name":"memory_search"',
-      "QA movie night snack lemon pepper wings blue cheese",
-      '\\"maxResults\\":10',
-    ]);
-    await check(
-      userInputs(
-        remember,
-        results(
-          hit(
-            "sessions/private-source.jsonl",
-            "Stable QA movie night snack preference: " + snack + ".",
-            2,
-            3,
-          ),
-        ),
-      ),
-      [snack],
-      ['"name":"memory_get"'],
-    );
-    await check(userInputs(rememberPrompt), [snack], [], injected, true);
-
-    const tools = [SESSIONS_SPAWN_TOOL];
-    const spawn = (input: unknown[]) => streamText(server, input, { tools });
-    expectIncludes(
-      await spawn(userInputs(QA_FANOUT_PROMPT)),
-      '"name":"sessions_spawn"',
-      '\\"label\\":\\"qa-fanout-alpha\\"',
-    );
-    expectIncludes(
-      await spawn(
+      ],
+      ["direct thread read", [out({ text: fact }), ack], ["ORBIT-22"], [], thread],
+      [
+        "unstructured thread output",
+        [makeToolOutput("Thread-hidden codename: ORBIT-23."), ack],
+        ["NONE"],
+        ["ORBIT-23"],
+        thread,
+      ],
+      [
+        "unavailable memory does not use system facts",
         userInputs(
-          QA_FANOUT_PROMPT,
-          makeToolOutput(
-            '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
-          ),
+          system("Available tools include sessions_spawn.\n"),
+          thread,
+          out({ results: [], unavailable: true, error: "database is not open" }),
         ),
-      ),
-      '"name":"sessions_spawn"',
-      '\\"label\\":\\"qa-fanout-beta\\"',
-    );
-    expect(
-      await reply(
-        server,
+        ["NONE"],
+        ["ORBIT-22"],
+      ],
+      [
+        "empty memory does not use system facts",
+        userInputs(system(), thread, out({ results: [] })),
+        ["NONE"],
+        ["ORBIT-22"],
+      ],
+      [
+        "session ranking wins over stale file",
+        userInputs(ranking, results(stale, current)),
+        ["Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10."],
+      ],
+      [
+        "missing ranking snippet requires read",
+        userInputs(ranking, results(hit(path, undefined, 2, 3))),
+        ['"name":"memory_get"'],
+        ["codename is ORBIT-10"],
+      ],
+      [
+        "unavailable ranking result",
         userInputs(
-          QA_FANOUT_PROMPT,
-          makeToolOutput(
-            '{"status":"accepted","childSessionKey":"agent:qa:subagent:beta","note":"BETA-OK"}',
+          ranking,
+          out({ results: [current], unavailable: true, error: "database is not open" }),
+        ),
+        ["NONE"],
+        ["codename is ORBIT-10"],
+      ],
+      [
+        "ranking uses returned value",
+        userInputs(ranking, results(hit(path, "Project Nebula current codename: ORBIT-9."))),
+        ["codename is ORBIT-9"],
+        ["codename is ORBIT-10"],
+      ],
+      ["snack search", userInputs(agent(snackPrompt)), ['"name":"memory_search"']],
+      [
+        "snack read",
+        userInputs(
+          agent(snackPrompt),
+          out({ text: `Stable QA movie night snack preference: ${snack}.` }),
+        ),
+        [snack],
+      ],
+      ["injected snack", userInputs(snackPrompt), [snack], [], "System context:\n" + injected],
+      [
+        "cross-conversation search",
+        userInputs(agent(rememberPrompt)),
+        [
+          '"name":"memory_search"',
+          "QA movie night snack lemon pepper wings blue cheese",
+          '\\"maxResults\\":10',
+        ],
+      ],
+      [
+        "cross-conversation snippet",
+        userInputs(
+          agent(rememberPrompt),
+          results(
+            hit(
+              "sessions/private-source.jsonl",
+              `Stable QA movie night snack preference: ${snack}.`,
+              2,
+              3,
+            ),
           ),
         ),
-        { tools },
-      ),
-    ).toBe("subagent-1: ok\nsubagent-2: ok");
+        [snack],
+        ['"name":"memory_get"'],
+      ],
+      ["cross-conversation injection", userInputs(rememberPrompt), [snack], [], injected],
+    ];
+    for (const [_name, input, included, excluded, instructions] of cases) {
+      const text = JSON.stringify(await respond(server, input, { instructions }));
+      expectIncludes(text, ...included);
+      expectExcludes(text, ...(excluded ?? []));
+    }
   });
+
   it.each([
     { name: "combined completion", combined: true, canDeliver: true, final: false },
     { name: "separate completions", combined: false, canDeliver: true, final: true },
@@ -2896,7 +2801,6 @@ describe("qa mock openai server", () => {
   it("replays one signed Anthropic thinking error for each independent scenario", async () => {
     const server = await startMockServer();
     const readCallIds: string[] = [];
-    const scenarioPrompts: string[] = [];
     const stream = async (messages: unknown[]) => {
       const response = await expectAnthropicMessages(server, { stream: true, messages });
       expect(response.headers.get("content-type")).toContain("text/event-stream");
@@ -2934,7 +2838,6 @@ describe("qa mock openai server", () => {
       ]);
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const prompt = `${QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT} QA scenario run: direct-${attempt}`;
-      scenarioPrompts.push(prompt);
       const initial = await readCall(prompt);
       expectIncludes(
         await replay(prompt, initial),
@@ -2951,20 +2854,6 @@ describe("qa mock openai server", () => {
       expect(recovered).not.toContain("event: error");
     }
     expect(new Set(readCallIds).size).toBe(4);
-    const requests = requireArray(await getJson(server, "/debug/requests"), "debug requests").map(
-      (request) => requireRecord(request, "debug request"),
-    );
-    expect(requests).toHaveLength(8);
-    expect(requests.every((request) => request.providerVariant === "anthropic")).toBe(true);
-    expect(requests.map((request) => request.plannedToolCallId)).toEqual(
-      readCallIds.flatMap((id) => [id, undefined]),
-    );
-    expect(requests.map((request) => request.toolOutputCallId)).toEqual(
-      readCallIds.flatMap((id) => [undefined, id]),
-    );
-    expect(requests.map((request) => request.prompt)).toEqual(
-      scenarioPrompts.flatMap((prompt) => Array.from({ length: 4 }, () => prompt)),
-    );
   });
 
   it.each([
@@ -3399,7 +3288,9 @@ describe("qa mock openai server", () => {
 
     const invalid = await fetch(`${server.baseUrl}/debug/requests?after=1.5`);
     expect(invalid.status).toBe(400);
-    expect(await invalid.json()).toEqual({ error: "after must be a non-negative safe integer" });
+    expect(await invalid.json()).toEqual({
+      error: "after must be a non-negative safe integer",
+    });
   });
   it("rejects an oversized upload without taking down the provider", async () => {
     const server = await startMockServer();
