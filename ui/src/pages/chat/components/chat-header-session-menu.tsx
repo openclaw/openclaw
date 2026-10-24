@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createProjection, createSignal, lazy, onSettled } from "solid-js";
+import { createProjection, createSignal, Errored, lazy, Loading, onSettled } from "solid-js";
 import type { UiSettings } from "../../../app/settings.ts";
 import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-options.ts";
 import type {
@@ -9,7 +9,7 @@ import type {
 import type { CompactSessionMenuView } from "../../../components/session-menu-compact.ts";
 import { EMPTY_SESSION_MENU_DATA } from "../../../components/session-menu-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { LazyMenuContent } from "../../../components/solid/lazy-view-error.tsx";
+import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import {
   createMenuControls,
   Menu,
@@ -175,33 +175,45 @@ function ChatHeaderSessionMenuShell(
         return handlers?.items() ?? [];
       },
       render: (renderItems) => (
-        <LazyMenuContent
-          onErrorShown={focusReady}
-          onRetry={() => {
-            openingFocus = host.ownerDocument.activeElement;
-            focusLast = false;
+        <Errored
+          fallback={(error, reset) => {
+            onSettled(focusReady);
+            return (
+              <LazyViewError
+                error={error()}
+                onRetry={() => {
+                  openingFocus = host.ownerDocument.activeElement;
+                  focusLast = false;
+                  reset();
+                }}
+                retryRef={controls.ref()}
+                inline
+              />
+            );
           }}
-          retryRef={controls.ref()}
-          fallback={renderItems(() => [
-            {
-              id: "header-session-loading",
-              label: t("common.loading"),
-              disabled: true,
-            },
-          ])}
         >
-          <Content
-            menuProps={props}
-            host={host}
-            controls={controls}
-            presented={presented()}
-            compactView={compactView()}
-            onCompactViewChange={setCompactView}
-            readMenu={() => menu}
-            onReady={ready}
-            renderItems={renderItems}
-          />
-        </LazyMenuContent>
+          <Loading
+            fallback={renderItems(() => [
+              {
+                id: "header-session-loading",
+                label: t("common.loading"),
+                disabled: true,
+              },
+            ])}
+          >
+            <Content
+              menuProps={props}
+              host={host}
+              controls={controls}
+              presented={presented()}
+              compactView={compactView()}
+              onCompactViewChange={setCompactView}
+              readMenu={() => menu}
+              onReady={ready}
+              renderItems={renderItems}
+            />
+          </Loading>
+        </Errored>
       ),
     },
   ];

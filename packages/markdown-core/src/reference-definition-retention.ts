@@ -73,7 +73,7 @@ function skipContainerPrefixes(text: string, start: number) {
   return cursor;
 }
 
-export function listMarkerEnd(text: string, start: number) {
+function listMarkerEnd(text: string, start: number) {
   const first = text[start] ?? "";
   let markerEnd = start;
   if (first === "-" || first === "+" || first === "*") {

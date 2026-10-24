@@ -17,7 +17,6 @@ import type {
 } from "../../../api/types.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import type { MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerSessionPeopleEnglish } from "../../../i18n/locales/en-session-people.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
@@ -395,43 +394,4 @@ export function projectChatSessionSharingRoster(
         ...rows,
       ]
     : rows;
-}
-
-export function createChatSessionSharingPermissionBranch(
-  row: () => ChatSessionSharingRosterRow,
-  busy: () => boolean,
-): MenuEntry {
-  return {
-    id: `permission:${row().identity.id}`,
-    class: "chat-pane__sharing-permission",
-    get label() {
-      return `${row().identity.label ?? row().identity.id}, ${row().controlLabel}`;
-    },
-    get trigger() {
-      return row().controlLabel;
-    },
-    get disabled() {
-      return !busy() && Boolean(row().disabledReason);
-    },
-    get attributes(): MenuItem["attributes"] {
-      return {
-        title: row().disabledReason,
-        "aria-disabled": busy() ? "true" : undefined,
-      };
-    },
-    onBeforeShow(event) {
-      if (busy()) {
-        event.preventDefault();
-      }
-    },
-    get children() {
-      return row().options.map((level) => ({
-        id: `permission:${level}:${row().identity.id}`,
-        label: chatSessionPermissionLabel(level),
-        type: "radio" as const,
-        checked: row().level === level,
-        closeOnSelect: false,
-      }));
-    },
-  };
 }

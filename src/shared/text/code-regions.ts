@@ -3,7 +3,6 @@ import {
   findMarkdownCodeRegions as findCodeRegions,
   parseMarkdownOwnership,
 } from "../../../packages/markdown-core/src/reasoning-tags.js";
-import { listMarkerEnd } from "../../../packages/markdown-core/src/reference-definition-retention.js";
 
 export { findCodeRegions };
 
@@ -267,7 +266,7 @@ function findReferenceDefinitionLabelStart(text: string, lineStart: number, line
       continue;
     }
 
-    const markerEnd = listMarkerEnd(text, markerStart);
+    const markerEnd = listMarkerEnd(text, markerStart, lineEnd);
     if (markerEnd > markerStart) {
       cursor = markerEnd;
       while (cursor < lineEnd && (text[cursor] === " " || text[cursor] === "\t")) {
@@ -282,6 +281,31 @@ function findReferenceDefinitionLabelStart(text: string, lineStart: number, line
     cursor += 1;
   }
   return text[cursor] === "[" ? cursor : -1;
+}
+
+function listMarkerEnd(text: string, start: number, lineEnd: number) {
+  const first = text[start] ?? "";
+  let markerEnd = start;
+  if (first === "-" || first === "+" || first === "*") {
+    markerEnd += 1;
+  } else if (first >= "0" && first <= "9") {
+    while (
+      markerEnd < lineEnd &&
+      (text[markerEnd] ?? "") >= "0" &&
+      (text[markerEnd] ?? "") <= "9"
+    ) {
+      markerEnd += 1;
+    }
+    const delimiter = text[markerEnd] ?? "";
+    if (markerEnd - start > 9 || (delimiter !== "." && delimiter !== ")")) {
+      return start;
+    }
+    markerEnd += 1;
+  } else {
+    return start;
+  }
+  const trailingSpace = text[markerEnd];
+  return trailingSpace === " " || trailingSpace === "\t" ? markerEnd : start;
 }
 
 function hasReferenceDefinitionColon(text: string, labelStart: number) {

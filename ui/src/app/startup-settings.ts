@@ -11,8 +11,8 @@ import {
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
   type ControlUiBootstrapProfileHint,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import type { GatewayBrowserClientOptions } from "../api/gateway.ts";
 import { inferBasePathFromPathname, sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
-import type { ApplicationGatewayOptions } from "./gateway.ts";
 import { createNativeGatewayConnectAuth } from "./native-gateway-auth.ts";
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import {
@@ -77,7 +77,16 @@ export function resolveApplicationStartupSettings(
   let pendingGatewayToken: string | null = null;
   let pendingBootstrapToken: string | null = null;
   let pendingBootstrapProfile: ControlUiBootstrapProfileHint | null = null;
-  let nativeClient: NonNullable<ApplicationGatewayOptions["clientOptions"]> | null = null;
+  let nativeClient: Pick<
+    GatewayBrowserClientOptions,
+    | "clientName"
+    | "mode"
+    | "platform"
+    | "deviceFamily"
+    | "instanceId"
+    | "scopes"
+    | "nativeConnectAuth"
+  > | null = null;
 
   const updateSettings = (patch: Partial<UiSettings>) => {
     const entries = Object.entries(patch) as Array<

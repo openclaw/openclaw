@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { Errored, Loading, onSettled, Show } from "solid-js";
+import { Show } from "solid-js";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { statusIconPaths } from "../icon-data-status.ts";
@@ -179,34 +179,5 @@ export function PanelErrorState(props: {
         </openclaw-modal-actions>
       ) : undefined}
     </div>
-  );
-}
-
-export function LazyMenuContent(props: {
-  children: SolidJSX.Element;
-  fallback: SolidJSX.Element;
-  onErrorShown: () => void;
-  onRetry: () => void;
-  retryRef: (button: HTMLButtonElement) => void;
-}) {
-  return (
-    <Errored
-      fallback={(error, reset) => {
-        onSettled(props.onErrorShown);
-        return (
-          <LazyViewError
-            error={error()}
-            onRetry={() => {
-              props.onRetry();
-              reset();
-            }}
-            retryRef={props.retryRef}
-            inline
-          />
-        );
-      }}
-    >
-      <Loading fallback={props.fallback}>{props.children}</Loading>
-    </Errored>
   );
 }

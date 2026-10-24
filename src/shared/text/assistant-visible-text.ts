@@ -18,7 +18,6 @@ import { modelSpecialTokensTextFilter } from "./model-special-tokens.js";
 import { createReasoningTagProbe, stripReasoningTagsFromText } from "./reasoning-tags.js";
 import {
   applyTextFilters,
-  createActivatedProjector,
   createConditionalTextProjector,
   leadingEmptyLinesTextFilter,
   trimTextFilter,
@@ -479,11 +478,22 @@ function createPlainToolCallTextProjector() {
   const resolveProtectedRanges = createAppendCodeRegionResolver();
   const checkpoint = (text: string, settleBefore: number) =>
     projectPlainTextToolCallBlocks(text, { resolveProtectedRanges, settleBefore });
-  return createActivatedProjector({
-    transform: plainToolCallTransform,
-    activationTokens: plainToolCallActivationTokens,
+  const activation = new RegExp(plainToolCallActivationTokens.map(escapeRegExp).join("|"), "i");
+  const overlap = Math.max(...plainToolCallActivationTokens.map((token) => token.length - 1));
+  let active = false;
+  let tail = "";
+  return createConditionalTextProjector(
+    plainToolCallTransform,
+    (input) => {
+      if (!active) {
+        const appended = tail + (input.delta ?? input.text);
+        active = activation.test(appended);
+        tail = !active && overlap ? appended.slice(-overlap) : "";
+      }
+      return active;
+    },
     checkpoint,
-  });
+  );
 }
 
 export const plainToolCallTextFilter: TextFilter = {

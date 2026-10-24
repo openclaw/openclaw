@@ -1,9 +1,9 @@
 import type { JSX } from "@solidjs/web";
-import { createUniqueId, lazy, onSettled, Show } from "solid-js";
+import { createUniqueId, Errored, lazy, Loading, onSettled, Show } from "solid-js";
 import { PersonAvatarLink } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { LazyMenuContent } from "../../../components/solid/lazy-view-error.tsx";
+import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import {
   createMenuControls,
   Menu,
@@ -78,30 +78,42 @@ export function ChatSessionSharing(props: ChatSessionSharingProps) {
         return sharing?.items() ?? [];
       },
       render: (renderItems) => (
-        <LazyMenuContent
-          onErrorShown={focusReady}
-          onRetry={() => {
-            openingFocus = menu?.overlay.surface.ownerDocument.activeElement;
-            focusLast = false;
+        <Errored
+          fallback={(error, reset) => {
+            onSettled(focusReady);
+            return (
+              <LazyViewError
+                error={error()}
+                onRetry={() => {
+                  openingFocus = menu?.overlay.surface.ownerDocument.activeElement;
+                  focusLast = false;
+                  reset();
+                }}
+                retryRef={controls.ref()}
+                inline
+              />
+            );
           }}
-          retryRef={controls.ref()}
-          fallback={renderItems(() => [
-            { id: "sharing-loading", label: t("common.loading"), disabled: true },
-          ])}
         >
-          <Content
-            sharing={props}
-            controls={controls}
-            readMenu={() => menu}
-            onReady={(next) => {
-              sharing = next;
-              if (next && menu?.overlay.open) {
-                focusReady();
-              }
-            }}
-            renderItems={renderItems}
-          />
-        </LazyMenuContent>
+          <Loading
+            fallback={renderItems(() => [
+              { id: "sharing-loading", label: t("common.loading"), disabled: true },
+            ])}
+          >
+            <Content
+              sharing={props}
+              controls={controls}
+              readMenu={() => menu}
+              onReady={(next) => {
+                sharing = next;
+                if (next && menu?.overlay.open) {
+                  focusReady();
+                }
+              }}
+              renderItems={renderItems}
+            />
+          </Loading>
+        </Errored>
       ),
     },
   ];
