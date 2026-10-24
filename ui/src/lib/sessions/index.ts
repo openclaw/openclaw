@@ -556,7 +556,7 @@ export function createSessionCapability(
     } | null;
     // Recaps are opt-in Activity data; shared session queries never include them.
     if (event.event === "sessions.changed" && payload?.reason === "activity-summary") {
-      roster.captureEvent(event.payload).deliver(event);
+      roster.observations.captureEventDelivery(connection.capture()).deliver(event);
       return;
     }
     const canApplySnapshot = roster.canApplyPrimarySnapshot(event.payload);

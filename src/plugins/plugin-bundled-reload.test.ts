@@ -30,6 +30,61 @@ afterEach(async () => {
 });
 type Probe = { value: string; increment: () => number; late: () => Promise<string> };
 
+it.each(["_scriptName", "import.meta.url"])(
+  "does not capture the host build for a discarded URL based on %s",
+  async (base) => {
+    const root = temp.make("bundled-reload-url-base-");
+    const captures = temp.make("bundled-reload-url-captures-");
+    const plugin = path.join(root, "dist/extensions/demo");
+    const entry = path.join(plugin, "index.mjs");
+    const codec = path.join(root, "dist/codec.mjs");
+    const asset = path.join(root, "dist/codec.wasm");
+    const unrelated = path.join(root, "dist/unrelated/private.txt");
+    const codecBytes = `const _scriptName = import.meta.url;
+    export const asset = new URL("./codec.wasm", _scriptName);
+    export function probe() {
+      if (globalThis.window) new URL(".", ${base}).href;
+    }`;
+    fs.mkdirSync(plugin, { recursive: true });
+    fs.mkdirSync(path.dirname(unrelated), { recursive: true });
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
+    fs.writeFileSync(entry, 'export { probe } from "../../codec.mjs";');
+    fs.writeFileSync(codec, codecBytes);
+    fs.writeFileSync(asset, Buffer.from("0061736d01000000", "hex"));
+    fs.writeFileSync(unrelated, "unrelated host asset");
+    fs.writeFileSync(
+      path.join(root, "dist/runtime-dependency-ownership.json"),
+      JSON.stringify({
+        chunks: {
+          "codec.mjs": {
+            sha256: createHash("sha256").update(codecBytes).digest("hex"),
+            extensions: ["demo"],
+          },
+        },
+      }),
+    );
+    const policy = resolveBundledPluginReloadSource(plugin);
+    const artifact = withPluginSourceCaptureDirectory(captures, () =>
+      capturePluginGenerationArtifact(
+        ...bundledPluginCaptureInputs(plugin, entry, policy, false, false),
+        (run) => run(),
+        undefined,
+        undefined,
+        undefined,
+        policy,
+      ),
+    );
+    try {
+      expect(artifact.hasSource(entry)).toBe(true);
+      expect(artifact.hasSource(codec)).toBe(true);
+      expect(artifact.hasSource(asset)).toBe(true);
+      expect(artifact.hasSource(unrelated)).toBe(false);
+    } finally {
+      await artifact.disposeAsync();
+    }
+  },
+);
+
 it("leaves absolute host imports outside a captured dependency's package untouched", async () => {
   const root = temp.make("bundled-reload-dependency-source-");
   const captures = temp.make("bundled-reload-dependency-captures-");

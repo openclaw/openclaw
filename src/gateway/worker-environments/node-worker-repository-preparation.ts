@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { appendGitConfig, gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type {
@@ -36,7 +37,7 @@ const { origin, token } = JSON.parse(fs.readFileSync(0, "utf8"));
 const env = { ...process.env };
 for (const key of Object.keys(env)) if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key)) delete env[key];
 Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" });
-if (token) Object.assign(env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "http." + origin + ".extraheader", GIT_CONFIG_VALUE_0: "Authorization: Basic " + Buffer.from("x-access-token:" + token).toString("base64") });
+Object.assign(env, (${appendGitConfig.toString()})(${JSON.stringify(gitMaintenanceEnvironment())}, token ? [["http." + origin + ".extraheader", "Authorization: Basic " + Buffer.from("x-access-token:" + token).toString("base64")]] : []));
 const args = process.argv.slice(1);
 // Identity-scoped workspaces can put partial-clone .promisor files at MAX_PATH.
 if (process.platform === "win32") args.unshift("-c", "core.longpaths=true");
@@ -52,6 +53,7 @@ const env = { ...process.env };
 for (const key of Object.keys(env)) if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key)) delete env[key];
 const nil = process.platform === "win32" ? "NUL" : "/dev/null";
 Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: nil, GIT_TERMINAL_PROMPT: "0", GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1" });
+Object.assign(env, ${JSON.stringify(gitMaintenanceEnvironment())});
 const git = (args, allowDetached = false) => {
   const result = spawnSync("git", ["-c", "core.hooksPath=" + nil, "-c", "core.fsmonitor=false", ...args], {
     env, encoding: "utf8", timeout: 30000, maxBuffer: 262144,

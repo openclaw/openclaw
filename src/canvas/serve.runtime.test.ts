@@ -6,7 +6,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import { createCanvasDocument, resolveCanvasDocumentsDir } from "./documents.js";
 import { handleCanvasDocumentHttpRequest } from "./serve.runtime.js";
-import { buildWidgetDocument } from "./wrap.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let stateDir: string;
@@ -50,38 +49,29 @@ async function expectHead(url: string) {
 }
 
 describe("core canvas document host", () => {
-  it.each([
-    [
-      "stored",
-      `<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'self'"><script src="/__openclaw__/a2ui/a2ui.bundle.js"></script>`,
-    ],
-    [
-      "new",
-      buildWidgetDocument(
-        "Registered renderer",
-        '<script src="/__openclaw__/a2ui/a2ui-v0.9.bundle.js"></script>',
-        { scriptOrigins: ["'self'"] },
-      ),
-    ],
-    ["sandbox-marked", "<html><body>widget</body></html>"],
-  ])("serves %s HTML unchanged with the sandbox and renderer policy", async (_, html) => {
-    const document = await createHtmlDocument(html, "scripts");
-    const response = await capture(document.entryUrl);
-    expect(response).toMatchObject({ handled: true, statusCode: 200, text: html });
-    expect(["content-type", "cache-control", "referrer-policy"].map(response.getHeader)).toEqual([
-      "text/html; charset=utf-8",
-      "no-store",
-      "no-referrer",
-    ]);
-    const csp = String(response.getHeader("content-security-policy"));
-    const scripts = csp.split(";").find((directive) => directive.trim().startsWith("script-src "));
-    expect(scripts?.split(/\s+/)).toContain("'self'");
-    expect(csp).toContain("sandbox allow-scripts");
-    expect(csp).toContain("default-src 'none'");
-    expect(csp).toContain("https://cdn.jsdelivr.net");
-    expect(csp).toContain("font-src data:");
-    expect(csp).toContain("connect-src 'none'");
-  });
+  it.each([["sandbox-marked", "<html><body>widget</body></html>"]])(
+    "serves %s HTML unchanged with the sandbox policy",
+    async (_, html) => {
+      const document = await createHtmlDocument(html, "scripts");
+      const response = await capture(document.entryUrl);
+      expect(response).toMatchObject({ handled: true, statusCode: 200, text: html });
+      expect(["content-type", "cache-control", "referrer-policy"].map(response.getHeader)).toEqual([
+        "text/html; charset=utf-8",
+        "no-store",
+        "no-referrer",
+      ]);
+      const csp = String(response.getHeader("content-security-policy"));
+      const scripts = csp
+        .split(";")
+        .find((directive) => directive.trim().startsWith("script-src "));
+      expect(scripts?.split(/\s+/)).toContain("'self'");
+      expect(csp).toContain("sandbox allow-scripts");
+      expect(csp).toContain("default-src 'none'");
+      expect(csp).toContain("https://cdn.jsdelivr.net");
+      expect(csp).toContain("font-src data:");
+      expect(csp).toContain("connect-src 'none'");
+    },
+  );
 
   it("omits the sandbox response header for unmarked documents", async () => {
     const document = await createHtmlDocument("<html><body>plain</body></html>");

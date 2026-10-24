@@ -73,6 +73,7 @@ export function createWorkerProviderLifecycle(
     finishConfirmedProvisionCleanup,
     preserveIndeterminateProvisionCleanup,
     destroy,
+    reclaim,
     retireMismatchedLease,
   } = createWorkerProviderOwnerLifecycle({
     ...options,
@@ -88,9 +89,7 @@ export function createWorkerProviderLifecycle(
           environmentId: record.environmentId,
           state: record.state,
           lastError: "Unused prepared worker expired",
-          assertCurrent: () => {
-            requireCurrentOwner(record);
-          },
+          assertCurrent: () => requireCurrentOwner(record),
         })
       : record;
 
@@ -734,6 +733,7 @@ export function createWorkerProviderLifecycle(
         return store.get(record.environmentId);
       }),
     destroy,
+    reclaim,
     identityResolverFor,
     ...machineCatalog,
     providerFor,

@@ -432,7 +432,10 @@ export function captureGatewayToolCallerAssertion(
   const assertCurrent = composeSessionSourceAssertion(
     [
       selection?.assertCurrent,
-      caller.operatorAuthority?.assertCurrent,
+      // Selection already checks its exact operator source in this synchronous guard.
+      selection?.operatorAuthority === caller.operatorAuthority
+        ? undefined
+        : caller.operatorAuthority?.assertCurrent,
       composeSessionSourceAssertion(
         isCurrent ? [captureGatewayToolReceiptAssertion(isCurrent)] : [],
         (assertReceipt) => {

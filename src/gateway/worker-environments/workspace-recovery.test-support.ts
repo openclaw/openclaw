@@ -35,6 +35,7 @@ export function createWorkerWorkspaceRecoveryFixture(options: {
     report: WorkerSessionPlacementIdentity & WorkerWorkspaceConflictReport,
   ) => Promise<void>;
   reportFailure?: (report: WorkerWorkspaceRecoveryFailureReport) => Promise<void>;
+  reportNote?: (report: WorkerSessionPlacementIdentity & { note: string }) => Promise<void>;
 }): Pick<PlacementRecoveryDeps, "resolveWorkspace" | "withPreparedRecovery"> {
   return {
     resolveWorkspace: options.resolveWorkspace,
@@ -59,6 +60,7 @@ export function createWorkerWorkspaceRecoveryFixture(options: {
         reportConflict: (report) =>
           guarded(() => options.reportConflict?.({ ...identity, ...report })),
         reportFailure: (error) => guarded(() => options.reportFailure?.({ ...identity, error })),
+        reportNote: (note) => guarded(() => options.reportNote?.({ ...identity, note })),
       });
     },
   };

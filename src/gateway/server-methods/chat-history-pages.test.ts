@@ -5,7 +5,7 @@ import {
   encodeChatHistoryResponsePage,
   enrichChatHistoryCompactionMarkers,
   prepareChatHistoryResponsePage,
-} from "./chat-history-response-page.js";
+} from "../chat-history-response-page.js";
 
 it.each([undefined, false, true])(
   "deflates encoded history only when requested (%s)",

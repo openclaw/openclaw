@@ -14,6 +14,7 @@ import { BoardSnapshotSchema } from "../packages/gateway-protocol/src/schema/boa
 import { CommandsListResultSchema } from "../packages/gateway-protocol/src/schema/commands.js";
 import {
   AgentActivityItemSchema,
+  AgentActivityDelegationSchema,
   ChatHistoryParamsSchema,
   ChatPendingInputsPageSchema,
 } from "../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -270,29 +271,25 @@ async function main() {
   if (args.some((arg) => arg !== "--check")) {
     throw new Error("Usage: pnpm ui:validators:gen [--check]");
   }
-  // Activity items are flat scalar records. Fail if their schema needs deeper cleaning.
-  const needsDeepClean = (value: unknown): boolean => {
-    if (!value || typeof value !== "object") {
-      return false;
+  // Activity receipts are the only nested record; keep their cleaner schema-derived too.
+  for (const schema of [AgentActivityItemSchema, AgentActivityDelegationSchema]) {
+    if (ObjectOptions(schema).additionalProperties !== false) {
+      throw new Error("Activity cleaners require closed records");
     }
-    return Object.entries(value).some(
-      ([key, child]) =>
-        (key === "type" && (child === "object" || child === "array")) ||
-        key === "$ref" ||
-        needsDeepClean(child),
-    );
-  };
-  if (
-    ObjectOptions(AgentActivityItemSchema).additionalProperties !== false ||
-    Object.values(AgentActivityItemSchema.properties).some(needsDeepClean)
-  ) {
-    throw new Error("AgentActivityItem needs a recursive standalone cleaner");
   }
   const cleaner = `const activityKeys = new Set(${JSON.stringify(Object.keys(AgentActivityItemSchema.properties))});
-    export function cleanAgentActivityItem(value) {
+    const delegationKeys = new Set(${JSON.stringify(Object.keys(AgentActivityDelegationSchema.properties))});
+    function cleanRecord(value, keys) {
       if (typeof value !== "object" || value === null || Array.isArray(value)) return value;
       for (const key of Object.getOwnPropertyNames(value)) {
-        if (!activityKeys.has(key)) delete value[key];
+        if (!keys.has(key)) delete value[key];
+      }
+      return value;
+    }
+    export function cleanAgentActivityItem(value) {
+      cleanRecord(value, activityKeys);
+      if (value && typeof value === "object" && Array.isArray(value.delegation)) {
+        for (const receipt of value.delegation) cleanRecord(receipt, delegationKeys);
       }
       return value;
     }`;

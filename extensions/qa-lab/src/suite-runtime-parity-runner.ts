@@ -6,7 +6,13 @@ import type { QaEvidenceSummaryV3Json } from "./evidence-summary.js";
 import { remapModelRefForForcedRuntime } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { RuntimeId } from "./runtime-id.js";
-import { runRuntimeParityScenario, type RuntimeParityCell } from "./runtime-parity.js";
+import {
+  isRuntimeParityResultPass,
+  runRuntimeParityScenario,
+  runtimeParityCellStatus,
+  type RuntimeParityCell,
+  type RuntimeParityResult,
+} from "./runtime-parity.js";
 import { createQaSuiteEvidenceInvocation, rebaseQaSuiteEvidence } from "./suite-evidence.js";
 import {
   mapQaSuiteWithConcurrency,
@@ -16,7 +22,6 @@ import {
 import { createQaSuiteProgressController } from "./suite-progress.js";
 import { completeQaSuiteRun } from "./suite-run-completion.js";
 import { createQaSuiteRunResources } from "./suite-run-resources.js";
-import { buildRuntimeParityScenarioResult } from "./suite-runtime-parity-result.js";
 import type {
   QaSuiteRunParams,
   QaSuiteRunner,
@@ -31,6 +36,34 @@ import {
   throwQaSuiteCleanupErrors,
   writeQaSuiteProgress,
 } from "./suite.js";
+
+// QA Lab projects canonical runtime-pair results into suite scenario results.
+function formatRuntimeParityCellDetails(cell: RuntimeParityCell) {
+  const errors = [cell.transportErrorClass, cell.runtimeErrorClass].filter(Boolean).join(", ");
+  const sentinels = cell.sentinelFindings?.map((finding) => finding.kind).join(", ");
+  return [
+    `runtime=${cell.runtime}`,
+    `wallMs=${cell.wallClockMs}`,
+    ...(cell.bootstrapWallClockMs === undefined
+      ? []
+      : [`bootstrapMs=${cell.bootstrapWallClockMs}`]),
+    `toolCalls=${cell.toolCalls.length}`,
+    `finalChars=${cell.finalText.length}`,
+    `tokens=${cell.usage.totalTokens}`,
+    ...(errors ? [`errors=${errors}`] : []),
+    ...(sentinels ? [`sentinels=${sentinels}`] : []),
+  ].join(" ");
+}
+
+function runtimeParityScenarioResultStatus(result: RuntimeParityResult) {
+  if (isRuntimeParityResultPass(result)) {
+    return "pass";
+  }
+  const statuses = new Set(
+    [result.cells.openclaw, result.cells.codex].map(runtimeParityCellStatus),
+  );
+  return !statuses.has("fail") && statuses.has("skip") ? "skip" : "fail";
+}
 
 export async function runQaRuntimeParitySuite(
   params: Omit<QaSuiteRunParams, "channelDriver" | "scenarioIds"> &
@@ -241,10 +274,27 @@ export async function runQaRuntimeParitySuite(
             },
           });
 
-          const parityResult = buildRuntimeParityScenarioResult({
-            scenarioName: scenario.title,
-            result: parity,
-          });
+          const driftStepStatus = runtimeParityScenarioResultStatus(parity);
+          const parityResult: QaSuiteScenarioResult = {
+            name: scenario.title,
+            status: driftStepStatus,
+            details: parity.driftDetails ?? `runtime drift classified as ${parity.drift}`,
+            steps: [
+              ...[parity.cells.openclaw, parity.cells.codex].map((cell) => ({
+                name: cell.runtime,
+                status: runtimeParityCellStatus(cell),
+                details: [cell.details, formatRuntimeParityCellDetails(cell)]
+                  .filter(Boolean)
+                  .join("\n"),
+              })),
+              {
+                name: "runtime drift",
+                status: driftStepStatus,
+                details: parity.driftDetails ?? parity.drift,
+              },
+            ],
+            runtimeParity: parity,
+          };
           recordingComparison = true;
           const parityScenarioResult = await recording.record(index, comparisonId, parityResult, {
             diagnostic: true,

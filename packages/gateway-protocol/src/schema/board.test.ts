@@ -66,18 +66,8 @@ it("BoardSnapshotSchema: accepts optional HTML widget view metadata", () => {
   });
   accepts(BoardSnapshotSchema, withWidget());
   accepts(BoardSnapshotSchema, withWidget({ contentOwner: "html" }));
-  accepts(
-    BoardSnapshotSchema,
-    withWidget({
-      contentKind: "plugin",
-      pluginKind: "diagrams:diagram",
-      contentOwner: "registered",
-      registeredContentKind: "diagram",
-    }),
-  );
   for (const invalid of [
     { contentOwner: "unknown" },
-    { contentOwner: "registered", registeredContentKind: "Invalid Kind" },
     { frameUrl: 42 },
     { presentation: "floating" },
     { heightMode: "elastic" },

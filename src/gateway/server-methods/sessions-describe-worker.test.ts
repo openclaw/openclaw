@@ -35,6 +35,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { holdSubagentExecution } from "../session-row-projection.read-fixture.test-support.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
+import { sessionTitleRequests } from "../session-title-state.js";
 import { reportPlacementTransition } from "../worker-environments/placement-record.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { sessionReader } from "./sessions-keyed-read.test-support.js";
@@ -213,6 +214,40 @@ async function afterCommittedChange(
     readiness.mockRestore();
   }
 }
+
+it("reuses unchanged descriptions across readers while sampling pending titles live", () =>
+  withFixture(async ({ context, describe }) => {
+    await describe();
+    const projection = getSessionRowProjection(context)!;
+    using present = vi.spyOn(projection, "present");
+    const owner = identifiedClient(ensureProfileForEmail("owner@example.com").id);
+    const readOwner = () => describeSession(context, owner);
+    const viewerRow = await describe();
+    const ownerRow = await readOwner();
+    expect(viewerRow).toMatchObject({ session: { sharingRole: "viewer", titlePending: false } });
+    expect(ownerRow).toMatchObject({ session: { sharingRole: "owner", titlePending: false } });
+    for (let index = 0; index < 3; index++) {
+      expectSession(await describe(), { sharingRole: "viewer", titlePending: false });
+      expectSession(await readOwner(), { sharingRole: "owner", titlePending: false });
+    }
+    expect(present).toHaveBeenCalledTimes(1);
+    const record = projection.describe({ agentId: "main", key: targetKey })!;
+    const generation = createDeferredCore<boolean>();
+    const pending = sessionTitleRequests.run(
+      { storePath: record.storeTarget.storePath, sessionKey: targetKey, sessionId: "original" },
+      () => generation.promise,
+    );
+    try {
+      expectSession(await describe(), { titlePending: true, sharingRole: "viewer" });
+      expectSession(await readOwner(), { titlePending: true, sharingRole: "owner" });
+    } finally {
+      generation.resolve(false);
+      await pending;
+    }
+    expectSession(await describe(), { titlePending: false, sharingRole: "viewer" });
+    expectSession(await readOwner(), { titlePending: false, sharingRole: "owner" });
+    expect(viewerRow).toMatchObject({ session: { titlePending: false } });
+  }));
 
 it("captures current registry facts after list owner publications", () =>
   withFixture(async ({ context, viewer, retainedRunIds, describe }) => {

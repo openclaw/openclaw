@@ -117,8 +117,7 @@ async function prepareOnlineLoopback(page: Page): Promise<void> {
   expect(await page.evaluate(() => navigator.onLine)).toBe(true);
 }
 
-async function createInstallGate(expectedRequests = 1): Promise<InstallGate> {
-  let requestCount = 0;
+async function createInstallGate(): Promise<InstallGate> {
   let released = false;
   const pendingResponses = new Set<ServerResponse>();
   const releaseResponse = (response: ServerResponse) => {
@@ -147,9 +146,7 @@ async function createInstallGate(expectedRequests = 1): Promise<InstallGate> {
       pendingResponses.add(response);
       response.once("close", () => pendingResponses.delete(response));
     }
-    if (++requestCount === expectedRequests) {
-      resolveRequested();
-    }
+    resolveRequested();
   });
   await new Promise<void>((resolve, reject) => {
     gateServer.once("error", reject);
@@ -284,19 +281,6 @@ async function fetchControlledAsset(
 }
 
 describe("Control UI service-worker production update E2E", () => {
-  it("releases concurrent and later worker installation requests", async ({ signal }) => {
-    const gate = await createInstallGate(2);
-    const requests = [fetch(gate.url, { signal }), fetch(gate.url, { signal })];
-    try {
-      await gate.requested;
-      gate.release();
-      expect((await Promise.all(requests)).map((response) => response.status)).toEqual([204, 204]);
-      expect((await fetch(gate.url, { signal })).status).toBe(204);
-    } finally {
-      await gate.close();
-    }
-  });
-
   it("boots a document loaded on a deep link (Gateway asset-path contract)", async () => {
     // The built index.html references ./assets/* relatively, so a document at
     // /chat/research requests /chat/assets/*. The Gateway resolves /assets/

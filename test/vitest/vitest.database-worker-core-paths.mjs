@@ -7,6 +7,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/sessions/background-session-result.test.ts",
   "test/discord-live-policy.integration.test.ts",
   "src/commands/startup-config-preflight.fresh-profiles.test.ts",
+  "src/channels/message-access/x-requester.test.ts",
   "src/channels/message/ingress-drain.handoff.test.ts",
   "src/channels/message/ingress-queue.authority.test.ts",
   "src/agents/mcp-oauth-authorization.test.ts",
