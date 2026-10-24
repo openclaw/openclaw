@@ -1511,7 +1511,6 @@ src/cli/update-cli.ts	2
 src/cli/update-cli/update-command-config.ts	5
 src/cli/update-cli/update-command-plugins.ts	1
 src/cli/users-cli.ts	1
-src/commands/agent-via-gateway.ts	2
 src/commands/agents.commands.identity.ts	1
 src/commands/agents.config.ts	1
 src/commands/audit.ts	1
