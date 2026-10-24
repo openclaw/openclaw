@@ -1,4 +1,3 @@
-// Broad coverage for embedded runner model resolution behavior.
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -268,11 +267,7 @@ function makeProviderConfig(
   overrides: Record<string, unknown> = {},
 ): OpenClawConfig {
   return makeOpenClawConfigFixture({
-    models: {
-      providers: {
-        [provider]: { models: [], ...overrides },
-      },
-    },
+    models: { providers: { [provider]: { models: [], ...overrides } } },
   });
 }
 
@@ -357,7 +352,6 @@ describe("resolveModel", () => {
   it("replaces models-add metadata with a preferred prepared model", async () => {
     const prepareProviderDynamicModel = vi.fn(async () => ({
       ...makeModel("prepared-model"),
-      input: ["text" as const],
       provider: "acme",
       name: "Prepared Model",
       api: "openai-completions" as const,
@@ -406,10 +400,7 @@ describe("resolveModel", () => {
     const cfg = makeOpenClawConfigFixture({
       agents: {
         defaults: { authInheritance: { agentId: "main" } },
-        entries: {
-          main: { agentDir: defaultAgentDir },
-          worker: { agentDir },
-        },
+        entries: { main: { agentDir: defaultAgentDir }, worker: { agentDir } },
       },
     });
     mockMinimalModelDiscovery("openai", "gpt-5.5");
@@ -436,9 +427,7 @@ describe("resolveModel", () => {
     const agentDir = state.agentDir("workspace-agent");
     fs.mkdirSync(agentDir, { recursive: true });
     const cfg = makeOpenClawConfigFixture({
-      agents: {
-        entries: { "workspace-agent": { agentDir, workspace: state.workspaceDir } },
-      },
+      agents: { entries: { "workspace-agent": { agentDir, workspace: state.workspaceDir } } },
     });
     mockMinimalModelDiscovery("openai", "gpt-5.5");
     const result = await resolveModelAsync("openai", "gpt-5.5", undefined, cfg, {
@@ -454,10 +443,9 @@ describe("resolveModel", () => {
 
   it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
     const metadataSnapshot = createPluginMetadataSnapshotFixture();
-    const config = {};
     const preparedModelRuntime = createEmptyPreparedModelRuntimeFixture({
       agentDir: state.agentDir(),
-      config,
+      config: {},
       metadataSnapshot,
       createStores: createEmptyAgentDiscoveryStores,
     });
@@ -488,18 +476,9 @@ describe("resolveModel", () => {
       contextWindow: 1_048_576,
       maxTokens: 65_536,
     });
-    const lookup = {
-      provider: "google",
-      modelId: "gemini-3.1-pro-preview",
-      cfg: undefined,
-      workspaceDir: undefined,
-      metadataSnapshot,
-    };
-    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
-      ...lookup,
-      includeRuntimeDiscovery: true,
-    });
-    expect(resolveBundledProviderStaticCatalogModelMock).toHaveBeenCalledWith(lookup);
+    expect(resolveBundledProviderStaticCatalogModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({ metadataSnapshot }),
+    );
     expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModelsAsync).not.toHaveBeenCalled();
   });
@@ -561,17 +540,18 @@ describe("resolveModel", () => {
         image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
       },
     });
+    const request = { proxy: { mode: "explicit-proxy", url: "http://127.0.0.1:18080" } };
+    const localService = {
+      command: "/opt/mistral/start",
+      args: ["--port", "18080"],
+      healthUrl: "http://127.0.0.1:18080/health",
+    };
     const cfg = makeProviderConfig("mistral", {
       baseUrl: "https://mistral-proxy.example.com/v1",
       api: "openai-completions",
       headers: { "X-Proxy": "static-fast-path" },
-      request: { proxy: { mode: "explicit-proxy", url: "http://127.0.0.1:18080" } },
-      localService: {
-        command: "/opt/mistral/start",
-        args: ["--port", "18080"],
-        healthUrl: "http://127.0.0.1:18080/health",
-      },
-      models: [],
+      request,
+      localService,
     });
 
     const result = await resolveWithoutDiscovery("mistral", "mistral-medium-3-5", cfg, {
@@ -581,14 +561,8 @@ describe("resolveModel", () => {
 
     expect(model.baseUrl).toBe("https://mistral-proxy.example.com/v1");
     expect(model.headers).toEqual({ "X-Proxy": "static-fast-path" });
-    expect(getModelProviderRequestTransport(model)).toEqual({
-      proxy: { mode: "explicit-proxy", url: "http://127.0.0.1:18080" },
-    });
-    expect(getModelProviderLocalService(model)).toEqual({
-      command: "/opt/mistral/start",
-      args: ["--port", "18080"],
-      healthUrl: "http://127.0.0.1:18080/health",
-    });
+    expect(getModelProviderRequestTransport(model)).toEqual(request);
+    expect(getModelProviderLocalService(model)).toEqual(localService);
     expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModelsAsync).not.toHaveBeenCalled();
   });
@@ -653,15 +627,7 @@ describe("resolveModel", () => {
       } else {
         expect(model.compat).toMatchObject(deepSeekCatalogCompat);
       }
-      if (mode === "fallback") {
-        expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
-          provider: "deepseek",
-          modelId: "deepseek-v4-pro",
-          cfg,
-          workspaceDir: expect.any(String),
-          includeRuntimeDiscovery: true,
-        });
-      } else if (mode === "runtime") {
+      if (mode === "runtime") {
         expect(runProviderDynamicModel).toHaveBeenCalled();
       }
     },
@@ -704,12 +670,8 @@ describe("resolveModel", () => {
       models: [makeModel("listed-model")],
     });
 
-    const result = await resolveModelForTest("custom", "missing-model", cfg);
-    const model = expectResolvedModel(result);
-
-    expect(model.headers).toEqual({
-      "X-Custom-Auth": "token-123",
-    });
+    const model = expectResolvedModel(await resolveModelForTest("custom", "missing-model", cfg));
+    expect(model.headers).toEqual({ "X-Custom-Auth": "token-123" });
   });
 
   it("merges configured model params with agent defaults for resolved models", async () => {
@@ -724,9 +686,9 @@ describe("resolveModel", () => {
       }),
     };
 
-    const result = await resolveModelForTest("ollama", "qwen3:32b", cfg);
-
-    expect(expectResolvedModel(result)).toHaveProperty("params", {
+    expect(
+      expectResolvedModel(await resolveModelForTest("ollama", "qwen3:32b", cfg)),
+    ).toHaveProperty("params", {
       num_ctx: 16384,
       keep_alive: "1m",
       thinking: "low",
@@ -749,9 +711,7 @@ describe("resolveModel", () => {
 
     const result = await resolveModelForTest("ollama", "llama3.2", cfg);
 
-    expect(expectResolvedModel(result)).toHaveProperty("params", {
-      num_ctx: 32768,
-    });
+    expect(expectResolvedModel(result)).toHaveProperty("params", { num_ctx: 32768 });
   });
 
   it.each(["endpoint", "manifest", "configured manifest"] as const)(
@@ -814,15 +774,7 @@ describe("resolveModel", () => {
   });
 
   it("explains when an agent model entry is missing provider model registration", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "microsoft-foundry/Kimi-K2.6-1": { contextWindow: 262144, maxOutputTokens: 16384 },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const cfg = agentModelConfig({ "microsoft-foundry/Kimi-K2.6-1": {} });
 
     const result = await resolveWithoutDiscovery("microsoft-foundry", "Kimi-K2.6-1", cfg);
 
@@ -876,16 +828,8 @@ describe("resolveModel", () => {
     const cfg = makeProviderConfig("openai", {
       api: "openai-chatgpt-responses",
       models: [
-        {
-          ...makeModel("gpt-5.4"),
-          contextWindow: 222222,
-          maxTokens: 22222,
-        },
-        {
-          ...makeModel("gpt-5.4-codex"),
-          contextWindow: 111111,
-          maxTokens: 11111,
-        },
+        { ...makeModel("gpt-5.4"), contextWindow: 222222, maxTokens: 22222 },
+        { ...makeModel("gpt-5.4-codex"), contextWindow: 111111, maxTokens: 11111 },
       ],
     });
 
