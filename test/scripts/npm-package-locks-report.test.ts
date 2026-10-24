@@ -139,9 +139,14 @@ describe("npm package-lock release report", () => {
     expect(new Date(report.generatedAt).toISOString()).toBe(report.generatedAt);
   });
 
-  it("marks only the root and gateway client partial in the release-split fixture", async () => {
+  it("sorts runtime omissions across release packages without including dev or peer references", async () => {
     const root = sourceFixture({
-      ".": { dependencies: { "@openclaw/ai": "workspace:*", fixture: "1.0.0" } },
+      ".": {
+        dependencies: { zeta: "workspace:*", alpha: "workspace:^", fixture: "1.0.0" },
+        optionalDependencies: { middle: "workspace:~", alpha: "workspace:^" },
+        devDependencies: { development: "workspace:*" },
+        peerDependencies: { peer: "workspace:*" },
+      },
       "packages/gateway-client": {
         dependencies: { "@openclaw/gateway-protocol": "workspace:*", fixture: "1.0.0" },
         openclaw: { release: { publishToNpm: true } },
@@ -156,7 +161,7 @@ describe("npm package-lock release report", () => {
       packageVersion: "2026.9.1",
       packagesWithOmittedWorkspaceDependencies: 2,
       packages: [
-        { name: "openclaw", omittedWorkspaceDependencies: ["@openclaw/ai"] },
+        { name: "openclaw", omittedWorkspaceDependencies: ["alpha", "middle", "zeta"] },
         {
           name: "@openclaw/acpx",
           bundleRuntimeDependencies: false,
@@ -168,22 +173,6 @@ describe("npm package-lock release report", () => {
           omittedWorkspaceDependencies: ["@openclaw/gateway-protocol"],
         },
       ],
-    });
-  });
-
-  it("sorts and deduplicates runtime omissions without including dev or peer references", async () => {
-    const root = sourceFixture({
-      ".": {
-        dependencies: { zeta: "workspace:*", alpha: "workspace:^", fixture: "1.0.0" },
-        optionalDependencies: { middle: "workspace:~", alpha: "workspace:^" },
-        devDependencies: { development: "workspace:*" },
-        peerDependencies: { peer: "workspace:*" },
-      },
-    });
-    const report = await generateNpmPackageLocksReport({ rootDir: root });
-    expect(report).toMatchObject({
-      packagesWithOmittedWorkspaceDependencies: 1,
-      packages: [{ omittedWorkspaceDependencies: ["alpha", "middle", "zeta"] }],
     });
   });
 
