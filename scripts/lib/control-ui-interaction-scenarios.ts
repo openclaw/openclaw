@@ -629,6 +629,45 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     },
   },
   {
+    id: "model-picker-navigate",
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected: "Keyboard navigation advances through model choices and returns to the selected row.",
+    prepare: async (page) => {
+      await prepareModelPicker(page);
+      await page.locator(`${activePane} [data-chat-model-select]`).click();
+      await page.locator("[data-chat-model-search]").waitFor();
+      await frames(page);
+    },
+    run: async (page) => {
+      const search = page.locator("[data-chat-model-search]");
+      const initial = await search.getAttribute("aria-activedescendant");
+      if (!initial) {
+        throw new Error("Expected the selected model to be the initial active descendant");
+      }
+      await search.press("ArrowDown");
+      await page.waitForFunction(
+        (id) =>
+          document
+            .querySelector("[data-chat-model-search]")
+            ?.getAttribute("aria-activedescendant") !== id,
+        initial,
+      );
+      for (let index = 0; index < 9; index++) {
+        await search.press("ArrowDown");
+      }
+      for (let index = 0; index < 10; index++) {
+        await search.press("ArrowUp");
+      }
+      await page.waitForFunction(
+        (id) =>
+          document
+            .querySelector("[data-chat-model-search]")
+            ?.getAttribute("aria-activedescendant") === id,
+        initial,
+      );
+    },
+  },
+  {
     id: "model-picker-search",
     route: controlUiSessionPath(sessionKeys[0]),
     expected: "The already-open 1,000-model picker filters to Warm model 0999.",

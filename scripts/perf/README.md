@@ -1,5 +1,12 @@
 # Team-shaped synthetic state
 
+## Retained heap
+
+Use the [heap retention runbook](heap-retention-runbook.md) to capture a main-isolate
+snapshot and run the streaming analyzer in aggregate-only mode with bounded host
+resources. It covers dominators, collections, duplicate strings, and session-key
+scaling without exporting snapshot payloads.
+
 ## Private-array copies
 
 `node --expose-gc scripts/perf/private-array-copies-measure.mjs <baseline-root> <candidate-root>`
@@ -3996,6 +4003,13 @@ WebSockets, then seeds mentions with real `chat.send` turns against a synthetic
 loopback model. The measured paths are `mentions.list` and mentioned-session
 label changes that produce `mentions.changed` for every viewer. Inbox item counts,
 model completion, and broadcast delivery are checked before and after measurement.
+Add `--clients 70 --sidebar-limit 200` to refresh each viewer's sidebar after every
+broadcast using the real Control UI conditional-row decoder over WebSockets. Each
+refresh must decode 200 rows and show the patched session title. The fixture has
+70 recipient connections for one profile plus one sender; the existing list owner
+can coalesce their identical sidebar requests. Its 5,000-session base fixture
+remains independent of the selected page size. Omit `--sidebar-limit` to isolate
+Inbox publication.
 
 ```sh
 node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
@@ -4007,12 +4021,17 @@ node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
 
 Use one task-owned source checkout and `--owner-dir /path/to/baseline-owners` to
 select baseline copies of `mention-inbox-targets.ts`, `mention-inbox.ts`,
-`mention-inbox-projection.ts`, and `mention-inbox-recording.ts`. The module URLs
+`mention-inbox-projection.ts`, `mention-inbox-recording.ts`, and
+`session-row-presentation.ts`. The module URLs
 and relative imports remain unchanged. Source hooks count `readTarget`,
-`currentTarget`, and `readView`; no production instrumentation is required.
+`currentTarget`, `readView`, and `shareSidebarSessionRows`; no production
+instrumentation is required. The report also counts full, delta, and unchanged
+sidebar wire responses.
 `--count-only` runs setup plus one list and one broadcast without profiling.
-`--start-at` schedules the warmed allocation pass, `--cpu-start-at` the unprofiled
-list pass, and `--broadcast-start-at` the unprofiled broadcast pass. Each rejects
+`--start-at` schedules the warmed list allocation pass,
+`--broadcast-allocation-start-at` the broadcast allocation pass,
+`--cpu-start-at` the unprofiled list pass, and `--broadcast-start-at` the unprofiled
+broadcast pass. Each rejects
 a missed preparation deadline. For sequential preparation followed by concurrent
 measurement, `--barrier-dir <shared-pair-directory> --side baseline|candidate`
 writes `<phase>.<side>.ready` and waits for `<phase>.start` containing a future
@@ -4036,9 +4055,15 @@ time. Always report both sides' maximum pause; the candidate maximum exceeding
 max(50 ms, twice baseline maximum) retains its gate. Guard-interrupted pairs are
 discarded and rerun; use the shared production guard without a stricter threshold.
 
-Sampled allocation includes collected objects and reports whole-process and
-target-read attribution per Inbox read, plus a rate normalized to the measured
-minute. CPU/GC/loop observations are separate from sampling; process CPU includes
+Sampled allocation includes collected objects in the main isolate, including the
+in-process WebSocket and UI driver, and reports owner attribution per Inbox read
+and per broadcast, plus a rate normalized to the measured minute. Worker-isolate
+allocations are not sampled. Broadcast allocation also reports bytes per recipient
+viewer. Owner subtrees (`readTarget`, `readView`, `shareSidebarSessionRows`) can
+overlap, so do not sum them. The broadcast profile is saved as
+`<output>.broadcast.heapprofile`; the list profile keeps `<output>.heapprofile`.
+With sidebar refresh enabled, broadcast latency includes delivery and all
+conditional list responses and client decoding, not only event transmission. CPU/GC/loop observations are separate from sampling; process CPU includes
 workers and in-process WebSocket clients, with main-thread CPU reported separately.
 Pass `--trace-log /path/to/captured-stdout.log` with `--trace-gc-nvp` to include
 promotion from the existing Gateway trace parser. Synchronous identification

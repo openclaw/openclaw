@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 // Production-renderer warm interactions. Trace once for attribution; compare untraced AB pairs.
+// --thread-cpu-time excludes renderer descheduling from duration metrics.
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -36,8 +37,8 @@ const { values } = parseArgs({
     pairs: { type: "string", default: "1" },
     trace: { type: "boolean", default: false },
     "selector-stats": { type: "boolean", default: false },
-    "time-domain": { type: "string", default: "timeTicks" },
     theme: { type: "string", default: "light" },
+    "thread-cpu-time": { type: "boolean", default: false },
     "invalidation-tracking": { type: "boolean", default: false },
   },
 });
@@ -46,10 +47,6 @@ if (values.theme !== "light" && values.theme !== "dark") {
   throw new Error("theme must be light or dark");
 }
 const theme = values.theme;
-if (values["time-domain"] !== "timeTicks" && values["time-domain"] !== "threadTicks") {
-  throw new Error("time-domain must be timeTicks or threadTicks");
-}
-const timeDomain = values["time-domain"];
 const pairs = Number(values.pairs);
 if (!Number.isInteger(pairs) || pairs < 1) {
   throw new Error("pairs must be a positive integer");
@@ -105,6 +102,7 @@ type Result = {
   bundle: number;
   pair: number;
   status: "passed" | "failed";
+  hostLoadAverage: number[];
   wallMs?: number;
   scriptMs?: number;
   taskMs?: number;
@@ -172,10 +170,10 @@ try {
         collection: trace
           ? "CDP trace + 1ms CPU profiler (overhead included)"
           : "untraced CDP metrics",
+        metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
         invalidationTracking:
           trace && (values["invalidation-tracking"] || values["selector-stats"]),
         selectorStats: values["selector-stats"],
-        timeDomain,
         theme,
         fixture: { sessions: 1000, messagesPerSession: 400, models: 1000, cronJobs: 500 },
         acceptance:
@@ -221,6 +219,7 @@ try {
             pair,
             bundle,
             status: "failed",
+            hostLoadAverage: os.loadavg(),
             artifactPrefix,
           };
           let cdp: CDPSession | undefined;
@@ -253,7 +252,9 @@ try {
             await settle(page);
             await page.locator(`html[data-theme-mode="${theme}"]`).waitFor({ state: "attached" });
             cdp = await context.newCDPSession(page);
-            await cdp.send("Performance.enable", { timeDomain });
+            await cdp.send("Performance.enable", {
+              timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+            });
             if (values["selector-stats"]) {
               cdp.on(
                 "CSS.styleSheetAdded",

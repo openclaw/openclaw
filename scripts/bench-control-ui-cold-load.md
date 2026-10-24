@@ -188,7 +188,7 @@ focused browser contracts with updated authoritative mock responses for that pro
 `run-N.selectors.json`, with stylesheet identities, elapsed microseconds, match
 attempts, matches, and fast rejects. It requires tracing. The warm interaction
 runner (`scripts/bench-control-ui-interactions.ts`) accepts the same flag, plus
-`--theme light|dark` and `--time-domain threadTicks` for thread CPU duration
+`--theme light|dark` and `--thread-cpu-time` for thread CPU duration
 metrics on a loaded host. Selector instrumentation adds substantial overhead;
 use separate untraced interleaved runs for timing comparisons. Empty Chromium
 selector snapshots represent no matching work and are omitted from the ranking.
