@@ -702,7 +702,6 @@
 ["extensions/memory-core/src/short-term-promotion-recording.test.ts","openclaw/plugin-sdk/memory-host-events","f1d4a649d6398f3a7d8b7807786e616e819e04623340b6dd128db5327a4d103e",1]
 ["extensions/memory-core/src/short-term-promotion.test.ts","openclaw/plugin-sdk/memory-host-events","f1d4a649d6398f3a7d8b7807786e616e819e04623340b6dd128db5327a4d103e",1]
 ["extensions/memory-lancedb/embeddings.responses.test.ts","openclaw/plugin-sdk/runtime-env","c130576e7b70e922c7339ec6f84b75e1aed3fdcfb05577de83847f45a06b0d31",1]
-["extensions/memory-lancedb/lancedb-store.delete.test.ts","./lancedb-runtime.js","6455a5721113f0897238a6fa6f46304493ee227c096f82254856ec6be4a0cecb",1]
 ["extensions/memory-lancedb/startup-imports.test.ts","openclaw/plugin-sdk/agent-runtime","b1d8a25da54e0d4487ab46c57f0e7c151a4d57892c8987d4407cc8923f39da36",1]
 ["extensions/memory-lancedb/startup-imports.test.ts","openclaw/plugin-sdk/channel-actions","8f349d3f44ef157d7d65d1e8e93e8b6918150d47f609bb992356b52c2ceba0ee",1]
 ["extensions/memory-wiki/cli-metadata.test.ts","./src/cli.js","08181976b3638a87f6ae455361007148b7c236adf64fbadb9b5ad63c537725d3",1]

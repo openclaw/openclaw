@@ -3,6 +3,7 @@ import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-l
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import * as ui from "./session-management.compact.test-support.ts";
 import {
   createSessionManagementE2eSuite,
@@ -71,6 +72,7 @@ suite.define(() => {
         },
       });
       const sidebar = page.locator("openclaw-app-sidebar");
+      const viewport = sidebar.locator(".sidebar-shell__body");
       const researchListQuery = {
         source: "sidebar",
         excludeDock: true,
@@ -84,17 +86,21 @@ suite.define(() => {
       const rowFor = (key: string) =>
         sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       const revealLastResearch = async () => {
-        const rows = sidebar.locator(".sidebar-recent-session");
         for (let remaining = research.length; remaining > 0; remaining -= 1) {
           if (await rowFor(lastResearch.key).count()) {
             break;
           }
-          const before = await rows.count();
-          await ui.button(sidebar, "Show more").click();
-          await ui.pollCount(rows).toBeGreaterThan(before);
+          const showMore = ui.button(sidebar, "Show more");
+          if (!(await showMore.count())) {
+            break;
+          }
+          const before = await viewport.evaluate((element) => element.scrollHeight);
+          await showMore.click();
+          await expect
+            .poll(() => viewport.evaluate((element) => element.scrollHeight))
+            .toBeGreaterThan(before);
         }
-        await rowFor(lastResearch.key).scrollIntoViewIfNeeded();
-        await rowFor(lastResearch.key).waitFor({ state: "visible" });
+        await revealSidebarTarget(viewport, rowFor(lastResearch.key));
       };
       const sidebarState = () =>
         evaluateControlUiContext(
@@ -133,7 +139,7 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.delete", { match: { key: targets[0]!.key } });
       await ui.button(sidebar, /Switch agent/, false).click();
       await ui.menuItem(sidebar.locator(".sidebar-agent-menu"), "Research").click();
-      await rowFor(research[0]!.key).waitFor({ state: "visible" });
+      await revealSidebarTarget(viewport, rowFor(research[0]!.key));
       const loadMore = sidebar.locator(".sidebar-session-pagination--roster > button");
       await loadMore.waitFor({ state: "visible" });
       await expect.poll(settledResearchRevision).toBeGreaterThan(0);
@@ -195,9 +201,9 @@ suite.define(() => {
       await revealLastResearch();
       await ui.expectCount(rowFor(lastResearch.key), 1);
       await filter("All");
-      await rowFor(research[0]!.key).waitFor({ state: "visible" });
+      await revealSidebarTarget(viewport, rowFor(research[0]!.key));
       await filter("Archived");
-      await rowFor(research[0]!.key).waitFor({ state: "visible" });
+      await revealSidebarTarget(viewport, rowFor(research[0]!.key));
       if (!(await pageKeys()).includes(lastResearch.key)) {
         await loadMore.click();
       }

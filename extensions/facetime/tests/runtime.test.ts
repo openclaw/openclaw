@@ -7,6 +7,8 @@ import {
   completeSharedAction,
   createRuntime,
   createTalkDriver,
+  endedCall,
+  helperResult,
   incomingCall,
   mocks,
   pendingDialCancellationResult,
@@ -44,19 +46,6 @@ function outgoingCall(
       is_outgoing: true,
       handle: { value: "owner@example.com" },
       transport: incomingCall().data.transport,
-      ...identity,
-    },
-  };
-}
-
-function endedCall(callUUID: string, identity: { dial_id?: string } = {}) {
-  return {
-    event: "ft-call-status-changed",
-    data: {
-      call_uuid: callUUID,
-      call_status: 6,
-      has_ended: true,
-      is_outgoing: true,
       ...identity,
     },
   };
@@ -286,15 +275,12 @@ describe("FaceTime runtime call sequencing", () => {
       const startupError = new Error("capture failed during startup");
       let releaseStartup: Promise<boolean> | undefined;
       let startupReleased = false;
-      mocks.helper.inspectCall.mockResolvedValue({
-        helpersContacted: 2,
-        topologyGeneration: 1,
-        topologyComplete: true,
-        helperResults: [
+      mocks.helper.inspectCall.mockResolvedValue(
+        helperResult([
           { outcome: "present", found: true, call_uuid: "call-1" },
           { outcome: "absent", found: false },
-        ],
-      });
+        ]),
+      );
       mocks.startTalk.mockImplementationOnce(
         async (params: { onFailure(error: Error): Promise<boolean> }) => {
           releaseStartup = params.onFailure(startupError);
@@ -306,14 +292,7 @@ describe("FaceTime runtime call sequencing", () => {
         },
       );
       runtime = await createRuntime(await pendingDialState({ callUUID: "call-1" }));
-      const outbound = {
-        ...incomingCall(3),
-        data: {
-          ...incomingCall(3).data,
-          dial_id: "approved-dial",
-          is_outgoing: true,
-        },
-      };
+      const outbound = incomingCall(3, { dial_id: "approved-dial", is_outgoing: true });
       void mocks.helperParams?.onMessage(outbound);
       await vi.waitFor(async () => expect((await runtime?.status())?.calls).toHaveLength(1));
       void mocks.helperParams?.onMessage({
@@ -419,20 +398,12 @@ describe("FaceTime runtime call sequencing", () => {
     mocks.helper.connectedSockets = 1;
     mocks.helper.connectedHelperBundles = ["com.apple.mobilephone"];
     talk.suspendMedia.mockRejectedValueOnce(new Error("local suspension failed"));
-    const survivingHelperAbsence = {
-      helpersContacted: 1,
-      topologyGeneration: 1,
-      topologyComplete: true,
-      helperResults: [{ outcome: "absent", found: false }],
-    };
+    const survivingHelperAbsence = helperResult([{ outcome: "absent", found: false }]);
     mocks.helper.safetyMute.mockResolvedValue(survivingHelperAbsence);
     mocks.helper.leaveCall.mockResolvedValue(survivingHelperAbsence);
-    mocks.helper.inspectCall.mockResolvedValue({
-      helpersContacted: 1,
-      topologyGeneration: 1,
-      topologyComplete: false,
-      helperResults: [{ outcome: "absent", found: false }],
-    });
+    mocks.helper.inspectCall.mockResolvedValue(
+      helperResult([{ outcome: "absent", found: false }], false),
+    );
 
     mocks.helperParams?.onDisconnect("com.apple.FaceTime");
     await vi.waitFor(() => expect(mocks.helper.leaveCall).toHaveBeenCalledWith("call-1"));
@@ -497,15 +468,12 @@ describe("FaceTime runtime call sequencing", () => {
   it("fails closed when any native unmute postcondition is negative", async () => {
     const talk = createTalkDriver({});
     mocks.startTalk.mockResolvedValueOnce(talk);
-    mocks.helper.setMuted.mockResolvedValueOnce({
-      helpersContacted: 2,
-      topologyGeneration: 1,
-      topologyComplete: true,
-      helperResults: [
+    mocks.helper.setMuted.mockResolvedValueOnce(
+      helperResult([
         { outcome: "media-configured", muted: false, is_uplink_muted: false },
         { outcome: "media-configured", muted: false, is_uplink_muted: true },
-      ],
-    });
+      ]),
+    );
     const runtime = await createRuntime();
 
     void mocks.helperParams?.onMessage(incomingCall(1));

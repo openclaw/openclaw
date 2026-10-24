@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
@@ -23,6 +23,7 @@ import {
 } from "./chat-transcript.test-support.ts";
 
 const cleanups: (() => void)[] = [];
+let frame: ReturnType<typeof stubAnimationFrames>;
 function createTestTranscript(...args: Parameters<typeof createTranscript>) {
   const transcript = createTranscript(...args);
   cleanups.push(() => transcript.dispose());
@@ -49,6 +50,18 @@ function drawThread(props: ReturnType<typeof threadProps>) {
   cleanups.push(() => render(null, container));
   return {
     container,
+    settle: async () => {
+      await waitForSolid(() => {
+        frame();
+        flush();
+        expect(transcript.isPositionSettled).toBe(true);
+      });
+      // The measured viewport paints before ordinary overscan resumes.
+      frame();
+      flush();
+      frame();
+      flush();
+    },
     draw: () => {
       render(renderChatThread(props, transcript), container);
       flush();
@@ -61,7 +74,7 @@ function drawThread(props: ReturnType<typeof threadProps>) {
 
 describe("transcript projection", () => {
   beforeEach(() => {
-    stubAnimationFrames();
+    frame = stubAnimationFrames();
     vi.useFakeTimers({ toNotFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     vi.setSystemTime(10_000);
     installTranscriptDomMocks();
@@ -198,7 +211,7 @@ describe("transcript projection", () => {
     expect(view.container.textContent).not.toContain("[object Object]");
   });
 
-  it("refreshes sender names for a replaced sender and a changed signed-in viewer", () => {
+  it("refreshes sender names for a replaced sender and a changed signed-in viewer", async () => {
     const own = personMessage("alex", "Alex", 1);
     const props = threadProps("projection-sender", "agent:main:main", [own]);
     props.userId = "alex";
@@ -207,6 +220,7 @@ describe("transcript projection", () => {
     const names = () =>
       [...view.container.querySelectorAll(".chat-sender-name")].map((node) => node.textContent);
     view.draw();
+    await view.settle();
     expect(names()).toEqual([]);
     props.messages = [own, personMessage("riley", "Riley", 2)];
     view.draw();
@@ -270,7 +284,7 @@ describe("transcript projection", () => {
     };
   }
 
-  it("moves live activity to the current eligible group after replacement and run changes", () => {
+  it("moves live activity to the current eligible group after replacement and run changes", async () => {
     const first = activityMessage("Earlier operation", 2);
     const latest = activityMessage("Latest operation", 4);
     const props = threadProps("projection-activity", "agent:main:main", [
@@ -286,6 +300,7 @@ describe("transcript projection", () => {
         (node) => node.textContent,
       );
     view.draw();
+    await view.settle();
     expect(liveLabels()).toEqual(["Latest operation…"]);
     props.messages = props.messages.map((message) =>
       message === latest ? { ...latest, runId: "peer" } : message,
@@ -347,7 +362,7 @@ describe("transcript projection", () => {
     expect(project()).toEqual([replacement, hit, liveMessage()]);
   });
 
-  it("opens the visible forwarded disclosure when replying across search after a prepend", () => {
+  it("opens the visible forwarded disclosure when replying across search after a prepend", async () => {
     const forwarded = (id: string, content: string, timestamp: number) => ({
       role: "assistant",
       provenance: { kind: "inter_session", sourceTool: "sessions_send" },
@@ -362,6 +377,7 @@ describe("transcript projection", () => {
     const state = getTranscriptState(props.paneId);
     const view = drawThread(props);
     view.draw();
+    await view.settle();
     props.messages = [forwarded("earlier", "Hidden original", 1), later, answer];
     view.draw();
     state.search.toggle();
@@ -370,7 +386,7 @@ describe("transcript projection", () => {
     expect(view.container.textContent).not.toContain("Hidden original");
 
     state.transcriptRenderContext.onOpenReply?.("earlier");
-    flush();
+    await view.settle();
 
     expect(state.search.snapshot.open).toBe(false);
     expect(view.container.querySelector<HTMLDetailsElement>(".chat-session-activity")?.open).toBe(

@@ -20,7 +20,6 @@ import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
 import { hasTerminalRunStatus } from "./chat-run-working.ts";
-import { createSideChatModelControlProps } from "./chat-session-companion-model-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createChatToolIcons, type PluginToolIcons } from "./chat-tool-icon-controller.ts";
 import type { ChatProps } from "./chat-view.tsx";
@@ -498,11 +497,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       activeRunId: observerRunId,
       pullRequests: this.sessionPullRequests,
       companion: companionThread,
-      companionModelControls: createSideChatModelControlProps({
-        state,
-        companion: companionThread,
-        onSelect: (patch) => this.sessionCompanionThreads.setModelSelection(currentAgentId, patch),
-      }),
+      onCompanionModelSelect: (patch) =>
+        this.sessionCompanionThreads.setModelSelection(currentAgentId, patch),
       companionFocusRequest: this.companionIntents.focusRequest,
       companionPresented,
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
