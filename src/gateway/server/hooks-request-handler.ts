@@ -115,7 +115,6 @@ export function createHooksRequestHandler(
     return normalizeRateLimitClientIp(clientIp);
   };
 
-
   return async (req, res) => {
     const hooksConfig = getHooksConfig();
     if (!hooksConfig) {
