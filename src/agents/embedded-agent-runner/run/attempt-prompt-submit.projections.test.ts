@@ -67,6 +67,15 @@ afterEach(() => {
   clearEmbeddedSessionPromptStates([toolProjectionSessionId, modelPromptSessionId]);
 });
 
+function captureRequests() {
+  const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
+  streamMocks.streamSimple.mockImplementation((model, context) => {
+    requests.push(buildOpenAIResponsesParams(model, context, undefined));
+    return createAssistantResultStream(createAssistant(model, [{ type: "text", text: "done" }]));
+  });
+  return requests;
+}
+
 describe("durable model prompt projection at provider dispatch", () => {
   const sessionId = modelPromptSessionId;
   it("commits final listener text with its actor carrier without a separate rewrite request", async () => {
@@ -653,13 +662,7 @@ describe("durable model prompt projection at provider dispatch", () => {
           convert(
             normalizeMessagesForLlmBoundary(messages, { userTranscriptContexts: contexts.list() }),
           );
-        const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
-        streamMocks.streamSimple.mockImplementation((model, context) => {
-          requests.push(buildOpenAIResponsesParams(model, context, undefined));
-          return createAssistantResultStream(
-            createAssistant(model, [{ type: "text", text: "done" }]),
-          );
-        });
+        const requests = captureRequests();
         const releaseMedia = async () => {
           media.resolve({
             ...original,
@@ -756,13 +759,7 @@ describe("durable model prompt projection at provider dispatch", () => {
       const { session } = await createTestSession({ sessionManager: manager });
       const convert = session.agent.convertToLlm;
       session.agent.convertToLlm = (messages) => convert(normalizeMessagesForLlmBoundary(messages));
-      const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
-      streamMocks.streamSimple.mockImplementation((model, context) => {
-        requests.push(buildOpenAIResponsesParams(model, context, undefined));
-        return createAssistantResultStream(
-          createAssistant(model, [{ type: "text", text: "done" }]),
-        );
-      });
+      const requests = captureRequests();
 
       await submitEmbeddedAttemptPrompt({
         ...createBaseInput(),
@@ -842,13 +839,7 @@ describe("durable model prompt projection at provider dispatch", () => {
         const convert = session.agent.convertToLlm;
         session.agent.convertToLlm = (messages) =>
           convert(normalizeMessagesForLlmBoundary(messages));
-        const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
-        streamMocks.streamSimple.mockImplementation((model, context) => {
-          requests.push(buildOpenAIResponsesParams(model, context, undefined));
-          return createAssistantResultStream(
-            createAssistant(model, [{ type: "text", text: "done" }]),
-          );
-        });
+        const requests = captureRequests();
 
         // The first request keeps the same stored provenance envelope as replay.
         await submitEmbeddedAttemptPrompt({
