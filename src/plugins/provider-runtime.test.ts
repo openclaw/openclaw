@@ -79,23 +79,6 @@ const DEMO_PROVIDER_ID = "demo";
 const EMPTY_MODEL_REGISTRY = { find: () => null } as never;
 const DEMO_REPLAY_MESSAGES: AgentMessage[] = [{ role: "user", content: "hello", timestamp: 1 }];
 
-function createOpenAiCatalogProviderPlugin(
-  overrides: Partial<ProviderPlugin> = {},
-): ProviderPlugin {
-  return {
-    id: "openai",
-    label: "OpenAI",
-    auth: [],
-    augmentModelCatalog: () => [
-      { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
-      { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
-      { provider: "openai", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
-      { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
-    ],
-    ...overrides,
-  };
-}
-
 function createDemoProvider(overrides: Partial<ProviderPlugin> = {}): ProviderPlugin {
   return { id: DEMO_PROVIDER_ID, label: "Demo", auth: [], ...overrides };
 }
@@ -112,26 +95,9 @@ function expectRecordFields(record: Record<string, unknown>, fields: Record<stri
   }
 }
 
-function expectObjectOrArrayFields(value: unknown, fields: Record<string, unknown>) {
-  if (!isRecord(value) && !Array.isArray(value)) {
-    throw new Error("Expected value to be an object or array");
-  }
-  const record = value as Record<string, unknown>;
-  expectRecordFields(record, fields);
-}
-
 function getLastResolvePluginProvidersParams() {
   const calls = resolvePluginProvidersMock.mock.calls;
   return requireRecord(calls[calls.length - 1]?.[0], "provider load params");
-}
-
-function expectProviderRuntimePluginLoad(params: { provider: string; expectedPluginId?: string }) {
-  const plugin = runtime.resolveProviderRuntimePlugin({ provider: params.provider });
-
-  expect(plugin?.id).toBe(params.expectedPluginId);
-  expectRecordFields(getLastResolvePluginProvidersParams(), {
-    providerRefs: [params.provider],
-  });
 }
 
 function createDemoRuntimeContext<TContext extends Record<string, unknown>>(
@@ -162,12 +128,6 @@ function createDemoResolvedModelContext<TContext extends Record<string, unknown>
   });
 }
 
-function expectCalledOnce(...mocks: Array<{ mock: { calls: unknown[] } }>) {
-  for (const mockFn of mocks) {
-    expect(mockFn).toHaveBeenCalledTimes(1);
-  }
-}
-
 function registerLoadedProviders(providers: ProviderPlugin[], startupWorkspaceDir?: string) {
   const registry = createEmptyPluginRegistry();
   registry.providers = providers.map((provider) => ({
@@ -189,30 +149,6 @@ function allowOnlyMockOpenAiProviderLoad() {
     }
     throw new Error("unexpected broad provider hook scan");
   });
-}
-
-function expectResolvedValues(
-  cases: ReadonlyArray<{
-    actual: () => unknown;
-    expected: unknown;
-  }>,
-) {
-  cases.forEach(({ actual, expected }) => {
-    expect(actual()).toEqual(expected);
-  });
-}
-
-async function expectResolvedMatches(
-  cases: ReadonlyArray<{
-    actual: () => Promise<unknown>;
-    expected: Record<string, unknown>;
-  }>,
-) {
-  await Promise.all(
-    cases.map(async ({ actual, expected }) => {
-      expectObjectOrArrayFields(await actual(), expected);
-    }),
-  );
 }
 
 describe("provider-runtime", () => {
@@ -345,9 +281,11 @@ describe("provider-runtime", () => {
       },
     ]);
 
-    expectProviderRuntimePluginLoad({
-      provider: "Open Router",
-      expectedPluginId: "openrouter",
+    const plugin = runtime.resolveProviderRuntimePlugin({ provider: "Open Router" });
+
+    expect(plugin?.id).toBe("openrouter");
+    expectRecordFields(getLastResolvePluginProvidersParams(), {
+      providerRefs: ["Open Router"],
     });
   });
 
@@ -1941,11 +1879,18 @@ describe("provider-runtime", () => {
           isModernModelRef: ({ modelId }) => modelId.startsWith("gpt-5"),
         }),
         {
-          ...createOpenAiCatalogProviderPlugin({
-            buildMissingAuthMessage: () =>
-              'No API key found for provider "openai". Use openai/gpt-5.5.',
-            buildUnknownModelHint,
-          }),
+          id: "openai",
+          label: "OpenAI",
+          auth: [],
+          augmentModelCatalog: () => [
+            { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+            { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
+            { provider: "openai", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
+            { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
+          ],
+          buildMissingAuthMessage: () =>
+            'No API key found for provider "openai". Use openai/gpt-5.5.',
+          buildUnknownModelHint,
         } as ProviderPlugin,
       ];
     });
@@ -2014,7 +1959,7 @@ describe("provider-runtime", () => {
       }),
     ).toBeTypeOf("function");
 
-    await expectResolvedMatches([
+    const asyncCases = [
       {
         actual: () =>
           runtime.prepareProviderRuntimeAuth({
@@ -2117,7 +2062,17 @@ describe("provider-runtime", () => {
           0: DEMO_REPLAY_MESSAGES[0],
         },
       },
-    ]);
+    ];
+    await Promise.all(
+      asyncCases.map(async ({ actual, expected }) => {
+        const value = await actual();
+        if (!isRecord(value) && !Array.isArray(value)) {
+          throw new Error("Expected value to be an object or array");
+        }
+        const record = value as Record<string, unknown>;
+        expectRecordFields(record, expected);
+      }),
+    );
 
     const agent = { streamFn: vi.fn() };
     applyExtraParamsToAgent(
@@ -2186,7 +2141,7 @@ describe("provider-runtime", () => {
       }),
     ).resolves.toEqual("Repair demo:default");
 
-    expectResolvedValues([
+    [
       {
         actual: () =>
           runtime.resolveProviderCacheTtlEligibility({
@@ -2249,7 +2204,9 @@ describe("provider-runtime", () => {
           }),
         expected: "Use demo setup for gpt-5.4",
       },
-    ]);
+    ].forEach(({ actual, expected }) => {
+      expect(actual()).toEqual(expected);
+    });
 
     const [externalProfile] = runtime.resolveExternalAuthProfilesWithPlugins({
       env: process.env,
@@ -2274,7 +2231,7 @@ describe("provider-runtime", () => {
     expectCodexMissingAuthHint(runtime.buildProviderMissingAuthMessageWithPlugin);
     await expectAugmentedCodexCatalog(runtime.augmentModelCatalogWithProviderPlugins);
 
-    expectCalledOnce(
+    for (const mockFn of [
       prepareDynamicModel,
       sanitizeReplayHistoryAsync,
       validateReplayTurns,
@@ -2288,7 +2245,9 @@ describe("provider-runtime", () => {
       prepareRuntimeAuth,
       resolveUsageAuth,
       fetchUsageSnapshot,
-    );
+    ]) {
+      expect(mockFn).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("does not treat core transport apis as custom provider plugin owners", () => {
