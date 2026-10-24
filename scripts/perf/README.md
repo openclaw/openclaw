@@ -375,6 +375,9 @@ of `--seconds`. Each batch sends a scoped `models.list` before an event-only
 sidebar, roster, Board, `sessions.resolve`, `sessions.messages.subscribe`, and
 keyed `chat.startup` requests. Batches await all replies and retain the
 `--poll-ms` pacing. There are no artificial handler delays or held preparations.
+Each client uses a distinct shared, unarchived fixture session for catalog,
+resolution, message subscription, and startup reads; Board uses the common seeded
+session. Results record each client's session key and exact request parameters.
 The first batch remains separate from later warm traffic in the latency report.
 The explicit catalog RPC reproduces the server's catalog-bootstrap admission
 order; this does not exercise capability negotiation or `models.snapshot` delivery.

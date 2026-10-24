@@ -156,6 +156,9 @@ if (
 ) {
   throw new Error("--cold-row-reads requires 5000 sessions and --settled-runs (or --runs 0)");
 }
+if (startupAdmission && 1 + 10 * (clientCount - 1) > 5000) {
+  throw new Error("--startup-admission requires at most 500 clients for distinct shared sessions");
+}
 const worktreeProject = Array.isArray(fixture.projectWorktrees)
   ? fixture.projectWorktrees[0]
   : undefined;
@@ -1878,13 +1881,13 @@ async function measureColdRowReads(
       throw new Error("Cold row probe did not start");
     }),
   ]);
-  const readShapes = [
+  const makeReadShapes = (clientSessionKey: string) => [
     ...(startupAdmission
       ? [
           {
             name: "models.list",
             method: "models.list",
-            params: { agentId: "main", sessionKey, view: "configured" },
+            params: { agentId: "main", sessionKey: clientSessionKey, view: "configured" },
           },
           {
             name: "sessions.subscribe",
@@ -1910,25 +1913,36 @@ async function measureColdRowReads(
     { name: "board.get", method: "board.get", params: { sessionKey } },
     ...(startupAdmission
       ? [
-          { name: "sessions.resolve", method: "sessions.resolve", params: { key: sessionKey } },
+          {
+            name: "sessions.resolve",
+            method: "sessions.resolve",
+            params: { key: clientSessionKey },
+          },
           {
             name: "sessions.messages.subscribe",
             method: "sessions.messages.subscribe",
-            params: { key: sessionKey },
+            params: { key: clientSessionKey },
           },
           {
             name: "chat.startup",
             method: "chat.startup",
-            params: { sessionKey, limit: 40, maxBytes: 262144 },
+            params: { sessionKey: clientSessionKey, limit: 40, maxBytes: 262144 },
           },
         ]
       : []),
   ];
+  // The fixture's indices ending in 1 are shared and unarchived.
+  const clientSessionKeys = Array.from({ length: clientCount }, (_, index) =>
+    startupAdmission ? `agent:main:team-shape-session-${1 + 10 * index}` : sessionKey,
+  );
+  const clientReadShapes = clientSessionKeys.map(makeReadShapes);
+  const readShapes = clientReadShapes[0]!;
   const deadline = loadStartedAt + durationMs;
   console.log(`PHASE cold-row-ready ${readyMs.toFixed(1)}ms`);
   const observations = await Promise.allSettled(
     Array.from({ length: clientCount }, async (_, index) => {
       const client = await connect(index);
+      const clientSessionKey = clientSessionKeys[index]!;
       connectedClients.add(index);
       for (
         let wave = 0;
@@ -1936,7 +1950,7 @@ async function measureColdRowReads(
         wave++
       ) {
         await Promise.all(
-          readShapes.map(async ({ name, method, params }) => {
+          clientReadShapes[index]!.map(async ({ name, method, params }) => {
             const startedMs = performance.now() - restartAt;
             let error: string | undefined;
             try {
@@ -1954,21 +1968,25 @@ async function measureColdRowReads(
                   throw new Error("Model catalog did not return its models array");
                 }
               } else if (method === "sessions.resolve") {
-                if (!isRecord(response) || response.ok !== true || response.key !== sessionKey) {
+                if (
+                  !isRecord(response) ||
+                  response.ok !== true ||
+                  response.key !== clientSessionKey
+                ) {
                   throw new Error("Session resolution did not return the seeded session");
                 }
               } else if (method === "sessions.messages.subscribe") {
                 if (
                   !isRecord(response) ||
                   response.subscribed !== true ||
-                  response.key !== sessionKey
+                  response.key !== clientSessionKey
                 ) {
                   throw new Error("Message subscription did not admit the seeded session");
                 }
               } else if (method === "chat.startup") {
                 if (
                   !isRecord(response) ||
-                  response.sessionKey !== sessionKey ||
+                  response.sessionKey !== clientSessionKey ||
                   !Array.isArray(response.messages) ||
                   !isRecord(response.sessionInfo)
                 ) {
@@ -2056,6 +2074,7 @@ async function measureColdRowReads(
       ? {
           waves: waveCount,
           pollMs,
+          clientSessionKeys,
           admission,
           requestStartOwner: { path: requestStartOwner, sha256: requestStartOwnerSha256 },
         }
@@ -2077,10 +2096,16 @@ async function measureColdRowReads(
     ...(startupAdmission ? { completedRequests: completedReads } : {}),
     errors,
     reads: Object.fromEntries(
-      readShapes.map(({ name, params }) => [
+      readShapes.map(({ name, params }, shapeIndex) => [
         name,
         {
-          params,
+          ...(startupAdmission
+            ? {
+                paramsByClient: clientReadShapes.map(
+                  (clientShapes) => clientShapes[shapeIndex]!.params,
+                ),
+              }
+            : { params }),
           ...summarize(timings.filter((row) => row.method === name)),
           firstBatch: summarize(timings.filter((row) => row.method === name && row.wave === 0)),
         },
