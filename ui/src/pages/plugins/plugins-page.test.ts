@@ -236,7 +236,7 @@ it("waits for uninstall confirmation and sends nothing when cancelled", async ()
   );
   expect(page.textContent).not.toContain("Removed Community Thing");
   expect(calls).toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]);
-  expect(calls).toContainEqual(["plugins.list", {}]);
+  expect(calls).toContainEqual(["plugins.list", {}, { signal: expect.any(AbortSignal) }]);
 });
 
 it.each([false, true])(
