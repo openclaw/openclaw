@@ -1,14 +1,31 @@
 import { getHeapSpaceStatistics, getHeapStatistics } from "node:v8";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import type { WorkerGcProfiles } from "../logging/diagnostic-worker-gc-profile.js";
-import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
+import type {
+  DiagnosticMemoryUsage,
+  DiagnosticWorkerRetainedData,
+} from "./diagnostic-process-types.js";
 import {
   flushGcSamples,
   getOldGenerationAfterGcBytes,
   observeGcSamples,
   type GcSample,
 } from "./gc-observer.js";
-import { localPostgresBridgeCountBuffer } from "./worker-cpu.js";
+import {
+  getTrackedPostgresBridgeCounters,
+  observeTrackedPostgresBridgeCounters,
+} from "./worker-cpu.js";
+
+export type WorkerMemorySample = Pick<
+  NodeJS.MemoryUsage,
+  "heapUsed" | "heapTotal" | "external" | "arrayBuffers"
+> & {
+  heapSizeLimitBytes?: number;
+  oldGenerationAfterGcBytes?: number;
+  heapSpaces?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["heapSpaces"];
+  retainedData?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["retainedData"];
+  gc?: GcSample[];
+};
 
 export type WorkerGcStorm = {
   workerId?: string;
@@ -58,6 +75,9 @@ export function serveWorkerMemorySamples(
 ) {
   const { port1, port2 } = new MessageChannel();
   diagnosticPort = port1;
+  const stopBridgeCounters = observeTrackedPostgresBridgeCounters(() => {
+    port1.postMessage({ postgresBridgeCounters: getTrackedPostgresBridgeCounters() });
+  });
   const heapSizeLimitBytes = process.versions.bun ? undefined : getHeapStatistics().heap_size_limit;
   let gc: GcSample[] | undefined;
   let taskMetrics = false;
@@ -144,15 +164,16 @@ export function serveWorkerMemorySamples(
   );
   port1.once("close", () => {
     diagnosticPort = undefined;
+    stopBridgeCounters();
     stopGc?.();
     gc = undefined;
   });
   port1.on("messageerror", () => port1.close());
   port1.unref();
   sample();
-  // Publish only direct bridges; the host retains this view until the parent exits.
+  // Shared counts update without messages; only descendant registration changes travel upstream.
   parent.postMessage(
-    { status: "memory", port: port2, postgresBridgeCount: localPostgresBridgeCountBuffer },
+    { status: "memory", port: port2, postgresBridgeCounters: getTrackedPostgresBridgeCounters() },
     [port2],
   );
   return {
@@ -165,6 +186,7 @@ export function serveWorkerMemorySamples(
     },
     close(this: void) {
       diagnosticPort = undefined;
+      stopBridgeCounters();
       stopGc?.();
       stopGc = undefined;
       flushGc();

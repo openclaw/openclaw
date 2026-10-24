@@ -1,7 +1,5 @@
 import "../../worker-heap-flag.mjs";
 import { channel } from "node:diagnostics_channel";
-import { basename } from "node:path";
-import { fileURLToPath } from "node:url";
 import { isMainThread, MessagePort, receiveMessageOnPort, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerRetirementReason } from "@openclaw/worker-runtime";
@@ -10,11 +8,8 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
 import type { GcSample } from "./gc-observer.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
-import {
-  MAX_DIAGNOSTIC_WORKER_SLOTS,
-  normalizeDiagnosticWorkerScript,
-} from "./worker-diagnostic-script.js";
-import type { WorkerGcStorm } from "./worker-memory.js";
+import { MAX_DIAGNOSTIC_WORKER_SLOTS, workerScriptName } from "./worker-diagnostic-script.js";
+import type { WorkerGcStorm, WorkerMemorySample } from "./worker-memory.js";
 import {
   canObserveWorkerMessages,
   recordWorkerMessage,
@@ -22,19 +17,14 @@ import {
   workerMessagePayloadBytes,
 } from "./worker-message-metrics.js";
 import type { WorkerPoolClass } from "./worker-pool-sizing.js";
+import {
+  collectPostgresBridgeCounters,
+  countPostgresBridges,
+  readPostgresBridgeCounters,
+  type PostgresBridgeCounter,
+} from "./worker-postgres-bridge-census.js";
 
 const gcStorm = channel("openclaw.code-mode.gc-storm");
-
-type WorkerMemorySample = Pick<
-  NodeJS.MemoryUsage,
-  "heapUsed" | "heapTotal" | "external" | "arrayBuffers"
-> & {
-  heapSizeLimitBytes?: number;
-  oldGenerationAfterGcBytes?: number;
-  heapSpaces?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["heapSpaces"];
-  retainedData?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["retainedData"];
-  gc?: GcSample[];
-};
 
 type WorkerCpuHandle = {
   readonly threadId: number;
@@ -65,25 +55,13 @@ type WorkerSource = {
   };
   heapPending?: boolean;
   memoryPort?: MessagePort;
-  postgresBridgeCount?: Int32Array<SharedArrayBuffer>;
+  postgresBridgeCounters?: readonly PostgresBridgeCounter[];
   memoryPending?: boolean;
   memoryUnavailable?: boolean;
   memoryFlush?: ReturnType<typeof createRetainedOperation<void>>;
 };
 
 export type { WorkerRetirementReason } from "@openclaw/worker-runtime";
-
-function workerScriptName(filename: string | URL, evalSource = false): string {
-  // Never retain eval source, arbitrary filenames, or installation paths in diagnostics.
-  if (evalSource || (filename instanceof URL && filename.protocol !== "file:")) {
-    return "other";
-  }
-  const name = basename(filename instanceof URL ? fileURLToPath(filename) : filename).replace(
-    /\.[cm]?[jt]s$/u,
-    ".js",
-  );
-  return normalizeDiagnosticWorkerScript(name);
-}
 
 // Native exit, not pool retirement or Gateway reset, ends resource-counter ownership.
 // Shared chunks must see the same workers; this registry never starts a sampler.
@@ -96,6 +74,7 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
       | ((samples: GcSample[], thread: string, workerSlot?: number) => void)
       | undefined,
     postgresBridgeCount: new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
+    postgresBridgeObservers: new Set<() => void>(),
     revision: 0,
     nextPoolId: 0,
     poolIds: new WeakMap<object, number>(),
@@ -150,16 +129,26 @@ export function trackNativeWorkerForCpu(
     source.script === "gateway-state-owner-heartbeat.worker.js";
 }
 
-export const localPostgresBridgeCountBuffer = trackedWorkers.postgresBridgeCount.buffer;
+export function getTrackedPostgresBridgeCounters(): PostgresBridgeCounter[] {
+  return collectPostgresBridgeCounters(
+    trackedWorkers.postgresBridgeCount,
+    trackedWorkers.workers.values(),
+  );
+}
+
+export function observeTrackedPostgresBridgeCounters(observer: () => void): () => void {
+  trackedWorkers.postgresBridgeObservers.add(observer);
+  return () => trackedWorkers.postgresBridgeObservers.delete(observer);
+}
+
+function publishPostgresBridgeCounters(): void {
+  for (const observer of trackedWorkers.postgresBridgeObservers) {
+    observer();
+  }
+}
 
 function getTrackedPostgresBridgeCount(): number {
-  let count = Atomics.load(trackedWorkers.postgresBridgeCount, 0);
-  for (const source of trackedWorkers.workers.values()) {
-    if (source.postgresBridgeCount) {
-      count += Atomics.load(source.postgresBridgeCount, 0);
-    }
-  }
-  return count;
+  return countPostgresBridges(getTrackedPostgresBridgeCounters());
 }
 
 /** Pool identity follows its live Workers without retaining the pool itself. */
@@ -241,6 +230,9 @@ function forgetWorker(worker: WorkerCpuHandle): void {
   source.memoryFlush?.resolve();
   source.memoryPort?.close();
   trackedWorkers.workers.delete(worker);
+  if (source.postgresBridgeCounters) {
+    publishPostgresBridgeCounters();
+  }
   trackedWorkers.revision++;
 }
 
@@ -520,12 +512,8 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
     port.close();
     return true;
   }
-  if (
-    message.postgresBridgeCount instanceof SharedArrayBuffer &&
-    message.postgresBridgeCount.byteLength === Int32Array.BYTES_PER_ELEMENT
-  ) {
-    source.postgresBridgeCount = new Int32Array(message.postgresBridgeCount);
-  }
+  source.postgresBridgeCounters = readPostgresBridgeCounters(message.postgresBridgeCounters);
+  publishPostgresBridgeCounters();
   source.memoryPort = port;
   source.memoryPending = true;
   const close = () => {
@@ -543,8 +531,15 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
         | { flushed: true; heapUsed: number }
         | { gc: GcSample[] }
         | { gcStorm: WorkerGcStorm }
+        | { postgresBridgeCounters: PostgresBridgeCounter[] }
         | { retireWorkerId: string },
     ) => {
+      if ("postgresBridgeCounters" in record) {
+        source.postgresBridgeCounters = readPostgresBridgeCounters(record.postgresBridgeCounters);
+        publishPostgresBridgeCounters();
+        recordWorkerMessage("memory", "from_worker");
+        return;
+      }
       if ("flushed" in record) {
         recordWorkerMessage("memory", "from_worker", 8);
         if (source.taskMetrics) {
