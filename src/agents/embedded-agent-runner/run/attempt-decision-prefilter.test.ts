@@ -41,7 +41,7 @@ const config: OpenClawConfig = {
 };
 const answer = (): Extract<DecisionOutcomeV2, { status: "ok" }> => ({
   status: "ok",
-  provenance: { providerId: "fixture", rubricVersion: "9", runtimeGeneration: "test" },
+  provenance: { providerId: "fixture", rubricVersion: "10", runtimeGeneration: "test" },
   result: {
     model: "model",
     answers: {
@@ -162,7 +162,7 @@ it("forwards one atomic Boolean batch, labeled hook fields, owner and 500ms budg
     agentId: "main",
     purpose: "tool-prefilter.semantic-gate",
     priority: "optional",
-    rubricVersion: "9",
+    rubricVersion: "10",
     timeoutMs: 500,
     signal,
   });
