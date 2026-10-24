@@ -443,24 +443,12 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       }
       return isConsoleEnabled || isFileEnabled;
     },
-    trace(message, meta) {
-      emitLog("trace", message, meta);
-    },
-    debug(message, meta) {
-      emitLog("debug", message, meta);
-    },
-    info(message, meta) {
-      emitLog("info", message, meta);
-    },
-    warn(message, meta) {
-      emitLog("warn", message, meta);
-    },
-    error(message, meta) {
-      emitLog("error", message, meta);
-    },
-    fatal(message, meta) {
-      emitLog("fatal", message, meta);
-    },
+    trace: emitLog.bind(undefined, "trace"),
+    debug: emitLog.bind(undefined, "debug"),
+    info: emitLog.bind(undefined, "info"),
+    warn: emitLog.bind(undefined, "warn"),
+    error: emitLog.bind(undefined, "error"),
+    fatal: emitLog.bind(undefined, "fatal"),
     raw(message) {
       if (isFileLogLevelEnabled("info")) {
         logToFile(getFileLogger("info"), "info", message, { raw: true });
