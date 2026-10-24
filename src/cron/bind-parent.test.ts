@@ -20,6 +20,7 @@ describe("resolveCronBindParent", () => {
     ["account policy naming the parent", { scheduledToolPolicy: account }],
     ["owner key without a policy", { owner: { sessionKey: PARENT } }],
     ["current target", { sessionTarget: "current", scheduledToolPolicy: account }],
+    ["default-agent job without agentId", { agentId: undefined, scheduledToolPolicy: account }],
   ])("binds a key-only job: %s", (_name, fields) => {
     expect(resolveCronBindParent({ ...base, ...fields } as CronStoredJob)).toEqual({
       parentSessionKey: PARENT,
