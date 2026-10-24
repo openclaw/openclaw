@@ -20,7 +20,6 @@ export const RELEASE_ONLY_UI_TEST_FILES: ReadonlySet<string> = new Set(
     "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
-    "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
     "ui/src/e2e/team-scale-cold-load.e2e.test.ts",
     "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",

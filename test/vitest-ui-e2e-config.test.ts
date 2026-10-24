@@ -53,7 +53,7 @@ const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecyc
   model-catalog-partial-refresh.real-gateway model-picker-search.real-gateway profile-page.real-gateway
   provider-browser-login.real-gateway quota-reset-status.real-gateway
   session-progress-hovercard.real-gateway session-roster-request-rate.real-gateway
-  session-pr-reader-lifetime.real-gateway sidebar-running-counts.real-gateway task-pull-requests.real-gateway
+  sidebar-running-counts.real-gateway task-pull-requests.real-gateway
   usage-sessions-owner-attribution worker-initial-setup.real-gateway`
   .split(/\s+/u)
   .map((name) => `ui/src/e2e/${name}.e2e.test.ts`)
