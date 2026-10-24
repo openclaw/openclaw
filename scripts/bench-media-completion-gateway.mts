@@ -217,8 +217,13 @@ try {
   cfg.browser = { enabled: false, ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } };
   cfg.agents = {
     ...cfg.agents,
-    defaults: { ...cfg.agents?.defaults, skipBootstrap: true, heartbeat: { every: "0m" } },
+    defaults: {
+      ...cfg.agents?.defaults,
+      skipBootstrap: true,
+      modelPolicy: { allow: ["openai/gpt-4.1"] },
+    },
   };
+  delete cfg.agents.defaults?.models;
   cfg.tools = { codeMode: false, allow: ["image_generate"] };
   cfg.plugins = {
     ...cfg.plugins,
@@ -390,6 +395,7 @@ try {
     });
   }
 } finally {
+  setPhase("shutdown");
   gatewayClient?.close();
   for (const child of children.toReversed()) {
     await stopChild(child, { teardownGraceMs: 30_000, killGraceMs: 2_000 });
