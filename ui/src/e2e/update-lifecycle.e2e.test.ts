@@ -52,7 +52,7 @@ suite.define(() => {
         await gateway.emitGatewayEvent("update.available", { schedule, updateAvailable });
         await page.locator(".sidebar-identity-card").click();
         await page.locator('.sidebar-identity-menu [data-value="command:updates"]').click();
-        await page.getByRole("button", { name: "Update Gateway…", exact: true }).click();
+        await page.getByRole("button", { name: "Update", exact: true }).click();
         await page
           .locator("openclaw-modal-dialog")
           .getByRole("button", { name: "Update and restart", exact: true })

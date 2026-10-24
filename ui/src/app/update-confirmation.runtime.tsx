@@ -9,9 +9,13 @@
 // Gateway restart that tears down the connection cannot unmount it.
 import { render } from "@solidjs/web";
 import { createMemo, createStore, Errored, For, isPending, Loading, Show } from "solid-js";
-import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  type UpdateRunRecord,
+} from "../../../src/infra/update-run-record.ts";
 import { isReportableUpdateRun } from "../../../src/shared/update-outcome-classification.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { Icon } from "../components/solid/icon.tsx";
 import { UpdateGitRevisions } from "../components/solid/update-git-revisions.tsx";
 import { UpdateRunView } from "../components/update-run-view.tsx";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
@@ -31,7 +35,7 @@ const UPDATE_DIALOG_OPEN_CLASS = "update-dialog-open";
 type DialogPhase =
   | { kind: "confirm" | "working" }
   | { kind: "run"; run: UpdateRunRecord }
-  | { kind: "failed"; message: string };
+  | { kind: "failed"; message: string; failureId: string | null };
 
 type StatusRead = { promise: Promise<"idle" | "success"> } | { error: string };
 
@@ -162,12 +166,14 @@ export async function confirmAndStartUpdateRuntime(
 
       const details = formatInstalledAndAvailable(updateAvailable, updateSchedule);
       const run = current.kind === "run" ? current.run : null;
+      const failureId = run?.runId ?? (current.kind === "failed" ? current.failureId : null);
       const readError = current.kind === "run" ? latestProgress?.readError : null;
       const working = current.kind === "working" || run?.status === "running";
       const finished = run !== null && run.status !== "running";
       const failed = current.kind === "failed" || (run !== null && isReportableUpdateRun(run));
       const showRecovery =
         failed || Boolean(readError) || (current.kind !== "confirm" && statusRead !== null);
+      const failureActions = params.readFailureActions?.(failureId);
       const disconnected = latestProgress?.connected === false;
       const body =
         current.kind === "run"
@@ -181,6 +187,7 @@ export async function confirmAndStartUpdateRuntime(
         route,
         details,
         run,
+        failureId,
         working,
         finished,
         failed,
@@ -192,6 +199,7 @@ export async function confirmAndStartUpdateRuntime(
         confirmed: current.kind === "confirm",
         updateAvailable,
         updateSchedule,
+        failureActions,
       };
     }
 
@@ -212,26 +220,52 @@ export async function confirmAndStartUpdateRuntime(
           const read = view.statusRead;
           return read && "promise" in read ? read.promise : "idle";
         });
+        const failureTitle = () =>
+          view.run?.status === "failed" && !isAcknowledgedAbandonedUpdateRun(view.run);
+        const title = () => (failureTitle() ? t("updates.run.failureHeadline") : view.route.title);
         const statusPending = () => isPending(statusCompletion);
         let cancelButton!: HTMLButtonElement;
         let closeButton: HTMLButtonElement | undefined;
         updateView = (next) => setView(() => next);
         return (
           <openclaw-modal-dialog
-            prop:initialFocus={() => (closeButton?.isConnected ? closeButton : cancelButton)}
-            label={view.route.title}
+            prop:initialFocus={() => {
+              if (cancelButton?.isConnected) {
+                return cancelButton;
+              }
+              return closeButton?.isConnected ? closeButton : null;
+            }}
+            label={title()}
             description={view.body}
             onModal-cancel={finish}
           >
             <div class="exec-approval-card update-run-dialog">
               <div class="exec-approval-header">
                 <div>
-                  <div class="exec-approval-title">{view.route.title}</div>
-                  <div class="exec-approval-sub" style="white-space: pre-line">
-                    {view.body}
+                  <div class="exec-approval-title" role="heading" aria-level={2}>
+                    {title()}
+                  </div>
+                  <div class="exec-approval-sub" style={{ "white-space": "pre-line" }}>
+                    {failureTitle() ? view.route.title : view.body}
                   </div>
                 </div>
+                <button
+                  ref={(element) => {
+                    closeButton = element;
+                  }}
+                  type="button"
+                  class="btn btn--icon"
+                  aria-label={t("common.close")}
+                  onClick={finish}
+                >
+                  <Icon name="x" />
+                </button>
               </div>
+              <Show when={failureTitle() && view.readError}>
+                <div role="alert" class="exec-approval-sub">
+                  {view.readError}
+                </div>
+              </Show>
               <For each={[view.statusRead]}>
                 {(read) => {
                   const statusMessage = (refreshed = false) => (
@@ -280,7 +314,13 @@ export async function confirmAndStartUpdateRuntime(
                 }}
               </For>
               <Show when={view.run}>
-                {(run) => <UpdateRunView run={run()} connected={!view.disconnected} />}
+                {(run) => (
+                  <UpdateRunView
+                    run={run()}
+                    connected={!view.disconnected}
+                    hideHeadline={failureTitle()}
+                  />
+                )}
               </Show>
               <openclaw-modal-actions class="exec-approval-actions">
                 <Show
@@ -318,18 +358,18 @@ export async function confirmAndStartUpdateRuntime(
                     </>
                   }
                 >
-                  <button
-                    ref={(element) => {
-                      closeButton = element;
-                    }}
-                    type="button"
-                    class="btn"
-                    autofocus
-                    onClick={finish}
+                  <Show when={view.finished && !view.failed}>
+                    <button type="button" class="btn" autofocus onClick={finish}>
+                      {t("common.close")}
+                    </button>
+                  </Show>
+                  <Show
+                    when={
+                      view.failed &&
+                      params.onReviewUpdate &&
+                      !(params.onReportFailure && params.onDiagnoseFailure)
+                    }
                   >
-                    {t("common.close")}
-                  </button>
-                  <Show when={view.failed && params.onReviewUpdate}>
                     <button
                       type="button"
                       class="btn"
@@ -341,11 +381,12 @@ export async function confirmAndStartUpdateRuntime(
                       {t("updates.reviewUpdate")}
                     </button>
                   </Show>
-                  <Show when={view.showRecovery && params.onCheckStatus}>
+                  <Show when={view.showRecovery}>
                     <button
                       type="button"
                       class={["btn", { "btn--busy": statusPending() }]}
-                      disabled={statusPending() || view.disconnected}
+                      title={params.onCheckStatus ? "" : t("updates.page.failureActionUnavailable")}
+                      disabled={!params.onCheckStatus || statusPending() || view.disconnected}
                       onClick={() => void checkStatus()}
                     >
                       {statusPending() ? (
@@ -354,18 +395,76 @@ export async function confirmAndStartUpdateRuntime(
                           {t("updates.dialog.checkingStatus")}
                         </>
                       ) : (
-                        t("updates.dialog.checkStatus")
+                        t("updates.page.checkStatus")
                       )}
                     </button>
                   </Show>
                   <Show when={view.failed}>
                     <button
                       type="button"
-                      class="btn primary"
+                      class="btn"
                       disabled={statusPending() || view.disconnected}
                       onClick={() => void retry()}
                     >
-                      {t("updates.dialog.retryUpdate")}
+                      {t("updates.page.retryUpdate")}
+                    </button>
+                  </Show>
+                  <Show when={view.failed && params.onReportFailure}>
+                    <button
+                      type="button"
+                      class="btn"
+                      title={
+                        !view.failureActions?.reportable
+                          ? t("updates.page.failureActionUnavailable")
+                          : view.failureActions?.canReport
+                            ? ""
+                            : t("updates.page.reportOwnerRequired")
+                      }
+                      disabled={
+                        !view.failureActions?.reportable ||
+                        !view.failureActions?.canReport ||
+                        statusPending() ||
+                        view.disconnected
+                      }
+                      onClick={() => {
+                        const attemptId = view.failureId;
+                        if (attemptId && view.failureActions?.reportable) {
+                          const report = params.onReportFailure;
+                          close();
+                          report?.(attemptId);
+                        }
+                      }}
+                    >
+                      {t("updates.page.reportFailure")}
+                    </button>
+                  </Show>
+                  <Show when={view.failed && params.onDiagnoseFailure}>
+                    <button
+                      type="button"
+                      class="btn primary"
+                      title={
+                        !view.failureActions?.diagnosable
+                          ? t("updates.page.failureActionUnavailable")
+                          : view.failureActions?.canDiagnose
+                            ? ""
+                            : t("updates.adminRequired")
+                      }
+                      disabled={
+                        !view.failureActions?.diagnosable ||
+                        !view.failureActions?.canDiagnose ||
+                        statusPending() ||
+                        view.disconnected
+                      }
+                      onClick={() => {
+                        const attemptId = view.failureId;
+                        if (attemptId && view.failureActions?.diagnosable) {
+                          const diagnose = params.onDiagnoseFailure;
+                          close();
+                          diagnose?.(attemptId);
+                        }
+                      }}
+                    >
+                      {t("updates.page.diagnoseFailure")}
                     </button>
                   </Show>
                 </Show>
@@ -554,7 +653,11 @@ export async function confirmAndStartUpdateRuntime(
             ? `${progress.failure}\n${progress.readError}`
             : (progress.failure ?? progress.readError);
         if (failure && !staleFailure) {
-          phase = { kind: "failed", message: failure };
+          phase = {
+            kind: "failed",
+            message: failure,
+            failureId: progress.failure ? (progress.reportableFailureId ?? null) : null,
+          };
           draw();
           return;
         }
@@ -569,7 +672,7 @@ export async function confirmAndStartUpdateRuntime(
         if (settled || sawBusy || phase.kind !== "working") {
           return;
         }
-        phase = { kind: "failed", message: t("updates.dialog.notStarted") };
+        phase = { kind: "failed", message: t("updates.dialog.notStarted"), failureId: null };
         draw();
       }, UPDATE_ACCEPT_GRACE_MS);
     }

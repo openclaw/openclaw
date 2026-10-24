@@ -14,6 +14,8 @@ export type UpdateProgress = {
   connected: boolean;
   /** Set once the update produced a definitive failure. */
   failure: string | null;
+  /** Identity captured with a non-ledger failure by its owning watcher. */
+  reportableFailureId?: string | null;
   /** Reading fresh progress failed; the retained run remains authoritative. */
   readError?: string | null;
 };
@@ -27,6 +29,7 @@ export function createUpdateProgressWatcher(context: {
   overlays: {
     snapshot: {
       updateRun: UpdateRunRecord | null;
+      reportableUpdateFailureId: string | null;
       updateRunning: boolean;
       updateReconciliationPending: boolean;
       updateStatusBanner: { tone: string; text: string; source?: "read" } | null;
@@ -44,6 +47,7 @@ export function createUpdateProgressWatcher(context: {
         busy: update.updateRunning || update.updateReconciliationPending,
         connected: context.gateway.snapshot.phase === "connected",
         failure: banner && banner.tone !== "info" && banner.source !== "read" ? banner.text : null,
+        reportableFailureId: update.reportableUpdateFailureId,
         readError:
           update.updateStatusCheckBanner?.text ?? (banner?.source === "read" ? banner.text : null),
       });
@@ -70,6 +74,14 @@ export type ConfirmAndStartUpdateParams = {
   /** Reconfirm a fresh Gateway target if the native bridge disappears. */
   prepareGatewayFallback?: ConfirmAndStartUpdateParams["prepareRetry"];
   onReviewUpdate?: () => void;
+  onReportFailure?: (attemptId: string) => void;
+  onDiagnoseFailure?: (attemptId: string) => void;
+  readFailureActions?: (attemptId: string | null) => {
+    reportable: boolean;
+    diagnosable: boolean;
+    canReport: boolean;
+    canDiagnose: boolean;
+  };
   onAcknowledge?: () => void;
   /**
    * True only where the surface can hand a confirmed update to the macOS app

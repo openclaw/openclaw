@@ -54,9 +54,12 @@ it.each(["confirmation", "report"] as const)(
     renderUpdates({
       onUpdateNow,
       onReportFailure,
-      update: { updateRun: run, reportableUpdateFailureId: run.runId },
+      update: {
+        updateStatusBanner: { tone: "danger", text: "Build failed" },
+        reportableUpdateFailureId: run.runId,
+      },
     });
-    const label = operation === "confirmation" ? "Update Gateway…" : "Report update failure";
+    const label = operation === "confirmation" ? "Update" : "Report failure";
     const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
       (candidate) => candidate.textContent?.trim() === label,
     )!;
@@ -79,7 +82,9 @@ it("shows a failed confirmation load and retries the command", async () => {
     .mockRejectedValueOnce(new Error("Confirmation unavailable"))
     .mockResolvedValue(undefined);
   renderUpdates({ onUpdateNow });
-  row("Update Gateway…").querySelector<HTMLButtonElement>("button")!.click();
+  [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .find((button) => button.textContent?.trim() === "Update")!
+    .click();
   await waitForSolid(() =>
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
       "Confirmation unavailable",
@@ -102,7 +107,7 @@ it("keeps native automatic-update intent until acknowledgement and permits retry
   nativeCapability = createNativeDeviceSettingsCapability();
   post.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
   renderUpdates({ nativeDeviceSettings: nativeCapability });
-  const input = toggle("Check for updates automatically");
+  const input = toggle("Automatic checks and downloads");
   input.checked = false;
   input.dispatchEvent(new Event("change"));
   await waitForSolid(() => {
@@ -113,12 +118,12 @@ it("keeps native automatic-update intent until acknowledgement and permits retry
   await waitForSolid(() =>
     expect(container.textContent).toContain("Automatic updates could not be saved"),
   );
-  const retry = row("Check for updates automatically").querySelector<HTMLButtonElement>("button")!;
+  const retry = row("Automatic checks and downloads").querySelector<HTMLButtonElement>("button")!;
   retry.click();
   flush();
   second.resolve({ ...snapshot, updates: { ...snapshot.updates, automatic: false } });
   await waitForSolid(() => {
-    const confirmed = toggle("Check for updates automatically");
+    const confirmed = toggle("Automatic checks and downloads");
     expect(confirmed.getAttribute("aria-disabled")).toBeNull();
     expect(confirmed.checked).toBe(false);
   });

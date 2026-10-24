@@ -142,7 +142,7 @@ suite.define(() => {
           const updateRuns = () => traffic.filter(({ method }) => method === "update.run");
           expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
           await gateway.waitForRequest("update.status");
-          await page.getByRole("button", { name: "Update Gateway…", exact: true }).waitFor();
+          await page.getByRole("button", { name: "Update", exact: true }).waitFor();
           if (source === "automatic") {
             const now = Date.now();
             await gateway.emitGatewayEvent("update.available", {
@@ -159,7 +159,7 @@ suite.define(() => {
             });
             await page.getByText("Applying update…", { exact: true }).waitFor();
           } else {
-            await page.getByRole("button", { name: "Update Gateway…", exact: true }).click();
+            await page.getByRole("button", { name: "Update", exact: true }).click();
             await page
               .locator("openclaw-modal-dialog")
               .getByRole("button", { name: "Update and restart", exact: true })
@@ -185,11 +185,11 @@ suite.define(() => {
           }
           if (source !== "automatic") {
             const dialog = page.locator("openclaw-modal-dialog");
-            await dialog.getByRole("button", { name: "Retry update", exact: true }).waitFor();
+            await dialog.getByRole("button", { name: "Try again", exact: true }).waitFor();
             expect(await dialog.textContent()).toContain("ENOSPC");
             await dialog.getByRole("button", { name: "Close", exact: true }).click();
           }
-          const diagnose = page.getByRole("button", { name: "Diagnose update", exact: true });
+          const diagnose = page.getByRole("button", { name: "Diagnose", exact: true });
           await diagnose.waitFor();
           expect(await diagnose.isEnabled()).toBe(true);
           expect(await page.locator(".custodian__alert-card").count()).toBe(0);
@@ -330,7 +330,7 @@ suite.define(() => {
             const status = page.locator("#config-section-update .settings-status");
             await status.getByText("openclaw triage", { exact: false }).waitFor();
             expect(await status.textContent()).toContain("ENOSPC");
-            const diagnose = page.getByRole("button", { name: "Diagnose update", exact: true });
+            const diagnose = page.getByRole("button", { name: "Diagnose", exact: true });
             await diagnose.waitFor();
             expect(await page.locator(".custodian__alert-card").count()).toBe(0);
             expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);

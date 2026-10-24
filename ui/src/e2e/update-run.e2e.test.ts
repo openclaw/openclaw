@@ -43,7 +43,7 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}settings/updates`);
         await gateway.waitForRequest("config.get");
-        await page.getByRole("button", { name: "Update Gateway…", exact: true }).click();
+        await page.getByRole("button", { name: "Update", exact: true }).click();
         const dialog = page.locator("openclaw-modal-dialog");
         await dialog.getByRole("button", { name: "Update and restart", exact: true }).waitFor();
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
@@ -56,6 +56,8 @@ suite.define(() => {
         const runView = dialog.locator("openclaw-update-run-view");
         const runDetails = runView.locator(".update-run-view__details");
         await text(runView, "⬆️ OpenClaw update in progress: staging.").waitFor();
+        await runView.locator(".update-run-view__technical-group > summary").click();
+        await runView.locator(".update-run-view__diagnostics > summary").click();
         await text(runDetails, "Downloading the update package.", false).waitFor();
         const installationSteps = runView.locator(".update-run-view__step-list");
         await installationSteps.locator(":scope > summary").click();
@@ -115,6 +117,7 @@ suite.define(() => {
         });
         const headline = "✅ OpenClaw updated to 2.0.0 (from 1.0.0); 3 warnings need attention.";
         await text(runView, headline).first().waitFor();
+        await runView.locator(".update-run-view__report-details > summary").click();
         await text(runView, "Gateway downtime: 1s.", false).waitFor();
         expect(await runView.locator('[data-oracle][data-state="pass"]').count()).toBe(4);
 
@@ -134,9 +137,14 @@ suite.define(() => {
         );
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
 
-        await dialog.getByRole("button", { name: "Close", exact: true }).click();
+        await dialog
+          .locator(".exec-approval-actions")
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
         await dialog.waitFor({ state: "detached" });
+        await page.getByRole("button", { name: "View result", exact: true }).click();
         await text(page.locator("openclaw-update-run-view"), headline).first().waitFor();
+        await runView.locator(".update-run-view__technical-group > summary").click();
         await page.locator(".update-run-view__report").scrollIntoViewIfNeeded();
       },
     );

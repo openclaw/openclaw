@@ -93,9 +93,11 @@ export function createUpdatesViewDom() {
   );
   const row = (title: string) =>
     expectDefined(
-      view
-        .queryAllByText(title, { selector: ".settings-row__title" })[0]
-        ?.closest<HTMLElement>(".settings-row"),
+      title === "Status" || title === "Installed version"
+        ? view.container.querySelector<HTMLElement>('section[aria-label="Update status"]')
+        : view
+            .queryAllByText(title, { selector: ".settings-row__title" })[0]
+            ?.closest<HTMLElement>(".settings-row"),
       `Missing settings row: ${title}`,
     );
   return {

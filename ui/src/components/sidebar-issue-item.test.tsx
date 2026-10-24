@@ -239,7 +239,7 @@ describe("renderSidebarUpdateSurface", () => {
         render(null);
         expect(card.isConnected).toBe(false);
         const retry = [...modal.querySelectorAll("button")].find(
-          (button) => button.textContent?.trim() === "Retry update",
+          (button) => button.textContent?.trim() === "Try again",
         );
         expect(retry).toBeDefined();
         retry!.click();

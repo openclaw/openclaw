@@ -191,6 +191,7 @@ export const SETTINGS_SEARCH_TARGETS = {
     labelKey: "tabs.updates",
     hash: "#config-section-update",
     searchKeys: ["updates.page.checkForUpdates", "updates.page.automaticUpdates"],
+    aliases: "check for updates",
   },
   channels: {
     routeId: "channels",

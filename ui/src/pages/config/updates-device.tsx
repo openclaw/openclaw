@@ -71,7 +71,14 @@ export function DeviceUpdates(props: {
   };
   return (
     <Show when={snapshot() && updates()}>
-      <SettingsSection title={t(deviceSettingsGroupLabelKey(snapshot()!))}>
+      <p class="settings-page__hint">
+        {t("updates.page.system")}:{" "}
+        <strong>
+          {snapshot()!.device.modelName ?? t(deviceSettingsGroupLabelKey(snapshot()!))}
+        </strong>
+      </p>
+      <section class="card stack" aria-label={t("updates.device.checkTitle")}>
+        <h2 class="card-title">{t("updates.device.checkTitle")}</h2>
         <SettingsRow
           title={t("updates.device.version")}
           control={
@@ -88,10 +95,23 @@ export function DeviceUpdates(props: {
           fallback={
             <SettingsRow
               title={t("updates.device.unavailable")}
-              description={updates()!.unavailableReason}
+              description={updates()!.unavailableReason ?? t("updates.device.unsupported")}
             />
           }
         >
+          <div class="filters">
+            <button
+              class="btn primary"
+              type="button"
+              onClick={() => props.capability.checkForUpdates()}
+            >
+              {t("updates.device.check")}
+            </button>
+          </div>
+        </Show>
+      </section>
+      <Show when={updates()!.available}>
+        <SettingsSection title={t("updates.page.policyTitle")}>
           <Errored
             fallback={(error, reset) => (
               <SettingsRow
@@ -117,25 +137,15 @@ export function DeviceUpdates(props: {
                 title={t("updates.device.automatic")}
                 checked={checked()}
                 saving={saving()}
-                description={saving() ? t("common.saving") : undefined}
+                description={
+                  saving() ? t("common.saving") : t("updates.device.automaticDescription")
+                }
                 onChange={(value) => void changeAutomatic(value)}
               />
             </Loading>
           </Errored>
-          <SettingsRow
-            title={t("updates.device.check")}
-            control={
-              <button
-                class="btn primary"
-                type="button"
-                onClick={() => props.capability.checkForUpdates()}
-              >
-                {t("updates.device.check")}
-              </button>
-            }
-          />
-        </Show>
-      </SettingsSection>
+        </SettingsSection>
+      </Show>
     </Show>
   );
 }

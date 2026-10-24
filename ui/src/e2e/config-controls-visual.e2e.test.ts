@@ -200,18 +200,16 @@ suite.define(() => {
       {
         colorScheme: "dark" as const,
         config: { ui: { prefs: { themeMode: "dark" } } },
-        featureMethods: undefined,
         route: "settings/appearance",
         selected: "Dark",
         unselected: "Light",
       },
       {
         colorScheme: "light" as const,
-        config: { update: { auto: { enabled: true }, channel: "beta" } },
-        featureMethods: ["config.get", "config.set", "config.apply", "update.run"],
-        route: "settings/updates",
-        selected: "Beta",
-        unselected: "Stable",
+        config: { ui: { prefs: { themeMode: "light" } } },
+        route: "settings/appearance",
+        selected: "Light",
+        unselected: "Dark",
       },
     ];
 
@@ -219,7 +217,6 @@ suite.define(() => {
       await withPage(
         async ({ page }) => {
           await installMockGateway(page, {
-            featureMethods: scenario.featureMethods,
             methodResponses: {
               "config.get": {
                 ...configSnapshot(scenario.config, `forced-colors-${scenario.route}`),

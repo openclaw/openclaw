@@ -53,6 +53,9 @@ export type SidebarUpdateCardProps = {
   onCheckStatus?: () => Promise<boolean>;
   prepareRetry?: ConfirmAndStartUpdateParams["prepareRetry"];
   onAcknowledge?: () => void;
+  onReportFailure?: ConfirmAndStartUpdateParams["onReportFailure"];
+  onDiagnoseFailure?: ConfirmAndStartUpdateParams["onDiagnoseFailure"];
+  readFailureActions?: ConfirmAndStartUpdateParams["readFailureActions"];
   statusBanner: ApplicationStatusBanner | null;
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
   canUpdate: boolean;
@@ -230,6 +233,9 @@ export function SidebarUpdateCard(
       onCheckStatus: props.onCheckStatus,
       onReviewUpdate: props.onReviewUpdate ?? (() => undefined),
       onAcknowledge: props.onAcknowledge,
+      onReportFailure: props.onReportFailure,
+      onDiagnoseFailure: props.onDiagnoseFailure,
+      readFailureActions: props.readFailureActions,
       watchUpdateProgress: props.watchUpdateProgress,
       updateAvailable: props.updateAvailable ?? null,
       updateSchedule: props.updateSchedule ?? null,

@@ -762,7 +762,7 @@ it.each([false, true])("presents and retries update status reads (failed=%s)", a
   expect(container.querySelectorAll('input[role="switch"]')).toHaveLength(2);
   const check = failed
     ? container.querySelector<HTMLButtonElement>(".updates-status-check-failed button")!
-    : buttonNamed(container, "Check status");
+    : buttonNamed(container, "Refresh status");
   check.click();
   await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
   if (!failed) {
@@ -814,9 +814,11 @@ it("routes update policy edits through the configuration owner", () => {
     overlays: { snapshot: { updateSchedule: { channel: "stable", autoEnabled: false } } },
   });
   const { container } = mountConfigPage(context, { pageId: "updates" });
-  container.querySelector<HTMLInputElement>('.settings-segmented__input[value="beta"]')!.click();
+  const channel = container.querySelector<HTMLSelectElement>(".settings-select")!;
+  channel.value = "beta";
+  channel.dispatchEvent(new Event("change", { bubbles: true }));
   for (const [title, checked, path] of [
-    ["Check for updates", false, ["update", "checkOnStart"]],
+    ["Check automatically", false, ["update", "checkOnStart"]],
     ["Automatic updates", true, ["update", "auto", "enabled"]],
   ] as const) {
     const input = [...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input")].find(

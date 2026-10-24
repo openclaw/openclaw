@@ -33,7 +33,9 @@ export type UpdatesViewProps = {
   onChannelChange: (channel: UpdatesChannel) => void;
   onUpdateChecksChange: (enabled: boolean) => void;
   onAutomaticUpdatesChange: (enabled: boolean) => void;
-  onUpdateNow: () => Promise<void>;
+  onUpdateNow: (
+    existingRun?: NonNullable<UpdatesViewProps["update"]["updateRun"]>,
+  ) => Promise<void>;
   onHoldUpdate: () => Promise<boolean>;
   onCheckStatus: () => Promise<boolean>;
   onReportFailure: (attemptId: string) => Promise<void>;

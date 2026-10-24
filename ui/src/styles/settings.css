@@ -957,6 +957,7 @@ textarea.settings-input {
 
 .updates-status-control {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-3);
@@ -966,6 +967,10 @@ textarea.settings-input {
     white-space: normal;
     overflow-wrap: anywhere;
   }
+}
+
+.card-title .settings-status {
+  font-size: inherit;
 }
 
 .updates-status-check-failed .settings-status {

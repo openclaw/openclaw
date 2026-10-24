@@ -88,17 +88,19 @@ localized guidance or executes an arbitrary command string.
 
 ## Recover in the Control UI
 
-1. Select **Check status** when the Gateway restarted, disconnected, or did not
+1. Select **Refresh status** when the Gateway restarted, disconnected, or did not
    report a final result. This reads `update.status`; it does not start another
    update. Recovery controls stay disabled while the check is pending, and a
    rejected request appears as an error on the page or in the update dialog.
    The dialog shows **Checking status…** while waiting and **Status refreshed.**
    after a successful read, even when the recorded failure has not changed.
    If the Gateway is disconnected, reconnect before checking or retrying.
-2. Open **View details** and address the recorded failing step. Diagnostic text
+2. Open **View result**, then expand **Update steps** for phases and installation
+   steps, or **Technical details** for logs, verification and the full report,
+   and address the recorded failing step. Diagnostic text
    is bounded and redacted for display; use Gateway logs when more context is
    required.
-3. Select **Retry update** only after the cause is resolved. The Control UI uses
+3. Select **Try again** only after the cause is resolved. The Control UI uses
    the normal confirmed update flow and states that running sessions are
    interrupted while the Gateway restarts.
 
