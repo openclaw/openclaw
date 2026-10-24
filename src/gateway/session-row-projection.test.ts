@@ -60,6 +60,13 @@ function write(key: string, entry: SessionEntry, agentId = "main", storePath?: s
   replaceSessionEntrySync({ agentId, sessionKey: key, storePath }, entry);
 }
 
+const modelEntry = (sessionId: string, modelOverride: string, updatedAt = 1): SessionEntry => ({
+  sessionId,
+  updatedAt,
+  providerOverride: "unit-test",
+  modelOverride,
+});
+
 function snapshotRow(
   projection: SessionRowProjection,
   key: string,
@@ -246,15 +253,7 @@ it.each(["config", "static", "unowned-map", "empty-map"] as const)(
         }
       });
       for (const target of targets) {
-        write(
-          target.key,
-          {
-            sessionId: target.key,
-            updatedAt: 1,
-            displayName: fromConfig ? "Policy fixture" : "Publication fixture",
-          },
-          target.agentId,
-        );
+        write(target.key, { sessionId: target.key, updatedAt: 1 }, target.agentId);
       }
       using projection = await createTestProjection({
         cfg,
@@ -365,27 +364,14 @@ it("keeps cross-agent inheritance bound to a stored qualified parent", () =>
       ["work", "global", "work-global"],
       ["work", "agent:work:main", "work"],
     ] as const) {
-      write(
-        sessionKey,
-        {
-          sessionId: `${label}-parent`,
-          updatedAt: 1,
-          providerOverride: "unit-test",
-          modelOverride: `${label}-model`,
-        },
-        agentId,
-      );
+      write(sessionKey, modelEntry(`${label}-parent`, `${label}-model`), agentId);
     }
     const key = "agent:main:child";
     write(key, { sessionId: "child", updatedAt: 2, parentSessionKey: "agent:work:main" });
     const projection = await create({ cfg });
     const parentKey = "agent:work:main";
     const writeParent = (sessionId: string, updatedAt: number, modelOverride: string) =>
-      write(
-        parentKey,
-        { sessionId, updatedAt, providerOverride: "unit-test", modelOverride },
-        "work",
-      );
+      write(parentKey, modelEntry(sessionId, modelOverride, updatedAt), "work");
     const children = (parentSessionKey: string, agentId?: string) =>
       projection.selectEntries({ agentId, parentSessionKey }).map((child) => child.key);
     const expectInherited = (parentSessionKey: string, model: string) =>
@@ -438,12 +424,7 @@ it.each(["global", "unknown"])(
         session: { scope: "global" as const, store: storePath },
       };
       openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-      const parent = {
-        sessionId: "work-parent",
-        updatedAt: 1,
-        providerOverride: "unit-test",
-        modelOverride: "before",
-      };
+      const parent = modelEntry("work-parent", "before");
       write(sentinel, parent, "work", storePath);
       const key = "agent:main:child";
       write(

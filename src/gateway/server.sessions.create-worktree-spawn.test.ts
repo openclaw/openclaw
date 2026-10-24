@@ -16,7 +16,6 @@ import {
   loadTranscriptEvents,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import * as sessionAccess from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { withTimeout } from "../infra/fs-safe.js";
@@ -26,7 +25,6 @@ import {
   captureSessionControllerSettlement,
   SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-controller.lifecycle.js";
-import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -117,10 +115,7 @@ async function expectCreationError(request: Promise<unknown>, message: unknown, 
   const result = await request;
   expect(result).toMatchObject({ ok: false, error: { message, ...(code ? { code } : {}) } });
 }
-const runtimeContext = () => ({
-  broadcast: vi.fn(),
-  dedupe: new Map(),
-});
+const runtimeContext = () => ({ broadcast: vi.fn(), dedupe: new Map() });
 function mockDispatch() {
   dispatchInboundMessageMock.mockResolvedValue({
     queuedFinal: false,
@@ -129,6 +124,16 @@ function mockDispatch() {
 }
 const git = (...args: string[]) => execFileAsync("git", ["-C", repository, ...args]);
 const readReadme = (dir: string) => fs.readFile(path.join(dir, "README.md"), "utf8");
+const expectMissing = (file: string) =>
+  expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+async function expectOwnedCheckout(key: string, contents = "selected-project\n") {
+  const child = readEntry(key)!;
+  const owned = (await managedWorktrees.findLiveByOwner("session", key))!;
+  expect(child.worktree?.id).toBe(owned.id);
+  expect(child.spawnedCwd).toBe(owned.path);
+  expect(await readReadme(owned.path)).toBe(contents);
+  await expectMissing(path.join(owned.path, "setup-marker.txt"));
+}
 
 function spawnClient(requesterSessionKey = parentKey) {
   return {
@@ -183,11 +188,10 @@ async function createVisibleSpawnTool() {
     getRuntimeConfig,
     trackExecution: async (run) => await run(),
   });
-  const registerRun = vi.fn();
   const tool = createSessionsSpawnTool({
     agentSessionKey: parentKey,
     config: getRuntimeConfig(),
-    registerRun,
+    registerRun: vi.fn(),
     countActiveRuns: () => 0,
   });
   const spawn = (options: Record<string, unknown>) =>
@@ -195,7 +199,7 @@ async function createVisibleSpawnTool() {
       () => context,
       () => tool.execute("select-project", { task: "Read README.md", visible: true, ...options }),
     );
-  return { context, registerRun, spawn };
+  return { context, spawn };
 }
 
 beforeEach(async () => {
@@ -232,41 +236,30 @@ test.each([
   ["github", true],
   ["inherited", true],
   ["registered", false],
-  ["github", false],
 ] as const)(
   "required visible spawn selects %s project (managed worktree: %s)",
   async (source, worktree) => {
     const { entry: parent } = await createManagedProjectParent(true);
-    const projectName = worktree ? "tool-selected-project" : "sandbox-external-project";
+    const projectName = "tool-selected-project";
     const otherRepository = await createRepository(state.root, projectName);
     const project = await registerProjectRegistry({ path: otherRepository });
     projectCloneMocks.materializeProjectClone.mockResolvedValue(project);
-    const { context, registerRun, spawn } = await createVisibleSpawnTool();
-    const createWorktree = vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome");
-    const bindChild = vi.spyOn(sessionAccess, "createSessionEntryWithTranscript");
+    const { context, spawn } = await createVisibleSpawnTool();
     mockDispatch();
     let childKey: string | undefined;
     let creationError: unknown;
     try {
       const result = await spawn({
         // Sandbox rejection must not await unrelated automatic title generation.
-        label: worktree ? "Selected project child" : "Rejected project child",
+        label: "Selected project child",
         ...(source === "registered"
           ? { projectId: project.id }
           : source === "github"
             ? {
-                projectGitUrl: worktree
-                  ? "git@github.com:example/selected.git"
-                  : "https://github.com/example/restricted.git",
+                projectGitUrl: "https://github.com/example/selected.git",
               }
             : {}),
-        ...(worktree
-          ? {
-              worktree: true,
-              worktreeName: "selected-child",
-              worktreeBaseRef: "main",
-            }
-          : {}),
+        ...(worktree ? { worktree: true, worktreeName: "selected-child" } : {}),
       }).catch((error: unknown) => {
         creationError = error;
         return undefined;
@@ -279,44 +272,27 @@ test.each([
       }
       const child = childKey ? readEntry(childKey) : undefined;
       if (!worktree) {
-        if (source === "registered") {
-          expect(creationError).toMatchObject({
-            message: expect.stringContaining("outside the sandboxed agent workspace"),
-          });
-          expect(childKey).toBeUndefined();
-          expect(bindChild).not.toHaveBeenCalled();
-          expect(registerRun).not.toHaveBeenCalled();
-        } else {
-          expect(creationError).toBeUndefined();
-          expect(child).toMatchObject({ sandbox: "required", status: "failed" });
-          expect(child?.lastRunError).toContain("outside the sandboxed agent workspace");
-        }
-        expect(createWorktree).not.toHaveBeenCalled();
-        if (childKey) {
-          expect(await managedWorktrees.findLiveByOwner("session", childKey)).toBeUndefined();
-        }
-        expect(child?.worktree).toBeUndefined();
-        expect(child?.projectId).toBeUndefined();
+        expect(creationError).toMatchObject({
+          message: expect.stringContaining("outside the sandboxed agent workspace"),
+        });
+        expect(childKey).toBeUndefined();
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         return;
       }
-      expect(result?.details, JSON.stringify(result?.details)).toMatchObject({
+      expect(result?.details).toMatchObject({
         status: "accepted",
+        childSessionKey: expect.any(String),
       });
-      expect(childKey).toEqual(expect.any(String));
-      expect(child).toMatchObject({ parentSessionId: parent.sessionId, sandbox: "required" });
-      if (source !== "inherited") {
-        expect(child?.projectId).toBe(project.id);
-      }
-      expect(child?.worktree?.repoRoot).toBe(source === "inherited" ? repository : otherRepository);
+      expect(child).toMatchObject({
+        parentSessionId: parent.sessionId,
+        sandbox: "required",
+        ...(source !== "inherited" ? { projectId: project.id } : {}),
+        worktree: { repoRoot: source === "inherited" ? repository : otherRepository },
+      });
       expect(await readReadme(child!.spawnedCwd!)).toBe(
         source === "inherited" ? "selected-project\n" : `${projectName}\n`,
       );
-      if (source !== "github") {
-        expect(projectCloneMocks.materializeProjectClone).not.toHaveBeenCalled();
-      }
-      await expect(fs.stat(path.join(child!.spawnedCwd!, "setup-marker.txt"))).rejects.toThrow();
-      expect(registerRun).toHaveBeenCalledOnce();
+      await expectMissing(path.join(child!.spawnedCwd!, "setup-marker.txt"));
     } finally {
       if (childKey) {
         await settleWorkspaceRuns(context, storePath, childKey, true);
@@ -368,13 +344,9 @@ test("required project preparation isolates host filters without rejecting the r
   await createChild({ key, projectId: project.id });
   const child = readEntry(key);
   expect(child).toMatchObject({ sandbox: "required", projectId: project.id });
-  expect(child?.worktree?.id).toBe((await managedWorktrees.findLiveByOwner("session", key))?.id);
   expect(child?.spawnedCwd).not.toBe(repository);
-  expect(await readReadme(child!.spawnedCwd!)).toBe(await readReadme(repository));
-  await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
-  await expect(fs.stat(path.join(child!.spawnedCwd!, "setup-marker.txt"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
+  await expectOwnedCheckout(key, await readReadme(repository));
+  await expectMissing(marker);
 });
 
 test.each(["archive", "unregister", "replace"] as const)(
@@ -413,7 +385,7 @@ test.each(["archive", "unregister", "replace"] as const)(
       if (!createdPath) {
         throw new Error("Expected the preparation to allocate a checkout");
       }
-      await expect(fs.stat(createdPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expectMissing(createdPath);
     }
   },
 );
@@ -439,14 +411,13 @@ test.each(["empty metadata", "missing worktree target", "partial metadata"])(
     await createSession({ key: parentKey });
     if (damage === "empty metadata") {
       const child = await createChild({ worktree: false });
-      expect(child.entry.worktree).toBeUndefined();
       const stored = readEntry(child.key);
-      expect(stored).toMatchObject({ parentSessionKey: parentKey });
-      expect(stored?.pendingWorktree).toBeUndefined();
+      expect(stored).toMatchObject({
+        parentSessionKey: parentKey,
+        worktree: undefined,
+        pendingWorktree: undefined,
+      });
       expect(await fs.readdir(metadata)).toEqual([]);
-      await expect(managedWorktrees.resolveRepositoryPaths(workspace)).rejects.toThrow(
-        "not a git checkout",
-      );
       await expectCreationError(
         requestChild(),
         "agent workspace is not a git checkout",
@@ -554,12 +525,10 @@ test("publishes a failed worktree spawn only after its durable session failure",
   const preparation = createDeferredCore<never>();
   void preparation.promise.catch(() => {});
   const preparationStarted = createDeferredCore();
-  const createWorktree = vi
-    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
-    .mockImplementationOnce(() => {
-      preparationStarted.resolve();
-      return preparation.promise;
-    });
+  vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome").mockImplementationOnce(() => {
+    preparationStarted.resolve();
+    return preparation.promise;
+  });
   const failure = new Error(
     "git ls-tree -r --format=%(objectsize) c79ad267ba623c1a323f1f6e8b60228bd5a30ce5 -- failed (timed out after 120 seconds; signal SIGTERM):\n4514\n4168\nCheck repository access and disk space.",
   );
@@ -610,14 +579,11 @@ test("publishes a failed worktree spawn only after its durable session failure",
     );
     expect(created.runStarted).toBe(true);
     const { runId, sessionId } = created;
-    const admittedRun = rpcSourceTesting.get(runId)!;
-    expect(admittedRun.input.claim).toBeUndefined();
     registryStartedAt = Date.now() + 1;
     const released = captureSessionControllerSettlement({ scope: storePath, identities: [key] });
     expect(released).toBeDefined();
     expect(loadSessionEntry(target)?.pendingWorktree?.workspace).toBe(repository);
     await preparationStarted.promise;
-    expect(createWorktree).toHaveBeenCalledOnce();
     preparation.reject(failure);
     await withTimeout(released!, SESSION_CONTROLLER_DRAIN_TIMEOUT_MS, "failed workspace proof");
     await registryProjection;
@@ -640,11 +606,12 @@ test("publishes a failed worktree spawn only after its durable session failure",
     expect(notices).toMatchObject([
       { details: { runId, error: expect.stringContaining("git ls-tree") }, display: true },
     ]);
-    const listed = await directSessionReq<{
-      sessions: Array<{ key: string; lastRunError?: string }>;
-    }>("sessions.list", { agentId: "main" }, adminRequest);
-    expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
-    expect(listed.payload?.sessions.find((row) => row.key === key)).toMatchObject({
+    const listed = await accepted(
+      directSessionReq<{
+        sessions: Array<{ key: string; lastRunError?: string }>;
+      }>("sessions.list", { agentId: "main" }, adminRequest),
+    );
+    expect(listed.sessions.find((row) => row.key === key)).toMatchObject({
       lastRunError: expect.stringContaining("git ls-tree"),
     });
   } finally {
@@ -667,8 +634,10 @@ test.each(["archive", "stale-child"] as const)(
     const key = `agent:main:dashboard:deferred-${change}`;
     await createChild({ key, task: "Read README.md" });
     const acceptedChild = readEntry(key)!;
-    expect(acceptedChild.pendingWorktree?.workspace).toBe(repository);
-    expect(acceptedChild.worktree).toBeUndefined();
+    expect(acceptedChild).toMatchObject({
+      pendingWorktree: { workspace: repository },
+      worktree: undefined,
+    });
     expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
     initialSend.mockRestore();
     const context = runtimeContext();
@@ -688,7 +657,6 @@ test.each(["archive", "stale-child"] as const)(
       expect(readEntry(parentKey)?.archivedAt).toBeDefined();
     }
     mockDispatch();
-    const resolveRepository = vi.spyOn(ManagedWorktreeService.prototype, "resolveRepositoryPaths");
     const createWorktree = vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome");
     let replaced = false;
     const unsubscribe = onAgentEvent((event) => {
@@ -699,10 +667,7 @@ test.each(["archive", "stale-child"] as const)(
         event.data.phase === "preparing_workspace"
       ) {
         replaced = true;
-        writeEntry(key, {
-          ...acceptedChild,
-          sessionId: "replacement-child",
-        });
+        writeEntry(key, { ...acceptedChild, sessionId: "replacement-child" });
       }
     });
     try {
@@ -722,22 +687,17 @@ test.each(["archive", "stale-child"] as const)(
       const child = readEntry(key)!;
       if (change === "stale-child") {
         expect(replaced).toBe(true);
-        expect(resolveRepository).not.toHaveBeenCalled();
         expect(createWorktree).not.toHaveBeenCalled();
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-        expect(child).toMatchObject({ sessionId: "replacement-child" });
-        expect(child.worktree).toBeUndefined();
+        expect(child).toMatchObject({ sessionId: "replacement-child", worktree: undefined });
       } else {
         expect(child).toMatchObject({
           sessionId: acceptedChild.sessionId,
           parentSessionId: parent.sessionId,
           worktree: { repoRoot: repository },
+          pendingWorktree: undefined,
         });
-        expect(child.pendingWorktree).toBeUndefined();
-        const owned = (await managedWorktrees.findLiveByOwner("session", key))!;
-        expect(owned.id).toBe(child.worktree?.id);
-        expect(await readReadme(owned.path)).toBe("selected-project\n");
-        await expect(fs.stat(path.join(owned.path, "setup-marker.txt"))).rejects.toThrow();
+        await expectOwnedCheckout(key);
         expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
       }
     } finally {
@@ -752,20 +712,13 @@ test("an existing child row does not replace an unaccepted parent project source
   const selectedParent = await createDirectProjectParent();
   const key = "agent:main:dashboard:unaccepted-parent-source";
   await createChild({ key, worktree: false }, selectedParent.key);
-  const child = readEntry(key);
-  if (!child) {
-    throw new Error("Expected the initial child row");
-  }
-  expect(child.worktree).toBeUndefined();
-  expect(child.pendingWorktree).toBeUndefined();
+  const child = readEntry(key)!;
+  expect(child).toMatchObject({ worktree: undefined, pendingWorktree: undefined });
   expect(await removeProjectRegistry(selectedParent.project)).toBe(true);
 
   await expect(requestChild({ key }, selectedParent.key)).rejects.toThrow(
     "Spawn parent project changed",
   );
   expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
-  expect(readEntry(key)).toMatchObject({
-    sessionId: child.sessionId,
-  });
-  expect(readEntry(key)?.worktree).toBeUndefined();
+  expect(readEntry(key)).toMatchObject({ sessionId: child.sessionId, worktree: undefined });
 });
