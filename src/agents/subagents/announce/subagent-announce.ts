@@ -134,6 +134,7 @@ type SubagentAnnounceFlowParams = Omit<PendingFinalDeliveryPayload, "requesterDi
   /** Exact source reserved synchronously by the durable registry handoff. */
   controllerInput?: SessionControllerInput;
   signal?: AbortSignal;
+  onAccepted?: () => void;
   onExecutionStarted?: () => void;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   onBeforeDeleteChildSession?: () => boolean | Promise<boolean>;
@@ -585,6 +586,7 @@ async function runSubagentAnnounceFlowBound(
           directIdempotencyKey,
           onDeliveryResult: reportDeliveryResult,
           signal: params.signal,
+          onAccepted: params.onAccepted,
           onExecutionStarted: params.onExecutionStarted,
           resolveGatewayContext: params.resolveGatewayContext,
           controllerInput: params.controllerInput,

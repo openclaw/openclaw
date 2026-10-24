@@ -445,7 +445,7 @@ export function scheduleRequesterSettleWake(
     void context
       .runRequesterSettleWake(
         entry,
-        async () => {
+        async (releasePreparation) => {
           // Admission can wait; reread the row before a blocked receipt is executed again.
           if (
             !isSourceCurrent() ||
@@ -475,6 +475,7 @@ export function scheduleRequesterSettleWake(
                   requesterOrigin: entry.requesterOrigin,
                   settledEntry: entry,
                   isSourceCurrent,
+                  onAccepted: releasePreparation,
                   onDescendantsPending: (deadline) => {
                     if (isSourceCurrent()) {
                       descendantWait = { entry, deadline };
