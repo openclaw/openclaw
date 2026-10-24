@@ -7,6 +7,7 @@ import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import {
   createOpenClawCodingTools,
+  createOpenClawCodingToolsInternal,
   createOpenClawCodingToolsInternalAsync,
 } from "./agent-tools.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
@@ -98,6 +99,45 @@ describe("assembled browser loopback authority", () => {
     {
       name: "denied exec tool",
       options: { config: { tools: { deny: ["exec"] } } },
+      allowed: false,
+    },
+    {
+      name: "deployment permits Browser but withholds exec",
+      options: {
+        config: {
+          tools: {
+            gatewayPolicy: { allow: ["browser"], actions: { browser: ["open", "navigate"] } },
+          },
+        },
+      },
+      allowed: false,
+    },
+    {
+      name: "deployment permits Browser and exec",
+      options: {
+        config: {
+          tools: {
+            gatewayPolicy: {
+              allow: ["browser", "exec"],
+              actions: { browser: ["open", "navigate"] },
+            },
+          },
+        },
+      },
+      allowed: true,
+    },
+    {
+      name: "deployment withholds exec through an empty action list",
+      options: {
+        config: {
+          tools: {
+            gatewayPolicy: {
+              allow: ["browser", "exec"],
+              actions: { browser: ["open", "navigate"], exec: [] },
+            },
+          },
+        },
+      },
       allowed: false,
     },
     {
@@ -221,4 +261,31 @@ describe("assembled browser loopback authority", () => {
       }
     },
   );
+
+  it("preserves independently authorized native execution when deployment withholds exec", () => {
+    const loadApprovals = vi
+      .spyOn(execApprovals, "loadExecApprovals")
+      .mockReturnValue({ version: 1, defaults: { security: "full", ask: "off" }, agents: {} });
+    const plugins = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([]);
+    try {
+      vi.mocked(createOpenClawTools).mockClear();
+      createOpenClawCodingToolsInternal({
+        config: {
+          tools: {
+            gatewayPolicy: { allow: ["browser"], actions: { browser: ["open", "navigate"] } },
+          },
+        },
+        nativeHarnessExecution: true,
+      });
+      const { context } = resolveOpenClawPluginToolInputs({
+        options: vi.mocked(createOpenClawTools).mock.calls.at(-1)?.[0],
+      });
+      expect(context.browser.allowLocalLoopback).toBe(true);
+    } finally {
+      plugins.mockRestore();
+      loadApprovals.mockRestore();
+    }
+  });
 });

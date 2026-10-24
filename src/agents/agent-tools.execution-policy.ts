@@ -7,6 +7,7 @@ import type { InternalCodingToolsOptions } from "./agent-tools.options.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { isConversationToolAllowed } from "./conversation-tool-policy-pipeline.js";
 import { prepareExecDefaults } from "./exec-defaults.js";
+import { isGatewayToolAllowedWithoutAction } from "./gateway-tool-policy.js";
 import {
   resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,
@@ -40,12 +41,14 @@ export function captureLocalBrowserLoopbackConfig(
 }
 
 function canPrepareLocalBrowserLoopback(params: BrowserLoopbackParams): boolean {
-  // Native harnesses may own the shell surface, so check policy, not materialization.
   return (
     !params.sandboxed &&
     !params.workspaceOnly &&
     params.options?.config?.browser?.ssrfPolicy === undefined &&
-    isConversationToolAllowed(params.capabilityProfile, "exec")
+    isConversationToolAllowed(params.capabilityProfile, "exec") &&
+    // Native programs have independent authority; Gateway tools honor the deployment ceiling.
+    (params.options?.nativeHarnessExecution === true ||
+      isGatewayToolAllowedWithoutAction("exec", params.options?.config))
   );
 }
 

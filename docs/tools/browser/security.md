@@ -49,6 +49,8 @@ When `browser.ssrfPolicy` is absent, agents with unrestricted execution on the
 Gateway host can navigate to `localhost`, `127.0.0.1`, and `::1` on any port in
 OpenClaw's own live, managed local Chrome. This includes unrelated services bound
 to loopback, consistent with that agent's existing host execution access.
+For Gateway-managed execution, `tools.gatewayPolicy` must also permit `exec`;
+independently authorized native harness execution keeps its own authority.
 
 Any explicit `browser.ssrfPolicy`, including `{}`, disables this automatic
 exception. Restricted or sandboxed agents, remote browser targets, externally

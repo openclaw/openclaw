@@ -1,4 +1,7 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import "./test-helpers/fast-bash-tools.js";
+import "./test-helpers/fast-coding-tools.js";
+import "./test-helpers/fast-openclaw-tools.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -9,6 +12,10 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createLocalBrowserLoopbackAssertion } from "./agent-tools.execution-policy.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { createAdmittedHostCapabilityTestFixture } from "./harness/host-capability.test-support.js";
+import * as openClawPluginTools from "./openclaw-plugin-tools.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
+import { resolveOpenClawPluginToolInputs } from "./openclaw-tools.plugin-context.js";
 import { projectEffectiveExecPolicy } from "./session-permission-exec-mode.js";
 
 const hostExecPolicy = projectEffectiveExecPolicy({
@@ -109,5 +116,41 @@ it("retires the grant when the runtime config owner publishes a policy change", 
     expect(assertCurrent).toThrow("policy changed");
   } finally {
     clearRuntimeConfigSnapshot();
+  }
+});
+
+it("keeps Browser callable while requiring the live host's native execution declaration", async () => {
+  const config = {
+    tools: { gatewayPolicy: { allow: ["browser"], actions: { browser: ["snapshot"] } } },
+  };
+  const { hostCapabilities, closeHost, closeAdmission } =
+    await createAdmittedHostCapabilityTestFixture({
+      runId: "browser-native-execution",
+      config,
+    });
+  const plugins = vi
+    .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptionsAsync")
+    .mockResolvedValue([]);
+  try {
+    for (const nativeLocalExecution of [undefined, true] as const) {
+      vi.mocked(createOpenClawTools).mockClear();
+      const tools = await hostCapabilities.createToolSurfaceAsync!(
+        {
+          config,
+          sessionPermissionPolicy: { mode: "full", root: process.cwd() },
+        },
+        { nativeLocalExecution },
+      );
+      expect(tools.some((tool) => tool.name === "browser")).toBe(true);
+      expect(tools.some((tool) => tool.name === "exec")).toBe(false);
+      const { context } = resolveOpenClawPluginToolInputs({
+        options: vi.mocked(createOpenClawTools).mock.calls.at(-1)?.[0],
+      });
+      expect(context.browser.allowLocalLoopback).toBe(nativeLocalExecution === true);
+    }
+  } finally {
+    plugins.mockRestore();
+    closeHost();
+    closeAdmission();
   }
 });
