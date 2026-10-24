@@ -46,8 +46,6 @@ import {
 } from "./doctor-maintenance.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
-type ServiceAudit = typeof import("../daemon/service-audit.js").auditGatewayServiceConfig;
-type TaskControl = typeof import("../daemon/schtasks-control.js");
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
   gatewayPid: Math.max(process.pid, process.ppid, 1) + 1,
@@ -55,12 +53,14 @@ const mocks = vi.hoisted(() => ({
   activeRoot: "",
   runtimePath: "",
   installPlanBuilt: false,
-  audit: vi.fn<ServiceAudit>(),
+  audit: vi.fn<typeof import("../daemon/service-audit.js").auditGatewayServiceConfig>(),
   confirm: vi.fn(),
   note: vi.fn(),
   health: vi.fn(async () => ({ outcome: "ready", healthy: true })),
-  suspend: vi.fn<TaskControl["suspendScheduledTaskAutoStartForUpdate"]>(),
-  resume: vi.fn<TaskControl["resumeScheduledTaskAutoStartAfterUpdate"]>(),
+  suspend:
+    vi.fn<typeof import("../daemon/schtasks-control.js").suspendScheduledTaskAutoStartForUpdate>(),
+  resume:
+    vi.fn<typeof import("../daemon/schtasks-control.js").resumeScheduledTaskAutoStartAfterUpdate>(),
 }));
 vi.mock("../daemon/service-process-membership.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/service-process-membership.js")>()),
@@ -462,11 +462,18 @@ async function runInstallationCase(params: {
             },
           },
         );
+        const notes = mocks.note.mock.calls.flat().join("\n");
+        expect(notes).toContain(`${oldRoot} (2026.9.4)`);
+        expect(notes).toContain(`${mocks.activeRoot} (2026.9.17)`);
+        expect(notes).toContain("openclaw doctor --fix");
+        expect(notes).toContain("openclaw gateway install --force");
         if (params.bun) {
           expectOriginal([], true);
+          expect(notes).toContain("automatic installation repair was skipped");
           return;
         }
         if (params.updateInProgress) {
+          expect(notes).toContain("deferred to update finalization");
           expectInstallation([]);
           expect(mocks.confirm).not.toHaveBeenCalled();
           return;
@@ -478,6 +485,9 @@ async function runInstallationCase(params: {
                 params.consent.interactive,
             ),
           );
+          if (params.consent.aggressive) {
+            expect(notes).toContain("Service command does not include the gateway subcommand");
+          }
         }
         if (
           params.inspectionFailure ||
@@ -490,6 +500,7 @@ async function runInstallationCase(params: {
             mocks.activeRoot,
           );
           expect(command.programArguments).toContain(params.invocationPort ?? "19989");
+          expect(notes).toContain("reconciled with the active CLI");
         }
         return;
       }
@@ -633,13 +644,22 @@ async function runInstallationCase(params: {
           const bytes = await fs.readFile(configPath!, "utf8");
           const refused =
             params.tokenRecovery === "writer-unavailable" || params.tokenRecovery === "no-consent";
+          expect(events).toEqual([
+            "stop",
+            "repair-state",
+            ...(refused ? [] : ["write-config", "install"]),
+          ]);
           if (refused) {
             expect(bytes).toBe(originalConfig);
             expect(writerContext?.cfg.gateway?.auth?.token).toBeUndefined();
             expectOriginal(["stop", "repair-state"], false);
             expect(mocks.health).not.toHaveBeenCalled();
+            if (params.tokenRecovery === "no-consent") {
+              expect(
+                mocks.note.mock.calls.map(([message]) => String(message)).join("\n"),
+              ).toContain("Skipped Gateway token preservation and service repair");
+            }
           } else {
-            expect(events).toEqual(["stop", "repair-state", "write-config", "install"]);
             expect(JSON.parse(bytes).gateway.auth.token).toMatchObject({ source: "store" });
             expect(writerContext?.cfgForPersistence).toEqual(writerContext?.cfg);
             expect(running).toBe(!installFails);
@@ -691,9 +711,10 @@ async function runInstallationCase(params: {
           expect(maintenance?.failureFacts).toEqual([
             expect.objectContaining({ check: "gateway-restoration", code }),
           ]);
-          expect(maintenance?.warnings?.join("\n")).toContain(
-            "openclaw gateway install --force --port 19989",
-          );
+          expect(maintenance?.warnings).toEqual([
+            expect.stringContaining("openclaw gateway install --force --port 19989"),
+          ]);
+          expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(outcome));
           expect(mocks.health).not.toHaveBeenCalled();
           if (outcome === "recovery-pending") {
             expect(finishError).toMatchObject({
@@ -707,7 +728,12 @@ async function runInstallationCase(params: {
         expect(finishError).toBeUndefined();
         if (params.restorationInspectionFailure) {
           expectOriginal(["stop", "repair-state"], false);
+          expect(maintenance?.warnings).toEqual([expect.stringContaining("could not reconcile")]);
           expect(maintenance?.warnings?.[0]).toContain("state compatibility is unverified");
+          expect(runtime.log).toHaveBeenCalledWith(maintenance?.warnings?.[0]);
+          expect(runtime.log).not.toHaveBeenCalledWith(
+            "Gateway restarted and verified after Doctor repair.",
+          );
           expect(mocks.health).not.toHaveBeenCalled();
           return;
         }
@@ -721,10 +747,18 @@ async function runInstallationCase(params: {
         if (initiallyStopped) {
           expectInstallation(["repair-state"]);
           expect(running).toBe(false);
-          expect(maintenance?.warnings?.[0]).toContain(
-            "openclaw gateway install --force --port 19989",
-          );
+          expect(maintenance?.warnings).toEqual([
+            expect.stringContaining(
+              "Stopped service definitions are preserved; run `openclaw gateway install --force --port 19989` from the active CLI.",
+            ),
+          ]);
           expect(maintenance?.warnings?.[0]).not.toContain("doctor --fix");
+          expect(runtime.log).toHaveBeenCalledWith(
+            expect.stringContaining(`${oldRoot} (2026.9.4)`),
+          );
+          expect(runtime.log).toHaveBeenCalledWith(
+            expect.stringContaining(`${mocks.activeRoot} (2026.9.17)`),
+          );
           expect(mocks.health).not.toHaveBeenCalled();
           return;
         }
@@ -734,11 +768,15 @@ async function runInstallationCase(params: {
         );
         expect(running).toBe(!installFails);
         expect(command.programArguments).toContain(params.invocationPort ?? "19989");
+        expect(maintenance?.warnings).toEqual(
+          installFails ? [expect.stringContaining("could not reconcile")] : [],
+        );
         if (installFails) {
           expect(mocks.health).not.toHaveBeenCalled();
-          expect(maintenance?.warnings?.[0]).toContain("state compatibility is unverified");
+          expect(maintenance?.warnings).toEqual([
+            expect.stringContaining("state compatibility is unverified"),
+          ]);
         } else {
-          expect(maintenance?.warnings).toEqual([]);
           expect(mocks.health).toHaveBeenCalledWith(expect.objectContaining({ port: 19989 }));
         }
         if (params.platform === "win32") {

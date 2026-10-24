@@ -26,31 +26,39 @@ async function mkdirSafe(dir: string) {
   await chmodSafeDir(dir);
 }
 
-async function writeFixtureFiles(dir: string, files: Record<string, string>) {
-  await mkdirSafe(dir);
-  for (const [name, content] of Object.entries(files)) {
-    await fs.writeFile(path.join(dir, name), content, "utf-8");
-  }
-}
-
 async function writePluginFixture(params: {
   dir: string;
   id: string;
   schema?: Record<string, unknown>;
   channels?: string[];
 }) {
-  await writeFixtureFiles(params.dir, {
-    "index.js": `export default { id: "${params.id}", register() {} };`,
-    "openclaw.plugin.json": JSON.stringify(
-      {
-        id: params.id,
-        configSchema: params.schema ?? { type: "object" },
-        ...(params.channels ? { channels: params.channels } : {}),
-      },
-      null,
-      2,
-    ),
-  });
+  await mkdirSafe(params.dir);
+  await fs.writeFile(
+    path.join(params.dir, "index.js"),
+    `export default { id: "${params.id}", register() {} };`,
+    "utf-8",
+  );
+  const manifest = {
+    id: params.id,
+    configSchema: params.schema ?? { type: "object" },
+    ...(params.channels ? { channels: params.channels } : {}),
+  };
+  await fs.writeFile(
+    path.join(params.dir, "openclaw.plugin.json"),
+    JSON.stringify(manifest, null, 2),
+    "utf-8",
+  );
+}
+
+async function writeManifestlessClaudeBundleFixture(params: { dir: string }) {
+  await mkdirSafe(params.dir);
+  await mkdirSafe(path.join(params.dir, "commands"));
+  await fs.writeFile(
+    path.join(params.dir, "commands", "review.md"),
+    "---\ndescription: fixture\n---\n",
+    "utf-8",
+  );
+  await fs.writeFile(path.join(params.dir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
 }
 
 type Diagnostics = readonly { path: string; message: string }[] | undefined;
@@ -69,9 +77,9 @@ function expectMessage(entries: Diagnostics, pathValue: string, message: string)
 }
 
 function expectIncludes(entries: Diagnostics, pathValue: string, fragment: string) {
-  expect(entries).toContainEqual(
-    expect.objectContaining({ path: pathValue, message: expect.stringContaining(fragment) }),
-  );
+  expect(
+    entries?.some((entry) => entry.path === pathValue && entry.message.includes(fragment)),
+  ).toBe(true);
 }
 
 function expectNoPath(entries: Diagnostics, pathValue: string) {
@@ -198,11 +206,7 @@ describe("config plugin validation", () => {
       schema: { type: "object", properties: { apiKey: { type: "string" } } },
     });
     manifestlessClaudeBundleDir = path.join(suiteHome, "manifestless-claude-bundle");
-    await mkdirSafe(path.join(manifestlessClaudeBundleDir, "commands"));
-    await writeFixtureFiles(manifestlessClaudeBundleDir, {
-      "commands/review.md": "---\ndescription: fixture\n---\n",
-      "settings.json": '{"hideThinkingBlock":true}',
-    });
+    await writeManifestlessClaudeBundleFixture({ dir: manifestlessClaudeBundleDir });
     blockedPluginDir = await installFixture("blocked-plugin");
     malformedSchemaPluginDir = await installFixture("malformed-schema-plugin", {
       schema: { type: "object", properties: { mode: { $ref: "#/$defs/Mode" } } },
@@ -291,23 +295,16 @@ describe("config plugin validation", () => {
     const anthropic = "anthropic/claude-sonnet-4-6";
     const openai = "openai/gpt-5.6";
     const codex = "openai/gpt-5.3-codex-spark";
-    const decision = "openai/gpt-6-luna";
     const modelSelection = (primary: string, fallbacks: string[] = []) => ({ primary, fallbacks });
     const agentWithSubagent = (primary: string) => ({
       model: modelSelection(primary),
       subagents: { model: primary },
     });
-    const nativeChat = agentWithSubagent(anthropic);
     const withAgents = (
       defaults: Record<string, unknown>,
       entries: Record<string, unknown> = { openclaw: {} },
       rest: Record<string, unknown> = {},
     ) => ({ ...rest, agents: { defaults, entries } });
-    const chat = (primary: string) => ({ model: modelSelection(primary) });
-    const channelChat = (target: string, model: string) =>
-      withAgents(chat(anthropic), undefined, {
-        channels: { modelByChannel: { telegram: { [target]: model } } },
-      });
     const explicitAgents = (
       entries: Record<string, unknown>,
       defaults: Record<string, unknown> = { systemAgent: { agentId: "openclaw" } },
@@ -326,65 +323,101 @@ describe("config plugin validation", () => {
       },
     });
 
-    const expectCodexRequirement = (
+    const validateMissingCodex = (
       raw: Record<string, unknown>,
-      warns = true,
       env: NodeJS.ProcessEnv = suiteEnv(),
-    ) => {
-      const result = validate(
+    ) =>
+      validate(
         {
           agents: { entries: { openclaw: {} } },
           plugins: { entries: { codex: {} } },
           ...raw,
         },
-        { env, pluginMetadataSnapshot: { manifestRegistry: { plugins: [], diagnostics: [] } } },
+        {
+          env,
+          pluginMetadataSnapshot: { manifestRegistry: { plugins: [], diagnostics: [] } },
+        },
       );
-      expect(result.ok).toBe(true);
+
+    const expectMissingCodexPluginWarning = (warnings: Diagnostics, expected = true) => {
       expect(
-        result.warnings.filter(
+        (warnings ?? []).some(
           ({ path: issuePath, message }) =>
             issuePath === "plugins.entries.codex" &&
             message.includes("plugin not installed: codex"),
         ),
-      ).toHaveLength(warns ? 1 : 0);
+      ).toBe(expected);
+    };
+    const expectCodexRequirement = (
+      config: Record<string, unknown>,
+      warns = true,
+      env: NodeJS.ProcessEnv = suiteEnv(),
+    ) => {
+      const result = validateMissingCodex(config, env);
+      expect(result.ok).toBe(true);
+      expectMissingCodexPluginWarning(result.warnings, warns);
     };
 
     it.each([
       ["string harness primary", "openai/gpt-5.6", false],
       ["native Codex fallback", modelSelection(openai, [codex]), true],
     ] as const)("uses native plugin requirements for ACP %s", (_name, model, needsCodex) => {
-      expectCodexRequirement(
+      const result = validateMissingCodex(
         explicitAgents(
           { worker: { runtime: { type: "acp", acp: { agent: "cursor" } }, model } },
           { model: modelSelection(anthropic) },
         ),
-        needsCodex,
       );
+      expect(result.ok).toBe(true);
+      expect(
+        (result.warnings ?? []).filter(
+          ({ path: issuePath, message }) =>
+            issuePath === "plugins.entries.codex" &&
+            message.includes("plugin not installed: codex"),
+        ),
+      ).toHaveLength(needsCodex ? 1 : 0);
     });
 
     it.each([
       [
-        "Decision default is not chat",
-        withAgents({ ...nativeChat, decisionModel: decision }),
+        "does not require Codex for a default Decision model beside non-OpenAI chat",
+        withAgents({ ...agentWithSubagent(anthropic), decisionModel: "openai/gpt-6-luna" }),
         false,
       ],
-      ["OpenAI chat requires Codex", withAgents(agentWithSubagent(decision)), true],
-      ["channel Decision-named target is chat", channelChat("decisionModel", decision), true],
       [
-        "request parameters stay agent-scoped",
+        "does not require Codex for a per-agent pinned Decision model",
+        withAgents(agentWithSubagent(anthropic), {
+          openclaw: { decisionModel: "openai/gpt-6-luna@openai:fixture" },
+        }),
+        false,
+      ],
+      [
+        "still requires Codex for the same model selected for chat",
+        withAgents(agentWithSubagent("openai/gpt-6-luna")),
+        true,
+      ],
+      [
+        "keeps channel targets named decisionModel on the chat diagnostic path",
+        withAgents(agentWithSubagent(anthropic), undefined, {
+          channels: { modelByChannel: { telegram: { decisionModel: "openai/gpt-6-luna" } } },
+        }),
+        true,
+      ],
+      [
+        "scopes request-parameter diagnostics to the affected keyed agent",
         explicitAgents({
-          openclaw: nativeChat,
+          openclaw: agentWithSubagent(anthropic),
           work: { ...agentWithSubagent(openai), params: { temperature: 0.4 } },
         }),
         false,
       ],
       [
-        "automatic model overrides provider PI",
+        "still warns when provider PI policy is overridden by an automatic OpenAI model route",
         { models: createPiProviderModels("https://api.openai.com/v1", "auto") },
         true,
       ],
       [
-        "agent primary replaces fallback inheritance",
+        "does not inherit default fallbacks after a listed agent selects its own primary",
         withAgents(
           { model: modelSelection(openai, [codex]) },
           { worker: { model: { primary: anthropic } } },
@@ -392,7 +425,7 @@ describe("config plugin validation", () => {
         false,
       ],
       [
-        "agent subagent model overrides default",
+        "uses a listed-agent subagent model before the default subagent model",
         withAgents(
           { model: modelSelection(anthropic), subagents: { model: codex } },
           { openclaw: { subagents: { model: anthropic } } },
@@ -400,7 +433,14 @@ describe("config plugin validation", () => {
         false,
       ],
       [
-        "agent PI shadows default Codex",
+        "warns when a channel model override needs Codex",
+        withAgents({ model: modelSelection(anthropic) }, undefined, {
+          channels: { modelByChannel: { telegram: { default: codex } } },
+        }),
+        true,
+      ],
+      [
+        "does not warn for a fully shadowed default exact Codex policy",
         withAgents(
           { model: modelSelection(openai), models: runtimePolicy(openai, "codex") },
           { openclaw: { models: runtimePolicy(openai, "pi") } },
@@ -409,15 +449,15 @@ describe("config plugin validation", () => {
         false,
       ],
       [
-        "model refs stay agent-scoped",
+        "does not attribute keyed agent model refs to another agent",
         explicitAgents({
-          openclaw: nativeChat,
-          ops: { ...nativeChat, models: runtimePolicy(openai, "pi") },
+          openclaw: agentWithSubagent(anthropic),
+          ops: { ...agentWithSubagent(anthropic), models: runtimePolicy(openai, "pi") },
         }),
         false,
       ],
       [
-        "default Codex remains reachable",
+        "warns when a default exact Codex policy remains reachable by another agent",
         {
           models: providerModels("pi"),
           ...explicitAgents(
@@ -428,12 +468,12 @@ describe("config plugin validation", () => {
         true,
       ],
       [
-        "custom endpoint stays automatic",
+        "does not warn when a custom OpenAI-compatible base URL uses automatic runtime policy",
         { models: createPiProviderModels("https://proxy.example.invalid/v1", "auto") },
         false,
       ],
       [
-        "exact PI overrides automatic route",
+        "does not warn when exact agent policy overrides an automatic OpenAI provider model route",
         withAgents(
           {
             models: {
@@ -447,12 +487,16 @@ describe("config plugin validation", () => {
         false,
       ],
       [
-        "explicit enable requires Codex",
+        "still warns when the missing Codex plugin is explicitly enabled",
         { models: providerModels("pi"), plugins: { entries: { codex: { enabled: true } } } },
         true,
       ],
     ] as const)("%s", (_name, config, warns) => {
       expectCodexRequirement(config, warns);
+    });
+
+    it("warns when the utility model needs Codex", () => {
+      expectCodexRequirement(withAgents({ model: modelSelection(anthropic), utilityModel: codex }));
     });
 
     it("keeps the two-argument diagnostic API correct for a legacy list", () => {
@@ -467,13 +511,20 @@ describe("config plugin validation", () => {
       expect(shouldSuppressMissingCodexPluginDiagnostics(raw, suiteEnv())).toBe(false);
     });
 
-    it("lets an agent wildcard override provider runtime policy", () => {
-      expectCodexRequirement(
-        withAgents({ models: runtimePolicy("openai/*", "codex") }, undefined, {
-          models: providerModels("pi"),
-        }),
-      );
-    });
+    it.each([
+      ["codex", "pi", false],
+      ["pi", "codex", true],
+    ] as const)(
+      "uses provider %s / wildcard %s precedence",
+      (providerRuntime, wildcardRuntime, warns) => {
+        expectCodexRequirement(
+          withAgents({ models: runtimePolicy("openai/*", wildcardRuntime) }, undefined, {
+            models: providerModels(providerRuntime),
+          }),
+          warns,
+        );
+      },
+    );
 
     it("uses the validation environment snapshot for implicit OpenAI routing", () => {
       expectCodexRequirement({}, false, {
@@ -704,7 +755,11 @@ describe("config plugin validation", () => {
         "memory-core": { config: { dreaming: { enabled: true } } },
       },
     });
-    expectNoMessage(res.warnings, /plugin not found: dreaming/);
+    expect(
+      res.warnings?.some(
+        (w) => w.path === "plugins.allow" && w.message.includes("plugin not found: dreaming"),
+      ),
+    ).toBe(false);
     expect(
       res.warnings?.some(
         (w) =>

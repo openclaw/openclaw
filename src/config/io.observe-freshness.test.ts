@@ -7,6 +7,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  executeSqliteQueryTakeFirstSync,
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
@@ -20,6 +25,7 @@ import {
   withOpenClawStateDatabaseReadSnapshot as readDatabaseSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync as closeDatabase,
   closeOpenClawStateDatabaseForTest,
@@ -643,7 +649,13 @@ describe("observation freshness", () => {
     db: ReturnType<typeof openOpenClawStateDatabase>["db"],
     configPath: string,
   ) {
-    return db.prepare("SELECT * FROM config_health_entries WHERE config_path = ?").get(configPath);
+    return executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<DB>(db)
+        .selectFrom("config_health_entries")
+        .selectAll()
+        .where("config_path", "=", configPath),
+    );
   }
 
   it.each([
@@ -834,11 +846,13 @@ describe("observation freshness", () => {
       const writeRaw = (text: string) =>
         writeTransaction(
           ({ db: writeDb }) => {
-            writeDb
-              .prepare(
-                "UPDATE config_health_entries SET last_known_good_json = ? WHERE config_path = ?",
-              )
-              .run(text, configPath);
+            executeSqliteQuerySync(
+              writeDb,
+              getNodeSqliteKysely<DB>(writeDb)
+                .updateTable("config_health_entries")
+                .set({ last_known_good_json: text })
+                .where("config_path", "=", configPath),
+            );
           },
           { env },
         );

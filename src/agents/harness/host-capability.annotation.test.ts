@@ -6,10 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { convertMessages } from "../../../packages/ai/src/openai-completions-messages.js";
 import { resolveOpenAICompletionsCompat } from "../../../packages/ai/src/transports/openai-completions-compat.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   listSessionPendingInputReceipts,
+  listSessionPendingInputs,
   loadSessionEntry,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
@@ -26,7 +28,7 @@ import * as sessionMessageRewrite from "../../config/sessions/session-message-re
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
-import { advancePlacementFixtureToActive } from "../../gateway/worker-environments/placement-test-fixtures.js";
+import { seedAttachedPlacementEnvironment } from "../../gateway/worker-environments/placement-test-fixtures.js";
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "../../plugin-sdk/codex-session-transcript-runtime.js";
 import { readSessionTranscriptVisibleMessageDelta } from "../../plugin-sdk/session-transcript-runtime.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -43,10 +45,10 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { convertToLlm } from "../sessions/messages.js";
-import { completionModel } from "../simple-completion.test-support.js";
 import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import {
@@ -74,10 +76,6 @@ function nativeAnnotation(
       .digest("hex")
       .slice(0, 32),
   };
-}
-
-function annotationCapability(host: ReturnType<typeof createAgentHarnessHostCapabilities>) {
-  return expectDefined(host.capabilities.annotateCurrentUserTurn, "annotation capability");
 }
 
 async function withAdmission(
@@ -116,11 +114,21 @@ async function prepareAdmission(
     expectedLifecycleRevision: "initial",
     expectedWriterRunId: runId,
   };
-  const entry = { sessionId: target.sessionId, updatedAt: 1, lifecycleRevision: "initial" };
   if (options.cronBaseKey) {
-    await upsertSessionEntryCore({ ...target, sessionKey: options.cronBaseKey }, entry);
+    await upsertSessionEntryCore(
+      { ...target, sessionKey: options.cronBaseKey },
+      {
+        sessionId: target.sessionId,
+        updatedAt: 1,
+        lifecycleRevision: "initial",
+      },
+    );
   }
-  await upsertSessionEntryCore(target, { ...entry, activeWriterRunId: runId });
+  await upsertSessionEntryCore(target, {
+    sessionId: target.sessionId,
+    updatedAt: 1,
+    lifecycleRevision: "initial",
+  });
   const patchSession = (patch: Record<string, unknown>) =>
     runOpenClawAgentWriteTransaction(
       (database) => {
@@ -131,12 +139,14 @@ async function prepareAdmission(
       },
       { agentId: target.agentId },
     );
+  patchSession({ activeWriterRunId: runId });
   const prior = expectDefined(
     await appendTranscriptMessage(target, {
       message: { role: "user", content: "prior", timestamp: 1 },
     }),
     "prior",
   );
+  const onPersisted = vi.fn();
   const recorder = createUserTurnTranscriptRecorder({
     input: {
       text: "prompt",
@@ -148,6 +158,7 @@ async function prepareAdmission(
     },
     target: { ...target, sessionEntry: loadSessionEntry(target), config: options.config },
     beforeMessageWrite: options.beforeMessageWrite,
+    onMessagePersisted: onPersisted,
   });
   if (options.persist !== false) {
     await recorder.persistApproved();
@@ -180,6 +191,7 @@ async function prepareAdmission(
     target,
     prior,
     recorder,
+    onPersisted,
     controller,
     createHost,
     patchSession,
@@ -190,17 +202,6 @@ async function prepareAdmission(
       expect(await loadTranscriptEvents(target)).toEqual(before);
     },
     receipt: () => expectDefined(recorder.getAdmissionReceipt(), "admission"),
-    async withHost(
-      overrides: Parameters<typeof createHost>[0],
-      run: (host: ReturnType<typeof createHost>) => Promise<void>,
-    ) {
-      const other = createHost(overrides);
-      try {
-        await run(other);
-      } finally {
-        other.close();
-      }
-    },
   };
 }
 
@@ -228,6 +229,7 @@ describe("host-owned current admission annotation", () => {
     await withAdmission(
       async (f) => {
         const before = await loadTranscriptEvents(f.target);
+        const original = structuredClone(f.receipt());
         const writer = loadSessionEntry(f.target);
         const base = { ...f.target, sessionKey: cronBaseKey };
         expect(loadSessionEntry(base)?.activeWriterRunId).toBeUndefined();
@@ -241,6 +243,8 @@ describe("host-owned current admission annotation", () => {
             await release.promise;
             return rewrite(...args);
           });
+        const updates = vi.fn();
+        const unsubscribe = onInternalSessionTranscriptUpdate(updates);
         const pending = f.annotate();
         try {
           // Publish only after the real selector captured authority, before the real SQLite rewrite.
@@ -253,6 +257,9 @@ describe("host-owned current admission annotation", () => {
           });
           release.resolve();
           await pending;
+          const refreshed = f.receipt();
+          expect(refreshed).toEqual({ ...original, generation: expect.any(String) });
+          expect(refreshed.generation).not.toBe(original.generation);
           expect(f.recorder.getPersistedMessage?.()).toMatchObject({
             content: "prompt",
             __openclaw: { ...nativeAnnotation(), runId: f.attempt.runId },
@@ -264,9 +271,20 @@ describe("host-owned current admission annotation", () => {
             lifecycleRevision: writer?.lifecycleRevision,
             activeWriterRunId: f.attempt.runId,
           });
+          await f.annotate();
+          expect(await loadTranscriptEvents(f.target)).toEqual(after);
+          expect(f.receipt()).toEqual(refreshed);
+          expect(updates).toHaveBeenCalledOnce();
+          expect(updates).toHaveBeenCalledWith(
+            expect.objectContaining({
+              messageId: original.entryId,
+              messageSeq: original.activeMessagePosition + 1,
+            }),
+          );
         } finally {
           release.resolve();
           await pending.catch(() => {});
+          unsubscribe();
         }
       },
       { cronBaseKey },
@@ -274,46 +292,95 @@ describe("host-owned current admission annotation", () => {
   });
 
   it("refreshes only the admitted collected input while preserving source custody", async () => {
+    const hook = vi.fn<NonNullable<CreateUserTurnTranscriptRecorderParams["beforeMessageWrite"]>>(
+      ({ message }) => message,
+    );
     await withAdmission(
       async (f) => {
         expect(f.hostCapabilities.annotateCurrentUserTurn).toBeUndefined();
-        await f.recorder.stageApproved?.({
-          runId: f.attempt.runId,
-          assertCurrent: f.hostCapabilities.assertActive,
-        });
-        const source = structuredClone(f.recorder.getPendingInputMessage?.());
+        const sources = [f.recorder];
+        let host: ReturnType<typeof createAgentHarnessHostCapabilities> | undefined;
         try {
+          expect(
+            await f.recorder.stageApproved?.({
+              runId: f.attempt.runId,
+              assertCurrent: f.hostCapabilities.assertActive,
+            }),
+          ).toBe(true);
+          const second = createUserTurnTranscriptRecorder({
+            target: { ...f.target, sessionEntry: loadSessionEntry(f.target) },
+            input: {
+              text: "second prompt",
+              idempotencyKey: "second-source:user",
+              timestamp: 124,
+            },
+            beforeMessageWrite: hook,
+          });
+          sources.push(second);
+          expect(
+            await second.stageApproved?.({
+              runId: "second-source",
+              assertCurrent: f.hostCapabilities.assertActive,
+            }),
+          ).toBe(true);
+          const accepted = await listSessionPendingInputs(f.target);
           const before = await loadTranscriptEvents(f.target);
+          const content = "prompt\nsecond prompt";
           const recorder = createUserTurnTranscriptRecorder({
             target: { ...f.target, sessionEntry: loadSessionEntry(f.target) },
-            input: { text: "prompt", idempotencyKey: "collected:user", timestamp: 125 },
-            pendingInputSources: [f.recorder],
+            input: { text: content, idempotencyKey: "collected:user", timestamp: 125 },
+            pendingInputSources: sources,
+            beforeMessageWrite: hook,
           });
-          await recorder.persistApproved();
+          const persisted = expectDefined(await recorder.persistApproved(), "promoted input");
+          const original = structuredClone(persisted.admission);
           const consumptions = await listSessionPendingInputReceipts(f.target, {
-            runIds: [f.attempt.runId],
+            runIds: accepted.items.map((input) => input.runId),
           });
-          await f.withHost({ userTurnTranscriptRecorder: recorder }, async (host) => {
-            await annotationCapability(host)(nativeAnnotation());
-            expect(recorder.getPersistedMessage?.()).toMatchObject({
-              content: "prompt",
-              __openclaw: nativeAnnotation(),
-            });
-            const after = await loadTranscriptEvents(f.target);
-            expect(after).toHaveLength(before.length + 1);
-            expect(after.slice(0, -1)).toEqual(before);
-            expect(f.recorder.getPendingInputMessage?.()).toEqual(source);
-            expect(
-              await listSessionPendingInputReceipts(f.target, {
-                runIds: [f.attempt.runId],
-              }),
-            ).toEqual(consumptions);
+          expect(consumptions).toEqual(
+            accepted.items.map((input) => ({
+              runId: input.runId,
+              state: "consumed",
+              consumedByEventId: original.entryId,
+            })),
+          );
+          expect(await listSessionPendingInputs(f.target)).toEqual({ items: [], total: 0 });
+          host = f.createHost({ userTurnTranscriptRecorder: recorder });
+          const annotate = expectDefined(host.capabilities.annotateCurrentUserTurn, "annotation");
+          await annotate(nativeAnnotation(content));
+          const refreshed = expectDefined(recorder.getAdmissionReceipt(), "refreshed admission");
+          expect(refreshed).toEqual({ ...original, generation: expect.any(String) });
+          expect(refreshed.generation).not.toBe(original.generation);
+          await expect(recorder.persistApproved()).resolves.toMatchObject({
+            admission: refreshed,
+            message: recorder.getPersistedMessage?.(),
+            messageId: original.entryId,
           });
+          await annotate(nativeAnnotation(content));
+          expect(recorder.getAdmissionReceipt()).toEqual(refreshed);
+          const after = await loadTranscriptEvents(f.target);
+          expect(after).toHaveLength(before.length + 1);
+          expect(after.slice(0, -1)).toEqual(before);
+          expect(sources.map((source) => source.getPendingInputMessage?.())).toEqual(
+            accepted.items.map((input) => input.message),
+          );
+          expect(
+            await listSessionPendingInputReceipts(f.target, {
+              runIds: accepted.items.map((input) => input.runId),
+            }),
+          ).toEqual(consumptions);
+          expect(hook).toHaveBeenCalledTimes(sources.length);
+          host.close();
+          await expect(annotate(nativeAnnotation(content))).rejects.toThrow();
+          expect(await loadTranscriptEvents(f.target)).toEqual(after);
         } finally {
-          f.recorder.finishPendingInput?.("interrupted");
+          host?.close();
+          for (const source of sources) {
+            source.finishPendingInput?.("interrupted");
+          }
         }
       },
-      { persist: false },
+      { persist: false, beforeMessageWrite: hook },
     );
   });
 
@@ -386,7 +453,28 @@ describe("host-owned current admission annotation", () => {
         const unsubscribe = onInternalSessionTranscriptUpdate(updates);
         try {
           const { db } = openOpenClawAgentDatabase({ agentId: "main" });
-          await f.annotate();
+          const searchRows = () =>
+            db
+              .prepare("SELECT * FROM session_transcript_fts WHERE session_id = ?")
+              .all(f.target.sessionId);
+          const searchBefore = searchRows();
+          const projectionWork = trackSqliteStatementExecutions(
+            requireNativeSqliteDatabase(db),
+            ["fts", "size"],
+            (sql) =>
+              /\bsession_transcript_fts\b/i.test(sql)
+                ? "fts"
+                : sql.includes("octet_length")
+                  ? "size"
+                  : null,
+          );
+          try {
+            await f.annotate();
+          } finally {
+            projectionWork.restore();
+          }
+          expect(projectionWork.counts).toEqual({ fts: 0, size: 0 });
+          expect(searchRows()).toEqual(searchBefore);
           const refreshed = f.receipt();
           expect(refreshed).toEqual({ ...original, generation: expect.any(String) });
           expect(refreshed.generation).not.toBe(original.generation);
@@ -412,12 +500,18 @@ describe("host-owned current admission annotation", () => {
               upstreamUserText: "native prompt",
             },
           });
-          const model = completionModel({
+          const model = {
             api: "openai-completions",
             provider: "openai",
             id: "gpt-5.5",
+            name: "GPT-5.5",
             baseUrl: "https://api.openai.com/v1",
-          });
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 100000,
+            maxTokens: 4096,
+          } satisfies Parameters<typeof convertMessages>[0];
           const modelBytes = (message: typeof originalMessage) =>
             JSON.stringify(
               convertMessages(
@@ -443,6 +537,7 @@ describe("host-owned current admission annotation", () => {
               messageSeq: original.activeMessagePosition + 1,
             }),
           );
+          expect(f.onPersisted).toHaveBeenCalledOnce();
           const terminal = expectDefined(
             await appendTranscriptMessage(f.target, {
               message: { role: "assistant", content: "answer", timestamp: 456 },
@@ -485,11 +580,19 @@ describe("host-owned current admission annotation", () => {
     "does not replace an inherited %s with a fresh session snapshot",
     async (field) => {
       await withAdmission(async (f) => {
-        await f.withHost({ sessionTarget: { ...f.target, [field]: "stale" } }, async (host) => {
-          const before = await loadTranscriptEvents(f.target);
-          await expect(annotationCapability(host)(nativeAnnotation())).rejects.toThrow();
+        const host = f.createHost({ sessionTarget: { ...f.target, [field]: "stale" } });
+        const before = await loadTranscriptEvents(f.target);
+        try {
+          await expect(
+            expectDefined(
+              host.capabilities.annotateCurrentUserTurn,
+              "bound annotation",
+            )(nativeAnnotation()),
+          ).rejects.toThrow();
           expect(await loadTranscriptEvents(f.target)).toEqual(before);
-        });
+        } finally {
+          host.close();
+        }
       });
     },
   );
@@ -498,7 +601,10 @@ describe("host-owned current admission annotation", () => {
     await withAdmission(async (f) => {
       const attempt = { ...f.attempt, admittedRunContext: f.admittedRunContext };
       const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-      const annotate = annotationCapability(host);
+      const annotate = expectDefined(
+        host.capabilities.annotateCurrentUserTurn,
+        "retained annotation",
+      );
       const before = await loadTranscriptEvents(f.target);
       try {
         attempt.userTurnTranscriptRecorder = { ...f.recorder };
@@ -530,19 +636,29 @@ describe("host-owned current admission annotation", () => {
       const pending = f.annotate();
       const refused = expect(pending).rejects.toThrow();
       try {
-        await {
-          "host-close": f.closeHost,
-          "admission-close": f.closeAdmission,
-          abort: () => f.controller.abort(),
-          writer: () => f.patchSession({ activeWriterRunId: "successor" }),
-          session: () => f.patchSession({ sessionId: "successor" }),
-          blocked: () => f.recorder.markBlocked(),
-          replacement: async () => {
-            const replacement = await createAdmittedHostCapabilityTestFixture(f.attempt);
-            replacement.closeHost();
-            replacement.closeAdmission();
-          },
-        }[reason]();
+        if (reason === "host-close") {
+          f.closeHost();
+        }
+        if (reason === "admission-close") {
+          f.closeAdmission();
+        }
+        if (reason === "abort") {
+          f.controller.abort();
+        }
+        if (reason === "writer") {
+          f.patchSession({ activeWriterRunId: "successor" });
+        }
+        if (reason === "session") {
+          f.patchSession({ sessionId: "successor" });
+        }
+        if (reason === "blocked") {
+          f.recorder.markBlocked();
+        }
+        if (reason === "replacement") {
+          const replacement = await createAdmittedHostCapabilityTestFixture(f.attempt);
+          replacement.closeHost();
+          replacement.closeAdmission();
+        }
       } finally {
         await release();
       }
@@ -559,11 +675,33 @@ describe("host-owned current admission annotation", () => {
   it("revalidates the captured host-owned worker claim inside the write transaction", async () => {
     await withAdmission(async (f) => {
       const placements = createWorkerSessionPlacementStore();
-      await advancePlacementFixtureToActive(placements, openOpenClawStateDatabase(), f.target, {
+      seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
         environmentId: "annotation-worker",
-        remoteWorkspaceDir: "/workspace/annotation",
-        seedEnvironment: "before-dispatch",
+        sessionId: f.target.sessionId,
+        ownerEpoch: 7,
       });
+      let placement = await placements.startDispatch(f.target);
+      for (const [from, to, patch] of [
+        ["requested", "provisioning", { environmentId: "annotation-worker" }],
+        ["provisioning", "syncing", { workerBundleHash: "a".repeat(64) }],
+        [
+          "syncing",
+          "starting",
+          {
+            workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+            remoteWorkspaceDir: "/workspace/annotation",
+          },
+        ],
+        ["starting", "active", { activeOwnerEpoch: 7 }],
+      ] as const) {
+        placement = await placements.transition({
+          sessionId: f.target.sessionId,
+          from,
+          to,
+          expectedGeneration: placement.generation,
+          patch,
+        });
+      }
       const claim = await placements.claimTurn({
         ...f.target,
         runId: f.attempt.runId,
@@ -582,9 +720,12 @@ describe("host-owned current admission annotation", () => {
       );
       const before = await loadTranscriptEvents(f.target);
       const release = await holdTranscriptWriter(f.target);
-      const refused = expect(annotationCapability(host)(nativeAnnotation())).rejects.toThrow(
-        "claim",
-      );
+      const refused = expect(
+        expectDefined(
+          host.capabilities.annotateCurrentUserTurn,
+          "worker annotation",
+        )(nativeAnnotation()),
+      ).rejects.toThrow("claim");
       await placements.releaseTurn(claim);
       await release();
       try {
@@ -647,9 +788,12 @@ describe("host-owned current admission annotation", () => {
 
   it("does not issue current-row authority for a copied recorder", async () => {
     await withAdmission(async (f) => {
-      await f.withHost({ userTurnTranscriptRecorder: { ...f.recorder } }, async (host) => {
+      const host = f.createHost({ userTurnTranscriptRecorder: { ...f.recorder } });
+      try {
         expect(host.capabilities.annotateCurrentUserTurn).toBeUndefined();
-      });
+      } finally {
+        host.close();
+      }
     });
   });
 

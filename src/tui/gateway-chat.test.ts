@@ -134,6 +134,10 @@ describe("GatewayChatClient", () => {
       if (sessionScoped) {
         request.mockResolvedValueOnce({ models: [model("second", "Second")] });
         await client.listModels(scope("second"));
+        expect(request).toHaveBeenLastCalledWith("models.list", {
+          ...params,
+          sessionKey: scope("second").sessionKey,
+        });
         expect(client.getKnownModels(scope("first"))?.[0]).toEqual(first);
       }
       expect(client.getKnownModels(scope("second"))?.[0]?.id).toBe(
