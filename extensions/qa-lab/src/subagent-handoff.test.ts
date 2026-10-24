@@ -19,7 +19,7 @@ function forRequester<Args extends unknown[], Result>(run: (...args: Args) => Re
     return run(...args);
   };
 }
-function messageEvent(id: string, parentId: string, message: unknown) {
+function messageEvent(id: string, parentId: string | null, message: unknown) {
   return { type: "message", id, parentId, message };
 }
 afterEach(() => vi.useRealTimers());
@@ -57,7 +57,7 @@ async function runHandoff({
     wrapPromptDataBlock({ label: "Child result", text, encoding: "verbatim" });
   const settlement = [
     wrapPromptDataBlock({ label: "1. Child task", text: "qa-sidecar" }),
-    "status: ok",
+    hasFault("unsuccessful settlement") ? "status: error" : "status: ok",
     childResult(delivered),
     ...(secondResult ? ["status: ok", childResult(childReply)] : []),
   ].join("\n");
@@ -66,7 +66,7 @@ async function runHandoff({
     content: hasFault("private announcement") ? "Continue the OpenClaw runtime event." : settlement,
     provenance: {
       kind: "inter_session",
-      sourceChannel: "internal",
+      sourceChannel: hasFault("external delivery") ? "external" : "internal",
       sourceTool: hasFault("private announcement") ? "subagent_announce" : "subagent_settle",
       sourceSessionKey: hasFault("another child's delivery")
         ? "another-child"
@@ -105,10 +105,42 @@ async function runHandoff({
       readSubagentHandoffReply: forRequester(
         async (childKey: string, text: string, messages: unknown[]) => {
           expect(childKey).toBe(child.childSessionKey);
-          const events = hasFault("parent guessed before completion")
+          const events: unknown[] = hasFault("parent guessed before completion")
             ? [{ ...report, parentId: "request" }, delivery]
             : [delivery, report];
-          return findSubagentHandoffReply(messages, childKey, text, async () => events);
+          if (hasFault("ordinary user turn")) {
+            events.splice(
+              1,
+              0,
+              messageEvent("next-turn", delivery.id, {
+                role: "user",
+                content: "Start another task",
+              }),
+            );
+            events[2] = { ...report, parentId: "next-turn" };
+          }
+          if (hasFault("non-message delivery")) {
+            events[0] = { ...delivery, type: "custom" };
+          }
+          if (hasFault("session reset")) {
+            events.splice(1, 0, { ...delivery, type: "reset", id: "reset", parentId: delivery.id });
+            events[2] = { ...report, parentId: "reset" };
+          }
+          if (hasFault("settlement appended after the reply reuses its parent ID")) {
+            const earlier = { ...delivery, message: { role: "user", content: "Earlier task" } };
+            const selectReply = {
+              type: "leaf",
+              id: "navigate",
+              parentId: delivery.id,
+              targetId: report.id,
+            };
+            events.splice(0, events.length, earlier, report, delivery, selectReply);
+          }
+          const request = messageEvent("request", null, { role: "user", content: "Delegate" });
+          return findSubagentHandoffReply(messages, childKey, text, async () => [
+            request,
+            ...events,
+          ]);
         },
       ),
       waitForAgentHistory: forRequester(
@@ -116,7 +148,9 @@ async function runHandoff({
           const visible = hasFault("unrelated public reply")
             ? { ...reply, __openclaw: { id: "another-report" } }
             : reply;
-          const selected = await select({ messages: [visible] });
+          const selected = await select({
+            messages: hasFault("absent public reply") ? [] : [visible],
+          });
           if (!selected) {
             throw new Error("no matching delivered reply");
           }
@@ -162,6 +196,13 @@ it.each([
     "answer only in second child",
     "private announcement",
     "unrelated public reply",
+    "ordinary user turn",
+    "non-message delivery",
+    "session reset",
+    "unsuccessful settlement",
+    "external delivery",
+    "absent public reply",
+    "settlement appended after the reply reuses its parent ID",
   ].map((fault) => [fault, "no matching delivered reply"]),
 ])("refuses %s", async (fault, error) => {
   await expect(runHandoff({ fault })).rejects.toThrow(error);

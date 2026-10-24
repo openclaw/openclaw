@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
+import { closeQaRuntimeStores, wrapPromptDataBlock } from "openclaw/plugin-sdk/qa-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -23,6 +23,7 @@ import {
   readSessionTranscriptSummary,
   readSessionToolActivity,
   readSkillStatus,
+  readSubagentHandoffReply,
   seedQaSessionEntries,
   seedQaSessionTranscript,
 } from "./suite-runtime-agent-session.js";
@@ -91,6 +92,68 @@ describe("qa suite runtime agent session helpers", () => {
         readSessionTranscriptSummary(env, sessionKey, options),
     };
   }
+
+  it("credits a settlement across active metadata, but not across a side append", async () => {
+    const { sessionKey, append } = await createQaTranscript();
+    const identity = identityFor("session", sessionKey);
+    const appendEvent = (event: Record<string, unknown>) =>
+      appendSqliteSessionTranscriptEventForTest({ ...identity, event });
+    const childSessionKey = "agent:qa:subagent:child";
+    const text = "Fixture result";
+    const request = await append({ role: "user", content: "Delegate" });
+    const delivery = await append({
+      role: "user",
+      content: "status: ok\n" + wrapPromptDataBlock({ label: "Child result", text }),
+      provenance: {
+        kind: "inter_session",
+        sourceChannel: "internal",
+        sourceTool: "subagent_settle",
+        sourceSessionKey: childSessionKey,
+      },
+    });
+    assert(request && delivery);
+    await appendEvent({
+      type: "custom_message",
+      id: "context",
+      parentId: delivery.messageId,
+      customType: "fixture",
+      content: "Context",
+      display: false,
+    });
+    const metadata = { type: "custom", customType: "fixture", data: {} };
+    await appendEvent({ ...metadata, id: "metadata", parentId: "context" });
+
+    const reply = {
+      role: "assistant",
+      content: `Delegated task:\nResult: ${text}\nEvidence:\nFixture.`,
+    };
+    const readReply = (id: string) =>
+      readSubagentHandoffReply(env, sessionKey, childSessionKey, text, [
+        { ...reply, __openclaw: { id } },
+      ]);
+    const report = await append(reply);
+    assert(report);
+    await expect(readReply(report.messageId)).resolves.toBe(reply.content);
+
+    // Fork at the request, then move only the append cursor back to the settlement.
+    // History places the next report on the new branch, where there was no delivery.
+    await appendEvent({
+      type: "leaf",
+      id: "select-request",
+      parentId: report.messageId,
+      targetId: request.messageId,
+    });
+    await append({ role: "user", content: "Another task" });
+    await appendEvent({
+      ...metadata,
+      id: "side-note",
+      parentId: delivery.messageId,
+      appendMode: "side",
+    });
+    const otherReport = await append(reply);
+    assert(otherReport);
+    await expect(readReply(otherReport.messageId)).resolves.toBeUndefined();
+  });
 
   function toolCall(id: string, name: string, args: Record<string, unknown> = {}) {
     return { type: "toolCall", id, name, arguments: args };

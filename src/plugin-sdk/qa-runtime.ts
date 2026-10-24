@@ -1,5 +1,6 @@
 import { createServer } from "node:net";
 import path from "node:path";
+import { selectSessionTranscriptActiveEntries } from "../config/sessions/transcript-tree.js";
 import { runExec } from "./process-runtime.js";
 import { loadQaRuntimeModule as loadQaRunnerRuntimeModule } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
@@ -21,6 +22,15 @@ export type {
   LiveTransportQaCredentialCliOptions,
   LiveTransportQaSuiteCommandOptions,
 } from "./qa-runner-runtime.js";
+
+/** Select the same transcript branch as session history, including user and reset boundaries. */
+export function selectQaActiveSessionTranscriptEvents(events: readonly unknown[]) {
+  return selectSessionTranscriptActiveEntries({
+    entries: events.map((event, index) => ({ event, index })),
+    recordOf: (row) => row.event,
+    failClosedOnInvalidLeafControl: true,
+  });
+}
 
 /** Inspect hot transcript evidence without admitting a writer or restoring cold sessions. */
 export async function visitQaSqliteTranscriptEvents(
