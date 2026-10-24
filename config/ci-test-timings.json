@@ -3392,7 +3392,6 @@
       "ui/src/e2e/chat-resize-anchor.e2e.test.ts": 9,
       "ui/src/e2e/chat-retained-pane-escape.e2e.test.ts": 4,
       "ui/src/e2e/chat-retained-pane-eviction.e2e.test.ts": 3,
-      "ui/src/e2e/chat-retained-pane-hydration.e2e.test.ts": 23,
       "ui/src/e2e/chat-run-lifecycle.e2e.test.ts": 35,
       "ui/src/e2e/chat-scroll-dock.e2e.test.ts": 74,
       "ui/src/e2e/chat-scroll.e2e.test.ts": 19,

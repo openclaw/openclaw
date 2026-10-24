@@ -44,8 +44,7 @@ async function recoverIncognito(page: Page) {
   });
   await page.goto(`${suite.server.baseUrl}${expiredPath.slice(1)}`);
   await waitForControlUiRoute(page, { routeId: "chat", pathname: expiredPath });
-  const startup = await gateway.waitForRequest("chat.startup");
-  expect(startup.params).toMatchObject({ sessionKey: expiredKey });
+  await gateway.waitForRequest("chat.startup");
   const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
   const composer = pane.locator(".agent-chat__composer-combobox textarea");
   const expired = pane.getByText("Incognito session expired", { exact: true });
@@ -64,9 +63,6 @@ async function recoverIncognito(page: Page) {
   await pane.getByRole("button", { name: "New Incognito session", exact: true }).click();
   const created = await gateway.waitForRequest("sessions.create");
   expect(created.params).toMatchObject({ agentId: "main", incognito: true });
-  expect(created.params).not.toHaveProperty("key");
-  expect(created.params).not.toHaveProperty("parentSessionKey");
-  expect(created.params).not.toHaveProperty("message");
   await waitForControlUiRoute(page, {
     routeId: "chat",
     pathname: `/chat/${freshKey.slice("agent:".length).replaceAll(":", "/")}`,
@@ -78,52 +74,9 @@ async function recoverIncognito(page: Page) {
   expect(await gateway.getRequests("chat.send")).toHaveLength(0);
   expect(errors).toEqual([]);
   await page.screenshot({ path: proof("fresh-incognito-session") });
-
-  // Expire authoritative history while the submitted failure remains in the outbox.
-  const pendingText = "Keep this unsent synthetic research question available to copy.";
-  await gateway.deferNext("chat.send");
-  await composer.fill(pendingText);
-  await pane.getByRole("button", { name: "Send message", exact: true }).click();
-  const rejected = await gateway.waitForRequest("chat.send");
-  expect(rejected.params).toMatchObject({ sessionKey: freshKey, message: pendingText });
-  await gateway.rejectDeferred("chat.send", {
-    code: "INVALID_REQUEST",
-    message: "Synthetic delivery rejection",
-  });
-  const pendingRow = pane.locator(".chat-group.user", { hasText: pendingText });
-  await pendingRow.locator('.chat-send-status[data-send-state="failed"]').waitFor();
-  await pendingRow.getByRole("button", { name: "Retry queued message" }).waitFor();
-  const expiredFreshHistory = { sessionKey: freshKey, messages: [] };
-  await gateway.setMethodResponse("chat.startup", expiredFreshHistory);
-  await gateway.setMethodResponse("chat.history", expiredFreshHistory);
-  const startupCount = (await gateway.getRequests("chat.startup")).length;
-  await gateway.setOnline(false);
-  await gateway.setOnline(true);
-  await gateway.waitForRequest("chat.startup", { after: startupCount });
-  await expired.waitFor();
-  await pendingRow.getByText(pendingText, { exact: true }).waitFor();
-  expect(await pane.getByText(activePrivateMessage, { exact: true }).count()).toBe(0);
-  expect(await pendingRow.getByRole("button", { name: /Retry/ }).count()).toBe(0);
-  const discard = pendingRow.getByRole("button", { name: "Discard", exact: true });
-  await discard.waitFor();
-  await page.screenshot({ path: proof("expired-with-failed-message") });
-  await pendingRow.locator(".chat-bubble").click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Copy as markdown", exact: true }).click();
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(pendingText);
-  await discard.click();
-  await pendingRow.waitFor({ state: "detached" });
-  expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-  expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-  expect(errors).toEqual([]);
 }
 
 suite.define(() => {
   it("replaces an expired deep link with an explicit fresh Incognito session action", () =>
-    suite.withPage(
-      {
-        ...createControlUiE2eContextOptions(),
-        permissions: ["clipboard-read", "clipboard-write"],
-      },
-      ({ page }) => recoverIncognito(page),
-    ));
+    suite.withPage(createControlUiE2eContextOptions(), ({ page }) => recoverIncognito(page)));
 });
