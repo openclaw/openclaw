@@ -40,24 +40,15 @@ function resetMusicStatusMocks() {
   resetRecentMediaGenerationDuplicateGuardsForTests();
 }
 
-function musicStatusOperation(
-  createdAt: number,
-  overrides: Partial<MediaGenerationOperation> = {},
-) {
+function musicStatusOperation(overrides: Partial<MediaGenerationOperation> = {}) {
   return {
     taskId: "task-active",
-    runtime: "cli",
     taskKind: MUSIC_GENERATION_TASK_KIND,
     sourceId: "music_generate:google",
     requesterSessionKey: "agent:main:discord:direct:123",
-    ownerKey: "agent:main:discord:direct:123",
-    scopeKind: "session",
     runId: "tool:music_generate:active",
     task: "night-drive synthwave",
     status: "running",
-    deliveryStatus: "not_applicable",
-    notifyPolicy: "silent",
-    createdAt,
     progressSummary: "Generating music",
     ...overrides,
   };
@@ -73,7 +64,7 @@ describe("createMusicGenerateTool status actions", () => {
   it("returns active task status instead of starting a duplicate generation", async () => {
     // Duplicate guard responses prevent agents from launching parallel provider
     // jobs while a matching request is still running.
-    mediaActivityMocks.listOperations.mockReturnValue([musicStatusOperation(Date.now())]);
+    mediaActivityMocks.listOperations.mockReturnValue([musicStatusOperation()]);
 
     const result = await createMusicGenerateDuplicateGuardResult("agent:main:discord:direct:123", {
       prompt: "night-drive synthwave",
@@ -100,7 +91,7 @@ describe("createMusicGenerateTool status actions", () => {
 
   it("reports active task status when action=status is requested", async () => {
     mediaActivityMocks.listOperations.mockReturnValue([
-      musicStatusOperation(Date.now(), {
+      musicStatusOperation({
         sourceId: "music_generate:minimax",
         status: "queued",
         progressSummary: "Queued music generation",
@@ -126,7 +117,7 @@ describe("createMusicGenerateTool status actions", () => {
   it("returns recent succeeded music status instead of starting a duplicate generation", async () => {
     const now = Date.now();
     mediaActivityMocks.listOperations.mockReturnValue([
-      musicStatusOperation(now - 20_000, {
+      musicStatusOperation({
         taskId: "task-recent-music",
         requestKey: "music-request:night-drive",
         runId: "tool:music_generate:recent",

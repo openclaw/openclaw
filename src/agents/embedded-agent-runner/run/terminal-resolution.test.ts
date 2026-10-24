@@ -45,6 +45,17 @@ function reasoningAssistant(id: string, thinking: string) {
   });
 }
 
+function replaySafeTextInput(text: string) {
+  return {
+    assistant: textAssistant(text),
+    attemptOverrides: {
+      assistantTexts: [text],
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    },
+    finalAssistantRawText: text,
+  };
+}
+
 describe("terminal resolution", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -460,14 +471,8 @@ describe("terminal resolution", () => {
         { text: '{"action":"NO_REPLY"}', silent: false },
         { text: "NO_REPLY The requested result.", silent: false },
       ]) {
-        const assistant = textAssistant(text);
         const input = makeTerminalInput({
-          assistant,
-          attemptOverrides: {
-            assistantTexts: [text],
-            currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-          },
-          finalAssistantRawText: text,
+          ...replaySafeTextInput(text),
           payloadsWithToolMedia: silent ? [] : [{ text }],
           runParams: { lane, messageChannel: undefined },
         });
@@ -486,14 +491,8 @@ describe("terminal resolution", () => {
 
   it("surfaces the canonical missing-result outcome for a presentation-hidden acknowledgement", async () => {
     const text = "HEARTBEAT_OK";
-    const assistant = textAssistant(text);
     const input = makeTerminalInput({
-      assistant,
-      attemptOverrides: {
-        assistantTexts: [text],
-        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-      },
-      finalAssistantRawText: text,
+      ...replaySafeTextInput(text),
       payloadsWithToolMedia: [{ text }],
       payloadsForVisibleCompletion: [],
       runParams: { terminalReplyExpectation: "result-required" },
@@ -524,14 +523,8 @@ describe("terminal resolution", () => {
     "does not manufacture a missing-result outcome for $name",
     async ({ terminalReplyExpectation, delivered }) => {
       const text = "HEARTBEAT_OK";
-      const assistant = textAssistant(text);
       const input = makeTerminalInput({
-        assistant,
-        attemptOverrides: {
-          assistantTexts: [text],
-          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-        },
-        finalAssistantRawText: text,
+        ...replaySafeTextInput(text),
         payloadsWithToolMedia: [{ text }],
         payloadsForVisibleCompletion: [],
         replyDeliveryState: delivered ? "delivered" : "missing",

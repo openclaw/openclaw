@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { resetGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { revokePluginRecord } from "../../../plugins/registry-lifecycle.js";
@@ -11,6 +10,7 @@ import { createOwnershipRecord } from "../../../plugins/registry-ownership.test-
 import { createTestPluginRegistry } from "../../../plugins/registry-runtime.test-helpers.js";
 import { disposePluginRegistryInstances } from "../../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createRequestNativeSubagentRuntime } from "../../plugin-native-subagent.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { holdQueuedSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -117,16 +117,12 @@ export function registerNativePluginProfileCases(options: NativePluginSpawnTestO
           await expect(native.spawn({ ...request, profile: undefined })).rejects.toThrow(
             "does not match",
           );
-          const entered = createDeferred();
-          const resume = createDeferred();
-          installNativeToolHook(record.id, async () => {
-            entered.resolve();
-            await resume.promise;
-          });
+          const profileGate = createEnteredGate();
+          installNativeToolHook(record.id, profileGate.wait);
           const pending = native.spawn({ ...request, requestId: "revoked" });
-          await entered.promise;
+          await profileGate.entered;
           revokePluginRecord(builder.registry, record);
-          resume.resolve();
+          profileGate.release();
           await expect(pending).rejects.toThrow("no longer active");
           expect(subagentRuns.size).toBe(1);
         },
