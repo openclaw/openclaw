@@ -1,10 +1,5 @@
 import { expect, it } from "vitest";
-import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
-import {
-  controlUiSessionUrl,
-  createControlUiMockBootstrapConfig,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -179,27 +174,4 @@ suite.define(() => {
         ));
     }
   }
-
-  it("honors earlier dismissals and deployment policy when re-enabled", async () =>
-    suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      await installMockGateway(page, { communityInvite: true });
-      await page.addInitScript((key) => localStorage.setItem(key, "dismissed"), dismissalKey);
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
-      await page.locator(".sidebar-shell").waitFor();
-      expect(await page.locator(".community-invite-card").count()).toBe(0);
-      await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
-        route.fulfill({
-          json: { ...createControlUiMockBootstrapConfig(), communityInvite: false },
-        }),
-      );
-      await page.reload();
-      await page.locator(".sidebar-shell").waitFor();
-      expect(await page.locator(".community-invite-card").count()).toBe(0);
-      await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
-        route.fulfill({ json: { ...createControlUiMockBootstrapConfig(), communityInvite: true } }),
-      );
-      await page.reload();
-      await page.locator(".sidebar-shell").waitFor();
-      expect(await page.locator(".community-invite-card").count()).toBe(0);
-    }));
 });

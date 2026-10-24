@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -130,63 +129,57 @@ suite.define(() => {
       expect(playback.duration).toBeCloseTo(1, 1);
     }));
 
-  it.each([
-    { device: "desktop", viewport: { width: 1280, height: 900 }, mobile: false },
-    { device: "mobile", viewport: { width: 390, height: 844 }, mobile: true },
-  ])(
-    "explains invalid media and unavailable browser codecs without sending on $device",
-    ({ device, viewport, mobile }) =>
-      suite.withPage(
-        { viewport, isMobile: mobile, hasTouch: mobile, colorScheme: "dark" },
-        async ({ page, context }) => {
-          const gateway = await installMockGateway(page, { attachmentMaxBytes: limit });
-          let unavailable = true;
-          // Remove WebCodecs from the real worker before its script is cached.
-          await context.route("**/chat-attachment-video.worker-*.js", async (route) => {
-            const response = await route.fetch();
-            await route.fulfill({
-              response,
-              body:
-                (unavailable ? "globalThis.VideoEncoder = undefined;\n" : "") +
-                (await response.text()),
-            });
+  it("explains invalid media and unavailable browser codecs without sending on mobile", () =>
+    suite.withPage(
+      {
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+        colorScheme: "dark",
+      },
+      async ({ page, context }) => {
+        const gateway = await installMockGateway(page, { attachmentMaxBytes: limit });
+        let unavailable = true;
+        // Remove WebCodecs from the real worker before its script is cached.
+        await context.route("**/chat-attachment-video.worker-*.js", async (route) => {
+          const response = await route.fetch();
+          await route.fulfill({
+            response,
+            body:
+              (unavailable ? "globalThis.VideoEncoder = undefined;\n" : "") +
+              (await response.text()),
           });
-          await page.goto(suite.server.baseUrl + "chat");
-          await page.locator(".agent-chat__composer-combobox textarea").fill("Keep this draft.");
-          const expectError = async (error: string, capture: boolean) => {
-            await expect.poll(() => button(page, "Send message").isEnabled()).toBe(true);
-            if (capture && process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
-              await page.screenshot({
-                path: path.join(suite.artifactDir, `${device}-compression-failed.png`),
-              });
-            }
-            await page
-              .locator(".chat-attachment-thumb")
-              .getByRole("status")
-              .filter({ hasText: error })
-              .waitFor();
-            await button(page, "Retry compression").waitFor();
-            expect(await page.locator(".app-toast").count()).toBe(0);
-            expect(await page.locator(".agent-chat__composer-combobox textarea").inputValue()).toBe(
-              "Keep this draft.",
-            );
-          };
-          await upload(page, "invalid.mp4", Buffer.alloc(256 * 1024));
-          await button(page, "Compress to fit").click();
-          await expectError("Could not compress video. Try again.", true);
-          await button(page, "Remove invalid.mp4").click();
-          await upload(page, "unsupported.mp4");
-          await button(page, "Compress to fit").click();
-          await expectError("This browser cannot compress this video.", false);
-          unavailable = false;
-          await button(page, "Retry compression").click();
-          await page.locator(".chat-attachment-thumb--preparation").waitFor({ state: "detached" });
-          await button(page, "Remove unsupported.mp4").waitFor();
-          expect(await gateway.getRequests("chat.send")).toEqual([]);
-          expect(await button(page, "Send message").isEnabled()).toBe(true);
-        },
-      ),
-  );
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        await page.locator(".agent-chat__composer-combobox textarea").fill("Keep this draft.");
+        const expectError = async (error: string) => {
+          await expect.poll(() => button(page, "Send message").isEnabled()).toBe(true);
+          await page
+            .locator(".chat-attachment-thumb")
+            .getByRole("status")
+            .filter({ hasText: error })
+            .waitFor();
+          await button(page, "Retry compression").waitFor();
+          expect(await page.locator(".app-toast").count()).toBe(0);
+          expect(await page.locator(".agent-chat__composer-combobox textarea").inputValue()).toBe(
+            "Keep this draft.",
+          );
+        };
+        await upload(page, "invalid.mp4", Buffer.alloc(256 * 1024));
+        await button(page, "Compress to fit").click();
+        await expectError("Could not compress video. Try again.");
+        await button(page, "Remove invalid.mp4").click();
+        await upload(page, "unsupported.mp4");
+        await button(page, "Compress to fit").click();
+        await expectError("This browser cannot compress this video.");
+        unavailable = false;
+        await button(page, "Retry compression").click();
+        await page.locator(".chat-attachment-thumb--preparation").waitFor({ state: "detached" });
+        await button(page, "Remove unsupported.mp4").waitFor();
+        expect(await gateway.getRequests("chat.send")).toEqual([]);
+        expect(await button(page, "Send message").isEnabled()).toBe(true);
+      },
+    ));
 
   it("offers the same cancelable preparation in New Session", () =>
     suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {

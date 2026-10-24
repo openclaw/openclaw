@@ -77,7 +77,7 @@ async function openDismissMenu(page: Page) {
 
 suite.define(() => {
   it("keeps the composer critter clickable and its dismissal menu inside the viewport", () =>
-    withDismissMenuPage({}, async (page) => {
+    withDismissMenuPage({ colorScheme: "dark" }, async (page) => {
       const sprite = page.locator(".lobster-pet");
       // Native dismissal completion needs live animation frames.
       await page.clock.resume();
@@ -188,13 +188,4 @@ suite.define(() => {
         expect(measurement.anchorTop).toBeCloseTo(point.clientY);
       }));
   }
-
-  it("does not scroll its two dismissal items under a dark color scheme", () =>
-    withDismissMenuPage({ colorScheme: "dark" }, async (darkPage) => {
-      await openDismissMenu(darkPage);
-
-      const measurement = await measureDismissMenu(darkPage);
-
-      expect(measurement).toMatchObject({ overflowPx: 0 });
-    }));
 });

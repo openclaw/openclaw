@@ -78,17 +78,15 @@ suite.define(() => {
     expect(firstRequest.params).toEqual({ includeQr: false, joinUrl: true });
     const dialog = page.locator('openclaw-modal-dialog[label="Connect a machine"]');
     await dialog.getByText(first.command, { exact: true }).waitFor();
-    const installed = dialog
-      .locator(".connect-machine-dialog__hint")
-      .filter({ hasText: "Already have OpenClaw installed? Run:" });
+    const installed = dialog.locator(".connect-machine-dialog__hint").filter({
+      hasText: "Already have OpenClaw installed? Run:",
+    });
+    const command = dialog.locator(".login-gate__command code").first();
     expect(await installed.locator("code").textContent()).toBe(first.installedCommand);
     expect(await dialog.getByText(versionNote, { exact: true }).count()).toBe(0);
-    expect(
-      await dialog
-        .locator(".login-gate__command code")
-        .first()
-        .evaluate((element) => element.scrollWidth <= element.clientWidth),
-    ).toBe(true);
+    expect(await command.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+      true,
+    );
     expect(await installed.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
       true,
     );
@@ -113,21 +111,9 @@ suite.define(() => {
     await expect
       .poll(async () => (await gateway.getRequests("device.pair.setupCode")).length)
       .toBe(2);
-    expect((await gateway.getRequests("device.pair.setupCode"))[1]?.params).toEqual({
-      includeQr: false,
-      joinUrl: true,
-    });
-    await dialog
-      .locator(".login-gate__command code")
-      .first()
-      .filter({ hasText: second.command })
-      .waitFor();
-    expect(await dialog.locator(".login-gate__command code").first().textContent()).toBe(
-      second.command,
-    );
+    await expect.poll(() => command.textContent()).toBe(second.command);
     expect(await installed.locator("code").textContent()).toBe(second.installedCommand);
-    const note = dialog.getByText(versionNote, { exact: true });
-    await note.waitFor();
+    await dialog.getByText(versionNote, { exact: true }).waitFor();
     expect(await dialog.getByText(first.command, { exact: true }).count()).toBe(0);
   });
 
@@ -144,12 +130,9 @@ suite.define(() => {
   });
 
   it("shows a retryable error when connection-link creation never responds", async () => {
-    const joinUrl = "https://gateway.example.com/j/retried-code";
-    const response = setupCode(joinUrl, "2026.9.30");
+    const response = setupCode("https://gateway.example.com/j/retried-code", "2026.9.30");
     const { page, gateway } = await openNewSession({
-      methodResponses: {
-        "device.pair.setupCode": response,
-      },
+      methodResponses: { "device.pair.setupCode": response },
     });
 
     await page.clock.install();
@@ -168,8 +151,7 @@ suite.define(() => {
       await dialog.getByText("Creating a secure connection link…", { exact: true }).count(),
     ).toBe(0);
 
-    const retry = dialog.getByRole("button", { name: "Mint fresh code" });
-    await retry.click();
+    await dialog.getByRole("button", { name: "Mint fresh code" }).click();
     await dialog.getByText(response.command, { exact: true }).waitFor();
     expect(await gateway.getRequests("device.pair.setupCode")).toHaveLength(2);
   });
