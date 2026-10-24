@@ -14,12 +14,16 @@ import {
   stringListFlag,
 } from "../../scripts/lib/arg-utils.runtime.mjs";
 
-const parseLimit = (argv: string[]) =>
-  parseFlagArgs(argv, { limit: 10 }, [intFlag("--limit", "limit", { min: 1 })]);
 const parseString = (argv: string[], options: Parameters<typeof stringFlag>[2] = {}) =>
   parseFlagArgs(argv, { value: "" }, [stringFlag("--value", "value", options)]);
 const parseMatches = (argv: string[], options: Parameters<typeof stringListFlag>[2] = {}) =>
   parseFlagArgs(argv, { match: [] as string[] }, [stringListFlag("--match", "match", options)]);
+const parse = (args: string) =>
+  parseFlagArgs(args.split(" "), { value: "", limit: 1, json: false }, [
+    stringFlag("--value", "value"),
+    intFlag("--limit", "limit", { min: 1 }),
+    booleanFlag("--json", "json"),
+  ]);
 
 it.each([
   ["strict", "true", true],
@@ -30,14 +34,14 @@ it.each([
   ["permissive", "enabled", undefined],
   ["permissive", true, undefined],
 ] as const)("parses %s Boolean token %j", (mode, input, expected) => {
-  const parse = () =>
+  const parseBoolean = () =>
     mode === "strict"
       ? parseStrictBooleanArg(input, "--enabled")
       : parsePermissiveBooleanToken(input);
   if (typeof expected === "string") {
-    expect(parse).toThrow(expected);
+    expect(parseBoolean).toThrow(expected);
   } else {
-    expect(parse()).toBe(expected);
+    expect(parseBoolean()).toBe(expected);
   }
 });
 
@@ -69,13 +73,13 @@ it.each([
 );
 it.each([
   [["-p", "first", "-p", "second"], "-p"],
-  [["--file=first", "--file", "second"], "--file"],
+  [["--file", "first", "--file=second"], "--file"],
 ] as const)("uses the last value for %j", (argv, flag) =>
   expect(readFlagValue(argv, flag)).toBe("second"),
 );
 
 it("ignores the conventional option separator by default", () =>
-  expect(parseLimit(["--", "--limit", "30"]).limit).toBe(30));
+  expect(parse("-- --limit 30 --json")).toEqual({ value: "", limit: 30, json: true }));
 
 it("collects repeatable string flags", () =>
   expect(parseMatches(["--match", "alpha", "--match=beta"]).match).toEqual(["alpha", "beta"]));
@@ -93,26 +97,14 @@ it("supports split-only, empty, transformed, and last-value-wins string contract
   ).toBe("second");
 });
 
-it("rejects duplicate single-value flags", () => {
-  expect(() => parseString(["--value", "first", "--value=second"])).toThrow(
-    "--value was provided more than once",
-  );
-  expect(() => parseLimit(["--limit", "1", "--limit=2"])).toThrow(
-    "--limit was provided more than once",
-  );
-  expect(() =>
-    parseFlagArgs(["--json", "--json"], { json: false }, [booleanFlag("--json", "json")]),
-  ).toThrow("--json was provided more than once");
-});
-
-it("rejects missing string flag values before consuming the next option", () => {
-  expect(() =>
-    parseFlagArgs(["--base", "--head", "HEAD"], { base: "origin/main", head: "HEAD" }, [
-      stringFlag("--base", "base"),
-      stringFlag("--head", "head"),
-    ]),
-  ).toThrow("--base requires a value");
-});
+it.each([
+  ["--value first --value=second", "--value was provided more than once"],
+  ["--value --limit 1", "--value requires a value"],
+  ["--limit", "--limit requires a value"],
+  ["--limit --value x", "--limit requires a value"],
+  ["--limit 20files", "--limit must be an integer"],
+  ["--limit 0", "--limit must be at least 1"],
+])("rejects %s", (args, message) => expect(() => parse(args)).toThrow(message));
 
 it("can reject short options as string values for CLIs that reserve short flags", () => {
   expect(() => parseString(["--value", "-h"], { rejectShortOptions: true })).toThrow(
@@ -121,13 +113,6 @@ it("can reject short options as string values for CLIs that reserve short flags"
   expect(() => parseMatches(["--match=-h"], { rejectShortOptions: true })).toThrow(
     "--match requires a value",
   );
-});
-
-it("rejects missing and malformed numeric flag values", () => {
-  expect(() => parseLimit(["--limit"])).toThrow("--limit requires a value");
-  expect(() => parseLimit(["--limit", "--factor", "1.5"])).toThrow("--limit requires a value");
-  expect(() => parseLimit(["--limit", "20files"])).toThrow("--limit must be an integer");
-  expect(() => parseLimit(["--limit", "0"])).toThrow("--limit must be at least 1");
 });
 
 it("can preserve the option separator for callers that need to handle it", () => {

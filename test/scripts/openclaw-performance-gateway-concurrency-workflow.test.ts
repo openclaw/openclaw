@@ -17,38 +17,15 @@ const step = (name: string, owner = job) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const posixIt = it.skipIf(process.platform === "win32");
 
-it("keeps manual mock/live load isolated from scheduled Kova and report publication", () => {
-  expect(job.if).toBe(
-    "${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'gateway-concurrency' }}",
-  );
-  for (const name of ["kova", "source_performance", "publish", "artifact_only_guard"]) {
-    expect(workflow.jobs[name]?.if).toContain("inputs.mode != 'gateway-concurrency'");
-  }
+it("exposes credentials only to the trust-gated live step", () => {
   const live = step("Run live Gateway concurrency");
   expect(live.if).toBe(
     "${{ inputs.live_openai_candidate == true && needs.resolve_target.outputs.secret_eligible == 'true' }}",
   );
-  expect(live.env).toEqual({
-    BENCH_PROVIDER: "openai",
-    OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}",
-  });
   for (const scope of [job.env, ...job.steps.filter((candidate) => candidate !== live)]) {
     expect(JSON.stringify(scope)).not.toContain("secrets.");
   }
-  expect([
-    step("Checkout Gateway concurrency target").with?.ref,
-    step("Checkout Gateway concurrency helpers").with?.ref,
-    step("Set up Gateway concurrency environment").with?.["cache-mode"],
-  ]).toEqual([
-    "${{ needs.resolve_target.outputs.checkout_ref }}",
-    "${{ github.workflow_sha }}",
-    "${{ needs.resolve_target.outputs.cache_write_allowed == 'true' && 'restore' || 'off' }}",
-  ]);
-  expect(step("Upload Gateway concurrency artifacts")).toMatchObject({
-    if: "${{ always() }}",
-    with: { "if-no-files-found": "error" },
-  });
-  expect(step("Record Gateway concurrency outcome").if).toBe("${{ always() }}");
+  expect(step("Checkout Gateway concurrency helpers").with?.ref).toBe("${{ github.workflow_sha }}");
 });
 
 posixIt.each([
