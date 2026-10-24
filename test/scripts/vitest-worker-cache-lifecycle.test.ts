@@ -8,14 +8,26 @@ import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../vitest/vitest.timeouts.js";
 import { copyWorkerRunFixture, writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const fixtureUrl = (root: string, name: string) =>
+  pathToFileURL(path.join(root, `scripts/lib/${name}.mts`)).href;
+
+async function runProbe(root: string, probe: string, env: NodeJS.ProcessEnv) {
+  const result = await runNodeScript(
+    probe,
+    { ...process.env, CI: "", GITHUB_ACTIONS: "", NODE_OPTIONS: "", NODE_PATH: "", ...env },
+    DEFAULT_VITEST_TEST_TIMEOUT_MS,
+    { cwd: root, requireProcessTreeExit: process.platform !== "win32" },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr + result.stdout).toBe(0);
+  return result;
+}
 
 it("retains verified artifacts after the runner's module loader stops", async () => {
   const root = tempDirs.make("vitest-worker-loader-shutdown-");
   const ownerUrl = copyWorkerRunFixture(root);
-  const artifactsUrl = pathToFileURL(
-    path.join(root, "scripts/lib/vitest-worker-artifacts.mts"),
-  ).href;
-  const cacheUrl = pathToFileURL(path.join(root, "scripts/lib/vitest-worker-cache.mts")).href;
+  const artifactsUrl = fixtureUrl(root, "vitest-worker-artifacts");
+  const cacheUrl = fixtureUrl(root, "vitest-worker-cache");
   const input = writeFixture(root, "fixture-input.ts", "export {};\n");
   const output = 'export const value = "compiled fixture";\n';
   // The real owner still launches and joins a native compiler child and verifies its files.
@@ -92,23 +104,11 @@ try {
 }
 `,
   );
-  const result = await runNodeScript(
-    probe,
-    {
-      ...process.env,
-      CI: "",
-      GITHUB_ACTIONS: "",
-      NODE_OPTIONS: "",
-      NODE_PATH: "",
-      NAPI_RS_NATIVE_LIBRARY_PATH: "",
-      NAPI_RS_WASI_FLAVOR: "",
-      NAPI_RS_FORCE_WASI: "",
-    },
-    DEFAULT_VITEST_TEST_TIMEOUT_MS,
-    { cwd: root, requireProcessTreeExit: process.platform !== "win32" },
-  );
-  expect(result.error).toBeUndefined();
-  expect(result.status, result.stderr + result.stdout).toBe(0);
+  const result = await runProbe(root, probe, {
+    NAPI_RS_NATIVE_LIBRARY_PATH: "",
+    NAPI_RS_WASI_FLAVOR: "",
+    NAPI_RS_FORCE_WASI: "",
+  });
   expect(result.stdout).toContain("joined cleanup retained verified artifacts");
 });
 
@@ -180,21 +180,11 @@ it.each([
   "preserves occupied generations and applies $label reservation lifetime",
   async ({ label, ci, cache, preload, reusesReleasedSlot }) => {
     const f = fixture(label === "late metadata", reusesReleasedSlot);
-    const result = await runNodeScript(
-      f.probe,
-      {
-        ...process.env,
-        CI: ci,
-        GITHUB_ACTIONS: "",
-        OPENCLAW_VITEST_WORKER_CACHE: cache,
-        NODE_OPTIONS: preload ? `"--im\\port" "${pathToFileURL(f.preload).href}"` : "",
-        NODE_PATH: "",
-      },
-      DEFAULT_VITEST_TEST_TIMEOUT_MS,
-      { cwd: f.root, requireProcessTreeExit: process.platform !== "win32" },
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr + result.stdout).toBe(0);
+    const result = await runProbe(f.root, f.probe, {
+      CI: ci,
+      OPENCLAW_VITEST_WORKER_CACHE: cache,
+      NODE_OPTIONS: preload ? `"--im\\port" "${pathToFileURL(f.preload).href}"` : "",
+    });
     const directories = JSON.parse(result.stdout) as [string, string, string];
     for (const directory of new Set(directories)) {
       expect(directory).not.toBe(f.occupied);

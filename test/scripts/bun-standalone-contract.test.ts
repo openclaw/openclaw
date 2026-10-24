@@ -138,6 +138,8 @@ describe("standalone build interface", () => {
       compileOptions: ["ENABLE_FTS5"],
       license: "public-domain",
     };
+    const embedded = { modules: 4, plugins: 1, workers: 2, inlineWorkers: 0 };
+    const pruning = { categories: { pluginAssets: { files: 1, bytes: 24 } }, sidecarPlugins: [] };
     fs.writeFileSync(path.join(root, "openclaw"), "standalone\n");
     fs.writeFileSync(path.join(runtime, "a.js"), "export const value = 7;\n");
     fs.symlinkSync("a.js", path.join(runtime, "link"));
@@ -146,14 +148,11 @@ describe("standalone build interface", () => {
       mode: "jit",
       bun: { version: "1.4.3", revision: "1.4.3+fixture", executableSha256: "a".repeat(64) },
       openclaw: { version: "2026.10.3", commit: "b".repeat(40) },
-      embedded: { modules: 4, plugins: 1, workers: 2, inlineWorkers: 0 },
+      embedded: structuredClone(embedded),
       packageManager: undefined,
       plugins: { embedded: ["slack", "codex"], omitted: ["signal", "matrix"] },
       sqlite: structuredClone(sqlite),
-      pruning: {
-        categories: { pluginAssets: { files: 1, bytes: 24 } },
-        sidecarPlugins: [],
-      },
+      pruning: structuredClone(pruning),
     });
     expect(manifest).toMatchObject({
       schemaVersion: 1,
@@ -164,11 +163,10 @@ describe("standalone build interface", () => {
         sizeBytes: 24,
         fileCount: 1,
         symlinkCount: 1,
-        categories: { pluginAssets: { files: 1, bytes: 24 } },
-        sidecarPlugins: [],
+        ...pruning,
         sqlite,
       },
-      embedded: { modules: 4, plugins: 1, workers: 2, inlineWorkers: 0 },
+      embedded,
       plugins: { embedded: ["codex", "slack"], omitted: ["matrix", "signal"] },
     });
     expect(manifest.runtime.sha256).toBe(
