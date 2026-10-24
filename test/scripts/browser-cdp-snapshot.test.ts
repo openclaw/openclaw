@@ -43,10 +43,9 @@ it("moves optional js/mjs chunks while preserving the loader, state, and other e
   const quarantineDir = path.join(root, "quarantine");
   const optional = ["pw-ai-optional.js", "pw-ai-optional.mjs"];
   const preserved = [
-    "pw-ai-module-loader.js",
-    "pw-ai-module-loader.mjs",
-    "pw-ai-state-shared.js",
-    "pw-ai-state-shared.mjs",
+    ...["pw-ai-module-loader", "pw-ai-state-shared"].flatMap((name) =>
+      ["js", "mjs"].map((extension) => `${name}.${extension}`),
+    ),
     "shared.js",
     "errors.mjs",
     "pw-ai-optional.js.map",
@@ -76,10 +75,9 @@ it("moves optional js/mjs chunks while preserving the loader, state, and other e
   expect(fs.lstatSync(path.join(distDir, "pw-ai-directory.js")).isDirectory()).toBe(true);
   expect(fs.readlinkSync(path.join(distDir, "pw-ai-linked.js"))).toBe("shared.js");
   expect(fs.readlinkSync(path.join(distDir, "pw-ai-broken.mjs"))).toBe("missing.mjs");
-  expect(result.stdout.trim().split("\n")).toEqual([
-    "Disabled Playwright AI snapshot chunk: pw-ai-optional.js",
-    "Disabled Playwright AI snapshot chunk: pw-ai-optional.mjs",
-  ]);
+  expect(result.stdout.trim().split("\n")).toEqual(
+    optional.map((file) => `Disabled Playwright AI snapshot chunk: ${file}`),
+  );
 });
 
 it("rejects oversized snapshots before reading them into diagnostics", () => {

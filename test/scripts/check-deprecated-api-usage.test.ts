@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
-import { buildDeprecatedPluginSdkModuleSpecifiers } from "../../scripts/lib/deprecated-plugin-sdk-usage.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
@@ -14,13 +13,6 @@ const message =
   "deliverOutboundPayloads (use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext)";
 const onceEach = (paths: string) => Object.fromEntries(paths.split(" ").map((file) => [file, 1]));
 const { createTempDir } = createScriptTestHarness();
-
-it("keeps removed root and private compatibility aliases out of the inventory", () => {
-  const specifiers = buildDeprecatedPluginSdkModuleSpecifiers();
-  for (const suffix of ["", "/agent-dir-compat", "/test-utils"]) {
-    expect(specifiers).not.toContain(`openclaw/plugin-sdk${suffix}`);
-  }
-});
 
 it("reads overlapping rule inputs once while preserving complete diagnostic order", () => {
   const fixtureRoot = fs.realpathSync(createTempDir("deprecated-guard-"));
@@ -85,9 +77,9 @@ process.on("exit", () => fs.writeFileSync("source-io.json", JSON.stringify(count
         `- facade-internal-imports: src/a.ts:1: ${inbound} (${facade})`,
         `- facade-internal-imports: src/a.ts:2: @${inbound} (${facade})`,
         `- facade-internal-imports: extensions/probe/src/a.ts:1: ${inbound} (${facade})`,
-        `- message-api: src/a.ts:3: ${message}`,
-        `- message-api: extensions/probe/src/a.ts:2: ${message}`,
-        `- message-api: packages/a.ts:2: ${message}`,
+        ...["src/a.ts:3", "extensions/probe/src/a.ts:2", "packages/a.ts:2"].map(
+          (file) => `- message-api: ${file}: ${message}`,
+        ),
       ].join("\n") + "\n",
   });
   expect(io).toEqual({

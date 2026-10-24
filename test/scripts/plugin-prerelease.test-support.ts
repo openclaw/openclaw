@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, symlinkSync } from "node:fs";
+import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
 type WorkflowStep = {
   id?: string;
@@ -90,11 +91,7 @@ export function createPrereleaseFixtures() {
     target(prefix: string, files: Record<string, string>, linkType: "dir" | "junction") {
       const root = tempDirs.make(prefix);
       symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), linkType);
-      for (const [file, content] of Object.entries(files)) {
-        const target = join(root, file);
-        mkdirSync(dirname(target), { recursive: true });
-        writeFileSync(target, content);
-      }
+      writeFixtureFiles(root, files);
       return root;
     },
   };
