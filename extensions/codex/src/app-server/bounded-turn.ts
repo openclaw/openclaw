@@ -12,6 +12,14 @@ import {
 } from "./attempt-client-cleanup.js";
 import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-types.js";
 import { assertCodexPrivateHookIsolation } from "./bounded-hook-policy.js";
+import {
+  readCodexBoundedTurnQuotaKind,
+  readThrownCodexBoundedTurnQuotaKind,
+  recordBoundedCodexTurnQuotaBlock,
+  resolveBoundedCodexTurnAuthPlan,
+  runBoundedCodexTurnAuthAttempts,
+  tagCodexBoundedTurnQuotaFailure,
+} from "./bounded-turn-auth-rotation.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./config.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
@@ -35,6 +43,7 @@ import type {
 } from "./protocol.js";
 import { resolveCodexAppServerReasoningEffort } from "./reasoning-effort.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
+import type { createIsolatedCodexAppServerClient } from "./shared-client.js";
 import {
   assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
@@ -67,6 +76,7 @@ const CODEX_SETTLED_FINALIZER_THREAD_CONFIG: JsonObject = {
 
 export type CodexBoundedTurnOptions = {
   pluginConfig?: CodexPluginConfig;
+  clientFactory?: typeof createIsolatedCodexAppServerClient;
 };
 
 type CodexBoundedTurnResult = {
@@ -156,9 +166,57 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
   workspace: { codexHome?: string; cwd: string },
 ): Promise<CodexBoundedTurnResult> {
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
-  const timeoutError = new CodexBoundedTurnTimeoutError(params.taskLabel, timeoutMs);
-  const deadline = performance.now() + timeoutMs;
+  const totalTimeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
+  const deadline = performance.now() + totalTimeoutMs;
+  // Private turns force an agent home even when the operator's harness is native.
+  const homeScope = workspace.codexHome
+    ? "agent"
+    : appServer.start.homeScope === "user"
+      ? "user"
+      : "agent";
+  const plan = await resolveBoundedCodexTurnAuthPlan({
+    profile: params.profile,
+    preparedAuth: params.preparedAuth,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+    hasClientFactory: Boolean(params.options.clientFactory),
+    homeScope,
+  });
+  return await runBoundedCodexTurnAuthAttempts({
+    plan,
+    taskLabel: params.taskLabel,
+    deadline,
+    run: (profileId) =>
+      runBoundedCodexAppServerTurnAttempt(
+        {
+          ...params,
+          ...(profileId ? { profile: profileId } : {}),
+          ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
+          ...(plan.store ? { authProfileStore: plan.store } : {}),
+        },
+        appServer,
+        workspace,
+        { deadline, timeoutMs: totalTimeoutMs },
+        plan.rotate,
+      ),
+  });
+}
+
+async function runBoundedCodexAppServerTurnAttempt(
+  params: CodexBoundedTurnParams,
+  appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
+  workspace: { codexHome?: string; cwd: string },
+  timing: { deadline: number; timeoutMs: number },
+  rotateQuota: boolean,
+): Promise<CodexBoundedTurnResult> {
+  const totalTimeoutMs = timing.timeoutMs;
+  const timeoutError = new CodexBoundedTurnTimeoutError(params.taskLabel, totalTimeoutMs);
+  const deadline = timing.deadline;
+  const timeoutMs = deadline - performance.now();
+  if (timeoutMs <= 0) {
+    throw timeoutError;
+  }
   params.assertCurrent?.();
   const agentDir = params.agentDir?.trim() || undefined;
   // Hosted search needs a private Codex home and cwd so inherited native tools
@@ -172,6 +230,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         params.requireNoExternalCapabilities === true,
       )
     : appServer.start;
+  const ownsClient = !params.options.clientFactory;
   const authSelection = params.preparedAuth
     ? { preparedAuth: params.preparedAuth }
     : { authProfileId: params.profile };
@@ -180,20 +239,44 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     ...authSelection,
     authRequirement: params.authRequirement,
     agentDir,
+    authProfileStore: params.authProfileStore,
     config: params.config,
     timeoutMs,
     assertCurrent: params.assertCurrent,
     ...(params.signal ? { abandonSignal: params.signal } : {}),
   };
-  const client = await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
-    createIsolatedCodexAppServerClient({
-      ...clientOptions,
-      authProfileStore: params.authProfileStore,
-    }),
-  );
+  const client = params.options.clientFactory
+    ? await params.options.clientFactory(clientOptions)
+    : await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
+        createIsolatedCodexAppServerClient(clientOptions),
+      );
   const abortController = new AbortController();
   let activeThreadId: string | undefined;
   let activeTurnId = "";
+  let selectedModelId: string | undefined;
+  let quotaRecorded = false;
+  const recordQuotaBlock = async (
+    kind: NonNullable<ReturnType<typeof readCodexBoundedTurnQuotaKind>>,
+    error: unknown,
+    source?: { message?: string | null; codexErrorInfo?: JsonValue | null; rateLimits?: JsonValue },
+  ) => {
+    if (!rotateQuota || quotaRecorded) {
+      return;
+    }
+    quotaRecorded = true;
+    await recordBoundedCodexTurnQuotaBlock({
+      client,
+      kind,
+      error,
+      source,
+      profileId: params.profile,
+      store: params.authProfileStore,
+      agentDir,
+      modelId: selectedModelId,
+      timeoutMs: Math.max(0, deadline - performance.now()),
+      signal: abortController.signal,
+    });
+  };
   let interruptPromise: Promise<boolean> | undefined;
   const requestInterrupt = () => {
     if (!activeThreadId || interruptPromise) {
@@ -236,6 +319,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       requiredModalities: params.requiredModalities,
       ...requestOptions,
     });
+    selectedModelId = modelSelection.id;
     const inheritedMcpServerNames = params.requireNoExternalCapabilities
       ? await readCodexInheritedMcpServerNames(client, workspace.cwd, abortController.signal)
       : [];
@@ -351,9 +435,16 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           ? readCodexErrorNotification(result.error)?.error
           : result.turn?.error;
         const failure = source ? resolveCodexPromptError(source) : undefined;
-        throw failure instanceof Error
-          ? failure
-          : new Error(failure ?? `codex app-server ${params.taskLabel} turn failed`);
+        const error =
+          failure instanceof Error
+            ? failure
+            : new Error(failure ?? `codex app-server ${params.taskLabel} turn failed`);
+        const quota = readCodexBoundedTurnQuotaKind(source);
+        if (rotateQuota && quota) {
+          tagCodexBoundedTurnQuotaFailure(error, quota);
+          await recordQuotaBlock(quota, error, source ?? undefined);
+        }
+        throw error;
       }
       if (result.turn?.status !== "completed") {
         throw new Error(
@@ -398,12 +489,21 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         timeoutError,
       );
     }
+    const quota = readThrownCodexBoundedTurnQuotaKind(error);
+    if (rotateQuota && quota) {
+      if (error instanceof Error) {
+        tagCodexBoundedTurnQuotaFailure(error, quota);
+      }
+      await recordQuotaBlock(quota, error);
+    }
     throw codexPrewriteRejectionCause(error);
   } finally {
     clearTimeout(timeout);
     params.signal?.removeEventListener("abort", abortFromCaller);
     await interruptPromise;
-    await closeCodexStartupClientBestEffort(client);
+    if (ownsClient) {
+      await closeCodexStartupClientBestEffort(client);
+    }
   }
 }
 
