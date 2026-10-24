@@ -139,7 +139,7 @@ beforeAll(async () => {
         acceptance:
           "Report-only census. Warm repeated workloads should plateau after bounded caches fill; rank sustained growth by post-GC bytes/cycle and inspect strong retainers before changing owners.",
         instrumentation:
-          "Production renderer; synthetic Gateway; native clocks; timer ID sets retain no callbacks; uninterrupted CDP profiler; Solid rc.16 production owner slots (_parent/De/He/R), disposed bit 64; detachedness=2 native nodes. Heap counters include the mock and probe overhead.",
+          "Production renderer; synthetic Gateway; native clocks; timer ID sets retain no callbacks; uninterrupted CDP profiler; Solid rc.18 production owner slots (_parent/De/He/R), disposed bit 64; detachedness=2 native nodes. Heap counters include the mock and probe overhead.",
         exclusions:
           "Standalone approval/question and boot-only Gateway confirmation use repeated full-document navigation; all other workloads preserve the SPA document. Native OS pickers, Linux companion dialogs, arbitrary third-party dialogs, and every visual/loading/error variant are outside this census.",
         coverageLimits: finalDialogCoverageLimits,

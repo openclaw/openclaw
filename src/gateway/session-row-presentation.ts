@@ -44,6 +44,7 @@ import {
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
 import { prepareProjectedSessionSharing } from "./session-sharing.js";
+import { sessionTitleRequests } from "./session-title-state.js";
 import { matchesSessionArchiveFilter, resolveSessionChildOwners } from "./session-utils-core.js";
 import {
   applyGatewaySessionRowMode,
@@ -466,6 +467,11 @@ export function prepareProjectedSessionPresentation(
         run?.active,
         run?.status,
         preparedFacts,
+        sessionTitleRequests.get({
+          storePath: record.storeTarget.storePath,
+          sessionKey: record.key,
+          sessionId: record.entry.sessionId,
+        }) !== undefined,
         resolveActiveSessionAgentStatus(record.entry.agentStatus, now),
         // Active budgeted goals can stamp budgetLimitedAt from enriched usage at this clock.
         record.entry.goal?.status === "active" && record.entry.goal.tokenBudget !== undefined

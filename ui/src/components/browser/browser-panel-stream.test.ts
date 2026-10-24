@@ -241,6 +241,9 @@ describe("Browser panel streaming", () => {
     expect(controller.view).toBeNull();
     expect(controller.urlDraft).toBe("");
     expect(revokedUrls).toEqual(["blob:frame-0"]);
+    await receive(socket, screencastFrame());
+    expect(controller.view).toBeNull();
+    expect(createdUrls).toEqual(["blob:frame-0"]);
   });
 
   it("reconciles the tab list when the streamed page closes", async () => {

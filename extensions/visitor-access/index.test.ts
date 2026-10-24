@@ -23,8 +23,9 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import type { VisitorGrant } from "./src/grant-record.js";
+import { visitorRuntimeStore } from "./src/runtime.js";
 import { visitorListDetailsSchema, type VisitorListDetails } from "./src/tool-results.js";
-import type { VisitorGrant } from "./src/visitors.js";
 import { visitorProfileFixture } from "./src/visitors.test-support.js";
 
 type PluginGatewayAccessPolicy = Parameters<OpenClawPluginApi["registerGatewayAccessPolicy"]>[0];
@@ -280,6 +281,89 @@ describe("visitor-access plugin lifecycle", () => {
       },
     };
   }
+
+  it("persists invitation metadata and a CAS session reservation across restart and renewal", async () => {
+    vi.stubGlobal("fetch", createPolicyFetch().fetcher);
+    const publicOrigin = "https://team.example.com";
+    const first = registerPlugin({}, { gateway: { ...gatewayConfig.gateway, publicOrigin } });
+    await first.start();
+    await first.settle();
+    const readDirectory = first.gatewayRequest.getMockImplementation()!;
+    first.gatewayRequest.mockImplementation(async (method, params) =>
+      method === "users.self"
+        ? { profile: { id: "inviter", displayName: "Inviter" } }
+        : readDirectory(method, params),
+    );
+    const firstInvite = await first.execute("visitor_invite", { email: "visitor@example.test" });
+    const invitationText = expect.stringMatching(/^Inviter invited you.*\nSign in at https/u);
+    expect(firstInvite.details).toMatchObject({ signInUrl: publicOrigin, invitationText });
+    expect(first.gatewayRequest).toHaveBeenCalledWith(
+      "users.self",
+      {},
+      { scopes: ["operator.read"] },
+    );
+    const service = visitorRuntimeStore.getRuntime().service;
+    await service.invite(
+      { email: "visitor@example.test", note: "  Welcome!\n" },
+      { assertCurrent: first.toolContext.assertInvocationCurrent },
+    );
+    const invitation = service.findActiveInvitation({ emails: ["visitor@example.test"] })!;
+    const result = await service.compareAndSetOnboarding({
+      grantId: invitation.grantId,
+      expected: invitation.onboarding!,
+      next: { state: "ready", welcomeSessionKey: "welcome", welcomeSessionId: "welcome-id" },
+    });
+    expect(result.applied).toBe(true);
+    await first.stop();
+    const second = registerPlugin();
+    await second.start();
+    await second.execute("visitor_invite", { email: "visitor@example.test", days: 30 });
+    expect(await second.store.lookup("visitor@example.test")).toMatchObject({
+      invitedBy: { profileId: "inviter", label: "Inviter" },
+      note: "  Welcome!\n",
+      onboarding: { state: "ready", welcomeSessionKey: "welcome", welcomeSessionId: "welcome-id" },
+    });
+    expect(
+      visitorRuntimeStore
+        .getRuntime()
+        .service.findActiveInvitation({ emails: ["visitor@example.test"] }),
+    ).toEqual(await second.store.lookup("visitor@example.test"));
+  });
+
+  it("upgrades a grant recorded by v2026.10.6 without onboarding metadata", async () => {
+    // Value recorded by the v2026.10.6 plugin through its registered visitor_invite tool.
+    const stableGrant = {
+      email: "stable@example.test",
+      invitedVia: "agent:main:maintainer",
+      createdAt: START_MS,
+      expiresAt: START_MS + 7 * DAY_MS,
+      grantId: "7b3da382-f824-43ff-ae25-9c8c994ca6f3",
+    };
+    vi.stubGlobal("fetch", createPolicyFetch([stableGrant.email]).fetcher);
+    const upgraded = registerPlugin();
+    await upgraded.store.register(stableGrant.email, stableGrant);
+    await upgraded.start();
+    await upgraded.settle();
+    const visitor = { profileId: "stable", emails: [stableGrant.email], assignedRole: null };
+    expect(upgraded.authorize(visitor)).toBeDefined();
+    const service = visitorRuntimeStore.getRuntime().service;
+    expect(service.findActiveInvitation(visitor)).toEqual(stableGrant);
+    await expect(
+      service.compareAndSetOnboarding({
+        grantId: stableGrant.grantId,
+        expected: null,
+        next: { state: "pending", welcomeSessionKey: "welcome" },
+      }),
+    ).resolves.toMatchObject({ applied: true });
+    await expect(
+      upgraded.execute("visitor_invite", { email: stableGrant.email, days: 30 }),
+    ).resolves.toMatchObject({ details: { outcome: "renewed" } });
+    expect(await upgraded.store.lookup(stableGrant.email)).toEqual({
+      ...stableGrant,
+      expiresAt: START_MS + 30 * DAY_MS,
+      onboarding: { state: "pending", welcomeSessionKey: "welcome", updatedAt: START_MS },
+    });
+  });
 
   it("keeps CLI metadata discovery free of runtime access and background work", () => {
     const api = createTestPluginApi({ registrationMode: "cli-metadata" });

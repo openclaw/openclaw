@@ -6,7 +6,8 @@ import type { PluginRuntime, PluginStateKeyedStore } from "../api.js";
 import { createVisitorAccessReader } from "./access.js";
 import { VisitorPolicyClient, type VisitorTarget } from "./cloudflare.js";
 import type { VisitorAccessConfig } from "./config.js";
-import { VisitorAccessService, type VisitorGrant } from "./visitors.js";
+import type { VisitorGrant } from "./grant-record.js";
+import { VisitorAccessService } from "./visitors.js";
 
 export const NOW = Date.parse("2026-08-28T12:00:00.000Z");
 export const DAY_MS = 86_400_000;

@@ -7,6 +7,7 @@ import {
   CONTROL_UI_ROUTE_PRELOAD_ATTRIBUTE,
   selectControlUiRoutePreloads,
 } from "../src/gateway/control-ui-route-preloads.ts";
+import { extractControlUiStartupAssetPaths } from "../ui/config/control-ui-startup-assets.ts";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { isRecord } from "./lib/record-shared.mjs";
@@ -78,48 +79,20 @@ const controlUiPerformanceBudgets = {
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
-function controlUiAssetPathFromUrl(value: string): string | null {
-  const normalized = value.split(/[?#]/u, 1)[0]?.replace(/\\/gu, "/") ?? "";
-  const markerIndex = normalized.lastIndexOf("assets/");
-  if (markerIndex === -1) {
-    return null;
-  }
-  const assetPath = normalized.slice(markerIndex);
-  if (assetPath.includes("../") || !/\.(?:css|js)$/u.test(assetPath)) {
-    return null;
-  }
-  return assetPath;
-}
-
-export function extractControlUiStartupAssetPaths(html: string): string[] {
-  const assets = new Set<string>();
-  for (const tag of html.matchAll(/<(?:link|script)\b[^>]*>/giu)) {
-    const attribute = tag[0].match(/\s(?:href|src)\s*=\s*["']([^"']+)["']/iu);
-    const assetPath = attribute?.[1] ? controlUiAssetPathFromUrl(attribute[1]) : null;
-    if (assetPath) {
-      assets.add(assetPath);
-    }
-  }
-  return [...assets].toSorted((left, right) => left.localeCompare(right));
-}
-
 function readAssetMetrics(assetsDir: string, entry: fs.Dirent) {
   const file = `assets/${entry.name}`;
   const sourcePath = path.join(assetsDir, entry.name);
   const gzipPath = `${sourcePath}.gz`;
   const brotliPath = `${sourcePath}.br`;
-  for (const sidecarPath of [gzipPath, brotliPath]) {
-    if (!fs.existsSync(sidecarPath)) {
-      throw new Error(`Control UI performance check missing ${path.basename(sidecarPath)}`);
-    }
-  }
+  const rawBytes = fs.statSync(sourcePath).size;
   const type = entry.name.endsWith(".js") ? "js" : "css";
   return {
     file,
     type,
-    rawBytes: fs.statSync(sourcePath).size,
-    gzipBytes: fs.statSync(gzipPath).size,
-    brotliBytes: fs.statSync(brotliPath).size,
+    rawBytes,
+    // The Gateway serves identity when a requested compression sidecar is absent.
+    gzipBytes: fs.statSync(gzipPath, { throwIfNoEntry: false })?.size ?? rawBytes,
+    brotliBytes: fs.statSync(brotliPath, { throwIfNoEntry: false })?.size ?? rawBytes,
   };
 }
 
@@ -499,7 +472,7 @@ export function formatControlUiPerformanceReport(
   );
   const lines = [
     "Control UI performance:",
-    `  measurement: shipped gzip sidecars; Node ${process.version}`,
+    `  measurement: shipped sidecars with identity fallback; Node ${process.version}`,
     `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(startupJsLimits.enforcementLimit)} gzip / ${startupJsLimits.enforcementLimit} B)`,
   ];
   if (startupBudgetBaseline) {

@@ -89,7 +89,18 @@ export function ProfilePage() {
     const [gitCoauthorEnabled, setGitCoauthorEnabled] = createOptimistic(
       () => view().gitCoauthorEnabled,
     );
-    return { scope, saving, setSaving, gitCoauthorEnabled, setGitCoauthorEnabled };
+    const [prAttributionEnabled, setPrAttributionEnabled] = createOptimistic(
+      () => view().prAttributionEnabled,
+    );
+    return {
+      scope,
+      saving,
+      setSaving,
+      gitCoauthorEnabled,
+      setGitCoauthorEnabled,
+      prAttributionEnabled,
+      setPrAttributionEnabled,
+    };
   });
   const identityBusy = () => presentation().saving() ?? view().identityBusy;
   const presentMutation = action(function* (
@@ -105,13 +116,21 @@ export function ProfilePage() {
         current.setSaving(change.kind);
         if (change.kind === "git-coauthor") {
           current.setGitCoauthorEnabled(change.enabled);
+        } else if (change.kind === "pr-attribution") {
+          current.setPrAttributionEnabled(change.enabled);
         } else {
           affects(identityRead);
         }
       }
       yield Promise.race([pending, retired]);
       if (isCurrent()) {
-        yield refresh(change.kind === "git-coauthor" ? current.gitCoauthorEnabled : identityRead);
+        yield refresh(
+          change.kind === "git-coauthor"
+            ? current.gitCoauthorEnabled
+            : change.kind === "pr-attribution"
+              ? current.prAttributionEnabled
+              : identityRead,
+        );
       }
     } catch (error) {
       if (isCurrent()) {
@@ -217,6 +236,7 @@ export function ProfilePage() {
         avatarUrl={avatarUrl()}
         displayName={view().displayName}
         gitCoauthorEnabled={presentation().gitCoauthorEnabled()}
+        prAttributionEnabled={presentation().prAttributionEnabled()}
         busy={identityBusy() ?? (props.pending ? "loading" : null)}
         error={view().identityError}
         onDisplayNameInput={(value) => {
@@ -226,6 +246,7 @@ export function ProfilePage() {
         onSaveDisplayName={() => void saveIdentity({ kind: "display-name" })}
         onAvatarSelect={(file) => void saveIdentity({ kind: "avatar", file })}
         onGitCoauthorChange={(enabled) => void saveIdentity({ kind: "git-coauthor", enabled })}
+        onPrAttributionChange={(enabled) => void saveIdentity({ kind: "pr-attribution", enabled })}
       />
     </Show>
   );

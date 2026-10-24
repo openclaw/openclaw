@@ -150,7 +150,7 @@ export function sessionPersonalProfileId(
   return assigned?.type === "human" ? assigned.id : sessionCreatorProfileId(entry?.createdActor);
 }
 
-/** Visible spawns keep the matching verified human parent owner without changing creator attribution. */
+/** Visible spawns default to the verified requester unless a different human owns the parent. */
 export function inheritSpawnSessionOwner(
   source: { owner?: SessionOwnerAssignment; createdActor?: SessionCreatedActor } | undefined,
   assignedBy: SessionActor | undefined,
@@ -172,7 +172,7 @@ export function inheritSpawnSessionOwner(
   const resolvedRequesterId =
     !directMatch && requesterProfileId ? resolveProfileId(requesterProfileId) : requesterProfileId;
   const assignmentActor =
-    resolvedOwnerId && resolvedOwnerId === resolvedRequesterId
+    resolvedRequesterId && (!owner || resolvedOwnerId === resolvedRequesterId)
       ? {
           type: "human" as const,
           id: resolvedRequesterId,

@@ -4,8 +4,14 @@ import {
   readSessionEntryReadOnlyInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import { persistCliSessionBindingResult } from "../cli-session-store.js";
+import type {
+  CliSessionBinding,
+  InternalSessionEntry as SessionEntry,
+} from "../../config/sessions/types.js";
+import {
+  persistCliSessionBindingResult,
+  persistStoppedFirstCliSessionInStore,
+} from "../cli-session-store.js";
 import { getCliSessionBinding } from "../cli-session.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import { createAgentRunSupersededAbortError } from "../run-termination.js";
@@ -35,6 +41,11 @@ export function withAdmittedCliCandidate(
     cliSessionBinding: ReturnType<typeof getCliSessionBinding>;
     assertSettlementCurrent: SessionSourceAssertion;
     settleResult: (settlement: CliCandidateSettlement) => Promise<EmbeddedAgentRunResult>;
+    persistStoppedFirstSession: (
+      settlement: Omit<CliCandidateSettlement, "result" | "preserveBinding"> & {
+        binding: CliSessionBinding;
+      },
+    ) => Promise<void>;
   }) => Promise<EmbeddedAgentRunResult>,
 ): Promise<EmbeddedAgentRunResult> {
   return withLocalSessionPlacementTurnSettlement(
@@ -83,6 +94,17 @@ export function withAdmittedCliCandidate(
             abortSignal: params.admission?.abortSignal,
           });
         },
+        persistStoppedFirstSession: ({ binding, expectedSession, sessionStore }) =>
+          persistStoppedFirstCliSessionInStore({
+            agentId: params.claim.agentId,
+            provider: params.provider,
+            sessionKey: target?.sessionKey,
+            storePath: target?.storePath,
+            binding,
+            expectedSession,
+            sessionStore,
+            assertSettlementCurrent,
+          }),
       });
     },
     { ...params.admission, sessionTarget: params.sessionTarget },

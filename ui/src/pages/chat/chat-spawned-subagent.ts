@@ -49,15 +49,35 @@ function readLaunch(card: LaunchCard) {
   }
   const args = asRecord(card.args);
   // History keeps the result as text; only a live result still carries its details.
-  const childKey =
-    text(asRecord(card.details)?.childSessionKey) ??
-    text(safeParseJsonRecord(card.outputText ?? "")?.childSessionKey);
+  const result = asRecord(card.details) ?? safeParseJsonRecord(card.outputText ?? "");
+  const childKey = text(result?.childSessionKey);
   return {
     label: text(args?.label),
     childKey,
+    result,
+    groupId: text(result?.groupId) ?? text(args?.groupId),
     ownSession:
       args?.visible === true || (childKey !== undefined && isDashboardSessionKey(childKey)),
   };
+}
+
+/** An accepted result is durable provenance; a label or a finished tool call is not. */
+export function readAcceptedSubagentLaunch(card: LaunchCard) {
+  const launch = readLaunch(card);
+  const runId = text(launch?.result?.runId);
+  return launch &&
+    !launch.ownSession &&
+    launch.result?.status === "accepted" &&
+    launch.childKey &&
+    runId
+    ? {
+        runId,
+        childSessionKey: launch.childKey,
+        label: launch.label,
+        groupId: launch.groupId,
+        status: "accepted" as const,
+      }
+    : undefined;
 }
 
 /** The calls among `cards` that a count of subagents must leave out. */

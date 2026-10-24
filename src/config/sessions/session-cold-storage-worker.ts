@@ -21,7 +21,6 @@ import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { readSessionGoalOperationInDatabase } from "./goals-operations.js";
 import { publishEncodedSessionTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
@@ -41,7 +40,6 @@ import {
 } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
 import type { SessionColdRestorationGuard } from "./session-cold-storage-guard.types.js";
-import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
 import {
   readSessionAdmissionProtectionKeys,
   selectSessionColdBatch,
@@ -690,20 +688,4 @@ export function mutateSessionColdTranscriptInWorker(
     plan.databaseOptions,
     { operationLabel: "session cold storage" },
   );
-}
-
-export function readSessionColdStorageInventoryInWorker(options: OpenClawAgentDatabaseOptions) {
-  const counts = withOpenClawAgentDatabaseReadOnly(readSessionColdStorageInventory, options);
-  return counts.found ? counts.value : readSessionColdStorageInventory();
-}
-
-export function readSessionColdMetadataInWorker(
-  options: OpenClawAgentDatabaseOptions,
-  sessionId: string,
-) {
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => readSessionColdTranscript(database.db, sessionId),
-    options,
-  );
-  return result.found ? result.value : undefined;
 }

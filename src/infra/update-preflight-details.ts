@@ -107,6 +107,23 @@ export function updatePreflightDetailMessage(code: string): string | undefined {
   return Object.entries(UPDATE_PREFLIGHT_DETAILS).find(([key]) => key === code)?.[1];
 }
 
+export function updateRepairRefusalNextAction(
+  code: string | null | undefined,
+  formatCommand: (command: string) => string = (command) => command,
+): string | undefined {
+  switch (code) {
+    case "inside-gateway-process-tree":
+    case "inside-gateway-service":
+    case "service-membership-unverified":
+    case "service-ancestry-unverified":
+      return `Run \`${formatCommand("openclaw update repair")}\` from a terminal outside the Gateway process tree. Do not run this repair through the Gateway's exec tool.`;
+    case "inside-triage-process-tree":
+      return `Run \`${formatCommand("openclaw update repair")}\` from a terminal outside automatic triage and the Gateway process tree. Do not stop the Gateway from its fixing subtree.`;
+    default:
+      return undefined;
+  }
+}
+
 export function createUpdatePreflightFailure(
   code: keyof typeof UPDATE_PREFLIGHT_DETAILS,
   detail?: string,

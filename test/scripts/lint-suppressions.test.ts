@@ -162,6 +162,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/model-prompt-stats-measure.ts|typescript/unbound-method|1",
         // The provider probe forwards native methods with their original receivers.
         "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
+        // The setup probe executes an expression from the same trusted source input it imports.
+        "scripts/perf/session-history-reader-setup-measure.mjs|typescript/no-implied-eval|1",
         // The subscription probe forwards track with the original AsyncWorkScope receiver.
         "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
         // The registry-copy probe forwards Map.set with the original map receiver.
@@ -193,6 +195,8 @@ describe("production lint suppressions", () => {
         "src/config/zod-schema.channel-messaging-common.ts|typescript/no-generated-empty-object-type|1",
         // Command declarations compare their stored JSON shape, where undefined properties are omitted.
         "src/cron/store/job-mutations.ts|unicorn/prefer-structured-clone|1",
+        // Task lineage traversal sorts its invocation-private result without another array copy.
+        "src/gateway/control-ui-session-task-prs.ts|unicorn/no-array-sort|1",
         // Pinned Bun HTTP sockets omit Writable._writev; this probe selects native or one-copy batching.
         "src/gateway/server/ws-transport.ts|no-underscore-dangle|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",

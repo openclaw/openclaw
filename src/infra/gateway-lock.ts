@@ -23,6 +23,7 @@ import {
   assertDatabasePortRecoveryAllowed,
   assertDatabasePortStartupAllowed,
   DatabasePortRecoveryError,
+  type DatabasePortRecoveryIntent,
 } from "./database-port-recovery.js";
 import { hasErrnoCode } from "./errno.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
@@ -31,6 +32,7 @@ import {
   describeGatewayLockHolder,
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
   GatewayLockNamespaceError,
+  type GatewayLockRole,
   type LockPayload,
   parseGatewayLockPayload,
   readGatewayLockProcessNamespace,
@@ -39,12 +41,12 @@ import {
   readGatewayLockProcessCmdline,
   readGatewayLockProcessStartTime,
 } from "./gateway-lock-process.js";
-import type { GatewayLockHandle, GatewayLockOptions } from "./gateway-lock.types.js";
 import {
   acquireGatewayOwnerLease,
   assertGatewayOwnerLeaseStopped,
   type GatewayOwnerLease,
 } from "./gateway-owner-lease.js";
+import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.types.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { captureStalledGatewayStartup } from "./gateway-startup-owner.js";
 import {
@@ -56,7 +58,38 @@ import {
   tryBorrowGatewayStateOwner,
 } from "./gateway-state-owner.js";
 
-export type { GatewayLockHandle, GatewayLockOptions } from "./gateway-lock.types.js";
+export type GatewayLockHandle = {
+  lockPath: string;
+  stateLockPath: string;
+  stateDir: string;
+  assertCurrent(this: void, assertPolicy?: () => void, access?: "read"): void;
+  assertDatabaseAccess(this: void, databasePath: string): void;
+  release: () => Promise<void>;
+  run<T>(operation: () => T): T;
+  markListening?: () => void;
+};
+
+export type GatewayLockOptions = {
+  env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  lifecycleDeadlineMs?: number;
+  pollIntervalMs?: number;
+  allowInTests?: boolean;
+  platform?: NodeJS.Platform;
+  port?: number;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  lockDir?: string;
+  role?: GatewayLockRole;
+  assertCurrent?: () => void;
+  onWait?: (message: string) => void;
+  /** Internal offline port recovery; validated only after acquiring fresh physical custody. */
+  databasePortRecovery?: DatabasePortRecoveryIntent;
+  /** Config-only repairs retain file custody without inspecting or admitting database work. */
+  databaseAccess?: "none";
+  listenerMode?: "foreground" | "supervised";
+  supervisor?: GatewayOwnerSupervisor | null;
+};
 
 export const GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS = 5 * 60_000;
 const log = createSubsystemLogger("gateway");

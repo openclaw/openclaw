@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { WorkerHelloOk } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { waitForExecScope } from "../agents/bash-process-registry.js";
 import type { ComputerContextEpoch } from "../agents/tools/computer-tool.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -26,6 +27,7 @@ import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
 import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
 
 const WORKER_REMOTE_CANCEL_GRACE_MS = 1_000;
+const WORKER_TURN_ADMISSION_TIMEOUT_MS = 10 * 60_000;
 declare const WORKER_DEPLOY_BUILD: boolean;
 
 function toWorkerRuntimeError(value: unknown, fallback: string): Error {
@@ -358,6 +360,26 @@ export async function runWorkerDescriptor(
             : {}),
           ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
           inference: { stream },
+          admitTurn: hello.protocolFeatures.includes(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE)
+            ? async (event) => {
+                const response = await connection.rpc.request(
+                  "turn-admission",
+                  { ...event, runEpoch: descriptor.admission.ownerEpoch },
+                  undefined,
+                  // Hooks run sequentially with their own Gateway-enforced deadlines (15 s each),
+                  // so several plugins can exceed the 30 s RPC default; the Gateway always answers.
+                  WORKER_TURN_ADMISSION_TIMEOUT_MS,
+                );
+                if (!response.ok) {
+                  throw new Error("Gateway rejected worker turn admission");
+                }
+                if (response.payload.outcome === "block") {
+                  return false;
+                }
+                transcript.admitInput(response.payload.baseLeafId);
+                return true;
+              }
+            : undefined,
           transcript,
           live: {
             enqueuePreview: (event) => live.enqueuePreview(descriptor.assignment.runId, event),

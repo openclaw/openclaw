@@ -101,6 +101,42 @@ it("keeps a cached failure during retry and clears it after the next successful 
 const sessionRow = (respond: ReturnType<typeof startCall>["respond"], catalog = 0) =>
   respond.mock.calls[0]?.[1]?.catalogs[catalog]?.hosts[0]?.sessions[0];
 
+it("never falls back to a previously authorized page for a fresh-list provider", async () => {
+  const host = catalogHost({ sessions: [catalogSession("previously-authorized")] });
+  const pending = createDeferredCore<(typeof host)[]>();
+  const list = vi
+    .fn<SessionCatalogProvider["list"]>()
+    .mockResolvedValueOnce([host])
+    .mockImplementationOnce(() => pending.promise)
+    .mockRejectedValueOnce(new Error("Source unavailable"));
+  hoisted.activeRegistry.sessionCatalogs = [
+    {
+      provider: provider("fixture", { list, requiresFreshList: true }),
+    },
+  ];
+  const config = {};
+  const client = { connId: "fresh-list-owner" };
+  const initial = await call("sessions.catalog.list", {}, config, client);
+  expectCatalog(initial, { requiresFreshList: true, hosts: [host] });
+  try {
+    const waiting = startCall("sessions.catalog.list", {}, config, client);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await waiting.completion;
+    expectCatalog(waiting.respond, { requiresFreshList: true, pending: true, hosts: [] });
+    pending.resolve([]);
+    await vi.advanceTimersByTimeAsync(0);
+    const failed = await call("sessions.catalog.list", {}, config, client);
+    expectCatalog(failed, {
+      requiresFreshList: true,
+      hosts: [],
+      error: expect.objectContaining({ message: expect.stringContaining("Source unavailable") }),
+    });
+  } finally {
+    pending.resolve([]);
+    await vi.advanceTimersByTimeAsync(0);
+  }
+});
+
 it("returns three fast catalogs within one second while an eight-second provider finishes later", async () => {
   const host = catalogHost();
   hoisted.activeRegistry.sessionCatalogs = [
