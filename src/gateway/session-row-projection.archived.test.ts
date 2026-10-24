@@ -334,7 +334,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
         ...refresh,
         prepareExactRows(queries) {
           // All materialization slices finish here while the reader still holds archive pins.
-          return refresh.prepareExactRows(queries)?.then(async () => {
+          return Promise.resolve(refresh.prepareExactRows(queries)).then(async () => {
             await afterExactPreparation?.();
           });
         },
