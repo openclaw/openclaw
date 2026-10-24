@@ -1,8 +1,8 @@
 import { createMemo, createRoot, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
 import "./components/chat-sidebar-region.runtime.tsx";
 import "../../components/browser/browser-panel.ts";
-import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   createBrowserClient,
@@ -10,6 +10,9 @@ import {
   createBrowserPanelTestMetrics,
 } from "../../components/browser/browser-panel-controller-test-support.ts";
 import {
+  BROWSER_PANEL_TOGGLE_EVENT,
+  DESKTOP_PANEL_TOGGLE_EVENT,
+  PORTAL_PANEL_TOGGLE_EVENT,
   LINK_READER_PANEL_TOGGLE_EVENT,
   PLUGIN_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
@@ -20,6 +23,7 @@ import {
   type SessionPanelToggleSlot,
 } from "../../components/session-panel-toggle-buffer.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createNoopSidebarRegionCallbacks } from "../../test-helpers/sidebar-region-callbacks.ts";
 import { flush as flushSolid } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
@@ -34,7 +38,12 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
+import {
+  ensureSidebarConversation,
+  isSidebarSlotVisible,
+  openSlot,
+  setSidebarDock,
+} from "./sidebar-layout.ts";
 
 const reader: ControlUiLinkReaderDescriptor = {
   pluginId: "forge",
@@ -143,6 +152,36 @@ it.each([
     expect(f.state.sidebarLayout.open).toBe(open);
   },
 );
+
+it.each([
+  ["browser", BROWSER_PANEL_TOGGLE_EVENT],
+  ["desktop", DESKTOP_PANEL_TOGGLE_EVENT],
+  ["portal", PORTAL_PANEL_TOGGLE_EVENT],
+  ["terminal", TERMINAL_PANEL_TOGGLE_EVENT],
+] as const)("expands %s in place and restores the selected panel and dock", (slot, eventName) => {
+  const f = fixture();
+  const layout = setSidebarDock(
+    openSlot(openSlot(ensureSidebarConversation({ columns: [] }), "workspace"), slot),
+    "bottom",
+  );
+  f.state.sidebarLayout = layout;
+  const show = (expanded: boolean) =>
+    window.dispatchEvent(
+      new CustomEvent(eventName, {
+        detail: { sessionKey: f.state.sessionKey, open: true, expanded },
+      }),
+    );
+  show(true);
+  expect(isSidebarSlotVisible(f.state.sidebarLayout, slot)).toBe(true);
+  expect(isSidebarSlotVisible(f.state.sidebarLayout, "conversation")).toBe(false);
+  expect(f.state.sidebarLayout.mainPanelId).toBe(layout.mainPanelId);
+  show(true);
+  expect(isSidebarSlotVisible(f.state.sidebarLayout, "conversation")).toBe(false);
+  show(false);
+  expect(isSidebarSlotVisible(f.state.sidebarLayout, slot)).toBe(true);
+  expect(isSidebarSlotVisible(f.state.sidebarLayout, "conversation")).toBe(true);
+  expect(f.state.sidebarLayout).toEqual({ ...layout, expanded: false });
+});
 
 describe("plugin panel intent delivery", () => {
   it.each(["buffered", "direct"] as const)(
@@ -426,16 +465,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
               };
             },
             availableWidth: 1400,
-            callbacks: {
-              activatePanel: () => undefined,
-              togglePanelExpanded: () => undefined,
-              setDock: () => undefined,
-              closeSlot: () => undefined,
-              openSlot: () => undefined,
-              reorderPanel: () => undefined,
-              resizePanel: () => undefined,
-              setOpen: () => undefined,
-            },
+            callbacks: createNoopSidebarRegionCallbacks(),
             layout: snapshot().layout,
             narrow: false,
             panelDefinitions: definitions,

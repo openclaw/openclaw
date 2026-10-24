@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
@@ -115,11 +116,7 @@ afterEach(() => {
   document.body.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
   document.body.replaceChildren();
   restoreDialogPolyfill();
-  if (originalWebkit) {
-    Object.defineProperty(window, "webkit", originalWebkit);
-  } else {
-    Reflect.deleteProperty(window, "webkit");
-  }
+  restorePropertyDescriptor(window, "webkit", originalWebkit);
 });
 
 it("refuses a native update without a live authority check", async () => {

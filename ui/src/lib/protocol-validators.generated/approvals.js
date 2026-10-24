@@ -69,7 +69,7 @@ var External = [
     "phase" in value &&
     "approval" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_31, unique_32) => External[0].test(unique_31) || check_3(value[unique_31]),
+      (unique_0, unique_1) => External[0].test(unique_0) || check_3(value[unique_0]),
     ) &&
     check_4(value.sessionKey) &&
     (value.sourceSessionKey === void 0 ||
@@ -100,7 +100,7 @@ var External = [
     "presentation" in value &&
     "status" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_33, unique_34) => External[1].test(unique_33) || check_3(value[unique_33]),
+      (unique_2, unique_3) => External[1].test(unique_2) || check_3(value[unique_2]),
     ) &&
     check_9(value.id) &&
     check_4(value.urlPath) &&
@@ -124,7 +124,7 @@ var External = [
     "commandText" in value &&
     "allowedDecisions" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_35, unique_36) => External[3].test(unique_35) || check_3(value[unique_35]),
+      (unique_4, unique_5) => External[3].test(unique_4) || check_3(value[unique_4]),
     ) &&
     check_12(value.kind) &&
     check_4(value.commandText) &&
@@ -152,7 +152,7 @@ var External = [
     "name" in value &&
     "operation" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_37, unique_38) => External[4].test(unique_37) || check_3(value[unique_37]),
+      (unique_6, unique_7) => External[4].test(unique_6) || check_3(value[unique_6]),
     ) &&
     check_4(value.jobId) &&
     check_4(value.name) &&
@@ -170,7 +170,7 @@ var External = [
     "target" in value &&
     "recipientCount" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_39, unique_40) => External[5].test(unique_39) || check_3(value[unique_39]),
+      (unique_8, unique_9) => External[5].test(unique_8) || check_3(value[unique_8]),
     ) &&
     check_23(value.kind) &&
     check_24(value.target) &&
@@ -187,7 +187,7 @@ var External = [
     (!(Number.isFinite(value) || typeof value == "bigint") || (value >= 1 && value <= 1e6)),
   check_26 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_41, index) => check_24(unique_41)) &&
+    value.every((unique_10, index) => check_24(unique_10)) &&
     value.length <= 5,
   check_27 = (value) => check_28(value) || check_29(value),
   check_28 = (value) => typeof value == "string" && value === "internal",
@@ -201,7 +201,7 @@ var External = [
     "currency" in value &&
     "target" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_42, unique_43) => External[6].test(unique_42) || check_3(value[unique_42]),
+      (unique_11, unique_12) => External[6].test(unique_11) || check_3(value[unique_11]),
     ) &&
     check_31(value.kind) &&
     check_32(value.amount) &&
@@ -224,7 +224,7 @@ var External = [
     "target" in value &&
     "visibility" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_44, unique_45) => External[7].test(unique_44) || check_3(value[unique_44]),
+      (unique_13, unique_14) => External[7].test(unique_13) || check_3(value[unique_13]),
     ) &&
     check_35(value.kind) &&
     check_24(value.target) &&
@@ -241,7 +241,7 @@ var External = [
     "automation" in value &&
     "command" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_46, unique_47) => External[8].test(unique_46) || check_3(value[unique_46]),
+      (unique_15, unique_16) => External[8].test(unique_15) || check_3(value[unique_15]),
     ) &&
     check_40(value.kind) &&
     check_24(value.automation) &&
@@ -260,8 +260,8 @@ var External = [
   check_43 = (value) =>
     Array.isArray(value) &&
     value.length !== 0 &&
-    value.some((unique_48, _) => check_44(unique_48)) &&
-    value.every((unique_49, index) => check_45(unique_49)) &&
+    value.some((unique_17, _) => check_44(unique_17)) &&
+    value.every((unique_18, index) => check_45(unique_18)) &&
     value.length >= 1 &&
     value.length <= 3 &&
     new Set(value).size === value.length,
@@ -279,7 +279,7 @@ var External = [
     "severity" in value &&
     "allowedDecisions" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_50, unique_51) => External[9].test(unique_50) || check_3(value[unique_50]),
+      (unique_19, unique_20) => External[9].test(unique_19) || check_3(value[unique_19]),
     ) &&
     check_49(value.kind) &&
     check_50(value.title) &&
@@ -318,13 +318,13 @@ var External = [
     "label" in value &&
     "decisions" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_52, unique_53) => External[10].test(unique_52) || check_3(value[unique_52]),
+      (unique_21, unique_22) => External[10].test(unique_21) || check_3(value[unique_21]),
     ) &&
     check_50(value.label) &&
     check_58(value.decisions),
   check_58 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_54, index) => check_59(unique_54)) &&
+    value.every((unique_23, index) => check_59(unique_23)) &&
     value.length >= 1 &&
     value.length <= 2 &&
     new Set(value).size === value.length,
@@ -339,7 +339,7 @@ var External = [
     "proposalHash" in value &&
     "allowedDecisions" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_55, unique_56) => External[11].test(unique_55) || check_3(value[unique_55]),
+      (unique_24, unique_25) => External[11].test(unique_24) || check_3(value[unique_24]),
     ) &&
     check_61(value.kind) &&
     check_50(value.title) &&
@@ -351,7 +351,7 @@ var External = [
   check_62 = (value) => typeof value == "string" && External[12].test(value),
   check_63 = (value) =>
     Array.isArray(value) &&
-    value.every((unique_57, unique_58) => unique_58 < 2 || check_3(unique_57)) &&
+    value.every((unique_26, unique_27) => unique_27 < 2 || check_3(unique_26)) &&
     (value.length <= 0 || check_46(value[0])) &&
     (value.length <= 1 || check_44(value[1])) &&
     value.length >= 2,
@@ -364,7 +364,7 @@ var External = [
     "phase" in value &&
     "approval" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_59, unique_60) => External[13].test(unique_59) || check_3(value[unique_59]),
+      (unique_28, unique_29) => External[13].test(unique_28) || check_3(value[unique_28]),
     ) &&
     check_4(value.sessionKey) &&
     (value.sourceSessionKey === void 0 ||
@@ -389,7 +389,7 @@ var External = [
     "decision" in value &&
     "reason" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_61, unique_62) => External[14].test(unique_61) || check_3(value[unique_61]),
+      (unique_30, unique_31) => External[14].test(unique_30) || check_3(value[unique_30]),
     ) &&
     check_9(value.id) &&
     check_4(value.urlPath) &&
@@ -407,7 +407,7 @@ var External = [
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_63, unique_64) => External[15].test(unique_63) || check_3(value[unique_63]),
+      (unique_32, unique_33) => External[15].test(unique_32) || check_3(value[unique_32]),
     ) &&
     (value.agentId === void 0 || !("agentId" in value) || check_5(value.agentId)) &&
     (value.sessionKey === void 0 || !("sessionKey" in value) || check_5(value.sessionKey)),
@@ -417,7 +417,7 @@ var External = [
     !Array.isArray(value) &&
     "kind" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_65, unique_66) => External[16].test(unique_65) || check_3(value[unique_65]),
+      (unique_34, unique_35) => External[16].test(unique_34) || check_3(value[unique_34]),
     ) &&
     check_70(value.kind) &&
     (value.id === void 0 || !("id" in value) || check_5(value.id)),
@@ -443,7 +443,7 @@ var External = [
     "decision" in value &&
     "reason" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_67, unique_68) => External[17].test(unique_67) || check_3(value[unique_67]),
+      (unique_36, unique_37) => External[17].test(unique_36) || check_3(value[unique_36]),
     ) &&
     check_9(value.id) &&
     check_4(value.urlPath) &&
@@ -474,7 +474,7 @@ var External = [
     "status" in value &&
     "reason" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_69, unique_70) => External[18].test(unique_69) || check_3(value[unique_69]),
+      (unique_38, unique_39) => External[18].test(unique_38) || check_3(value[unique_38]),
     ) &&
     check_9(value.id) &&
     check_4(value.urlPath) &&
@@ -502,7 +502,7 @@ var External = [
     "status" in value &&
     "reason" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_71, unique_72) => External[19].test(unique_71) || check_3(value[unique_71]),
+      (unique_40, unique_41) => External[19].test(unique_40) || check_3(value[unique_40]),
     ) &&
     check_9(value.id) &&
     check_4(value.urlPath) &&
@@ -528,14 +528,14 @@ var External = [
     "approvals" in value &&
     "truncated" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_73, unique_74) => External[20].test(unique_73) || check_3(value[unique_73]),
+      (unique_42, unique_43) => External[20].test(unique_42) || check_3(value[unique_42]),
     ) &&
     check_4(value.sessionKey) &&
     check_6(value.updatedAtMs) &&
     check_95(value.approvals) &&
     check_96(value.truncated),
   check_95 = (value) =>
-    Array.isArray(value) && value.every((unique_75, index) => check_8(unique_75)),
+    Array.isArray(value) && value.every((unique_44, index) => check_8(unique_44)),
   check_96 = (value) => typeof value == "boolean",
   isSessionApprovalEvent = (value) => check_0(value),
   isSessionApprovalReplay = (value) => check_93(value);

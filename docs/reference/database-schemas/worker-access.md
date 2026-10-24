@@ -6661,7 +6661,7 @@ the existing commit receipts. Manager ordering, live write authority, and commit
 view adoption remain unchanged. Released synchronous persistence methods retain
 their separate native adapter.
 
-Transcript rewrite preparation and publication copy mutable view containers while
+Transcript hydration residency, rewrite preparation, and publication copy mutable view containers while
 retaining already-owned string values, so old tool results and image payloads do
 not require another full byte copy on the main thread. Prepared views remain
 independently mutable. Opaque structured-cloneable SDK data retains native snapshot

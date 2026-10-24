@@ -23,6 +23,7 @@ import {
   createGatewayMethodRegistry,
 } from "../methods/registry.js";
 import { coreGatewayHandlers, handleGatewayRequest } from "../server-methods.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import * as resolution from "./artifacts-session-resolution.js";
 import { assistantFileMessage } from "./artifacts.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
@@ -97,13 +98,7 @@ async function exercise(
     const client: GatewayClient = {
       connId: "artifact-authority-original-connection",
       connectionSignal: connection.signal,
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-        role: "operator",
-        scopes: ["operator.read"],
-      },
+      connect: gatewayConnect(["operator.read"]),
     };
     let current = true;
     let guardAllowed = true;
@@ -327,13 +322,7 @@ describe("registered artifact request authority after session preparation", () =
       boundaries.visit.mockImplementation(readers.visitSessionMessagesAsync);
       const client: GatewayClient = {
         connId: "artifact-default-agent",
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-          role: "operator",
-          scopes: ["operator.read"],
-        },
+        connect: gatewayConnect(["operator.read"]),
       };
       const request = async (
         selectedMethod: Method,

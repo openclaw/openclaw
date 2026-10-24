@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import {
   createSubscriptionHydrationHarness,
   sessionsResult,
@@ -111,23 +112,15 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1").each(["invalidation", "ro
       const index = second % rows.length;
       eventBytes += publish(
         index,
-        {
-          state: "active",
-          generation: 1,
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          stateChangedAtMs: 1,
+        createActiveSessionPlacement({
           environmentId: `environment-${index}`,
-          activeOwnerEpoch: 1,
-          workerBundleHash: "a".repeat(64),
           workspaceBaseManifestRef: "synthetic-manifest",
-          remoteWorkspaceDir: "/workspace",
           runner: {
             kind: "device",
             deviceId: `device-${index}`,
             status: Math.floor(second / rows.length) % 2 ? "available" : "offline",
           },
-        },
+        }),
         publication === "invalidation",
       );
       await vi.advanceTimersByTimeAsync(1_000);

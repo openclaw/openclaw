@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,8 +20,13 @@ import {
   renewSkillUploadInstallLease,
 } from "./upload-store.sqlite.js";
 import {
+  chunkCount,
+  installLeaseCount,
   observeExpiredUploadInventory,
   observeSkillUploadRenewal,
+  sha256,
+  stateDatabase,
+  uploadExists,
   useSkillUploadStoreLocation,
 } from "./upload-store.test-support.js";
 
@@ -63,10 +68,6 @@ async function committedUpload(
   return upload;
 }
 
-function stateDatabase(databasePath: string) {
-  return openOpenClawStateDatabase({ path: databasePath }).db;
-}
-
 function uploadCount(databasePath: string): number {
   return (
     stateDatabase(databasePath).prepare("SELECT count(*) AS count FROM skill_uploads").get() as {
@@ -75,44 +76,15 @@ function uploadCount(databasePath: string): number {
   ).count;
 }
 
-function uploadExists(databasePath: string, uploadId: string): boolean {
-  return Boolean(
-    stateDatabase(databasePath)
-      .prepare("SELECT 1 AS found FROM skill_uploads WHERE upload_id = ?")
-      .get(uploadId),
-  );
-}
-
 function expireUpload(databasePath: string, uploadId: string) {
   stateDatabase(databasePath)
     .prepare("UPDATE skill_uploads SET expires_at = 1 WHERE upload_id = ?")
     .run(uploadId);
 }
 
-function chunkCount(databasePath: string, uploadId: string): number {
-  const row = stateDatabase(databasePath)
-    .prepare("SELECT count(*) AS count FROM skill_upload_chunks WHERE upload_id = ?")
-    .get(uploadId);
-  return (row as { count: number }).count;
-}
-
-function installLeaseCount(databasePath: string, uploadId: string): number {
-  return (
-    stateDatabase(databasePath)
-      .prepare(
-        "SELECT count(*) AS count FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
-      )
-      .get(uploadId) as { count: number }
-  ).count;
-}
-
 function commitStagedFixture(databasePath: string, uploadId: string) {
   const database = openOpenClawStateDatabase({ path: databasePath });
   return commitSkillUploadInDatabase({ uploadId }, { database, path: databasePath });
-}
-
-function sha256(bytes: Buffer): string {
-  return createHash("sha256").update(bytes).digest("hex");
 }
 
 function holdUpload(store: typeof defaultSkillUploadStore, uploadId: string) {

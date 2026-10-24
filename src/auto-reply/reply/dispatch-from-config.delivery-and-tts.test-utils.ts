@@ -50,6 +50,7 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
   automaticGroupReplyConfig,
+  mockPluginBoundDiscordBinding,
   dispatchReplyFromConfig,
   installCaptionedVoiceTestPlugin,
   installThreadingTestPlugin,
@@ -65,7 +66,7 @@ import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.j
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { usesFullReplyRuntime } from "./reply-config-runtime-mode.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
-import { buildTestCtx } from "./test-ctx.js";
+import { buildTestCtx, createDiscordPluginBindingCtx, createRoutedTestCtx } from "./test-ctx.js";
 
 const NO_VISIBLE_REPLY_FALLBACK_TEXT = MISSING_REPLY_NOTICE_TEXT;
 
@@ -270,37 +271,22 @@ describe("dispatchReplyFromConfig", () => {
       status: "handled",
       result: { handled: true, reply: { text: "do not leak slash reply" } },
     });
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-command-escape-denied",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
       detachHint: "/codex detach",
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:1481858418548412579",
-      To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
+    const ctx = createDiscordPluginBindingCtx({
       ChatType: "channel",
       CommandSource: "text",
       CommandAuthorized: false,
-      WasMentioned: false,
       CommandBody: "/codex detach",
       RawBody: "/codex detach",
       Body: "/codex detach",
       MessageSid: "msg-claim-plugin-command-denied",
-      SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
@@ -337,35 +323,16 @@ describe("dispatchReplyFromConfig", () => {
       },
       { pluginId: "codex" },
     );
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-reply-1",
       targetSessionKey: "plugin-binding:codex:reply123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginId: "codex",
       pluginRoot: "/plugins/codex",
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:1481858418548412579",
-      To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "who are you",
-      RawBody: "who are you",
-      Body: "who are you",
+    const ctx = createDiscordPluginBindingCtx({
       MessageSid: "msg-claim-plugin-reply",
-      SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
@@ -397,14 +364,9 @@ describe("dispatchReplyFromConfig", () => {
       },
       { pluginId: "codex" },
     );
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-reply-abort-1",
       targetSessionKey: "plugin-binding:codex:reply-abort-123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginId: "codex",
       pluginRoot: "/plugins/codex",
     });
@@ -428,22 +390,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const dispatch = withDispatchProcessedOutcomeSink(() =>
       dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          Provider: "discord",
-          Surface: "discord",
-          OriginatingChannel: "discord",
-          OriginatingTo: "discord:channel:1481858418548412579",
-          To: "discord:channel:1481858418548412579",
-          AccountId: "default",
-          SenderId: "user-9",
-          SenderUsername: "ada",
-          CommandAuthorized: true,
-          WasMentioned: false,
-          CommandBody: "who are you",
-          RawBody: "who are you",
-          Body: "who are you",
+        ctx: createDiscordPluginBindingCtx({
           MessageSid: "msg-claim-plugin-reply-abort",
-          SessionKey: "agent:main:discord:channel:1481858418548412579",
         }),
         cfg: emptyConfig,
         dispatcher,
@@ -862,26 +810,16 @@ describe("dispatchReplyFromConfig", () => {
   it("routes plugin-owned Discord DM bindings to the owning plugin before generic inbound claim broadcast", async () => {
     setNoAbort();
     mockPluginBindingClaim();
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-dm-1",
       targetSessionKey: "plugin-binding:codex:dm123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:1177378744822943744",
-      },
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      conversationId: "user:1177378744822943744",
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
+    const ctx = createRoutedTestCtx("discord", "channel:1480574946919846079", {
       From: "discord:1177378744822943744",
-      OriginatingTo: "channel:1480574946919846079",
-      To: "channel:1480574946919846079",
-      AccountId: "default",
       SenderId: "user-9",
       SenderUsername: "ada",
       CommandAuthorized: true,
@@ -995,28 +933,18 @@ describe("dispatchReplyFromConfig", () => {
       status: "no_handler",
     });
     hookMocks.runner.runInboundClaimForPluginOutcome.mockClear();
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-no-handler-1",
       targetSessionKey: "plugin-binding:codex:nohandler123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:no-handler",
-      },
       pluginName: "Codex App Server",
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      conversationId: "channel:no-handler",
     });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "openclaw fallback" }) satisfies ReplyPayload);
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "discord:channel:no-handler",
-        To: "discord:channel:no-handler",
-        AccountId: "default",
+      ctx: createRoutedTestCtx("discord", "discord:channel:no-handler", {
         MessageSid: "msg-no-handler-1",
         SessionKey: "agent:main:discord:channel:no-handler",
         CommandBody: "hello",
@@ -1042,29 +970,19 @@ describe("dispatchReplyFromConfig", () => {
     mockPluginBindingClaim({
       status: "declined",
     });
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-declined-1",
       targetSessionKey: "plugin-binding:codex:declined123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:declined",
-      },
       pluginName: "Codex App Server",
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
       detachHint: "/codex_detach",
+      conversationId: "channel:declined",
     });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "discord:channel:declined",
-        To: "discord:channel:declined",
-        AccountId: "default",
+      ctx: createRoutedTestCtx("discord", "discord:channel:declined", {
         MessageSid: "msg-declined-1",
         SessionKey: "agent:main:discord:channel:declined",
         CommandBody: "hello",
@@ -1089,28 +1007,18 @@ describe("dispatchReplyFromConfig", () => {
       status: "error",
       error: "boom",
     });
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-error-1",
       targetSessionKey: "plugin-binding:codex:error123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:error",
-      },
       pluginName: "Codex App Server",
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      conversationId: "channel:error",
     });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "discord:channel:error",
-        To: "discord:channel:error",
-        AccountId: "default",
+      ctx: createRoutedTestCtx("discord", "discord:channel:error", {
         MessageSid: "msg-error-1",
         SessionKey: "agent:main:discord:channel:error",
         CommandBody: "hello",

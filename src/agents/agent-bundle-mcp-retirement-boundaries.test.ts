@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -19,6 +18,7 @@ import { getSessionMcpRuntimeTestManager } from "./agent-bundle-mcp-manager.test
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import { prepareCliBundleMcpConfig } from "./cli-runner/bundle-mcp.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { createEnteredGate } from "./entered-gate.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const emptyConfig: OpenClawConfig = { plugins: { enabled: false }, mcp: { servers: {} } };
@@ -47,17 +47,9 @@ async function createFixture(workspaceDir: string) {
     },
     hooks,
     hold: () => {
-      const entered = createDeferred();
-      const release = createDeferred();
-      releases.push(() => release.resolve());
-      return {
-        entered,
-        release,
-        wait: async () => {
-          entered.resolve();
-          await release.promise;
-        },
-      };
+      const gate = createEnteredGate();
+      releases.push(gate.release);
+      return gate;
     },
     releaseAll: () => releases.forEach((release) => release()),
     close: server.close,
@@ -121,7 +113,7 @@ it("preserves a newer session binding while old empty cleanup drains", async () 
       }
     };
     const reloading = reloadSessionMcpRuntimes({ cfg: emptyConfig });
-    await deletion.entered.promise;
+    await deletion.entered;
     const retiring = retireSessionMcpRuntime({ sessionId: "old-binding", reason: "boundary-test" });
     const next = await acquireSessionMcpRuntime(input("new-binding", "/new", sessionKey));
     try {
@@ -129,7 +121,7 @@ it("preserves a newer session binding while old empty cleanup drains", async () 
       await expect(next.runtime.callTool("probe", "read", {})).resolves.toMatchObject({
         content: [{ text: "/new" }],
       });
-      deletion.release.resolve();
+      deletion.release();
       await Promise.all([reloading, retiring]);
       expect(getSessionMcpRuntimeTestManager().resolveSessionId(sessionKey)).toBe("new-binding");
       expect(peekSessionMcpRuntime({ sessionKey })).toBe(next.runtime);
@@ -138,7 +130,7 @@ it("preserves a newer session binding while old empty cleanup drains", async () 
         content: [{ text: "/new" }],
       });
     } finally {
-      deletion.release.resolve();
+      deletion.release();
       await releaseSessionMcpRuntime(next);
       await Promise.all([reloading, retiring]);
     }
@@ -173,7 +165,7 @@ it("preserves the runtime admitted by an in-flight static native preflight", asy
       return result;
     });
     try {
-      await listing.entered.promise;
+      await listing.entered;
       const admitted = expectDefined(
         peekSessionMcpRuntime({ sessionKey }),
         "in-flight native runtime",
@@ -182,7 +174,7 @@ it("preserves the runtime admitted by an in-flight static native preflight", asy
       expect(prepared).toBe(false);
       expect(peekSessionMcpRuntime({ sessionKey })).toBe(admitted);
       expect(admitted.activeLeases).toBe(1);
-      listing.release.resolve();
+      listing.release();
       const result = await preflight;
       expect(result.backend.args).toContain("--mcp-config");
       expect(peekSessionMcpRuntime({ sessionKey })).toBe(admitted);
@@ -190,7 +182,7 @@ it("preserves the runtime admitted by an in-flight static native preflight", asy
         content: [{ text: "/native" }],
       });
     } finally {
-      listing.release.resolve();
+      listing.release();
       await releaseSessionMcpRuntime(original);
       await (await preflight).cleanup?.();
     }

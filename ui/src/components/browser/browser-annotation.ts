@@ -89,27 +89,6 @@ const ANNOTATION_TITLE_MAX_LENGTH = 80;
 const ANNOTATION_CONTEXT_URL_MAX_LENGTH = 500;
 const ANNOTATION_DISPLAY_URL_MAX_LENGTH = 160;
 
-function sanitizePageUrl(value: string): string {
-  const normalized = sanitizePageText(value, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
-  const parsed = URL.parse(normalized);
-  if (!parsed) {
-    return normalized.replace(/^([a-z][a-z\d+.-]*:\/\/)[^/?#\s]*@/i, "$1");
-  }
-  if (!parsed.username && !parsed.password) {
-    return normalized;
-  }
-  parsed.username = "";
-  parsed.password = "";
-  return truncateUtf16Safe(parsed.href, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
-}
-
-function annotationDisplayUrl(url: string): string {
-  const hostname = URL.parse(url)?.hostname;
-  return hostname
-    ? sanitizePageText(hostname, ANNOTATION_DISPLAY_URL_MAX_LENGTH)
-    : truncateUtf16Safe(url, ANNOTATION_DISPLAY_URL_MAX_LENGTH);
-}
-
 /** Selector fragments (tag/id/class) are page-controlled too: keep only
  * word characters and dashes so they cannot carry quotes or directives. */
 function sanitizeSelectorToken(value: string): string {
@@ -147,9 +126,21 @@ export function buildBrowserAnnotationContent(params: {
   element?: BrowserInspectedNode | null;
   browserTab?: BrowserTabTarget;
 }): Pick<BrowserAnnotationDraft, "modelContext" | "card"> {
-  const url = sanitizePageUrl(params.url);
+  const normalizedUrl = sanitizePageText(params.url, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
+  const parsedUrl = URL.parse(normalizedUrl);
+  let url = normalizedUrl;
+  if (!parsedUrl) {
+    url = normalizedUrl.replace(/^([a-z][a-z\d+.-]*:\/\/)[^/?#\s]*@/i, "$1");
+  } else if (parsedUrl.username || parsedUrl.password) {
+    parsedUrl.username = "";
+    parsedUrl.password = "";
+    url = truncateUtf16Safe(parsedUrl.href, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
+  }
   const title = sanitizePageText(params.title, ANNOTATION_TITLE_MAX_LENGTH);
-  const displayUrl = annotationDisplayUrl(url);
+  const hostname = URL.parse(url)?.hostname;
+  const displayUrl = hostname
+    ? sanitizePageText(hostname, ANNOTATION_DISPLAY_URL_MAX_LENGTH)
+    : truncateUtf16Safe(url, ANNOTATION_DISPLAY_URL_MAX_LENGTH);
   const regions = params.strokes.flatMap((stroke) => strokeBoundingRegion(stroke) ?? []);
   const element = params.element
     ? {

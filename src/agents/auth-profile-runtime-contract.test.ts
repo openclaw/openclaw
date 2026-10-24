@@ -6,6 +6,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { buildAgentRuntimeAuthPlan } from "./runtime-plan/auth.js";
 
@@ -29,17 +30,9 @@ const authAliasMetadata = {
 };
 
 function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        [provider]: {
-          baseUrl: "https://api.openclaw.test/v1",
-          agentRuntime: { id: runtime },
-          models: [],
-        },
-      },
-    },
-  } as OpenClawConfig;
+  return configFor(provider, "https://api.openclaw.test/v1", {
+    agentRuntime: { id: runtime },
+  });
 }
 
 describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", () => {

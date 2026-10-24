@@ -30,6 +30,7 @@ import {
 } from "./doctor-retired-models.test-support.js";
 import { createRetiredModelRefRepairResolver } from "./doctor/shared/retired-model-ref-repair.js";
 import { repairRetiredSessionModelRef } from "./doctor/shared/retired-session-model-repair.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 function expectRouteWarning(warnings: string[], model: string, detail: string) {
   for (const expected of [
@@ -44,16 +45,7 @@ function expectRouteWarning(warnings: string[], model: string, detail: string) {
 }
 
 function authoredModel(id: string, baseUrl?: string): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 16_000,
-    maxTokens: 4_096,
-    ...(baseUrl ? { baseUrl } : {}),
-  };
+  return createTestModelDefinition(id, { contextWindow: 16_000, ...(baseUrl ? { baseUrl } : {}) });
 }
 
 describe("doctor retirement repair ordering", () => {

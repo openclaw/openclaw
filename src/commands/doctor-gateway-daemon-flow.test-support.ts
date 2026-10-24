@@ -1,8 +1,8 @@
 import { expect, it, vi, type Mock } from "vitest";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { GatewayService } from "../daemon/service-types.js";
+import { createDoctorPrompterFixture as makePrompter } from "../flows/doctor-health-context.test-support.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
-import { makePrompter } from "./doctor-auth-flat-profiles.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
@@ -21,7 +21,7 @@ export function mockDoctorRuntimeFacts(runExec: Mock<typeof import("../process/e
 
 export function createPrompter(confirmImpl: (message: string) => boolean) {
   return {
-    ...makePrompter(false),
+    ...makePrompter(false, true),
     confirmRuntimeRepair: vi.fn(async ({ message }: { message: string }) => confirmImpl(message)),
     select: vi.fn(),
   };

@@ -21,6 +21,7 @@ import type {
 } from "../../state/user-profiles.types.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient } from "./client-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { usersPersonalFileHandlers } from "./users-personal-file.js";
@@ -135,19 +136,8 @@ beforeEach(async () => {
   config = { agents: { defaults: { workspace } } };
   client = {
     connId: "alice-connection",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
-    authenticatedUserProfile: {
-      profileId: "alice-alias",
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 0,
-    },
+    connect: gatewayConnect(["operator.read"]),
+    authenticatedUserProfile: gatewayProfile("alice-alias", null, 0),
   };
   await fs.writeFile(path.join(workspace, "USER.md"), "Shared defaults");
 });

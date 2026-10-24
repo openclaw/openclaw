@@ -9,7 +9,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
-import type { SkillWorkshopAccess } from "./access.ts";
+import type { resolveWorkshopAccess } from "./access.ts";
 import type { WorkshopMutation, WorkshopSnapshot } from "./api.ts";
 import type { SkillWorkshopMode } from "./mode.ts";
 
@@ -137,7 +137,7 @@ export type WorkshopTab = "instructions" | "files" | "history";
 type SkillWorkshopViewProps = {
   context: ApplicationContext;
   agentId: string | null;
-  access: SkillWorkshopAccess;
+  access: ReturnType<typeof resolveWorkshopAccess>;
   snapshot: WorkshopSnapshot | null;
   error: string | null;
   viewer: WorkshopViewer | null;

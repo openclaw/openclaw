@@ -6,6 +6,7 @@ import {
 import { isSchedulerSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
 import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { prepareCronToolArguments } from "./tools/cron-tool-canonicalize.js";
 
 function tool(name: string): AnyAgentTool {
   return {
@@ -40,9 +41,12 @@ describe("resolveTurnToolSurface", () => {
 });
 
 describe("resolveTurnToolSurface on a system turn", () => {
-  const surface = (schedulerSystemTurn: boolean) =>
+  const surface = (
+    schedulerSystemTurn: boolean,
+    prepareArguments?: AnyAgentTool["prepareArguments"],
+  ) =>
     resolveTurnToolSurface({
-      turnTools: [tool("automations"), tool("gateway")],
+      turnTools: [{ ...tool("automations"), prepareArguments }, tool("gateway")],
       ownerOnlyDenied: new Set(["automations", "gateway"]),
       schedulerSystemTurn,
     });
@@ -55,22 +59,36 @@ describe("resolveTurnToolSurface on a system turn", () => {
     return execute(`call-${name}`, args);
   };
 
-  it("serves caller-scoped automation reads and keeps every write owner-gated", async () => {
-    const { tools, exportedTools, callableTools } = surface(true);
+  it.each([undefined, prepareCronToolArguments])(
+    "serves scoped reads with native preparation %j",
+    async (prepareArguments) => {
+      const { tools, exportedTools, callableTools } = surface(true, prepareArguments);
 
-    for (const action of ["list", "get", " runs "]) {
-      await expect(run(tools, "automations", { action, jobId: "job-1" })).resolves.toMatchObject({
-        details: { ran: "automations" },
-      });
-    }
-    for (const action of ["status", "add", "update", "remove", "run", "wake", undefined]) {
-      const result = await run(tools, "automations", { action });
-      expect(result.details).toMatchObject({ gated: true });
-    }
-    await expectOwnerGated(tools, "gateway");
-    // Descendants never inherit the system turn's partial access.
-    expect(exportedTools.map((entry) => entry.name)).toEqual([]);
-    expect(callableTools.map((entry) => entry.name)).toEqual([]);
+      for (const action of ["list", "get", " runs "]) {
+        await expect(run(tools, "automations", { action, jobId: "job-1" })).resolves.toMatchObject({
+          details: { ran: "automations" },
+        });
+      }
+      for (const action of ["status", "add", "update", "remove", "run", "wake", undefined]) {
+        const result = await run(tools, "automations", { action });
+        expect(result.details).toMatchObject({ gated: true });
+      }
+      await expectOwnerGated(tools, "gateway");
+      // Descendants never inherit the system turn's partial access.
+      expect(exportedTools.map((entry) => entry.name)).toEqual([]);
+      expect(callableTools.map((entry) => entry.name)).toEqual([]);
+    },
+  );
+
+  it("does not run unknown preparation for scheduler reads", async () => {
+    const prepareArguments = () => {
+      throw new Error("must not run");
+    };
+    const { tools } = surface(true, prepareArguments);
+    await expect(run(tools, "automations", { action: "list" })).resolves.toMatchObject({
+      details: { gated: true },
+    });
+    expect(tools.find((entry) => entry.name === "automations")?.prepareArguments).toBeUndefined();
   });
 
   it("keeps a completion handoff's requester denial over the scheduler reads", async () => {

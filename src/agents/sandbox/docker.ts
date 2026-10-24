@@ -29,7 +29,7 @@ import {
   dockerPersistentTargetFromEngineTarget,
   dockerPersistentTargetToEngineTarget,
 } from "./docker-persistent-target.js";
-import { prepareSandboxMountPlan, sandboxMountPlanMatchesContainer } from "./mount-plan.js";
+import { compareSandboxMountPlan, prepareSandboxMountPlan } from "./mount-plan.js";
 import type { DockerPersistentExecTarget } from "./persistent-exec.types.js";
 import {
   assertPodmanSandboxTarget,
@@ -231,15 +231,18 @@ async function ensureSandboxContainerLifecycle(
     existingRegistryEntry?.runtimeState === "pending";
   const state = await containerState(engine, containerName, { strict: needsSetupReservation });
   let containerId = "";
+  let readOnlyRoot = false;
   if (state.exists) {
     const identity = await execContainer(
       engine,
-      ["inspect", "--format", "{{.Id}}", containerName],
+      ["inspect", "--format", "{{.Id}} {{.HostConfig.ReadonlyRootfs}}", containerName],
       {
         signal: AbortSignal.timeout(5_000),
       },
     );
-    containerId = identity.stdout.trim();
+    const [id, rootReadOnly] = identity.stdout.trim().split(/\s+/u);
+    containerId = id ?? "";
+    readOnlyRoot = rootReadOnly === "true";
     if (!/^[a-f0-9]{64}$/u.test(containerId)) {
       throw new Error("Container inspect did not return an immutable container ID.");
     }
@@ -265,24 +268,37 @@ async function ensureSandboxContainerLifecycle(
       const { hasSandboxPersistentExecCustody } = await import("./persistent-exec.js");
       const persistent = await hasSandboxPersistentExecCustody({ containerName, containerId });
       params.assertCurrent?.();
-      const isHot =
+      let isHot =
         persistent ||
         (running &&
           (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_CONTAINER_WINDOW_MS));
       if (isHot) {
-        const mountsMatch =
-          params.requireCurrentConfig ||
-          (await sandboxMountPlanMatchesContainer({ engine, containerName, plan: mountPlan }));
-        handleHotSandboxConfigMismatch({
-          containerName,
-          scope: params.cfg.scope,
-          sessionKey: params.scopeKey,
-          mountsChanged: !mountsMatch,
-          ...(params.requireCurrentConfig !== undefined
-            ? { requireCurrentConfig: params.requireCurrentConfig }
-            : {}),
-        });
-      } else {
+        const mounts = params.requireCurrentConfig
+          ? "match"
+          : await compareSandboxMountPlan({ engine, containerName: containerId, plan: mountPlan });
+        if (
+          mounts === "protected-mounts-added" &&
+          !persistent &&
+          readOnlyRoot &&
+          typeof lastUsedAtMs === "number" &&
+          lastUsedAtMs < performance.timeOrigin
+        ) {
+          // A deploy can add protected overlays before the first resumed turn.
+          // The existing replacement path retains host-backed workspace bytes.
+          isHot = false;
+        }
+        params.assertCurrent?.();
+        if (isHot) {
+          handleHotSandboxConfigMismatch({
+            containerName,
+            scope: params.cfg.scope,
+            sessionKey: params.scopeKey,
+            mountsChanged: mounts !== "match",
+            requireCurrentConfig: params.requireCurrentConfig,
+          });
+        }
+      }
+      if (!isHot) {
         params.assertCurrent?.();
         const removed = await execContainer(engine, ["rm", "-f", containerId], {
           allowFailure: true,

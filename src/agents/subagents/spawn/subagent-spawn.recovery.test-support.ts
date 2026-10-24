@@ -35,6 +35,7 @@ import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
+import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
 import {
   recordSpawnBoundaryFinal,
   type NativePluginSpawnTestOptions,
@@ -280,13 +281,7 @@ export function registerRecoverySpawnCases(
         if (params.sessionKey !== fixture.target.sessionKey) {
           childFinished.resolve();
         }
-        return {
-          payloads: [{ text: "Recovered task complete." }],
-          meta: {
-            durationMs: 1,
-            terminalReply: { disposition: "visible", text: "Recovered task complete." },
-          },
-        };
+        return visibleResult("Recovered task complete.");
       });
       try {
         await expect(

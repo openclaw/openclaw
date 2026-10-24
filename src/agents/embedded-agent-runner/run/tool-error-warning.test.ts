@@ -1,25 +1,14 @@
 // Tool warning tests ensure failed actions remain visible without exposing
 // verbose execution details unless the operator explicitly requests them.
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import {
   buildPayloads,
+  makePayloadAssistant as makeAssistant,
   expectSinglePayloadText,
   expectSingleToolErrorPayload,
 } from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads tool warnings", () => {
-  const errorJson =
-    '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
-  const makeAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage =>
-    // Default to an overloaded provider error so each test can override only
-    // the assistant fields relevant to user-visible payload sanitization.
-    makeAssistantMessageFixture({
-      errorMessage: errorJson,
-      content: [{ type: "text", text: errorJson }],
-      ...overrides,
-    });
   const makeStoppedAssistant = (text = "") =>
     makeAssistant({
       stopReason: "stop",
@@ -47,11 +36,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   function expectNoSyntheticCompletionForSession(sessionKey: string) {
     expectNoPayloads({
       sessionKey,
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
+      lastAssistant: makeStoppedAssistant(),
     });
   }
 
@@ -88,11 +73,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     expectNoPayloads({
       sessionKey: "agent:main:discord:direct:u123",
       didSendViaMessagingTool: true,
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
+      lastAssistant: makeStoppedAssistant(),
     });
   });
 

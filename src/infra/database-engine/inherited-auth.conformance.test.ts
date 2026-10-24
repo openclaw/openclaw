@@ -64,6 +64,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { acquireStateDatabaseSchemaLease } from "../gateway-state-owner.js";
+import { dropPostgresTestSchemas } from "../postgres-sync/schema-cleanup.test-support.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
 import { sqliteWorkerPreloadEnv } from "../sqlite-worker-preload.test-support.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
@@ -575,13 +576,7 @@ process.emit = function(event, ...args) {
       }
       await Promise.allSettled(providerWork);
       await closeDatabases();
-      const schemas = await database.query<{ nspname: string }>(
-        "SELECT nspname FROM pg_namespace WHERE starts_with(nspname, $1)",
-        [prefix + "_"],
-      );
-      for (const { nspname } of schemas.rows) {
-        await database.query(`DROP SCHEMA "${nspname.replaceAll('"', '""')}" CASCADE`);
-      }
+      await dropPostgresTestSchemas(database, prefix);
       await database.end();
       await state.cleanup();
       clearSecretsRuntimeSnapshot();

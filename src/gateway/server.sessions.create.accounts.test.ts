@@ -18,6 +18,7 @@ import {
   chatSendOwner,
   removeSessionWorktree,
 } from "./server.sessions.create.test-support.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   getGatewayConfigModule,
@@ -52,19 +53,8 @@ async function createPersonalAccountSessionFixture() {
   const authProfileId = connectAccount("first-account@example.test");
   const client: GatewayClient & { connId: string } = {
     connId: "personal-session-connection",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.write"],
-    },
-    authenticatedUserProfile: {
-      profileId: owner.id,
-      displayName: owner.displayName,
-      hasAvatar: false,
-      updatedAt: owner.updatedAt,
-    },
+    connect: gatewayConnect(["operator.write"]),
+    authenticatedUserProfile: gatewayProfile(owner.id, owner.displayName, owner.updatedAt),
   };
   const clients = new Set([client]);
   const catalog = [

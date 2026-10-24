@@ -1,10 +1,45 @@
+import { createHash } from "node:crypto";
 import { vi } from "vitest";
 import * as tmpDir from "../../infra/tmp-openclaw-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as stateContext from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 
 const captureStateContext = stateContext.captureOpenClawStateWorkerContext;
+
+export function stateDatabase(databasePath: string) {
+  return openOpenClawStateDatabase({ path: databasePath }).db;
+}
+
+export function uploadExists(databasePath: string, uploadId: string): boolean {
+  return Boolean(
+    stateDatabase(databasePath)
+      .prepare("SELECT 1 AS found FROM skill_uploads WHERE upload_id = ?")
+      .get(uploadId),
+  );
+}
+
+export function chunkCount(databasePath: string, uploadId: string): number {
+  const row = stateDatabase(databasePath)
+    .prepare("SELECT count(*) AS count FROM skill_upload_chunks WHERE upload_id = ?")
+    .get(uploadId);
+  return (row as { count: number }).count;
+}
+
+export function installLeaseCount(databasePath: string, uploadId: string): number {
+  return (
+    stateDatabase(databasePath)
+      .prepare(
+        "SELECT count(*) AS count FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
+      )
+      .get(uploadId) as { count: number }
+  ).count;
+}
+
+export function sha256(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
 
 export function useSkillUploadStoreLocation(databasePath: string, tempRootDir: string): void {
   vi.spyOn(stateContext, "captureOpenClawStateWorkerContext").mockImplementation((options) =>

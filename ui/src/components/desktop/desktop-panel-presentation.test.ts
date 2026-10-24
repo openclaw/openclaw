@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
@@ -89,11 +90,7 @@ function define(object: object, descriptors: PropertyDescriptorMap) {
   for (const property of Object.keys(descriptors)) {
     const original = Object.getOwnPropertyDescriptor(object, property);
     restore.push(() => {
-      if (original) {
-        Object.defineProperty(object, property, original);
-      } else {
-        Reflect.deleteProperty(object, property);
-      }
+      restorePropertyDescriptor(object, property, original);
     });
   }
   Object.defineProperties(object, descriptors);

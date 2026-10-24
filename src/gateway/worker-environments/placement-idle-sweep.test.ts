@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
@@ -24,7 +23,10 @@ import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordina
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerPlacementIdleSweep } from "./placement-idle-sweep.js";
+import { makeClaimInput } from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { journalOwner } from "./placement-suite.test-support.js";
+import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
 
 const tempDirs = useStateDatabaseTempDirs();
 
@@ -103,16 +105,7 @@ describe("worker placement idle suspension", () => {
     if (active?.state !== "active") {
       throw new Error("expected an active worker placement");
     }
-    return placements.claimTurn({
-      ...REQUEST,
-      claimId,
-      runId: `run-${claimId}`,
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    return placements.claimTurn(makeClaimInput(active, claimId, `run-${claimId}`));
   }
 
   it("reports suspension only when enabled", async () => {
@@ -343,16 +336,9 @@ describe("worker placement idle suspension", () => {
       if (kind === "worker-claim") {
         await claimWorkerTurn();
       } else if (kind === "local-claim" || kind === "pending-result") {
-        const claim = await placements.claimTurn({
-          ...REQUEST,
-          claimId: "busy-local-claim",
-          runId: "busy-local-run",
-          owner: {
-            kind: "local",
-            environmentId: active.environmentId,
-            ownerEpoch: active.activeOwnerEpoch,
-          },
-        });
+        const claim = await placements.claimTurn(
+          makeClaimInput(active, "busy-local-claim", "busy-local-run"),
+        );
         if (kind === "pending-result") {
           await placements.markWorkspaceResultPending(claim);
           await placements.clearLocalTurnClaimsAfterRestartAsync();
@@ -362,23 +348,10 @@ describe("worker placement idle suspension", () => {
       } else if (kind === "reconciling-result") {
         const basePack = Buffer.from("idle workspace journal");
         await placements.beginWorkspaceReconciliation(
-          {
-            sessionId: active.sessionId,
-            environmentId: active.environmentId,
-            ownerEpoch: active.activeOwnerEpoch,
-            placementGeneration: active.generation,
-          },
-          {
-            version: 1,
-            temporaryNonce: "a".repeat(32),
-            baseManifestRef: active.workspaceBaseManifestRef,
-            currentManifestRef: `sha256:${"c".repeat(64)}`,
-            baseEntries: [],
-            appliedEntries: [],
-            baseTree: "f".repeat(40),
-            basePackSha256: createHash("sha256").update(basePack).digest("hex"),
+          journalOwner(active),
+          workspaceJournal(active.workspaceBaseManifestRef, `sha256:${"c".repeat(64)}`, {
             basePack,
-          },
+          }),
         );
         expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
       } else if (kind === "draining") {

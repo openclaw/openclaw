@@ -6,6 +6,7 @@ import {
   buildInstallerSmokeScript,
   runCommand,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
+import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.ts";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -15,28 +16,13 @@ function installerTempFiles(dir: string) {
   return readdirSync(dir).filter((entry) => entry.startsWith("openclaw-installer-"));
 }
 
-async function listen(server: ReturnType<typeof createServer>) {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Installer proof server did not bind to a TCP port.");
-  }
-  return `http://127.0.0.1:${address.port}`;
-}
-
-async function close(server: ReturnType<typeof createServer>) {
-  server.closeAllConnections();
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-}
-
-function installer(baseUrl: string, route: string, platform: "linux" | "win32") {
+function installer(baseUrl: string, route: string) {
   return buildInstallerSmokeScript(
-    { installerUrl: `${baseUrl}/${route}`, installTarget: "proof-target", platform },
+    {
+      installerUrl: `${baseUrl}/${route}`,
+      installTarget: "proof-target",
+      platform: windows ? "win32" : "linux",
+    },
     { connectTimeoutSeconds: 2, requestTimeoutSeconds: 1 },
   );
 }
@@ -82,7 +68,7 @@ it("buffers installers before execution and cleans up timed-out downloads", asyn
   });
 
   try {
-    const baseUrl = await listen(server);
+    const baseUrl = await listenLoopback(server);
     const env = {
       ...process.env,
       ...(windows
@@ -93,36 +79,22 @@ it("buffers installers before execution and cleans up timed-out downloads", asyn
             OPENCLAW_PROOF_STALL_MARKER: stalledMarker,
           }),
     };
-    if (!windows) {
-      const healthy = await runShell(
-        installer(baseUrl, "healthy", "linux"),
-        dir,
-        env,
-        join(dir, "healthy.log"),
-      );
-      expect(healthy.exitCode).toBe(0);
-      expect(readFileSync(healthyMarker, "utf8")).toBe("--version|proof-target|--no-onboard");
-      expect(installerTempFiles(dir)).toEqual([]);
-    }
+    const scripts = [installer(baseUrl, "healthy"), installer(baseUrl, "stalled")];
     const result = await runShell(
       windows
-        ? [
-            "[Console]::Out.WriteLine('OPENCLAW_INSTALLER_PROOF:started ' + [DateTime]::UtcNow.ToString('O'))",
-            installer(baseUrl, "healthy", "win32"),
-            "if (-not $?) { throw 'Healthy installer command failed' }",
-            "[Console]::Out.WriteLine('OPENCLAW_INSTALLER_PROOF:healthy-complete ' + [DateTime]::UtcNow.ToString('O'))",
-            installer(baseUrl, "stalled", "win32"),
-          ].join("\n")
-        : installer(baseUrl, "stalled", "linux"),
+        ? scripts.join("\nif (-not $?) { throw 'Healthy installer command failed' }\n")
+        : // Each POSIX installer owns an EXIT trap; subshells keep their cleanup separate.
+          ["set -e", ...scripts.map((script) => `(\n${script}\n)`)].join("\n"),
       dir,
       env,
       logPath,
     );
 
+    expect(readFileSync(healthyMarker, "utf8")).toBe(
+      windows ? "tag=proof-target noOnboard=True" : "--version|proof-target|--no-onboard",
+    );
+    expect(requests).toEqual(["/healthy", "/stalled"]);
     if (windows) {
-      expect(result.stdout, result.stderr).toContain("OPENCLAW_INSTALLER_PROOF:healthy-complete ");
-      expect(readFileSync(healthyMarker, "utf8")).toBe("tag=proof-target noOnboard=True");
-      expect(requests).toEqual(["/healthy", "/stalled"]);
       expect(result.exitCode).not.toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).toContain("exit 28");
     } else {
@@ -132,6 +104,6 @@ it("buffers installers before execution and cleans up timed-out downloads", asyn
     // Each installer uses a distinct GUID, so the final inventory covers both cleanups.
     expect(installerTempFiles(dir)).toEqual([]);
   } finally {
-    await close(server);
+    await closeHttpServer(server);
   }
 }, 15_000);

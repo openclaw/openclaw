@@ -22,7 +22,6 @@ import {
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { OutboundHandoffRejectedError } from "../../infra/outbound/deliver-handoff.js";
 import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
-import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -46,6 +45,7 @@ import { captureAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
 import type { StreamFn } from "../runtime/index.js";
 import { AuthStorage } from "../sessions/auth-storage.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
+import { createQueuedAssistantStream } from "../test-helpers/assistant-event-stream.test-support.js";
 import {
   buildEmbeddedRunnerAssistant,
   createEmbeddedAgentRunnerOpenAiConfig,
@@ -468,12 +468,9 @@ describe("ordinary source reply across deferred plugin refresh", () => {
             : [{ type: "text", text: "The result." }],
           stopReason: call ? "toolUse" : "stop",
         });
-        const stream = createAssistantMessageEventStream();
-        queueMicrotask(() => {
-          stream.push({ type: "done", reason: call ? "toolUse" : "stop", message });
-          stream.end();
+        return createQueuedAssistantStream((push) => {
+          push({ type: "done", reason: call ? "toolUse" : "stop", message });
         });
-        return stream;
       });
 
       const abort = new AbortController();

@@ -65,41 +65,98 @@ async function openChat(page: Page, gateway: Awaited<ReturnType<typeof installMo
 }
 
 suite.define(() => {
-  it("downloads a populated conversation as Markdown without sending a chat request", async () => {
-    await withPage(async ({ page }) => {
-      const question = "What can you export?";
-      const answer = "A readable conversation.";
-      const gateway = await installMockGateway(page, {
-        historyMessages: [
-          { role: "user", content: question },
-          { role: "assistant", content: answer },
-        ],
+  it.each(["/export-session", "/export"])(
+    "shows an empty export result and retains staged attachments for %s",
+    async (command) => {
+      await withPage(async ({ page }) => {
+        const gateway = await installMockGateway(page, { historyMessages: [] });
+        const downloads: string[] = [];
+        page.on("download", (download) => downloads.push(download.suggestedFilename()));
+
+        const composer = await openChat(page, gateway);
+        await page.locator(".agent-chat__file-input").setInputFiles({
+          name: "export-proof.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("keep this staged"),
+        });
+        const attachment = page.locator(".chat-attachment-file__name", {
+          hasText: "export-proof.txt",
+        });
+        await attachment.waitFor({ state: "visible" });
+
+        await composer.fill(command);
+        await page.getByRole("button", { name: "Send message" }).click();
+
+        await page
+          .locator(".chat-thread-inner")
+          .getByText("There are no messages to export yet.", { exact: true })
+          .waitFor({ state: "visible" });
+        await expect.poll(() => composer.inputValue()).toBe("");
+        expect(await attachment.isVisible()).toBe(true);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        expect(downloads).toEqual([]);
       });
+    },
+  );
 
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      await page.locator(".chat-thread-inner").getByText(answer, { exact: true }).waitFor({
-        state: "visible",
+  it.each(["/export", "/export-session"])(
+    "downloads the complete conversation without scrolling for %s",
+    async (command) => {
+      await withPage(async ({ page }) => {
+        const messages = Array.from({ length: 160 }, (_, index) => ({
+          __openclaw: { seq: index + 1 },
+          role: index % 2 ? "assistant" : "user",
+          content: `Export marker ${index + 1} ${"Synthetic detail. ".repeat(15)}`,
+        }));
+        const history = (rows: unknown[], hasMore: boolean, nextOffset?: number) => ({
+          messages: rows,
+          hasMore,
+          nextOffset,
+          totalMessages: messages.length,
+          sessionId: "export-pagination",
+          deltaCursor: "stable-export-cursor",
+        });
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "chat.startup": history(messages.slice(80), true, 80),
+            "chat.history": {
+              cases: [
+                { match: { offset: 0, limit: 1 }, response: history(messages.slice(-1), true, 1) },
+                { match: { offset: 0 }, response: history(messages.slice(80), true, 80) },
+                { match: { offset: 80 }, response: history(messages.slice(0, 80), false) },
+              ],
+            },
+          },
+        });
+        const composer = await openChat(page, gateway);
+        await page
+          .locator(".chat-thread-inner")
+          .getByText("Export marker 160", { exact: false })
+          .waitFor();
+        const firstMessage = messages[0];
+        assert(firstMessage, "paginated export fixture needs an earliest message");
+        expect(await page.getByText(firstMessage.content, { exact: true }).count()).toBe(0);
+        expect(await gateway.getRequests("chat.history")).toHaveLength(0);
+
+        await composer.fill(command);
+        const pending = page.waitForEvent("download");
+        await page.getByRole("button", { name: "Send message" }).click();
+        const download = await pending;
+        expect(download.suggestedFilename()).toMatch(/^chat-OpenClaw-.+\.md$/);
+        const stream = await download.createReadStream();
+        assert(stream, "chat export did not provide a readable download");
+        const markdown = await text(stream);
+        expect(markdown.match(/Export marker \d+ /g)).toHaveLength(160);
+        let previous = -1;
+        for (let index = 1; index <= 160; index += 1) {
+          const position = markdown.indexOf(`Export marker ${index} `);
+          expect(position).toBeGreaterThan(previous);
+          previous = position;
+        }
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       });
-
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("/export");
-      const downloadPromise = page.waitForEvent("download");
-      await page.getByRole("button", { name: "Send message" }).click();
-      const download = await downloadPromise;
-
-      expect(download.suggestedFilename()).toMatch(/^chat-OpenClaw-.+\.md$/);
-      const stream = await download.createReadStream();
-      assert(stream, "chat export did not provide a readable download");
-      const markdown = await text(stream);
-      expect(markdown).toContain("# Chat with OpenClaw");
-      expect(markdown).toContain("## Message");
-      expect(markdown).toContain(question);
-      expect(markdown).toContain("## OpenClaw");
-      expect(markdown).toContain(answer);
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-    });
-  });
+    },
+  );
 
   it.each(["Enter", "Tab", "pointer"])(
     "shows the first argument after selecting from a scrolled command menu with %s",

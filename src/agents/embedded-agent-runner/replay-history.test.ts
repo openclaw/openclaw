@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { convertMessages } from "../../../packages/ai/src/openai-completions-messages.js";
 import { transformMessages } from "../../../packages/ai/src/transcript-transform.js";
 import { resolveOpenAICompletionsCompat } from "../../../packages/ai/src/transports/openai-completions-compat.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-openclaw-assistant.js";
@@ -93,16 +94,6 @@ function hiddenAssistant(
     }),
   });
 }
-function toolResult(tool: { id: string; name: string }, timestamp: number): AgentMessage {
-  return {
-    role: "toolResult",
-    toolCallId: tool.id,
-    toolName: tool.name,
-    content: [textBlock("file contents")],
-    isError: false,
-    timestamp,
-  };
-}
 function completionsModel() {
   return makeProviderModelFixture<"openai-completions">({
     id: "test-model",
@@ -156,7 +147,7 @@ describe("normalizeAssistantReplayContent", () => {
     const messages: AgentMessage[] = [
       user("Read the file internally."),
       hiddenCall,
-      toolResult(toolCall, 1),
+      makeTextToolResult(toolCall.id, toolCall.name, "file contents", false, 1),
       hiddenAnswer,
       user("What did the file contain?"),
     ];
@@ -201,7 +192,10 @@ describe("normalizeAssistantReplayContent", () => {
         stopReason,
         timestamp: 1,
       };
-      const messages: AgentMessage[] = [source, toolResult(completed, 2)];
+      const messages: AgentMessage[] = [
+        source,
+        makeTextToolResult(completed.id, completed.name, "file contents", false, 2),
+      ];
       const normalized = normalize(messages);
       const replay = transformMessages(providerMessages(normalized), model);
       expect(replay).toHaveLength(2);

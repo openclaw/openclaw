@@ -76,15 +76,7 @@ describe("tool name allowlists", () => {
     const allowlist = toSessionToolAllowlist(
       collectAllowedToolNames({
         tools: [createStubTool("exec"), createStubTool("read"), createStubTool("exec")],
-        clientTools: [
-          {
-            type: "function",
-            function: {
-              name: "image_generate",
-              parameters: { type: "object", properties: {} },
-            },
-          },
-        ],
+        clientTools: [clientTool("image_generate")],
       }),
     );
 

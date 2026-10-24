@@ -172,6 +172,7 @@ openclaw-image-lightbox {
   }
 
   .slide {
+    position: relative;
     container-type: size;
     width: 100%;
     height: 100%;

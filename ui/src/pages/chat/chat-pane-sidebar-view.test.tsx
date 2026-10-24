@@ -4,6 +4,7 @@ import { createSignal, Show } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../lib/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createNoopSidebarRegionCallbacks } from "../../test-helpers/sidebar-region-callbacks.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ChatMobileHost } from "./chat-mobile-host.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
@@ -37,16 +38,7 @@ it("releases each mobile details mount when its host is replaced or removed", ()
       mobileHost={mobileHost()}
       layout={{ columns: [] }}
       panelDefinitions={sidebarPanelDefinitions()}
-      callbacks={{
-        activatePanel() {},
-        togglePanelExpanded() {},
-        setDock() {},
-        closeSlot() {},
-        openSlot() {},
-        reorderPanel() {},
-        resizePanel() {},
-        setOpen() {},
-      }}
+      callbacks={createNoopSidebarRegionCallbacks()}
     />
   ));
   flush();
@@ -85,16 +77,7 @@ it("retains loading panel contents when fitting a new layout snapshot", () => {
         panelIdPrefix="chat-panel-loading-layout"
         availableWidth={width()}
         narrow={false}
-        callbacks={{
-          activatePanel() {},
-          togglePanelExpanded() {},
-          setDock() {},
-          closeSlot() {},
-          openSlot() {},
-          reorderPanel() {},
-          resizePanel() {},
-          setOpen() {},
-        }}
+        callbacks={createNoopSidebarRegionCallbacks()}
         layout={fitSidebarLayout(layout, width())!}
         panelDefinitions={sidebarPanelDefinitions()}
       />
@@ -130,16 +113,7 @@ it("retains the primary input and the region-owned outlet while changing the lay
         panelIdPrefix="chat-panel-native-layout"
         availableWidth={1400}
         narrow={false}
-        callbacks={{
-          activatePanel() {},
-          togglePanelExpanded() {},
-          setDock() {},
-          closeSlot() {},
-          openSlot() {},
-          reorderPanel() {},
-          resizePanel() {},
-          setOpen() {},
-        }}
+        callbacks={createNoopSidebarRegionCallbacks()}
         layout={setSidebarOpen(layout, open())}
         panelDefinitions={sidebarPanelDefinitions()}
         primary={primary}
@@ -206,16 +180,7 @@ it("releases region refs when the panel column or its containing view unmounts",
         narrow={false}
         layout={pending() ? { columns: [] } : openSlot({ columns: [] }, "workspace")}
         panelDefinitions={sidebarPanelDefinitions()}
-        callbacks={{
-          activatePanel() {},
-          togglePanelExpanded() {},
-          setDock() {},
-          closeSlot() {},
-          openSlot() {},
-          reorderPanel() {},
-          resizePanel() {},
-          setOpen() {},
-        }}
+        callbacks={createNoopSidebarRegionCallbacks()}
         onRegionElementRef={(element) => {
           regionElement = element;
           return () => {

@@ -35,6 +35,7 @@ import {
 } from "./manager-embedding-cache-ops.js";
 import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
+  embedMemoryQuery,
   runMemoryEmbeddingBatchTimeoutRetry,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
@@ -384,9 +385,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         message: `memory embedding probe timed out after ${Math.round(timeoutMs / 1000)}s`,
         deadlineControl,
         run: (signal) =>
-          provider.embed(formatEmbeddingModelInput("ping", provider.model, "query"), {
+          embedMemoryQuery(provider, "ping", this.settings.queryInstruction, {
             signal,
-            inputType: "query",
             [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl,
           }),
       });
@@ -423,9 +423,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
             signal,
             deadlineControl,
             run: async (opSignal) =>
-              await provider.embed(formatEmbeddingModelInput(text, provider.model, "query"), {
+              await embedMemoryQuery(provider, text, this.settings.queryInstruction, {
                 signal: opSignal,
-                inputType: "query",
                 ...(deadlineControl ? { [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl } : {}),
               }),
           });

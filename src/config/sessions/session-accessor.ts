@@ -48,7 +48,6 @@ export type {
   SessionAbortTargetIdentity,
   SessionAbortTargetResult,
   SessionAccessScope,
-  SessionArchivedTranscriptCleanupRule,
   SessionMessageCutMutationParams,
   SessionMessageCutMutationResult,
   SessionBranchListParams,

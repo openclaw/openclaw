@@ -1,5 +1,6 @@
 import http from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 
 export type SignalRpcEnvelope = {
   id?: string | number;
@@ -51,15 +52,8 @@ export async function listenSignalServer(
   server: http.Server,
   kind: TransportKind = "external-native",
 ) {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected a TCP listener");
-  }
-  return signalAccountConfig(kind, `http://127.0.0.1:${address.port}`);
+  const port = await listenOnLoopback(server);
+  return signalAccountConfig(kind, `http://127.0.0.1:${port}`);
 }
 
 export function closeSignalServer(server: http.Server) {

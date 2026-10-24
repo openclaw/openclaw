@@ -5,18 +5,6 @@ import { resolveStandaloneNpmCliPath } from "../../cli-invocation.mjs";
 
 const require = createRequire(import.meta.url);
 
-class BundledNpmCliNotFoundError extends Error {
-  readonly code = "BUNDLED_NPM_CLI_NOT_FOUND";
-
-  constructor(cliPath: string, cause?: unknown) {
-    super(
-      `Bundled npm CLI is missing: ${cliPath}. Reinstall OpenClaw to restore npm/bin/npm-cli.js.`,
-      { cause },
-    );
-    this.name = "BundledNpmCliNotFoundError";
-  }
-}
-
 /** Runs the packaged npm CLI with the current JavaScript runtime. */
 export function resolveBundledNpmCommand(args: readonly string[]): [string, string, ...string[]] {
   let cliPath = "npm/bin/npm-cli.js";
@@ -28,7 +16,13 @@ export function resolveBundledNpmCommand(args: readonly string[]): [string, stri
       throw new Error("Not a regular file");
     }
   } catch (cause) {
-    throw new BundledNpmCliNotFoundError(cliPath, cause);
+    throw Object.assign(
+      new Error(
+        `Bundled npm CLI is missing: ${cliPath}. Reinstall OpenClaw to restore npm/bin/npm-cli.js.`,
+        { cause },
+      ),
+      { code: "BUNDLED_NPM_CLI_NOT_FOUND", name: "BundledNpmCliNotFoundError" },
+    );
   }
   return [process.execPath, cliPath, ...args];
 }

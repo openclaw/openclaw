@@ -22,6 +22,7 @@ import {
   createGoalChatStartRequest,
   readGoalChatUserMessages,
 } from "./server.chat-goal.test-support.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { result as workerCommandResult } from "./worker-environments/bootstrap.test-support.js";
@@ -240,12 +241,7 @@ export function registerWorkerGoalChatCases(
       const profile = ensureProfileForEmail("worker-goal@example.test");
       const operator = {
         ...client,
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
+        authenticatedUserProfile: gatewayProfile(profile.id),
         internal: {
           authenticatedControlUi: true,
           authenticatedOperator: true,

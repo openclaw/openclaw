@@ -4,7 +4,7 @@ import { page, userEvent } from "vitest/browser";
 import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { focusChatComposerFromPrintableKeydown } from "../chat-pane-shared.ts";
+import { focusChatComposerFromKeydown } from "../chat-pane-shared.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
 import { focusComposerFromChrome } from "./chat-composer-dom.ts";
@@ -54,7 +54,7 @@ function mountPicker(optionsReady = true) {
           class="agent-chat__input"
           onPointerDown={(event) => focusComposerFromChrome(event, true, composer)}
           onClick={(event) => focusComposerFromChrome(event, true, composer)}
-          onKeyDown={(event) => focusChatComposerFromPrintableKeydown(container, event, composer)}
+          onKeyDown={(event) => focusChatComposerFromKeydown(container, event, composer)}
         >
           <div class="agent-chat__composer-combobox">
             <textarea ref={(element) => (composer = element)} />

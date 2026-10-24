@@ -30,6 +30,7 @@ import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts
 import { createResolvedModelPatch } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient as clientWithRequest } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -317,19 +318,15 @@ function deviceSessionRow(
   return row(key, {
     ...overrides,
     updatedAt: 10,
-    placement: {
-      state: "active",
+    placement: createActiveSessionPlacement({
       generation: 4,
-      createdAtMs: 1,
       updatedAtMs: 2,
       stateChangedAtMs: 2,
       environmentId: "environment-device",
       activeOwnerEpoch: 7,
-      workerBundleHash: "a".repeat(64),
       workspaceBaseManifestRef: "manifest-device",
-      remoteWorkspaceDir: "/workspace",
       runner: { kind: "device", status },
-    },
+    }),
   });
 }
 

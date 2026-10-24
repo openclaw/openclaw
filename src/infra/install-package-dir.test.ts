@@ -8,6 +8,7 @@ import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { expectedNpmCommand } from "../test-utils/npm-command.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
   copyPackageDirInstallTransactionRequest,
   installPackageDir,
@@ -21,14 +22,7 @@ import {
   updateOptions,
 } from "./install-package-dir.test-support.js";
 
-const npmSuccess: SpawnResult = {
-  stdout: "",
-  stderr: "",
-  code: 0,
-  signal: null,
-  killed: false,
-  termination: "exit",
-};
+const npmSuccess: SpawnResult = createCommandResult();
 
 vi.mock("../process/exec.js", async () => {
   const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");

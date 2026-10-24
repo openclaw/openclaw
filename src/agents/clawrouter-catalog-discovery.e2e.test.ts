@@ -17,6 +17,7 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "./auth-profiles/credential-fixtures.test-support.js";
+import { catalogProvider } from "./clawrouter-catalog.test-support.js";
 import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "./code-mode-runtime.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
@@ -288,23 +289,12 @@ describe("ClawRouter cold prepared catalog", () => {
   });
 
   it("publishes native Code Mode and sampling facts on routed rows without enabling those plugins", async () => {
-    const routedProvider = (id: string, upstreams: string[], capabilities: string[]) => ({
-      id,
-      displayName: id,
-      openaiCompatible: id === "openai",
-      nativeBaseUrl: `/v1/native/${id}`,
-      routes:
-        id === "anthropic"
-          ? [{ path: "/v1/messages", requestFormat: "anthropic.messages", methods: ["POST"] }]
-          : [],
-      models: upstreams.map((upstream) => ({ id: `${id}/${upstream}`, upstream, capabilities })),
-    });
     const { agentId, config, pluginMetadataSnapshot, result } = await publishCatalog({
       sibling: false,
       refreshedAuth: false,
       catalogProviders: [
-        routedProvider("openai", ["gpt-6.1-sol", "gpt-6-unknown"], ["llm.responses"]),
-        routedProvider("anthropic", ["claude-opus-5-5", "claude-haiku-4-5"], ["llm.messages"]),
+        catalogProvider("openai", ["gpt-6.1-sol", "gpt-6-unknown"], ["llm.responses"]),
+        catalogProvider("anthropic", ["claude-opus-5-5", "claude-haiku-4-5"], ["llm.messages"]),
       ],
     });
     // Only ClawRouter is enabled: the native rows are manifest facts, not activated plugins.

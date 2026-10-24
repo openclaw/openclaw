@@ -10,6 +10,7 @@ import { createAgentCapability } from "../lib/agents/index.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
 import { invalidateCronCatalog } from "../lib/cron/catalog.ts";
 import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -75,17 +76,15 @@ export function createGateway(
     }
     return request(...args);
   });
-  const { gateway, publish, publishEvent } = createApplicationGateway({
-    client,
-    phase: connected ? "connected" : "reconnecting",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: options.methods ? ({ features: { methods: options.methods } } as never) : null,
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  });
+  const { gateway, publish, publishEvent } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client,
+      phase: connected ? "connected" : "reconnecting",
+      hello: options.methods ? ({ features: { methods: options.methods } } as never) : null,
+      assistantAgentId: "main",
+      sessionKey: "main",
+    }),
+  );
   Object.assign(gateway, {
     connection: { gatewayUrl: "ws://localhost", token: "", bootstrapToken: "", password: "" },
     setSessionKey: () => undefined,

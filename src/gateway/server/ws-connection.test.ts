@@ -250,11 +250,9 @@ it("counts accepted event bytes per socket with bounded names and live operator 
       String(frame).includes('"event":"tick"'),
     )![0];
     const lastFrame = first.socket.send.mock.lastCall![0];
-    const firstBytes =
-      typeof firstFrame === "string" ? Buffer.byteLength(firstFrame) : firstFrame.byteLength;
-    const lastBytes =
-      typeof lastFrame === "string" ? Buffer.byteLength(lastFrame) : lastFrame.byteLength;
-    expect(events[0]!.bytes).toBe(2 * firstBytes + lastBytes);
+    const byteLength = (frame: typeof firstFrame) =>
+      typeof frame === "string" ? Buffer.byteLength(frame) : frame.byteLength;
+    expect(events[0]!.bytes).toBe(2 * byteLength(firstFrame) + byteLength(lastFrame));
     expect(JSON.stringify(events)).not.toMatch(/private-dynamic-name|private-content|connId/);
     expect(operatorCounts()).toEqual([2]);
     observations.length = 0;
@@ -548,19 +546,14 @@ it.each([false, true])(
     broadcast("tick", { value: 3 });
     expect([...liveClients][0]!.socket.bufferedAmount).toBeGreaterThan(0);
     await complete.promise;
-    expect(received).toEqual([
-      { type: "event", event: "tick", payload: { value: 1 }, seq: 1 },
-      { type: "event", event: "tick", payload: { value: 2 }, seq: 2 },
-      { type: "res", id: "between", ok: true },
-      { type: "event", event: "tick", payload: { value: 3 }, seq: 3 },
-    ]);
-    const wire = Buffer.concat(writes.mock.calls.map(([chunk]) => Buffer.from(chunk)));
     const expected = [
       '{"type":"event","event":"tick","payload":{"value":1},"seq":1}',
       '{"type":"event","event":"tick","payload":{"value":2},"seq":2}',
       '{"type":"res","id":"between","ok":true}',
       '{"type":"event","event":"tick","payload":{"value":3},"seq":3}',
     ];
+    expect(received).toEqual(expected.map((json) => JSON.parse(json)));
+    const wire = Buffer.concat(writes.mock.calls.map(([chunk]) => Buffer.from(chunk)));
     expect(wire).toEqual(
       Buffer.concat(
         expected.flatMap((json) => [Buffer.from([0x81, json.length]), Buffer.from(json)]),
@@ -601,60 +594,87 @@ it.each(["closing", "failed-send"] as const)("retires both peers after %s", asyn
   await vi.waitFor(() => expect(peer.readyState).toBe(Ws.WebSocket.CLOSED));
 });
 
-it("keeps a closing node discoverable throughout pending lifecycle dispatch and fanout", async () => {
-  const unregister = vi.fn(() => "draining-node");
-  const get = vi.fn(() => undefined);
+it.each(["current", "stale", "draining"] as const)("retires %s nodes safely", async (state) => {
+  const draining = state === "draining";
+  const stale = state === "stale";
+  const unregister = vi.fn(() => (stale ? null : "node-1"));
+  const get = vi.fn();
+  const publishPresence = vi.fn();
   const handler = await connectWs({
-    clients,
-    socket,
     options: {
+      refreshHealthSnapshot: vi.fn(),
       buildRequestContext: () =>
-        makeContext({ nodeRegistry: { get, unregister } as never }) as never,
+        makeContext({ nodeRegistry: { get, unregister } as never, publishPresence }) as never,
     },
   });
-
-  const nodeClient = makeClient(socket, handler.connId, {
-    connect: { ...nodeConnect, minProtocol: 1, maxProtocol: 1, device: device("draining-device") },
+  if (state === "current") {
+    get.mockReturnValue({
+      nodeId: "node-1",
+      connId: handler.connId,
+      connectedAtMs: 1_000,
+      pairingGeneration: "generation-1",
+    });
+  }
+  const nodeClient = registerClient(handler, socket, {
+    connId: stale ? "conn-old" : handler.connId,
+    connect: {
+      ...nodeConnect,
+      ...(draining ? { minProtocol: 1, maxProtocol: 1 } : {}),
+      device: device("node-1"),
+    },
+    ...(!draining ? { presenceKey: "node-1" } : {}),
   });
-  expect(handler.setClient(nodeClient)).toBe(true);
   expect(nodeClient.connectionSignal?.aborted).toBe(false);
   const subscriptionEnded = vi.fn();
   nodeClient.connectionSignal?.addEventListener("abort", subscriptionEnded);
   const healthySocket = makeSocket();
-  clients.add(
-    makeClient(healthySocket, "healthy-during-node-drain", { connect: readableOperator }),
-  );
   const { promise: pending, resolve: releaseDispatch } = createDeferred();
-  const dispatch = handler.nodeLifecycleDispatch.dispatch("node.invoke.result", () => pending);
-  socket.send.mockClear();
-  socket.readyState = Ws.WebSocket.CLOSING;
-
-  expect(handler.send(responseFrame)).toEqual({ kind: "unavailable" });
-  expect(clients.has(nodeClient)).toBe(true);
-  expect(nodeClient.connectionSignal?.aborted).toBe(true);
-  expect(subscriptionEnded).toHaveBeenCalledOnce();
+  const dispatch = draining
+    ? handler.nodeLifecycleDispatch.dispatch("node.invoke.result", () => pending)
+    : undefined;
   const broadcaster = createBroadcaster({ clients });
-  broadcaster.broadcast("tick", { source: "before-node-close" });
-
-  socket.emit("close", 1000, Buffer.from("node draining"));
-  expect(clients.has(nodeClient)).toBe(true);
-  expect(unregister).not.toHaveBeenCalled();
-
-  broadcaster.broadcast("tick", { source: "during-node-drain" });
-
-  expect(socket.send).not.toHaveBeenCalled();
-  expect(healthySocket.send).toHaveBeenCalledTimes(2);
-  const revocableNode = [...clients].find(
-    (client) => client.connect.device?.id === "draining-device",
-  );
-  expect(revocableNode).toBe(nodeClient);
-  revocableNode!.invalidated = true;
-
+  if (draining) {
+    clients.add(
+      makeClient(healthySocket, "healthy-during-node-drain", { connect: readableOperator }),
+    );
+    socket.send.mockClear();
+    socket.readyState = Ws.WebSocket.CLOSING;
+    expect(handler.send(responseFrame)).toEqual({ kind: "unavailable" });
+    expect(clients.has(nodeClient)).toBe(true);
+    expect(nodeClient.connectionSignal?.aborted).toBe(true);
+    expect(subscriptionEnded).toHaveBeenCalledOnce();
+    broadcaster.broadcast("tick", { source: "before-node-close" });
+  }
+  socket.emit("close", 1000, Buffer.from(state));
+  if (draining) {
+    expect(clients.has(nodeClient)).toBe(true);
+    expect(unregister).not.toHaveBeenCalled();
+    broadcaster.broadcast("tick", { source: "during-node-drain" });
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(healthySocket.send).toHaveBeenCalledTimes(2);
+    const revocableNode = [...clients].find((client) => client.connect.device?.id === "node-1");
+    expect(revocableNode).toBe(nodeClient);
+    revocableNode!.invalidated = true;
+  }
   releaseDispatch();
   await dispatch;
   await vi.waitFor(() => expect(unregister).toHaveBeenCalledOnce());
   expect(clients.has(nodeClient)).toBe(false);
   expect(subscriptionEnded).toHaveBeenCalledOnce();
+  if (stale) {
+    expect(recordDisconnect).not.toHaveBeenCalled();
+    expect(upsertPresence).not.toHaveBeenCalled();
+    expect(publishPresence).not.toHaveBeenCalled();
+  } else if (!draining) {
+    expect(get).toHaveBeenCalledWith("node-1");
+    await vi.waitFor(() => expect(recordDisconnect).toHaveBeenCalledOnce());
+    expect(recordDisconnect).toHaveBeenCalledWith({
+      nodeId: "node-1",
+      connectedAtMs: 1_000,
+      disconnectedAtMs: expect.any(Number),
+      expectedPairingGeneration: { nodeId: "node-1", key: "generation-1" },
+    });
+  }
 });
 
 it("distinguishes serialization failure from unavailable transports", async () => {
@@ -788,45 +808,3 @@ it.each([
     expect(JSON.stringify(logWsControl.info.mock.calls)).not.toContain("private");
   },
 );
-
-it.each([false, true])("records node disconnects unless stale=%s", async (stale) => {
-  const unregister = vi.fn(() => (stale ? null : "node-1"));
-  const get = vi.fn();
-  const publishPresence = vi.fn();
-  const handler = await connectWs({
-    options: {
-      refreshHealthSnapshot: vi.fn(),
-      buildRequestContext: () =>
-        makeContext({ nodeRegistry: { get, unregister } as never, publishPresence }) as never,
-    },
-  });
-  if (!stale) {
-    get.mockReturnValue({
-      nodeId: "node-1",
-      connId: handler.connId,
-      connectedAtMs: 1_000,
-      pairingGeneration: "generation-1",
-    });
-  }
-  registerClient(handler, socket, {
-    connId: stale ? "conn-old" : handler.connId,
-    connect: { ...nodeConnect, device: device("node-1") },
-    presenceKey: "node-1",
-  });
-  socket.emit("close", 1000, Buffer.from(stale ? "stale" : "done"));
-  await vi.waitFor(() => expect(unregister).toHaveBeenCalledOnce());
-  if (stale) {
-    expect(recordDisconnect).not.toHaveBeenCalled();
-    expect(upsertPresence).not.toHaveBeenCalled();
-    expect(publishPresence).not.toHaveBeenCalled();
-  } else {
-    expect(get).toHaveBeenCalledWith("node-1");
-    await vi.waitFor(() => expect(recordDisconnect).toHaveBeenCalledOnce());
-    expect(recordDisconnect).toHaveBeenCalledWith({
-      nodeId: "node-1",
-      connectedAtMs: 1_000,
-      disconnectedAtMs: expect.any(Number),
-      expectedPairingGeneration: { nodeId: "node-1", key: "generation-1" },
-    });
-  }
-});

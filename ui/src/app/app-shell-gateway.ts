@@ -372,6 +372,7 @@ export class ShellGatewayOwner {
               : {}),
             ...(sessionKey ? { sessionKey } : {}),
             ...(command.dock ? { dock: command.dock } : {}),
+            ...(command.expanded !== undefined ? { expanded: command.expanded } : {}),
             ...(command.panel === "terminal" && command.terminalSessionId
               ? { terminalSessionId: command.terminalSessionId }
               : {}),

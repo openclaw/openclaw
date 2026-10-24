@@ -28,6 +28,7 @@ import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transc
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { disposeSessionReadContexts } from "../session-read-contexts.test-support.js";
 import { dispatchInboundMessageMock, testState, writeSessionStore } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
@@ -41,12 +42,7 @@ export function setClientProfile(
   profile: { id: string; updatedAt: number },
   displayName: string | null = null,
 ) {
-  client.authenticatedUserProfile = {
-    profileId: profile.id,
-    displayName,
-    hasAvatar: false,
-    updatedAt: profile.updatedAt,
-  };
+  client.authenticatedUserProfile = gatewayProfile(profile.id, displayName, profile.updatedAt);
 }
 
 export function setNativeIosClient(client: GatewayClient) {
@@ -224,13 +220,9 @@ export function useBrowserFollowupFixture() {
     });
     const client: GatewayClient = {
       connId: "browser-custody-client",
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "operator",
-        scopes: ["operator.read", "operator.write", "operator.admin"],
-        client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
-      },
+      connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"], {
+        platform: "web",
+      }),
     };
     const params: Static<typeof ChatSendParamsSchema> = {
       sessionKey: scope.sessionKey,

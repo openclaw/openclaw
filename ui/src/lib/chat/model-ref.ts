@@ -40,7 +40,9 @@ function hasCatalogQualifiedValue(catalog: ModelCatalogEntry[], value: string): 
   if (!normalized) {
     return false;
   }
-  return catalog.some((entry) => createQualifiedCatalogKey(entry) === normalized);
+  return catalog.some(
+    (entry) => buildQualifiedChatModelValue(entry.id, entry.provider).toLowerCase() === normalized,
+  );
 }
 
 function resolveUniqueCatalogValueById(model: string, catalog: ModelCatalogEntry[]): string {
@@ -147,14 +149,6 @@ function resolveCatalogDisplayName(entry: ModelCatalogEntry): string {
   return alias.toLowerCase().includes(name.toLowerCase()) ? alias : `${name} · ${alias}`;
 }
 
-function createQualifiedCatalogKey(entry: ModelCatalogEntry): string {
-  return buildQualifiedChatModelValue(entry.id, entry.provider).toLowerCase();
-}
-
-function createNameProviderKey(name: string, provider?: string | null): string {
-  return `${name.toLowerCase()}\u0000${provider?.trim().toLowerCase() ?? ""}`;
-}
-
 type ChatModelDisplayLookup = ReadonlyMap<string, string>;
 
 export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<string, string> {
@@ -169,7 +163,7 @@ export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<str
         buildQualifiedChatModelValue(entry.id, entry.provider),
       ),
       nameKey: name.toLowerCase(),
-      providerKey: createNameProviderKey(name, entry.provider),
+      providerKey: `${name.toLowerCase()}\u0000${entry.provider?.trim().toLowerCase() ?? ""}`,
     };
   });
 

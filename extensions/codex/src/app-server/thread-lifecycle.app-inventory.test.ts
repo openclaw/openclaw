@@ -15,6 +15,8 @@ import type { CodexPluginConfig } from "./config.js";
 import {
   appInfo,
   appSummary,
+  codexPluginConfig,
+  curatedPlugin,
   pluginDetail,
   pluginInstalled,
   pluginSummary,
@@ -36,19 +38,11 @@ import {
 describe("Codex app inventory across physical process restart", () => {
   const appId = "calendar-app";
   const pluginName = "calendar";
-  const pluginConfig = {
-    codexPlugins: {
-      enabled: true,
-      plugins: {
-        calendar: {
-          marketplaceName: "openai-curated",
-          pluginName,
-          enabled: true,
-          allow_destructive_actions: false,
-        },
-      },
+  const pluginConfig = codexPluginConfig({
+    plugins: {
+      calendar: curatedPlugin(pluginName, { enabled: true, allow_destructive_actions: false }),
     },
-  };
+  });
   const authority: NonNullable<EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]> = {
     version: 1,
     runtimeId: "codex",
@@ -524,12 +518,9 @@ describe("Codex app inventory across physical process restart", () => {
   );
 
   it("preserves excluded native app denials on non-ask warm continuation", async () => {
-    const f = await continuation(
-      false,
-      "warm",
-      { codexPlugins: { enabled: true, allow_all_plugins: true } },
-      { excluded: { enabled: true } },
-    );
+    const f = await continuation(false, "warm", codexPluginConfig({ allow_all_plugins: true }), {
+      excluded: { enabled: true },
+    });
     const boundary = f.calls.length;
     const second = await f.process.run();
     expect(second.threadId).toBe(f.first.threadId);
@@ -546,13 +537,11 @@ describe("Codex app inventory across physical process restart", () => {
   it.each(["cold", "warm"])(
     "reconfigures the %s thread when native ask override keys change",
     async (lifecycle) => {
-      const f = await continuation(false, lifecycle, {
-        codexPlugins: {
-          enabled: true,
-          allow_all_plugins: true,
-          allow_destructive_actions: "ask",
-        },
-      });
+      const f = await continuation(
+        false,
+        lifecycle,
+        codexPluginConfig({ allow_all_plugins: true, allow_destructive_actions: "ask" }),
+      );
       expect(f.first.pluginAppPolicyContext?.apps[appId]).toMatchObject({
         source: "account",
         destructiveApprovalMode: "ask",
@@ -613,13 +602,11 @@ describe("Codex app inventory across physical process restart", () => {
   ])(
     "contains $lifecycle ask inventory timeouts, scheduled=$scheduled",
     async ({ lifecycle, scheduled }) => {
-      const f = await continuation(scheduled, lifecycle, {
-        codexPlugins: {
-          enabled: true,
-          allow_all_plugins: true,
-          allow_destructive_actions: "ask",
-        },
-      });
+      const f = await continuation(
+        scheduled,
+        lifecycle,
+        codexPluginConfig({ allow_all_plugins: true, allow_destructive_actions: "ask" }),
+      );
       const binding = f.readBinding();
       const release = createDeferred<void>();
       f.process.faults.beforeInventory = () => release.promise;

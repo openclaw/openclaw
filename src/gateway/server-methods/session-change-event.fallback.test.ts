@@ -19,6 +19,7 @@ import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import type { SerializedGatewayFrame } from "../serialized-json.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createGatewayConnectionState } from "../server-connection-state.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
@@ -117,13 +118,7 @@ it.each(["ready", "preparation"] as const)(
       const recipient = {
         connId: "conn-1",
         usesSharedGatewayAuth: false,
-        connect: {
-          minProtocol: 4,
-          maxProtocol: 4,
-          client: { id: "test", mode: "test", version: "1", platform: "test" },
-          role: "operator",
-          scopes: ["operator.admin"],
-        },
+        connect: gatewayConnect(["operator.admin"], { id: "test", mode: "test", version: "1" }, 4),
         socket: {
           readyState: 1,
           bufferedAmount: 0,

@@ -33,16 +33,24 @@ private final class RuntimeTestAudioCapture: RealtimeTalkAudioCapturing {
 private actor RuntimeTestRelayRequestLog {
     private var methods: [String] = []
     private var sessionIds: [String?] = []
+    private var closeDispositions: [String?] = []
     private nonisolated let changed = AsyncTestSignal()
 
     func record(method: String, params: [String: AnyCodable]?) {
         self.methods.append(method)
         self.sessionIds.append(params?["sessionId"]?.stringValue)
+        if method == "talk.session.close" {
+            self.closeDispositions.append(params?["disposition"]?.stringValue)
+        }
         self.changed.notify()
     }
 
     func snapshot() -> (methods: [String], sessionIds: [String?]) {
         (self.methods, self.sessionIds)
+    }
+
+    func closeDispositionSnapshot() -> [String?] {
+        self.closeDispositions
     }
 
     func waitForCount(_ count: Int, sourceLocation: SourceLocation = #_sourceLocation) async throws {
@@ -57,7 +65,8 @@ private actor RuntimeTestRelayRequestLog {
 @MainActor
 private func makeRecordingRelaySession(
     requests: RuntimeTestRelayRequestLog,
-    audioCapture: RuntimeTestAudioCapture) -> RealtimeTalkRelaySession
+    audioCapture: RuntimeTestAudioCapture,
+    supportsCloseDisposition: Bool = false) -> RealtimeTalkRelaySession
 {
     let session = RealtimeTalkRelaySession(
         transport: RealtimeTalkRelayTransport(
@@ -65,7 +74,8 @@ private func makeRecordingRelaySession(
             request: { method, params, _ in
                 await requests.record(method: method, params: params)
                 return Data("{\"ok\":true}".utf8)
-            }),
+            },
+            supportsCloseDisposition: { supportsCloseDisposition }),
         options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
         audioCapture: audioCapture,
         pcmPlayer: RuntimeTestPCMPlayer(),
@@ -456,7 +466,10 @@ struct TalkModeRuntimeSpeechTests {
                     return recoveryCapture
                 }))
             let audioCapture = RuntimeTestAudioCapture()
-            let session = makeRecordingRelaySession(requests: requests, audioCapture: audioCapture)
+            let session = makeRecordingRelaySession(
+                requests: requests,
+                audioCapture: audioCapture,
+                supportsCloseDisposition: true)
             defer { session.stop() }
             let generation = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
 
@@ -483,6 +496,8 @@ struct TalkModeRuntimeSpeechTests {
                 let recorded = try await waitForRelayClose(requests)
                 #expect(recorded == ["talk.session.close"])
                 #expect(await requests.snapshot().sessionIds == ["relay-1"])
+                // A failed microphone is not an explicit Stop, so accepted agent work continues.
+                #expect(await requests.closeDispositionSnapshot() == ["detach"])
                 recordRecovery("awaiting microphone signal")
                 try await recoveryStarted.wait("replacement realtime microphone")
                 #expect(recoveryCapture.startCount == 1)

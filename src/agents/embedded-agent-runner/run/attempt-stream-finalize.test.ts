@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 
 const mocks = vi.hoisted(() => ({
@@ -35,6 +36,7 @@ import { createSubscribedSessionHarness } from "../../embedded-agent-subscribe.e
 import { SessionManager } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
+import { createSettledStreamResult as settledResult } from "./attempt-stream.test-helpers.js";
 
 type SettledInput = Parameters<typeof runEmbeddedAttemptSettledPhase>[0];
 type SettleMockInput = {
@@ -53,28 +55,6 @@ type FixtureOverrides = {
   sessionManager?: SettledInput["prepared"]["sessionRuntime"]["sessionManager"];
   waitForPendingEvents?: (options?: { includePartialReplies?: boolean }) => Promise<void>;
 };
-
-type SettledStream = Awaited<
-  ReturnType<typeof import("./attempt-stream-settle.js").settleEmbeddedAttemptStream>
->;
-function settledResult(overrides: Partial<SettledStream> = {}): SettledStream {
-  return {
-    promptError: null,
-    promptErrorSource: null,
-    timedOutDuringCompaction: false,
-    compactionOccurredThisAttempt: false,
-    messagesSnapshot: [],
-    sessionIdUsed: "session-1",
-    lastAssistant: undefined,
-    currentAttemptAssistant: undefined,
-    currentAttemptCompletedAssistant: undefined,
-    attemptUsage: undefined,
-    lastCallUsage: undefined,
-    promptCache: undefined,
-    successfulNestedToolNames: [],
-    ...overrides,
-  };
-}
 
 function createFixture(overrides: FixtureOverrides = {}) {
   const order: string[] = [];
@@ -495,10 +475,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
   it("re-drains queued events when the run-budget timeout fires during the abort-aware join", async () => {
     // Timeout during the abort-aware join must re-drain before salvaging the suffix.
     const abortController = new AbortController();
-    let releaseJoin!: () => void;
-    const joinGate = new Promise<void>((resolve) => {
-      releaseJoin = resolve;
-    });
+    const { promise: joinGate, resolve: releaseJoin } = createDeferredCore();
     const fixture = createFixture({
       runAbortController: abortController,
       waitForPendingEvents: vi.fn(async (options) => {

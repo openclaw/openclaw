@@ -25,6 +25,7 @@ import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-clie
 import type { GatewayHostLifecycle, GatewayServer } from "./server-public.js";
 import { createMaintenanceHandles } from "./server-runtime-services.test-harness.js";
 import { expectCoreAgentDatabaseReadiness } from "./server-startup-readiness.test-support.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 function expectCalls(count: number, ...mocks: Array<(...args: never[]) => unknown>) {
@@ -248,24 +249,11 @@ describe("createGatewayKernel", () => {
         expect(getStartup()).toMatchObject({ ok: true, status: "started" });
         expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
         const reader = {
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            client: {
-              id: "openclaw-control-ui",
-              version: "test",
-              platform: "web",
-              mode: "webchat",
-            },
-            role: "operator",
-            scopes: ["operator.read"],
-          },
-          authenticatedUserProfile: {
-            profileId: ensureProfileForEmail("mention-reader@example.test").id,
-            displayName: "Reader",
-            hasAvatar: false,
-            updatedAt: 1,
-          },
+          connect: gatewayConnect(["operator.read"], { platform: "web" }),
+          authenticatedUserProfile: gatewayProfile(
+            ensureProfileForEmail("mention-reader@example.test").id,
+            "Reader",
+          ),
         } satisfies GatewayClient;
         await kernel.gatewayRequestContext.mentionInbox?.listAsync(reader, (result) => {
           expect(result).toMatchObject({

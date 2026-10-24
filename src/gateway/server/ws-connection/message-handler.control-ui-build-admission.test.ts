@@ -92,6 +92,7 @@ vi.mock("../../../version.js", async (importOriginal) => {
 });
 
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { gatewayRequest } from "../../request-frame.test-support.js";
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
 
 // A stale Control UI browser still owns a device identity; the build check is
@@ -242,11 +243,8 @@ describe("Control UI build admission over WebSocket", () => {
         ws.once("close", resolve);
       });
       ws.send(
-        JSON.stringify({
-          type: "req",
-          id: "connect-legacy-build",
-          method: "connect",
-          params: {
+        JSON.stringify(
+          gatewayRequest("connect-legacy-build", "connect", {
             minProtocol: protocol,
             maxProtocol: protocol,
             client: {
@@ -260,8 +258,8 @@ describe("Control UI build admission over WebSocket", () => {
             caps: [],
             auth: { token: "test-token" },
             device,
-          },
-        }),
+          }),
+        ),
       );
 
       const rejection = await response;
@@ -292,14 +290,7 @@ describe("Control UI build admission over WebSocket", () => {
           (rejection.error as { details?: unknown } | undefined)?.details,
         ),
       ).toBe("gateway-build");
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id: "post-rejection-rpc",
-          method: "health",
-          params: {},
-        }),
-      );
+      ws.send(JSON.stringify(gatewayRequest("post-rejection-rpc", "health", {})));
       expect(await withDeadline(closed, "socket close")).toBe(
         protocol === PROTOCOL_VERSION ? 1008 : 1002,
       );

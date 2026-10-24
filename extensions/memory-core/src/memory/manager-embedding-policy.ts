@@ -1,7 +1,9 @@
+import type { EmbeddingProviderCallOptions } from "openclaw/plugin-sdk/embedding-providers";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
+  formatEmbeddingModelInput,
   type EmbeddingInput,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
@@ -9,6 +11,25 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { EmbeddingProvider } from "./embeddings.js";
+
+export function embedMemoryQuery(
+  provider: EmbeddingProvider,
+  text: string,
+  instruction: string | undefined,
+  options: EmbeddingProviderCallOptions,
+): Promise<number[]> {
+  return provider.embed(
+    instruction
+      ? `${instruction}${text}`
+      : formatEmbeddingModelInput(text, provider.model, "query"),
+    {
+      ...options,
+      inputType: "query",
+      ...(instruction ? { queryInstructionApplied: true } : {}),
+    },
+  );
+}
 
 // Retry attempts are host control state. Provider-thrown values stay opaque so
 // they cannot override the counter or break accounting when they are immutable.

@@ -12,6 +12,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const spawn = vi.hoisted(() => vi.fn<ProcessSupervisor["spawn"]>());
@@ -59,16 +60,7 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
       runId: "recorded-spawn",
       startedAtMs: Date.now(),
       cancel: () => {},
-      wait: async () => ({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 0,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
+      wait: async () => createRunExit({ durationMs: 0 }),
     }));
   });
 

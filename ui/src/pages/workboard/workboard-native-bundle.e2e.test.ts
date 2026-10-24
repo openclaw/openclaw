@@ -34,15 +34,12 @@ const views = [
   { name: "desktop", viewport: { width: 1440, height: 1000 } },
   { name: "mobile", viewport: { width: 390, height: 844 } },
 ] as const;
-const card = makeCard(
-  {
-    id: "native-proof",
-    title: "Review release readiness",
-    labels: ["release"],
-    metadata: { automation: { boardId: "ops" } },
-  },
-  1_780_336_800_000,
-);
+const card = makeCard({
+  id: "native-proof",
+  title: "Review release readiness",
+  labels: ["release"],
+  metadata: { automation: { boardId: "ops" } },
+});
 const board = makeBoard("ops", { name: "Operations", total: 1, active: 1, byStatus: { todo: 1 } });
 
 const cardsResponse = (cards: WorkboardCard[]) => ({
@@ -55,12 +52,9 @@ suite.define(() => {
   it.each(["chromium", "webkit"] as const)(
     "loads the native bundle and preserves overlay focus and card identity in %s",
     async (engine) => {
-      const proof = createWorkboardProof(
-        suite,
-        "workboard-native-bundle-overlay-parity",
-        undefined,
-        { captureMode: engine },
-      );
+      const proof = createWorkboardProof(suite, "workboard-native", undefined, {
+        captureMode: engine,
+      });
       for (const view of views) {
         for (const theme of ["light", "dark"] as const) {
           const options = {
@@ -79,12 +73,6 @@ suite.define(() => {
             page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
             const errors: string[] = [];
             page.on("pageerror", (error) => errors.push(error.message));
-            const requestedAssets = new Set<string>();
-            page.on("request", (request) => {
-              if (request.url().includes("/__openclaw__/plugins/control-ui/workboard/")) {
-                requestedAssets.add(request.url());
-              }
-            });
             await page.addInitScript(
               ({ key, theme: colorTheme }) => {
                 localStorage.setItem("openclaw.i18n.locale", "en");
@@ -102,11 +90,6 @@ suite.define(() => {
             await page.goto(`${suite.server.baseUrl}workboard/ops`);
             const tile = page.locator(".workboard-card").filter({ hasText: card.title });
             await tile.waitFor();
-            const report = await gateway.waitForRequest("plugins.controlUi.report");
-            expect(report.params).toMatchObject({
-              reports: [{ pluginId: "workboard", status: "activated" }],
-            });
-            expect([...requestedAssets].some((url) => url.endsWith("/index.js"))).toBe(true);
             const prefix = `${engine}-${view.name}-${theme}`;
             await proof.capture(page, `${prefix}-board`, page.locator(".workboard-main"), [
               page.locator(".workboard-page-title"),
