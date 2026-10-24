@@ -18,6 +18,7 @@ import { copyHookMetadata, listHookMetadataOutputs } from "./copy-hook-metadata.
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import { collectPackageDistImports } from "./lib/package-dist-imports.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   copyStaticExtensionAssets,
@@ -56,6 +57,8 @@ const ROOT = resolveRepoRoot(import.meta.url);
 const UPDATE_COMPATIBILITY_INVENTORY = path.join(ROOT, "scripts/lib/update-compat-inventory.json");
 const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.m?js$/u;
 const ROOT_STABLE_RUNTIME_ALIAS_PATTERN = /^.+\.(?:runtime|contract)\.js$/u;
+const CANONICAL_RUNTIME_ENTRY_HEADER =
+  "// Generated canonical stable runtime entry; do not edit.\n";
 const ROOT_RUNTIME_IMPORT_SPECIFIER_PATTERN =
   /(["'])\.\/([^"']+\.(?:runtime|contract)-[A-Za-z0-9_-]+\.m?js)\1/gu;
 const OFFICIAL_CHANNEL_CATALOG_OUTPUT = "dist/channel-catalog.json";
@@ -132,6 +135,15 @@ function collectStableRootRuntimeAliasCandidates(distDir: string, fsImpl: typeof
     if (!entry.isFile()) {
       continue;
     }
+    if (ROOT_STABLE_RUNTIME_ALIAS_PATTERN.test(entry.name)) {
+      const source = fsImpl.readFileSync(path.join(distDir, entry.name), "utf8");
+      if (source.startsWith(CANONICAL_RUNTIME_ENTRY_HEADER)) {
+        const candidates = candidatesByAlias.get(entry.name) ?? [];
+        candidates.push({ candidate: entry.name, source });
+        candidatesByAlias.set(entry.name, candidates);
+      }
+      continue;
+    }
     const match = entry.name.match(ROOT_RUNTIME_ALIAS_PATTERN);
     if (!match?.groups?.base) {
       continue;
@@ -159,6 +171,11 @@ function collectStableRootRuntimeAliasCandidates(distDir: string, fsImpl: typeof
   return { entries, candidatesByAlias, pluginInstallCandidates };
 }
 
+// Only existing emitted wrapper edges explain a second same-basename candidate.
+function isRuntimeWrapperDependency(source: string, target: string) {
+  return !source.includes("\n//#region ") && source.includes(JSON.stringify(`./${target}`));
+}
+
 function resolveStableRootRuntimeAliasCandidate(
   aliasFileName: string,
   candidates: RuntimeAliasCandidate[],
@@ -168,6 +185,20 @@ function resolveStableRootRuntimeAliasCandidate(
     ({ source }) => !isRuntimeAliasSource(source, aliasFileName),
   );
   const candidateNames = implementationCandidates.map(({ candidate }) => candidate);
+  // A retained postbuild output cannot override a newly emitted implementation.
+  // Normal builds clean dist first; partial re-emission must rebuild.
+  const canonical = implementationCandidates.find(({ candidate }) => candidate === aliasFileName);
+  if (
+    canonical &&
+    !implementationCandidates.every(
+      ({ candidate }) =>
+        candidate === aliasFileName || isRuntimeWrapperDependency(canonical.source, candidate),
+    )
+  ) {
+    throw new Error(
+      `Stable runtime entry collides with emitted chunks: ${aliasFileName}; rebuild dist`,
+    );
+  }
   if (candidateNames.length === 1) {
     return candidateNames[0] ?? null;
   }
@@ -371,6 +402,29 @@ function writeRuntimeDependencyOwnership(
   }
 }
 
+/** Reuse the package closure owner; nested consumers must keep their original module URL. */
+function collectStableRuntimeAliasImporters(rootDir: string, fsImpl: typeof fs) {
+  const files = [
+    ...fsImpl.globSync("dist/**/*.{js,cjs,mjs,json}", {
+      cwd: rootDir,
+      exclude: ["**/node_modules/**"],
+    }),
+  ].filter((file) => /\.(?:cjs|js|mjs)$/u.test(file) || path.basename(file) === "package.json");
+  if (fsImpl.existsSync(path.join(rootDir, "package.json"))) {
+    files.push("package.json");
+  }
+  const importers = new Map<string, Set<string>>();
+  for (const edge of collectPackageDistImports({
+    files,
+    readText: (file: string) => fsImpl.readFileSync(path.join(rootDir, file), "utf8"),
+  })) {
+    const consumers = importers.get(edge.importedPath) ?? new Set<string>();
+    consumers.add(edge.importerPath);
+    importers.set(edge.importedPath, consumers);
+  }
+  return importers;
+}
+
 /**
  * Writes stable aliases for current hashed runtime chunks.
  * @internal Directly tested script implementation detail.
@@ -387,7 +441,16 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
     fsImpl,
   );
 
+  if (candidatesByAlias.size === 0) {
+    return;
+  }
   const ownership = readRuntimeDependencyOwnership(rootDir, fsImpl);
+  const importers = collectStableRuntimeAliasImporters(rootDir, fsImpl);
+  const publishedPaths = new Set(
+    listUpdateCompatibilityChunkPaths(
+      readUpdateCompatibilityInventory(UPDATE_COMPATIBILITY_INVENTORY),
+    ),
+  );
   using parser = createNativeTypeScriptParser({ cwd: rootDir });
   for (const [aliasFileName, candidates] of candidatesByAlias) {
     const aliasPath = path.join(distDir, aliasFileName);
@@ -403,8 +466,38 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
       }
       continue;
     }
-    const source =
-      aliasFileName === "io.runtime.js"
+    const targetSource = fsImpl.readFileSync(path.join(distDir, candidate), "utf8");
+    const owner = ownership?.chunks[candidate];
+    // The header identifies generated output, not permission to rehash changed bytes.
+    // Carry the producer ownership proof through reruns as well as promotion.
+    if (owner && createHash("sha256").update(targetSource).digest("hex") !== owner.sha256) {
+      throw new Error(`runtime dependency ownership no longer matches ${candidate}; rebuild dist`);
+    }
+    if (candidate === aliasFileName) {
+      continue;
+    }
+    const promote =
+      aliasFileName !== "io.runtime.js" &&
+      // The minimal web-search package fixture discovers this entry by prefix.
+      aliasFileName !== "call.runtime.js" &&
+      !ROOT_RUNTIME_STABLE_IMPORT_SKIP_ALIASES.has(aliasFileName) &&
+      !publishedPaths.has(candidate) &&
+      candidates.every(
+        (other) =>
+          other.candidate === candidate ||
+          isRuntimeAliasSource(other.source, aliasFileName) ||
+          isRuntimeWrapperDependency(targetSource, other.candidate),
+      ) &&
+      !targetSource.includes("import.meta") &&
+      !targetSource.includes("sourceMappingURL=") &&
+      !fsImpl.existsSync(path.join(distDir, candidate + ".map")) &&
+      !RUNTIME_CHUNK_DEFAULT_EXPORT_PATTERN.test(targetSource) &&
+      [...(importers.get(`dist/${candidate}`) ?? [])].every(
+        (importer) => importer === `dist/${aliasFileName}`,
+      );
+    const source = promote
+      ? CANONICAL_RUNTIME_ENTRY_HEADER + targetSource
+      : aliasFileName === "io.runtime.js"
         ? buildUpdateConfigRuntimeAlias(
             candidate,
             parser.parseSourceFile(
@@ -413,14 +506,7 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
             ),
           )
         : buildRuntimeAliasSource(candidate, distDir, fsImpl);
-    const owner = ownership?.chunks[candidate];
     if (ownership && owner) {
-      const targetSource = fsImpl.readFileSync(path.join(distDir, candidate));
-      if (createHash("sha256").update(targetSource).digest("hex") !== owner.sha256) {
-        throw new Error(
-          `runtime dependency ownership no longer matches ${candidate}; rebuild dist`,
-        );
-      }
       ownership.chunks[aliasFileName] = {
         extensions: owner.extensions,
         sha256: createHash("sha256").update(source).digest("hex"),
@@ -429,6 +515,13 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
       delete ownership.chunks[aliasFileName];
     }
     writeTextFileIfChanged(aliasPath, source);
+    if (promote) {
+      // Relative imports keep the same directory; no second URL may own the state.
+      fsImpl.rmSync(path.join(distDir, candidate));
+      if (ownership) {
+        delete ownership.chunks[candidate];
+      }
+    }
   }
   writeRuntimeDependencyOwnership(rootDir, ownership, fsImpl);
 }

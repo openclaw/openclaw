@@ -372,8 +372,13 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           }),
         });
       }
-      const diagnostics = json ? result.stderr : result.stdout;
-      expectText(diagnostics, failure, ...doctorDiagnostics);
+      const diagnostics = result.stderr;
+      for (const diagnostic of doctorDiagnostics) {
+        check(diagnostics).toContain(diagnostic);
+        if (!json) {
+          check(result.stdout).not.toContain(diagnostic);
+        }
+      }
       check(diagnostics.match(/Doctor console diagnostic/gu)).toHaveLength(1);
       check(result.stderr).toContain("Doctor stderr diagnostic");
       if (scenario === "human-recovery-plugin-error") {
