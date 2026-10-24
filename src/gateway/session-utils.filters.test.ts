@@ -175,6 +175,41 @@ it("reuses involvement facts until session replacement or profile publication", 
   expect(select(mergedAdaId)).toEqual([]);
 });
 
+it("updates empty and shared involvement facets independently in a retained selection", () => {
+  const key = sessionKey("initially-empty");
+  const untouched = sessionKey("untouched");
+  const projection = projectionFixture({ store: { [key]: entry(), [untouched]: entry() } });
+  const scope = projection.state.scope({});
+  projection.state.scope = () => scope;
+  const select = (personal: boolean) => {
+    const prepared = prepareSessionRowSelection(projection, {}, { ordered: true });
+    return [...prepared.involvementKeys(adaId, personal)];
+  };
+  expect(select(true)).toEqual([]);
+  expect(select(false)).toEqual([]);
+  projection.setEntry(key, entry({ createdActor: actor(adaId) }));
+  expect(select(true)).toEqual([key]);
+  expect(select(false)).toEqual([key]);
+  projection.setEntry(
+    key,
+    entry({
+      createdActor: actor(adaId),
+      profileInvolvement: { profiles: { [adaId]: { hidden: true, updatedAt: 2 } } },
+    }),
+  );
+  expect(select(true)).toEqual([]);
+  expect(select(false)).toEqual([key]);
+  projection.setEntry(
+    key,
+    entry({ profileInvolvement: { profiles: { [adaId]: { hidden: false, updatedAt: 3 } } } }),
+  );
+  expect(select(true)).toEqual([key]);
+  expect(select(false)).toEqual([]);
+  projection.setEntry(key, undefined);
+  expect(select(true)).toEqual([]);
+  expect(select(false)).toEqual([]);
+});
+
 it("expires bounded non-native child owners without a session or registry publication", () => {
   const key = "agent:main:legacy-child";
   const parent = "agent:main:dashboard:parent";
