@@ -288,6 +288,14 @@ async function publishPreparedModelRuntimeCatalogReplacement(
     );
     await host.publicationQueue.enqueue(async () => {
       signal.throwIfAborted();
+      // A plugin replacement admitted after preparation owns the next catalog publication.
+      // Revalidate drain state at the effect boundary so pricing/discovery that started earlier
+      // cannot commit owners for a generation that is already retiring.
+      if (host.getPendingReplacement()) {
+        throw new PreparedModelRuntimePublicationSupersededError(
+          "A plugin replacement started before remote catalog publication",
+        );
+      }
       // One effect check keeps auth refreshes and retired plugins from publishing stale authority.
       if (
         claims.some(
