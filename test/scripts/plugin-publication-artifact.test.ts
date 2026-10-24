@@ -1,20 +1,11 @@
 import { createHash } from "node:crypto";
 /* oxlint-disable typescript/no-base-to-string -- fetch mocks normalize standard RequestInfo inputs exactly as the production fetch boundary does. */
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { crc32, deflateRawSync, gzipSync } from "node:zlib";
 import * as tar from "tar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { downloadExactActionsArtifactArchive } from "../../scripts/lib/actions-artifact-archive.mjs";
 import {
   createPluginPublicationArtifact,
@@ -22,6 +13,7 @@ import {
   inspectActionsArtifactZipWithPolicy,
   verifyPluginPublicationArtifact,
 } from "../../scripts/plugin-publication-artifact.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
 
 const TARGET_SHA = "1".repeat(40);
 const WORKFLOW_SHA = "2".repeat(40);
@@ -52,13 +44,8 @@ const WORKFLOW_BINDING = {
   workflowSha: WORKFLOW_SHA,
 };
 
-const tempDirs: string[] = [];
-
-function tempDir(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-publication-artifact-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const { createTempDir } = createScriptTestHarness();
+const tempDir = () => createTempDir("openclaw-plugin-publication-artifact-");
 
 function stagingFixture(markerName = "marker") {
   const root = tempDir();
@@ -71,12 +58,6 @@ function stagingFixture(markerName = "marker") {
     tarballPath: path.join(artifactDir, TARBALL_NAME),
   };
 }
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
-  }
-});
 
 function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -557,13 +538,17 @@ function expectVerifyError(
   expect(() => verifyFixture(fixture, overrides)).toThrow(message);
 }
 
-it.each(["npm-readback"])("retains historical alpha artifact readback through %s", (route) => {
+it("retains historical alpha artifact readback through npm-readback", () => {
   const packageJson = JSON.parse(metaPackageJson("unused-marker"));
   packageJson.version = "2026.7.1-alpha.3";
   expect(() =>
     createFixture({
       packageJson: JSON.stringify(packageJson),
-      publicationOverrides: { route, version: packageJson.version, publishTag: "alpha" },
+      publicationOverrides: {
+        route: "npm-readback",
+        version: packageJson.version,
+        publishTag: "alpha",
+      },
     }),
   ).not.toThrow();
 });
@@ -608,13 +593,11 @@ describe("plugin publication artifact", () => {
     });
     expect(existsSync(fixture.markerPath)).toBe(false);
 
-    const wrongSizeFixture = createFixture();
-    expectVerifyError(wrongSizeFixture, "tarball size does not match", {
-      expectedTarballSizeBytes: wrongSizeFixture.tarball.length + 1,
+    expectVerifyError(fixture, "tarball size does not match", {
+      expectedTarballSizeBytes: fixture.tarball.length + 1,
     });
 
-    const wrongInventoryFixture = createFixture();
-    expectVerifyError(wrongInventoryFixture, "tarball inventory does not match", {
+    expectVerifyError(fixture, "tarball inventory does not match", {
       expectedInventory: expectedInventory.slice(0, -1),
     });
   });

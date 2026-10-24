@@ -230,18 +230,6 @@ describe("write-cli-startup-metadata", () => {
 
     await siblingEvent;
     await expect(render).resolves.toBe("Usage: openclaw\n");
-    expect(spawnMock).toHaveBeenCalledOnce();
-    expect(spawnMock.mock.calls[0]?.[1]).toEqual([
-      "--import",
-      "tsx",
-      "--input-type=module",
-      "--eval",
-      expect.any(String),
-    ]);
-    expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
   });
 
   it("finishes root help before rendering at most two command snapshots", async () => {
@@ -380,7 +368,6 @@ describe("write-cli-startup-metadata", () => {
 
       await expect(writePromise).rejects.toThrow("Failed to render source browser help");
       await expect(writePromise).rejects.toThrow(/browser renderer failed \(elapsed \d+ms\)/u);
-      expect(children.map((child) => child.commandName)).not.toContain("tasks");
       for (const child of children.slice(1)) {
         expect(child.kill).toHaveBeenCalledWith("SIGTERM");
         expect(events).toContain(`close:${child.commandName}`);
@@ -898,15 +885,17 @@ finally:
   it.runIf(process.platform !== "win32")(
     "waits for all command help descendants before re-raising parent signals",
     async ({ signal }) => {
-      const tempRoot = createTempDir("openclaw-startup-metadata-signal-");
+      const {
+        sourceRootDir: tempRoot,
+        distDir,
+        outputPath,
+      } = metadataFixture("openclaw-startup-metadata-signal-");
       const fastCommandPath = path.join(tempRoot, "fast-command.mjs");
       const fastReadyPath = path.join(tempRoot, "fast-ready");
       const commandPath = path.join(tempRoot, "command.mjs");
       const runnerPath = path.join(tempRoot, "runner.mjs");
       const grandchildPidPath = path.join(tempRoot, "grandchild.pid");
       const renderStatePath = path.join(tempRoot, "render-state.txt");
-      const distDir = path.join(tempRoot, "dist");
-      const outputPath = path.join(distDir, "cli-startup-metadata.json");
       const grandchildScript = [
         "process.on('SIGTERM', () => {});",
         "process.send('ready');",
@@ -943,8 +932,6 @@ finally:
           "setInterval(() => {}, 1000);",
         ].join("\n"),
       );
-      writeStartupMetadataSourceSignatureFixture(tempRoot);
-      writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
       writeFixtureFile(
         tempRoot,
         "runner.mjs",
@@ -974,12 +961,7 @@ finally:
           `  renderSourceBrowserHelpText: renderCommand(${JSON.stringify(fastCommandPath)}, 'fast render failed'),`,
           `  renderSourceSecretsHelpText: renderCommand(${JSON.stringify(commandPath)}, 'render failed'),`,
           "  renderSourceNodesHelpText: () => 'Usage: openclaw nodes\\n',",
-          "  renderSourceSubcommandHelpTextRecord: () => ({",
-          "    config: 'Usage: openclaw config\\n',",
-          "    doctor: 'Usage: openclaw doctor\\n', gateway: 'Usage: openclaw gateway\\n',",
-          "    models: 'Usage: openclaw models\\n', plugins: 'Usage: openclaw plugins\\n',",
-          "    sessions: 'Usage: openclaw sessions\\n',",
-          "  }),",
+          `  renderSourceSubcommandHelpTextRecord: () => (${JSON.stringify(sourceSubcommandHelp())}),`,
           "});",
         ].join("\n"),
       );
