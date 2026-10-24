@@ -48,9 +48,9 @@ export function formatGoogleChatMediaText(
   mediaUrls: readonly string[],
 ): string {
   const remoteUrls = mediaUrls.filter((value) => {
-    // URL parsing strips controls; reject them before they reach the rendered message.
+    // Controls are ASCII; check code units before URL parsing strips them.
     if (
-      [...value].some((character) => character <= " " || character === "\u007f") ||
+      value.split("").some((character) => character <= " " || character === "\u007f") ||
       !/^https?:\/\//iu.test(value)
     ) {
       return false;
