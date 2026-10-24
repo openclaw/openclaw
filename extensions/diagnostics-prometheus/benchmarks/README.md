@@ -83,14 +83,15 @@ profiled promotion separate. The synchronous owner phases omit HTTP transport; u
 include it. Neither mode measures Gateway
 event-loop delay.
 
-The store retains fixed prefix text and its UTF-8 byte length, then encodes it
-into a fresh response buffer with ASCII-formatted numbers. `scrape.bufferByteLength` records
+The store encodes fixed prefixes into independently owned UTF-8 byte arrays and
+copies them into a fresh response buffer with ASCII-formatted numbers. `scrape.bufferByteLength` records
 that transient allocation; it is not included in sampled V8 heap allocation.
 There is no rendered-series cache. After consuming a render in an owner phase,
 the benchmark releases its private backing store, matching the successful HTTP
 completion lifetime. Owner CPU includes release; the render-latency timer ends
 before release. The HTTP phase releases only after Node's completion callback.
-The 1 ms event-loop monitor reports sample counts and tails for each phase;
+The scrape workspace reuses its capacity but clears all fragment references after
+encoding; reset releases that capacity. The 1 ms event-loop monitor reports sample counts and tails for each phase;
 synchronous owner loops normally have no samples.
 
 Use `--updates-per-render <count>` with `--shape` to rotate through that many

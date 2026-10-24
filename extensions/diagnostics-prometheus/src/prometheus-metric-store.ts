@@ -14,30 +14,26 @@ import {
   type LabelSet,
 } from "./prometheus-format.js";
 
-type Prefix = { text: string; bytes: number };
-
-function createPrefix(text: string): Prefix {
-  return { text, bytes: Buffer.byteLength(text) };
-}
+const prefixEncoder = new TextEncoder();
 
 type ScalarSample = {
   help: string;
   key: string;
   name: string;
-  prefix: Prefix;
+  prefix: Uint8Array;
   value: number;
 };
 
 type HistogramSample = {
   buckets: number[];
-  bucketPrefixes: Prefix[];
+  bucketPrefixes: Uint8Array[];
   counts: number[];
   count: number;
   help: string;
   key: string;
   name: string;
-  sumPrefix: Prefix;
-  countPrefix: Prefix;
+  sumPrefix: Uint8Array;
+  countPrefix: Uint8Array;
   sum: number;
 };
 
@@ -76,6 +72,8 @@ export function createPrometheusMetricStore(
   let sharedSeries = 0;
   const familyCounts = new Map<PrometheusMetricName, number>();
   const familyDrops = new Map<PrometheusMetricName, number>();
+  // Reuse scratch capacity, but release every fragment reference after each scrape.
+  const parts: (Uint8Array | string)[] = [];
 
   const series = <T>(map: MetricSeries<T>, name: PrometheusMetricName, labels: LabelSet) => {
     let labelCount = 0;
@@ -180,7 +178,7 @@ export function createPrometheusMetricStore(
         help,
         key: metricKey(name, labels),
         name,
-        prefix: createPrefix(`${name}${formatLabels(labels)} `),
+        prefix: prefixEncoder.encode(`${name}${formatLabels(labels)} `),
         value,
       };
       map.samples.push(node.sample);
@@ -229,15 +227,15 @@ export function createPrometheusMetricStore(
         buckets,
         // Labels and bounds are fixed for this series; reset releases the prepared text.
         bucketPrefixes: [...buckets, "+Inf"].map((le) =>
-          createPrefix(`${name}_bucket${formatLabels({ ...labels, le: String(le) })} `),
+          prefixEncoder.encode(`${name}_bucket${formatLabels({ ...labels, le: String(le) })} `),
         ),
         counts: buckets.map(() => 0),
         count: 0,
         help,
         key: metricKey(name, labels),
         name,
-        sumPrefix: createPrefix(`${name}_sum${formatLabels(labels)} `),
-        countPrefix: createPrefix(`${name}_count${formatLabels(labels)} `),
+        sumPrefix: prefixEncoder.encode(`${name}_sum${formatLabels(labels)} `),
+        countPrefix: prefixEncoder.encode(`${name}_count${formatLabels(labels)} `),
         sum: 0,
       };
       node.sample = sample;
@@ -275,20 +273,22 @@ export function createPrometheusMetricStore(
   };
 
   const render = () => {
-    const parts: (Prefix | string)[] = [];
+    let index = 0;
     let bytes = 0;
-    const write = (prefix: Prefix, value: number) => {
+    const write = (prefix: Uint8Array, value: number) => {
       const number = formatPrometheusNumber(value);
-      parts.push(prefix, number, "\n");
-      bytes += prefix.bytes + number.length + 1;
+      parts[index++] = prefix;
+      parts[index++] = number;
+      parts[index++] = "\n";
+      bytes += prefix.length + number.length + 1;
     };
     const emitted = new Set<string>();
     const header = (name: string, type: string, help: string) => {
       if (!emitted.has(name)) {
         emitted.add(name);
-        const text = createPrefix(`# HELP ${name} ${escapeHelp(help)}\n# TYPE ${name} ${type}\n`);
-        parts.push(text);
-        bytes += text.bytes;
+        const text = Buffer.from(`# HELP ${name} ${escapeHelp(help)}\n# TYPE ${name} ${type}\n`);
+        parts[index++] = text;
+        bytes += Buffer.byteLength(text);
       }
     };
     for (const [type, samples] of [
@@ -305,14 +305,14 @@ export function createPrometheusMetricStore(
           type,
           "New-series observations dropped because an exporter series budget was reached.",
         );
-        write(createPrefix(`${DROPPED_SERIES_COUNTER_NAME} `), droppedSeries);
+        write(Buffer.from(`${DROPPED_SERIES_COUNTER_NAME} `), droppedSeries);
         header(
           DROPPED_FAMILY_COUNTER_NAME,
           type,
           "New-series observations dropped by bounded metric family.",
         );
         for (const [family, count] of familyDrops) {
-          write(createPrefix(`${DROPPED_FAMILY_COUNTER_NAME}${formatLabels({ family })} `), count);
+          write(Buffer.from(`${DROPPED_FAMILY_COUNTER_NAME}${formatLabels({ family })} `), count);
         }
       }
     }
@@ -329,19 +329,22 @@ export function createPrometheusMetricStore(
       write(sample.sumPrefix, sample.sum);
       write(sample.countPrefix, sample.count);
     }
+    parts.length = index;
     // A private backing store lets the HTTP owner release bytes after the write completes.
     const output = Buffer.from(new ArrayBuffer(bytes));
     let offset = 0;
     for (const part of parts) {
       if (typeof part === "string") {
-        // Numbers and newlines are ASCII; prefixes use UTF-8 below.
+        // Number formatting and newlines are ASCII; labels/help were encoded above.
         for (let i = 0; i < part.length; i++) {
           output[offset++] = part.charCodeAt(i);
         }
       } else {
-        offset += output.write(part.text, offset);
+        output.set(part, offset);
+        offset += part.length;
       }
     }
+    parts.fill("");
     return output;
   };
 
@@ -354,6 +357,7 @@ export function createPrometheusMetricStore(
     sharedSeries = 0;
     familyCounts.clear();
     familyDrops.clear();
+    parts.length = 0;
   };
 
   return { counter, counterValue, gauge, clearGauges, histogram, reserveHistogram, reset, render };
