@@ -20,6 +20,7 @@ import {
   retireSessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
+import * as controllerState from "../../../sessions/session-controller.state.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
@@ -238,10 +239,89 @@ it.each([
   },
 );
 
+it("steers completion into the same requester after its timeout recovery reattaches", async ({
+  signal,
+}) => {
+  const fixture = setup("subagent_announce");
+  const operation = createReplyOperation({
+    sessionKey,
+    sessionId: fixture.state.entry.sessionId,
+    resetTriggered: false,
+    target: fixture.target,
+  });
+  operation.setPhase("running");
+  const previous = { kind: "embedded" as const, cancel() {} };
+  operation.attachBackend(previous);
+  operation.detachBackend(previous);
+  const input = reserveSessionControllerSource(sessionKey, {
+    target: fixture.target,
+    policy: { mode: "followup" },
+  });
+  fixture.params.controllerInput = input;
+  fixture.state.active = true;
+  fixture.readDone.resolve();
+  const abandonment = vi
+    .spyOn(embeddedRuns, "resolveEmbeddedRunAbandonment")
+    .mockReturnValue("recovering_timeout");
+  const entered = createDeferredCore();
+  const waitForBackend = controllerState.waitForReplyOperationBackend;
+  const waiting = vi
+    .spyOn(controllerState, "waitForReplyOperationBackend")
+    .mockImplementation((...args) => {
+      entered.resolve();
+      return waitForBackend(...args);
+    });
+  const delivery = fixture.startDelivery();
+  try {
+    await withinTest(
+      Promise.race([
+        entered.promise,
+        fixture.dispatchEntered.promise.then(() => {
+          throw new Error("completion escaped recovery into a later turn");
+        }),
+      ]),
+      signal,
+    );
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+    const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
+      async (_text, options, assertCurrent) => {
+        assertCurrent();
+        options?.onQueueAccepted?.(true);
+      },
+    );
+    operation.attachBackend({
+      kind: "embedded",
+      cancel() {},
+      supportsTranscriptCommitWait: true,
+      messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+    });
+    await expect(delivery).resolves.toMatchObject({ delivered: true, path: "steered" });
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(input.phase).toBe("consumed");
+    expectNoReplay(fixture, 0);
+  } finally {
+    operation.complete();
+    fixture.dispatchDone.resolve(response());
+    retireSessionControllerInput(input);
+    await Promise.allSettled([delivery, input.settlement.promise]);
+    clearSessionControllerMailbox(input.mailbox, () => {});
+    waiting.mockRestore();
+    abandonment.mockRestore();
+  }
+});
+
 it("keeps the same completion input queued when timeout recovery cannot accept steering", async ({
   signal,
 }) => {
   const fixture = setup("subagent_announce");
+  const backendWaiting = createDeferredCore();
+  const waitForBackend = controllerState.waitForReplyOperationBackend;
+  const waiting = vi
+    .spyOn(controllerState, "waitForReplyOperationBackend")
+    .mockImplementation((...args) => {
+      backendWaiting.resolve();
+      return waitForBackend(...args);
+    });
   const recoveryEntered = createDeferredCore();
   const releaseRecovery = createDeferredCore();
   const recovery = withSessionTurn(
@@ -271,6 +351,11 @@ it("keeps the same completion input queued when timeout recovery cannot accept s
     const parentClaim = input.mailbox.claim;
     fixture.params.controllerInput = input;
     delivery = fixture.startDelivery();
+    await withinTest(backendWaiting.promise, signal);
+    expect(input.mailbox.claim).toBe(parentClaim);
+    expect(input.phase).not.toBe("consumed");
+    releaseRecovery.resolve();
+    await recovery;
     await withinTest(
       awaitGateBeforeSettlement(
         fixture.dispatchEntered.promise,
@@ -280,10 +365,7 @@ it("keeps the same completion input queued when timeout recovery cannot accept s
       signal,
     );
     expect(fixture.dispatch.mock.calls[0]?.[2]?.controllerInput).toBe(input);
-    expect(input.mailbox.claim).toBe(parentClaim);
     expect(input.phase).not.toBe("consumed");
-    releaseRecovery.resolve();
-    await recovery;
     fixture.dispatchDone.resolve(response([{ text: "Recovered completion" }], sentDeliveryStatus));
     await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
     expectNoReplay(fixture);
@@ -295,6 +377,7 @@ it("keeps the same completion input queued when timeout recovery cannot accept s
     }
     await Promise.allSettled([recovery, delivery, input?.settlement.promise]);
     abandonment.mockRestore();
+    waiting.mockRestore();
   }
 });
 

@@ -27,7 +27,7 @@ import {
 
 export { fixedTime };
 export const baseScenario = parityBaseScenario;
-export type Profile = {
+type Profile = {
   id: string;
   width: number;
   height: number;

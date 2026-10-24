@@ -30,7 +30,10 @@ import {
 } from "../../src/shared/worker-bundle-hash.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import buildConfigs from "../../tsdown.config.ts";
-import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
+import {
+  copyFsSafePackageFixture,
+  linkFsSafeFixtureRuntimeDependencies,
+} from "./fs-safe-package.test-support.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -1064,31 +1067,7 @@ console.log("relocated session card renders with bundled fonts");
           bundle.chunks.filter((chunk) => chunk.type === "chunk"),
         );
         if (!worker) {
-          const dependencies = JSON.parse(fs.readFileSync("package.json", "utf8")).dependencies;
-          const emittedFiles = new Set(chunks.map((chunk) => chunk.fileName));
-          // Preserve the copied fs-safe/native owner while providing the other
-          // production dependencies imported by the real SDK entrypoint.
-          for (const specifier of new Set(
-            chunks.flatMap((chunk) => [...chunk.imports, ...chunk.dynamicImports]),
-          )) {
-            if (isBuiltin(specifier) || specifier.startsWith(".") || emittedFiles.has(specifier)) {
-              continue;
-            }
-            const packageName = specifier
-              .split("/")
-              .slice(0, specifier.startsWith("@") ? 2 : 1)
-              .join("/");
-            expect(Object.hasOwn(dependencies, packageName), specifier).toBe(true);
-            const destination = path.join(sourceRoot, "node_modules", packageName);
-            if (!fs.existsSync(destination)) {
-              fs.mkdirSync(path.dirname(destination), { recursive: true });
-              fs.symlinkSync(
-                fs.realpathSync(path.join("node_modules", packageName)),
-                destination,
-                "dir",
-              );
-            }
-          }
+          linkFsSafeFixtureRuntimeDependencies(sourceRoot, chunks);
         }
         fs.renameSync(sourceRoot, relocatedRoot);
         const emittedChunks = worker

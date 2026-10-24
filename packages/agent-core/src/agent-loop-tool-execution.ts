@@ -31,7 +31,7 @@ export type ExecutedToolCallOutcome = {
   callerCancelled?: true;
 };
 
-export type ReadyToolCallExecution = {
+type ReadyToolCallExecution = {
   kind: "ready";
   args: unknown;
   execute: (onImplementationStart?: () => void) => Promise<ExecutedToolCallOutcome>;

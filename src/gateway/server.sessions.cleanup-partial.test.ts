@@ -1,5 +1,5 @@
 import { beforeEach, expect, test, vi } from "vitest";
-import type { SessionCleanupSummary } from "../config/sessions.js";
+import type { SessionCleanupSummary } from "../config/sessions/cleanup-result.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { directSessionReq } from "./test/server-sessions.test-helpers.js";
 

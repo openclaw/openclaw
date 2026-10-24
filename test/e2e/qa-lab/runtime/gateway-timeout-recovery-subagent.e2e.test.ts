@@ -1,15 +1,26 @@
 import { once } from "node:events";
+import fs from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
+  buildQaGatewayConfig,
   createQaBusState,
   createQaChannelTransport,
-  createQaGatewayChild,
   startQaBusServer,
 } from "../../../../extensions/qa-lab/api.js";
+import { AgentSession } from "../../../../src/agents/sessions/agent-session.js";
+import {
+  disconnectGatewayClient,
+  startGatewayWithClient,
+} from "../../../../src/gateway/test-helpers.e2e.js";
+import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
+import { acquireGatewayE2ePortBlock } from "../../../../src/gateway/test-helpers.listener.js";
+import { flushLogger, setLoggerOverride } from "../../../../src/logging/logger.js";
+import * as controllerState from "../../../../src/sessions/session-controller.state.js";
+import { createOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
 import { closeHttpServer, readRequestText } from "../../../helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesSse as writeSse } from "../../../helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../../helpers/promise.js";
@@ -19,7 +30,8 @@ import { listenLoopback } from "./gateway-recovery.test-support.js";
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const MODEL = "mock-openai/gpt-5.6-luna";
 const CHILD_MODEL = "mock-openai/gpt-5.6-luna-alt";
-const CONVERSATION = { id: "timeout-recovery", kind: "direct" as const };
+// Automatic completion steering is a group flow; DM completions require the message tool.
+const CONVERSATION = { id: "timeout-recovery", kind: "group" as const };
 const PROMPT =
   "Subagent terminal reply QA check: visible. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP.";
 const CHILD_MARKER = "QA-TIMEOUT-RECOVERY-CHILD-OK";
@@ -141,6 +153,7 @@ async function streamAssistantReply(
 async function startProofProvider() {
   const proof: {
     parentContinuationStartedAt?: number;
+    parentContinuationClosedAt?: number;
     childReleasedAt?: number;
     compactionStartedAt?: number;
     compactionReleasedAt?: number;
@@ -197,8 +210,8 @@ async function startProofProvider() {
       if (parentContinuationSeen) {
         // Compacted history must neither respawn the child nor fabricate its completion.
         const hasChildCompletion =
-          inputText.includes("Agent steering queue items arrived since your last turn.") &&
-          inputText.includes("qa-timeout-recovery-child") &&
+          inputText.includes("[Internal task completion event]") &&
+          inputText.includes("task: qa-timeout-recovery-child") &&
           inputText.includes(CHILD_MARKER);
         const reply = hasChildCompletion ? CHILD_MARKER : "QA-TIMEOUT-RECOVERY-PARENT-OK";
         proof.recoveredParentReplies.push(reply);
@@ -234,6 +247,7 @@ async function startProofProvider() {
       parentContinuationSeen = true;
       proof.parentContinuationStartedAt = performance.now();
       await once(response, "close");
+      proof.parentContinuationClosedAt = performance.now();
     })().catch(() => {
       if (!response.headersSent) {
         response.writeHead(500);
@@ -263,6 +277,10 @@ function withTimeoutConfig(config: OpenClawConfig): OpenClawConfig {
   // Exercise model silence, not a terminal run deadline or deferred tool discovery.
   provider.timeoutSeconds = 4;
   config.tools = { ...config.tools, codeMode: false, toolSearch: false };
+  config.messages = {
+    ...config.messages,
+    groupChat: { ...config.messages?.groupChat, visibleReplies: "automatic" },
+  };
   const agents = (config.agents ??= {});
   const defaults = (agents.defaults ??= {});
   defaults.model = { primary: MODEL }; // The alternate model identifies the child, not a fallback.
@@ -285,26 +303,134 @@ it("delivers a child completion once while parent timeout recovery is active", a
   const transport = createQaChannelTransport(state);
   const bus = await startQaBusServer({ state });
   cleanups.push(() => bus.stop());
-  const owner = createQaGatewayChild();
-  cleanups.push(async () => expect((await owner.stop()).errors).toEqual([]));
-  const gateway = await owner.start({
-    repoRoot: REPO_ROOT,
-    useRepoCli: false,
-    providerBaseUrl: `${provider.baseUrl}/v1`,
-    providerMode: "mock-openai",
-    primaryModel: MODEL,
-    alternateModel: CHILD_MODEL,
-    transport,
-    transportBaseUrl: bus.baseUrl,
-    controlUiEnabled: false,
-    mutateConfig: withTimeoutConfig,
+  // Keep the Gateway and native queue observer on the same production module graph.
+  const fixture = await createOpenClawTestState({
+    label: "qa-timeout-recovery",
+    env: {
+      ...snapshotGatewayStartupEnv(),
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(REPO_ROOT, "extensions"),
+      OPENCLAW_SKIP_CHANNELS: undefined,
+      OPENCLAW_SKIP_PROVIDERS: undefined,
+      OPENCLAW_SKIP_CRON: "1",
+      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+      OPENCLAW_SKIP_CANVAS_HOST: "1",
+      OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
+      OPENCLAW_GATEWAY_TOKEN: undefined,
+      OPENCLAW_GATEWAY_PASSWORD: undefined,
+    },
   });
+  cleanups.push(() => fixture.cleanup());
+  const claim = await acquireGatewayE2ePortBlock();
+  cleanups.push(() => claim.release());
+  const token = "qa-timeout-recovery-token";
+  const logPath = fixture.path("gateway.log");
+  setLoggerOverride({ file: logPath, level: "debug", consoleLevel: "silent" });
+  cleanups.push(async () => {
+    await flushLogger();
+    setLoggerOverride(null);
+  });
+  const accepted = createDeferred<{ sessionKey: string | undefined; acceptedAt: number }>();
+  const stopped = createDeferred();
+  const recoveryWaiting = createDeferred();
+  const waitForBackend = controllerState.waitForReplyOperationBackend;
+  const waitObserver = vi
+    .spyOn(controllerState, "waitForReplyOperationBackend")
+    .mockImplementation((...args) => {
+      if (
+        provider.proof.compactionStartedAt !== undefined &&
+        provider.proof.compactionReleasedAt === undefined
+      ) {
+        expect(controllerState.getAttachedBackendAttachment(args[0])).toBeUndefined();
+        recoveryWaiting.resolve();
+      }
+      return waitForBackend(...args);
+    });
+  // oxlint-disable-next-line typescript/unbound-method -- Forward through the original receiver below.
+  const prompt = AgentSession.prototype.prompt;
+  const promptObserver = vi.spyOn(AgentSession.prototype, "prompt");
+  promptObserver.mockImplementation(async function (this: AgentSession, ...args) {
+    // Recovery attaches its new native queue before submitting the retry prompt.
+    // Let the real completion enter that queue before the retry constructs its request.
+    if (provider.proof.compactionReleasedAt !== undefined) {
+      await Promise.race([
+        accepted.promise,
+        stopped.promise.then(() => {
+          throw new Error("Recovery proof stopped before native queue acceptance");
+        }),
+      ]);
+    }
+    return prompt.apply(this, args);
+  });
+  // oxlint-disable-next-line typescript/unbound-method -- Forward through the original receiver below.
+  const steer = AgentSession.prototype.steer;
+  const observer = vi.spyOn(AgentSession.prototype, "steer");
+  observer.mockImplementation(function (this: AgentSession, ...args) {
+    // Completion content is runtime context, not the generic runtime-event user prompt.
+    if (args[7]?.text.includes(CHILD_MARKER)) {
+      const onAccepted = args[9];
+      args[9] = () => {
+        onAccepted?.();
+        // The native owner calls this only after installing the real steering message.
+        expect(this.getSteeringMessages()).toContain(args[0]);
+        accepted.resolve({ sessionKey: this.sessionKey, acceptedAt: performance.now() });
+      };
+    }
+    // Pass through to the real native queue; the observer neither admits nor injects input.
+    return steer.apply(this, args);
+  });
+  cleanups.push(async () => {
+    waitObserver.mockRestore();
+    observer.mockRestore();
+    promptObserver.mockRestore();
+  });
+  const config = withTimeoutConfig(
+    buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: claim.port,
+      gatewayToken: token,
+      workspaceDir: fixture.workspaceDir,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+      providerMode: "mock-openai",
+      primaryModel: MODEL,
+      alternateModel: CHILD_MODEL,
+      enabledPluginIds: ["openai"],
+      transportPluginIds: transport.requiredPluginIds,
+      transportConfig: transport.createGatewayConfig({ baseUrl: bus.baseUrl }),
+      controlUiEnabled: false,
+    }),
+  );
+  config.logging = { ...config.logging, file: logPath };
+  const source = await startGatewayWithClient({
+    cfg: config,
+    configPath: fixture.configPath,
+    token,
+    portClaim: claim,
+    scopes: ["operator.admin", "operator.read", "operator.write"],
+  });
+  cleanups.push(async () => {
+    stopped.resolve();
+    provider.releaseCompaction();
+    try {
+      await disconnectGatewayClient(source.client);
+    } finally {
+      await source.server.close({ reason: "timeout-recovery proof complete" });
+    }
+  });
+  await source.server.startupSettled;
+  const gateway = {
+    token,
+    runtimeEnv: fixture.env,
+    call: source.client.request.bind(source.client),
+    logs: () => (fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : ""),
+  };
   await transport.waitReady({ gateway });
   const readChildRuns = () =>
     readQaSubagentRuns(gateway.runtimeEnv).filter(
       (entry) => entry.label === "qa-timeout-recovery-child",
     );
-  // Only a pending, unclaimed payload can be injected into the recovered retry.
   const readChildHandoff = () =>
     readChildRuns().map((run) => ({
       execution: run.execution.status,
@@ -342,12 +468,16 @@ it("delivers a child completion once while parent timeout recovery is active", a
   const completion = await withTestTimeout(
     (async () => {
       await provider.compactionStarted;
-      phase = "child completion handoff";
-      // A terminal row races handoff: hold compaction until delivery defers the payload.
-      await expect
-        .poll(readChildHandoff, { timeout: remainingMs() })
-        .toEqual([{ execution: "terminal", outcome: "ok", delivery: "pending", leasable: true }]);
+      phase = "completion waiting for recovery backend";
+      await recoveryWaiting.promise;
+      // The timed-out attempt has already detached its queue. Complete compaction
+      // so the retry can attach the native queue observed above.
       provider.releaseCompaction();
+      phase = "native child completion acceptance";
+      const receipt = await accepted.promise;
+      expect(receipt.sessionKey).toBeTypeOf("string");
+      expect(receipt.sessionKey).toBe(readChildRuns()[0]?.requesterSessionKey);
+      expect(receipt.acceptedAt).toBeGreaterThan(provider.proof.childReleasedAt!);
       phase = "child completion outbound";
       return await waitOutbound(sinceIndex, CHILD_MARKER, remainingMs());
     })(),
@@ -359,9 +489,24 @@ it("delivers a child completion once while parent timeout recovery is active", a
       phase,
       provider: provider.proof,
       child: readChildHandoff(),
-      gatewayLogTail: redactSensitiveText(gateway.logs().replaceAll(gateway.token, "[redacted]"), {
-        mode: "tools",
-      }).slice(-8_000),
+      steeringCalls: observer.mock.calls.length,
+      promptCalls: promptObserver.mock.calls.length,
+      backendWaits: waitObserver.mock.calls.length,
+
+      gatewayLogTail: redactSensitiveText(
+        gateway
+          .logs()
+          .split("\n")
+          .filter(
+            (line) =>
+              line.includes("injection") ||
+              line.includes("completion") ||
+              line.includes("announce"),
+          )
+          .join("\n")
+          .replaceAll(gateway.token, "[redacted]"),
+        { mode: "tools" },
+      ).slice(-16_000),
     });
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`${message} ${evidence}`, { cause: error });
@@ -369,12 +514,17 @@ it("delivers a child completion once while parent timeout recovery is active", a
   expect(completion.accountId).toBe("default");
   expect(provider.proof.parentContinuationStartedAt).toBeTypeOf("number");
   expect(provider.proof.childReleasedAt).toBeTypeOf("number");
+  expect(provider.proof.parentContinuationClosedAt).toBeTypeOf("number");
+  expect(provider.proof.parentContinuationStartedAt!).toBeLessThan(
+    provider.proof.parentContinuationClosedAt!,
+  );
   expect(provider.proof.compactionStartedAt).toBeTypeOf("number");
   expect(provider.proof.compactionReleasedAt).toBeTypeOf("number");
   expect(provider.proof.compactionStartedAt!).toBeLessThan(provider.proof.childReleasedAt!);
   expect(provider.proof.childReleasedAt!).toBeLessThan(provider.proof.compactionReleasedAt!);
   // The deferred result reaches the recovered retry itself, not a later wake.
   expect(provider.proof.recoveredParentReplies[0]).toBe(CHILD_MARKER);
+  await flushLogger();
   expect(gateway.logs()).toContain("attempting compaction before retry");
   expect(gateway.logs()).toContain("compaction succeeded");
   const runs = readChildRuns();

@@ -81,6 +81,12 @@ const repositoryScriptEntries = [
   "scripts/bench-plugin-registration.mts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-cold-load.ts!",
+  // scripts/README.md invokes these memory-search benchmark CLIs by path.
+  "scripts/bench-memory-search.mjs!",
+  "scripts/bench-memory-search-sqlite.mjs!",
+  // pnpm ui:parity loads this opt-in Vitest config and its capture suite by path.
+  "scripts/control-ui-parity/vitest.config.ts!",
+  "scripts/control-ui-parity/capture-suite.ts!",
   // scripts/control-ui-retention/README.md invokes this opt-in production census.
   "scripts/control-ui-retention/retention-suite.ts!",
   "scripts/control-ui-retention/vitest.config.ts!",
@@ -98,6 +104,17 @@ const repositoryScriptEntries = [
   "scripts/build-decision-transport-bench.mts!",
   // scripts/perf/README.md invokes this shared-writer benchmark by path.
   "scripts/bench-channel-ingress-writer.ts!",
+  // scripts/perf/README.md invokes these drivers and passes Gateway/preload entries by path.
+  "scripts/perf/control-ui-forbidden-rpc-measure.ts!",
+  "scripts/perf/database-page-cache-measure.ts!",
+  "scripts/perf/fsync-gateway-entry.ts!",
+  "scripts/perf/fsync-scratch-measure.ts!",
+  "scripts/perf/fsync-tts-gateway-measure.ts!",
+  "scripts/perf/fsync-tts-worker-preload.mjs!",
+  "scripts/perf/worker-module-graphs-measure.mjs!",
+  // These offline measurement CLIs document invocation in their file headers.
+  "scripts/perf/doctor-tool-schemas-measure.ts!",
+  "scripts/perf/github-reader-measure.ts!",
   // The performance guide invokes these measurement commands by path.
   "scripts/perf/adoption-candidates-measure.ts!",
   "scripts/perf/background-result-wait-measure.ts!",
@@ -1013,6 +1030,15 @@ const config = {
     "src/infra/database-engine/physical-facts.ts": ["exports"],
     // The full-tree companion config makes tests entrypoints; these contracts
     // are intentionally test-only in the production graph.
+    // Focused tests consume these contracts; the full-tree pass still audits their named exports.
+    "src/agents/cli-runner/history-boundary.ts": ["exports"],
+    "src/commands/doctor/shared/context-engine-plugin-id-selector.ts": ["exports"],
+    "src/config/sessions/archive-compression.ts": ["exports"],
+    "src/config/sessions/session-history-read.ts": ["exports"],
+    "src/gateway/server-cron-agent-run.ts": ["exports"],
+    "src/plugins/hook-message.types.ts": ["types"],
+    "src/plugins/tool-metadata.ts": ["exports"],
+    "src/shared/sort-and-limit.ts": ["exports"],
     // Native-command tests exercise requester authorization and cancellation at this runtime gate.
     "src/auto-reply/reply/request-native-subagent.ts": ["exports"],
     // Scheduled-command tests exercise registry replacement and persisted-job validation at the owner.

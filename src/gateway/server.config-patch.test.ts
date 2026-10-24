@@ -37,6 +37,7 @@ import { registerAgentConfigMutationTests } from "./server.config-agent-mutation
 import {
   configRawPayload,
   configWithGatewayTokenSecretRef,
+  makeApprovedOperationAuditConfig,
   makeRouteBinding,
   withConfigFileFixture,
 } from "./server.config-patch.test-support.js";
@@ -215,19 +216,9 @@ describe("gateway config methods", () => {
       const { readConfigFileSnapshot } = await import("../config/config.js");
       const original = await getCurrentConfigObject();
       const model = "openai/gpt-4.1-mini";
-      const agents = {
-        entries: { main: {} },
-        defaults: { model: { primary: "openai/gpt-4.1" } },
-      };
+      const { root, includedConfig } = makeApprovedOperationAuditConfig(original.config, layout);
       const includePath = path.join(path.dirname(original.path), "audit-include.json");
-      await writeJsonFile(includePath, layout === "include-only" ? agents : { level: "info" });
-      const root = {
-        ...original.config,
-        agents: layout === "include-only" ? { $include: "./audit-include.json" } : agents,
-        ...(layout === "unrelated-include"
-          ? { logging: { $include: "./audit-include.json" } }
-          : {}),
-      };
+      await writeJsonFile(includePath, includedConfig);
       await writeJsonFile(original.path, root);
       const rootBefore = await fs.readFile(original.path, "utf8");
       const includeBefore = await fs.readFile(includePath, "utf8");

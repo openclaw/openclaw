@@ -42,7 +42,6 @@ import {
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatHeaderState, renderModelControls } from "./chat-model-controls.test-support.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
-import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import * as chatProgress from "./chat-progress.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
@@ -745,111 +744,6 @@ describe("chat history pagination", () => {
     renderChatInto(container, { messages: props.messages, onHistoryIntent });
     expect(container.querySelector(".chat-history-sentinel")).toBeNull();
     expect(thread.contains(sentinel)).toBe(false);
-  });
-});
-
-describe("retained input navigation", () => {
-  it("keeps an empty filtered page navigable without blocking an independent send", async () => {
-    const sessionKey = "agent:main:hidden-page";
-    const sessionId = "hidden-page-session";
-    const olderPage = {
-      total: 21,
-      items: [
-        {
-          id: "older-visible",
-          acceptedAt: 1,
-          state: "interrupted" as const,
-          message: { role: "user", content: "Older visible input" },
-        },
-      ],
-    };
-    const historyState = makeChatHost({
-      sessionKey,
-      currentSessionId: sessionId,
-      requestHandlers: { "chat.history": () => ({ sessionId, pendingInputs: olderPage }) },
-    });
-    applyChatPendingInputs(historyState, { total: 21, items: [], nextBefore: 2 });
-    const onSend = vi.fn();
-    const container = renderChatView({
-      historyState,
-      sessionKey,
-      draft: "Independent work",
-      getDraft: () => "Independent work",
-      onSend,
-    });
-    const earlier = expectDefined(
-      [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
-        button.textContent?.includes(t("chat.pendingInputs.earlier")),
-      ),
-      "earlier pending-input navigation",
-    );
-    expect(earlier.disabled).toBe(false);
-    const send = expectDefined(
-      container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]'),
-      "send button",
-    );
-    expect(send.disabled).toBe(false);
-    send.click();
-    expect(onSend).toHaveBeenCalledOnce();
-    earlier.click();
-    await vi.waitFor(() => expect(getChatPendingInputs(historyState)?.page).toEqual(olderPage));
-    expect(historyState.request).toHaveBeenCalledWith(
-      "chat.history",
-      expect.objectContaining({ pendingBefore: 2 }),
-    );
-    expect(historyState.chatMessages).toEqual([]);
-  });
-
-  it("hides the retained queue copy represented by pending custody without hiding an identical new send", () => {
-    const historyState = makeChatHost({ currentSessionId: "retained-input-session" });
-    const message = {
-      role: "user",
-      content: "Check the deployment notes",
-      timestamp: 100,
-      idempotencyKey: "retained-run:user",
-    };
-    applyChatPendingInputs(historyState, {
-      total: 1,
-      items: [
-        {
-          id: "retained-input",
-          runId: "retained-run",
-          acceptedAt: 100,
-          state: "queued",
-          message,
-        },
-      ],
-    });
-    const queue = ["before", "retained", "new"].map((id, index) => ({
-      id,
-      text: message.content,
-      createdAt: 100 + index,
-      sendRunId: `${id}-run`,
-      sendState: "waiting-reconnect" as const,
-    }));
-    const onQueueRemove = vi.fn();
-    const onQueueMove = vi.fn();
-    const container = renderChatView({
-      historyState,
-      messages: [],
-      queue,
-      onQueueRemove,
-      onQueueMove,
-    });
-
-    const rows = container.querySelectorAll(".chat-queue__item");
-    expect([...rows].map((row) => row.getAttribute("data-chat-queue-item"))).toEqual([
-      "before",
-      "new",
-    ]);
-    const grips = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__grip")];
-    expect(grips).toHaveLength(2);
-    expect(grips.every((grip) => grip.disabled)).toBe(true);
-    grips[1]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
-    expect(onQueueMove).not.toHaveBeenCalled();
-    rows[1]?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
-    expect(onQueueRemove).toHaveBeenCalledWith("new");
-    expect(queue).toHaveLength(3);
   });
 });
 

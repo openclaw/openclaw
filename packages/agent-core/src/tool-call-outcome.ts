@@ -243,7 +243,7 @@ export function immediateToolPreparationError(error: unknown): ImmediateToolCall
  * An executed call's source comes from its tool declaration, or from the raw
  * result/error mark a dispatcher (Tool Search, Code Mode) sets for nested calls.
  */
-export function resolveToolResultContentSource(
+function resolveToolResultContentSource(
   tool: Pick<AgentTool, "resultContentSource">,
   result: object,
 ): Pick<FinalizedToolCallOutcome, "resultContentSource"> {

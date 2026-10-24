@@ -144,6 +144,7 @@ describe("gateway WebSocket chat abort settlement", () => {
       let injectionSignal: AbortSignal | undefined;
       let injectionSettled = false;
       const injectionWork: Promise<void>[] = [];
+      const injectionAccepted = createDeferred();
       const waitForAgentJob = agentJobs.waitForAgentJob;
       const waitObserver = vi.spyOn(agentJobs, "waitForAgentJob").mockImplementation((params) => {
         const work = waitForAgentJob(params);
@@ -205,6 +206,7 @@ describe("gateway WebSocket chat abort settlement", () => {
                   injectionSettled = true;
                 });
                 injectionWork.push(work);
+                injectionAccepted.resolve();
                 return work;
               },
             },
@@ -240,6 +242,8 @@ describe("gateway WebSocket chat abort settlement", () => {
         expect(started.ok).toBe(true);
         expect(started.payload).toMatchObject({ runId, status: "started" });
         if (settlement === "accepted-injection") {
+          // The ACK owns durable input custody, not detached native acceptance.
+          await withinTest(injectionAccepted.promise, signal);
           expect(injectionWork).toHaveLength(1);
           expect(injectionSignal?.aborted).toBe(false);
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();

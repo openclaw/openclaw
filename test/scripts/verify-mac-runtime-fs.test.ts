@@ -1,14 +1,18 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { createRequire, isBuiltin } from "node:module";
+import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { build } from "tsdown";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import buildConfigs from "../../tsdown.config.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
+import {
+  copyFsSafePackageFixture,
+  linkFsSafeFixtureRuntimeDependencies,
+} from "./fs-safe-package.test-support.js";
 
 const builds = useAutoCleanupTempDirTracker(afterAll);
 const fixtures = useAutoCleanupTempDirTracker(afterEach);
@@ -16,7 +20,7 @@ const helper = path.resolve("scripts/verify-mac-runtime-fs.mjs");
 const testNodeExecPath = resolveTestNodeExecPath();
 // Native package containment runs on the test runtime; the packager repeats
 // this proof on the bundled Bun for each shipped architecture.
-describe.skipIf(process.platform !== "darwin")("Mac runtime bundled filesystem proof", () => {
+describe("Mac runtime bundled filesystem proof", () => {
   let compiled: string;
   beforeAll(async () => {
     compiled = builds.make("openclaw-runtime-fs-build-");
@@ -35,35 +39,15 @@ describe.skipIf(process.platform !== "darwin")("Mac runtime bundled filesystem p
       dts: false,
       logLevel: "silent",
     });
-    const chunks = bundles.flatMap((bundle) =>
-      bundle.chunks.filter((chunk) => chunk.type === "chunk"),
-    );
-    const emittedFiles = new Set(chunks.map((chunk) => chunk.fileName));
-    const dependencies = JSON.parse(fs.readFileSync("package.json", "utf8")).dependencies;
-    // The SDK entry also imports memory helpers; provide their declared runtime
-    // dependencies while keeping fs-safe/native copies owned by each fixture.
-    for (const specifier of new Set(
-      chunks.flatMap((chunk) => chunk.imports.concat(chunk.dynamicImports)),
-    )) {
-      if (isBuiltin(specifier) || specifier.startsWith(".") || emittedFiles.has(specifier)) {
-        continue;
+    try {
+      linkFsSafeFixtureRuntimeDependencies(
+        compiled,
+        bundles.flatMap((bundle) => bundle.chunks.filter((chunk) => chunk.type === "chunk")),
+      );
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
       }
-      const packageName = specifier
-        .split("/")
-        .slice(0, specifier.startsWith("@") ? 2 : 1)
-        .join("/");
-      expect(Object.hasOwn(dependencies, packageName), specifier).toBe(true);
-      if (packageName === "@openclaw/fs-safe") {
-        continue;
-      }
-      const destination = path.join(compiled, "node_modules", packageName);
-      if (!fs.existsSync(destination)) {
-        fs.mkdirSync(path.dirname(destination), { recursive: true });
-        fs.symlinkSync(fs.realpathSync(path.join("node_modules", packageName)), destination, "dir");
-      }
-    }
-    for (const bundle of bundles) {
-      await bundle[Symbol.asyncDispose]();
     }
     expect(fs.existsSync(path.join(compiled, "dist/native"))).toBe(false);
     fs.writeFileSync(path.join(compiled, "package.json"), '{"type":"module"}');
@@ -98,69 +82,95 @@ describe.skipIf(process.platform !== "darwin")("Mac runtime bundled filesystem p
     return result;
   }
 
-  it("rejects an omitted native package through the bundled filesystem verifier", () => {
-    const { packageRoot, home, nativePackage } = fixture();
-    fs.rmSync(nativePackage.root, { recursive: true });
-    const result = probe(packageRoot, home);
-    expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain("helper-unavailable");
-    expect(result.stderr).toContain("MODULE_NOT_FOUND");
-    expect(result.stderr).toContain(nativePackage.name);
-  });
-
-  it("accepts SDK write/create bytes from the installed platform package", () => {
-    const { packageRoot, home, native } = fixture();
-    const result = probe(packageRoot, home);
+  it("loads the emitted SDK with its production dependencies", () => {
+    const directory = fixtures.make("openclaw-runtime-fs-import-");
+    fs.cpSync(compiled, directory, { recursive: true });
+    copyFsSafePackageFixture(directory);
+    const entry = path.join(directory, "dist/plugin-sdk/memory-core-host-engine-fs.js");
+    const result = spawnSync(
+      testNodeExecPath,
+      ["--input-type=module", "-e", `await import(${JSON.stringify(pathToFileURL(entry).href)})`],
+      { cwd: directory, encoding: "utf8", timeout: 30_000 },
+    );
+    expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(fs.readFileSync(path.join(home, "native-write-proof"), "utf8")).toBe(
-      "bundled runtime write proof\n",
-    );
-    expect(fs.readFileSync(path.join(home, "native-create-proof"), "utf8")).toBe(
-      "bundled runtime create proof\n",
-    );
-    expect(JSON.parse(result.stdout)).toEqual({
-      architecture: process.arch,
-      nativeModule: native,
-      writeBytes: 28,
-      createBytes: 29,
-    });
   });
 
-  it("rejects a loaded native package outside the runtime payload", () => {
-    const { packageRoot, home, native } = fixture();
-    const outside = path.join(home, "fs-safe-native.node");
-    fs.renameSync(native, outside);
-    fs.symlinkSync(outside, native);
-    const result = probe(packageRoot, home);
-    expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain("fs-safe native package is outside the runtime payload");
-    // The SDK operation succeeded; the package provenance check rejects its source.
-    expect(fs.readFileSync(path.join(home, "native-write-proof"), "utf8")).toBe(
-      "bundled runtime write proof\n",
-    );
-    expect(fs.readFileSync(path.join(home, "native-create-proof"), "utf8")).toBe(
-      "bundled runtime create proof\n",
-    );
-  });
+  it.skipIf(process.platform !== "darwin")(
+    "rejects an omitted native package through the bundled filesystem verifier",
+    () => {
+      const { packageRoot, home, nativePackage } = fixture();
+      fs.rmSync(nativePackage.root, { recursive: true });
+      const result = probe(packageRoot, home);
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("helper-unavailable");
+      expect(result.stderr).toContain("MODULE_NOT_FOUND");
+      expect(result.stderr).toContain(nativePackage.name);
+    },
+  );
 
-  it("does not recover an omitted platform package from a stale dist native tree", () => {
-    const { packageRoot, home, native, nativePackage } = fixture();
-    const staleNative = path.join(
-      packageRoot,
-      "dist/native",
-      `${process.platform}-${process.arch}`,
-      "fs-safe-native.node",
-    );
-    fs.mkdirSync(path.dirname(staleNative), { recursive: true });
-    fs.copyFileSync(native, staleNative);
-    fs.rmSync(nativePackage.root, { recursive: true });
-    const result = probe(packageRoot, home);
-    expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain("helper-unavailable");
-    expect(result.stderr).toContain(nativePackage.name);
-    expect(fs.readFileSync(path.join(home, "native-write-proof"), "utf8")).toBe(
-      "before replacement\n",
-    );
-    expect(fs.existsSync(path.join(home, "native-create-proof"))).toBe(false);
-  });
+  it.skipIf(process.platform !== "darwin")(
+    "accepts SDK write/create bytes from the installed platform package",
+    () => {
+      const { packageRoot, home, native } = fixture();
+      const result = probe(packageRoot, home);
+      expect(result.status, result.stderr).toBe(0);
+      expect(fs.readFileSync(path.join(home, "native-write-proof"), "utf8")).toBe(
+        "bundled runtime write proof\n",
+      );
+      expect(fs.readFileSync(path.join(home, "native-create-proof"), "utf8")).toBe(
+        "bundled runtime create proof\n",
+      );
+      expect(JSON.parse(result.stdout)).toEqual({
+        architecture: process.arch,
+        nativeModule: native,
+        writeBytes: 28,
+        createBytes: 29,
+      });
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "rejects a loaded native package outside the runtime payload",
+    () => {
+      const { packageRoot, home, native } = fixture();
+      const outside = path.join(home, "fs-safe-native.node");
+      fs.renameSync(native, outside);
+      fs.symlinkSync(outside, native);
+      const result = probe(packageRoot, home);
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("fs-safe native package is outside the runtime payload");
+      // The SDK operation succeeded; the package provenance check rejects its source.
+      expect(fs.readFileSync(path.join(home, "native-write-proof"), "utf8")).toBe(
+        "bundled runtime write proof\n",
+      );
+      expect(fs.readFileSync(path.join(home, "native-create-proof"), "utf8")).toBe(
+        "bundled runtime create proof\n",
+      );
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "does not recover an omitted platform package from a stale dist native tree",
+    () => {
+      const { packageRoot, home, native, nativePackage } = fixture();
+      const staleNative = path.join(
+        packageRoot,
+        "dist/native",
+        `${process.platform}-${process.arch}`,
+        "fs-safe-native.node",
+      );
+      fs.mkdirSync(path.dirname(staleNative), { recursive: true });
+      fs.copyFileSync(native, staleNative);
+      fs.rmSync(nativePackage.root, { recursive: true });
+      const result = probe(packageRoot, home);
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("helper-unavailable");
+      expect(result.stderr).toContain(nativePackage.name);
+      expect(fs.readFileSync(path.join(home, "native-write-proof"), "utf8")).toBe(
+        "before replacement\n",
+      );
+      expect(fs.existsSync(path.join(home, "native-create-proof"))).toBe(false);
+    },
+  );
 });

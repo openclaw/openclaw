@@ -327,39 +327,45 @@ describe("prepared model runtime snapshots", () => {
     }
   });
 
-  it("keeps replacement readers blocked when an earlier refresh is superseded", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const initialConfig = {};
-    const skippedConfig = configFor("openai/gpt-5.4");
-    const latestConfig = configFor();
-    await refresh(initialConfig);
-    const build = holdNextBuild();
+  it.each([false, true])(
+    "follows superseding replacement gates (passive: %s)",
+    async (readPublished) => {
+      mocks.configuredAgentIds = ["default"];
+      const initialConfig = {};
+      const skippedConfig = configFor("openai/gpt-5.4");
+      const latestConfig = configFor();
+      await refresh(initialConfig);
+      const build = holdNextBuild();
 
-    markStale("test overlapping config commit", { waitForReplacement: true });
-    const skipped = build.track(refresh(skippedConfig));
-    const latest = build.track(refresh(latestConfig));
-    const read = build.track(
-      prepare({
-        ...fixture.agentInput("default", latestConfig),
-        workspaceDir: "/tmp/unused-workspace",
-      }),
-    );
-
-    await skipped;
-    await expect(
-      Promise.race([
-        read.then(
-          () => "settled",
-          () => "settled",
+      markStale("test overlapping config commit", { waitForReplacement: true });
+      const read = build.track(
+        prepare(
+          {
+            ...fixture.agentInput("default", latestConfig),
+            workspaceDir: "/tmp/unused-workspace",
+          },
+          { readPublished },
         ),
-        Promise.resolve("pending"),
-      ]),
-    ).resolves.toBe("pending");
-    await build.started;
-    build.finish();
-    await latest;
-    await expect(read).resolves.toMatchObject({ config: latestConfig });
-  });
+      );
+      const skipped = build.track(refresh(skippedConfig));
+      const latest = build.track(refresh(latestConfig));
+
+      await skipped;
+      await expect(
+        Promise.race([
+          read.then(
+            () => "settled",
+            () => "settled",
+          ),
+          Promise.resolve("pending"),
+        ]),
+      ).resolves.toBe("pending");
+      await build.started;
+      build.finish();
+      await latest;
+      await expect(read).resolves.toMatchObject({ config: latestConfig });
+    },
+  );
   it.each(["workspace", "config"] as const)(
     "deduplicates standalone activation while publishing a changed %s",
     async (changed) => {

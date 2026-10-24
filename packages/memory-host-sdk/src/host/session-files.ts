@@ -387,7 +387,7 @@ export async function buildSessionEntry(
         ? attachSessionEntryResetRecallCutoff(prepared.entry, prepared.resetRecallCutoff)
         : null;
     }
-    return buildSessionEntryInProcess(absPath, opts);
+    return buildSessionEntryFromSource(absPath, opts);
   };
   try {
     return await prepare();
@@ -455,15 +455,6 @@ export async function buildSessionEntries(
   };
   await Promise.all([...otherEntries, prepareWorkerEntries()]);
   return results;
-}
-
-/** The shared transcript worker runs the same projection as inline readers. */
-export async function buildSessionEntryInProcess(
-  absPath: string,
-  opts: BuildSessionEntryOptions = {},
-  snapshot?: SessionEntrySnapshot,
-): Promise<SessionFileEntry | null> {
-  return buildSessionEntryFromSource(absPath, opts, snapshot);
 }
 
 /** Project an actor-owned snapshot without reopening its physical store on the caller. */

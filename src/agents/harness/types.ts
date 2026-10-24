@@ -17,7 +17,7 @@ import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
 export type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
-export type AgentHarnessNativeSubagents = NativeSubagentsSnapshot;
+type AgentHarnessNativeSubagents = NativeSubagentsSnapshot;
 
 /** Private native ownership, not execution authority or credential readiness. */
 export type AgentHarnessSessionRuntimeOwnership = {

@@ -113,6 +113,13 @@ describe("resident catalog rollout currency", () => {
   });
 
   it("scans new day folders without content reads and prefers plain rollout siblings", async () => {
+    const { watchers } = watchWithControlledEvents("linux");
+    const lstat = fs.lstat;
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const stat = await lstat(...args);
+      // Directory timestamps can tie across mutations; watcher delivery owns invalidation.
+      return stat.isDirectory() ? Object.assign(stat, { ctimeMs: 0, mtimeMs: 0 }) : stat;
+    });
     const f = await fixture();
     const noReads = expectNoReads("readFile", "open");
     const tracked = [f.file];
@@ -127,6 +134,7 @@ describe("resident catalog rollout currency", () => {
     await fs.mkdir(newDay);
     const added = path.join(newDay, "rollout-new.jsonl.zst");
     await fs.writeFile(added, zstdCompressSync(meta("new-thread")));
+    watchers[0]!.emit("change", "rename", path.basename(compressedSibling));
     const { files: next, present } = await f.scan(tracked);
     expect(next.size).toBe(2);
     expect(next.get(f.file)).toEqual(first.get(f.file));
@@ -138,6 +146,8 @@ describe("resident catalog rollout currency", () => {
     const renamed = path.join(newDay, "rollout-renamed.jsonl.zst");
     await fs.rename(added, renamed);
     await fs.unlink(f.file);
+    watchers[0]!.emit("change", "rename", path.basename(f.file));
+    watchers[1]!.emit("change", "rename", path.basename(added));
     const final = await f.scan([f.file, added.slice(0, -4), renamed.slice(0, -4)]);
     expect(new Set(final.files.keys())).toEqual(new Set([compressedSibling, renamed]));
     expect(final.present).toEqual(new Set([f.file, renamed.slice(0, -4)]));

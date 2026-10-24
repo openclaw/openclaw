@@ -18,6 +18,26 @@ export function configRawPayload(config: unknown, baseHash?: string) {
   };
 }
 
+export function makeApprovedOperationAuditConfig(
+  config: Record<string, unknown>,
+  layout: "unrelated-include" | "include-only",
+) {
+  const agents = {
+    entries: { main: {} },
+    defaults: { model: { primary: "openai/gpt-4.1" } },
+  };
+  return {
+    includedConfig: layout === "include-only" ? agents : { level: "info" },
+    root: {
+      ...config,
+      // This proof owns persistence/journals, not unrelated model/plugin activation.
+      gateway: { reload: { mode: "off" } },
+      agents: layout === "include-only" ? { $include: "./audit-include.json" } : agents,
+      ...(layout === "unrelated-include" ? { logging: { $include: "./audit-include.json" } } : {}),
+    },
+  };
+}
+
 export function configWithGatewayTokenSecretRef(config: Record<string, unknown>, envVar: string) {
   const nextConfig = structuredClone(config);
   const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;

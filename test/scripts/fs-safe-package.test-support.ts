@@ -1,5 +1,6 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
-import { createRequire } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 
 const require = createRequire(import.meta.url);
@@ -8,6 +9,42 @@ const requireFromFsSafe = createRequire(path.join(fsSafeRoot, "package.json"));
 const manifest = JSON.parse(fs.readFileSync(path.join(fsSafeRoot, "package.json"), "utf8")) as {
   optionalDependencies: Record<string, string>;
 };
+
+// Keep external runtime dependencies available without replacing the copied
+// fs-safe/native package whose containment these fixtures prove.
+export function linkFsSafeFixtureRuntimeDependencies(
+  packageRoot: string,
+  chunks: ReadonlyArray<{
+    fileName: string;
+    imports: readonly string[];
+    dynamicImports: readonly string[];
+  }>,
+) {
+  const { dependencies } = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+    dependencies: Record<string, string>;
+  };
+  const emittedFiles = new Set(chunks.map((chunk) => chunk.fileName));
+  for (const specifier of new Set(
+    chunks.flatMap((chunk) => [...chunk.imports, ...chunk.dynamicImports]),
+  )) {
+    if (isBuiltin(specifier) || specifier.startsWith(".") || emittedFiles.has(specifier)) {
+      continue;
+    }
+    const packageName = specifier
+      .split("/")
+      .slice(0, specifier.startsWith("@") ? 2 : 1)
+      .join("/");
+    assert(Object.hasOwn(dependencies, packageName), specifier);
+    if (packageName === "@openclaw/fs-safe") {
+      continue;
+    }
+    const destination = path.join(packageRoot, "node_modules", packageName);
+    if (!fs.existsSync(destination)) {
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.symlinkSync(fs.realpathSync(path.join("node_modules", packageName)), destination, "dir");
+    }
+  }
+}
 
 // Nest platform packages under their declared owner so a hoisted development
 // install cannot hide a bundled loader that resolves from the wrong package.

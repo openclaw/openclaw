@@ -58,6 +58,8 @@ const config = {
   // Script entrypoints import core and Plugin SDK APIs. Those owners are
   // checked by the application scans; this pass owns only scripts/** exports.
   ignoreIssues: {
+    // instrumentGatewayBenchWorkerSource emits a named self-import into the measured worker.
+    "scripts/lib/gateway-bench-worker-messages.ts": ["exports"],
     // These executable modules are also loaded through variable/file-URL imports
     // by build or subprocess test harnesses, which Knip cannot resolve statically.
     "scripts/diffs-shiki-curated.ts": [
@@ -80,6 +82,9 @@ const config = {
     "scripts/oxlint-boundary-guards.mjs": ["exports"],
     // Oxlint consumes this required default export through a JSON config path.
     "tools/solid-lint/index.mjs": ["exports"],
+    // Vitest loads these opt-in configs by CLI path, consuming their required default exports.
+    "scripts/control-ui-parity/vitest.config.ts": ["exports"],
+    "scripts/control-ui-retention/vitest.config.ts": ["exports"],
     // Vitest consumes this required default export through the reporter CLI path.
     "scripts/lib/vitest-resource-reporter.mts": ["exports"],
     // Vitest loads this default class through the report owner's CLI and generated merge config.

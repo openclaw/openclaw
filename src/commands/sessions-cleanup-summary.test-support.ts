@@ -1,4 +1,4 @@
-import type { SessionCleanupSummary } from "../config/sessions.js";
+import type { SessionCleanupSummary } from "../config/sessions/cleanup-result.js";
 
 export function cleanupSummary(overrides: Partial<SessionCleanupSummary>): SessionCleanupSummary {
   return {

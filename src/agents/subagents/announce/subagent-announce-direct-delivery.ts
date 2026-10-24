@@ -9,6 +9,7 @@ import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
 } from "../../../sessions/input-provenance.js";
+import { waitForReplyOperationBackend } from "../../../sessions/session-controller.state.js";
 import {
   submitSessionControllerSteer,
   type SessionControllerSteerResult,
@@ -305,6 +306,16 @@ async function sendSubagentAnnounceDirectlyBound(
       params.expectsCompletionMessage &&
       params.controllerInput
     ) {
+      // Timeout compaction retains the requester but detaches its failed attempt.
+      // Wait for that owner's retry instead of parking completion behind the turn
+      // that needs it. A retired owner still falls back to the ordinary mailbox.
+      const active = params.controllerInput.mailbox.owner.active;
+      if (requesterAbandonment === "recovering_timeout" && active) {
+        await waitForReplyOperationBackend(active, params.signal);
+        if (!isCompletionAdmissionAllowed()) {
+          return sourceOwnerChangedResult();
+        }
+      }
       let steer: SessionControllerSteerResult;
       try {
         steer = await submitSessionControllerSteer({

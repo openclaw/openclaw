@@ -115,9 +115,6 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/proxy-capture/child-transport.process.test-support.ts!",
   // The PostgreSQL state owner test resolves this worker through resolveRuntimeWorkerUrl.
   "src/state/openclaw-state-db.postgres.test-support.ts!",
-  // `pnpm ui:parity` runs this opt-in Vitest config by path; it includes the capture suite.
-  "scripts/control-ui-parity/vitest.config.ts!",
-  "scripts/control-ui-parity/capture-suite.ts!",
   // The cold-load benchmark README invokes this standalone driver by path.
   "scripts/bench-control-ui-cold-load.ts!",
   // The hot-reload scenario passes this isolated upstream preload to the Gateway CLI.
@@ -238,6 +235,8 @@ const config = {
   // This fixture deliberately mixes used, aliased, and unused exports so the
   // topology analyzer can prove each classification.
   ignoreIssues: {
+    // instrumentGatewayBenchWorkerSource emits a named self-import into the measured worker.
+    "scripts/lib/gateway-bench-worker-messages.ts": ["exports"],
     // The memory-state compatibility facade must retain its pre-registry-bundle type export.
     "src/plugins/memory-state.ts": ["types"],
     "test/fixtures/ts-topology/basic/**": [
