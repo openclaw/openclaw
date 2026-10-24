@@ -61,6 +61,10 @@ async function openBridge(
   return { ...fixture, ws, callbacks: await ready.promise };
 }
 
+function invokeConsult(request: RealtimeVoiceBridgeCreateRequest, id: string, args: unknown) {
+  request.onToolCall?.({ itemId: `item-${id}`, callId: id, name: "openclaw_agent_consult", args });
+}
+
 function endedEvents(
   processEvent: ReturnType<typeof createCarrierLifecycleHarness>["processEvent"],
 ) {
@@ -216,9 +220,8 @@ describe("RealtimeCallHandler lifecycle", () => {
       realtimeProvider.createBridge,
       { resolveCallRegistration },
     );
-    const predecessor = await connectCarrierStream(handler);
-
-    sendCarrierStart(predecessor.ws, "MZ-predecessor", call.providerCallId);
+    const { ws: predecessor } = await connectCarrierStream(handler);
+    sendCarrierStart(predecessor, "MZ-predecessor", call.providerCallId);
     await vi.waitFor(() => expect(realtimeProvider.createBridge).toHaveBeenCalledTimes(1));
 
     const replacement = await connectCarrierStream(handler);
@@ -233,7 +236,7 @@ describe("RealtimeCallHandler lifecycle", () => {
     ).toHaveLength(1);
     expect(endedEvents(processEvent)).toHaveLength(0);
     expect(endCall).not.toHaveBeenCalled();
-    expect(predecessor.ws.readyState).toBe(WebSocket.OPEN);
+    expect(predecessor.readyState).toBe(WebSocket.OPEN);
     expect(handler.speak(call.callId, "predecessor remains connected")).toEqual({
       success: true,
     });
@@ -253,21 +256,20 @@ describe("RealtimeCallHandler lifecycle", () => {
       );
     const { call, handler, endCall, processEvent } =
       createCarrierLifecycleHarness(createBridgeForCall);
-    const previous = await connectCarrierStream(handler);
-
-    sendCarrierStart(previous.ws, "MZ-previous", call.providerCallId);
+    const { ws: previous } = await connectCarrierStream(handler);
+    sendCarrierStart(previous, "MZ-previous", call.providerCallId);
     await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledTimes(1));
 
-    const replacement = await connectCarrierStream(handler);
-    sendCarrierStart(replacement.ws, "MZ-replacement", call.providerCallId);
+    const { ws: replacement } = await connectCarrierStream(handler);
+    sendCarrierStart(replacement, "MZ-replacement", call.providerCallId);
     await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledTimes(2));
 
-    const previousClosed = waitForClose(previous.ws);
+    const previousClosed = waitForClose(previous);
     pendingStartup.reject(new Error("superseded provider rejected startup"));
     expect((await previousClosed).code).toBe(1011);
     expect(endCall).not.toHaveBeenCalled();
     expect(endedEvents(processEvent)).toHaveLength(0);
-    expect(replacement.ws.readyState).toBe(WebSocket.OPEN);
+    expect(replacement.readyState).toBe(WebSocket.OPEN);
     expect(handler.speak(call.callId, "replacement remains connected")).toEqual({
       success: true,
     });
@@ -310,83 +312,62 @@ describe("RealtimeCallHandler lifecycle", () => {
     expect(endCall).toHaveBeenCalledExactlyOnceWith(call.callId, { reason: "timeout" });
   });
 
-  it("cancels native dispatch when the stream closes during transcript settling", async () => {
-    const submitToolResult = vi.fn();
-    const { handler, ws, callbacks } = await openBridge(vi.fn(), {
-      supportsToolResultContinuation: true,
-      submitToolResult,
-    });
-    const consult = vi.fn<ToolHandler>(async () => ({ text: "Must not run" }));
-    handler.registerToolHandler("openclaw_agent_consult", consult);
-    callbacks.onTranscript?.("user", "Check the deployment", false);
-    callbacks.onToolCall?.({
-      itemId: "item-consult",
-      callId: "tool-consult",
-      name: "openclaw_agent_consult",
-      args: { question: "Check the deployment." },
-    });
-    const consults = (
-      handler as unknown as {
-        nativeConsultsInFlightByCallId: Map<string, unknown>;
-      }
-    ).nativeConsultsInFlightByCallId;
-    await vi.waitFor(() => {
-      expect(consults.size).toBe(1);
-      expect(submitToolResult).toHaveBeenCalledOnce();
-      expect(consult).not.toHaveBeenCalled();
-    });
-    const closed = waitForClose(ws);
-    ws.close();
-    await closed;
-    await vi.waitFor(() => expect(consults.size).toBe(0));
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 400);
-    });
-    expect(consult).not.toHaveBeenCalled();
-    expect(submitToolResult).toHaveBeenCalledOnce();
-  });
-
-  it("aborts a hung native consult during stream teardown", async () => {
-    let consultSignal: AbortSignal | undefined;
-    const submitToolResult = vi.fn();
-    const { handler, ws, callbacks } = await openBridge(vi.fn(), {
-      supportsToolResultContinuation: true,
-      submitToolResult,
-    });
-    handler.registerToolHandler("openclaw_agent_consult", async (_args, _callId, context) => {
-      consultSignal = context.abortSignal;
-      return await new Promise<unknown>((_resolve, reject) => {
-        context.abortSignal?.addEventListener(
-          "abort",
-          () => reject(new Error("native consult aborted", { cause: context.abortSignal?.reason })),
-          { once: true },
-        );
+  it.each(["settling", "running"] as const)(
+    "cancels a %s native consult during stream teardown",
+    async (phase) => {
+      let consultSignal: AbortSignal | undefined;
+      const submitToolResult = vi.fn();
+      const { handler, ws, callbacks } = await openBridge(vi.fn(), {
+        supportsToolResultContinuation: true,
+        submitToolResult,
       });
-    });
-    callbacks.onToolCall?.({
-      itemId: "item-consult",
-      callId: "tool-consult",
-      name: "openclaw_agent_consult",
-      args: { question: "Check the deployment." },
-    });
-    await vi.waitFor(() => expect(consultSignal).toBeDefined());
-
-    const consults = (
-      handler as unknown as {
-        nativeConsultsInFlightByCallId: Map<string, unknown>;
+      const consult = vi.fn<ToolHandler>(async (_args, _callId, context) => {
+        if (phase === "settling") {
+          return { text: "Must not run" };
+        }
+        consultSignal = context.abortSignal;
+        return await new Promise<unknown>((_resolve, reject) => {
+          context.abortSignal?.addEventListener(
+            "abort",
+            () =>
+              reject(new Error("native consult aborted", { cause: context.abortSignal?.reason })),
+            { once: true },
+          );
+        });
+      });
+      handler.registerToolHandler("openclaw_agent_consult", consult);
+      if (phase === "settling") {
+        callbacks.onTranscript?.("user", "Check the deployment", false);
       }
-    ).nativeConsultsInFlightByCallId;
-    expect(consults.size).toBe(1);
-
-    const closed = waitForClose(ws);
-    ws.close();
-    await closed;
-    await vi.waitFor(() => expect(consults.size).toBe(0));
-
-    expect(consultSignal?.aborted).toBe(true);
-    await nextImmediate();
-    expect(submitToolResult).toHaveBeenCalledTimes(1);
-  });
+      invokeConsult(callbacks, "tool-consult", { question: "Check the deployment." });
+      const consults = (
+        handler as unknown as { nativeConsultsInFlightByCallId: Map<string, unknown> }
+      ).nativeConsultsInFlightByCallId;
+      await vi.waitFor(() => {
+        expect(consults.size).toBe(1);
+        if (phase === "settling") {
+          expect(submitToolResult).toHaveBeenCalledOnce();
+          expect(consult).not.toHaveBeenCalled();
+        } else {
+          expect(consultSignal).toBeDefined();
+        }
+      });
+      const closed = waitForClose(ws);
+      ws.close();
+      await closed;
+      await vi.waitFor(() => expect(consults.size).toBe(0));
+      if (phase === "settling") {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 400);
+        });
+        expect(consult).not.toHaveBeenCalled();
+      } else {
+        expect(consultSignal?.aborted).toBe(true);
+        await nextImmediate();
+      }
+      expect(submitToolResult).toHaveBeenCalledOnce();
+    },
+  );
 
   it("preserves a concurrently admitted bridge when another creation fails", async () => {
     const firstPersistence = defer<ProcessResult>({ kind: "processed" });
@@ -651,6 +632,8 @@ async function createConsultFixture(delegation = false) {
     .mockResolvedValue(responseB);
   handler.registerToolHandler("openclaw_agent_consult", consult);
   vi.useFakeTimers();
+  const finalResults = (id: string) =>
+    submit.mock.calls.filter(([callId, , options]) => callId === id && !options?.willContinue);
   return {
     first,
     consult,
@@ -658,16 +641,11 @@ async function createConsultFixture(delegation = false) {
     provider: {
       request,
       submit,
-      invoke: (id: string, args: unknown) => {
-        request.onToolCall?.({
-          itemId: `item-${id}`,
-          callId: id,
-          name: "openclaw_agent_consult",
-          args,
-        });
+      invoke: (id: string, args: unknown) => invokeConsult(request, id, args),
+      finalResults,
+      expectFinal: (id: string, result: unknown) => {
+        expect(finalResults(id)).toEqual([[id, result, undefined]]);
       },
-      finalResults: (id: string) =>
-        submit.mock.calls.filter(([callId, , options]) => callId === id && !options?.willContinue),
     },
   };
 }
@@ -707,21 +685,21 @@ describe("native realtime consult request identity", () => {
 
     first.resolve(responseA);
     await vi.advanceTimersByTimeAsync(0);
-    expect(provider.finalResults("first")).toEqual([["first", { text: "Answer A." }, undefined]]);
+    provider.expectFinal("first", responseA);
     const busy = {
       status: "busy",
       started: false,
       retryable: true,
       error: expect.stringMatching(/different request.*not started.*retry/i),
     };
-    expect(provider.finalResults("different")).toEqual([["different", busy, undefined]]);
+    provider.expectFinal("different", busy);
     expect(overlappingSubmissions).toEqual([["different", busy, undefined]]);
 
     provider.invoke("retry", args);
     await vi.advanceTimersByTimeAsync(0);
     expect(consult).toHaveBeenCalledTimes(2);
     expect(consult.mock.calls[1]?.[0]).toEqual(args);
-    expect(provider.finalResults("retry")).toEqual([["retry", { text: "Answer B." }, undefined]]);
+    provider.expectFinal("retry", responseB);
   });
 
   it.each([
@@ -757,13 +735,10 @@ describe("native realtime consult request identity", () => {
     expect(consult).not.toHaveBeenCalled();
     persistence.resolve({ kind: "processed" });
     await vi.advanceTimersByTimeAsync(0);
-    expect(provider.finalResults("different")).toEqual([
-      [
-        "different",
-        expect.objectContaining({ status: "busy", started: false, retryable: true }),
-        undefined,
-      ],
-    ]);
+    provider.expectFinal(
+      "different",
+      expect.objectContaining({ status: "busy", started: false, retryable: true }),
+    );
     expect(provider.submit.mock.calls.filter(([id]) => id === "different")).toHaveLength(1);
     working.resolve();
     await vi.advanceTimersByTimeAsync(350);
@@ -781,7 +756,7 @@ describe("native realtime consult request identity", () => {
     expect(consult.mock.calls[1]?.[2].partialUserTranscript).toBe(
       phase === "same completed ASR" ? undefined : speechB,
     );
-    expect(provider.finalResults("retry")).toEqual([["retry", { text: "Answer B." }, undefined]]);
+    provider.expectFinal("retry", responseB);
   });
 
   it("captures native delegation context before transcript persistence yields", async () => {
@@ -801,10 +776,10 @@ describe("native realtime consult request identity", () => {
     expect(consult).toHaveBeenCalledOnce();
     expect(consult.mock.calls[0]?.[2].partialUserTranscript).toBe(speechA);
     first.resolve(responseA);
-    await expect(answerA).resolves.toEqual({ text: "Answer A." });
+    await expect(answerA).resolves.toEqual(responseA);
     const answerB = delegate({ prompt: "message" });
     await vi.advanceTimersByTimeAsync(350);
-    await expect(answerB).resolves.toEqual({ text: "Answer B." });
+    await expect(answerB).resolves.toEqual(responseB);
     expect(consult.mock.calls[1]?.[2].partialUserTranscript).toBe(speechB);
     expect(provider.submit).not.toHaveBeenCalled();
   });
@@ -842,9 +817,7 @@ describe("native realtime consult request identity", () => {
       provider.request.onTranscript?.("user", laterSpeech, true);
       provider.invoke("different", { question: "message" });
       await vi.advanceTimersByTimeAsync(0);
-      expect(provider.finalResults("different")).toEqual([
-        ["different", expect.objectContaining({ status: "busy" }), undefined],
-      ]);
+      provider.expectFinal("different", expect.objectContaining({ status: "busy" }));
       first.resolve(responseA);
       await vi.advanceTimersByTimeAsync(0);
       provider.invoke("retry", { question: "message" });

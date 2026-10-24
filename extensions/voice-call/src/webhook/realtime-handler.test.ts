@@ -28,7 +28,6 @@ import {
 import { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
 
 const realtimeVoiceHarnessTestHooks = vi.hoisted(() => ({
-  onCreate: undefined as ((harness: RealtimeVoiceSessionHarness) => void) | undefined,
   sessions: new Map<string, RealtimeVoiceSessionHarness>(),
 }));
 
@@ -41,7 +40,6 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
     ) => {
       const harness = actual.createRealtimeVoiceSessionHarness(params);
       realtimeVoiceHarnessTestHooks.sessions.set(params.talk.sessionId, harness);
-      realtimeVoiceHarnessTestHooks.onCreate?.(harness);
       return harness;
     },
   };
@@ -49,7 +47,6 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
-  realtimeVoiceHarnessTestHooks.onCreate = undefined;
   realtimeVoiceHarnessTestHooks.sessions.clear();
   vi.useRealTimers();
   for (const close of cleanup.splice(0).toReversed()) {
@@ -211,6 +208,26 @@ async function openConsult(
   return { ...fixture, ...(await fixture.start()), submitToolResult, consult };
 }
 
+function replacementHarness(
+  bridges: RealtimeVoiceBridge[],
+  config?: Partial<VoiceCallRealtimeConfig>,
+) {
+  return makeCallHarness((_request, index) => expectDefined(bridges[index], "replacement bridge"), {
+    config,
+  });
+}
+
+function registerPendingConsult(handler: RealtimeCallHandler) {
+  const oldResult = createDeferred<{ text: string }>();
+  const replacementResult = createDeferred<{ text: string }>();
+  const consult = vi
+    .fn<Parameters<RealtimeCallHandler["registerToolHandler"]>[1]>()
+    .mockImplementationOnce(() => oldResult.promise)
+    .mockImplementationOnce(() => replacementResult.promise);
+  handler.registerToolHandler("openclaw_agent_consult", consult);
+  return { oldResult, replacementResult, consult };
+}
+
 function callTool(
   callbacks: RealtimeBridgeRequest | undefined,
   callId: string,
@@ -308,11 +325,15 @@ async function bargeInHarness(params: {
   return { ...fixture, ws, callbacks, sendAudio, handleBargeIn, outboundMessages };
 }
 
-function recentTalkEvents(call: CallRecord): RecentTalkEvent[] {
+function sessionFor(call: CallRecord) {
   return expectDefined(
     realtimeVoiceHarnessTestHooks.sessions.get(`voice-call:${call.callId}:realtime`),
     "voice-call realtime session harness",
-  ).talk.recentEvents.slice(-12);
+  );
+}
+
+function recentTalkEvents(call: CallRecord): RecentTalkEvent[] {
+  return sessionFor(call).talk.recentEvents.slice(-12);
 }
 
 function talkEvents(call: CallRecord, type: string) {
@@ -374,12 +395,7 @@ describe("RealtimeCallHandler path routing", () => {
     const persistence = createDeferred<Awaited<ReturnType<CallManager["processEvent"]>>>();
     processEvent.mockReturnValueOnce(persistence.promise);
     callbacks.onTranscript?.("user", "Check the deployment.", true);
-    callbacks.onToolCall?.({
-      itemId: "item-pending-store",
-      callId: "consult-pending-store",
-      name: "openclaw_agent_consult",
-      args: { question: "Check the deployment." },
-    });
+    requestConsult(callbacks, "consult-pending-store", "Check the deployment.");
     const audio = Buffer.from([0xff, 0xfe]);
     sendMedia(ws, audio);
     try {
@@ -626,62 +642,48 @@ describe("RealtimeCallHandler path routing", () => {
     expect(recentTalkEvents(call).some((event) => event.type === "turn.cancelled")).toBe(false);
   });
 
-  it("supplies item-relative telephony playout state to the provider bridge", async () => {
-    const { callbacks, outboundMessages, ws } = await bargeInHarness({
-      providerCallId: "CA-playback-state",
-      handlesProviderBargeIn: true,
-    });
-    expect(callbacks.getPlaybackState).toBeTypeOf("function");
-    expect(callbacks.getPlaybackState?.()).toEqual([]);
-
-    callbacks?.onAudio?.(Buffer.alloc(8 * 160, 0xff), { itemId: "item-1" });
-    await expectFrame(outboundMessages, "media");
-    // Carrier playout remains unconfirmed until its mark receipt arrives.
-    const drainedPlayback = callbacks.getPlaybackState?.();
-    expect(drainedPlayback).toHaveLength(1);
-    expect(drainedPlayback?.[0]?.itemId).toBe("item-1");
-    expect(drainedPlayback?.[0]?.audioEndMs ?? 160).toBeLessThan(40);
-
-    let markAcknowledged = false;
-    callbacks?.onMark?.("mark-1", () => {
-      markAcknowledged = true;
-    });
-    await expectFrame(outboundMessages, "mark");
-
-    ws.send(JSON.stringify({ event: "mark", mark: { name: "mark-1" } }));
-    await waitFor(() => expect(markAcknowledged).toBe(true));
-    expect(callbacks.getPlaybackState?.()).toEqual([]);
-
-    callbacks?.onClearAudio("barge-in");
-    await expectFrame(outboundMessages, "clear");
-    expect(callbacks.getPlaybackState?.()).toEqual([]);
-  });
-
-  it("discards provider mark acknowledgements after barge-in", async () => {
-    const { callbacks, call, outboundMessages, ws } = await bargeInHarness({
-      providerCallId: "CA-mark-clear",
-      handlesProviderBargeIn: true,
-    });
-    callbacks?.onAudio?.(Buffer.alloc(8 * 160, 0xff), { itemId: "item-1" });
-    await expectFrame(outboundMessages, "media");
-
-    // Late receipts must not acknowledge marks retired by the playback reset.
-    let markAcknowledged = false;
-    callbacks?.onMark?.("mark-1", () => {
-      markAcknowledged = true;
-    });
-
-    expect(recentTalkEvents(call).some((event) => event.type === "turn.cancelled")).toBe(false);
-    callbacks?.onClearAudio("barge-in");
-    expect(
-      recentTalkEvents(call).findLast((event) => event.type === "output.audio.done")?.turnId,
-    ).toBe(requireCancelledTurn(call).turnId);
-    await expectFrame(outboundMessages, "clear");
-
-    ws.send(JSON.stringify({ event: "mark", mark: { name: "mark-1" } }));
-    await delay(60);
-    expect(markAcknowledged).toBe(false);
-  });
+  it.each(["played", "retired"] as const)(
+    "tracks item-relative playout for %s carrier marks",
+    async (state) => {
+      const { callbacks, call, outboundMessages, ws } = await bargeInHarness({
+        providerCallId: "CA-playback-state",
+        handlesProviderBargeIn: true,
+      });
+      expect(callbacks.getPlaybackState).toBeTypeOf("function");
+      expect(callbacks.getPlaybackState?.()).toEqual([]);
+      callbacks.onAudio(Buffer.alloc(8 * 160, 0xff), { itemId: "item-1" });
+      await expectFrame(outboundMessages, "media");
+      const playback = callbacks.getPlaybackState?.();
+      expect(playback).toHaveLength(1);
+      expect(playback?.[0]?.itemId).toBe("item-1");
+      expect(playback?.[0]?.audioEndMs ?? 160).toBeLessThan(40);
+      let acknowledged = false;
+      callbacks.onMark?.("mark-1", () => {
+        acknowledged = true;
+      });
+      if (state === "retired") {
+        expect(talkEvents(call, "turn.cancelled")).toHaveLength(0);
+        callbacks.onClearAudio("barge-in");
+        expect(
+          recentTalkEvents(call).findLast((event) => event.type === "output.audio.done")?.turnId,
+        ).toBe(requireCancelledTurn(call).turnId);
+        await expectFrame(outboundMessages, "clear");
+      } else {
+        await expectFrame(outboundMessages, "mark");
+      }
+      ws.send(JSON.stringify({ event: "mark", mark: { name: "mark-1" } }));
+      if (state === "retired") {
+        await delay(60);
+        expect(acknowledged).toBe(false);
+      } else {
+        await waitFor(() => expect(acknowledged).toBe(true));
+        expect(callbacks.getPlaybackState?.()).toEqual([]);
+        callbacks.onClearAudio("barge-in");
+        await expectFrame(outboundMessages, "clear");
+      }
+      expect(callbacks.getPlaybackState?.()).toEqual([]);
+    },
+  );
 
   it("lets a session bridge override provider-level barge-in capabilities", async () => {
     const { callbacks, call, handleBargeIn, outboundMessages, sendAudio, ws } =
@@ -1028,18 +1030,11 @@ describe("RealtimeCallHandler path routing", () => {
   });
 
   it("clears cancelled consult dedupe for a fresh provider session", async () => {
-    let sessionHarness: RealtimeVoiceSessionHarness | undefined;
-    realtimeVoiceHarnessTestHooks.onCreate = (harness) => {
-      sessionHarness = harness;
-    };
-    const { submitToolResult, consult, callbacks } = await openConsult(async () => ({
+    const { call, submitToolResult, consult, callbacks } = await openConsult(async () => ({
       text: "fresh consult answer",
     }));
 
-    const coordinator = expectDefined(
-      sessionHarness,
-      "voice-call realtime session harness",
-    ).forcedConsults;
+    const coordinator = sessionFor(call).forcedConsults;
     const cancelled = expectDefined(
       coordinator.prepare("same question"),
       "cancelled forced consult",
@@ -1071,45 +1066,29 @@ describe("RealtimeCallHandler path routing", () => {
   });
 
   it("keeps a replacement session's forced consult when the old result resolves late", async () => {
-    const sessionHarnesses: RealtimeVoiceSessionHarness[] = [];
-    realtimeVoiceHarnessTestHooks.onCreate = (harness) => {
-      sessionHarnesses.push(harness);
-    };
     const oldSendUserMessage = vi.fn();
     const replacementSendUserMessage = vi.fn();
     const oldSubmitToolResult = vi.fn();
     const oldCloseBridge = vi.fn();
-    const bridges = [
-      makeBridge({
-        close: oldCloseBridge,
-        sendUserMessage: oldSendUserMessage,
-        submitToolResult: oldSubmitToolResult,
-      }),
-      makeBridge({ sendUserMessage: replacementSendUserMessage }),
-    ];
-    const { handler, callbacks, start } = makeCallHarness(
-      (_request, index) => expectDefined(bridges[index], "replacement bridge"),
-      { config: { consultPolicy: "always" } },
+    const { call, handler, callbacks, start } = replacementHarness(
+      [
+        makeBridge({
+          close: oldCloseBridge,
+          sendUserMessage: oldSendUserMessage,
+          submitToolResult: oldSubmitToolResult,
+        }),
+        makeBridge({ sendUserMessage: replacementSendUserMessage }),
+      ],
+      { consultPolicy: "always" },
     );
-    const oldResult = createDeferred<{ text: string }>();
-    const replacementResult = createDeferred<{ text: string }>();
-    const consult = vi
-      .fn<
-        (_args: unknown, _callId: string, context: ToolHandlerContext) => Promise<{ text: string }>
-      >()
-      .mockImplementationOnce(() => oldResult.promise)
-      .mockImplementationOnce(() => replacementResult.promise);
-    handler.registerToolHandler("openclaw_agent_consult", consult);
+    const { oldResult, replacementResult, consult } = registerPendingConsult(handler);
     const clearAudio = vi.spyOn(RealtimeAudioPacer.prototype, "clearAudio");
 
     try {
       const { ws: oldWs } = await start("MZ-forced-old", "CA-forced-old");
       callbacks[0]?.onTranscript?.("user", "Check the old deployment.", true);
       await waitForCalls(consult);
-      const oldCoordinator = expectDefined(
-        sessionHarnesses[0],
-        "old voice-call realtime session harness",
-      ).forcedConsults;
+      const oldCoordinator = sessionFor(call).forcedConsults;
       const oldForcedHandle = expectDefined(
         oldCoordinator.handles().find((handle) => handle.question === "Check the old deployment."),
         "old forced consult handle",
@@ -1166,13 +1145,10 @@ describe("RealtimeCallHandler path routing", () => {
   it("retires predecessor audio and isolates late bridge events from its replacement", async () => {
     const oldCloseBridge = vi.fn();
     const replacementCloseBridge = vi.fn();
-    const bridges = [
+    const { callbacks, start, processEvent, endCall } = replacementHarness([
       makeBridge({ close: oldCloseBridge }),
       makeBridge({ close: replacementCloseBridge }),
-    ];
-    const { callbacks, start, processEvent, endCall } = makeCallHarness((_request, index) =>
-      expectDefined(bridges[index], "replacement bridge"),
-    );
+    ]);
     const { ws: oldWs } = await start("MZ-continuity-old");
     callbacks[0]?.onTranscript?.("user", "Old ", false);
 
@@ -1225,7 +1201,7 @@ describe("RealtimeCallHandler path routing", () => {
   it("does not share a native consult with a replacement realtime session", async () => {
     const oldSubmitToolResult = vi.fn();
     const replacementSubmitToolResult = vi.fn();
-    const bridges = [
+    const { handler, callbacks, start } = replacementHarness([
       makeBridge({
         supportsToolResultContinuation: true,
         submitToolResult: oldSubmitToolResult,
@@ -1234,17 +1210,8 @@ describe("RealtimeCallHandler path routing", () => {
         supportsToolResultContinuation: true,
         submitToolResult: replacementSubmitToolResult,
       }),
-    ];
-    const { handler, callbacks, start } = makeCallHarness((_request, index) =>
-      expectDefined(bridges[index], "replacement bridge"),
-    );
-    const oldResult = createDeferred<{ text: string }>();
-    const replacementResult = createDeferred<{ text: string }>();
-    const consult = vi
-      .fn()
-      .mockImplementationOnce(() => oldResult.promise)
-      .mockImplementationOnce(() => replacementResult.promise);
-    handler.registerToolHandler("openclaw_agent_consult", consult);
+    ]);
+    const { oldResult, replacementResult, consult } = registerPendingConsult(handler);
 
     await start("MZ-native-old", "CA-native-old");
     requestConsult(callbacks[0], "native-old", "Check the old deployment.");
