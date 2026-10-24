@@ -136,16 +136,20 @@ export function createDispatchFixture(
   const waitCallsPath = join(root, "wait-calls.txt");
   const releaseRef = options.releaseRef ?? "release/2026.8.1";
   mkdirSync(binDir);
+  const executable = (name: string, source: string) => {
+    const file = join(binDir, name);
+    writeFileSync(file, `#!${testNodeExecPath}\n${source}`);
+    chmodSync(file, 0o755);
+    return file;
+  };
   writeFileSync(npmCallsPath, "");
   writeFileSync(
     publishedVersionsPath,
     JSON.stringify(["2026.6.34", "2026.7.8", "2026.7.9", "2026.9.6"]),
   );
-  const npmPath = join(binDir, "npm");
-  writeFileSync(
-    npmPath,
-    `#!${testNodeExecPath}
-const fs = require("node:fs");
+  executable(
+    "npm",
+    `const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(npmCallsPath)}, JSON.stringify(args) + "\\n");
 if (JSON.stringify(args) !== JSON.stringify(["view", "openclaw", "versions", "--json", "--silent", "--prefer-online"])) {
@@ -157,7 +161,6 @@ if (fs.existsSync(${JSON.stringify(admissionCapturePath)}) || fs.existsSync(${JS
 process.stdout.write(fs.readFileSync(${JSON.stringify(publishedVersionsPath)}));
 `,
   );
-  chmodSync(npmPath, 0o755);
   writeFileSync(gitCallsPath, "");
   writeFileSync(ghCallsPath, "");
   writeFileSync(pathGhCallsPath, "");
@@ -316,11 +319,9 @@ module.exports = async () => {
 };
 `,
   );
-  const gitPath = join(binDir, "git");
-  writeFileSync(
-    gitPath,
-    `#!${testNodeExecPath}
-const fs = require("node:fs");
+  executable(
+    "git",
+    `const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.MOCK_GIT_CALLS, JSON.stringify(args) + "\\n");
@@ -346,25 +347,17 @@ const result = spawnSync("git", args, {
 process.exit(result.status ?? 1);
 `,
   );
-  chmodSync(gitPath, 0o755);
-
-  const ghPath = join(binDir, "gh");
-  writeFileSync(
-    ghPath,
-    `#!${testNodeExecPath}
-const fs = require("node:fs");
+  const ghPath = executable(
+    "gh",
+    `const fs = require("node:fs");
 fs.appendFileSync(process.env.MOCK_PATH_GH_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n");
 console.error("PATH gh must not be used");
 process.exit(89);
 `,
   );
-  chmodSync(ghPath, 0o755);
-
-  const selectedGhPath = join(binDir, "selected-gh");
-  writeFileSync(
-    selectedGhPath,
-    `#!${testNodeExecPath}
-const fs = require("node:fs");
+  const selectedGhPath = executable(
+    "selected-gh",
+    `const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.MOCK_GH_CALLS, JSON.stringify(args) + "\\n");
@@ -623,7 +616,6 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
 }
 `,
   );
-  chmodSync(selectedGhPath, 0o755);
   if (options.ghRoute === "path") {
     writeFileSync(ghPath, readFileSync(selectedGhPath));
   }

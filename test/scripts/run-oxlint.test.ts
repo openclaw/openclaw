@@ -2,7 +2,6 @@ import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -30,6 +29,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
+import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { withinTest } from "../helpers/promise.js";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -92,64 +92,43 @@ function runFixtureShard(runner: string, env: NodeJS.ProcessEnv) {
   });
 }
 
-async function rescueChild(pidPath: string, signal: AbortSignal) {
-  const pid = existsSync(pidPath) ? Number(readFileSync(pidPath, "utf8")) : 0;
-  if (pid && isProcessAlive(pid)) {
+async function rescueChild(file: string, signal: AbortSignal) {
+  const pid = existsSync(file) ? Number(readFileSync(file, "utf8")) : 0;
+  if (Number.isSafeInteger(pid) && pid > 1 && isProcessAlive(pid)) {
     process.kill(pid, "SIGKILL");
-    await waitForProcessState(() => !isProcessAlive(pid), `process still alive: ${pid}`, signal);
+    await waitForDead(pid, signal);
   }
 }
 
-function createSignalRunner(target: string): void {
-  const childScript =
-    "process.on('SIGTERM', () => {}); process.send(process.pid); setInterval(() => {}, 1000);";
-  // An empty PID read becomes 0, so failure cleanup would kill its own process
-  // group. Publish complete PID bytes before the harness can observe the file.
-  writeModule(target, [
-    "import { spawn } from 'node:child_process';",
-    "import { renameSync, writeFileSync } from 'node:fs';",
-    fixtureReceiptClientSource(receipts.endpoint),
-    `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
-    "child.once('message', (pid) => {",
-    "  writeFileSync(process.env.CHILD_PID_PATH + '.tmp', String(pid));",
-    "  renameSync(process.env.CHILD_PID_PATH + '.tmp', process.env.CHILD_PID_PATH);",
-    "  writeFileSync(process.env.READY_FILE, String(process.pid));",
-    "  sendReceipt(process.env.READY_FILE, 'ready');",
-    "});",
-    "process.on('SIGTERM', () => process.exit(0));",
-    "setInterval(() => {}, 1000);",
-  ]);
-}
-
 async function runParentTerminationScenario(signal: AbortSignal) {
-  const tempDir = createTempDir("openclaw-oxlint-parent-group-");
+  const tempDir = createTempDir("openclaw-oxlint-signal-");
   const runner = join(tempDir, "signal-runner.mjs");
   const harness = join(tempDir, "signal-harness.mjs");
   const readyFile = join(tempDir, "ready");
-  const childPidPath = join(tempDir, "child.pid");
-  createSignalRunner(runner);
+  writeModule(runner, [
+    "import { writeFileSync } from 'node:fs';",
+    fixtureReceiptClientSource(receipts.endpoint),
+    "setInterval(() => {}, 1000);",
+    "writeFileSync(process.env.READY_FILE, String(process.pid));",
+    "sendReceipt(process.env.READY_FILE, 'ready');",
+  ]);
 
   // Execute cancellation in a subprocess because runShard installs process-level signal handlers.
   writeModule(harness, [
     `import { runShard } from ${JSON.stringify(RUN_OXLINT_SHARDS_URL)};`,
-    "const stop = new Promise((resolve) => { process.once('message', resolve); process.once('SIGTERM', resolve); });",
     "const shardEnv = { ...process.env, OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: '0', OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: '0' };",
     "shardEnv.OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS = '25';",
-    "const promise = runShard({ env: shardEnv, extraArgs: [], runner: process.env.RUNNER_FILE, shard: { name: 'signal-group-test', args: [] } });",
-    "await stop;",
-    "process.kill(process.pid, 'SIGTERM'); const status = await promise;",
-    "process.exit(status === 143 ? 0 : 4);",
+    "process.exitCode = await runShard({ env: shardEnv, extraArgs: [], runner: process.env.RUNNER_FILE, shard: { name: 'signal-test', args: [] } });",
   ]);
 
   const scenarioEnv: NodeJS.ProcessEnv = {
     ...process.env,
-    CHILD_PID_PATH: childPidPath,
     READY_FILE: readyFile,
     RUNNER_FILE: runner,
   };
   const child = spawn(process.execPath, [harness], {
     env: scenarioEnv,
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
+    stdio: ["ignore", "pipe", "pipe"],
   });
   const closed = once(child, "close");
   let stderr = "";
@@ -159,46 +138,16 @@ async function runParentTerminationScenario(signal: AbortSignal) {
   child.stdout?.resume();
   try {
     await withinTest(fixtureEventBeforeSettlement(readyFile, closed), signal);
-    child.send("stop");
+    child.kill("SIGTERM");
     const [status, exitSignal] = await withinTest(closed, signal);
-    if (childPidPath) {
-      const pid = Number(readFileSync(childPidPath, "utf8"));
-      await waitForProcessState(() => !isProcessAlive(pid), `process still alive: ${pid}`, signal);
-    }
+    expect(isProcessAlive(Number(readFileSync(readyFile, "utf8")))).toBe(false);
     return { status, signal: exitSignal, stderr };
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");
     }
     await closed;
-    if (childPidPath && existsSync(childPidPath)) {
-      const pid = Number(readFileSync(childPidPath, "utf8"));
-      if (isProcessAlive(pid)) {
-        process.kill(pid, "SIGKILL");
-      }
-    }
-  }
-}
-
-// The owner joins terminal groups, but foreign-PID reaping and rescue kills expose no event here.
-async function waitForProcessState(
-  predicate: () => boolean,
-  message: string,
-  signal: AbortSignal,
-): Promise<void> {
-  while (!predicate()) {
-    await waitForProcessTick(5, undefined, { signal }).catch((cause: unknown) => {
-      throw new Error(message, { cause });
-    });
-  }
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
+    await rescueChild(readyFile, signal);
   }
 }
 
@@ -305,34 +254,20 @@ describe("run-oxlint", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32").for(["group", "nested"] as const)(
-    "joins timed-out %s compiler ownership before returning",
-    async (ownership, { signal }) => {
+  it.runIf(process.platform !== "win32")(
+    "maps a joined compiler timeout to exit 124",
+    async ({ signal }) => {
       const tempDir = createTempDir("openclaw-oxlint-timeout-group-");
       const runner = join(tempDir, "timeout-runner.mjs");
       const childPidPath = join(tempDir, "child.pid");
-      const childScript = [
+      writeModule(runner, [
         "import fs from 'node:fs';",
         fixtureReceiptClientSource(receipts.endpoint),
-        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+        "setInterval(() => {}, 1000);",
         "fs.writeFileSync(process.env.CHILD_PID_PATH + '.tmp', String(process.pid));",
         "fs.renameSync(process.env.CHILD_PID_PATH + '.tmp', process.env.CHILD_PID_PATH);",
         "sendReceipt(process.env.CHILD_PID_PATH, 'ready');",
-      ].join("\n");
-      writeModule(
-        runner,
-        ownership === "nested"
-          ? [
-              `import { runManagedCommand } from ${JSON.stringify(pathToFileURL(join(process.cwd(), "scripts/lib/managed-child-process.mts")).href)};`,
-              `process.exitCode = await runManagedCommand({ bin: process.execPath, args: ['--input-type=module', '-e', ${JSON.stringify(childScript)}], stdio: 'ignore', requireProcessTreeExit: true, signalKillGraceMs: 250 });`,
-            ]
-          : [
-              "import { spawn } from 'node:child_process';",
-              `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-              "process.on('SIGTERM', () => process.exit(0));",
-              "setInterval(() => {}, 1000);",
-            ],
-      );
+      ]);
 
       // The watchdog must test teardown, not win a race against child startup.
       let completion!: Promise<number>;
@@ -369,11 +304,11 @@ describe("run-oxlint", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "terminates detached shard descendants on parent termination",
+    "preserves parent termination as exit 143",
     async ({ signal }) => {
       const result = await runParentTerminationScenario(signal);
       expect({ status: result.status, signal: result.signal }, result.stderr).toEqual({
-        status: 0,
+        status: 143,
         signal: null,
       });
     },

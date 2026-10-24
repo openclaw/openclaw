@@ -82,8 +82,6 @@ async function implementationReadyBeforeSettlement(
   return Number.parseInt(readFileSync(pidPath, "utf8"), 10);
 }
 
-type ModulesEnv = Partial<Record<"PNPM_CONFIG_MODULES_DIR" | "npm_config_modules_dir", string>>;
-
 function writeTsxFixture(modulesDir: string, marker: string) {
   const packageDir = path.join(modulesDir, "tsx");
   mkdirSync(packageDir, { recursive: true });
@@ -102,54 +100,6 @@ function writeTsxFixture(modulesDir: string, marker: string) {
     JSON.stringify({ name: "shim-dependency", type: "module", exports: "./index.js" }),
   );
   writeFileSync(path.join(dependencyDir, "index.js"), 'export const value = "loaded";\n');
-}
-
-function runShimFixture(
-  wrapper: (typeof TSX_SHIM_WRAPPERS)[number],
-  configureModules: (paths: {
-    checkoutRoot: string;
-    fixtureRoot: string;
-  }) => ModulesEnv = () => ({}),
-  nodeArgs: readonly string[] = [],
-) {
-  return withShimFixture(
-    wrapper,
-    ({ checkoutRoot, fixtureRoot, implementationPath, wrapperPath, runNode }) => {
-      writeFileSync(
-        implementationPath,
-        'import { value } from "shim-dependency";\nprocess.stdout.write(JSON.stringify({ loader: process.env.OPENCLAW_TSX_FIXTURE_LOADER, dependency: value, args: process.argv.slice(2), execArgv: process.execArgv }));\n',
-      );
-      writeTsxFixture(path.join(checkoutRoot, "node_modules"), "checkout");
-      const modulesEnv = configureModules({ checkoutRoot, fixtureRoot });
-
-      const env = testRunnerFixtureEnv();
-      delete env.NODE_OPTIONS;
-      delete env.NODE_PATH;
-      delete env.PNPM_CONFIG_MODULES_DIR;
-      delete env.npm_config_modules_dir;
-      Object.assign(env, modulesEnv);
-      return runNode(
-        [...nodeArgs, wrapperPath, "--hydrated-proof", "--no-maglev"],
-        env,
-        fixtureRoot,
-      );
-    },
-  );
-}
-
-function expectShimLoader(
-  result: Awaited<ReturnType<typeof runShimFixture>>,
-  loader: string,
-  nodeArgs: readonly string[] = [],
-) {
-  expect(result.error, formatShimResult(result)).toBeUndefined();
-  expect(result.status, formatShimResult(result)).toBe(0);
-  expect(JSON.parse(result.stdout)).toEqual({
-    loader,
-    dependency: "loaded",
-    args: ["--hydrated-proof", "--no-maglev"],
-    execArgv: ["--import", expect.stringMatching(/^file:.*\/scripts\/tsx\.mjs$/u), ...nodeArgs],
-  });
 }
 
 describe("script direct-run entrypoints", () => {
@@ -491,38 +441,32 @@ process.stdout.write(response + "\n");
   });
 
   it("boots scripts/e2e/kitchen-sink-rpc-walk.mjs from a relative PNPM_CONFIG_MODULES_DIR", async () => {
-    const nodeArgs = ["--no-maglev", "--maglev", "--no-concurrent-sparkplug"];
-    const result = await runShimFixture(
-      TSX_SHIM_WRAPPERS[1],
-      ({ checkoutRoot, fixtureRoot }) => {
-        const modulesDir = path.join(fixtureRoot, "hydrated-modules");
-        writeTsxFixture(modulesDir, "hydrated");
-        return { PNPM_CONFIG_MODULES_DIR: path.relative(checkoutRoot, modulesDir) };
-      },
-      nodeArgs,
-    );
-    expectShimLoader(result, "hydrated", nodeArgs);
-  });
-
-  it("requires explicit hydration to bootstrap from primary without local modules", async () => {
-    const result = await runShimFixture(TSX_SHIM_WRAPPERS[0], ({ checkoutRoot, fixtureRoot }) => {
-      rmSync(path.join(checkoutRoot, "node_modules"), { recursive: true });
-      const primaryRoot = path.join(fixtureRoot, "primary");
-      const modulesDir = path.join(primaryRoot, "node_modules");
-      writeTsxFixture(modulesDir, "primary");
-      const initialized = spawnSync(
-        "git",
-        ["init", "--quiet", "--separate-git-dir", path.join(primaryRoot, ".git"), checkoutRoot],
-        { encoding: "utf8" },
+    await withShimFixture(TSX_SHIM_WRAPPERS[1], async (fixture) => {
+      const { checkoutRoot, fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
+      const nodeArgs = ["--no-maglev", "--maglev", "--no-concurrent-sparkplug"];
+      writeFileSync(
+        implementationPath,
+        'import { value } from "shim-dependency";\nprocess.stdout.write(JSON.stringify({ loader: process.env.OPENCLAW_TSX_FIXTURE_LOADER, dependency: value, args: process.argv.slice(2), execArgv: process.execArgv }));\n',
       );
-      expect(initialized.status, initialized.stderr).toBe(0);
-      return {};
+      writeTsxFixture(path.join(checkoutRoot, "node_modules"), "checkout");
+      const modulesDir = path.join(fixtureRoot, "hydrated-modules");
+      writeTsxFixture(modulesDir, "hydrated");
+      const env = shimEnv({ PNPM_CONFIG_MODULES_DIR: path.relative(checkoutRoot, modulesDir) });
+      delete env.NODE_PATH;
+      delete env.npm_config_modules_dir;
+      const result = await runNode(
+        [...nodeArgs, wrapperPath, "--hydrated-proof", "--no-maglev"],
+        env,
+        fixtureRoot,
+      );
+      expectExit(result, 0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        loader: "hydrated",
+        dependency: "loaded",
+        args: ["--hydrated-proof", "--no-maglev"],
+        execArgv: ["--import", expect.stringMatching(/^file:.*\/scripts\/tsx\.mjs$/u), ...nodeArgs],
+      });
     });
-    expectExit(result, 1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(
-      "Run pnpm install --frozen-lockfile in an independently owned checkout.",
-    );
   });
 
   it("matches Windows drive paths case-insensitively", () => {

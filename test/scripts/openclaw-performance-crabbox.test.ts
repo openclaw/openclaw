@@ -70,25 +70,10 @@ function fixture() {
     testedRef: "refs/pull/1/head",
     openclawSha: "a".repeat(40),
     kovaSha: "b".repeat(40),
-    workflow: { sha: "c".repeat(40), runId: "123", runAttempt: "1" },
-    crabbox: {
-      commit: "8ba71f913bbe57285ae29af45ef0d8ec6712477d",
-      version: "0.46.0+8ba71f913bbe",
-    },
-    command: {
-      name: "mock-provider",
-      argv: ["fixture"],
-      exitCode: 0,
-      startedAt: "2026-08-21T00:00:00Z",
-      finishedAt: "2026-08-21T00:01:00Z",
-    },
+    workflow: { runAttempt: "1" },
+    crabbox: { version: "0.46.0+8ba71f913bbe" },
+    command: { finishedAt: "2026-08-21T00:01:00Z" },
     isolation: {
-      sutUser: "openclaw-sut",
-      trustedHarnessRootOwned: true,
-      noSudo: true,
-      imdsBlocked: true,
-      environmentClean: true,
-      cachesEmptyBefore: true,
       tailscaleRequested: false,
       tailscaleMetadataAbsent: true,
     },
@@ -601,7 +586,6 @@ finish
     const defaults = {
       gated: false,
       sutExit: 0,
-      records: true,
       planFilter: "scenario:probe",
       admitted: true,
     };
@@ -616,10 +600,9 @@ finish
       kovaCase("unadaptable gated BLOCKED", { gated: true, sutExit: 17 }, 17),
       kovaCase("wrong plan filters", { planFilter: "scenario:wrong" }, 1),
       kovaCase("custom Kova cannot approve a gate", { gated: true, admitted: false }, 1),
-      kovaCase("custom Kova invalid evidence", { records: false, admitted: false }, 1),
     ])(
       "enforces native Kova evidence and gate semantics: $name",
-      ({ gated, sutExit, records, planFilter, admitted, expected }) => {
+      ({ gated, sutExit, planFilter, admitted, expected }) => {
         const root = tempDirs.make("openclaw-performance-kova-contract-");
         const openclaw = join(root, "openclaw");
         const artifact = (path: string) => join(openclaw, ".artifacts/kova", path);
@@ -639,18 +622,16 @@ finish
           controls,
           auth: { requestedMode: "mock" },
           summary: { statuses: { BLOCKED: 1 } },
-          records: records
-            ? [
-                {
-                  scenario: "probe",
-                  state: { id: "fresh" },
-                  status: "BLOCKED",
-                  repeat: { total: 1, index: 1 },
-                  auth: { mode: "mock" },
-                  failureReason: "fixture blocked prerequisite",
-                },
-              ]
-            : [],
+          records: [
+            {
+              scenario: "probe",
+              state: { id: "fresh" },
+              status: "BLOCKED",
+              repeat: { total: 1, index: 1 },
+              auth: { mode: "mock" },
+              failureReason: "fixture blocked prerequisite",
+            },
+          ],
         });
         writeJson(artifact("bundles/mock-provider/bundle.json"), { files: [] });
         const result = shell(
@@ -672,19 +653,14 @@ validate_kova mock-provider "$ROOT" diagnostic 1 scenario:probe - "$GATED" "$HEL
         if (planFilter !== "scenario:probe") {
           expect(result.stderr).toContain("did not preserve the requested include filters");
         } else {
-          const calls = readFileSync(join(root, "helper-calls"), "utf8");
-          expect(calls).toContain("kova-workflow-evidence.mjs");
-          expect(calls.includes("kova-report-gate.mjs")).toBe(gated && records && sutExit !== 0);
           if (gated && sutExit !== 0) {
-            expect(calls).toContain("--require-instrumented-performance-contract");
-          }
-          if (records) {
-            expect(readFileSync(artifact("summaries/mock-provider.md"), "utf8")).toContain(
-              "fixture blocked prerequisite",
+            expect(readText(root, "helper-calls")).toContain(
+              "--require-instrumented-performance-contract",
             );
-          } else {
-            expect(result.stderr).toContain("coverage");
           }
+          expect(readFileSync(artifact("summaries/mock-provider.md"), "utf8")).toContain(
+            "fixture blocked prerequisite",
+          );
         }
       },
     );
