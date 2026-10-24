@@ -61,9 +61,29 @@ const mockRewrap = vi.mocked(rewrapToolWithBeforeToolCallHook);
 const mockRunBefore = vi.mocked(runBeforeToolCallHook);
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 const { admittedAttempt, closeAdmissions } = admissionFixture(workspaceDefaults);
+const hosts: ReturnType<typeof createAgentHarnessHostCapabilities>[] = [];
+
+async function createHost(...args: Parameters<typeof admittedAttempt>) {
+  const fixture = await admittedAttempt(...args);
+  const host = createAgentHarnessHostCapabilities({ attempt: fixture.attempt, pluginId: "codex" });
+  hosts.push(host);
+  return { ...fixture, host };
+}
+
+const execRequest = { toolName: "exec", params: { command: "true" } };
+const approvalRequest = {
+  title: "Run command",
+  description: "Execute a native command",
+  severity: "warning" as const,
+  toolName: "exec",
+  timeoutMs: 1_000,
+};
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  for (const host of hosts.splice(0)) {
+    host.close();
+  }
   closeAdmissions();
   resetAgentRunRegistryForTest();
 });
@@ -80,41 +100,36 @@ describe("agent harness host capability", () => {
     async (revocation) => {
       const flushed = createDeferred();
       const recorder = { recordEvent: vi.fn(), flush: vi.fn(() => flushed.promise) };
-      const { attempt, admission } = await admittedAttempt("run-trajectory-cleanup", {
+      const { attempt, admission, host } = await createHost("run-trajectory-cleanup", {
         trajectoryRecorder: recorder,
       });
-      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
       const trajectory = host.capabilities.trajectory!;
-      try {
-        const pending = trajectory.flush();
-        expect(recorder.flush).toHaveBeenCalledOnce();
-        if (revocation === "host close") {
-          host.close();
-        } else if (revocation === "run replacement") {
-          attempt.admittedRunContext = {
-            ...attempt.admittedRunContext,
-            operationalRunInstance: createOperationalRunInstanceRef(attempt.runId),
-          };
-        } else if (revocation === "recorder replacement") {
-          attempt.trajectoryRecorder = { recordEvent: vi.fn(), flush: vi.fn(async () => {}) };
-        } else if (revocation === "admission release") {
-          admission.close();
-        } else {
-          rotateAgentRunRegistryLifecycleGeneration();
-        }
-        flushed.resolve();
-        await expect(pending).rejects.toThrow("no longer active");
-        await expect(trajectory.flush()).rejects.toThrow("no longer active");
-        expect(recorder.flush).toHaveBeenCalledOnce();
-      } finally {
+      const pending = trajectory.flush();
+      expect(recorder.flush).toHaveBeenCalledOnce();
+      if (revocation === "host close") {
         host.close();
+      } else if (revocation === "run replacement") {
+        attempt.admittedRunContext = {
+          ...attempt.admittedRunContext,
+          operationalRunInstance: createOperationalRunInstanceRef(attempt.runId),
+        };
+      } else if (revocation === "recorder replacement") {
+        attempt.trajectoryRecorder = { recordEvent: vi.fn(), flush: vi.fn(async () => {}) };
+      } else if (revocation === "admission release") {
+        admission.close();
+      } else {
+        rotateAgentRunRegistryLifecycleGeneration();
       }
+      flushed.resolve();
+      await expect(pending).rejects.toThrow("no longer active");
+      await expect(trajectory.flush()).rejects.toThrow("no longer active");
+      expect(recorder.flush).toHaveBeenCalledOnce();
     },
   );
 
   it("preserves trajectory flush failures", async () => {
     const failure = new Error("trajectory storage unavailable");
-    const { attempt } = await admittedAttempt("run-trajectory-failure", {
+    const { host } = await createHost("run-trajectory-failure", {
       trajectoryRecorder: {
         recordEvent: vi.fn(),
         flush: async () => {
@@ -122,19 +137,13 @@ describe("agent harness host capability", () => {
         },
       },
     });
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-    try {
-      await expect(host.capabilities.trajectory!.flush()).rejects.toBe(failure);
-    } finally {
-      host.close();
-    }
+    await expect(host.capabilities.trajectory!.flush()).rejects.toBe(failure);
   });
 
   it.each(["host close", "authority release"] as const)(
     "rejects an awaited tool surface after %s during construction",
     async (revocation) => {
-      const { attempt, admission } = await admittedAttempt("run-tool-construction-race");
-      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const { admission, host } = await createHost("run-tool-construction-race");
       const result = createDeferred<AnyAgentTool[]>();
       using construct = vi
         .spyOn(agentTools, "createOpenClawCodingToolsInternalAsync")
@@ -281,8 +290,7 @@ describe("agent harness host capability", () => {
     );
 
     const forgedRequest = {
-      toolName: "exec",
-      params: { command: "true" },
+      ...execRequest,
       approvalMode: "deny" as const,
       ctx: { agentId: "forged" },
     };
@@ -297,11 +305,7 @@ describe("agent harness host capability", () => {
       }),
     );
 
-    await host.capabilities.runBeforeToolCall({
-      toolName: "exec",
-      params: { command: "true" },
-      approvalMode: "defer",
-    });
+    await host.capabilities.runBeforeToolCall({ ...execRequest, approvalMode: "defer" });
     expect(mockRunBefore).toHaveBeenLastCalledWith(
       expect.objectContaining({ approvalMode: "defer" }),
     );
@@ -322,8 +326,7 @@ describe("agent harness host capability", () => {
   it("keeps policy snapshots independent from later attempt mutation", async () => {
     const config = { tools: { loopDetection: { enabled: true } } };
     const skillsSnapshot = { prompt: "safe", version: 1, skills: [{ name: "safe" }] };
-    const { attempt } = await admittedAttempt("run-snapshot", { config, skillsSnapshot });
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const { host } = await createHost("run-snapshot", { config, skillsSnapshot });
 
     config.tools.loopDetection.enabled = false;
     skillsSnapshot.skills[0]!.name = "forged";
@@ -355,8 +358,7 @@ describe("agent harness host capability", () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-host-binding-"));
     try {
       fs.writeFileSync(path.join(cwd, "script.sh"), "#!/bin/sh\necho approved\n");
-      const { attempt } = await admittedAttempt("run-file-binding", { cwd });
-      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const { host } = await createHost("run-file-binding", { cwd });
       const prepared = await host.capabilities.prepareMutableFileApproval?.({
         command: "sh script.sh",
         cwd,
@@ -419,8 +421,7 @@ describe("agent harness host capability", () => {
       readStarted.resolve();
       return await readResult.promise;
     });
-    const { attempt } = await admittedAttempt("run-reply-media");
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const { attempt, host } = await createHost("run-reply-media");
     const prepare = expectDefined(host.capabilities.prepareReplyMedia, "reply media capability");
     const request = {
       kind: "payload" as const,
@@ -444,7 +445,7 @@ describe("agent harness host capability", () => {
   ])(
     "prepares the $source preview scrub for a $identity local Codex host",
     async ({ managed, source }) => {
-      const { attempt } = await admittedAttempt(`run-${source}-${managed ? "managed" : "native"}`, {
+      const { host } = await createHost(`run-${source}-${managed ? "managed" : "native"}`, {
         config: {
           ...(managed
             ? { tools: { github: { profileId: "ghp_66666666666666666666666666666666" } } }
@@ -458,7 +459,6 @@ describe("agent harness host capability", () => {
           },
         },
       });
-      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
       const environment = host.capabilities.preparedEnvironment?.();
 
       if (managed) {
@@ -477,8 +477,7 @@ describe("agent harness host capability", () => {
   );
 
   it("derives a bounded native action cwd without accepting forged host authority", async () => {
-    const { attempt } = await admittedAttempt("run-native");
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const { host } = await createHost("run-native");
 
     const forgedRequest = {
       toolName: "exec",
@@ -488,16 +487,14 @@ describe("agent harness host capability", () => {
     };
     await host.capabilities.runBeforeToolCall(forgedRequest);
 
-    expect(mockRunBefore).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          agentId: "main",
-          runId: "run-native",
-          sessionKey: "agent:main:session-1",
-          cwd: "/attempt/worktree/action",
-        }),
-      }),
-    );
+    expect(mockRunBefore.mock.lastCall?.[0]).toMatchObject({
+      ctx: {
+        agentId: "main",
+        runId: "run-native",
+        sessionKey: "agent:main:session-1",
+        cwd: "/attempt/worktree/action",
+      },
+    });
 
     await expect(
       host.capabilities.runBeforeToolCall({
@@ -510,8 +507,7 @@ describe("agent harness host capability", () => {
   });
 
   it("rejects a deferred policy result after exact authority release", async () => {
-    const { attempt } = await admittedAttempt("run-policy-race");
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const { attempt, host } = await createHost("run-policy-race");
     const hookStarted = createDeferred<(() => boolean | void) | undefined>();
     const hookResult = createDeferred<{ blocked: false; params: { command: string } }>();
     mockRunBefore.mockImplementationOnce(async () => {
@@ -519,10 +515,7 @@ describe("agent harness host capability", () => {
       return await hookResult.promise;
     });
 
-    const pending = host.capabilities.runBeforeToolCall({
-      toolName: "exec",
-      params: { command: "true" },
-    });
+    const pending = host.capabilities.runBeforeToolCall(execRequest);
     const receiptAuthority = await hookStarted.promise;
     expect(receiptAuthority).toEqual(expect.any(Function));
     closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
@@ -534,8 +527,7 @@ describe("agent harness host capability", () => {
   it.each(["replacement", "lifecycle rotation"])(
     "keeps a native policy lease after foreground close but fences %s",
     async (revocation) => {
-      const { attempt } = await admittedAttempt("run-retained-policy");
-      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const { attempt, host } = await createHost("run-retained-policy");
       const delegatedAuthority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
       const retained = retainBeforeToolCallForNativeHookRelay(host.capabilities.runBeforeToolCall);
       mockRunBefore.mockImplementationOnce(async ({ params }) => {
@@ -550,21 +542,19 @@ describe("agent harness host capability", () => {
 
       expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
       expect(validateAgentRunDelegatedAuthority(delegatedAuthority!)).toBe(false);
-      await expect(
-        host.capabilities.runBeforeToolCall({ toolName: "exec", params: { command: "true" } }),
-      ).rejects.toThrow("no longer active");
-      await expect(
-        retained.runBeforeToolCall({ toolName: "exec", params: { command: "true" } }),
-      ).resolves.toMatchObject({ blocked: false });
+      await expect(host.capabilities.runBeforeToolCall(execRequest)).rejects.toThrow(
+        "no longer active",
+      );
+      await expect(retained.runBeforeToolCall(execRequest)).resolves.toMatchObject({
+        blocked: false,
+      });
 
       if (revocation === "replacement") {
         await admittedAttempt("run-retained-policy");
       } else {
         rotateAgentRunRegistryLifecycleGeneration();
       }
-      await expect(
-        retained.runBeforeToolCall({ toolName: "exec", params: { command: "true" } }),
-      ).rejects.toThrow("no longer active");
+      await expect(retained.runBeforeToolCall(execRequest)).rejects.toThrow("no longer active");
       retained.release();
     },
   );
@@ -574,13 +564,7 @@ describe("agent harness host capability", () => {
       name: "request",
       result: { id: "approval-1", decision: null },
       start: (host: ReturnType<typeof createAgentHarnessHostCapabilities>) =>
-        host.capabilities.requestApproval({
-          title: "Run command",
-          description: "Execute a native command",
-          severity: "warning",
-          toolName: "exec",
-          timeoutMs: 1_000,
-        }),
+        host.capabilities.requestApproval(approvalRequest),
     },
     {
       name: "wait",
@@ -589,8 +573,7 @@ describe("agent harness host capability", () => {
         host.capabilities.waitForApproval({ approvalId: "approval-1", timeoutMs: 1_000 }),
     },
   ])("rejects a late approval $name result after admission closes", async (operation) => {
-    const { attempt, admission } = await admittedAttempt(`run-approval-race-${operation.name}`);
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const { admission, host } = await createHost(`run-approval-race-${operation.name}`);
     const started = createDeferred();
     const result = createDeferred<typeof operation.result>();
     mockCallGatewayTool.mockImplementationOnce(async () => {
@@ -618,8 +601,7 @@ describe("agent harness host capability", () => {
   ] as const)(
     "binds the gateway $label to the requested approval",
     async ({ response, expected }) => {
-      const { attempt } = await admittedAttempt("run-approval-result-binding");
-      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const { host } = await createHost("run-approval-result-binding");
       mockCallGatewayTool.mockResolvedValueOnce(response);
 
       await expect(
@@ -629,8 +611,7 @@ describe("agent harness host capability", () => {
   );
 
   it("carries native-turn closure through policy, approval registration, and decision waits", async () => {
-    const { attempt } = await admittedAttempt("run-native-approval-scope");
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const { host } = await createHost("run-native-approval-scope");
     const turn = new AbortController();
     const scopes: AbortSignal[] = [];
     const captureScope = () => {
@@ -649,14 +630,7 @@ describe("agent harness host capability", () => {
       params: {},
       signal: turn.signal,
     });
-    await host.capabilities.requestApproval({
-      title: "Run command",
-      description: "Native command",
-      severity: "warning",
-      toolName: "exec",
-      timeoutMs: 1_000,
-      signal: turn.signal,
-    });
+    await host.capabilities.requestApproval({ ...approvalRequest, signal: turn.signal });
     await host.capabilities.waitForApproval({
       approvalId: "approval",
       timeoutMs: 1_000,
@@ -670,8 +644,7 @@ describe("agent harness host capability", () => {
   });
 
   it("hands off MCP persistence proof once without serializing the callback", async () => {
-    const { attempt } = await admittedAttempt("mcp-persistence-proof");
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const { attempt, host } = await createHost("mcp-persistence-proof");
     const authority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext)!;
     const scope = {
       authority,
