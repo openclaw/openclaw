@@ -36,6 +36,7 @@ import { loadCombinedSessionStoreForGatewayCoreAsync as loadCombinedStoreAsync }
 import { loadCombinedSessionStoreForGatewayCore as loadCombinedStore } from "./combined-store-gateway.native.js";
 import { upsertSessionEntryCore } from "./session-accessor.entry.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
+import { withoutHostSql } from "./session-accessor.observation.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { commitMemory } from "./session-actor-memory-publication.test-support.js";
 import { sessionTests } from "./session-entry-fixture.test-support.js";
@@ -91,15 +92,6 @@ const boundary = vi.hoisted(
     afterReply: ((reply: unknown) => Promise<void>) | undefined;
   } => ({ beforeRequest: undefined, afterReply: undefined }),
 );
-async function withoutHostSql(run: () => Promise<void>) {
-  const observed = observeHostDataSql();
-  try {
-    await run();
-    expect(observed.queries).toEqual([]);
-  } finally {
-    observed.restore();
-  }
-}
 vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/worker-task-pool.js")>();
   return {

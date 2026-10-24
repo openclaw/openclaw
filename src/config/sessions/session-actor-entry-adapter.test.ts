@@ -28,10 +28,6 @@ const readEntry = (storage: SessionActorStorage) =>
   storage.read({ type: "session.entry.read", input: {} }, authority);
 const readCurrentEntry = (storage: SessionActorStorage, sessionKey?: string) =>
   storage.readCurrent({ type: "session.entry.read", input: { sessionKey } }, authority);
-const mutate = <Key extends keyof SessionActorStorageWrites>(
-  storage: SessionActorStorage,
-  command: { type: Key; input: SessionActorStorageWrites[Key]["input"] },
-) => storage.mutate(command, authority);
 const readHistory = (storage: SessionActorStorage) =>
   storage.read({ type: "session.history.hydrate", input: {} }, authority);
 async function commit<Key extends keyof SessionActorStorageWrites>(
@@ -488,22 +484,18 @@ describe("selected actor storage binding", () => {
       { database: owner.identity, sessionKey: siblingKey },
       lifetime,
     );
-    expect(
-      await mutate(sibling.storage!, {
-        type: "session.entry.create",
-        input: { entry: { sessionId: "sibling", updatedAt: 2 } },
-      }),
-    ).toMatchObject({ kind: "committed" });
+    await commit(sibling.storage!, {
+      type: "session.entry.create",
+      input: { entry: { sessionId: "sibling", updatedAt: 2 } },
+    });
     expect(readCurrentEntry(storage, siblingKey)).toMatchObject({
       sessionId: "sibling",
       updatedAt: 2,
     });
-    expect(
-      await mutate(sibling.storage!, {
-        type: "session.entry.patch",
-        input: { operation: { kind: "fields", patch: { label: "changed" } } },
-      }),
-    ).toMatchObject({ kind: "committed" });
+    await commit(sibling.storage!, {
+      type: "session.entry.patch",
+      input: { operation: { kind: "fields", patch: { label: "changed" } } },
+    });
     expect(readCurrentEntry(storage, siblingKey)).toMatchObject({ label: "changed" });
     owner.closeSession(sessionKey);
     expect(() => actor.assertCurrent()).toThrow(/closed/);
@@ -516,12 +508,10 @@ describe("selected actor storage binding", () => {
   it("acquires separate handles from the captured owner after rotation and release", async () => {
     const { actor, storage, sessionKey } = await fixture("rotate");
     const before = readCurrentEntry(storage)!;
-    expect(
-      await mutate(storage, {
-        type: "session.lifecycle.reset",
-        input: { expected: before, nextEntry: { ...before, sessionId: "rotated" } },
-      }),
-    ).toMatchObject({ kind: "committed" });
+    await commit(storage, {
+      type: "session.lifecycle.reset",
+      input: { expected: before, nextEntry: { ...before, sessionId: "rotated" } },
+    });
     expect(() => actor.assertCurrent()).toThrow(/closed/);
     const replacement = await storage.acquire(sessionKey);
     expect(replacement).not.toBe(actor);

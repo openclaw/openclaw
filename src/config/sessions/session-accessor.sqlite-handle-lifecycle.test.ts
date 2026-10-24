@@ -90,8 +90,13 @@ describe("SQLite session handle lifecycle", () => {
     role: string,
     content: string,
     fields: Record<string, unknown> = {},
+    parentId?: string | null,
   ) {
-    return { eventId, message: { role, content, ...fields } };
+    return {
+      eventId,
+      ...(parentId === undefined ? {} : { parentId }),
+      message: { role, content, ...fields },
+    };
   }
 
   beforeEach(async () => {
@@ -220,21 +225,9 @@ describe("SQLite session handle lifecycle", () => {
     "limits message facts to the active branch (fallback=%s)",
     async (fallback) => {
       await persist([
-        {
-          eventId: "root",
-          parentId: null,
-          message: { role: "user", content: "root", idempotencyKey: "root" },
-        },
-        {
-          eventId: "abandoned",
-          parentId: "root",
-          message: { role: "assistant", content: "old", idempotencyKey: "abandoned" },
-        },
-        {
-          eventId: "active",
-          parentId: "root",
-          message: { role: "assistant", content: "new", idempotencyKey: "active" },
-        },
+        runMessage("root", "user", "root", { idempotencyKey: "root" }, null),
+        runMessage("abandoned", "assistant", "old", { idempotencyKey: "abandoned" }, "root"),
+        runMessage("active", "assistant", "new", { idempotencyKey: "active" }, "root"),
       ]);
       await withTranscriptWriteLock(scope, async (transcript) => {
         if (fallback) {
