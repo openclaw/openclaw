@@ -251,8 +251,18 @@ final class RootSidebarModel {
         let selectedIsSnoozed = sessions.contains {
             $0.key == selectedSessionKey && $0.isSnoozed(at: now)
         }
+        // iOS browsing policy (Android parity): ordinary lists hide automation
+        // sessions, but search keeps full discovery and the resolved selected
+        // row stays reachable even when automation-created.
+        let queryIsEmpty = query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let browsingSessions = sessions.filter { entry in
+            if entry.isSnoozed(at: now) { return false }
+            if !queryIsEmpty { return true }
+            return OpenClawChatSessionListVisibility.isVisibleInNavigation(
+                entry, selectedKey: selectedSessionKey)
+        }
         return ChatSessionSidebarModel.sections(
-            sessions: sessions.filter { !$0.isSnoozed(at: now) },
+            sessions: browsingSessions,
             // The shared sidebar otherwise creates a placeholder for a missing selected row.
             currentSessionKey: selectedIsSnoozed ? "" : currentSessionKey,
             mainSessionKey: mainSessionKey,
