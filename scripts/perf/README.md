@@ -3615,6 +3615,8 @@ Supported scenarios:
 | Scenario               | One measured operation                                                                                                         |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `sessions.list`        | One compact sidebar page RPC, `archived=all`, `--limit` rows                                                                   |
+| `status`               | One admin status RPC with channel summary disabled; verifies session counts and recent rows                                    |
+| `health`               | One admin health RPC with `probe: true`; verifies session counts and recent rows                                               |
 | `sessions.describe`    | One detailed parent-row RPC, including the harness's synthetic children                                                        |
 | `sessions.patch`       | One title, expiring status-note, or model-selection mutation on a retained fixture session                                     |
 | `sessions.cleanup`     | One cleanup RPC in warning mode, including current subagent preservation and commit compatibility checks                       |
