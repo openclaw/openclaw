@@ -1,12 +1,16 @@
+import { readFile } from "node:fs/promises";
 import { createServer, type RequestListener } from "node:http";
-import type { AddressInfo } from "node:net";
+import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
+import { createWriteTool } from "../../../../src/agents/sessions/tools/write.js";
+import { reserveTestPortListener } from "../../../../src/test-utils/port-claims.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { configureAiTransportHost } from "../host.js";
 import { collectEventTypes } from "../transports/openai-stream-cases.test-support.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
-import type { Context, Model } from "../types.js";
+import type { AssistantMessage, Context, Model } from "../types.js";
 import { streamAnthropic } from "./anthropic.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
 
@@ -63,17 +67,18 @@ async function withLoopback<T>(
   handler: RequestListener,
   run: (baseUrl: string) => Promise<T>,
 ): Promise<T> {
-  const server = createServer(handler);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve());
+  const { claim, releaseListener } = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () => createServer(handler),
   });
-  const address = server.address() as AddressInfo;
   try {
-    return await run(`http://127.0.0.1:${address.port}`);
+    return await run(`http://127.0.0.1:${claim.port}`);
   } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    try {
+      await releaseListener();
+    } finally {
+      await claim.release();
+    }
   }
 }
 
@@ -81,7 +86,8 @@ async function withLoopback<T>(
 // socket is ours; the SDK, its SSE reader, and the provider stream are production code.
 async function streamAnthropicSseFrames(
   frames: readonly (readonly [string, string])[],
-): Promise<{ stopReason: string; errorMessage?: string }> {
+  requestContext: Context = context,
+): Promise<AssistantMessage> {
   return withLoopback(
     (request, response) => {
       response.writeHead(200, {
@@ -94,16 +100,82 @@ async function streamAnthropicSseFrames(
       response.end();
       void request.resume();
     },
-    async (baseUrl) => {
-      const result = await streamAnthropic(makeModel(baseUrl), context, {
+    async (baseUrl) =>
+      streamAnthropic(makeModel(baseUrl), requestContext, {
         apiKey: "test-api-key",
-      }).result();
-      return { stopReason: result.stopReason, errorMessage: result.errorMessage };
-    },
+      }).result(),
   );
 }
 
 describe("Anthropic malformed SSE frames", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("preserves newline and literal backslash-n bytes from seeded tool input through write", async () => {
+    const cwd = tempDirs.make("openclaw-anthropic-seeded-write-");
+    const writeTool = createWriteTool(cwd);
+    const result = await streamAnthropicSseFrames(
+      [
+        WELL_FORMED_FRAMES[0],
+        [
+          "content_block_start",
+          JSON.stringify({
+            type: "content_block_start",
+            index: 0,
+            content_block: {
+              type: "tool_use",
+              id: "call_write",
+              name: "write",
+              input: {
+                path: "snippet.py",
+                content: 'with open("data.txt") as f:\n    print(r"\\n")\n',
+              },
+            },
+          }),
+        ],
+        WELL_FORMED_FRAMES[3],
+        [
+          "message_delta",
+          '{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},' +
+            '"usage":{"output_tokens":1}}',
+        ],
+        WELL_FORMED_FRAMES[5],
+      ],
+      { ...context, tools: [writeTool] },
+    );
+
+    expect(result.stopReason).toBe("toolUse");
+    const toolCall = result.content.find((block) => block.type === "toolCall");
+    if (!toolCall || toolCall.name !== "write") {
+      throw new Error("Expected a terminal write tool call");
+    }
+    const { path: filePath, content } = toolCall.arguments;
+    if (typeof filePath !== "string" || typeof content !== "string") {
+      throw new Error("Expected string write arguments");
+    }
+    await writeTool.execute(toolCall.id, { path: filePath, content }, undefined);
+
+    expect(await readFile(path.join(cwd, "snippet.py"))).toEqual(
+      Buffer.from('with open("data.txt") as f:\n    print(r"\\n")\n', "utf8"),
+    );
+  });
+
+  it("still repairs malformed escapes in outer SSE JSON", async () => {
+    const result = await streamAnthropicSseFrames([
+      WELL_FORMED_FRAMES[0],
+      WELL_FORMED_FRAMES[1],
+      [
+        "content_block_delta",
+        String.raw`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"C:\users\bob"}}`,
+      ],
+      ...WELL_FORMED_FRAMES.slice(3),
+    ]);
+
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([
+      expect.objectContaining({ type: "text", text: String.raw`C:\users\bob` }),
+    ]);
+  });
+
   it("reports the shared malformed-fragment error without echoing the frame payload", async () => {
     const result = await streamAnthropicSseFrames([["content_block_delta", MALFORMED_FRAME]]);
 
