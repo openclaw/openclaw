@@ -62,7 +62,11 @@ export function prepareOwnedPluginLoadContext(
     return metadataSnapshot;
   }
   const { config } = input;
-  const workspaceDir = metadataSnapshot.workspaceDir ?? input.workspaceDir;
+  // Config-wide metadata does not move an already registered instance into the caller's workspace.
+  const workspaceDir =
+    metadataSnapshot.workspaceDir ??
+    getPluginRuntimeLoadContext(registry)?.workspaceDir ??
+    input.workspaceDir;
   const preparedActivation = getReusablePluginRuntimeActivation(preparedRegistry ?? registry, {
     config,
     env,
