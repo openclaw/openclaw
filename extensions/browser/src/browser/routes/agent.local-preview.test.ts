@@ -11,8 +11,11 @@ import * as pwAiModule from "../pw-ai-module.js";
 import { withBrowserRequestScope } from "../request-scope.js";
 import { createBrowserRouteContext, type BrowserServerState } from "../server-context.js";
 import { mockLaunchedChrome } from "../server-context.test-harness.js";
+import { expectResponse, runRoute } from "./agent-route.test-support.js";
+import { registerBrowserAgentActRoutes } from "./agent.act.js";
 import { browserNavigationPolicyForProfile } from "./agent.shared.js";
 import { createBrowserRouteDispatcher } from "./dispatcher.js";
+import { createBrowserRouteApp } from "./test-helpers.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -145,6 +148,51 @@ describe("local preview navigation policy", () => {
       );
     });
   });
+  it.each([false, true])(
+    "rechecks preview authority before returning an admitted URL (revoked=%s)",
+    async (revoke) => {
+      let revoked = false;
+      await withBrowserRequestScope(
+        {
+          ...scope,
+          assertInvocationCurrent: () => {
+            if (revoked) {
+              throw new Error("preview invocation revoked");
+            }
+          },
+        },
+        async () => {
+          const { ctx, profileCtx } = browserContext();
+          await profileCtx.ensureBrowserAvailable();
+          const tab = {
+            targetId: "PREVIEW",
+            title: "Preview",
+            type: "page",
+            url: "http://127.0.0.1:49187/",
+          };
+          vi.spyOn(ctx, "forProfile").mockReturnValue(profileCtx);
+          vi.spyOn(profileCtx, "ensureTabAvailable").mockResolvedValue(tab);
+          vi.spyOn(profileCtx, "listTabs").mockImplementation(async () => {
+            revoked = revoke;
+            return [tab];
+          });
+          const pw = expectDefined(await pwAiModule.getPwAiModule(), "Playwright helpers");
+          const execute = vi.spyOn(pw, "executeActViaPlaywright").mockResolvedValue({});
+          const { app, postHandlers } = createBrowserRouteApp();
+          registerBrowserAgentActRoutes(app, ctx);
+          const response = await runRoute(postHandlers.get("/act"), {
+            body: { kind: "hover", targetId: tab.targetId, ref: "1" },
+          });
+          expectResponse(response, {
+            ok: true,
+            targetId: tab.targetId,
+            ...(revoke ? {} : { url: tab.url }),
+          });
+          expect(execute).toHaveBeenCalledOnce();
+        },
+      );
+    },
+  );
   it("requires a host invocation assertion for an automatic preview grant", async () => {
     await withBrowserRequestScope({ ...scope, assertInvocationCurrent: undefined }, async () => {
       await expect(navigate()).rejects.toThrow(/private|internal|special-use/i);

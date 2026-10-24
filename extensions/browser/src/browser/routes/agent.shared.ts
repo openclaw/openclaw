@@ -219,6 +219,8 @@ export async function resolveSafeRouteTabUrl(params: {
       params.admittedNavigation?.url === candidateUrl &&
       params.admittedNavigation.policyKey === JSON.stringify(navigationPolicy)
     ) {
+      // Policy fingerprints omit functions; retain the live authority check.
+      navigationPolicy.assertNavigationCurrent?.();
       return candidateUrl;
     }
     await assertBrowserNavigationResultAllowed({
