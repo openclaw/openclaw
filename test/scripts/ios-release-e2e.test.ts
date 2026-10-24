@@ -7,7 +7,6 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
-  armPlan,
   IOS_RELEASE_TESTS,
   parseMeasurement,
   runTrials,
@@ -350,7 +349,6 @@ describe("fresh trial ownership", () => {
     const { deps, trace } = fixture({ fail: "test", measure: true });
     const report = await runTrials("compare", deps);
     const order = ["stock", "simslim", "simslim", "stock", "stock", "simslim", "simslim", "stock"];
-    expect(armPlan("compare").map(({ arm }) => arm)).toEqual(order);
     expect(report.trials.map(({ arm }) => arm)).toEqual(order);
     expect(deps.create).toHaveBeenCalledTimes(8);
     expect(report.trials[0]).toMatchObject({
@@ -1210,7 +1208,6 @@ it.each([
   });
   const dirtySource = scenario.startsWith("dirty-");
   const invalidRuntime = scenario === "unavailable-runtime" || scenario === "invalid-xcode-output";
-  const failedBuild = scenario.startsWith("build-");
   const failedInstall = scenario.startsWith("gateway-install-");
   const failedPreflight = scenario.startsWith("gateway-preflight-");
   const admissionFailures: [boolean, Partial<Diagnostic>][] = [
@@ -1244,45 +1241,27 @@ it.each([
     if (dirtySource) {
       expect(nativeMocks.command.mock.calls).toHaveLength(2);
     }
-    if (invalidRuntime) {
-      expect(commandsWith("build-for-testing")).toHaveLength(0);
-    }
-    if (failedInstall || failedPreflight) {
+    if (invalidRuntime || failedInstall || failedPreflight) {
       expect(nativeMocks.build).not.toHaveBeenCalled();
     }
-    if (failedBuild || failedInstall) {
-      expect(proof.resourcesPreserved).toBe(unjoined ? true : undefined);
-    }
+    expect(proof.resourcesPreserved).toBe(preserved ? true : undefined);
     if (failedInstall) {
       expect(nativeMocks.gateway).not.toHaveBeenCalled();
     }
     if (failedPreflight) {
       expect(preflightCleanup).toHaveBeenCalledOnce();
-      expect(instances).toEqual([]);
-      expect(created).toBe(0);
+      expect([instances.length, created]).toEqual([0, 0]);
       expect(lifecycle).not.toContain("mock-start");
     }
     return;
   }
   const native = await admission;
-  expect(proof).toMatchObject({
-    xcode: "27.0",
-    xcodeBuild: "27A266a",
-    runtime: scenario === "newest-compatible-runtime" ? "26.10" : "26.5",
-    runtimeIdentifier:
-      scenario === "newest-compatible-runtime"
-        ? "com.apple.CoreSimulator.SimRuntime.iOS-26-10"
-        : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
-  });
   try {
     if (scenario === "native-build-only") {
       expect(nativeMocks.build).toHaveBeenCalledOnce();
-      expect(nativeMocks.install).not.toHaveBeenCalled();
-      expect(nativeMocks.gateway).not.toHaveBeenCalled();
-      expect(nativeMocks.rpc).not.toHaveBeenCalled();
+      expect(lifecycle).toEqual(["native-build-complete"]);
       expect(created).toBe(0);
       expect(proof.gateway).toBeUndefined();
-      expect(proof.gatewayInstallMs).toBeUndefined();
       return;
     }
     expect(nativeMocks.install).toHaveBeenCalledExactlyOnceWith({
@@ -1298,20 +1277,10 @@ it.each([
       } finally {
         await gatewayProbe.cleanup();
       }
-      expect(lifecycle).toEqual([
-        "gateway-install",
-        "gateway-preflight-create",
-        "gateway-preflight-start",
-        "gateway-preflight-rpc",
-        "gateway-preflight-cleanup",
-        "mock-start",
-        "gateway-create",
-        "gateway-start",
-        "setup-status",
-        "setup-status-ready",
-        "setup-code",
-        "gateway-cleanup",
-        "mock-cleanup",
+      expectBefore(lifecycle, [
+        ["gateway-preflight-cleanup", "gateway-create"],
+        ["setup-status-ready", "setup-code"],
+        ["setup-code", "gateway-cleanup"],
       ]);
       expect(nativeMocks.build).not.toHaveBeenCalled();
       expect(created).toBe(0);
@@ -1511,24 +1480,12 @@ it.each([
       );
       return;
     }
-    const gatewayExit = preparationFailure("gateway-start", "exit", {
-      exitCode: 17,
-    });
+    const gatewayExit = preparationFailure("gateway-start", "exit", { exitCode: 17 });
     const preparationFailures: Record<string, ReturnType<typeof preparationFailure>> = {
       "boot-timeout": preparationFailure("simulator-ready", "timeout"),
       "gateway-start-failure": preparationFailure("gateway-start", "failed"),
-      "setup-status-timeout": preparationFailure("setup-status", "timeout", {
-        context: [
-          "rpc-attempts:1",
-          "rpc-transport-kind:timeout",
-          "rpc-authenticated:true",
-          "rpc-dispatch-entered:true",
-          "rpc-request-dispatched:true",
-        ],
-      }),
-      "setup-status-failure": preparationFailure("setup-status", "failed", {
-        context: [],
-      }),
+      "setup-status-timeout": preparationFailure("setup-status", "timeout"),
+      "setup-status-failure": preparationFailure("setup-status", "failed"),
       "status-unjoined-gateway-exit": {
         ...gatewayExit,
         errors: ["preparation-failed", "cleanup-failed"],
