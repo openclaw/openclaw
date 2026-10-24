@@ -1,3 +1,4 @@
+import "./session-send-recovery.delivery.mocks.test-support.js";
 import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
@@ -41,14 +42,9 @@ import {
 } from "./session-send-recovery.test-support.js";
 import { SessionStoreUnavailableError } from "./session-utils-store-error.js";
 
-const io = vi.hoisted(() => ({
-  discover: vi.fn(),
-  entries: vi.fn(),
-  pending: vi.fn(),
-  source: vi.fn(),
-  load: vi.fn(),
-  report: vi.fn(),
-  withdraw: vi.fn(),
+const { recoveryDeliveryMocks } =
+  await import("./session-send-recovery.delivery.mocks.test-support.js");
+const recoveryOverrides = vi.hoisted(() => ({
   restoreOperator:
     vi.fn<typeof import("./operator-run-recovery.js").restoreGatewayQueuedOperatorRecovery>(),
   resumeMain:
@@ -60,47 +56,15 @@ vi.mock(
   import("../agents/main-session-recovery/main-session-restart-recovery.js"),
   async (importOriginal) => ({
     ...(await importOriginal()),
-    retryRestartAbortedMainSessionRecovery: io.resumeMain,
-  }),
-);
-vi.mock(
-  import("../agents/main-session-recovery/main-session-restart-recovery-shared.js"),
-  async (importOriginal) => ({
-    ...(await importOriginal()),
-    discoverRestartRecoveryStoreTargets: io.discover,
-  }),
-);
-vi.mock(import("../config/sessions/session-entry-read-maintenance.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  readPendingInputRecoveryEntriesInWorker: io.entries,
-}));
-vi.mock(import("../config/sessions/session-pending-input-history.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  readSessionSendRecoveryPage: io.pending,
-}));
-vi.mock(import("../config/sessions/session-pending-input-source.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  readPendingInputSource: io.source,
-}));
-vi.mock(import("../config/sessions/session-accessor.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  appendSessionTranscriptReport: io.report,
-}));
-vi.mock(
-  import("../config/sessions/session-pending-input-withdrawal.js"),
-  async (importOriginal) => ({
-    ...(await importOriginal()),
-    discardSessionPendingInput: io.withdraw,
+    retryRestartAbortedMainSessionRecovery: recoveryOverrides.resumeMain,
   }),
 );
 vi.mock(import("./operator-run-recovery.js"), async (importOriginal) => ({
   ...(await importOriginal()),
-  restoreGatewayQueuedOperatorRecovery: io.restoreOperator,
+  restoreGatewayQueuedOperatorRecovery: recoveryOverrides.restoreOperator,
 }));
-vi.mock(import("./session-utils-store-worker.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  resolveGatewaySessionStoreTargetInWorker: io.load,
-}));
+
+const io = { ...recoveryDeliveryMocks, ...recoveryOverrides };
 
 let sourceEntry: {
   sessionId: string;
