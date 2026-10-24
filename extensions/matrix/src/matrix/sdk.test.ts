@@ -23,6 +23,11 @@ import { installMatrixTestRuntime } from "../test-runtime.js";
 import type { CoreConfig } from "../types.js";
 import { SqliteBackedMatrixSyncStore } from "./client/file-sync-store.js";
 import { prepareMockMatrixClientStorage } from "./client/shared.test-support.js";
+import * as keyUploadFence from "./sdk.key-upload-fence.test-helpers.js";
+import {
+  clearTestUndiciRuntimeDepsOverride,
+  stubRuntimeFetch,
+} from "./sdk.key-upload-fence.test-helpers.js";
 import {
   registerCryptoOneOffInitializationTests,
   registerCryptoShutdownTests,
@@ -108,21 +113,6 @@ function expectSomeMockCallOptions(
   expect(mock.mock.calls.map(([options]) => options)).toContainEqual(
     expect.objectContaining(fields),
   );
-}
-
-const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
-
-function clearTestUndiciRuntimeDepsOverride(): void {
-  Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
-}
-
-function stubRuntimeFetch(fetchImpl: typeof fetch): void {
-  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-    Agent: function MockAgent() {},
-    EnvHttpProxyAgent: function MockEnvHttpProxyAgent() {},
-    ProxyAgent: function MockProxyAgent() {},
-    fetch: fetchImpl,
-  };
 }
 
 async function consumeMatrixSecretStorageKey(keyId = "SSSSKEY"): Promise<boolean> {
@@ -794,6 +784,12 @@ describe("MatrixClient request hardening", () => {
       "Absolute Matrix endpoint is blocked by default",
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  keyUploadFence.testKeyUploadFenceModes({
+    MatrixClient,
+    makeTempDir: () => tempDirs.make("matrix-key-upload-"),
+    getFetchFn: () => lastCreateClientOpts?.fetchFn as typeof fetch,
   });
 
   it("injects a guarded fetchFn into matrix-js-sdk", async () => {
