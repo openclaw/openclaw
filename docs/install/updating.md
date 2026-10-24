@@ -190,6 +190,10 @@ If the retained verifier cannot authenticate to the restarted Gateway, it stops
 retrying that rejection. Local HTTP readiness and runtime version/build identity
 can verify activation instead, with an RPC authentication warning recorded in
 the update result. This does not change Gateway authentication or pairing.
+The retained verifier runs the previous package, so an update that changes the
+Gateway protocol version, in either direction, gets the same HTTP identity check
+with an RPC protocol warning instead of waiting for an RPC handshake that cannot
+succeed.
 
 Channel outages are warnings once the expected Gateway build is running and its
 core readiness is verified. Detailed `/readyz` responses report `coreReady`
