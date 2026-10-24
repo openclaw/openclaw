@@ -200,6 +200,44 @@ describe("inspectAuthProfileHealth", () => {
       }),
     ]);
   });
+
+  it("maps subscription blocks to structured findings without labeling them as cooldowns", async () => {
+    writeAuthStore(mainDir);
+    authProfileMocks.hasLocalAuthProfileStoreSource.mockImplementation(
+      (agentDir) => agentDir !== undefined,
+    );
+    authProfileMocks.loadAuthProfileStoreForRuntime.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:blocked": {
+          type: "oauth",
+          provider: "openai",
+          access: "access",
+          refresh: "refresh",
+          expires: now + 365 * 24 * 60 * 60_000,
+        },
+      },
+      usageStats: {
+        "openai:blocked": {
+          blockedUntil: now + 5 * 60_000,
+          blockedReason: "subscription_limit",
+          blockedSource: "wham",
+        },
+      },
+    } satisfies AuthProfileStore);
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: configForAgents("main"),
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        message: "Auth profile openai:blocked is blocked:subscription_limit (5m).",
+        fixHint: "Restore subscription quota, then re-authenticate to clear the cached block.",
+      }),
+    ]);
+  });
+
   it("skips external auth profile resolution when no auth source exists", async () => {
     const findings = await inspectAuthProfileHealth({
       cfg: {
