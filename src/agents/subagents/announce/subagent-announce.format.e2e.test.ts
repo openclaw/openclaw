@@ -96,7 +96,7 @@ function getAgentCallContext(call = getAgentCall()): string {
   const events = call.params?.internalEvents as AgentInternalEvent[] | undefined;
   return events?.length
     ? projectRuntimeContextFragments(buildAgentInternalEventContext(events))
-    : String(call.params?.message ?? "");
+    : (call.params?.message ?? "");
 }
 
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => visibleAgentResponse());
@@ -891,4 +891,3 @@ describe("subagent announce formatting", () => {
     }
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
