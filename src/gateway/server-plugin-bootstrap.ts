@@ -14,12 +14,6 @@ import { resolveDurableWorkerProviderAutoEnabledReasons } from "../plugins/worke
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import { loadGatewayPlugins } from "./server-plugins.js";
 
-type GatewayPluginBootstrapLog = Required<PluginLogger>;
-type GatewayPluginBootstrapParams = Omit<
-  Parameters<typeof loadGatewayPlugins>[0],
-  "autoEnabledReasons"
-> & { log: GatewayPluginBootstrapLog };
-
 // Reload replaces the cache's metadata object and permits the next generation's notices.
 const loggedInfoByMetadata = new WeakMap<object, Set<string>>();
 
@@ -32,7 +26,11 @@ export type GatewayPluginRuntimePreparation = (
   afterCommit: () => void;
 }>;
 
-export async function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
+export async function prepareGatewayPluginLoad(
+  params: Omit<Parameters<typeof loadGatewayPlugins>[0], "autoEnabledReasons"> & {
+    log: Required<PluginLogger>;
+  },
+) {
   return withPluginCache(
     params.pluginMetadataSnapshot
       ? getPluginMetadataSnapshotCache(params.pluginMetadataSnapshot)

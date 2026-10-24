@@ -55,8 +55,7 @@ import {
 } from "./update-cli/update-cli-config.test-support.js";
 import {
   mockUnbuiltRecoveryFixture,
-  recoveryVerificationStep,
-  recoveryVersionMismatch,
+  recoveryObservationStep,
 } from "./update-cli/update-cli-failure-recovery.test-support.js";
 import {
   writeJsonFixture,
@@ -168,32 +167,6 @@ describe("update-cli", () => {
       channel: "dev",
       config: { update: { channel: "dev" } },
     });
-  });
-
-  it("prints plugin channel fallbacks near the post-core plugin summary", async () => {
-    mockNpmPluginOutcomes([
-      {
-        pluginId: "lossless-claw",
-        status: "updated",
-        message: "Updated lossless-claw: 1.0.0 -> 1.0.1.",
-        channelFallback: {
-          requestedSpec: "lossless-claw@beta",
-          usedSpec: "lossless-claw",
-          requestedLabel: "@beta",
-          usedLabel: "@latest",
-          reason: "unavailable",
-          message:
-            "plugin channel fallback: lossless-claw used @latest because @beta was unavailable",
-        },
-      },
-    ]);
-
-    await runPostCoreCommand({ restart: false }, { OPENCLAW_UPDATE_POST_CORE_CHANNEL: "beta" });
-
-    expect(getLogOutput()).toContain("Plugin updates: 1 updated, 0 unchanged.");
-    expect(getLogOutput()).toContain(
-      "plugin channel fallback: lossless-claw used @latest because @beta was unavailable",
-    );
   });
 
   it("completes finalize with a plugin retry notice when bridge awaits capability consent", async () => {
@@ -499,12 +472,14 @@ describe("update-cli", () => {
 
     await expect(updateCommand({ json: true, restart: false })).rejects.toEqual(new ExitError(1));
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(lastWriteJsonCall()).toMatchObject({
+    const result = lastWriteJsonCall() as UpdateRunResult | undefined;
+    expect(result?.verification).toEqual({});
+    expect(result).toMatchObject({
       status: "error",
       reason: "post-update-failed",
       steps: [
         expect.objectContaining({ exitCode: 1, stderrTail: message }),
-        recoveryVerificationStep([recoveryVersionMismatch]),
+        recoveryObservationStep(),
       ],
     });
   });

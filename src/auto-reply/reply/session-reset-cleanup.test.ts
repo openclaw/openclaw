@@ -8,6 +8,8 @@ import {
   clearPreparedEmbeddedAgentSettings,
   createPreparedEmbeddedAgentSettingsManager,
 } from "../../agents/agent-project-settings.js";
+import { completePromptCacheObservation } from "../../agents/embedded-agent-runner/prompt-cache-observability.js";
+import { beginOpenAIObservation } from "../../agents/embedded-agent-runner/prompt-cache-observability.test-support.js";
 import {
   clearEmbeddedSessionPromptStates,
   retainEmbeddedSessionPromptState,
@@ -112,6 +114,24 @@ describe("clearSessionResetRuntimeState", () => {
 
     using replacement = retainEmbeddedSessionPromptState("old-session");
     expect(replacement.state).not.toBe(state);
+  });
+
+  it("clears the archived diagnostic baseline when a reply rotates its session", () => {
+    const identity = { sessionId: "old-session", sessionKey: replySessionKey };
+    beginOpenAIObservation(identity);
+    completePromptCacheObservation({ ...identity, usage: { cacheRead: 8_000 } });
+
+    clearCommittedSessionResetRuntimeState({
+      previousSessionEntry: { sessionId: identity.sessionId },
+      storePath: "/synthetic/reset-observability.sqlite",
+      agentId: "main",
+      sessionKey: replySessionKey,
+      onError: (error) => {
+        throw error;
+      },
+    });
+
+    expect(beginOpenAIObservation(identity).previousCacheRead).toBeNull();
   });
 
   it("clears reset queues and drains system events for normalized keys", () => {

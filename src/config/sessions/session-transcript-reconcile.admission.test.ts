@@ -1,9 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import * as sqlite from "../../infra/node-sqlite.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -16,7 +14,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import { persistSessionTranscriptTurn } from "./session-accessor.js";
+import { observeNativeSqliteIntegrityChecks } from "./session-accessor.sqlite-native-integrity.test-support.js";
+import * as fixtures from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
@@ -32,12 +31,11 @@ vi.mock("node:worker_threads", async () =>
 );
 
 const observer = useReconcileWorkerObserver();
-const roots: string[] = [];
-const realOpen = sqlite.openNodeSqliteDatabase;
+const roots = createTempDirTracker();
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const root of roots) {
+  for (const root of roots.dirs) {
     await waitForSessionTranscriptIndexReconcilesInStateDir(root);
   }
   await closeOpenClawAgentDatabasesAsync();
@@ -45,26 +43,19 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  roots.cleanup();
   clearRuntimeConfigSnapshot();
 });
 
 async function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "reconcile-admission-"));
-  roots.push(root);
+  const root = roots.make("reconcile-admission-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   setRuntimeConfigSnapshot({});
-  const options = { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: root } };
-  const scope = { ...options, sessionId: "cold", sessionKey: "agent:main:cold" };
-  await persistSessionTranscriptTurn(scope, {
-    messages: [{ eventId: "seed", message: { role: "user", content: "cold admission fixture" } }],
-    touchSessionEntry: false,
-  });
+  const { options, scope } = fixtures.reconcileScope(root, "cold");
+  await fixtures.seedTranscript(scope, "seed", "cold admission fixture");
   await waitForSessionTranscriptIndexReconcile(options);
   const database = openOpenClawAgentDatabase(options);
-  database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
+  fixtures.markRebuild(database.db);
   await closeOpenClawAgentDatabaseByPathAsync(database.path);
   return {
     root,
@@ -78,26 +69,8 @@ it("waits for a cold projection without superseding its native integrity admissi
   closeOpenClawAgentDatabasesForTest(root);
   revokeSqliteDatabaseAdmissionsForPath(options.path);
   let parentChecks = 0;
-  vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, openOptions) => {
-    const database = realOpen(pathname, openOptions);
-    if (pathname === options.path && !openOptions?.readOnly) {
-      const prepare = database.prepare.bind(database);
-      database.prepare = (sql) => {
-        const statement = prepare(sql);
-        if (
-          sql === "PRAGMA integrity_check;" ||
-          sql === "PRAGMA integrity_check('sqlite_schema');"
-        ) {
-          const all = statement.all.bind(statement);
-          statement.all = () => {
-            parentChecks += 1;
-            return all();
-          };
-        }
-        return statement;
-      };
-    }
-    return database;
+  observeNativeSqliteIntegrityChecks(options.path, () => {
+    parentChecks += 1;
   });
   const entered = createDeferred();
   probe.admission(admission, (request, grant, admit) => {
@@ -123,8 +96,7 @@ it.each(["direct", "deferred"] as const)(
   "retains the operation environment before %s admission",
   async (mode) => {
     const { options } = await fixture();
-    const nextRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reconcile-next-owner-"));
-    roots.push(nextRoot);
+    const nextRoot = roots.make("reconcile-next-owner-");
     const original = { ...options, env: { ...options.env } };
     const inputs: SessionTranscriptReconcileWorkerInput[] = [];
     observer.onTask = ({ input }) => inputs.push(input);

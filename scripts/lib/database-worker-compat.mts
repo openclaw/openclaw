@@ -113,8 +113,26 @@ const reviewed = new Map<string, readonly string[]>([
 // Mixed SDK receivers retain only these deprecated members, never their live factories.
 const reviewedMembers = new Map<string, readonly string[]>([
   [
+    "src/gateway/github-oauth-lifecycle.ts",
+    ["createGitHubOAuthLifecycle.cancelAuthorization", "createGitHubOAuthLifecycle.retireProfile"],
+  ],
+  [
+    "src/gateway/github-personal-oauth.ts",
+    [
+      "createPersonalGitHubOAuthLifecycle.cancelAuthorization",
+      "createPersonalGitHubOAuthLifecycle.disconnect",
+    ],
+  ],
+  [
     "src/agents/sessions/session-manager.ts",
-    ["open", "openBounded", "openDetachedBounded", "openModelContext", "readSessionContext"],
+    [
+      "open",
+      "openBounded",
+      "openDetachedBounded",
+      "openModelContext",
+      "readSessionContext",
+      "prepareTranscriptRewrite",
+    ],
   ],
   [
     "src/agents/sessions/session-manager-core.ts",

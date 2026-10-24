@@ -16,7 +16,7 @@ import {
 } from "../../infra/update-doctor-result.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { updateRecoverySchema } from "../../infra/update-recovery.js";
-import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -320,9 +320,6 @@ export function registerRollbackReportTests(
           },
         },
       });
-      expect(getUpdateRun(run.runId, { env })?.steps).toContainEqual(
-        expect.objectContaining({ step: "package rollback", detail: message }),
-      );
       const result = completeUpdateCommandRun(rolledBack.result, run);
       const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});

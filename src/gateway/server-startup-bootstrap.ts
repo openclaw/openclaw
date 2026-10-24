@@ -12,7 +12,7 @@ import {
   readConfigFileSnapshotWithPluginMetadata,
   setAppliedRuntimeConfigSnapshot,
 } from "../config/io.js";
-import { normalizeStateDirEnv } from "../config/paths.js";
+import { isNamedProfile, normalizeStateDirEnv, resolveStateDir } from "../config/paths.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import { captureConfigOverrideApplier } from "../config/runtime-overrides.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
@@ -21,6 +21,7 @@ import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store/paths.js";
+import { resolveConfigDir } from "../infra/config-dir.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
@@ -138,6 +139,14 @@ async function prepareGatewayServerBootstrapSelected(input: {
   });
   const inspectStateOwnership = async (signal?: AbortSignal) => {
     normalizeStateDirEnv(process.env);
+    // Preserve split-config roots and named profiles whose dotenv/socket defaults
+    // distinguish an implicit state directory from an explicit override.
+    if (!process.env.OPENCLAW_STATE_DIR?.trim() && !isNamedProfile(process.env)) {
+      const stateDir = resolveStateDir(process.env);
+      if (resolveConfigDir(process.env) === stateDir) {
+        process.env.OPENCLAW_STATE_DIR = stateDir;
+      }
+    }
     await assertOpenClawStateWriteAllowedAtPath({
       databasePath: resolveOpenClawStateSqlitePath(process.env),
       env: process.env,
@@ -590,9 +599,7 @@ async function prepareGatewayServerBootstrapSelected(input: {
     ambientEnvTriggers,
     startupTrace,
     configSnapshot,
-    startupConfigLoad,
     startupActivationSourceConfig,
-    startupRuntimeConfig,
     startupSessionDatabases,
     cronStorePath,
     cfgAtStart,

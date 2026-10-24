@@ -57,6 +57,7 @@ describe("configureProgramHelp", () => {
       },
     });
     program.command("models").description("models");
+    program.command("claws").description("claws");
     program.command("status").description("status");
     const plugins = program.command("plugins").description("Manage plugins");
     plugins
@@ -82,12 +83,14 @@ describe("configureProgramHelp", () => {
     expect(rootHelp.error.code).toBe("commander.helpDisplayed");
     expect(rootHelp.stdout).toContain("Hint: commands suffixed with * have subcommands");
     expect(rootHelp.stdout).toContain("models *");
+    expect(rootHelp.stdout).toContain("claws *");
     expect(rootHelp.stdout).toContain("status");
     expect(rootHelp.stdout).not.toContain("status *");
     expect(rootHelp.stdout).toContain("BANNER-LINE");
     expect(rootHelp.stdout).toContain("Examples:");
     expect(rootHelp.stdout).toContain("openclaw setup --baseline");
     expect(rootHelp.stdout).toContain("https://docs.openclaw.ai/cli");
+    expect(rootHelp.stdout).toContain("Support: https://community.openclaw.ai/");
     expect(shortHelp.stdout).toBe(rootHelp.stdout);
     expect(groupHelp.stdout).toContain("Usage: openclaw plugins [options] [command]");
     expect(subcommandHelp.stdout).toContain("Usage: openclaw plugins list [options]");
@@ -123,6 +126,30 @@ describe("configureProgramHelp", () => {
     expect(stderr.match(/Try: openclaw plugins list --help/g)).toHaveLength(2);
     expect(stderr).not.toContain("openclaw plugins list list --help");
     expect(stderr).toContain("Did you mean this?\n  openclaw plugins list\n");
+  });
+
+  it.each([
+    ["debug", "debug"],
+    [" trace ", "trace"],
+  ])("accepts allowed --log-level %p through Commander", async (input, expected) => {
+    process.argv = ["node", "openclaw", "--log-level", input];
+    const program = new Command().exitOverride();
+    configureProgramHelp(program, testProgramContext);
+    program.action(() => {});
+    await program.parseAsync(process.argv);
+    expect(program.opts().logLevel).toBe(expected);
+  });
+
+  it("rejects invalid --log-level through Commander", async () => {
+    process.argv = ["node", "openclaw", "--log-level", "loud"];
+    const program = new Command().exitOverride();
+    configureProgramHelp(program, testProgramContext);
+    program.configureOutput({ writeErr: () => {} });
+    await expect(program.parseAsync(process.argv)).rejects.toMatchObject({
+      code: "commander.invalidArgument",
+      exitCode: 1,
+      message: expect.stringContaining("Invalid --log-level"),
+    });
   });
 
   it("suppresses banner formatting when parent default help requests it", async () => {

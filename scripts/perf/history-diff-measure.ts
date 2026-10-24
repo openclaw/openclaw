@@ -1,10 +1,18 @@
 // Synthetic chat.history and sessions.diff traffic against an owned loopback Gateway.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createWriteStream, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { pipeline } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.ts";
@@ -14,9 +22,11 @@ import type { TranscriptEvent } from "../../src/config/sessions/session-accessor
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import {
   controlGatewayProfile,
+  measureGatewayAllocations,
   measureGatewayCpuUsage,
   readGatewayCpuProfile,
   readGatewayCpuUsage,
+  readGatewayGcTrace,
 } from "../lib/gateway-bench-profile.ts";
 import { buildGatewayBenchChildArgs, createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
@@ -30,6 +40,8 @@ const { values } = parseArgs({
     "untracked-files": { type: "string", default: "32" },
     "unchanged-files": { type: "string", default: "0" },
     "managed-worktree": { type: "boolean", default: false },
+    "dirty-baseline": { type: "boolean", default: false },
+    mutate: { type: "boolean", default: false },
     "scoped-reader": { type: "boolean", default: false },
     port: { type: "string", default: "41072" },
     entry: { type: "string", default: "dist/entry.js" },
@@ -38,7 +50,11 @@ const { values } = parseArgs({
     rounds: { type: "string", default: "5" },
     "warmup-cohorts": { type: "string", default: "5" },
     scenario: { type: "string", default: "all" },
+    allocations: { type: "boolean", default: false },
+    "history-source": { type: "string" },
+    "diff-source": { type: "string" },
     "start-at": { type: "string" },
+    "start-file": { type: "string" },
     output: { type: "string" },
     revision: { type: "string" },
   },
@@ -64,7 +80,14 @@ const clientCount = integer(values.clients, "--clients");
 const operations = integer(values.operations, "--operations");
 const rounds = integer(values.rounds, "--rounds");
 const warmupCohorts = integer(values["warmup-cohorts"], "--warmup-cohorts", 0);
-const startAt = values["start-at"] ? integer(values["start-at"], "--start-at") : undefined;
+let startAt = values["start-at"] ? integer(values["start-at"], "--start-at") : undefined;
+const startFile = values["start-file"] ? path.resolve(values["start-file"]) : undefined;
+if (startFile && startAt !== undefined) {
+  throw new Error("--start-file and --start-at are mutually exclusive");
+}
+if (startFile && existsSync(startFile)) {
+  throw new Error("--start-file must not already exist at setup");
+}
 const trackedFiles = integer(values["tracked-files"], "--tracked-files", 0);
 const untrackedFiles = integer(values["untracked-files"], "--untracked-files", 0);
 const unchangedFiles = integer(values["unchanged-files"], "--unchanged-files", 0);
@@ -87,6 +110,9 @@ const env = createGatewayBenchEnv(path.join(root, "home"), path.join(root, "open
 });
 
 async function seed() {
+  if (values["dirty-baseline"] && trackedFiles === 0) {
+    throw new Error("--dirty-baseline requires at least one tracked file");
+  }
   // Exclusive creation makes an accidental second seed fail before changing any state.
   mkdirSync(seedDir);
   const previousEnv = process.env;
@@ -131,6 +157,14 @@ async function seed() {
       "test: seed synthetic diff",
     );
     await git("worktree", "add", "-b", branch, worktree);
+    if (values["dirty-baseline"]) {
+      for (let index = 0; index < trackedFiles; index++) {
+        writeFileSync(
+          path.join(worktree, `tracked-${index}.txt`),
+          `Synthetic tracked file ${index}\nSynthetic pre-session edit\n`,
+        );
+      }
+    }
     const [{ captureSessionDiffBaseline }, agentDb, stateDb, entries, transcripts, lifecycle] =
       await Promise.all([
         import("../../src/sessions/session-diff.js"),
@@ -142,8 +176,9 @@ async function seed() {
       ]);
     try {
       const baseline = await captureSessionDiffBaseline({ cwd: worktree, sessionId });
-      if (!baseline || baseline.files.length !== 0) {
-        throw new Error("Synthetic session must start with a captured clean checkout baseline");
+      const expectedBaselineFiles = values["dirty-baseline"] ? trackedFiles : 0;
+      if (!baseline || baseline.truncated || baseline.files.length !== expectedBaselineFiles) {
+        throw new Error("Synthetic session baseline does not match the requested tracked edits");
       }
       const managedBinding = values["managed-worktree"]
         ? { id: "history-diff-managed-worktree", branch, repoRoot: repo }
@@ -186,6 +221,7 @@ async function seed() {
                 source_paths_json: "[]",
                 baseline_json: null,
                 baseline_ref: null,
+                checkpoint_json: null,
                 pending_ref: null,
                 pending_target: null,
                 journal_json: null,
@@ -305,7 +341,7 @@ async function seed() {
         untrackedFiles,
         unchangedFiles,
         managedWorktree: Boolean(managedBinding),
-        baselineFiles: 0,
+        baselineFiles: baseline.files.length,
         agentDatabaseBytes: statSync(database.path).size,
       };
       writeFileSync(seedPath, `${JSON.stringify(summary, null, 2)}\n`);
@@ -349,14 +385,49 @@ async function measure() {
   };
   const expectedTrackedFiles = seededCount("trackedFiles");
   const expectedUntrackedFiles = seededCount("untrackedFiles");
+  if (values.mutate && expectedTrackedFiles === 0) {
+    throw new Error("--mutate requires a fixture with at least one changed tracked file");
+  }
+  const mutationPath = path.join(seedDir, "worktree", "tracked-0.txt");
+  const mutationBytes = values.mutate ? readFileSync(mutationPath) : undefined;
   const output = path.resolve(
     values.output ?? path.join(root, `history-diff-measure-${Date.now()}`),
   );
   mkdirSync(output);
   const scopedReader = values["scoped-reader"];
+  const historySource = values["history-source"];
+  const diffSource = values["diff-source"] ? path.resolve(values["diff-source"]) : undefined;
+  const diffSourceReceipt = path.join(output, "diff-source-loads.jsonl");
+  const gitTracePath = path.join(output, "git-trace.jsonl");
   const readerIdentity = "history-diff-reader@example.invalid";
   const readerOrigin = "https://history-diff.example.invalid";
-  let gatewayEnv = env;
+  let gatewayEnv: NodeJS.ProcessEnv = {
+    ...env,
+    GIT_TRACE2_EVENT: gitTracePath,
+    ...(historySource ? { OPENCLAW_BENCH_HISTORY_SOURCE: path.resolve(historySource) } : {}),
+  };
+  if (diffSource) {
+    if (path.resolve(values.entry) !== path.resolve("src/entry.ts")) {
+      throw new Error("--diff-source requires --entry src/entry.ts");
+    }
+    const preload = path.join(output, "diff-source-preload.cjs");
+    const owner = new URL("../../src/sessions/session-diff.runtime.ts", import.meta.url).href;
+    // NODE_OPTIONS also installs the hook in source Git workers with their own execArgv.
+    writeFileSync(
+      preload,
+      `const { registerHooks } = require("node:module");
+const { readFileSync, appendFileSync } = require("node:fs");
+const { threadId } = require("node:worker_threads");
+registerHooks({ load(url, context, nextLoad) {
+  if (url !== ${JSON.stringify(owner)}) return nextLoad(url, context);
+  const source = readFileSync(${JSON.stringify(diffSource)}, "utf8");
+  appendFileSync(${JSON.stringify(diffSourceReceipt)}, JSON.stringify({ threadId }) + "\\n");
+  return { format: "module-typescript", source, shortCircuit: true };
+} });
+`,
+    );
+    gatewayEnv.NODE_OPTIONS = `--require=${JSON.stringify(preload)}`;
+  }
   if (scopedReader) {
     const config: unknown = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
     if (!isRecord(config) || !isRecord(config.gateway)) {
@@ -384,11 +455,14 @@ async function measure() {
     };
     const configPath = path.join(output, "gateway-config.json");
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
-    gatewayEnv = { ...env, OPENCLAW_CONFIG_PATH: configPath };
+    gatewayEnv = { ...gatewayEnv, OPENCLAW_CONFIG_PATH: configPath };
   }
   const clients: ReturnType<typeof createGatewayWsClient>[] = [];
   const readerProfileIds = new Set<string>();
   let gateway: ChildProcess | undefined;
+  const gcLogPath = path.join(output, "gateway-gc.log");
+  let gcCapture: Promise<void> | undefined;
+  let gcCaptureFailure: Error | undefined;
   let closing = false;
   let clientFailure: Error | undefined;
   let cleanupPromise: Promise<void> | undefined;
@@ -400,6 +474,10 @@ async function measure() {
       }
       if (gateway) {
         await stopChild(gateway, { teardownGraceMs: 10_000, killGraceMs: 2000 });
+      }
+      await gcCapture;
+      if (gcCaptureFailure) {
+        throw gcCaptureFailure;
       }
     })());
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
@@ -431,6 +509,7 @@ async function measure() {
     });
     const log = createWriteStream(path.join(output, "gateway.log"));
     const childArgs = buildGatewayBenchChildArgs(values.entry, port, [
+      ...(values.allocations ? ["--trace-gc-nvp"] : []),
       "--import",
       "./scripts/tsx.mjs",
       "--import",
@@ -446,6 +525,12 @@ async function measure() {
     });
     gateway.stdout?.pipe(log);
     gateway.stderr?.pipe(log);
+    if (values.allocations && gateway.stdout) {
+      // Keep V8 lines and synchronous capture markers together, without stderr interleaving.
+      gcCapture = pipeline(gateway.stdout, createWriteStream(gcLogPath)).catch((error: unknown) => {
+        gcCaptureFailure = error instanceof Error ? error : new Error(String(error));
+      });
+    }
     let startup = "";
     let listening = false;
     const observe = (chunk: Buffer) => {
@@ -563,6 +648,12 @@ async function measure() {
       );
     }
     const diffHashes = new Map<string, string>();
+    const mutate = (variant: (typeof variants)[number]) => {
+      if (mutationBytes && variant.method === "sessions.diff") {
+        // Advance filesystem freshness without changing the response oracle.
+        writeFileSync(mutationPath, mutationBytes);
+      }
+    };
     const request = async (
       client: (typeof clients)[number],
       variant: (typeof variants)[number],
@@ -601,17 +692,33 @@ async function measure() {
           throw new Error(`${variant.name}: missing patches`);
         }
       }
-      const comparable = Object.fromEntries(
-        Object.entries(response).filter(([key]) => key !== "root" && key !== "sessionKey"),
+      const comparable =
+        variant.method === "chat.history"
+          ? {
+              ...response,
+              ...(isRecord(response.sessionInfo)
+                ? { sessionInfo: { ...response.sessionInfo, snapshotAt: 0 } }
+                : {}),
+            }
+          : Object.fromEntries(
+              Object.entries(response).filter(([key]) => key !== "root" && key !== "sessionKey"),
+            );
+      const payloadJson = JSON.stringify(comparable, (_key, value: unknown) =>
+        variant.method === "chat.history" && typeof value === "string"
+          ? value.replaceAll(root, "<fixture>")
+          : value,
       );
-      const payloadSha256 = createHash("sha256").update(JSON.stringify(comparable)).digest("hex");
+      const payloadSha256 = createHash("sha256").update(payloadJson).digest("hex");
+      if (!diffHashes.has(variant.name)) {
+        writeFileSync(path.join(output, `${variant.name}.json`), payloadJson);
+      }
       if (variant.method === "sessions.diff") {
         const previous = diffHashes.get(variant.name);
         if (previous && previous !== payloadSha256) {
           throw new Error(`${variant.name}: unchanged checkout returned different payload bytes`);
         }
-        diffHashes.set(variant.name, payloadSha256);
       }
+      diffHashes.set(variant.name, payloadSha256);
       return {
         elapsedMs,
         payloadBytes: Buffer.byteLength(JSON.stringify(response)),
@@ -624,6 +731,15 @@ async function measure() {
     for (const variant of variants) {
       warmup.push({ variant: variant.name, sample: await request(clients[0]!, variant) });
     }
+    if (
+      variants.some((variant) => variant.method === "sessions.diff") &&
+      !existsSync(gitTracePath)
+    ) {
+      throw new Error("Synthetic diff warmup did not produce a Git trace");
+    }
+    if (diffSource && !existsSync(diffSourceReceipt)) {
+      throw new Error("Selected diff source was not loaded during warmup");
+    }
     console.log(JSON.stringify({ ready: true, output }));
     if (startAt !== undefined) {
       if (Date.now() >= startAt) {
@@ -634,29 +750,67 @@ async function measure() {
     }
     for (let cohort = 0; cohort < warmupCohorts; cohort++) {
       for (const variant of variants) {
+        mutate(variant);
         await Promise.all(clients.map((client) => request(client, variant)));
       }
     }
+    console.log(JSON.stringify({ warmed: true, output }));
     const results = [];
+    const waitForStart = async () => {
+      if (results.length !== 0) {
+        return;
+      }
+      if (startFile) {
+        while (!existsSync(startFile)) {
+          await delay(100);
+        }
+        startAt = integer(readFileSync(startFile, "utf8").trim(), "--start-file deadline");
+      }
+      if (startAt !== undefined) {
+        if (Date.now() >= startAt) {
+          throw new Error("Start deadline passed before measurement readiness");
+        }
+        await delay(startAt - Date.now());
+      }
+    };
     for (let round = 0; round < rounds; round++) {
       for (const variant of variants) {
-        const profilePath = path.join(output, `${variant.name}-${round}.cpuprofile`);
-        await controlGatewayProfile(gateway, "cpu", "start", profilePath);
-        const before = await readGatewayCpuUsage(gateway);
-        if (results.length === 0 && startAt !== undefined) {
-          if (Date.now() >= startAt) {
-            throw new Error("--start-at passed before concurrent warmup and profiler readiness");
+        const profilePath = path.join(
+          output,
+          `${variant.name}-${round}.${values.allocations ? "heapprofile" : "cpuprofile"}`,
+        );
+        let startedAt = 0;
+        let traceStart = 0;
+        let traceEnd = 0;
+        const samples: Awaited<ReturnType<typeof request>>[] = [];
+        const workload = async () => {
+          traceStart = existsSync(gitTracePath) ? statSync(gitTracePath).size : 0;
+          startedAt = Date.now();
+          for (let operation = 0; operation < operations; operation++) {
+            mutate(variant);
+            samples.push(...(await Promise.all(clients.map((client) => request(client, variant)))));
           }
-          await delay(startAt - Date.now());
+          traceEnd = existsSync(gitTracePath) ? statSync(gitTracePath).size : 0;
+        };
+        let cpu;
+        let profileResult;
+        await waitForStart();
+        if (values.allocations) {
+          profileResult = await measureGatewayAllocations(
+            gateway,
+            profilePath,
+            clientCount * operations,
+            workload,
+          );
+          cpu = profileResult.cpu;
+        } else {
+          await controlGatewayProfile(gateway, "cpu", "start", profilePath);
+          const before = await readGatewayCpuUsage(gateway);
+          await workload();
+          cpu = measureGatewayCpuUsage(before, await readGatewayCpuUsage(gateway));
+          await controlGatewayProfile(gateway, "cpu", "stop", profilePath);
+          profileResult = readGatewayCpuProfile(profilePath);
         }
-        const startedAt = Date.now();
-        const samples = [];
-        for (let operation = 0; operation < operations; operation++) {
-          samples.push(...(await Promise.all(clients.map((client) => request(client, variant)))));
-        }
-        const cpu = measureGatewayCpuUsage(before, await readGatewayCpuUsage(gateway));
-        await controlGatewayProfile(gateway, "cpu", "stop", profilePath);
-        const profileResult = readGatewayCpuProfile(profilePath);
         if (
           !profileResult.diagnostics ||
           profileResult.diagnostics.collectionErrors ||
@@ -665,6 +819,18 @@ async function measure() {
         ) {
           throw new Error(`${variant.name}: incomplete diagnostic capture`);
         }
+        const gitSpawns =
+          traceEnd > traceStart
+            ? readFileSync(gitTracePath)
+                .subarray(traceStart, traceEnd)
+                .toString("utf8")
+                .split("\n")
+                .filter(Boolean)
+                .filter((line) => {
+                  const event: unknown = JSON.parse(line);
+                  return isRecord(event) && event.event === "start";
+                }).length
+            : 0;
         const result = {
           round,
           variant: variant.name,
@@ -674,6 +840,8 @@ async function measure() {
           payloadBytes: summarize(samples.map((sample) => sample.payloadBytes)),
           payloadSha256: [...new Set(samples.map((sample) => sample.payloadSha256))],
           samples,
+          gitSpawns,
+          gitSpawnsPerRpc: gitSpawns / samples.length,
           cpu,
           profile: profileResult,
         };
@@ -689,10 +857,44 @@ async function measure() {
         );
       }
     }
+    // Promotion parsing needs complete stdout, including the final capture's stop marker.
+    if (values.allocations) {
+      await cleanup();
+    }
+    const diffSourceLoads: unknown[] = diffSource
+      ? (existsSync(diffSourceReceipt) ? readFileSync(diffSourceReceipt, "utf8") : "")
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+      : [];
+    if (
+      diffSource &&
+      !diffSourceLoads.some((load) => isRecord(load) && Number(load.threadId) > 0)
+    ) {
+      throw new Error("Selected diff source was not loaded by a Git worker");
+    }
     const report = {
       revision: values.revision ?? null,
+      historySources: historySource
+        ? Object.fromEntries(
+            ["chat-history-session-read.ts", "chat-history-handler.ts"].map((file) => [
+              file,
+              createHash("sha256")
+                .update(readFileSync(path.join(historySource, file)))
+                .digest("hex"),
+            ]),
+          )
+        : undefined,
       entry: values.entry,
+      diffSource: diffSource
+        ? {
+            sha256: createHash("sha256").update(readFileSync(diffSource)).digest("hex"),
+            loads: diffSourceLoads,
+          }
+        : undefined,
+      mutate: values.mutate,
       scenario: values.scenario,
+      profiling: values.allocations ? "allocations" : "cpu",
       reader: scopedReader ? "scoped-profile" : "admin",
       readerProfileIds: [...readerProfileIds],
       fixture,
@@ -702,9 +904,21 @@ async function measure() {
       rounds,
       warmupCohorts,
       requestedStartAt: startAt ?? null,
+      startFile: startFile ?? null,
       startSkewMs: startAt === undefined ? null : results[0]!.startedAt - startAt,
       warmup,
-      results,
+      results: results.map((result) => {
+        if (!values.allocations) {
+          return result;
+        }
+        const promotion = readGatewayGcTrace(gcLogPath, result.profile.profilePath);
+        return Object.assign(result, {
+          promotion: {
+            ...promotion,
+            promotedBytesPerOperation: promotion.promotedBytes / (clientCount * operations),
+          },
+        });
+      }),
     };
     writeFileSync(path.join(output, "result.json"), `${JSON.stringify(report, null, 2)}\n`);
     console.log(`RESULT ${path.join(output, "result.json")}`);

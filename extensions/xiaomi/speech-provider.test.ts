@@ -1,6 +1,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 
 const transcodeMock = vi.hoisted(() => vi.fn());
 
@@ -67,16 +68,7 @@ describe("buildXiaomiSpeechProvider", () => {
     expect(resolveConfig({ mimo: { voiceId: "default_zh" } }).voice).toBe("default_zh");
   });
 
-  const policy = {
-    enabled: true,
-    allowText: true,
-    allowProvider: true,
-    allowVoice: true,
-    allowModelId: true,
-    allowVoiceSettings: true,
-    allowNormalization: true,
-    allowSeed: true,
-  };
+  const policy = createSpeechDirectivePolicy();
   const parse = (key: string, value: string) =>
     provider.parseDirectiveToken!({ key, value, policy });
   const expectOverride = (key: string, value: string) =>
@@ -127,10 +119,11 @@ describe("buildXiaomiSpeechProvider", () => {
         voiceCompatible: voiceNote,
         audioBuffer: Buffer.from(voiceNote ? "fake-opus-audio" : "fake-mp3-audio"),
       });
-      expect(timeoutSpy).toHaveBeenCalledWith(
-        expect.any(Function),
-        voiceNote ? 30000 : MAX_TIMER_TIMEOUT_MS,
-      );
+      expect(
+        timeoutSpy.mock.calls.some(
+          ([, delay]) => delay === (voiceNote ? 30000 : MAX_TIMER_TIMEOUT_MS),
+        ),
+      ).toBe(true);
       expect(mockFetch).toHaveBeenCalledOnce();
       const [url, init] = mockFetch.mock.calls[0] ?? [];
       expect(url).toBe("https://api.xiaomimimo.com/v1/chat/completions");

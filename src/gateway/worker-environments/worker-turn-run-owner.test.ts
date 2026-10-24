@@ -27,6 +27,7 @@ import { isReplyRunEvidenceStale } from "../../sessions/session-controller.state
 import { steerSessionControllerOperation } from "../../sessions/session-controller.steer.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { createWorkerLiveEventReceiver } from "./live-events.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
@@ -46,6 +47,7 @@ import {
   setupWorkerTurnLauncherTest,
   turn,
   workerTurnEnvironments,
+  workerTurnRequest,
 } from "./worker-turn-launcher.test-support.js";
 import { captureWorkerTurnLiveEventOwner } from "./worker-turn-run-owner.js";
 
@@ -62,12 +64,15 @@ function replyOperation(extra: Partial<Parameters<typeof createReplyOperation>[0
 
 function claimInput(runId: string) {
   return {
-    sessionId: SESSION_ID,
-    sessionKey: SESSION_KEY,
-    agentId: "main",
-    runId,
+    ...workerTurnRequest(runId),
     owner: { kind: "worker" as const, environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
   };
+}
+
+function boundReplyOperation(storeScope = sessionTarget.storePath) {
+  return replyOperation({
+    target: captureSessionTarget({ storeScope, sessionKey: SESSION_KEY, incarnation: SESSION_ID }),
+  });
 }
 
 async function claimTurn(runId: string, claimId: string) {
@@ -155,22 +160,10 @@ describe("cloud worker run ownership", () => {
         },
       );
       const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-      const operation = replyOperation({
-        target: captureSessionTarget({
-          storeScope: sessionTarget.storePath,
-          sessionKey: SESSION_KEY,
-          incarnation: SESSION_ID,
-        }),
-      });
+      const operation = boundReplyOperation();
       let otherOperation: ReturnType<typeof createReplyOperation> | undefined;
       const collideSessionId = () => {
-        otherOperation = replyOperation({
-          target: captureSessionTarget({
-            storeScope: `${sessionTarget.storePath}.other`,
-            sessionKey: SESSION_KEY,
-            incarnation: SESSION_ID,
-          }),
-        });
+        otherOperation = boundReplyOperation(`${sessionTarget.storePath}.other`);
       };
       operation.setPhase("running");
       const runId = "run-bounded-worker-tool";
@@ -186,11 +179,7 @@ describe("cloud worker run ownership", () => {
         abortSignal: operation.abortSignal,
       };
       const attempt = provider
-        .executeTurn(
-          { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
-          input,
-          vi.fn(),
-        )
+        .executeTurn(workerTurnRequest(runId), input, vi.fn())
         .catch((error: unknown) => error)
         .finally(() => operation.complete());
       await launched.promise;
@@ -203,18 +192,15 @@ describe("cloud worker run ownership", () => {
         getWorkerTurnExecutionIdentityCapability(placements, turnClaim),
         "expected worker turn capability",
       );
-      const identity: WorkerConnectionIdentity = {
+      const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(turnClaim, {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         sessionId: SESSION_ID,
         runId,
-        turnClaim,
         credentialHash: "worker-test-credential-hash",
-        bundleHash: "a".repeat(64),
-        rpcSetVersion: 1,
         protocolFeatures: ["worker-live-event-v1"],
         credentialExpiresAtMs: Date.now() + input.timeoutMs,
-      };
+      });
       const receiver = createWorkerLiveEventReceiver();
       const receive = (event: WorkerLiveEventParams["event"], seq: number, sender = identity) =>
         receiver.apply({

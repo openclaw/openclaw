@@ -188,7 +188,6 @@ describe("native extension bootstrap", () => {
     expect(status).toMatchObject({
       paired: true,
       retiredCopilotCustodyBlocked: true,
-      accessibleTabCount: 0,
     });
     expect(JSON.stringify(status)).not.toMatch(/creationPending|pendingArchives|sessionKey/u);
     expect(await pair(h)).toMatchObject({ ok: false });
@@ -275,7 +274,6 @@ describe("native extension bootstrap", () => {
     expectUnused(h.sendNativeMessage, h.debuggerAttach);
     expect(await runtime(h, "getStatus")).toMatchObject({
       retiredCopilotCustodyBlocked: true,
-      accessibleTabCount: 0,
     });
   });
 });

@@ -163,7 +163,10 @@ describe("resolveCachedMessageThreadSpec", () => {
 
     await expect(
       runtime.resolveCachedMessageThreadSpec({ chatId: CHAT_ID, messageId: 102 }),
-    ).resolves.toEqual({ scope: "direct-messages", id: TOPIC_ID });
+    ).resolves.toEqual({
+      threadSpec: { scope: "direct-messages", id: TOPIC_ID },
+      isTopicMessage: false,
+    });
   });
 });
 

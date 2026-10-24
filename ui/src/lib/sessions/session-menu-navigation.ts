@@ -5,9 +5,8 @@ import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
-import type { ChatHistoryResult } from "../../pages/chat/chat-history-snapshot.ts";
 import { buildChatMarkdown } from "../../pages/chat/export.ts";
-import { nativeHistoryMessageIdentity } from "../chat/history-message-identity.ts";
+import { loadCompleteChatHistory } from "../chat/complete-history.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { formatUiError } from "../format-error.ts";
 import { reserveExternalWindowForDeferredNavigation } from "../open-external-url.ts";
@@ -85,71 +84,17 @@ async function copySessionMarkdown<TRouteId extends string>(
     gateway.snapshot.client === client &&
     gateway.snapshot.phase === "connected" &&
     gateway.snapshot.hello === hello;
-  const pages: unknown[][] = [];
-  const seenCounts = new Map<string, number>();
-  const requestHistory = (offset: number, limit = 1000) =>
-    client.request<ChatHistoryResult>("chat.history", {
-      sessionKey: session.key,
-      agentId,
-      limit,
-      maxChars: 500_000,
-      offset,
-    });
-  let offset = 0;
-  let snapshot: ChatHistoryResult | undefined;
-  while (true) {
-    const page = await requestHistory(offset);
-    // Offsets are relative to the current tail. Never stitch different sessions,
-    // branches, or growing transcripts into a seemingly complete export.
-    if (
-      !isCurrent() ||
-      (session.sessionId && page.sessionId !== session.sessionId) ||
-      (snapshot &&
-        (page.sessionId !== snapshot.sessionId || page.totalMessages !== snapshot.totalMessages))
-    ) {
-      throw new Error(t("sessionsView.copyTranscriptChanged"));
-    }
-    snapshot ??= page;
-    const pageCounts = new Map<string, number>();
-    const messages = (page.messages ?? []).filter((message) => {
-      const identity = nativeHistoryMessageIdentity(message);
-      if (!identity) {
-        return true;
-      }
-      const count = (pageCounts.get(identity) ?? 0) + 1;
-      pageCounts.set(identity, count);
-      return count > (seenCounts.get(identity) ?? 0);
-    });
-    for (const [identity, count] of pageCounts) {
-      seenCounts.set(identity, Math.max(count, seenCounts.get(identity) ?? 0));
-    }
-    pages.push(messages);
-    if (!page.hasMore) {
-      break;
-    }
-    if (page.nextOffset === undefined || page.nextOffset <= offset) {
-      throw new Error(t("sessionsView.copyTranscriptChanged"));
-    }
-    offset = page.nextOffset;
-  }
-  if (pages.length > 1) {
-    // Only tail pages carry the branch marker and history cursor. Re-read the
-    // tail after paging so a branch switch or rewrite cannot mix transcripts.
-    const tail = await requestHistory(0, 1);
-    if (
-      !isCurrent() ||
-      tail.sessionId !== snapshot.sessionId ||
-      tail.totalMessages !== snapshot.totalMessages ||
-      tail.deltaCursor !== snapshot.deltaCursor ||
-      tail.sessionInfo?.activeLeafEntryId !== snapshot.sessionInfo?.activeLeafEntryId
-    ) {
-      throw new Error(t("sessionsView.copyTranscriptChanged"));
-    }
-  }
+  const messages = await loadCompleteChatHistory({
+    client,
+    sessionKey: session.key,
+    sessionId: session.sessionId,
+    agentId,
+    isCurrent,
+  });
   const assistantName =
     context.agents.state.agentsList?.agents.find((agent) => agent.id === agentId)?.name ??
     "OpenClaw";
-  const markdown = buildChatMarkdown(pages.toReversed().flat(), assistantName);
+  const markdown = buildChatMarkdown(messages, assistantName);
   if (!markdown) {
     throw new Error(t("chat.commandResults.emptyExport"));
   }

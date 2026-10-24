@@ -5,7 +5,7 @@ import {
   withSessionActor,
 } from "../../config/sessions/session-actor-scope.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { RunReplyAgentParams } from "./agent-runner-core.js";
 
 async function commitQueuedReplySessionActivity(params: {
@@ -46,9 +46,10 @@ async function commitQueuedReplySessionActivity(params: {
         ),
       );
       if (outcome.kind !== "committed") {
-        throw new SqliteWorkerError(
+        throw wrapSqliteWorkerError(
           outcome.error.message,
           outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
+          outcome.error,
         );
       }
       params.onCommittedEntry(outcome.receipt.postimage.entry);

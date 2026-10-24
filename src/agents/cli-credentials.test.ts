@@ -4,13 +4,20 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const execSyncMock = vi.fn();
+const execSyncMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  execSync: execSyncMock,
+}));
 const CLI_CREDENTIALS_CACHE_TTL_MS = 15 * 60 * 1000;
 let readCodexCliActiveApiKey: typeof import("./cli-credentials.js").readCodexCliActiveApiKey;
 let hasCodexCliAuthFile: typeof import("./cli-credentials.js").hasCodexCliAuthFile;
 let readCodexCliCredentialsCached: typeof import("./cli-credentials.js").readCodexCliCredentialsCached;
 let readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGeminiCliCredentialsCached;
 let readMiniMaxCliCredentialsCached: typeof import("./cli-credentials.js").readMiniMaxCliCredentialsCached;
+let resolveNativeCliLoginOwner: typeof import("./cli-credentials.js").resolveNativeCliLoginOwner;
+let readAttestedNativeCliLoginOwner: typeof import("./cli-credentials.js").readAttestedNativeCliLoginOwner;
 
 function createJwtWithExp(expSeconds: number): string {
   // Signature verification is out of scope; expiration extraction only needs a
@@ -40,16 +47,22 @@ describe("cli credentials", () => {
       readCodexCliCredentialsCached,
       readGeminiCliCredentialsCached,
       readMiniMaxCliCredentialsCached,
+      resolveNativeCliLoginOwner,
+      readAttestedNativeCliLoginOwner,
     } = await import("./cli-credentials.js"));
   });
 
   beforeEach(() => {
     vi.useFakeTimers();
+    execSyncMock.mockImplementation(() => {
+      throw Object.assign(new Error("Keychain item not found"), { status: 44 });
+    });
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.useRealTimers();
-    execSyncMock.mockClear().mockImplementation(() => undefined);
+    execSyncMock.mockReset();
     delete process.env.CODEX_HOME;
     vi.unstubAllEnvs();
   });
@@ -257,6 +270,7 @@ describe("cli credentials", () => {
 
   it("prefers active Codex OAuth over a stale file API key", () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-keychain-oauth-"));
+    vi.stubGlobal("process", { ...process, platform: "darwin" });
     fs.writeFileSync(
       path.join(tempHome, "auth.json"),
       JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "stale-file-api-key" }),
@@ -264,18 +278,13 @@ describe("cli credentials", () => {
     );
     execSyncMock.mockReturnValue("Logged in using ChatGPT");
 
-    expect(
-      readCodexCliActiveApiKey({
-        codexHome: tempHome,
-        platform: "darwin",
-        execSync: execSyncMock,
-      }),
-    ).toBeNull();
+    expect(readCodexCliActiveApiKey({ codexHome: tempHome })).toBeNull();
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });
 
   it("uses the API key that Codex reports active instead of a stale Keychain record", () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-default-file-"));
+    vi.stubGlobal("process", { ...process, platform: "darwin" });
     fs.writeFileSync(
       path.join(tempHome, "auth.json"),
       JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "active-file-api-key" }),
@@ -287,13 +296,11 @@ describe("cli credentials", () => {
         : JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "stale-keychain-api-key" }),
     );
 
-    expect(
-      readCodexCliActiveApiKey({
-        codexHome: tempHome,
-        platform: "darwin",
-        execSync: execSyncMock,
-      }),
-    ).toEqual({ type: "api_key", provider: "openai", key: "active-file-api-key" });
+    expect(readCodexCliActiveApiKey({ codexHome: tempHome })).toEqual({
+      type: "api_key",
+      provider: "openai",
+      key: "active-file-api-key",
+    });
     expect(execSyncMock).toHaveBeenCalledTimes(2);
   });
 
@@ -533,6 +540,40 @@ describe("cli credentials", () => {
         email: "user@example.com",
       });
     } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a native login owner only for backends that own one", async () => {
+    // A readable Claude login must not leak into other backends' history ownership.
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-owner-"));
+    try {
+      vi.stubEnv("HOME", tempHome);
+      fs.mkdirSync(path.join(tempHome, ".claude"), { recursive: true });
+      fs.writeFileSync(
+        path.join(tempHome, ".claude", ".credentials.json"),
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "synthetic",
+            expiresAt: Date.parse("2030-01-01T00:00:00Z"),
+          },
+        }),
+      );
+      const fetchFn = vi.fn(async () => Response.json({ account: { uuid: "uuid-a" } }));
+      vi.stubGlobal("fetch", fetchFn);
+      for (const backendId of ["google-gemini-cli", "codex-cli"]) {
+        expect(await resolveNativeCliLoginOwner(backendId, process.env)).toEqual({});
+        expect(readAttestedNativeCliLoginOwner(backendId, process.env)).toBeUndefined();
+      }
+      expect(fetchFn).not.toHaveBeenCalled();
+      // The Claude backend attests the same login, and only then answers the local check.
+      expect(readAttestedNativeCliLoginOwner("claude-cli", process.env)).toBeUndefined();
+      expect((await resolveNativeCliLoginOwner("claude-cli", process.env)).owner).toBe(
+        "uuid:uuid-a",
+      );
+      expect(readAttestedNativeCliLoginOwner("claude-cli", process.env)).toBe("uuid:uuid-a");
+    } finally {
+      vi.unstubAllGlobals();
       fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });

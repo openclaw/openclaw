@@ -10,23 +10,30 @@ import {
   PROTOCOL_VERSION,
   ndJsonStream,
   type RequestPermissionRequest,
+  type RequestPermissionResponse,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   isStandaloneRuntimeExecutable,
   resolveOpenClawCliInvocation,
 } from "../../cli-invocation.mjs";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
-import { settlesWithin } from "../shared/settle-within.js";
 import {
-  buildAcpClientStripKeys,
-  resolveAcpClientSpawnEnv,
-  resolveAcpClientSpawnInvocation,
-  resolvePermissionRequest,
-  shouldStripProviderAuthEnvVarsForAcpServer,
-} from "./client-helpers.js";
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "../plugin-sdk/windows-spawn.js";
+import { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
+import {
+  listKnownProviderAuthEnvVarNamesCore,
+  omitEnvKeysCaseInsensitive,
+} from "../secrets/provider-env-vars.js";
+import { settlesWithin } from "../shared/settle-within.js";
+import { classifyAcpToolApproval } from "./approval-classifier.js";
 
 type AcpClientOptions = {
   cwd?: string;
@@ -126,6 +133,58 @@ function printSessionUpdate(notification: SessionNotification): void {
   }
 }
 
+function promptUserPermission(
+  toolName: string | undefined,
+  toolTitle?: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (signal?.aborted) {
+    return Promise.resolve(false);
+  }
+  if (!process.stdin.isTTY || !process.stderr.isTTY) {
+    console.error(`[permission denied] ${toolName ?? "unknown"}: non-interactive terminal`);
+    return Promise.resolve(false);
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stderr,
+    });
+
+    const finish = (approved: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onClose);
+      rl.off("close", onClose);
+      rl.close();
+      resolve(approved);
+    };
+
+    const onClose = () => finish(false);
+    rl.once("close", onClose);
+    signal?.addEventListener("abort", onClose, { once: true });
+    const timeout = setTimeout(() => {
+      console.error(`\n[permission timeout] denied: ${toolName ?? "unknown"}`);
+      finish(false);
+    }, 30_000);
+
+    const label = toolTitle
+      ? toolName
+        ? `${toolTitle} (${toolName})`
+        : toolTitle
+      : (toolName ?? "unknown tool");
+    rl.question(`\n[permission] Allow "${label}"? (y/N) `, (answer) => {
+      const approved = normalizeLowercaseStringOrEmpty(answer) === "y";
+      console.error(`[permission ${approved ? "approved" : "denied"}] ${toolName ?? "unknown"}`);
+      finish(approved);
+    });
+  });
+}
+
 async function createAcpClient(opts: AcpClientOptions = {}) {
   const cwd = opts.cwd ?? process.cwd();
   const verbose = Boolean(opts.verbose);
@@ -148,29 +207,32 @@ async function createAcpClient(opts: AcpClientOptions = {}) {
   const serverCommand = opts.serverCommand ?? defaultServerCommand;
   const effectiveArgs = opts.serverCommand ? serverArgs : defaultServerArgs;
   const { getActiveSkillEnvKeysCore } = await import("../skills/runtime/env-overrides.js");
-  const stripProviderAuthEnvVars = shouldStripProviderAuthEnvVarsForAcpServer({
-    serverCommand,
-    serverArgs: effectiveArgs,
-    defaultServerCommand,
-    defaultServerArgs,
+  const normalizedServerCommand = normalizeOptionalString(serverCommand);
+  const stripProviderAuthEnvVars =
+    !normalizedServerCommand ||
+    (normalizedServerCommand === normalizeOptionalString(defaultServerCommand) &&
+      effectiveArgs.length === defaultServerArgs.length &&
+      effectiveArgs.every((arg, index) => arg === defaultServerArgs[index]));
+  const stripKeys = new Set(getActiveSkillEnvKeysCore());
+  if (stripProviderAuthEnvVars) {
+    for (const key of listKnownProviderAuthEnvVarNamesCore()) {
+      stripKeys.add(key);
+    }
+  }
+  const spawnEnv = omitEnvKeysCaseInsensitive(process.env, stripKeys);
+  spawnEnv.OPENCLAW_SHELL = "acp-client";
+  const spawnProgram = resolveWindowsSpawnProgram({
+    command: serverCommand,
+    platform: process.platform,
+    env: spawnEnv,
+    execPath: process.execPath,
+    packageName: "openclaw",
   });
-  const stripKeys = buildAcpClientStripKeys({
-    stripProviderAuthEnvVars,
-    activeSkillEnvKeys: getActiveSkillEnvKeysCore(),
-  });
-  const spawnEnv = resolveAcpClientSpawnEnv(process.env, { stripKeys });
-  const spawnInvocation = resolveAcpClientSpawnInvocation(
-    { serverCommand, serverArgs: effectiveArgs },
-    {
-      platform: process.platform,
-      env: spawnEnv,
-      execPath: process.execPath,
-    },
-  );
+  const spawnInvocation = materializeWindowsSpawnProgram(spawnProgram, effectiveArgs);
 
-  log(`spawning: ${spawnInvocation.command} ${spawnInvocation.args.join(" ")}`);
+  log(`spawning: ${spawnInvocation.command} ${spawnInvocation.argv.join(" ")}`);
 
-  const agent = spawn(spawnInvocation.command, spawnInvocation.args, {
+  const agent = spawn(spawnInvocation.command, spawnInvocation.argv, {
     stdio: ["pipe", "pipe", "inherit"],
     cwd,
     env: spawnEnv,
@@ -201,8 +263,62 @@ async function createAcpClient(opts: AcpClientOptions = {}) {
         sessionUpdate: async (params: SessionNotification) => {
           printSessionUpdate(params);
         },
-        requestPermission: async (params: RequestPermissionRequest) => {
-          return resolvePermissionRequest(params, { cwd, signal: permissions.signal });
+        requestPermission: async (
+          params: RequestPermissionRequest,
+        ): Promise<RequestPermissionResponse> => {
+          if (permissions.signal.aborted) {
+            return { outcome: { outcome: "cancelled" } };
+          }
+          const options = params.options ?? [];
+          const toolTitle = sanitizeTerminalText(params.toolCall?.title ?? "tool");
+          const classification = classifyAcpToolApproval({ toolCall: params.toolCall, cwd });
+          const toolName = classification.toolName;
+          const toolKind =
+            !toolName && classification.approvalClass === "unknown"
+              ? undefined
+              : classification.approvalClass;
+
+          if (options.length === 0) {
+            console.error(`[permission cancelled] ${toolName ?? "unknown"}: no options available`);
+            return { outcome: { outcome: "cancelled" } };
+          }
+
+          const allowOption =
+            options.find((option) => option.kind === "allow_once") ??
+            options.find((option) => option.kind === "allow_always");
+          const rejectOption =
+            options.find((option) => option.kind === "reject_once") ??
+            options.find((option) => option.kind === "reject_always");
+          if (classification.autoApprove) {
+            if (!allowOption) {
+              console.error(
+                `[permission cancelled] ${toolName ?? "unknown"}: missing allow option`,
+              );
+              return { outcome: { outcome: "cancelled" } };
+            }
+            console.error(`[permission auto-approved] ${toolName} (${toolKind ?? "unknown"})`);
+            return { outcome: { outcome: "selected", optionId: allowOption.optionId } };
+          }
+
+          console.error(
+            `\n[permission requested] ${toolTitle}${toolName ? ` (${toolName})` : ""}${toolKind ? ` [${toolKind}]` : ""}`,
+          );
+          const approved = await promptUserPermission(toolName, toolTitle, permissions.signal);
+          if (permissions.signal.aborted) {
+            return { outcome: { outcome: "cancelled" } };
+          }
+
+          if (approved && allowOption) {
+            return { outcome: { outcome: "selected", optionId: allowOption.optionId } };
+          }
+          if (!approved && rejectOption) {
+            return { outcome: { outcome: "selected", optionId: rejectOption.optionId } };
+          }
+
+          console.error(
+            `[permission cancelled] ${toolName ?? "unknown"}: missing ${approved ? "allow" : "reject"} option`,
+          );
+          return { outcome: { outcome: "cancelled" } };
         },
       }),
       stream,

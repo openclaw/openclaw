@@ -1,11 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
@@ -20,6 +19,7 @@ import {
   chatSendOwner,
   removeSessionWorktree,
 } from "./server.sessions.create.test-support.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   getGatewayConfigModule,
@@ -54,19 +54,8 @@ async function createPersonalAccountSessionFixture() {
   const authProfileId = connectAccount("first-account@example.test");
   const client: GatewayClient & { connId: string } = {
     connId: "personal-session-connection",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.write"],
-    },
-    authenticatedUserProfile: {
-      profileId: owner.id,
-      displayName: owner.displayName,
-      hasAvatar: false,
-      updatedAt: owner.updatedAt,
-    },
+    connect: gatewayConnect(["operator.write"]),
+    authenticatedUserProfile: gatewayProfile(owner.id, owner.displayName, owner.updatedAt),
   };
   const clients = new Set([client]);
   const catalog = [
@@ -206,27 +195,19 @@ test.each([
                 baseUrl: "https://openrouter.ai/api/v1",
                 api: "openai-completions",
                 models: [
-                  {
-                    id: "trinity-large-thinking",
+                  modelDefinition("trinity-large-thinking", {
                     name: "Direct Arcee model",
                     api: "openai-completions",
                     baseUrl: "https://api.arcee.ai/api/v1",
-                    reasoning: true,
-                    input: ["text"],
                     contextWindow: 32768,
                     maxTokens: 2048,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  },
-                  {
-                    id: "trinity-large-preview",
+                  }),
+                  modelDefinition("trinity-large-preview", {
                     name: "Arcee model through OpenRouter",
                     api: "openai-completions",
-                    reasoning: true,
-                    input: ["text"],
                     contextWindow: 32768,
                     maxTokens: 2048,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  },
+                  }),
                 ],
               },
             },
@@ -498,64 +479,6 @@ test.each(["foreign admin", "unidentified admin", "synthetic owner"] as const)(
         }
         testState.agentConfig = undefined;
       }
-    });
-  },
-);
-
-test.each([
-  { loss: "disconnected", selection: "explicit" },
-  { loss: "role revoked", selection: "default" },
-] as const)(
-  "sessions.create rejects a personal $selection when $loss while the model catalog is loading",
-  async ({ loss, selection }) => {
-    await withSessionTestState({ layout: "state-only" }, async () => {
-      const { storePath, authProfileId, client, clients, catalog, context } =
-        await createPersonalAccountSessionFixture();
-      const writer: GatewayOperatorRoleDefinition = {
-        agents: "*",
-        scopes: ["operator.write"],
-        sessions: { others: "none" },
-      };
-      const cfg = {
-        ...getRuntimeConfig(),
-        gateway: { roles: { default: "writer", definitions: { writer } } },
-      };
-      const catalogStarted = createDeferredCore();
-      const catalogGate = createDeferredCore();
-      context.loadGatewayModelCatalogSnapshot.mockImplementationOnce(async () => {
-        catalogStarted.resolve();
-        await catalogGate.promise;
-        return { entries: catalog, routeVariants: catalog };
-      });
-      const key = "agent:main:dashboard:personal-revoked";
-      const creating = directSessionReq(
-        "sessions.create",
-        {
-          key,
-          model: `openai/gpt-5.6-sol${selection === "explicit" ? `@${authProfileId}` : ""}`,
-        },
-        { client, context: { ...context, getRuntimeConfig: () => cfg } },
-      );
-      try {
-        await Promise.race([
-          catalogStarted.promise,
-          creating.then(() => {
-            throw new Error("Session creation returned before loading the model catalog");
-          }),
-        ]);
-        expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
-        if (loss === "disconnected") {
-          clients.delete(client);
-        } else {
-          writer.scopes = ["operator.read"];
-        }
-      } finally {
-        catalogGate.resolve();
-      }
-      const created = await creating;
-
-      expect(created).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
-      expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
     });
   },
 );

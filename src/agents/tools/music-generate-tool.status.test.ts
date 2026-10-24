@@ -8,9 +8,9 @@ vi.mock("../media-generation-activity.js", async (importOriginal) => {
 // Music generation status tests cover duplicate guards and explicit status
 // actions for background music tasks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as musicGenerationRuntime from "../../music-generation/runtime.js";
-import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
+import * as musicGenerationRegistry from "../../media-generation/registry.js";
+import type { MediaGenerationOperation } from "../media-generation-activity.js";
+import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 import { MUSIC_GENERATION_TASK_KIND } from "../media-generation-task-status.js";
 import {
   createMusicGenerateDuplicateGuardResult,
@@ -30,14 +30,28 @@ const mediaActivityMocks = vi.hoisted(() => {
 
 function resetMusicStatusMocks() {
   vi.restoreAllMocks();
-  vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
+  vi.spyOn(musicGenerationRegistry, "listMusicGenerationProviders").mockReturnValue([]);
   mediaActivityMocks.listOperations.mockReset();
   mediaActivityMocks.listOperations.mockReturnValue([]);
   mediaActivityMocks.listMediaGenerationOperations.mockReset();
   mediaActivityMocks.listMediaGenerationOperations.mockImplementation((ownerKey) =>
     mediaActivityMocks.listOperations(ownerKey),
   );
-  resetRecentMediaGenerationDuplicateGuardsForTests();
+  resetGeneratedMediaTaskActivityForTests();
+}
+
+function musicStatusOperation(overrides: Partial<MediaGenerationOperation> = {}) {
+  return {
+    taskId: "task-active",
+    taskKind: MUSIC_GENERATION_TASK_KIND,
+    sourceId: "music_generate:google",
+    requesterSessionKey: "agent:main:discord:direct:123",
+    runId: "tool:music_generate:active",
+    task: "night-drive synthwave",
+    status: "running",
+    progressSummary: "Generating music",
+    ...overrides,
+  };
 }
 
 describe("createMusicGenerateTool status actions", () => {
@@ -50,24 +64,7 @@ describe("createMusicGenerateTool status actions", () => {
   it("returns active task status instead of starting a duplicate generation", async () => {
     // Duplicate guard responses prevent agents from launching parallel provider
     // jobs while a matching request is still running.
-    mediaActivityMocks.listOperations.mockReturnValue([
-      {
-        taskId: "task-active",
-        runtime: "cli",
-        taskKind: MUSIC_GENERATION_TASK_KIND,
-        sourceId: "music_generate:google",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        ownerKey: "agent:main:discord:direct:123",
-        scopeKind: "session",
-        runId: "tool:music_generate:active",
-        task: "night-drive synthwave",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: Date.now(),
-        progressSummary: "Generating music",
-      },
-    ]);
+    mediaActivityMocks.listOperations.mockReturnValue([musicStatusOperation()]);
 
     const result = await createMusicGenerateDuplicateGuardResult("agent:main:discord:direct:123", {
       prompt: "night-drive synthwave",
@@ -94,22 +91,11 @@ describe("createMusicGenerateTool status actions", () => {
 
   it("reports active task status when action=status is requested", async () => {
     mediaActivityMocks.listOperations.mockReturnValue([
-      {
-        taskId: "task-active",
-        runtime: "cli",
-        taskKind: MUSIC_GENERATION_TASK_KIND,
+      musicStatusOperation({
         sourceId: "music_generate:minimax",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        ownerKey: "agent:main:discord:direct:123",
-        scopeKind: "session",
-        runId: "tool:music_generate:active",
-        task: "night-drive synthwave",
         status: "queued",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: Date.now(),
         progressSummary: "Queued music generation",
-      },
+      }),
     ]);
 
     const result = await createMusicGenerateStatusActionResult("agent:main:discord:direct:123");
@@ -130,36 +116,15 @@ describe("createMusicGenerateTool status actions", () => {
 
   it("returns recent succeeded music status instead of starting a duplicate generation", async () => {
     const now = Date.now();
-    recordRecentMediaGenerationTaskStartForSession({
-      sessionKey: "agent:main:discord:direct:123",
-      taskKind: MUSIC_GENERATION_TASK_KIND,
-      sourcePrefix: "music_generate",
-      taskId: "task-recent-music",
-      runId: "tool:music_generate:recent",
-      taskLabel: "night-drive synthwave",
-      requestKey: "music-request:night-drive",
-      providerId: "google",
-      progressSummary: "Generating music",
-      nowMs: now - 20_000,
-    });
     mediaActivityMocks.listOperations.mockReturnValue([
-      {
+      musicStatusOperation({
         taskId: "task-recent-music",
-        runtime: "cli",
-        taskKind: MUSIC_GENERATION_TASK_KIND,
-        sourceId: "music_generate:google",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        ownerKey: "agent:main:discord:direct:123",
-        scopeKind: "session",
+        requestKey: "music-request:night-drive",
         runId: "tool:music_generate:recent",
-        task: "night-drive synthwave",
         status: "succeeded",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: now - 20_000,
         endedAt: now - 10_000,
         progressSummary: "Generated 1 track",
-      },
+      }),
     ]);
 
     const result = await createMusicGenerateDuplicateGuardResult("agent:main:discord:direct:123", {

@@ -8,7 +8,6 @@ import {
   withinTest,
 } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import * as controllerLifecycle from "../../../sessions/session-controller.lifecycle.js";
 import {
@@ -24,6 +23,7 @@ import {
   retireSessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
@@ -41,8 +41,7 @@ import {
 import * as nativeControl from "./subagent-control.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { markSubagentRunTerminated, registerSubagentRun } from "./subagent-registry.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { markSubagentRunTerminated } from "./subagent-registry.js";
 import { finalizeInterruptedSubagentRun } from "./subagent-registry.test-helpers.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
@@ -52,22 +51,18 @@ const requesterKey = "agent:main:main";
 const { writeSession, register, seed } = createControlRunFixture(() => fixture.stateDir);
 
 async function block(enabled: boolean, scope: string, identities: string[]) {
-  const entered = createDeferred();
-  const release = createDeferred();
+  const mutationGate = createEnteredGate();
   const pending = enabled
     ? runSessionMutation({
         scope,
         identities,
-        run: async () => {
-          entered.resolve();
-          await release.promise;
-        },
+        run: mutationGate.wait,
       })
     : Promise.resolve();
   if (enabled) {
-    await entered.promise;
+    await mutationGate.entered;
   }
-  return { pending, release: release.resolve };
+  return { pending, release: mutationGate.release };
 }
 
 it("does not transfer a selected task cancellation to an admitted follow-up generation", async () => {
@@ -552,36 +547,18 @@ it.for(["before capacity release", "after interrupt"] as const)(
 );
 
 it("full child Stop preserves later and foreign sources while joining captured queue cleanup", async () => {
-  const sessionKey = "agent:main:subagent:captured-queue";
-  const sessionId = "captured-queue-session";
-  const runId = "captured-queue-run";
-  const storePath = await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey,
-    defaultSessionId: sessionId,
-    lifecycleRevision: "captured-queue-revision",
-  });
-  await registerSubagentRun({
-    runId,
-    childSessionKey: sessionKey,
-    childAgentId: "main",
-    sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", storePath, sessionKey })?.entry,
-    requesterSessionKey: "agent:main:main",
-    requesterAgentId: "main",
-    requesterDisplayKey: "main",
-    task: "captured queue",
-    cleanup: "keep",
-    expectsCompletionMessage: false,
-  });
+  const { sessionKey, sessionId, storePath } = await seed(
+    "captured-queue",
+    { runId: "captured-queue-run", requesterDisplayKey: "main", task: "captured queue" },
+    "captured-queue-revision",
+  );
   const target = captureSessionTarget({
     storeScope: storePath,
     sessionKey,
     incarnation: sessionId,
   });
   const interrupted = createDeferred();
-  const cleaning = createDeferred();
-  const cleanupFinish = createDeferred();
+  const cleanupGate = createEnteredGate();
   const admission = await beginSessionEffect({
     target,
     assertAllowed: () => {},
@@ -591,10 +568,7 @@ it("full child Stop preserves later and foreign sources while joining captured q
     target,
     policy: { mode: "followup" },
     adapter: {
-      onSettled: async () => {
-        cleaning.resolve();
-        await cleanupFinish.promise;
-      },
+      onSettled: cleanupGate.wait,
     },
   });
   const foreign = reserveSessionControllerSource(sessionKey, {
@@ -613,17 +587,17 @@ it("full child Stop preserves later and foreign sources while joining captured q
     await interrupted.promise;
     later = reserveSessionControllerSource(sessionKey, { target, policy: { mode: "followup" } });
     admission.release();
-    await cleaning.promise;
+    await cleanupGate.entered;
     expect(own.abortSignal.aborted).toBe(true);
     expect(later.abortSignal.aborted).toBe(false);
     expect(foreign.abortSignal.aborted).toBe(false);
     expect(completed).toBe(false);
-    cleanupFinish.resolve();
+    cleanupGate.release();
     expect(await pending).toMatchObject({ found: true, killed: true });
     await own.settlement.promise;
     expect(later.abortSignal.aborted).toBe(false);
   } finally {
-    cleanupFinish.resolve();
+    cleanupGate.release();
     admission.release();
     await pending;
     const inputs = [own, foreign, ...(later ? [later] : [])];

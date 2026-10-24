@@ -49,7 +49,7 @@ export type ApplicationPlacementStartupStatus = {
   readonly retryable?: boolean;
   readonly discardAndReload?: () => void;
   readonly initialTurn?: ChatQueueItem;
-  readonly action?: "retry" | "check-delivery";
+  readonly action?: "retry";
 };
 
 type PlacementStartupInput = {
@@ -71,18 +71,19 @@ type PlacementStartupRecoveryAccess = Pick<
   "readSessionPlacementRecovery" | "pauseSessionPlacementRecovery"
 >;
 
-export type ApplicationPlacementStartupRuntime = {
+export type ApplicationPlacementStartup = {
   get: (sessionKey: string) => ApplicationPlacementStartupStatus | null;
   hasPendingTurn: (sessionKey: string) => boolean;
   resumeRecovery: () => void;
   start: (input: PlacementStartupInput) => void;
   retry: (sessionKey: string) => void;
+  discard: (sessionKey: string) => void;
   pause: (sessionKey: string, error: string, recovery: PlacementStartupRecoveryAccess) => void;
   subscribe: (listener: () => void) => () => void;
   dispose: () => void;
 };
 
-export type ApplicationPlacementStartup = ApplicationPlacementStartupRuntime;
+export type ApplicationPlacementStartupRuntime = Omit<ApplicationPlacementStartup, "subscribe">;
 
 // Submitted display survives transport loss; a changed connection owner revokes it.
 export function capturePlacementStartupConnection(
@@ -184,6 +185,7 @@ export function createApplicationPlacementStartup(
     if (disposed) {
       return;
     }
+    // Resume retained starts from connection receipts even while no page is mounted.
     stopGateway ??= gateway.subscribe(() => resumeRecovery());
     if ((pending || retry) && runtimeLoad?.error) {
       runtimeLoad = undefined;
@@ -276,8 +278,7 @@ export function createApplicationPlacementStartup(
         if (disposed) {
           return;
         }
-        runtime = createApplicationPlacementStartupRuntime(dependencies);
-        runtime.subscribe(publish);
+        runtime = createApplicationPlacementStartupRuntime(dependencies, publish);
         resumeRecovery();
       },
       (error: unknown) => {
@@ -333,6 +334,51 @@ export function createApplicationPlacementStartup(
     },
     // New Session confirms its initial save before handing a persistent start to this owner.
     start: (input) => resumeRecovery({ input, persisted: input.persistRecovery }),
+    discard(sessionKey) {
+      if (runtime) {
+        runtime.discard(sessionKey);
+        return;
+      }
+      const pending = preRuntimeEntries.get(sessionKey)?.();
+      if (!pending) {
+        return;
+      }
+      const current = capturePlacementStartupConnection(gateway, pending.input.recovery);
+      const discardPending = async () => {
+        try {
+          const { clearSessionPlacementRecovery } =
+            await import("../lib/sessions/session-placement-recovery.ts");
+          if (disposed || !current()) {
+            return;
+          }
+          if (runtime) {
+            if (
+              runtime.get(sessionKey)?.initialTurn?.sendRunId === pending.input.recovery.messageId
+            ) {
+              runtime.discard(sessionKey);
+            }
+            return;
+          }
+          if (preRuntimeEntries.get(sessionKey)?.() !== pending) {
+            return;
+          }
+          clearSessionPlacementRecovery(
+            gateway.connection.gatewayUrl,
+            pending.input.recovery.recoveryScope,
+            sessionKey,
+            pending.input.recovery.messageId,
+          );
+          preRuntimeEntries.delete(sessionKey);
+          pendingStoredRecovery?.refresh();
+          publish();
+        } catch (error) {
+          if (!disposed && current()) {
+            showToast({ message: formatUiError(error) });
+          }
+        }
+      };
+      void discardPending();
+    },
     pause(sessionKey, error, recoveryAccess) {
       const client = readyClient();
       if (disposed || !client) {

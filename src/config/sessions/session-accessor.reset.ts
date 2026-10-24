@@ -9,10 +9,7 @@ import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
-import {
-  cloneSessionEntries,
-  createReplySessionInitializationRevision,
-} from "./session-accessor.entry-mutation.js";
+import { createReplySessionInitializationRevision } from "./session-accessor.entry-mutation.js";
 import { resolveSessionEntryFromStore } from "./session-accessor.entry.js";
 import type {
   SessionEntryLifecycleUpsert,
@@ -603,6 +600,8 @@ export async function commitReplySessionInitialization(params: {
   return {
     ok: true,
     sessionEntry: { ...committedSessionEntry },
-    sessionStoreView: cloneSessionEntries(store),
+    sessionStoreView: Object.fromEntries(
+      Object.entries(store).map(([key, entry]) => [key, { ...entry }]),
+    ),
   };
 }

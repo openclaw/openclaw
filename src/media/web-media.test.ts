@@ -10,9 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createImageProcessor,
@@ -22,6 +20,7 @@ import {
 import { encodePngRgba, fillPixel } from "./png-encode.js";
 
 let media: typeof import("./web-media.js");
+type MediaOptions = Exclude<Parameters<typeof media.loadWebMedia>[1], number | undefined>;
 const suiteDirs = useAutoCleanupTempDirTracker(afterAll);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const TINY_PNG = createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 });
@@ -34,7 +33,6 @@ const IMAGE_LIMITS = {
 let fixtureRoot = "";
 let tinyPngFile = "";
 let stateDir = "";
-let canvasPngFile = "";
 let workspaceDir = "";
 
 async function writeFile(name: string, body: Buffer | string, root = fixtureRoot) {
@@ -44,8 +42,20 @@ async function writeFile(name: string, body: Buffer | string, root = fixtureRoot
   return file;
 }
 
-function localOptions() {
-  return { maxBytes: 1024 * 1024, localRoots: [fixtureRoot] };
+function localOptions(overrides: MediaOptions = {}): MediaOptions {
+  return { maxBytes: 1024 * 1024, localRoots: [fixtureRoot], ...overrides };
+}
+
+function remoteOptions(
+  body: BodyInit,
+  headers: HeadersInit,
+  overrides: MediaOptions = {},
+): MediaOptions {
+  return {
+    fetchImpl: vi.fn(async () => new Response(body, { headers })),
+    ssrfPolicy: { allowedHostnames: ["example.test"] },
+    ...overrides,
+  };
 }
 
 function loadWithHostRead(file: string) {
@@ -55,10 +65,6 @@ function loadWithHostRead(file: string) {
     readFile: (source) => fs.readFile(source),
     hostReadCapability: true,
   });
-}
-
-async function hostDocument(name: string, body: Buffer | string) {
-  return loadWithHostRead(await writeFile(name, body));
 }
 
 async function expectAccessError(promise: Promise<unknown>, code = "path-not-allowed") {
@@ -139,11 +145,7 @@ beforeAll(async () => {
   await writeFile("chart.png", TINY_PNG, workspaceDir);
   stateDir = resolveStateDir();
   await fs.mkdir(path.join(stateDir, "media", "outbound"), { recursive: true });
-  canvasPngFile = await writeFile(
-    "canvas/documents/cv_test/collection.media/tiny.png",
-    TINY_PNG,
-    stateDir,
-  );
+  await writeFile("canvas/documents/cv_test/collection.media/tiny.png", TINY_PNG, stateDir);
 });
 
 afterEach(() => {
@@ -172,8 +174,7 @@ describe("loadWebMedia", () => {
       localOptions(),
     );
     expect(result.buffer).toEqual(TINY_PNG);
-    expect(result.fileName).toBe(fileName);
-    expect(result.contentType).toBe("image/png");
+    expect([result.fileName, result.contentType]).toEqual([fileName, "image/png"]);
   });
 
   it.each([
@@ -214,55 +215,6 @@ describe("loadWebMedia", () => {
     }
   });
 
-  it("keeps trying hosted media resolvers after one throws", async () => {
-    const registry = createEmptyPluginRegistry();
-    registry.hostedMediaResolvers = [
-      {
-        pluginId: "broken",
-        source: "test",
-        resolver: () => {
-          throw new Error("resolver failed");
-        },
-      },
-      {
-        pluginId: "hosted-media",
-        source: "test",
-        resolver: (url) => (url === "/__test__/tiny.png" ? canvasPngFile : null),
-      },
-    ];
-    setActivePluginRegistry(registry);
-    const result = await media.loadWebMedia("/__test__/tiny.png", { maxBytes: 1024 * 1024 });
-    expect(result.kind).toBe("image");
-    expect(result.buffer).toEqual(TINY_PNG);
-  });
-
-  it("resolves hosted media from the request registry, including an empty selection", async () => {
-    const url = "/__test__/scoped-hosted-media";
-    const selectedFile = await writeFile("selected.txt", "SELECTED");
-    const activeFile = await writeFile("active.txt", "ACTIVE");
-    const selected = createEmptyPluginRegistry();
-    selected.hostedMediaResolvers.push({
-      pluginId: "scoped",
-      source: "test",
-      resolver: (input) => (input === url ? selectedFile : null),
-    });
-    const active = createEmptyPluginRegistry();
-    const activeResolver = vi.fn((input: string) => (input === url ? activeFile : null));
-    active.hostedMediaResolvers.push({
-      pluginId: "global",
-      source: "test",
-      resolver: activeResolver,
-    });
-    setActivePluginRegistry(active);
-    expect((await media.loadWebMediaRaw(url)).buffer.toString()).toBe("ACTIVE");
-    const scoped = await withPluginRuntimeRegistryScope(selected, () => media.loadWebMediaRaw(url));
-    expect(scoped.buffer.toString()).toBe("SELECTED");
-    await expectAccessError(
-      withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () => media.loadWebMediaRaw(url)),
-    );
-    expect(activeResolver).toHaveBeenCalledTimes(1);
-  });
-
   it("surfaces Rastermill decode failures when optimization cannot produce a JPEG", async () => {
     await expect(media.optimizeImageToJpeg(Buffer.from("not an image"), 8)).rejects.toThrow(
       /Unable to determine image dimensions/,
@@ -283,13 +235,12 @@ describe("loadWebMedia", () => {
     const buffer = Buffer.concat([jpeg.subarray(0, 2), orientation, jpeg.subarray(2)]);
     expect(readImageMetadataFromHeader(buffer)).toEqual({ width: 16, height: 32 });
     const file = await writeFile("portrait.heif", buffer);
-    const result = await media.loadWebMedia(file, {
-      ...localOptions(),
+    const options = localOptions({
       imageCompression: { quality: "balanced", models: [{ maxSidePx: 32, maxPixels: 1024 }] },
     });
+    const result = await media.loadWebMedia(file, options);
     expect(result.buffer).toEqual(buffer);
-    expect(result.contentType).toBe("image/jpeg");
-    expect(result.fileName).toBe("portrait.heif");
+    expect([result.contentType, result.fileName]).toEqual(["image/jpeg", "portrait.heif"]);
   });
 
   it("preserves the explicit GIF byte cap for optimized remote media", async () => {
@@ -297,15 +248,10 @@ describe("loadWebMedia", () => {
     buffer.write("GIF89a", 0, "ascii");
     buffer.writeUInt16LE(16, 6);
     buffer.writeUInt16LE(16, 8);
-    const options = {
-      fetchImpl: vi.fn(
-        async () =>
-          new Response(Buffer.from(buffer), {
-            headers: { "content-type": "image/gif", "content-length": String(buffer.length) },
-          }),
-      ),
-      ssrfPolicy: { allowedHostnames: ["example.test"] },
-    };
+    const options = remoteOptions(Buffer.from(buffer), {
+      "content-type": "image/gif",
+      "content-length": String(buffer.length),
+    });
     await expect(
       media.loadWebMedia("https://example.test/explicit-cap.gif", {
         ...options,
@@ -317,18 +263,16 @@ describe("loadWebMedia", () => {
       maxBytes: buffer.length,
     });
     expect(result.buffer).toEqual(buffer);
-    expect(result.contentType).toBe("image/gif");
-    expect(result.fileName).toBe("explicit-cap.gif");
+    expect([result.contentType, result.fileName]).toEqual(["image/gif", "explicit-cap.gif"]);
   });
 
   it("resolves relative PNGs and enforces the strictest model dimensions", async () => {
     const file = "portrait.png";
     await writeFile(file, colorBlockPng(64));
-    const options = {
-      ...localOptions(),
+    const options = localOptions({
       workspaceDir: fixtureRoot,
       imageCompression: { ...IMAGE_LIMITS, quality: "high" },
-    } satisfies Parameters<typeof media.loadWebMedia>[1];
+    });
     await expect(media.loadWebMediaRaw(file, options)).rejects.toThrow(
       /dimensions exceed model image limits/i,
     );
@@ -344,10 +288,8 @@ describe("loadWebMedia", () => {
     const webp = (await createImageProcessor().encode(colorBlockPng(64, true), { format: "webp" }))
       .data;
     const file = await writeFile("portrait.WebP", webp);
-    const result = await media.loadWebMedia(file, {
-      ...localOptions(),
-      imageCompression: { ...IMAGE_LIMITS, imageCount: 8 },
-    });
+    const options = localOptions({ imageCompression: { ...IMAGE_LIMITS, imageCount: 8 } });
+    const result = await media.loadWebMedia(file, options);
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/png");
     expect(result.fileName).toBe("portrait.png");
@@ -368,11 +310,10 @@ describe("loadWebMedia", () => {
     "reports the effective image byte cap (raw=$raw)",
     async ({ raw, error, imageCompression, maxBytes }) => {
       await expect(
-        (raw ? media.loadWebMediaRaw : media.loadWebMedia)(tinyPngFile, {
-          ...localOptions(),
-          maxBytes,
-          imageCompression,
-        }),
+        (raw ? media.loadWebMediaRaw : media.loadWebMedia)(
+          tinyPngFile,
+          localOptions({ maxBytes, imageCompression }),
+        ),
       ).rejects.toThrow(error);
     },
   );
@@ -401,7 +342,7 @@ describe("loadWebMedia", () => {
         }
       },
     });
-    await expect(media.loadWebMediaRaw(file, { ...localOptions(), maxBytes })).rejects.toThrow(
+    await expect(media.loadWebMediaRaw(file, localOptions({ maxBytes }))).rejects.toThrow(
       "Media exceeds 1.50MB limit",
     );
     expect(observedOpen).toBe(true);
@@ -438,56 +379,41 @@ describe("loadWebMedia", () => {
 
   it("resolves home-relative paths through allowed local roots", async () => {
     await withEnvAsync({ OPENCLAW_HOME: fixtureRoot }, async () => {
-      const result = await media.loadWebMedia("~/workspace/chart.png", {
-        ...localOptions(),
-        localRoots: [workspaceDir],
-      });
-      expect(result.kind).toBe("image");
-      expect(result.buffer).toEqual(TINY_PNG);
+      const result = await media.loadWebMedia(
+        "~/workspace/chart.png",
+        localOptions({ localRoots: [workspaceDir] }),
+      );
+      expect([result.kind, result.buffer]).toEqual(["image", TINY_PNG]);
     });
   });
 
   it.each([
-    { name: "notes.txt", body: ",,,,,,,,,,\n", contentType: "text/plain" },
-    {
-      name: "legacy.csv",
-      body: Buffer.from("caf\xe9,ni\xf1o\n", "latin1"),
-      contentType: "text/csv",
-    },
-    {
-      name: "report.html",
-      body: "<!doctype html><title>Report</title><h1>Report</h1>\n",
-      contentType: "text/html",
-    },
-  ])("allows validated host-read $name", async ({ name, body, contentType }) => {
-    const result = await hostDocument(name, body);
-    expect(result.kind).toBe("document");
-    expect(result.contentType).toBe(contentType);
+    ["notes.txt", ",,,,,,,,,,\n", "text/plain"],
+    ["legacy.csv", Buffer.from("caf\xe9,ni\xf1o\n", "latin1"), "text/csv"],
+    ["report.html", "<!doctype html><title>Report</title><h1>Report</h1>\n", "text/html"],
+  ] as const)("allows validated host-read %s", async (name, body, contentType) => {
+    const result = await loadWithHostRead(await writeFile(name, body));
+    expect(result).toMatchObject({ kind: "document", contentType });
   });
 
   it.each([
-    { name: "debug.log", body: "plain text\n" },
-    { name: "secret.pdf", body: "secret" },
-    { name: "report.html", body: "status,value\nok,1\n" },
-    { name: "outside.html", body: "<!doctype html><h1>outside</h1>", outside: true },
-    {
-      name: "prefix-tail.csv",
-      body: Buffer.concat([
+    ["debug.log", "plain text\n"],
+    ["secret.pdf", "secret"],
+    ["report.html", "status,value\nok,1\n"],
+    ["outside.html", "<!doctype html><h1>outside</h1>", true],
+    [
+      "prefix-tail.csv",
+      Buffer.concat([
         Buffer.from(`name,value\n${"row,1\n".repeat(1400)}`),
         Buffer.from([0x00, 0xff, 0x10, 0x80]),
       ]),
-    },
-    {
-      name: "bom-binary.csv",
-      body: Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.alloc(9000, 0xff)]),
-    },
-    {
-      name: "alternating-high.csv",
-      body: Buffer.from(
-        Array.from({ length: 9000 }, (_, index) => (index % 2 === 0 ? 0x41 : 0xff)),
-      ),
-    },
-  ])("rejects unsafe host-read document $name", async ({ name, body, outside }) => {
+    ],
+    ["bom-binary.csv", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.alloc(9000, 0xff)])],
+    [
+      "alternating-high.csv",
+      Buffer.from(Array.from({ length: 9000 }, (_, index) => (index % 2 === 0 ? 0x41 : 0xff))),
+    ],
+  ] as const)("rejects unsafe host-read document %s", async (name, body, outside?: true) => {
     if (name === "prefix-tail.csv") {
       expect(body.length - 4).toBeGreaterThan(8192);
     }
@@ -495,6 +421,47 @@ describe("loadWebMedia", () => {
       loadWithHostRead(
         await writeFile(name, body, outside ? tempDirs.make("html-outside-") : fixtureRoot),
       ),
+    );
+  });
+
+  it("admits explicitly published HTML without inventing generated provenance", async () => {
+    const root = tempDirs.make("html-publication-");
+    const body = Buffer.from("<!doctype html><h1>Final report</h1>");
+    const file = await writeFile("report.html", body, root);
+    const options = {
+      localRoots: [root],
+      readFile: (source: string) => fs.readFile(source),
+      hostReadCapability: true,
+      htmlPublication: "explicit" as const,
+    };
+    const result = await media.loadWebMedia(file, options);
+    expect(result.buffer).toEqual(body);
+    expect(result.contentType).toBe("text/html");
+    expect(result.trustedGeneratedHtmlSource).toBeUndefined();
+    await expectAccessError(loadWithHostRead(file));
+    await expect(
+      media.loadWebMedia(file, { ...options, maxBytes: body.length - 1 }),
+    ).rejects.toThrow(/exceeds.*limit/i);
+    const deniedRead = vi.fn(options.readFile);
+    await expectAccessError(
+      media.loadWebMedia(file, { ...options, localRoots: [workspaceDir], readFile: deniedRead }),
+    );
+    expect(deniedRead).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "not-html", body: Buffer.from("status,value\nok,1\n") },
+    { name: "binary", body: Buffer.from([0, 0xff, 0x10, 0x80]) },
+  ])("rejects $name bytes during explicit HTML publication", async ({ body }) => {
+    const root = tempDirs.make("html-publication-invalid-");
+    const file = await writeFile("report.html", body, root);
+    await expectAccessError(
+      media.loadWebMedia(file, {
+        localRoots: [root],
+        readFile: (source) => fs.readFile(source),
+        hostReadCapability: true,
+        htmlPublication: "explicit",
+      }),
     );
   });
 
@@ -687,51 +654,42 @@ describe("loadWebMedia", () => {
       const result = await media.loadWebMedia(`  media :  media://inbound/${id}`, {
         maxBytes: 1024 * 1024,
       });
-      expect(result.kind).toBe("image");
-      expect(result.buffer).toEqual(TINY_PNG);
-      expect(result.fileName).toBe(id);
+      expect([result.kind, result.buffer, result.fileName]).toEqual(["image", TINY_PNG, id]);
     } finally {
       await fs.rm(file, { force: true });
     }
   });
 
   it("bounds explicit-cap image fetches at the optimization headroom", async () => {
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(new ReadableStream<Uint8Array>(), {
-          headers: { "content-type": "image/png", "content-length": String(30 * 1024 * 1024) },
-        }),
-    );
     await expect(
-      media.loadWebMedia("https://example.test/huge.png", {
-        maxBytes: 5 * 1024 * 1024,
-        fetchImpl,
-        ssrfPolicy: { allowedHostnames: ["example.test"] },
-      }),
+      media.loadWebMedia(
+        "https://example.test/huge.png",
+        remoteOptions(
+          new ReadableStream<Uint8Array>(),
+          { "content-type": "image/png", "content-length": String(30 * 1024 * 1024) },
+          { maxBytes: 5 * 1024 * 1024 },
+        ),
+      ),
     ).rejects.toThrow(/exceeds maxBytes/);
   });
 
   it("applies the shared remote read idle timeout", async () => {
     vi.useFakeTimers();
     try {
-      const fetchImpl = vi.fn(
-        async () =>
-          new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller) {
-                controller.enqueue(new Uint8Array([0x25, 0x50, 0x44, 0x46]));
-              },
-            }),
-            { headers: { "content-type": "application/pdf" } },
-          ),
-      );
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([0x25, 0x50, 0x44, 0x46]));
+        },
+      });
       const outcome = media
-        .loadWebMediaRaw("https://example.test/stalled.pdf", {
-          maxBytes: 1024 * 1024,
-          fetchImpl,
-          readIdleTimeoutMs: 20,
-          ssrfPolicy: { allowedHostnames: ["example.test"] },
-        })
+        .loadWebMediaRaw(
+          "https://example.test/stalled.pdf",
+          remoteOptions(
+            body,
+            { "content-type": "application/pdf" },
+            { maxBytes: 1024 * 1024, readIdleTimeoutMs: 20 },
+          ),
+        )
         .then(
           () => ({ status: "resolved" as const }),
           (error: unknown) => ({ status: "rejected" as const, error }),

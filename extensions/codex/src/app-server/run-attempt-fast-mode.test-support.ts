@@ -1,5 +1,6 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { expect, it, vi } from "vitest";
+import { createModelFixture } from "./model-fixture.test-support.js";
 import {
   createParams,
   createResumeHarness,
@@ -211,14 +212,10 @@ export function registerCodexFastModeTests({
           return {
             data: [
               {
-                id: "catalog-alias",
+                ...createModelFixture("catalog-alias"),
                 model: "gpt-5.4-codex",
                 displayName: "Test model",
                 description: "Test model",
-                hidden: false,
-                isDefault: false,
-                supportedReasoningEfforts: [],
-                defaultReasoningEffort: "medium",
                 serviceTiers: supported
                   ? [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }]
                   : [],
@@ -306,14 +303,10 @@ export function registerCodexFastModeTests({
           return {
             data: [
               {
-                id: "catalog-alias",
+                ...createModelFixture("catalog-alias"),
                 model: "gpt-5.4-codex",
                 displayName: "Test model",
                 description: "Test model",
-                hidden: false,
-                isDefault: false,
-                supportedReasoningEfforts: [],
-                defaultReasoningEffort: "medium",
                 serviceTiers: catalogSupported
                   ? [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }]
                   : [],
@@ -365,14 +358,9 @@ export function registerCodexFastModeTests({
         ? {
             data: [
               {
-                id: "gpt-5.4-codex",
-                model: "gpt-5.4-codex",
+                ...createModelFixture("gpt-5.4-codex"),
                 displayName: "Test model",
                 description: "Test model",
-                hidden: false,
-                isDefault: false,
-                supportedReasoningEfforts: [],
-                defaultReasoningEffort: "medium",
                 serviceTiers: [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }],
               },
             ],

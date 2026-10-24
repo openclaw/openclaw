@@ -1,7 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
-import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
 import { readModelFallbackNotice } from "../../../../src/shared/model-fallback-notice.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
@@ -20,13 +19,14 @@ import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
+import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import {
   canvasPreviewsMatch,
-  readCanvasContentPreview,
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
-import { extractToolCardsCached, type CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
+import { pluginInlineViewItems } from "../../lib/chat/plugin-inline-views.ts";
+import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import {
   buildCompactionDividerItem,
   buildGuardianNoticeItem,
@@ -38,12 +38,18 @@ import {
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
+import { projectRunFailureStreaks } from "./chat-run-failure-streaks.ts";
 import {
-  hasSessionsYieldCall,
+  hasHandoffToolCall,
   pendingSessionsYield,
   projectSessionsYieldItems,
 } from "./chat-sessions-yield.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
+import {
+  canvasAssistantItemKey,
+  collectCanvasTurns,
+  reconcileLiveCanvasPreviews,
+} from "./chat-thread-canvas.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import {
   placeChatInputs,
@@ -63,7 +69,6 @@ import {
   type ChatProjection,
   messageMatchesSearchQuery,
   rawMessageTimestamp,
-  readChatThreadMessageIdentity,
   insertChatItemsByTimestamp,
   sanitizeStreamText,
   timestampAfterVisibleItems,
@@ -83,7 +88,6 @@ import {
 } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import { copyLiveTerminalIdentity, readLiveTerminalRunId } from "./terminal-message-identity.ts";
 import type { ChatReasoning, CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = ChatInputPlacementProps & {
@@ -121,20 +125,12 @@ export type BuildChatItemsProps = ChatInputPlacementProps & {
   replyLocalPerson?: string;
 };
 
-function canvasAssistantItemKey(
-  message: unknown,
-  source: Parameters<typeof canvasPreviewBaseIdentity>[1],
-  fallback: string,
-): string {
-  const identity = canvasPreviewBaseIdentity(message, source);
-  return identity ? `canvas:${identity}` : `${fallback}:canvas`;
-}
-
 export function buildChatItems(
   props: BuildChatItemsProps,
   inputOrder: ChatInputOrderState = { keys: [] },
 ): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
+  const inlineInvocations = new Set<string>();
   const tools = props.toolMessages.filter(
     (message): message is Record<string, unknown> => asRecord(message) !== null,
   );
@@ -188,6 +184,14 @@ export function buildChatItems(
   );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
   const hiddenHistoryKeys = new Set<string>();
+  const hideSearchMiss = (item: Extract<ChatItem, { kind: "message" }>) => {
+    if (
+      searchFiltering &&
+      !messageMatchesSearchQuery(item.message, props.searchQuery ?? "", props.messageRecovery)
+    ) {
+      hiddenHistoryKeys.add(item.key);
+    }
+  };
   const canvasIdentities = new Set<string>();
   const normalizedHistory = history.map(safeNormalizeMessage);
   const permissionInMessage = (message: unknown) =>
@@ -195,36 +199,13 @@ export function buildChatItems(
       readNodePermissionRequest(asRecord(card.details)?.permissionMissing),
     );
   const historyItems = buildMessageItems(history);
-  let canvasTurn: {
-    previews: { preview: CanvasToolPreview; item: (typeof historyItems)[number] }[];
-    lastMatchingAssistantIndex: number;
-  } = {
-    previews: [],
-    lastMatchingAssistantIndex: -1,
-  };
-  // Rows in one turn share these facts so a tool result can see the assistant
-  // projection that follows it, without consuming a view from another turn.
-  const canvasTurns = historyItems.map((item, index) => {
-    const message = normalizedHistory[index];
-    const role = message && normalizeRoleForGrouping(message.role);
-    if (role === "user" || role === "system") {
-      canvasTurn = { previews: [], lastMatchingAssistantIndex: -1 };
-    }
-    if (
-      role === "assistant" &&
-      message &&
-      (!searchFiltering ||
-        messageMatchesSearchQuery(history[index], props.searchQuery ?? "", props.messageRecovery))
-    ) {
-      canvasTurn.lastMatchingAssistantIndex = index;
-      canvasTurn.previews.push(
-        ...message.content.flatMap((block) =>
-          block.type === "canvas" ? [{ preview: block.preview, item }] : [],
-        ),
-      );
-    }
-    return canvasTurn;
-  });
+  const canvasTurns = collectCanvasTurns(
+    historyItems,
+    normalizedHistory,
+    (message) =>
+      !searchFiltering ||
+      messageMatchesSearchQuery(message, props.searchQuery ?? "", props.messageRecovery),
+  );
   const compaction = props.compactionStatus;
   const compactionKey = compaction
     ? `divider:compaction:live:${compaction.runId}:${compaction.itemId ?? "manual"}`
@@ -291,6 +272,10 @@ export function buildChatItems(
       continue;
     }
 
+    for (const inline of pluginInlineViewItems(item, inlineInvocations)) {
+      hideSearchMiss(inline);
+      items.push(inline);
+    }
     const isToolResult = normalized.role.toLowerCase() === "toolresult";
     const persistedCanvasSource = isToolResult ? extractChatMessagePreview(msg) : null;
     let duplicatePersistedCanvas = false;
@@ -335,20 +320,13 @@ export function buildChatItems(
       !props.showToolCalls &&
       isToolResult &&
       !(raw.role === "assistant" && extractTextCached(msg)?.trim()) &&
-      !hasSessionsYieldCall(msg) &&
+      !hasHandoffToolCall(msg) &&
       !permissionInMessage(msg)
     ) {
       continue;
     }
 
-    const searchQuery = props.searchQuery ?? "";
-    if (
-      props.searchOpen &&
-      searchQuery.trim() &&
-      !messageMatchesSearchQuery(msg, searchQuery, props.messageRecovery)
-    ) {
-      hiddenHistoryKeys.add(itemKey);
-    }
+    hideSearchMiss(item);
     if (
       !hasRenderableNormalizedMessage(msg, normalized) &&
       normalized.role.toLowerCase() !== "assistant"
@@ -454,65 +432,7 @@ export function buildChatItems(
       message: createCanvasAssistantMessage(preview, timestamp),
     });
   }
-  // Tool receipts can own a visible preview before an assistant row arrives.
-  // Reconcile terminal copies only after all of those projections exist.
-  const ownedCanvas = items.flatMap((item) => {
-    if (
-      item.kind !== "message" ||
-      readLiveTerminalRunId(item.message) ||
-      hiddenHistoryKeys.has(item.key) ||
-      hiddenKeys.has(item.key)
-    ) {
-      return [];
-    }
-    const runId = transcriptRunId(item.message);
-    const message = runId ? safeNormalizeMessage(item.message) : null;
-    if (!message || normalizeRoleForGrouping(message.role) !== "assistant") {
-      return [];
-    }
-    return message.content.flatMap((block) =>
-      block.type === "canvas" ? [{ runId, preview: block.preview }] : [],
-    );
-  });
-  for (const item of items) {
-    if (item.kind !== "message") {
-      continue;
-    }
-    const runId = readLiveTerminalRunId(item.message);
-    const terminal = runId ? asRecord(item.message) : null;
-    if (!terminal || !Array.isArray(terminal.content)) {
-      continue;
-    }
-    const isOwned = (preview: Pick<CanvasToolPreview, "viewId" | "url">) =>
-      ownedCanvas.some(
-        (entry) => entry.runId === runId && canvasPreviewsMatch(entry.preview, preview),
-      );
-    let changed = false;
-    const content = terminal.content.flatMap((value) => {
-      const preview = readCanvasContentPreview(value);
-      if (preview && isOwned(preview)) {
-        changed = true;
-        return [];
-      }
-      const block = asRecord(value);
-      if (block?.type === "text" && typeof block.text === "string") {
-        const extracted = extractCanvasShortcodes(block.text, isOwned);
-        if (extracted.previews.length > 0) {
-          changed = true;
-          return [{ ...block, text: extracted.text }];
-        }
-      }
-      return [value];
-    });
-    if (changed) {
-      const projection = { ...terminal, content };
-      copyLiveTerminalIdentity(terminal, projection);
-      item.message = projection;
-    }
-  }
-  items = items.filter(
-    (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
-  );
+  items = reconcileLiveCanvasPreviews(items, hiddenHistoryKeys, hiddenKeys);
   const projections: ChatProjection[] = [];
   if (compaction && compactionKey && !hasPersistedCompaction) {
     const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
@@ -620,7 +540,7 @@ export function buildChatItems(
     if (
       tool &&
       (props.showToolCalls ||
-        hasSessionsYieldCall(tool.projection.item.message) ||
+        hasHandoffToolCall(tool.projection.item.message) ||
         permissionInMessage(tool.projection.item.message))
     ) {
       tool.projection.bounds = resolveProjectionBounds(
@@ -701,6 +621,21 @@ export function buildChatItems(
     items,
     toolItems.map((tool) => tool.projection),
   );
+  for (const tool of toolItems) {
+    for (const item of pluginInlineViewItems(tool.projection.item, inlineInvocations)) {
+      hideSearchMiss(item);
+      projections.push({
+        ...tool.projection,
+        bounds:
+          tool.projection.bounds ??
+          resolveProjectionBounds(
+            tool.runId,
+            normalizeOptionalString(tool.projection.item.message.openclawToolStreamAfterSendId),
+          ),
+        item,
+      });
+    }
+  }
   insertChatItemsByTimestamp(items, projections);
 
   // The active claw is telemetry, not a placeholder: it stays through visible
@@ -790,6 +725,8 @@ export function buildChatItems(
       : undefined;
   const projectYields = (source: ChatItem[], complete?: ChatItem[]) =>
     projectSessionsYieldItems(source, props.showToolCalls, complete);
+  // Keep real user boundaries even when search hides their rows.
+  items = projectRunFailureStreaks(items);
   const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
   return groupMessages(
     projectYields(coalesceToolActivityMessages(items, hidden), complete),

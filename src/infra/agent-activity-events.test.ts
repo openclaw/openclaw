@@ -1,4 +1,4 @@
-import { expect, expectTypeOf, test } from "vitest";
+import { expect, expectTypeOf, onTestFinished, test } from "vitest";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {
   emitAgentActivityEvent,
@@ -93,26 +93,22 @@ test("emits every activity stream with shared sequencing and context", () => {
     },
   ];
   resetAgentEventsForTest();
+  onTestFinished(() => resetAgentEventsForTest());
   const events: AgentEventPayload[] = [];
-  const unsubscribe = onAgentEvent((event) => events.push(event));
-  try {
-    for (const input of inputs) {
-      emitAgentActivityEvent(input);
-    }
-    expect(
-      events.map(({ runId, seq, stream, sessionKey }) => ({ runId, seq, stream, sessionKey })),
-    ).toEqual([
-      { runId: "run-1", seq: 1, stream: "item", sessionKey: "session-1" },
-      { runId: "run-1", seq: 2, stream: "approval", sessionKey: "session-1" },
-      { runId: "run-1", seq: 3, stream: "command_output", sessionKey: "session-1" },
-      { runId: "run-1", seq: 4, stream: "patch", sessionKey: undefined },
-    ]);
-    expect(events.map((event) => event.data)).toEqual(inputs.map((input) => input.data));
-    expect(events[0]?.data).toBe(inputs[0]?.data);
-  } finally {
-    unsubscribe();
-    resetAgentEventsForTest();
+  onTestFinished(onAgentEvent((event) => events.push(event)));
+  for (const input of inputs) {
+    emitAgentActivityEvent(input);
   }
+  expect(
+    events.map(({ runId, seq, stream, sessionKey }) => [runId, seq, stream, sessionKey]),
+  ).toEqual([
+    ["run-1", 1, "item", "session-1"],
+    ["run-1", 2, "approval", "session-1"],
+    ["run-1", 3, "command_output", "session-1"],
+    ["run-1", 4, "patch", undefined],
+  ]);
+  expect(events.map((event) => event.data)).toEqual(inputs.map((input) => input.data));
+  expect(events[0]?.data).toBe(inputs[0]?.data);
 });
 
 test("projects Tool Search names for live and history activity without changing outcomes or pairing", () => {

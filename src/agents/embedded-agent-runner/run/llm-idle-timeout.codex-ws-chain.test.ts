@@ -6,6 +6,10 @@ import {
   closeOpenAICodexWebSocketSessions,
   resetOpenAICodexWebSocketStateForTest,
 } from "../../../../packages/ai/src/providers/openai-chatgpt-responses.js";
+import {
+  createJwt,
+  completedResponse as completedFrame,
+} from "../../../../packages/ai/src/providers/openai-chatgpt-responses.test-helpers.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 // Installs the same transport host as the runtime.
 import "../../../llm/stream.js";
@@ -13,11 +17,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
-import {
-  clearEmbeddedSessionForkSnapshot,
-  runEmbeddedSessionFork,
-  wrapStreamFnWithSessionFork,
-} from "../session-fork.js";
+import { runEmbeddedSessionFork } from "../session-fork.js";
 import { resolveEmbeddedAgentStream } from "../stream-resolution.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
 import { wrapStreamFnTrimToolCallNames } from "./attempt-tool-call-stream-normalization.js";
@@ -29,12 +29,6 @@ import {
   resolveLlmIdleTimeoutMs,
   streamWithIdleTimeout,
 } from "./llm-idle-timeout.js";
-
-function createJwt(payload: Record<string, unknown>): string {
-  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return `${header}.${body}.signature`;
-}
 
 const apiKey = createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } });
 
@@ -92,18 +86,6 @@ class ControlledWebSocket extends EventTarget {
   fail(): void {
     this.dispatchEvent(Object.assign(new Event("error"), { message: "WebSocket error" }));
   }
-}
-
-function completedFrame(id: string): Frame {
-  return {
-    type: "response.completed",
-    response: {
-      id,
-      status: "completed",
-      output: [],
-      usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-    },
-  };
 }
 
 function startWatchdog(label: string) {
@@ -218,8 +200,19 @@ function textFrames(id: string, itemId: string, text: string): Frame[] {
 function runFork(
   identity: { agentId: string; sessionId: string; runId: string },
   question: string,
+  streamFn: StreamFn,
+  assertCurrent = () => {},
+  promptCacheKey?: string,
 ) {
-  return runEmbeddedSessionFork({ ...identity, model, apiKey, question, assertCurrent: () => {} });
+  return runEmbeddedSessionFork({
+    context,
+    streamFn,
+    options: { sessionId: identity.sessionId, transport: "auto", promptCacheKey },
+    model,
+    apiKey,
+    question,
+    assertCurrent,
+  });
 }
 
 function parkConsumer(streamFn: StreamFn, signal: AbortSignal) {
@@ -243,11 +236,8 @@ async function expectIdleDeadline(onIdleTimeout: ReturnType<typeof vi.fn>) {
 
 function forkParent(sessionId: string, runtime = llmRuntime) {
   const identity = { agentId: "main", sessionId, runId: "parent" };
-  const parent = wrapStreamFnWithSessionFork(
-    (requestModel, requestContext, options) =>
-      runtime.streamSimple(requestModel, requestContext, options),
-    identity,
-  );
+  const parent: StreamFn = (requestModel, requestContext, options) =>
+    runtime.streamSimple(requestModel, requestContext, options);
   return { identity, parent };
 }
 
@@ -284,61 +274,74 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
         .stopReason,
     ).toBe("stop");
     expect(ControlledWebSocket.instances[0]?.sent).toHaveLength(1);
-    ControlledWebSocket.onOpen = () => clearEmbeddedSessionForkSnapshot(identity.sessionId);
-    await expect(runFork(identity, "Review without dispatch after revocation")).rejects.toThrow(
-      "Cache-parity session fork requires a parent turn",
-    );
+    let current = true;
+    ControlledWebSocket.onOpen = () => {
+      current = false;
+    };
+    await expect(
+      runFork(identity, "Review without dispatch after revocation", parent, () => {
+        if (!current) {
+          throw new Error("Session read authority revoked");
+        }
+      }),
+    ).rejects.toThrow("Session read authority revoked");
     expect(ControlledWebSocket.instances).toHaveLength(2);
     expect(ControlledWebSocket.instances[1]?.sent).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("isolates a native session fork without consuming or replacing the parent's cached continuation", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const requests: Frame[] = [];
-    ControlledWebSocket.onSend = (socket, payload) => {
-      requests.push(JSON.parse(payload) as Frame);
-      const id = `resp_native_${requests.length}`;
-      const isFork = requests.length === 2;
-      queueMicrotask(() => {
-        socket.deliver({ type: "response.created", response: { id } });
-        if (isFork) {
-          for (const frame of textFrames(id, "msg_native_fork", "Independent review")) {
-            socket.deliver(frame);
+  it.each([undefined, "parent-key"])(
+    "omits native fork affinity without replacing the parent's continuation (source key=%s)",
+    async (promptCacheKey) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const requests: Frame[] = [];
+      ControlledWebSocket.onSend = (socket, payload) => {
+        requests.push(JSON.parse(payload) as Frame);
+        const id = `resp_native_${requests.length}`;
+        const isFork = requests.length === 2;
+        queueMicrotask(() => {
+          socket.deliver({ type: "response.created", response: { id } });
+          if (isFork) {
+            for (const frame of textFrames(id, "msg_native_fork", "Independent review")) {
+              socket.deliver(frame);
+            }
+          } else {
+            socket.deliver(completedFrame(id));
           }
-        } else {
-          socket.deliver(completedFrame(id));
-        }
+        });
+      };
+      const { identity, parent } = forkParent("native-fork-independent");
+      const options = {
+        apiKey,
+        sessionId: identity.sessionId,
+        transport: "websocket-cached" as const,
+      };
+      expect((await (await parent(model, context, options)).result()).stopReason).toBe("stop");
+      await expect(
+        runFork(identity, "Review independently", parent, undefined, promptCacheKey),
+      ).resolves.toBe("Independent review");
+      expect((await (await parent(model, followupContext, options)).result()).stopReason).toBe(
+        "stop",
+      );
+      expect(ControlledWebSocket.instances.map((socket) => socket.sent.length)).toEqual([2, 1]);
+      expect(ControlledWebSocket.instances[1]?.closeCalls).toHaveLength(1);
+      expect(requests[1]).not.toHaveProperty("previous_response_id");
+      expect(requests[1]).toMatchObject({
+        input: [
+          { role: "user", content: [{ type: "input_text", text: "hi" }] },
+          { role: "user", content: [{ type: "input_text", text: "Review independently" }] },
+        ],
       });
-    };
-    const { identity, parent } = forkParent("native-fork-independent");
-    const options = {
-      apiKey,
-      sessionId: identity.sessionId,
-      transport: "websocket-cached" as const,
-    };
-    expect((await (await parent(model, context, options)).result()).stopReason).toBe("stop");
-    await expect(runFork(identity, "Review independently")).resolves.toBe("Independent review");
-    expect((await (await parent(model, followupContext, options)).result()).stopReason).toBe(
-      "stop",
-    );
-    expect(ControlledWebSocket.instances.map((socket) => socket.sent.length)).toEqual([2, 1]);
-    expect(ControlledWebSocket.instances[1]?.closeCalls).toHaveLength(1);
-    expect(requests[1]).not.toHaveProperty("previous_response_id");
-    expect(requests[1]).toMatchObject({
-      prompt_cache_key: identity.sessionId,
-      input: [
-        { role: "user", content: [{ type: "input_text", text: "hi" }] },
-        { role: "user", content: [{ type: "input_text", text: "Review independently" }] },
-      ],
-    });
-    expect(requests[2]).toMatchObject({
-      previous_response_id: "resp_native_1",
-      input: [{ role: "user", content: [{ type: "input_text", text: "Continue parent" }] }],
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
+      expect(requests[0]?.prompt_cache_key).toBe(identity.sessionId);
+      expect(requests[1]).not.toHaveProperty("prompt_cache_key");
+      expect(requests[2]).toMatchObject({
+        previous_response_id: "resp_native_1",
+        input: [{ role: "user", content: [{ type: "input_text", text: "Continue parent" }] }],
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps the parent's native auto transport after an independent fork falls back to SSE", async () => {
     const fetchMock = vi.fn(async () => {
@@ -367,9 +370,9 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     const { identity, parent } = forkParent("native-fork-fallback", runtime);
     const options = { apiKey, sessionId: identity.sessionId, transport: "auto" as const };
     expect((await (await parent(model, context, options)).result()).stopReason).toBe("stop");
-    await expect(runFork(identity, "Review with independent transport recovery")).resolves.toBe(
-      "Fallback review",
-    );
+    await expect(
+      runFork(identity, "Review with independent transport recovery", parent),
+    ).resolves.toBe("Fallback review");
     expect((await (await parent(model, followupContext, options)).result()).stopReason).toBe(
       "stop",
     );
@@ -427,35 +430,99 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     );
   });
 
-  it.each(["silent", "progress"] as const)(
-    "polices a parked consumer while its provider is %s",
-    async (mode) => {
-      const id = mode === "silent" ? "resp_d" : "resp_f";
-      deliverOnSend(id);
-      const { streamFn, onIdleTimeout, runAbort } = startWatchdog(mode);
-      const { entered, release, consumed } = parkConsumer(streamFn, runAbort.signal);
+  it("D: consumer parked in emit() after start is still policed by the idle watchdog", async () => {
+    deliverOnSend("resp_d");
+    const { streamFn, onIdleTimeout, runAbort } = startWatchdog("D");
+    const { entered, release, consumed } = parkConsumer(streamFn, runAbort.signal);
+    await vi.advanceTimersByTimeAsync(10);
+    await entered;
+    await vi.advanceTimersByTimeAsync(119_000);
+    expect(onIdleTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2_000);
+    // The consumer is still parked; the dead socket is aborted anyway.
+    expect(onIdleTimeout).toHaveBeenCalledTimes(1);
+    expect(String(onIdleTimeout.mock.calls[0]?.[0]?.message)).toMatch(/idle timeout/);
+    expect(ControlledWebSocket.instances[0]?.closeCalls.length).toBeGreaterThan(0);
+
+    release();
+    await vi.advanceTimersByTimeAsync(10);
+    const { result, thrown } = await consumed;
+    expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
+      /idle timeout|aborted/,
+    );
+  });
+
+  it.each([
+    { activity: "bookkeeping", parked: true },
+    { activity: "hidden reasoning", parked: true },
+    { activity: "empty reasoning", parked: false },
+    { activity: "repeated snapshot", parked: false },
+    { activity: "hidden reasoning", parked: false },
+  ] as const)(
+    "F: distinguishes activity from progress ($activity, parked=$parked)",
+    async ({ activity, parked }) => {
+      ControlledWebSocket.onSend = (socket) => {
+        queueMicrotask(() => {
+          socket.deliver({ type: "response.created", response: { id: "resp_f" } });
+          if (activity !== "bookkeeping") {
+            socket.deliver({
+              type: "response.output_item.added",
+              output_index: 0,
+              item: { id: "reasoning_f", type: "reasoning", summary: [] },
+            });
+          }
+        });
+      };
+      const { streamFn, onIdleTimeout, runAbort } = startWatchdog(`F-${activity}-${parked}`);
+      const emitEntered = createDeferredCore();
+      const releaseEmit = createDeferredCore();
+      const consumed = consumeLikeAgentCore(streamFn, runAbort.signal, async (type) => {
+        if (type === "start") {
+          emitEntered.resolve();
+          if (parked) {
+            await releaseEmit.promise;
+          }
+        }
+      });
       await vi.advanceTimersByTimeAsync(10);
-      await entered;
+      await emitEntered.promise;
       const socket = ControlledWebSocket.instances[0];
-      if (mode === "silent") {
-        await expectIdleDeadline(onIdleTimeout);
-        expect(String(onIdleTimeout.mock.calls[0]?.[0]?.message)).toMatch(/idle timeout/);
-        expect(socket?.closeCalls.length).toBeGreaterThan(0);
+      // Both kinds arrive inside the connection's 120s window. Only genuine
+      // reasoning is allowed to extend the independent 15-minute progress deadline.
+      const progress = setInterval(() => {
+        socket?.deliver(
+          activity === "bookkeeping"
+            ? { type: "response.in_progress", response: { id: "resp_f" } }
+            : activity === "repeated snapshot"
+              ? {
+                  type: "response.output_item.done",
+                  output_index: 0,
+                  item: { id: "reasoning_f", type: "reasoning", summary: [] },
+                }
+              : {
+                  type: "response.reasoning_text.delta",
+                  item_id: "reasoning_f",
+                  output_index: 0,
+                  delta: activity === "empty reasoning" ? "" : "Synthetic hidden progress",
+                },
+        );
+      }, 60_000);
+      await vi.advanceTimersByTimeAsync(1_020_000);
+      clearInterval(progress);
+      if (activity !== "hidden reasoning") {
+        expect(onIdleTimeout).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ message: "LLM idle timeout (900s): no model progress" }),
+        );
       } else {
-        const progress = setInterval(() => {
-          socket?.deliver({ type: "response.in_progress", response: { id } });
-        }, 60_000);
-        await vi.advanceTimersByTimeAsync(300_000);
-        clearInterval(progress);
         expect(onIdleTimeout).not.toHaveBeenCalled();
-        socket?.deliver(completedFrame(id));
+        socket?.deliver(completedFrame("resp_f"));
       }
-      release();
+      releaseEmit.resolve();
       await vi.advanceTimersByTimeAsync(10);
       const { result, thrown } = await consumed;
-      if (mode === "silent") {
+      if (activity !== "hidden reasoning") {
         expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
-          /idle timeout|aborted/,
+          /no model progress|aborted/,
         );
       } else {
         expect(thrown).toBeUndefined();

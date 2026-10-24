@@ -20,7 +20,6 @@ import type { VoiceCallRuntime } from "./runtime.js";
 type VoiceCallGatewayMethod =
   | "voicecall.initiate"
   | "voicecall.start"
-  | "voicecall.continue"
   | "voicecall.continue.start"
   | "voicecall.continue.result"
   | "voicecall.steer"
@@ -30,8 +29,6 @@ type VoiceCallGatewayMethod =
   | "voicecall.status";
 
 type VoiceCallGatewayCallResult = { ok: true; payload: unknown } | { ok: false; error: unknown };
-
-type GatewayCallOptions = { timeoutMs?: number };
 
 const VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
 const VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS = 30000;
@@ -80,14 +77,10 @@ function gatewayOperationalError(err: unknown): Error {
   return new Error(redactSensitiveUrlLikeString(detail));
 }
 
-export function isUnknownMethod(err: unknown, method: VoiceCallGatewayMethod): boolean {
-  return formatErrorMessage(err).includes(`unknown method: ${method}`);
-}
-
 export async function callVoiceCallGateway(
   method: VoiceCallGatewayMethod,
   params?: Record<string, unknown>,
-  opts?: GatewayCallOptions,
+  opts?: { timeoutMs?: number },
 ): Promise<VoiceCallGatewayCallResult> {
   try {
     const timeoutMs =

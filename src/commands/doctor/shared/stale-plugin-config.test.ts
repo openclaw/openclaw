@@ -7,6 +7,7 @@ import {
 } from "../../../plugins/config-state.js";
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import {
   collectStalePluginConfigWarnings,
   maybeRepairStalePluginConfig,
@@ -26,18 +27,12 @@ vi.mock("../../../plugins/installed-plugin-index-records.js", async (importOrigi
 }));
 
 function manifest(id: string): PluginManifestRecord {
-  return {
+  return createPluginManifestRecordFixture({
     id,
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
     rootDir: `/plugins/${id}`,
     source: `/plugins/${id}`,
     manifestPath: `/plugins/${id}/openclaw.plugin.json`,
-  };
+  });
 }
 
 function enabledEntries(...ids: string[]) {
@@ -59,6 +54,15 @@ function hit(
 
 function heartbeat(target: string, every?: string) {
   return { heartbeat: { target, ...(every ? { every } : {}) } };
+}
+
+function activation(config: OpenClawConfig, plugin: PluginManifestRecord) {
+  return resolveEffectivePluginActivationState({
+    ...plugin,
+    channelIds: plugin.channels,
+    config: normalizePluginsConfig(config.plugins),
+    rootConfig: config,
+  }).enabled;
 }
 
 describe("doctor stale plugin config helpers", () => {
@@ -86,7 +90,6 @@ describe("doctor stale plugin config helpers", () => {
     ["mixed surviving allowlist", { allow: ["webhooks", "surviving-installed"] }, true, true],
     ["surviving deny entry", { deny: ["webhooks", "unrelated-installed"] }, true, true],
   ] as const)("preserves activation after repairing %s", (_name, policy, enabled, surviving) => {
-    const unrelated = false;
     const cfg: OpenClawConfig = {
       hooks: { enabled: true, token: "synthetic-gateway-hook-token" },
       plugins: {
@@ -95,19 +98,14 @@ describe("doctor stale plugin config helpers", () => {
       },
     };
     const before = structuredClone(cfg);
-    const activation = (config: OpenClawConfig, id: string) =>
-      resolveEffectivePluginActivationState({
-        id,
-        origin: "global",
-        config: normalizePluginsConfig(config.plugins),
-        rootConfig: config,
-      });
-    expect(activation(cfg, "unrelated-installed").enabled).toBe(unrelated);
-    expect(activation(cfg, "surviving-installed").enabled).toBe(surviving);
+    const activations = (config: OpenClawConfig) =>
+      ["unrelated-installed", "surviving-installed"].map((id) =>
+        activation(config, { ...manifest(id), origin: "global" }),
+      );
+    expect(activations(cfg)).toEqual([false, surviving]);
 
     const result = maybeRepairStalePluginConfig(cfg);
-    expect(activation(result.config, "unrelated-installed").enabled).toBe(unrelated);
-    expect(activation(result.config, "surviving-installed").enabled).toBe(surviving);
+    expect(activations(result.config)).toEqual([false, surviving]);
     expect(normalizePluginsConfig(result.config.plugins).enabled).toBe(enabled);
     expect(result.config.plugins?.entries?.webhooks).toBeUndefined();
     expect(result.config.hooks).toEqual(cfg.hooks);
@@ -185,15 +183,7 @@ describe("doctor stale plugin config helpers", () => {
       };
       const expectActivation = (candidate: OpenClawConfig) => {
         for (const plugin of plugins) {
-          expect(
-            resolveEffectivePluginActivationState({
-              ...plugin,
-              channelIds: plugin.channels,
-              config: normalizePluginsConfig(candidate.plugins),
-              rootConfig: candidate,
-            }).enabled,
-            plugin.id,
-          ).toBe(enabledIds.includes(plugin.id));
+          expect(activation(candidate, plugin), plugin.id).toBe(enabledIds.includes(plugin.id));
         }
       };
       expectActivation(cfg);
@@ -257,6 +247,79 @@ describe("doctor stale plugin config helpers", () => {
     expect(result.config.plugins?.slots).toBeUndefined();
   });
 
+  it("retains canonical policy for an installed mixed-case manifest owner", () => {
+    vi.mocked(manifestRegistry.loadPluginManifestRegistryCore).mockReturnValue({
+      plugins: [manifest("MiXeD-owner")],
+      diagnostics: [],
+    });
+    const cfg: OpenClawConfig = {
+      plugins: {
+        allow: ["mixed-owner"],
+        deny: ["mixed-owner"],
+        entries: { "mixed-owner": { enabled: true, config: { retained: true } } },
+      },
+    };
+    expect(scanStalePluginConfig(cfg)).toEqual([]);
+    expect(maybeRepairStalePluginConfig(cfg).config).toEqual(cfg);
+  });
+
+  it.each(["context-engine", ["memory", "context-engine"]] as const)(
+    "preserves declared engine slots without treating engine IDs as plugin policy IDs (%s)",
+    (kind) => {
+      vi.mocked(manifestRegistry.loadPluginManifestRegistryCore).mockReturnValue({
+        plugins: [
+          {
+            ...manifest("vendor-plugin"),
+            kind: typeof kind === "string" ? kind : [...kind],
+            contextEngineIds: ["canonical-engine"],
+          },
+        ],
+        diagnostics: [],
+      });
+      const cfg: OpenClawConfig = {
+        plugins: {
+          allow: ["vendor-plugin", "canonical-engine"],
+          deny: ["canonical-engine"],
+          entries: { "vendor-plugin": { enabled: false }, "canonical-engine": { enabled: true } },
+          slots: { memory: "canonical-engine", contextEngine: "canonical-engine" },
+        },
+      };
+      expect(scanStalePluginConfig(cfg).map((entry) => entry.pathLabel)).toEqual([
+        "plugins.allow",
+        "plugins.deny",
+        "plugins.entries.canonical-engine",
+        "plugins.slots.memory",
+      ]);
+      const result = maybeRepairStalePluginConfig(cfg);
+      expect(result.config.plugins).toEqual({
+        allow: ["vendor-plugin"],
+        deny: [],
+        entries: { "vendor-plugin": { enabled: false } },
+        slots: { contextEngine: "canonical-engine" },
+      });
+    },
+  );
+
+  it("does not retain engine slots using stale install records or non-engine declarations", () => {
+    vi.mocked(manifestRegistry.loadPluginManifestRegistryCore).mockReturnValue({
+      plugins: [
+        { ...manifest("other-plugin"), kind: "memory", contextEngineIds: ["canonical-engine"] },
+      ],
+      diagnostics: [],
+    });
+    installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReturnValue({
+      "missing-owner": {
+        source: "path",
+        contextEngineIdsByPlugin: { "missing-owner": ["canonical-engine"] },
+      },
+    });
+    const result = maybeRepairStalePluginConfig({
+      plugins: { slots: { contextEngine: "canonical-engine" } },
+    });
+    expect(result.config.plugins?.slots).toBeUndefined();
+    expect(result.changes).toHaveLength(1);
+  });
+
   it("does not preserve codex outside policy surfaces", () => {
     const result = maybeRepairStalePluginConfig(
       {
@@ -302,14 +365,15 @@ describe("doctor stale plugin config helpers", () => {
     ]);
   });
 
-  it("removes stale third-party channel config and dependent channel refs", () => {
+  it("removes stale channels, preserves survivors, and reports only affected dependent ids", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {
-        allow: ["discord", "missing-chat-plugin"],
+        allow: ["discord", "missing-chat-plugin", "missing-unreferenced"],
         entries: enabledEntries("discord", "missing-chat-plugin"),
       },
       channels: {
         "missing-chat-plugin": { enabled: true, token: "stale" },
+        "missing-unreferenced": { enabled: true },
         telegram: { botToken: "keep" },
         modelByChannel: {
           openai: {
@@ -328,15 +392,16 @@ describe("doctor stale plugin config helpers", () => {
     } as OpenClawConfig);
 
     expect(result.changes).toEqual([
-      "- plugins.allow: removed 1 stale plugin id (missing-chat-plugin)",
+      "- plugins.allow: removed 2 stale plugin ids (missing-chat-plugin, missing-unreferenced)",
       "- plugins.entries: removed 1 stale plugin entry (missing-chat-plugin)",
-      "- channels: removed 1 stale channel config (missing-chat-plugin)",
+      "- channels: removed 2 stale channel configs (missing-chat-plugin, missing-unreferenced)",
       "- agents heartbeat: removed 2 stale heartbeat targets (missing-chat-plugin)",
       "- channels.modelByChannel: removed 1 stale channel model override (missing-chat-plugin)",
     ]);
     expect(result.config.plugins?.allow).toEqual(["discord"]);
     expect(result.config.plugins?.entries).toEqual({ discord: { enabled: true } });
     expect(result.config.channels?.["missing-chat-plugin"]).toBeUndefined();
+    expect(result.config.channels?.["missing-unreferenced"]).toBeUndefined();
     expect(result.config.channels?.telegram).toEqual({ botToken: "keep" });
     expect(result.config.channels?.modelByChannel).toEqual({
       openai: { telegram: "openai/gpt-5.4" },
@@ -344,29 +409,6 @@ describe("doctor stale plugin config helpers", () => {
     expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
     expect(result.config.agents?.entries?.openclaw?.heartbeat).toStrictEqual({});
     expect(result.config.agents?.entries?.ops?.heartbeat).toEqual({ target: "telegram" });
-  });
-
-  it("lists only the actually removed ids in heartbeat and modelByChannel change entries", () => {
-    const result = maybeRepairStalePluginConfig({
-      plugins: { allow: ["missing-a", "missing-b"] },
-      channels: {
-        "missing-a": { enabled: true, token: "stale-a" },
-        "missing-b": { enabled: true, token: "stale-b" },
-        modelByChannel: { openai: { "missing-a": "openai/gpt-5.4" } },
-      },
-      agents: { defaults: heartbeat("missing-a", "30m") },
-    } as OpenClawConfig);
-
-    expect(result.changes).toEqual([
-      "- plugins.allow: removed 2 stale plugin ids (missing-a, missing-b)",
-      "- plugins.enabled: disabled plugins because no allowed plugins remain; review plugins.allow before enabling plugins",
-      "- channels: removed 2 stale channel configs (missing-a, missing-b)",
-      "- agents heartbeat: removed 1 stale heartbeat target (missing-a)",
-      "- channels.modelByChannel: removed 1 stale channel model override (missing-a)",
-    ]);
-    expect(result.config.channels?.["missing-a"]).toBeUndefined();
-    expect(result.config.channels?.["missing-b"]).toBeUndefined();
-    expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
   });
 
   it("treats stale plugin refs as inert while plugins are globally disabled", () => {

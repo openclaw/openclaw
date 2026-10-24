@@ -3,10 +3,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import {
+  flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
@@ -30,7 +31,7 @@ function renderChatView(overrides: Partial<ChatProps>) {
 describe("recorded automation input attribution", () => {
   it.each(["agent:main:cron:daily:run:execution", "agent:main:main"])(
     "keeps compact automation input outside the completed run: %s",
-    (sourceSessionKey) => {
+    async (sourceSessionKey) => {
       const container = renderChatView({
         sessionKey: "agent:main:main",
         messages: [
@@ -63,6 +64,7 @@ describe("recorded automation input attribution", () => {
           },
         ],
       });
+      await flushDeferredRowPrune();
 
       expect(container.querySelectorAll(".chat-group--forwarded")).toHaveLength(0);
       const forwarded = expectDefined(

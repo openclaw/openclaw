@@ -1,12 +1,15 @@
+import "./sessions-files.mocks.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { resolveSandboxWorkspaceLayoutPaths } from "../../agents/sandbox/shared.js";
 import {
   setRuntimeConfigSnapshot,
   clearRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import type { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
@@ -25,41 +28,8 @@ import {
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 import * as workspaceFs from "./workspace-fs.js";
 
-const hoisted = vi.hoisted(() => ({
-  execOpenPath: vi.fn(),
-  loadSessionEntry: vi.fn(),
-  resolveAgentWorkspaceDir: vi.fn(),
-  resolveDefaultAgentId: vi.fn(),
-  readDelta: vi.fn(),
-}));
-
-vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
-  resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
-  resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
-}));
-
-vi.mock("../session-utils.js", async (original) => ({
-  ...(await original<typeof import("../session-utils.js")>()),
-  loadIncognitoGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
-}));
-
-vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
-  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
-    hoisted.loadSessionEntry(params.key, { agentId: params.agentId }),
-}));
-
-// mock-isolation: File-policy tests supply visible transcript pages without opening SQLite.
-vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
-  withSessionTranscriptDeltaReader: ((scope, consume) =>
-    consume({
-      visible: async (limits) => hoisted.readDelta(scope, limits),
-      raw: async () => {
-        throw new Error("File browsing must consume visible transcript pages");
-      },
-    })) satisfies typeof withSessionTranscriptDeltaReader,
-}));
+const { sessionFilesMocks } = await import("./sessions-files.mocks.test-support.js");
+const hoisted = { ...sessionFilesMocks, execOpenPath: vi.fn() };
 
 const sessionKey = "agent:main:main";
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
@@ -87,8 +57,21 @@ afterEach(() => {
 
 function prepareHostFileRead(
   overrides: Partial<InternalSessionEntry> = {},
-  cfg: OpenClawConfig = {},
+  inputCfg: OpenClawConfig = {},
 ) {
+  const cfg: OpenClawConfig = {
+    ...inputCfg,
+    agents: {
+      ...inputCfg.agents,
+      defaults: {
+        ...inputCfg.agents?.defaults,
+        sandbox: {
+          ...inputCfg.agents?.defaults?.sandbox,
+          workspaceRoot: outsideDirs.make("session-file-sandboxes-"),
+        },
+      },
+    },
+  };
   const entry: InternalSessionEntry = {
     sessionId: "sess-main",
     updatedAt: 1,
@@ -96,6 +79,26 @@ function prepareHostFileRead(
     spawnedCwd: workspaceRoot,
     ...overrides,
   };
+  const runtime = resolveSandboxRuntimeStatus({
+    cfg,
+    agentId: "main",
+    sessionKey,
+    preparedSessionEntry: entry,
+  });
+  const sandbox = resolveSandboxConfigForAgent(cfg, "main");
+  if (runtime.sandboxed && sandbox.workspaceAccess === "none") {
+    const layout = resolveSandboxWorkspaceLayoutPaths({
+      cfg: runtime.sandboxRequired
+        ? { ...sandbox, scope: "agent", workspaceAccess: runtime.workspaceAccess }
+        : sandbox,
+      agentId: "main",
+      rawSessionKey: sessionKey,
+      isolationSubject: runtime.isolationSubject,
+      workspaceDir: workspaceRoot,
+    });
+    fs.mkdirSync(path.join(layout.workspaceDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(layout.workspaceDir, "src/readme.md"), "# Read me\n");
+  }
   hoisted.loadSessionEntry.mockReturnValue({
     agentId: "main",
     canonicalKey: sessionKey,
@@ -267,7 +270,9 @@ it("canonicalizes host previews and lists outside touched-file metadata without 
   ]);
   expect(list.files[0]).not.toHaveProperty("content");
   expect(list.files[0]).not.toHaveProperty("hash");
-  const hidden = expectOkPayload(await invoke("sessions.files.list", { sessionKey }));
+  const hidden = expectOkPayload(
+    await invoke("sessions.files.list", { sessionKey }, fixture.context),
+  );
   expect(hidden.files).toEqual([]);
   const hardlinkedPath = path.join(path.dirname(outsidePath), "hardlinked.txt");
   fs.linkSync(outsidePath, hardlinkedPath);

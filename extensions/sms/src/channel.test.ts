@@ -101,6 +101,50 @@ function mediaContext({
   };
 }
 
+describe("smsPlugin setup", () => {
+  it.each([
+    ["default", "AC-updated", "AC-support", [TO], [FROM]],
+    ["support", "AC123", "AC-updated", [FROM], [TO]],
+  ] as const)(
+    "patches only the %s account and preserves omitted fields",
+    (accountId, rootSid, supportSid, rootAllowFrom, supportAllowFrom) => {
+      const cfg = {
+        commands: { text: false },
+        ...createConfig({
+          webhookPath: "/existing",
+          allowFrom: [FROM],
+          accounts: {
+            support: { accountSid: "AC-support", authToken: "support-token", allowFrom: [FROM] },
+            sibling: { accountSid: "AC-sibling", fromNumber: TO },
+          },
+        }),
+      };
+      const updated = smsPlugin.setupContract?.applyAccountConfig({
+        cfg,
+        accountId,
+        input: { accountSid: "AC-updated", allowFrom: [TO] },
+      });
+
+      expect(updated?.commands).toEqual({ text: false });
+      expect(updated?.channels?.sms).toEqual({
+        accountSid: rootSid,
+        authToken: "secret",
+        fromNumber: FROM,
+        webhookPath: "/existing",
+        allowFrom: rootAllowFrom,
+        accounts: {
+          support: {
+            accountSid: supportSid,
+            authToken: "support-token",
+            allowFrom: supportAllowFrom,
+          },
+          sibling: { accountSid: "AC-sibling", fromNumber: TO },
+        },
+      });
+    },
+  );
+});
+
 describe("smsPlugin status", () => {
   it("projects lifecycle from the runtime status record", async () => {
     const snapshot = await smsPlugin.status?.buildAccountSnapshot?.({

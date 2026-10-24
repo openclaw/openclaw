@@ -17,6 +17,7 @@ import { isProcessAlive } from "../helpers/process-wait.js";
 import { createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
+import { fixtureReadyBeforeSettlement } from "./run-process.test-support.js";
 import {
   captureOutput,
   captureWatchdog,
@@ -59,28 +60,6 @@ function cleanupAfterProgressBody(cleanup: () => void) {
     await Promise.allSettled([progressBodies.get(context)]);
     cleanup();
   });
-}
-
-function fixtureReadyBeforeSettlement(
-  readyPath: string,
-  operation: PromiseLike<unknown>,
-  description: string,
-) {
-  // The worker publishes its PID before reporting readiness. Receipt delivery
-  // can trail completion on the independently owned output pipes.
-  const settled = Promise.resolve(operation).then(
-    () => {
-      if (!fs.existsSync(readyPath)) {
-        throw new Error(`Timed out waiting for ${description}`);
-      }
-    },
-    (error: unknown) => {
-      if (!fs.existsSync(readyPath)) {
-        throw error;
-      }
-    },
-  );
-  return Promise.race([receipts.waitFor(readyPath, "ready"), settled]);
 }
 
 posixDescribe.each([false, true])(
@@ -180,11 +159,7 @@ export default {
       watched.child.stderr!.on("data", observeOutput);
       const waitForReady = (index: number) =>
         withinTest(
-          fixtureReadyBeforeSettlement(
-            files.path(`ready-${index}`),
-            watched.completion,
-            `case ${index} readiness\n${output}`,
-          ),
+          fixtureReadyBeforeSettlement(receipts, files.path(`ready-${index}`), watched.completion),
           signal,
         );
       let workerPid: number | undefined;

@@ -7,6 +7,7 @@ import {
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { stateDirGatewayFixtureEntrypoint } from "../cli/cli-entrypoint.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
@@ -150,16 +151,13 @@ it(
                 apiKey: "local-fixture-key",
                 api: "anthropic-messages",
                 models: [
-                  {
-                    id: "stream-fixture",
+                  modelDefinition("stream-fixture", {
                     name: "Stream fixture",
                     api: "anthropic-messages",
                     reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                     contextWindow: 200_000,
                     maxTokens: 4096,
-                  },
+                  }),
                 ],
               },
             },

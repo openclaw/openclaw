@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import * as globals from "../globals.js";
 import { logWarn } from "../logger.js";
@@ -28,7 +29,7 @@ vi.mock("../media/media-services.js", () => ({
 }));
 
 type Fixture = Parameters<Parameters<typeof withAudioFixture>[1]>[0];
-type Overrides = Pick<Parameters<typeof runCliEntry>[0], "config" | "request">;
+type Overrides = Pick<Parameters<typeof runCliEntry>[0], "assertCurrent" | "config" | "request">;
 
 function runFixture(
   { ctx, media, cache }: Fixture,
@@ -48,6 +49,18 @@ async function runAudioEntry(
     result = await runFixture(fixture, entry, options);
   });
   return result;
+}
+
+function withCompressedAudio(run: (fixture: Fixture) => Promise<void>, extension = "mp3") {
+  return withMediaFixture(
+    {
+      filePrefix: "openclaw-cli-compressed",
+      extension,
+      mediaType: extension === "ogg" ? "audio/ogg" : "audio/mpeg",
+      fileContents: createSafeAudioFixtureBuffer(),
+    },
+    run,
+  );
 }
 
 function expectExec(
@@ -247,16 +260,50 @@ it.each(transcriptFileCases)(
   },
 );
 
+it("does not convert or transcribe when admission expires during attachment path resolution", async () => {
+  const pathResolutionStarted = createDeferred();
+  const releasePathResolution = createDeferred();
+  await withCompressedAudio(async (fixture) => {
+    const getPath = fixture.cache.getPath.bind(fixture.cache);
+    vi.spyOn(fixture.cache, "getPath").mockImplementation(async (params) => {
+      pathResolutionStarted.resolve();
+      await releasePathResolution.promise;
+      return await getPath(params);
+    });
+    let admitted = true;
+    const assertCurrent = () => {
+      if (!admitted) {
+        throw new Error("admission expired");
+      }
+    };
+    const transcription = runFixture(fixture, whisper, { assertCurrent });
+
+    await pathResolutionStarted.promise;
+    admitted = false;
+    releasePathResolution.resolve();
+    await expect(transcription).rejects.toThrow("admission expired");
+    expect(runFfmpegMock).not.toHaveBeenCalled();
+    expect(runExecMock).not.toHaveBeenCalled();
+  });
+});
+
 it.each([
   { language: "fr", expected: "fr" },
   { language: "fr", request: { language: "es" }, expected: "es" },
   { language: "fr", config: { language: "de" }, expected: "de" },
   { expected: undefined },
   { language: "fr", request: { language: "" }, expected: undefined },
-  { command: "whisper-cli", language: "fr", expected: undefined },
-])("forwards auto-discovered Whisper language: %j", async (options) => {
+  { language: "pt-BR", expected: "pt" },
+  { command: "whisper-cli", language: "fr", expected: "fr" },
+  { command: "whisper-cli", language: "fr", request: { language: "pt-BR" }, expected: "pt" },
+  { command: "whisper-cli", expected: undefined },
+  { command: "whisper-cli", converted: true, expected: undefined },
+  { command: "sherpa-onnx-offline", expected: undefined },
+])("runs auto-discovered audio tools with language: %j", async (options) => {
   await withTestDir({ prefix: "openclaw-auto-language-" }, async (dir) => {
     const command = options.command ?? "whisper";
+    const sherpa = command === "sherpa-onnx-offline";
+    const sherpaFiles = ["tokens.txt", "encoder.onnx", "decoder.onnx", "joiner.onnx"];
     await fs.writeFile(
       path.join(dir, `${command}${process.platform === "win32" ? ".cmd" : ""}`),
       "synthetic executable",
@@ -264,6 +311,15 @@ it.each([
     );
     const model = path.join(dir, "model.bin");
     await fs.writeFile(model, "synthetic model");
+    if (sherpa) {
+      await Promise.all(sherpaFiles.map((name) => fs.writeFile(path.join(dir, name), "model")));
+    }
+    if (options.converted) {
+      runFfmpegMock.mockImplementation(async (args: string[]) => {
+        await fs.writeFile(expectDefined(args.at(-1), "wav output"), "RIFF");
+        return "";
+      });
+    }
     runExecMock.mockImplementation(async (_executable, args: string[]) => {
       if (command === "whisper") {
         await fs.writeFile(
@@ -274,13 +330,19 @@ it.each([
           "fixture transcript",
         );
       } else if (args.includes("-of")) {
-        await fs.writeFile(`${args[args.indexOf("-of") + 1]}.txt`, "fixture transcript");
+        await fs.writeFile(`${args[args.indexOf("-of") + 1]}.txt`, "fixture transcript\n");
       }
-      return { stdout: "", stderr: "" };
+      return { stdout: sherpa ? '{"text":"fixture transcript"}' : "", stderr: "" };
     });
-    await withAudioFixture("openclaw-auto-language", async ({ ctx, media, cache }) => {
+    let mediaPath = "";
+    const fixture = options.converted
+      ? (run: (fixture: Fixture) => Promise<void>) => withCompressedAudio(run, "ogg")
+      : (run: (fixture: Fixture) => Promise<void>) =>
+          withAudioFixture("openclaw-auto-language", run);
+    await fixture(async ({ ctx, media, cache, mediaPath: inputPath }) => {
+      mediaPath = await fs.realpath(inputPath);
       const result = await withEnvAsync(
-        { PATH: dir, WHISPER_CPP_MODEL: model, SHERPA_ONNX_MODEL_DIR: undefined },
+        { PATH: dir, WHISPER_CPP_MODEL: model, SHERPA_ONNX_MODEL_DIR: sherpa ? dir : undefined },
         () =>
           runCapability({
             capability: "audio",
@@ -295,11 +357,36 @@ it.each([
       );
       expect(result.outputs[0]?.text).toBe("fixture transcript");
     });
-    const args = runExecMock.mock.calls.find(
-      ([executable]) =>
-        executable === path.join(dir, command) || executable === path.join(dir, `${command}.cmd`),
-    )?.[1];
-    expect(args).toBeDefined();
+    const args = expectDefined(
+      runExecMock.mock.calls.find(
+        ([executable]) =>
+          executable === path.join(dir, command) || executable === path.join(dir, `${command}.cmd`),
+      ),
+      "CLI invocation",
+    )[1];
+    if (sherpa) {
+      expect(args).toEqual([
+        ...sherpaFiles.map((name) => `--${name.split(".")[0]}=${path.join(dir, name)}`),
+        mediaPath,
+      ]);
+    }
+    if (options.converted) {
+      expect(runFfmpegMock.mock.calls[0]?.[0]).toEqual([
+        "-y",
+        "-i",
+        mediaPath,
+        ..."-ac 1 -ar 16000 -c:a pcm_s16le -f wav".split(" "),
+        expect.stringMatching(/\.wav.*\.part$/),
+      ]);
+      expect(
+        path.basename(
+          expectDefined(runFfmpegMock.mock.calls[0]?.[0].at(-1), "converted audio path"),
+        ),
+      ).toContain(`${path.parse(mediaPath).name}.wav`);
+      expect(args.slice(0, 4)).toEqual(["-m", model, "-otxt", "-of"]);
+      expect(args[5]).toBe("-nt");
+      expect(path.basename(args[6])).toBe(`${path.parse(mediaPath).name}.wav`);
+    }
     if (options.expected === undefined) {
       expect(args).not.toContain("--language");
     } else {
@@ -337,17 +424,9 @@ it("removes the CLI scratch directory when audio conversion fails", async () => 
     scratchDir = path.dirname(outputPath);
     throw new Error("ffmpeg conversion failed");
   });
-  await withMediaFixture(
-    {
-      filePrefix: "openclaw-cli-conversion",
-      extension: "mp3",
-      mediaType: "audio/mpeg",
-      fileContents: createSafeAudioFixtureBuffer(),
-    },
-    async (fixture) => {
-      await expect(runFixture(fixture, whisper)).rejects.toThrow("ffmpeg conversion failed");
-    },
-  );
+  await withCompressedAudio(async (fixture) => {
+    await expect(runFixture(fixture, whisper)).rejects.toThrow("ffmpeg conversion failed");
+  });
   expect(scratchDir).not.toBe("");
   await expect(fs.stat(scratchDir)).rejects.toMatchObject({ code: "ENOENT" });
 });

@@ -35,6 +35,7 @@ import {
 } from "./telegram-ingress-coalescing.test-support.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import { openTelegramIngressQueue, telegramQueueEventId } from "./telegram-ingress-spool.js";
+import { writeTelegramSpooledUpdate } from "./telegram-ingress-spool.test-support.js";
 
 export const runtimeErrors: unknown[] = [];
 
@@ -94,21 +95,6 @@ export function createDownstreamTurnFixture(
       { timeout: 5_000, interval: 5 },
     );
     return downstreamTurns.mock.calls[0]?.[0] as MsgContext & Record<string, unknown>;
-  }
-
-  async function assertAlbumTurnAndTombstones(params: {
-    stateDir: string;
-    updateIds: number[];
-    monitor: ReturnType<typeof createTelegramTransportIngressMonitor>;
-  }) {
-    await params.monitor.waitForDeferredClaims();
-    const turn = await awaitSingleDownstreamTurn();
-    expect(turn.Body).toContain("Two photo album");
-    expect(turn.media).toMatchObject([
-      { path: "/tmp/photo-1.jpg", kind: "image" },
-      { path: "/tmp/photo-2.jpg", kind: "image" },
-    ]);
-    await assertSpoolTombstoned(params);
   }
 
   function holdFirstDownstreamTurn() {
@@ -176,7 +162,6 @@ export function createDownstreamTurnFixture(
   return {
     captureNextDownstreamTurn,
     awaitSingleDownstreamTurn,
-    assertAlbumTurnAndTombstones,
     holdFirstDownstreamTurn,
     holdDownstreamLane,
   };
@@ -271,6 +256,34 @@ export async function admitAlbum(
     await monitor.waitForIdle();
   }
   await vi.advanceTimersByTimeAsync(40);
+}
+
+/** Every update is settled except `pending`, which stays retryable in the spool. */
+export async function expectOnlyPending(
+  queue: ReturnType<typeof openTelegramIngressQueue>,
+  pending: Array<Record<string, unknown>>,
+) {
+  expect(await queue.listClaims()).toEqual([]);
+  expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+  expect(await queue.listPending({ limit: "all" })).toMatchObject(pending);
+}
+
+/** Buffers `first`, then pauses the pump so `second` is durably pending but not yet buffered. */
+export async function spoolBehindPausedPump(params: {
+  monitor: ReturnType<typeof createTelegramTransportIngressMonitor>;
+  queue: ReturnType<typeof openTelegramIngressQueue>;
+  stateDir: string;
+  first: Parameters<ReturnType<typeof createTelegramTransportIngressMonitor>["admit"]>[0];
+  second: { update_id: number };
+}) {
+  params.monitor.start();
+  await params.monitor.admit(params.first);
+  await params.monitor.waitForIdle();
+  await params.monitor.pause();
+  await writeTelegramSpooledUpdate({ stateDir: params.stateDir, update: params.second });
+  expect(await params.queue.listPending({ limit: "all" })).toMatchObject([
+    { id: telegramQueueEventId(params.second.update_id) },
+  ]);
 }
 
 export type TelegramIngressResources = Awaited<ReturnType<typeof createIngressMonitor>>;

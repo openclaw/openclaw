@@ -1,6 +1,7 @@
 import type { ModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
@@ -8,7 +9,6 @@ import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import { assignProviderModelOrder } from "./model-catalog-order.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
-import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
@@ -38,13 +38,7 @@ export function prepareConfiguredRuntimeFacts(params: {
   const runtimeEntries = (replace ? [] : params.configuredRuntimeModels).map(({ model }) =>
     modelCatalogRowToEntry(model),
   );
-  const runtimeByIdentity = new Map<string, ModelCatalogEntry[]>();
-  for (const entry of runtimeEntries) {
-    const key = keyOf(entry);
-    const donors = runtimeByIdentity.get(key) ?? [];
-    donors.push(entry);
-    runtimeByIdentity.set(key, donors);
-  }
+  const runtimeByIdentity = groupRecords(runtimeEntries, keyOf);
   const catalog = [
     ...(replace ? [] : params.templateModelRegistry.getAll().map(modelCatalogRowToEntry)),
     ...runtimeEntries,

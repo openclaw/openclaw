@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { FileLockOptions } from "../../infra/file-lock.js";
 import { snapshotFiles } from "../../infra/state-migrations.caller-mode.test-helpers.js";
 
@@ -248,19 +249,21 @@ describe("ensureTool", () => {
     }
   });
 
-  it("single-flights concurrent installs of the same tool", async () => {
+  it("single-flights concurrent installs until installation settles", async () => {
+    const releaseCheckStarted = createDeferred();
     const { ensureTool } = await import("./tools-manager.js");
     const releaseCheckRelease = vi.fn(async () => {});
     const downloadRelease = vi.fn(async () => {});
-    let resolveCheck!: (value: ReturnType<typeof guardedResponse>) => void;
-    const releaseCheck = new Promise<Parameters<typeof resolveCheck>[0]>((resolve) => {
-      resolveCheck = resolve;
-    });
+    const { promise: releaseCheck, resolve: resolveCheck } =
+      createDeferred<ReturnType<typeof guardedResponse>>();
     extractArchiveMock.mockImplementation(async (params: { destDir: string }) => {
       writeFileSync(join(params.destDir, "fd"), "binary");
     });
     fetchWithSsrFGuardMock
-      .mockReturnValueOnce(releaseCheck)
+      .mockImplementationOnce(() => {
+        releaseCheckStarted.resolve();
+        return releaseCheck;
+      })
       .mockResolvedValueOnce(guardedResponse(new Response("archive-bytes"), downloadRelease));
     withFileLockMock.mockImplementationOnce(
       async (lockPath: string, _options: FileLockOptions, fn: () => Promise<unknown>) => {
@@ -270,6 +273,8 @@ describe("ensureTool", () => {
     );
 
     const installs = [ensureTool("fd"), ensureTool("fd")];
+
+    await releaseCheckStarted.promise;
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
     resolveCheck(guardedResponse(Response.json({ tag_name: "v10.3.0" }), releaseCheckRelease));
     const binaryPath = join(tempAgentDir!, "bin", "fd");
@@ -288,7 +293,7 @@ describe("ensureTool", () => {
     expect(minimumLockWaitMs).toBeGreaterThan(stale);
   });
 
-  it("reuses an installation published while waiting for the file lock", async () => {
+  it("reuses an installation published during the lock wait", async () => {
     const binaryPath = join(tempAgentDir!, "bin", "fd");
     withFileLockMock.mockImplementationOnce(
       async (_path: string, _options: FileLockOptions, fn: () => Promise<unknown>) => {

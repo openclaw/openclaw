@@ -46,7 +46,6 @@ type OwnedArchivePruningParams = ArchivePruningParams & {
 export type SessionArchivePruningResult = {
   removedFiles: number;
   usage: SessionPhysicalDiskUsage;
-  completed: boolean;
   checkpointIncomplete: number;
   checkpoint?: SqliteWalHealth;
 };
@@ -240,7 +239,6 @@ async function pruneSessionArchivesWithOwner(
     diagnostics.completed = checkpointIncomplete === 0 && !diagnostics.failedRemovals;
     return {
       ...result,
-      completed: diagnostics.completed,
       checkpointIncomplete,
       checkpoint: diagnostics.checkpoint,
     };

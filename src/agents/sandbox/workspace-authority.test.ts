@@ -38,12 +38,13 @@ async function prepareWorkspaceAuthority(
 }
 
 const SAFE_WORKBOARD_TOOLS = ["exec", "process", "read", "write", "edit", "apply_patch"];
-const lifecycleTools = {
-  confinedToolNames: ["workboard_complete"],
-  requiredToolNames: ["workboard_complete"],
-};
+const completionTool = "workboard_complete";
+const lifecycleTools = { confinedToolNames: [completionTool], requiredToolNames: [completionTool] };
 
-function configWithSandbox(sandbox: AgentSandboxConfig = {}): OpenClawConfig {
+function configWithSandbox(
+  sandbox: AgentSandboxConfig = {},
+  tools: OpenClawConfig["tools"] = {},
+): OpenClawConfig {
   return {
     agents: {
       defaults: {
@@ -54,8 +55,19 @@ function configWithSandbox(sandbox: AgentSandboxConfig = {}): OpenClawConfig {
     },
     tools: {
       sandbox: { tools: { allow: SAFE_WORKBOARD_TOOLS } },
+      ...tools,
     },
   };
+}
+
+function lifecycleConfig(tools: OpenClawConfig["tools"] = {}, allow = [completionTool]) {
+  return configWithSandbox(
+    {},
+    {
+      sandbox: { tools: { allow: [...SAFE_WORKBOARD_TOOLS, ...allow] } },
+      ...tools,
+    },
+  );
 }
 
 describe("resolveSandboxWorkspaceAuthority", () => {
@@ -81,11 +93,10 @@ describe("resolveSandboxWorkspaceAuthority", () => {
   });
 
   it("preserves read-only authority", async () => {
-    const result = await prepareWorkspaceAuthority(
-      configWithSandbox({ mode: "all", workspaceAccess: "ro" }),
-    );
-
-    expect(result).toEqual({ sandboxed: true, workspaceAccess: "ro" });
+    expect(await prepareWorkspaceAuthority(configWithSandbox({ workspaceAccess: "ro" }))).toEqual({
+      sandboxed: true,
+      workspaceAccess: "ro",
+    });
   });
 
   it("caps role-required access and rejects principal-shared worker authority", async () => {
@@ -110,41 +121,25 @@ describe("resolveSandboxWorkspaceAuthority", () => {
     });
   });
 
-  it("rejects Docker and shell escape configurations", async () => {
-    const externalBind = await prepareWorkspaceAuthority(
-      configWithSandbox({
-        docker: { dangerouslyAllowExternalBindSources: true },
-      }),
-    );
-    expect(externalBind.confinementError).toContain("dangerous Docker");
-
-    const gatewayExecConfig = configWithSandbox();
-    const gatewayExec = await prepareWorkspaceAuthority({
-      ...gatewayExecConfig,
-      tools: { ...gatewayExecConfig.tools, exec: { host: "gateway" } },
+  it.each<[AgentSandboxConfig, NonNullable<OpenClawConfig["tools"]>, string]>([
+    [{ docker: { dangerouslyAllowExternalBindSources: true } }, {}, "dangerous Docker"],
+    [{}, { exec: { host: "gateway" } }, "outside the sandbox"],
+    [{ scope: "agent" }, {}, "not exclusive"],
+    [{ scope: "shared" }, {}, "not exclusive"],
+    [{}, { elevated: { enabled: true } }, "elevated execution"],
+    [
+      {},
+      {
+        sandbox: { tools: { allow: [...SAFE_WORKBOARD_TOOLS, "sessions_spawn"] } },
+        subagents: { tools: { alsoAllow: ["sessions_spawn"] } },
+      },
+      "sessions_spawn",
+    ],
+  ])("rejects unconfined configuration: %j %j (%s)", async (sandbox, tools, error) => {
+    expect(await prepareWorkspaceAuthority(configWithSandbox(sandbox, tools))).toMatchObject({
+      sandboxed: true,
+      confinementError: expect.stringContaining(error),
     });
-    expect(gatewayExec.confinementError).toContain("outside the sandbox");
-  });
-
-  it("rejects non-session, elevated, and delegating workers", async () => {
-    const agentScoped = await prepareWorkspaceAuthority(configWithSandbox({ scope: "agent" }));
-    expect(agentScoped.confinementError).toContain("not exclusive");
-
-    const shared = await prepareWorkspaceAuthority(configWithSandbox({ scope: "shared" }));
-    expect(shared.confinementError).toContain("not exclusive");
-
-    const elevatedConfig = configWithSandbox();
-    elevatedConfig.tools!.elevated = { enabled: true };
-    const elevated = await prepareWorkspaceAuthority(elevatedConfig);
-    expect(elevated.confinementError).toContain("elevated execution");
-
-    // A delegated child can write through its own workspace authority.
-    const delegatingConfig = configWithSandbox();
-    delegatingConfig.tools!.sandbox!.tools!.allow = [...SAFE_WORKBOARD_TOOLS, "sessions_spawn"];
-    delegatingConfig.tools!.subagents = { tools: { alsoAllow: ["sessions_spawn"] } };
-    const delegating = await prepareWorkspaceAuthority(delegatingConfig);
-    expect(delegating.confinementError).toContain("sessions_spawn");
-    expect(delegating.sandboxed).toBe(true);
   });
 
   it("uses the runtime session visibility clamp", async () => {
@@ -165,49 +160,37 @@ describe("resolveSandboxWorkspaceAuthority", () => {
     expect(result.confinementError).toBeUndefined();
   });
 
-  it("rejects persisted session host execution overrides", async () => {
-    const config = configWithSandbox();
-    const gateway = await prepareWorkspaceAuthority(config, {
-      sessionEntry: { execHost: "gateway" },
-    });
-    expect(gateway.confinementError).toContain("outside the sandbox");
+  it.each([{ execHost: "gateway" }, { execHost: "auto", execNode: "build-node" }])(
+    "rejects persisted session host override %j",
+    async (sessionEntry) => {
+      const result = await prepareWorkspaceAuthority(configWithSandbox(), { sessionEntry });
+      expect(result.confinementError).toContain("outside the sandbox");
+    },
+  );
 
-    const node = await prepareWorkspaceAuthority(config, {
-      sessionEntry: { execHost: "auto", execNode: "build-node" },
-    });
-    expect(node.confinementError).toContain("outside the sandbox");
-  });
-
-  it("rejects unbounded, plugin, MCP, and named custom tool surfaces", async () => {
-    for (const allow of [[], ["group:plugins"], ["bundle-mcp"], ["custom_tool"]]) {
-      const config = configWithSandbox();
-      config.tools!.sandbox!.tools!.allow = allow;
-      const result = await prepareWorkspaceAuthority(config);
-      expect(result.confinementError).toContain("unclassified tool surface");
-    }
-  });
+  it.each([[], ["group:plugins"], ["bundle-mcp"], ["custom_tool"]].map((allow) => ({ allow })))(
+    "rejects unclassified tool surface $allow",
+    async ({ allow }) => {
+      const config = configWithSandbox({}, { sandbox: { tools: { allow } } });
+      expect((await prepareWorkspaceAuthority(config)).confinementError).toContain(
+        "unclassified tool surface",
+      );
+    },
+  );
 
   it("trusts only caller-enumerated plugin tools", async () => {
-    const config = configWithSandbox({ mode: "all", workspaceAccess: "rw" });
-    config.tools!.sandbox!.tools!.allow = [
-      ...SAFE_WORKBOARD_TOOLS,
-      "workboard_complete",
-      "workboard_shell",
-    ];
+    const config = lifecycleConfig({}, [completionTool, "workboard_shell"]);
     const result = await prepareWorkspaceAuthority(config, {
-      confinedToolNames: ["workboard_complete"],
+      confinedToolNames: [completionTool],
     });
 
     expect(result.confinementError).toContain("workboard_shell");
   });
 
   it("requires lifecycle tools across the complete effective policy", async () => {
-    const missingResult = await prepareWorkspaceAuthority(configWithSandbox(), lifecycleTools);
+    const missingResult = await prepareWorkspaceAuthority(lifecycleConfig({}, []), lifecycleTools);
     expect(missingResult.confinementError).toContain("required tool workboard_complete");
-
-    const denied = configWithSandbox();
-    denied.tools!.sandbox!.tools!.allow = [...SAFE_WORKBOARD_TOOLS, "workboard_complete"];
-    denied.tools!.deny = ["workboard_complete"];
+    const denied = lifecycleConfig({ deny: [completionTool] });
     const deniedResult = await prepareWorkspaceAuthority(denied, lifecycleTools);
     expect(deniedResult.confinementError).toContain("required tool workboard_complete");
 
@@ -218,20 +201,14 @@ describe("resolveSandboxWorkspaceAuthority", () => {
   });
 
   it("applies profile alsoAllow to required lifecycle tools", async () => {
-    const config = configWithSandbox();
-    config.tools!.profile = "minimal";
-    config.tools!.alsoAllow = ["workboard_complete"];
-    config.tools!.sandbox!.tools!.allow = [...SAFE_WORKBOARD_TOOLS, "workboard_complete"];
-
+    const config = lifecycleConfig({ profile: "minimal", alsoAllow: [completionTool] });
     const result = await prepareWorkspaceAuthority(config, lifecycleTools);
     expect(result.confinementError).toBeUndefined();
   });
 
   it("applies the configured target model's provider policy", async () => {
-    const config = configWithSandbox();
+    const config = lifecycleConfig({ byProvider: { anthropic: { deny: [completionTool] } } });
     config.agents!.defaults!.model = "anthropic/claude-sonnet-4-6";
-    config.tools!.byProvider = { anthropic: { deny: ["workboard_complete"] } };
-    config.tools!.sandbox!.tools!.allow = [...SAFE_WORKBOARD_TOOLS, "workboard_complete"];
 
     const result = await prepareWorkspaceAuthority(config, lifecycleTools);
     expect(result.confinementError).toContain("required tool workboard_complete");
@@ -245,12 +222,11 @@ describe("resolveSandboxWorkspaceAuthority", () => {
       {
         sessionId: "workboard-card",
         updatedAt: Date.now(),
-        inheritedToolDeny: ["workboard_complete"],
+        inheritedToolDeny: [completionTool],
       },
     );
-    const config = configWithSandbox();
+    const config = lifecycleConfig();
     config.session = { store: storePath };
-    config.tools!.sandbox!.tools!.allow = [...SAFE_WORKBOARD_TOOLS, "workboard_complete"];
 
     const result = await prepareWorkspaceAuthority(config, { sessionKey, ...lifecycleTools });
     expect(result.confinementError).toContain("required tool workboard_complete");

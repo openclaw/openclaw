@@ -8,6 +8,7 @@ import { Writable } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { resolveGatewayLockPaths } from "../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
@@ -17,6 +18,7 @@ import {
   resolveManagedUpdateLeaseDatabasePath,
 } from "../infra/update-managed-service-handoff-lease.js";
 import * as exec from "../process/exec.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import * as pidIdentity from "../shared/pid-alive.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import * as existingWrites from "../state/openclaw-state-db-existing-write.js";
@@ -29,6 +31,7 @@ import { stopLaunchAgent } from "./launchd-stop.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import * as serviceMembership from "./service-process-membership.js";
 import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const stdout = new Writable({ write: (_chunk, _encoding, done) => done() });
@@ -59,7 +62,12 @@ const run = (sql: string, ...params: SQLInputValue[]) =>
 const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
 function servingPayload(ownerPid = pid) {
   return {
-    owner: { pid: ownerPid, host: hostname(), startedAt: getFileLockProcessStartTime(ownerPid) },
+    owner: {
+      pid: ownerPid,
+      host: hostname(),
+      startedAt: getFileLockProcessStartTime(ownerPid),
+      processNamespace: readGatewayLockProcessNamespace(),
+    },
     port: 19483,
     mode: "supervised",
     supervisor: { kind: "launchd", name: label },
@@ -91,18 +99,13 @@ function interceptIntent(after: (recorded: boolean) => void, fail = false) {
     },
   );
 }
-const nativeResult = (code: number, output = "", stderr = "") => ({
-  code,
-  stdout: output,
-  stderr,
-  termination: "exit" as const,
-});
+const nativeResult = (code: number, output = "", stderr = "") => nativeExit(output, stderr, code);
 const notLoaded = () => nativeResult(113, "", "Could not find service");
-async function stop(updateOwned = true, disable = false) {
+async function stop(updateOwned = true, disable = false, output = stdout) {
   const invoke = () =>
     withGatewayServiceOperationLock(env, (assertCurrent) =>
       stopLaunchAgent({
-        stdout,
+        stdout: output,
         env,
         disable,
         assertCurrent,
@@ -238,6 +241,84 @@ beforeEach(async () => {
     }
     throw new Error(`Unexpected fixture launchctl: ${args.join(" ")}`);
   });
+});
+
+it("joins the serving child's database cleanup after its launchd wrapper exits", async () => {
+  await stopChildProcess(child, 5000);
+  await closed;
+  const releasePath = path.join(root, "release-serving-child");
+  const retiredPath = path.join(root, "serving-child-retired");
+  const databasePath = path.join(root, "held-agent.sqlite");
+  const servingSource = `
+    const fs = require('node:fs');
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(${JSON.stringify(databasePath)});
+    db.exec("CREATE TABLE proof (value TEXT); BEGIN IMMEDIATE; INSERT INTO proof VALUES ('preserved')");
+    const watcher = fs.watch(${JSON.stringify(root)}, () => {
+      if (!fs.existsSync(${JSON.stringify(releasePath)})) return;
+      db.exec('COMMIT'); db.close(); watcher.close();
+      fs.writeFileSync(${JSON.stringify(retiredPath)}, 'closed');
+    });
+    process.send('ready'); process.disconnect();
+  `;
+  child = spawn(
+    process.execPath,
+    [
+      "-e",
+      `
+    const { spawn } = require('node:child_process');
+    const serving = spawn(process.execPath, ['-e', ${JSON.stringify(servingSource)}], {
+      env: process.env, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+    });
+    serving.once('message', () => process.stdout.write(String(serving.pid) + '\\n'));
+    serving.once('exit', () => process.exit(1));
+    setInterval(() => {}, 60000);
+  `,
+    ],
+    {
+      env: { HOME: root, OPENCLAW_STATE_DIR: effectiveEnv.OPENCLAW_STATE_DIR },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  closed = once(child, "close");
+  const [ready] = await once(child.stdout!, "data");
+  const servingPid = Number(String(ready).trim());
+  pid = child.pid!;
+  run(
+    "UPDATE state_leases SET payload_json=? WHERE scope='gateway-owner'",
+    JSON.stringify(servingPayload(servingPid)),
+  );
+  const waiting = createDeferredCore();
+  const output = new Writable({
+    write(chunk, _encoding, done) {
+      if (String(chunk).includes("Waiting for Gateway")) {
+        waiting.resolve();
+      }
+      done();
+    },
+  });
+  let stopping: Promise<void> | undefined;
+  try {
+    stopping = stop(true, false, output);
+    const outcome = await Promise.race([
+      waiting.promise.then(() => "waiting"),
+      stopping.then(() => "stopped-before-database-close"),
+    ]);
+    expect(outcome).toBe("waiting");
+    expect(isPidAlive(servingPid)).toBe(true);
+    expect(fs.existsSync(retiredPath)).toBe(false);
+    fs.writeFileSync(releasePath, "release");
+    await stopping;
+    expect(isPidAlive(servingPid)).toBe(false);
+    using persisted = new DatabaseSync(databasePath);
+    expect(persisted.prepare("SELECT value FROM proof").get()).toEqual({ value: "preserved" });
+  } finally {
+    fs.writeFileSync(releasePath, "release");
+    await stopping?.catch(() => {});
+    if (isPidAlive(servingPid)) {
+      process.kill(servingPid, "SIGTERM");
+    }
+  }
 });
 
 afterEach(async () => {

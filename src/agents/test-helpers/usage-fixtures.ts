@@ -23,5 +23,10 @@ export function createZeroUsageFixture(): Usage {
   };
 }
 
+/** Complete zero-cost usage with explicit token counts; totals are never inferred. */
+export function createUsageFixture(input: number, output: number, totalTokens: number): Usage {
+  return { ...createZeroUsageFixture(), input, output, totalTokens };
+}
+
 /** Usage fixture with every token and cost counter set to zero. */
 export const ZERO_USAGE_FIXTURE: Usage = createZeroUsageFixture();

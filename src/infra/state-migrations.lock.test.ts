@@ -1,193 +1,159 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { resolveGatewayStateOwnerPath } from "./gateway-state-owner.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 
-describe("legacy state migration ownership", () => {
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
-      vi.restoreAllMocks();
-      closeOpenClawStateDatabaseForTest();
-      cleanup();
-    });
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
   });
+});
 
-  function migrationOptions() {
-    const stateDir = tempDirs.make("openclaw-state-migration-lock-");
-    const env = {
+function migrationOptions() {
+  const stateDir = tempDirs.make("openclaw-state-migration-lock-");
+  return {
+    env: {
       ...process.env,
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       OPENCLAW_STATE_DIR: stateDir,
-    };
-    return {
-      env,
-      stateDir,
-      label: "legacy example state",
-      releaseLabel: "Example",
-    };
-  }
-
-  async function expectStateOwnershipReleased(env: NodeJS.ProcessEnv) {
-    const lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: 10,
-      role: "sqlite-maintenance",
-      timeoutMs: 100,
-    });
-    expect(lock).not.toBeNull();
-    await lock?.release();
-  }
-
-  it.each([
-    { code: "EACCES", message: "permission denied", guidance: "permissions" },
-    { code: "ENOSYS", message: "function not implemented", guidance: "filesystem" },
-    { code: "ENOSPC", message: "no space left on device", guidance: "space" },
-    {
-      code: "ENOTSUP",
-      message: "operation not supported",
-      guidance: "exclusive file creation",
     },
-  ])(
-    "reports $code acquisition failure on empty state without inventing an owner",
-    async (failure) => {
-      const options = migrationOptions();
-      expect(fs.readdirSync(options.stateDir)).toEqual([]);
-      const databasePath = path.join(options.stateDir, "state", "openclaw.sqlite");
-      const ownerPath = resolveGatewayStateOwnerPath(databasePath);
-      const open = fs.openSync;
-      let injected = false;
-      vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
-        if (
-          file === ownerPath &&
-          typeof flags === "number" &&
-          (flags & fs.constants.O_CREAT) !== 0
-        ) {
-          injected = true;
-          throw Object.assign(new Error(failure.message), { code: failure.code });
-        }
-        return open(file, flags, mode);
-      });
-      const run = vi.fn(async () => ({ changes: ["imported"], warnings: [] }));
+    stateDir,
+    label: "legacy example state",
+    releaseLabel: "Example",
+  };
+}
 
-      const result = await withLegacyMigrationStateLock({ ...options, run });
+async function expectStateOwnershipReleased(env: NodeJS.ProcessEnv) {
+  const lock = await acquireGatewayLock({
+    allowInTests: true,
+    env,
+    pollIntervalMs: 10,
+    role: "sqlite-maintenance",
+    timeoutMs: 100,
+  });
+  expect(lock).not.toBeNull();
+  await lock?.release();
+}
 
-      expect(injected).toBe(true);
-      expect(result.changes).toEqual([]);
-      expect(run).not.toHaveBeenCalled();
-      const warning = result.warnings.join("\n");
-      expect(warning).toContain(failure.message);
-      expect(warning).toContain(failure.code);
-      expect(warning).toContain(failure.guidance);
-      expect(warning).not.toContain("owns this state directory");
-      expect(fs.readdirSync(path.dirname(ownerPath))).toEqual([]);
-      expect(fs.existsSync(databasePath)).toBe(false);
-    },
-  );
+it.each([
+  ["EACCES", "permission denied", "permissions"],
+  ["ENOSYS", "function not implemented", "filesystem"],
+  ["ENOSPC", "no space left on device", "space"],
+  ["ENOTSUP", "operation not supported", "exclusive file creation"],
+])("reports %s acquisition failure without inventing an owner", async (code, message, guidance) => {
+  const options = migrationOptions();
+  expect(fs.readdirSync(options.stateDir)).toEqual([]);
+  const databasePath = path.join(options.stateDir, "state", "openclaw.sqlite");
+  const ownerPath = resolveGatewayStateOwnerPath(databasePath);
+  const open = fs.openSync;
+  let injected = false;
+  vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
+    if (file === ownerPath && typeof flags === "number" && (flags & fs.constants.O_CREAT) !== 0) {
+      injected = true;
+      throw Object.assign(new Error(message), { code });
+    }
+    return open(file, flags, mode);
+  });
+  const run = vi.fn(async () => ({ changes: ["imported"], warnings: [] }));
 
-  it("keeps nested cleanup inside exclusive ownership and forwards canonical state env", async () => {
+  const result = await withLegacyMigrationStateLock({ ...options, run });
+
+  expect(injected).toBe(true);
+  expect(result.changes).toEqual([]);
+  expect(run).not.toHaveBeenCalled();
+  const warning = result.warnings.join("\n");
+  for (const detail of [message, code, guidance]) {
+    expect(warning).toContain(detail);
+  }
+  expect(warning).not.toContain("owns this state directory");
+  expect(fs.readdirSync(path.dirname(ownerPath))).toEqual([]);
+  expect(fs.existsSync(databasePath)).toBe(false);
+});
+
+it.each(["success", "converted", "thrown", "cleanup"] as const)(
+  "releases ownership after %s",
+  async (mode) => {
     const options = migrationOptions();
+    const cleanup = mode === "cleanup";
+    const success = mode === "success";
     const events: string[] = [];
-    const result = await withLegacyMigrationStateLock({
+    const message = cleanup ? "nested release failed" : "unsafe source";
+    const retained = { changes: ["imported"], warnings: ["retained historical source"] };
+    const result = withLegacyMigrationStateLock({
       ...options,
-      beforeRelease: () => {
-        events.push("nested-release");
-      },
+      errorLabel: mode === "converted" ? "Failed reading legacy example state" : undefined,
+      beforeRelease:
+        success || cleanup
+          ? () => {
+              events.push("nested-release");
+              if (cleanup) {
+                throw new Error(message);
+              }
+            }
+          : undefined,
       run: async (env) => {
         events.push("migrate");
         expect(env.OPENCLAW_STATE_DIR).toBe(options.stateDir);
-        return { changes: ["imported"], warnings: [], notices: ["verified"] };
+        if (!cleanup && !success) {
+          throw new Error(message);
+        }
+        return {
+          ...retained,
+          warnings: cleanup ? [...retained.warnings] : [],
+          ...(success ? { notices: ["verified"] } : { warningDisposition: "recoverable" as const }),
+        };
       },
     });
-
-    expect(result).toEqual({ changes: ["imported"], warnings: [], notices: ["verified"] });
-    expect(events).toEqual(["migrate", "nested-release"]);
-    await expectStateOwnershipReleased(options.env);
-  });
-
-  it("reports migration failures without retaining exclusive ownership", async () => {
-    const options = migrationOptions();
-    const result = await withLegacyMigrationStateLock({
-      ...options,
-      errorLabel: "Failed reading legacy example state",
-      run: async () => {
-        throw new Error("unsafe source");
-      },
-    });
-
-    expect(result).toEqual({
-      changes: [],
-      warnings: ["Failed reading legacy example state: Error: unsafe source"],
-    });
-    await expectStateOwnershipReleased(options.env);
-  });
-
-  it("preserves thrown owner failures when the caller does not request conversion", async () => {
-    const options = migrationOptions();
-    await expect(
-      withLegacyMigrationStateLock({
-        ...options,
-        run: async () => {
-          throw new Error("unexpected owner failure");
-        },
-      }),
-    ).rejects.toThrow("unexpected owner failure");
-    await expectStateOwnershipReleased(options.env);
-  });
-
-  it("reports nested cleanup failures after releasing the Gateway lock", async () => {
-    const options = migrationOptions();
-    const result = await withLegacyMigrationStateLock({
-      ...options,
-      beforeRelease: () => {
-        throw new Error("nested release failed");
-      },
-      run: async () => ({
-        changes: ["imported"],
-        warnings: ["retained historical source"],
-        warningDisposition: "recoverable",
-      }),
-    });
-
-    expect(result).toEqual({
-      changes: ["imported"],
-      warnings: [
-        "retained historical source",
-        "Example migration lock release failed: nested release failed",
-      ],
-    });
-    await expectStateOwnershipReleased(options.env);
-  });
-
-  it("refuses active Gateway ownership without touching the migration source", async () => {
-    const options = migrationOptions();
-    const owner = await acquireGatewayLock({
-      allowInTests: true,
-      env: options.env,
-      pollIntervalMs: 10,
-      port: 18_796,
-      timeoutMs: 100,
-    });
-    if (!owner) {
-      throw new Error("expected Gateway lock");
-    }
-    const run = vi.fn(async () => ({ changes: [], warnings: [] }));
-    try {
-      const result = await withLegacyMigrationStateLock({
-        ...options,
-        retryGuidance: "Stop the Gateway and node host, then retry.",
-        run,
+    if (mode === "thrown") {
+      await expect(result).rejects.toThrow(message);
+    } else {
+      await expect(result).resolves.toEqual({
+        changes: cleanup || success ? ["imported"] : [],
+        warnings: cleanup
+          ? [...retained.warnings, `Example migration lock release failed: ${message}`]
+          : success
+            ? []
+            : [`Failed reading legacy example state: Error: ${message}`],
+        ...(success ? { notices: ["verified"] } : {}),
       });
-
-      expect(result.warnings).toEqual([expect.stringContaining("OpenClaw state database is busy")]);
-      expect(result.warnings[0]).toContain("Stop the Gateway and node host, then retry.");
-      expect(run).not.toHaveBeenCalled();
-    } finally {
-      await owner.release();
     }
+    if (success) {
+      expect(events).toEqual(["migrate", "nested-release"]);
+    }
+    await expectStateOwnershipReleased(options.env);
+  },
+);
+
+it("refuses active Gateway ownership without touching the migration source", async () => {
+  const options = migrationOptions();
+  const owner = await acquireGatewayLock({
+    allowInTests: true,
+    env: options.env,
+    pollIntervalMs: 10,
+    port: 18_796,
+    timeoutMs: 100,
   });
+  if (!owner) {
+    throw new Error("expected Gateway lock");
+  }
+  const run = vi.fn(async () => ({ changes: [], warnings: [] }));
+  try {
+    const result = await withLegacyMigrationStateLock({
+      ...options,
+      retryGuidance: "Stop the Gateway and node host, then retry.",
+      run,
+    });
+
+    expect(result.warnings).toEqual([expect.stringContaining("OpenClaw state database is busy")]);
+    expect(result.warnings[0]).toContain("Stop the Gateway and node host, then retry.");
+    expect(run).not.toHaveBeenCalled();
+  } finally {
+    await owner.release();
+  }
 });

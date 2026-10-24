@@ -5,7 +5,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "./approval-gateway-runtime.types.js";
 import type { ApprovalRequestInput } from "./approval-types.js";
-import type { ExecApprovalChannelRuntimeAdapterAsync } from "./exec-approval-channel-runtime.types.js";
+import type { ExecApprovalChannelRuntimeAdapterAsync } from "./exec-approval-channel-runtime.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 import type {
@@ -396,6 +396,7 @@ describe("createExecApprovalChannelRuntime", () => {
     const shouldHandle = vi.fn(() => true);
     const deliverRequested = vi.fn(async (approval: ExecApprovalRequest) => [{ id: approval.id }]);
     const gatewayRuntime: GatewayNativeApprovalRuntime = {
+      getRuntimeConfig: () => ({}),
       request: request as GatewayNativeApprovalRuntime["request"],
       requestRoute: vi.fn(),
       routeCoordinator: {} as never,

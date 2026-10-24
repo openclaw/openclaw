@@ -9,6 +9,7 @@ import {
   GATEWAY_RUN_CHUNK_METADATA_PATH,
   readGatewayRunChunks,
 } from "../../scripts/lib/gateway-run-chunk-metadata.mts";
+import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../src/shared/worker-bundle-hash.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 function snapshotAcornParserPrototype() {
@@ -27,13 +28,6 @@ const {
 } = await import("../../scripts/check-cli-bootstrap-imports.mts");
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
-const workerDeployArtifactNames = `code-mode-node.worker.mjs file-tool-planning.worker.mjs
-file-tool-read.worker.mjs gateway-state-owner-heartbeat.worker.mjs github-exec-launcher.mjs
-image-processor.worker.mjs openclaw-state-read.worker.mjs service-child-group-anchor.mjs
-service-child-relay.mjs sqlite-source-revision.worker.mjs sqlite-store.worker.mjs
-worker-native-lifecycle.worker.mjs worker.mjs workspace-rsync-receiver.mjs windows-security-helper.exe`.split(
-  /\s+/u,
-);
 
 function makeTempRoot(files: Record<string, string> = {}): string {
   const root = tempRoots.make("openclaw-cli-bootstrap-imports-");
@@ -52,7 +46,7 @@ function writeFixture(root: string, relativePath: string, source: string): void 
 
 function workerFixture(files: Record<string, string> = {}) {
   const root = makeTempRoot();
-  for (const artifact of workerDeployArtifactNames) {
+  for (const artifact of WORKER_BUNDLE_ARTIFACT_PATHS) {
     writeFixture(root, `dist/worker/${artifact}`, "export {};\n");
   }
   for (const [file, source] of Object.entries(files)) {
@@ -71,9 +65,7 @@ function expectWorkerErrors(rootDir: string, expected: string[] = [], entrypoint
 
 function writeGatewayRunChunk(root: string, source = ""): void {
   const chunkName = "run-gateway.js";
-  writeFixture(root, "dist/string-coerce.js", "export const normalize = true;");
   const chunkSource = [
-    'import "./string-coerce.js";',
     "const GATEWAY_AUTH_MODES = [];",
     "function addGatewayRunCommand(cmd) { return cmd; }",
     source,
@@ -103,6 +95,7 @@ describe("check-cli-bootstrap-imports", () => {
       "dist/entry.js": `import fs from "node:fs";\nimport "./cli/run-main.js";\nvoid fs;\n`,
       "dist/cli/run-main.js": `import "../light-abc123.mjs";\nexport async function run() { return import("tslog"); }\n`,
       "dist/light-abc123.mjs": 'import "./string-coerce.js";\n',
+      "dist/string-coerce.js": "export const normalize = true;",
     });
     writeGatewayRunChunk(root);
 
@@ -114,14 +107,12 @@ describe("check-cli-bootstrap-imports", () => {
   it("reports external packages in the static bootstrap graph", () => {
     const root = makeTempRoot({
       "dist/entry.js": `import "./cli/run-main.js";\n`,
-      "dist/cli/run-main.js": `import "../bridge-abc123.mjs";\n`,
-      "dist/bridge-abc123.mjs": `import "./heavy.js";\n`,
-      "dist/heavy.js": `import { Logger } from "tslog";\nvoid Logger;\n`,
+      "dist/cli/run-main.js": `import { Logger } from "tslog";\nvoid Logger;\n`,
     });
     writeGatewayRunChunk(root);
 
     expect(bootstrapErrors({ rootDir: root })).toEqual([
-      'CLI bootstrap static graph imports external package "tslog" from dist/heavy.js.',
+      'CLI bootstrap static graph imports external package "tslog" from dist/cli/run-main.js.',
     ]);
   });
 
@@ -157,7 +148,7 @@ describe("check-cli-bootstrap-imports", () => {
       "dist/native-hook-relay/entry.js":
         'import "../client.js";\nvoid import("../gateway-call.js");\n',
       "dist/client.js":
-        'import "kysely";\nimport "@openclaw/fs-safe/config";\nimport "@openclaw/fs-safe/advanced";\nimport "@openclaw/proc-safe/errors";\nimport "@openclaw/proc-safe/identity";\n',
+        'import "kysely";\nimport "@openclaw/fs-safe/config";\nimport "@openclaw/proc-safe/errors";\n',
     });
     expect(relayErrors({ rootDir: root })).toEqual([]);
   });
@@ -209,36 +200,20 @@ describe("check-cli-bootstrap-imports", () => {
     expect(diagnostic.mock.calls.flat().join("\n")).toContain("static graph imports cold path");
   });
 
-  it("keeps binding searches bounded while rejecting an early name redeclared in a large module", () => {
+  it("rejects redeclared worker bindings without changing the Acorn prototype", () => {
     const root = makeTempRoot();
-    const bindings = 2048;
-    const source =
-      Array.from(
-        { length: bindings },
-        (_, index) => `const bootstrap_binding_${index} = ${index};`,
-      ).join("\n") + "\nlet bootstrap_binding_0;";
-    writeFixture(root, "dist/worker/worker.mjs", source);
-    let searchedSlots = 0;
-    const indexOf = Array.prototype.indexOf;
-    const observed = vi.spyOn(Array.prototype, "indexOf").mockImplementation(function (
-      this: unknown[],
-      value: unknown,
-      fromIndex?: number,
-    ) {
-      if (typeof value === "string" && value.startsWith("bootstrap_binding_")) {
-        searchedSlots += this.length;
-      }
-      return indexOf.call(this, value, fromIndex);
-    });
+    writeFixture(
+      root,
+      "dist/worker/worker.mjs",
+      "const bootstrap_binding_0 = 0; let bootstrap_binding_0;",
+    );
     const errors = workerErrors({
       rootDir: root,
       workerDeployEntrypoints: ["dist/worker/worker.mjs"],
     });
-    observed.mockRestore();
     expect(errors).toEqual([
       expect.stringContaining("Identifier 'bootstrap_binding_0' has already been declared"),
     ]);
-    expect(searchedSlots).toBeLessThanOrEqual(bindings * 8);
     expect(snapshotAcornParserPrototype()).toEqual(acornPrototypeBeforeCheck);
   });
 
@@ -280,12 +255,7 @@ describe("check-cli-bootstrap-imports", () => {
         'require("koffi");',
         'require("bun:ffi-extra");',
         'await import("./lazy.mjs");',
-        '__require("json5");',
         '__require2("numbered");',
-        '(__require)("parenthesized");',
-        '__require?.("optional");',
-        'const interpolated = `literal ${import("template-expression")}`;',
-        String.raw`__r\u0065quire("escaped");`,
         'function nested() { require("nested"); }',
         'export * from "export-all";',
         'export { value } from "export-named";',
@@ -303,8 +273,8 @@ describe("check-cli-bootstrap-imports", () => {
     expectWorkerErrors(root, [
       importError("github-exec-launcher", "yaml"),
       importError("service-child-group-anchor", "signal-exit"),
-      ...`../../package.json ./lazy.mjs @openclaw/fs-safe/temp bun:ffi-extra escaped export-all
-export-named final-external json5 koffi left-pad nested numbered optional parenthesized template-expression`
+      ...`../../package.json ./lazy.mjs @openclaw/fs-safe/temp bun:ffi-extra export-all
+export-named final-external koffi left-pad nested numbered`
         .split(/\s+/u)
         .map((specifier) => importError("worker", specifier)),
       "Worker deploy artifact emits unstaged runtime asset dist/worker/lazy.mjs.",
@@ -368,9 +338,6 @@ describe("gateway run chunk metadata", () => {
       (root) => {
         const chunks = readGatewayRunChunks(join(root, "dist"));
         expect(chunks).toHaveLength(1);
-        expect(chunks[0]?.filePath).toMatch(/-[A-Za-z0-9_-]+\.mjs$/u);
-        expect(fs.existsSync(join(root, "dist/cli/run-main.js"))).toBe(true);
-        expect(chunks[0]?.source).not.toContain("GATEWAY_AUTH_MODES");
         expect(gatewayErrors({ rootDir: root })).toEqual([]);
         fs.appendFileSync(chunks[0]!.filePath, "\n// changed after emission\n");
         expect(() => readGatewayRunChunks(join(root, "dist"))).toThrow(

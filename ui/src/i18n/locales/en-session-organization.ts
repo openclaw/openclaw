@@ -6,6 +6,12 @@ const enSessionOrganization = {
   sessionsView: {
     pullRequestCount: en.sessionsView.pullRequestCount,
     advanced: "Advanced",
+    searchGroups: "Search groups",
+    unassigned: "Unassigned",
+    mobileConversation: "Conversation",
+    mobileCopyPreviewLink: "Copy preview link",
+    mobileCopySessionId: "Copy session ID",
+    mobileCopyMarkdown: "Copy as Markdown",
     copyDetails: "Copy details",
     copyLink: "Copy link",
     communication: {
@@ -285,12 +291,15 @@ const enSessionOrganization = {
       "Delete 1 session?\n\nStop any attached worker safely, then delete the session entry and archive its transcript.",
     deleteSelectedConfirm:
       "Delete {count} sessions?\n\nStop any attached workers safely, then delete the session entries and archive their transcripts.",
-    archiveSessionTitle: "Archive session?",
+    archiveSessionTitle: "Also archive nested sessions?",
     archiveSessionNestedOne:
-      '"{session}" has a nested session. Archive only this one and it moves to the top level.',
+      '"{session}" has 1 directly nested session. If you archive only this session, that nested session moves to the top level.',
     archiveSessionNestedOther:
-      '"{session}" has {count} nested sessions. Archive only this one and they move to the top level.',
-    archiveThisSession: "Archive this session",
+      '"{session}" has {count} directly nested sessions. If you archive only this session, those nested sessions move to the top level.',
+    archiveThisSession: "Archive only this session",
+    archiveSessionNestedOffline:
+      'Archive only "{session}"? Its directly nested sessions move to the top level. Reconnect to archive the complete subtree.',
+    archiveAllSessions: "Archive all ({count})",
     moveToTopLevel: en.sessionsView.moveToTopLevel,
     archiveTreeRootRequired:
       "Archive a persistent conversation and its children, not a hidden worker run.",
@@ -322,8 +331,10 @@ const enSessionOrganization = {
       "Worker stop requested. Review the initial message before retrying.",
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
-    deleteSessionStale: en.sessionsView.deleteSessionStale,
-    deleteSessionsStale: en.sessionsView.deleteSessionsStale,
+    deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
+    deleteSessionIdentityMissing: en.sessionsView.deleteSessionIdentityMissing,
+    deleteSessionsStale:
+      "Gateway connection replaced before {count} sessions were deleted. Try again.",
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
@@ -354,6 +365,7 @@ const enSessionOrganization = {
     removeFromGroup: "Remove from group",
     moveBackToGroups: "Move back to Groups",
     groupMenu: en.sessionsView.groupMenu,
+    groupOptions: en.sessionsView.groupOptions,
     newSessionInGroup: en.sessionsView.newSessionInGroup,
     groupDefaultsMenu: "New session defaults",
     groupDefaultsFailed: "Could not save the group defaults.",
@@ -374,11 +386,32 @@ const enSessionOrganization = {
     groupRowCount: "{count} sessions",
     groupRowCountOne: "{count} session",
   },
+  worktrees: {
+    adminRequired: "Browsing only. Worktree changes require operator.admin access.",
+    newWorktree: "New worktree",
+    ownerManual: "Manual",
+    ownerSession: "Session",
+    ownerWorkboard: "Workboard",
+    title: "Managed Worktrees",
+    subtitle: "Isolated repository checkouts owned by OpenClaw.",
+    cleanNow: "Clean up now",
+    name: "Name",
+    namePlaceholder: "auto",
+    baseBranch: "Base branch",
+    baseBranchPlaceholder: "Remote default",
+    repo: "Repository",
+    empty: "No managed worktrees.",
+    restorable: "Restorable",
+    restore: "Restore",
+    confirmDelete: "Snapshot and delete {name}?",
+    confirmForceDelete: "Snapshot failed: {error}\n\nDelete without a snapshot?",
+  },
 } satisfies TranslationMap;
 
 export const registerSessionOrganizationEnglish = Object.assign(
   () => {
     Object.assign(en.sessionsView, enSessionOrganization.sessionsView);
+    Object.assign(en.worktrees, enSessionOrganization.worktrees);
   },
   { catalog: enSessionOrganization },
 );

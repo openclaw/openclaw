@@ -36,7 +36,7 @@ it.each(["rename", "new group", "rename group"] as const)(
     const open = () =>
       modal.track(
         kind === "rename"
-          ? sidebar.sessionOrganizer.renameSession(row)
+          ? sidebar.sessionOrganizer.runSessionAction(row, { kind: "rename" })
           : kind === "new group"
             ? sidebar.sessionOrganizer.createSessionGroup()
             : sidebar.sessionOrganizer.renameSessionGroupFromMenu("Drafts"),
@@ -108,8 +108,9 @@ it.each(["failed", "stale"] as const)(
     });
     try {
       void modal.track(
-        sidebar.sessionOrganizer.renameSession(
+        sidebar.sessionOrganizer.runSessionAction(
           sidebar.findSidebarSessionByKey("agent:main:draft")!,
+          { kind: "rename" },
         ),
       );
       await submitInputDialog("Keep this name");

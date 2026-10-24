@@ -5,18 +5,21 @@ import { icons } from "../../components/icons.tsx";
 import { WorkboardToast } from "../../components/toast.tsx";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
-import { groupWorkboardCardsByStatus } from "../../lib/workboard/derived.ts";
-import "../../styles/workboard.css";
+import { createElementRefs } from "../../lib/element-refs.ts";
 import {
-  dispatchWorkboard,
-  loadWorkboard,
   filterWorkboardCards,
+  groupWorkboardCardsByStatus,
   workboardCardMatchesHealthKey,
-  workboardHasActiveWrites,
+} from "../../lib/workboard/derived.ts";
+import { loadWorkboard } from "../../lib/workboard/loading.ts";
+import { dispatchWorkboard } from "../../lib/workboard/mutations.ts";
+import { workboardHasActiveWrites } from "../../lib/workboard/runtime.ts";
+import {
   WORKBOARD_PRIORITIES,
   type WorkboardCard,
   type WorkboardStatus,
-} from "../../lib/workboard/index.ts";
+} from "../../lib/workboard/types.ts";
+import "../../styles/workboard.css";
 import { agentDisplayName, buildAgentFilterOptions } from "./agent-filter.ts";
 import { buildBoardFilterOptions, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
 import { getVisibleDetailCard, CardDetailsPanel } from "./view-card-details.tsx";
@@ -80,6 +83,7 @@ function WorkboardColumns(props: {
   workboard: WorkboardProps;
   statuses: WorkboardStatus[];
   byStatus: Map<WorkboardStatus, WorkboardCard[]>;
+  cardRefs: ReturnType<typeof createElementRefs<HTMLElement>>;
 }) {
   const state = workboardViewState(() => props.workboard);
   const boardEdges = boardScrollEdgesRef();
@@ -116,6 +120,7 @@ function WorkboardColumns(props: {
               workboard={props.workboard}
               status={status()}
               cards={props.byStatus.get(status()) ?? []}
+              cardRefs={props.cardRefs}
               options={{ surface: state().viewMode === "list" ? "list" : "page" }}
             />
           )}
@@ -125,7 +130,11 @@ function WorkboardColumns(props: {
   );
 }
 
-export function WorkboardView(props: WorkboardProps & { onRefresh: () => void }) {
+export function WorkboardView(
+  props: WorkboardProps & { onRefresh: () => void; onFocusTarget?: (element: HTMLElement) => void },
+) {
+  let filterTrigger: HTMLButtonElement | undefined;
+  const cardRefs = createElementRefs<HTMLElement>();
   const state = workboardViewState(() => props);
   const view = createMemo(() => {
     const current = state();
@@ -406,26 +415,39 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
           ]}
         >
           {view().selectedCards.length ? (
-            <SelectionActions workboard={props} />
+            <SelectionActions
+              workboard={props}
+              focusSelectedCard={() => {
+                for (const status of view().visibleStatuses) {
+                  for (const card of view().byStatus.get(status) ?? []) {
+                    const element = cardRefs.get(card.id);
+                    if (element && state().selectedCardIds.has(card.id)) {
+                      element.focus({ preventScroll: true });
+                      return;
+                    }
+                  }
+                }
+              }}
+            />
           ) : (
             <div class="workboard-toolbar__filters">
               <div class="workboard-toolbar__navigation">
                 <StatusTabs
                   state={state()}
-                  requestUpdate={props.onRequestUpdate}
+                  onChange={props.onRequestUpdate}
                   revision={props.revision}
                 />
                 <MobileStatusPicker
                   state={state()}
                   cards={view().statusCards}
-                  requestUpdate={props.onRequestUpdate}
+                  onChange={props.onRequestUpdate}
                   revision={props.revision}
                 />
               </div>
             </div>
           )}
           <div class="workboard-toolbar__tools">
-            <WorkboardSearch workboard={props} />
+            <WorkboardSearch workboard={props} onFocusTarget={props.onFocusTarget} />
             {view().hasAgentControl ? (
               <div class="workboard-agent-filter">
                 <AgentControl workboard={props} options={view().agentFilterOptions} />
@@ -434,6 +456,9 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
             <button
               popovertarget={workboardFilterPopoverId}
               class={["btn workboard-filter-trigger", { active: view().activeFilterCount > 0 }]}
+              ref={(element) => {
+                filterTrigger = element;
+              }}
               type="button"
               aria-label={
                 view().activeFilterCount > 0
@@ -486,7 +511,7 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
                   <DisplayChoices
                     state={state()}
                     revision={props.revision}
-                    requestUpdate={props.onRequestUpdate}
+                    onChange={props.onRequestUpdate}
                   />
                 </div>
                 <MultiFilter
@@ -544,7 +569,11 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
             </div>
           </div>
           {!view().selectedCards.length ? (
-            <ActiveFilters filters={view().activeFilters} requestUpdate={props.onRequestUpdate} />
+            <ActiveFilters
+              filters={view().activeFilters}
+              onChange={props.onRequestUpdate}
+              filterTrigger={() => filterTrigger}
+            />
           ) : null}
         </div>
         {state().nextCursor ? (
@@ -578,6 +607,7 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
             workboard={props}
             statuses={view().visibleStatuses}
             byStatus={view().byStatus}
+            cardRefs={cardRefs}
           />
         )}
       </div>

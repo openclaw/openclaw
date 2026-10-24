@@ -18,52 +18,15 @@ import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { ExecToolRoutingDefaults } from "./bash-tools.exec-routing.types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
+import type { ExecApprovalTransport } from "./exec-approval-transport.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
 import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types.js";
-
-type ExecProcessFailureKind =
-  | "shell-command-not-found"
-  | "shell-not-executable"
-  | "overall-timeout"
-  | "no-output-timeout"
-  | "signal"
-  | "aborted"
-  | "runtime-error";
-
-export type ExecExitFailureKind = Exclude<ExecProcessFailureKind, "runtime-error">;
-
-/** Normalized result of a spawned exec process. */
-export type ExecProcessOutcome =
-  | {
-      status: "completed";
-      exitCode: number;
-      exitSignal: NodeJS.Signals | number | null;
-      exitReason?: TerminationReason;
-      durationMs: number;
-      aggregated: string;
-      timedOut: false;
-      noOutputTimedOut?: boolean;
-    }
-  | {
-      status: "failed";
-      exitCode: number | null;
-      exitSignal: NodeJS.Signals | number | null;
-      exitReason?: TerminationReason;
-      durationMs: number;
-      aggregated: string;
-      timedOut: boolean;
-      noOutputTimedOut?: boolean;
-      failureKind: ExecProcessFailureKind;
-      oomScoreWrapperSelected?: boolean;
-      reason: string;
-    };
 
 export type ExecToolDefaults = ExecToolRoutingDefaults & {
   hasCronTool?: boolean;
   mode?: ExecMode;
   bypassHostApprovalFloors?: boolean;
   trigger?: string;
-  continuesConversation?: boolean;
   pathPrepend?: string[];
   safeBins?: string[];
   strictInlineEval?: boolean;
@@ -79,6 +42,7 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   /** Host-prepared routing hint; remote workers have no Gateway session database. */
   preparedSubagentExecution?: boolean;
   autoReviewer?: ExecAutoReviewer;
+  createApprovalTransport?: (toolCallId: string, signal?: AbortSignal) => ExecApprovalTransport;
   /** Reads current attempt context only when a command needs review. */
   reviewTranscript?: () => ExecAutoReviewTranscript | undefined;
   agentId?: string;
@@ -139,6 +103,7 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
 
 /** Request and approval context shared by Gateway and node execution hosts. */
 export type ExecHostCommandParams = {
+  approvalTransport?: ExecApprovalTransport;
   command: string;
   env: Record<string, string>;
   requestedEnv?: Record<string, string>;
@@ -206,6 +171,20 @@ export type ExecElevatedDefaults = {
   fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
 };
 
+export function cloneExecElevatedDefaults(value: ExecElevatedDefaults): ExecElevatedDefaults {
+  return {
+    enabled: value.enabled,
+    allowed: value.allowed,
+    defaultLevel: value.defaultLevel,
+    ...(value.fullAccessAvailable !== undefined
+      ? { fullAccessAvailable: value.fullAccessAvailable }
+      : {}),
+    ...(value.fullAccessBlockedReason !== undefined
+      ? { fullAccessBlockedReason: value.fullAccessBlockedReason }
+      : {}),
+  };
+}
+
 /** One model-backed approval review recorded on an exec tool call. */
 export type ExecToolApprovalReview = Omit<ToolApprovalReview, "userAuthorization">;
 
@@ -220,6 +199,7 @@ export type ExecToolDetails = {
       sessionId: string;
       pid?: number;
       startedAt: number;
+      deadlineAtMs?: number;
       cwd?: string;
       tail?: string;
       followUp?: string;

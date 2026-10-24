@@ -14,6 +14,7 @@ import {
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { formatCliCommand } from "../command-format.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import {
   requestUpdateCommandExecutorCancellation,
@@ -352,9 +353,16 @@ export async function withUpdateCommandExecutor<T>(
             borrowed = true;
             managedHandoff = true;
           } else {
+            const admissionStore = store;
             const acquired = requireUpdateCommandAcquisition(
               store.acquire(key, randomUUID(), { kind: "update" }),
-              "Another update executor owns this installation.",
+              () => {
+                const retained = admissionStore.read(key);
+                // Only explicit repair settles a cancelled original after its updater exits.
+                return retained.kind === "current" && retained.lease.version === 4
+                  ? `Another update executor owns this installation. It retains cancelled update custody (owner ${retained.lease.owner}, lease version 4, last activity ${new Date(retained.lease.updatedAt).toISOString()}). If that update has exited, run ${formatCliCommand("openclaw update repair")} to settle it.`
+                  : "Another update executor owns this installation.";
+              },
             );
             lease = acquired.lease;
             if (acquired.originalDatabaseIdentity) {

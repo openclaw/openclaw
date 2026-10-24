@@ -1,18 +1,19 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
-import { serializeCacheTtlToolResultProjections } from "./cache-ttl-checkpoint.js";
+import { serializeCacheTtlToolResultProjections as snapshot } from "./cache-ttl-checkpoint.js";
 import { appendAttemptCacheTtlIfNeeded } from "./run/attempt-thread-helpers.js";
 import {
   clearEmbeddedSessionPromptStates,
-  createToolResultPromptProjectionState,
-  retainEmbeddedSessionPromptState,
+  createToolResultPromptProjectionState as newState,
+  retainEmbeddedSessionPromptState as retainState,
 } from "./session-prompt-state.js";
+import { replayToolResultPromptProjections } from "./tool-result-projection-replay.js";
 import {
   pruneExpiredCacheTtlToolResults,
-  reconcileToolResultPromptProjectionState,
+  reconcileToolResultPromptProjectionState as reconcile,
   resolveCacheTtlPruningSettings,
-  restoreCacheTtlToolResultProjections,
+  restoreCacheTtlToolResultProjections as restore,
   truncateOversizedToolResultsInMessages as truncate,
 } from "./tool-result-truncation.js";
 
@@ -57,12 +58,7 @@ function prunableHistory(oldTools: AgentMessage[]): AgentMessage[] {
     user("first"),
     assistant(),
     ...oldTools,
-    user("second"),
-    assistant(),
-    user("third"),
-    assistant(),
-    user("fourth"),
-    assistant(),
+    ...["second", "third", "fourth"].flatMap((text) => [user(text), assistant()]),
   ];
 }
 
@@ -71,9 +67,7 @@ function addNewRound(history: AgentMessage[]): AgentMessage[] {
     ...history,
     assistant(),
     tool({ id: "new", text: "b".repeat(5_000) }),
-    assistant(),
-    assistant(),
-    assistant(),
+    ...Array.from({ length: 3 }, () => assistant()),
   ];
 }
 
@@ -96,7 +90,7 @@ function project(messages: AgentMessage[], options: PruningOptions = {}): AgentM
     lastCacheTouchAt: NOW - 300_000,
     dropThinkingBlocksForEstimate: false,
     now: NOW,
-    projectionState: createToolResultPromptProjectionState(),
+    projectionState: newState(),
     pruneNewRounds: true,
     ...options,
   });
@@ -117,11 +111,36 @@ function toolText(messages: AgentMessage[], id: string): string {
 }
 
 describe("cache-TTL tool-result projection", () => {
+  it.each(["cache-TTL", "aggregate"])(
+    "replays %s bytes for a fork without pruning new results or changing parent state",
+    (kind) => {
+      const state = newState();
+      const history = prunableHistory([
+        tool({ id: "old", text: "a".repeat(100_000) }),
+        tool({ id: "older", text: "c".repeat(100_000) }),
+      ]);
+      const sent =
+        kind === "cache-TTL"
+          ? project(history, { projectionState: state })
+          : truncate(history, 128_000, 100_000, 1_000, state).messages;
+      expect(toolText(sent, "old").length).toBeLessThan(100_000);
+      const freshResult = tool({ id: "fresh", text: "b".repeat(100_000) });
+      const before = structuredClone(state);
+
+      expect(replayToolResultPromptProjections([...history, freshResult], state)).toEqual([
+        ...sent,
+        freshResult,
+      ]);
+      expect(state).toEqual(before);
+      expect(toolText(history, "old")).toBe("a".repeat(100_000));
+    },
+  );
+
   it("preserves ordinary projected bytes across turn teardown and compaction", () => {
     const maxChars = 4_000;
     const sessionId = "ordinary-turn-teardown";
 
-    using initialLease = retainEmbeddedSessionPromptState(sessionId);
+    using initialLease = retainState(sessionId);
     const state = initialLease.state.toolResults;
     const history: AgentMessage[] = [user("start")];
     let sent: AgentMessage[] = [];
@@ -137,24 +156,23 @@ describe("cache-TTL tool-result projection", () => {
     expect(
       [0, 1, 2].reduce((sum, batch) => sum + toolText(sent, `batch-${batch}`).length, 0),
     ).toBeGreaterThan(8_000);
-    const markerData = JSON.stringify(serializeCacheTtlToolResultProjections(state));
+    const markerData = JSON.stringify(snapshot(state));
     const entries = checkpoint(JSON.parse(markerData));
     initialLease[Symbol.dispose]();
-    using restoredLease = retainEmbeddedSessionPromptState(sessionId);
+    using restoredLease = retainState(sessionId);
     const restored = restoredLease.state.toolResults;
     expect(restored).not.toBe(state);
-    restoreCacheTtlToolResultProjections(restored, entries);
-    expect(
-      JSON.stringify(truncate(history, 128_000, maxChars, 8_000, restored).messages) ===
-        JSON.stringify(sent),
-    ).toBe(true);
+    restore(restored, entries);
+    expect(JSON.stringify(truncate(history, 128_000, maxChars, 8_000, restored).messages)).toBe(
+      JSON.stringify(sent),
+    );
     const compacted = [user("summary"), ...history.slice(-2)];
-    reconcileToolResultPromptProjectionState(compacted, restored);
+    reconcile(compacted, restored);
     expect(restored).toMatchObject({ frozen: { size: 1 }, replacements: { size: 1 } });
-    const compactedSnapshot = serializeCacheTtlToolResultProjections(restored);
+    const compactedSnapshot = snapshot(restored);
     expect(JSON.stringify(compactedSnapshot)).not.toContain("batch-0");
-    const reopened = createToolResultPromptProjectionState();
-    restoreCacheTtlToolResultProjections(reopened, [{ ...entries[0], data: compactedSnapshot }]);
+    const reopened = newState();
+    restore(reopened, [{ ...entries[0], data: compactedSnapshot }]);
     expect(truncate(compacted, 128_000, maxChars, 8_000, reopened).messages).toEqual([
       user("summary"),
       ...sent.slice(-2),
@@ -172,7 +190,7 @@ describe("cache-TTL tool-result projection", () => {
           tool({ id: `tool-${index}`, text: `${index}:` + "x".repeat(6_000), image: true }),
         ),
       );
-      using initialLease = retainEmbeddedSessionPromptState(sessionId);
+      using initialLease = retainState(sessionId);
       const state = initialLease.state.toolResults;
       truncate(messages, 1_000, 5_500, 100_000, state);
       let pruningRounds = 0;
@@ -194,6 +212,7 @@ describe("cache-TTL tool-result projection", () => {
           entries.push({ type: "custom", customType, data: JSON.parse(serialized) });
         },
       };
+      using _ = vi.spyOn(Date, "now").mockReturnValueOnce(NOW);
       await appendAttemptCacheTtlIfNeeded({
         sessionManager,
         config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
@@ -203,7 +222,6 @@ describe("cache-TTL tool-result projection", () => {
         compactionOccurredThisAttempt: false,
         isCacheTtlEligibleProvider: () => true,
         toolResultPromptProjectionState: state,
-        now: NOW,
       });
       expect(entries.at(-1)?.data).toMatchObject({
         timestamp: NOW,
@@ -214,9 +232,9 @@ describe("cache-TTL tool-result projection", () => {
       // The marker carries keys only; pruned bytes never enter the transcript.
       expect(JSON.stringify(entries.at(-1)?.data)).not.toContain("x".repeat(20));
       clearEmbeddedSessionPromptStates([sessionId]);
-      using restartedLease = retainEmbeddedSessionPromptState(sessionId);
+      using restartedLease = retainState(sessionId);
       const restarted = restartedLease.state.toolResults;
-      restoreCacheTtlToolResultProjections(restarted, entries);
+      restore(restarted, entries);
       const restored = project(messages, {
         projectionState: restarted,
         lastCacheTouchAt: NOW,
@@ -226,40 +244,37 @@ describe("cache-TTL tool-result projection", () => {
       expect(pruningRounds).toBe(1);
       expect(truncate(restored, 1_000, 2_500, 100_000, restarted).messages).toEqual(sent);
       const compacted = [user("summary"), ...messages.slice(-4)];
-      reconcileToolResultPromptProjectionState(compacted, restarted);
+      reconcile(compacted, restarted);
       expect(restarted.replacements.size).toBe(0);
-      restoreCacheTtlToolResultProjections(restarted, entries);
+      restore(restarted, entries);
       project(compacted, { projectionState: restarted, lastCacheTouchAt: NOW });
       expect(restarted).toMatchObject({
         replacements: { size: 0 },
         restoredCacheTtl: { size: 0 },
       });
       clearEmbeddedSessionPromptStates([sessionId]);
-      using resetLease = retainEmbeddedSessionPromptState(sessionId);
+      using resetLease = retainState(sessionId);
       expect(resetLease.state.toolResults.replacements.size).toBe(0);
     },
   );
 
   it("keeps pruned bytes when a later result makes a tool identity ambiguous", () => {
     const messages = prunableHistory([tool({ id: "reused", text: "a".repeat(5_000) })]);
-    const state = createToolResultPromptProjectionState();
+    const state = newState();
     const sent = project(messages, { projectionState: state });
-    const entries = checkpoint(serializeCacheTtlToolResultProjections(state));
+    const entries = checkpoint(snapshot(state));
     const expanded = [...messages, tool({ id: "reused", text: "b".repeat(5_000) })];
     const continued = project(expanded, { projectionState: state, lastCacheTouchAt: NOW });
     expect(JSON.stringify(continued.slice(0, messages.length))).toBe(JSON.stringify(sent));
-    const restarted = createToolResultPromptProjectionState();
-    restoreCacheTtlToolResultProjections(restarted, entries);
+    const restarted = newState();
+    restore(restarted, entries);
     const restored = project(expanded, { projectionState: restarted, lastCacheTouchAt: NOW });
     expect(JSON.stringify(restored)).toBe(JSON.stringify(continued));
   });
 
   it("preserves a restored soft projection with non-array content on later replay", () => {
-    const state = createToolResultPromptProjectionState();
-    restoreCacheTtlToolResultProjections(
-      state,
-      checkpoint({ prunedToolResults: [{ key: "tool:old:42", mode: "soft" }] }),
-    );
+    const state = newState();
+    restore(state, checkpoint({ prunedToolResults: [{ key: "tool:old:42", mode: "soft" }] }));
     // SAFETY: older malformed plugin content is handled by the existing replay guard.
     const original = { ...tool({ id: "old" }), content: null } as unknown as AgentMessage;
     truncate([original], 128_000, 5_000, 20_000, state);
@@ -276,18 +291,18 @@ describe("cache-TTL tool-result projection", () => {
   it.each(["server", "TTL"])(
     "gates new %s pruning rounds without undoing live or restored projections",
     (owner) => {
-      const state = createToolResultPromptProjectionState();
+      const state = newState();
       const history = prunableHistory([tool({ id: "old", text: "a".repeat(5_000) })]);
       const first = project(history, { projectionState: state });
-      const entries = checkpoint(serializeCacheTtlToolResultProjections(state));
+      const entries = checkpoint(snapshot(state));
       const expanded = addNewRound(history);
       const gate = owner === "server" ? { pruneNewRounds: false } : { lastCacheTouchAt: NOW };
       const live = project(expanded, { projectionState: state, ...gate });
       expect(toolText(live, "old")).toBe(toolText(first, "old"));
       expect(toolText(live, "new")).toBe("b".repeat(5_000));
       if (owner === "server") {
-        const restarted = createToolResultPromptProjectionState();
-        restoreCacheTtlToolResultProjections(restarted, entries);
+        const restarted = newState();
+        restore(restarted, entries);
         const restored = project(expanded, { projectionState: restarted, ...gate });
         expect(toolText(restored, "old")).toBe(toolText(first, "old"));
         expect(toolText(restored, "new")).toBe("b".repeat(5_000));

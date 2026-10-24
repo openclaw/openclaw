@@ -1,3 +1,4 @@
+import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import {
   captureWorktreeRegistryReadGuard,
   prepareWorktreeRegistryGuard,
@@ -16,6 +17,7 @@ import { captureSessionEntryMetadataRead } from "../../config/sessions/session-e
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { projectionOperations } from "./local-workspace-state.js";
 import { withLocalWorkspaceStore, type LocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
@@ -45,6 +47,42 @@ export async function withSettledLocalWorkspace<T>(
 ): Promise<T> {
   const context = captureWorktreeRunEndContext(params.env ?? process.env);
   const env = { ...(params.env ?? process.env), ...context.environment };
+  const persistentRetirements: Array<{ finish: () => Promise<void> }> = [];
+  if (params.retireRuntime) {
+    // Stream finalization checkpoints acquire the projection lease themselves.
+    // Settle them before taking that lease; its quiescence owner rechecks custody below.
+    const reply = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env },
+      { type: "localWorkspace.get", input: { id: params.worktree.id } },
+      { context, current: true, live: true },
+    );
+    context.admission.assertCurrent();
+    params.assertCurrent?.();
+    if (reply && (!reply.ok || reply.type !== "localWorkspace.get")) {
+      throw new Error("Unexpected local workspace retirement lookup");
+    }
+    if (reply?.row) {
+      const { readRegistry } = await import("../../agents/sandbox/registry.js");
+      const { prepareSandboxPersistentExecRetirement } =
+        await import("../../agents/sandbox/persistent-exec-retirement.js");
+      for (const runtime of (await readRegistry({ path: context.admission.databasePath, env }))
+        .entries) {
+        if (runtime.workspaceDir === reply.row.projection_path) {
+          persistentRetirements.push(
+            await prepareSandboxPersistentExecRetirement({
+              containerName: runtime.containerName,
+              env,
+              assertCurrent: () => {
+                context.admission.assertCurrent();
+                params.assertCurrent?.();
+                params.workerAuthority?.assertCurrent?.();
+              },
+            }),
+          );
+        }
+      }
+    }
+  }
   return await withLocalWorkspaceStore(
     { ...params, env, worktreeId: params.worktree.id },
     async (store) => {
@@ -100,14 +138,17 @@ export async function withSettledLocalWorkspace<T>(
           }
         }
         if (params.retireRuntime) {
+          for (const retirement of persistentRetirements) {
+            await retirement.finish();
+          }
           await quiescence?.retire();
         }
-        owner.assertCurrent();
+        const current = state.current();
         return await operation(
-          state.current().baseline_ref
+          current.baseline_ref
             ? {
                 worktreeId: worktree.id,
-                projectionPath: state.current().projection_path,
+                projectionPath: current.projection_path,
                 prepareArchive: state.prepareArchive,
                 canonicalPaths: state.canonicalPaths,
                 assertCurrent: state.current,
@@ -202,13 +243,16 @@ async function runLocalWorkspaceProjection<T>(
     await import("../../agents/sandbox/local-workspace-quiescence.js");
   const quiescence =
     previous && !options.provision
-      ? await quiesceLocalWorkspace({
-          workspaceDir: previous.projection_path,
-          retained: parseLocalWorkspacePausedRuntimes(previous.paused_runtimes_json),
-          persist: (runtimes) =>
-            operations.rememberPaused(runtimes.length ? JSON.stringify(runtimes) : null),
-          assertCurrent,
-        })
+      ? await timeWorktreePreparationPhase("runtimeQuiesce", () =>
+          quiesceLocalWorkspace({
+            env: owner.env,
+            workspaceDir: previous.projection_path,
+            retained: parseLocalWorkspacePausedRuntimes(previous.paused_runtimes_json),
+            persist: (runtimes) =>
+              operations.rememberPaused(runtimes.length ? JSON.stringify(runtimes) : null),
+            assertCurrent,
+          }),
+        )
       : undefined;
   try {
     return await run(operations, quiescence);
@@ -220,7 +264,9 @@ async function runLocalWorkspaceProjection<T>(
       !retained.journal_json &&
       !(retained.pending_target && isLocalWorkspaceBaseRefreshRef(retained.pending_ref))
     ) {
-      await quiescence?.resume();
+      if (quiescence) {
+        await timeWorktreePreparationPhase("runtimeResume", () => quiescence.resume());
+      }
     }
   }
 }
@@ -293,20 +339,17 @@ export async function resolveLocalWorkspaceOwner(params: {
     }),
     env,
   };
-  let active = true;
+  const lifetime = new DisposableStack();
   let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
   let unregister = () => {};
-  const release = () => {
-    if (!active) {
-      return;
-    }
-    active = false;
+  lifetime.defer(() => {
     retained?.release();
     unregister();
-  };
+  });
+  const release = () => lifetime.dispose();
   const assertActive = () => {
     params.assertCurrent?.();
-    if (!active) {
+    if (lifetime.disposed) {
       throw new Error("Local sandbox workspace authority changed");
     }
   };
@@ -367,8 +410,8 @@ export async function resolveLocalWorkspaceOwner(params: {
       throw new Error("Local sandbox managed workspace owner changed");
     }
     const assertSessionCurrent = () => {
-      assertActive();
       if (!metadata) {
+        assertActive();
         if (!retained?.isCurrent()) {
           throw new Error("Local sandbox workspace authority changed");
         }

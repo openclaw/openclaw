@@ -27,6 +27,7 @@ import {
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
 import { bindGatewayLifecycleRequest } from "./server-recovery-runtime-context.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 const deleteGatewaySession = vi.hoisted(() =>
   vi.fn<typeof import("./server-methods/sessions-delete.js").deleteGatewaySession>(),
@@ -187,12 +188,7 @@ describe("hosted lifecycle Gateway dispatch", () => {
     const cleanup = () => cleanupChild(resolveContext, () => current);
     const invoke = await withOperatorToolGatewayAuthority(
       {
-        authenticatedUserProfile: {
-          profileId: "operator",
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
+        authenticatedUserProfile: gatewayProfile("operator"),
         scopes: ["operator.write"],
       },
       async () => AsyncLocalStorage.snapshot(),

@@ -1,4 +1,3 @@
-// Memory Wiki tests cover ingest plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
@@ -9,15 +8,23 @@ import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
+async function sourceFixture(filename: string, content: string) {
+  const rootDir = await createTempDir("memory-wiki-ingest-");
+  const inputPath = path.join(rootDir, filename);
+  const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+  await fs.writeFile(inputPath, content, "utf8");
+  const ingest = () =>
+    ingestMemoryWikiSource({ config, inputPath, nowMs: Date.UTC(2026, 3, 5, 12) });
+  const read = (relativePath: string) =>
+    fs.readFile(path.join(config.vault.path, relativePath), "utf8");
+  return { config, inputPath, ingest, read };
+}
 
 describe("ingestMemoryWikiSource", () => {
   it("rejects malformed source encodings without replacing the imported page", async () => {
-    const rootDir = await createTempDir("memory-wiki-ingest-encoding-");
-    const inputPath = path.join(rootDir, "notes.txt");
-    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
     const content = "\uFEFFNotes: café, 東京, 🦞\n";
-    await fs.writeFile(inputPath, content);
-    const result = await ingestMemoryWikiSource({ config, inputPath });
+    const { config, inputPath, ingest } = await sourceFixture("notes.txt", content);
+    const result = await ingest();
     const pagePath = path.join(config.vault.path, result.pagePath);
     const original = await fs.readFile(pagePath);
     expect(original.toString("utf8")).toContain(content);
@@ -29,81 +36,40 @@ describe("ingestMemoryWikiSource", () => {
       Buffer.concat([Buffer.from("valid UTF-8 café then Latin-1: "), Buffer.from([0xe9])]),
     ]) {
       await fs.writeFile(inputPath, bytes);
-      await expect(ingestMemoryWikiSource({ config, inputPath })).rejects.toThrow(/UTF-8/);
+      await expect(ingest()).rejects.toThrow(/UTF-8/);
       expect(await fs.readFile(pagePath)).toEqual(original);
       expect(await fs.readFile(inputPath)).toEqual(bytes);
     }
   });
 
   it("copies a local text file into sources markdown", async () => {
-    const rootDir = await createTempDir("memory-wiki-ingest-");
-    const inputPath = path.join(rootDir, "meeting-notes.txt");
-    await fs.writeFile(inputPath, "hello from source\n", "utf8");
-    const { config } = await createVault({
-      rootDir: path.join(rootDir, "vault"),
-    });
-
-    const result = await ingestMemoryWikiSource({
-      config,
-      inputPath,
-      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
-    });
-
-    expect(result.pageId).toBe("source.meeting-notes");
-    expect(result.pagePath).toBe("sources/meeting-notes.md");
-    expect(result.indexUpdatedFiles.length).toBeGreaterThan(0);
-    await expect(fs.readFile(path.join(config.vault.path, "sources", "meeting-notes.md"), "utf8"))
-      .resolves.toBe(`---
-pageType: source
-id: source.meeting-notes
-title: meeting notes
-sourceType: local-file
-sourcePath: ${inputPath}
-ingestedAt: 2026-04-05T12:00:00.000Z
-updatedAt: 2026-04-05T12:00:00.000Z
-status: active
----
-
-# meeting notes
-
-## Source
-- Type: \`local-file\`
-- Path: \`${inputPath}\`
-- Bytes: 18
-- Updated: 2026-04-05T12:00:00.000Z
-
-## Content
-\`\`\`text
-hello from source
-
-\`\`\`
-
-## Notes
-<!-- openclaw:human:start -->
-<!-- openclaw:human:end -->
-
-## Related
-<!-- openclaw:wiki:related:start -->
-- No related pages yet.
-<!-- openclaw:wiki:related:end -->
-`);
-    await expect(fs.readFile(path.join(config.vault.path, "index.md"), "utf8")).resolves.toContain(
-      "[meeting notes](sources/meeting-notes.md)",
+    const { inputPath, ingest, read } = await sourceFixture(
+      "meeting-notes.txt",
+      "hello from source\n",
     );
+    const result = await ingest();
+    expect(result).toMatchObject({
+      pageId: "source.meeting-notes",
+      pagePath: "sources/meeting-notes.md",
+    });
+    expect(result.indexUpdatedFiles.length).toBeGreaterThan(0);
+    await expect(read("sources/meeting-notes.md")).resolves.toBe(
+      [
+        `---\npageType: source\nid: source.meeting-notes\ntitle: meeting notes\nsourceType: local-file\nsourcePath: ${inputPath}\ningestedAt: 2026-04-05T12:00:00.000Z\nupdatedAt: 2026-04-05T12:00:00.000Z\nstatus: active\n---`,
+        "# meeting notes",
+        `## Source\n- Type: \`local-file\`\n- Path: \`${inputPath}\`\n- Bytes: 18\n- Updated: 2026-04-05T12:00:00.000Z`,
+        "## Content\n```text\nhello from source\n\n```",
+        "## Notes\n<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+        "## Related\n<!-- openclaw:wiki:related:start -->\n- No related pages yet.\n<!-- openclaw:wiki:related:end -->\n",
+      ].join("\n\n"),
+    );
+    await expect(read("index.md")).resolves.toContain("[meeting notes](sources/meeting-notes.md)");
   });
 
   it("ingests a source with many backtick runs without losing its content", async () => {
-    const rootDir = await createTempDir("memory-wiki-ingest-backticks-");
-    const inputPath = path.join(rootDir, "backticks.txt");
     const content = "`x".repeat(1_000_000) + "\n````\n";
-    await fs.writeFile(inputPath, content, "utf8");
-    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
-
-    const result = await ingestMemoryWikiSource({
-      config,
-      inputPath,
-      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
-    });
+    const { ingest, read } = await sourceFixture("backticks.txt", content);
+    const result = await ingest();
 
     expect(result).toMatchObject({
       pagePath: "sources/backticks.md",
@@ -111,22 +77,18 @@ hello from source
       created: true,
     });
     expect(result.indexUpdatedFiles.length).toBeGreaterThan(0);
-    const page = await fs.readFile(path.join(config.vault.path, result.pagePath), "utf8");
+    const page = await read(result.pagePath);
     expect(page).toContain(
       ["## Content", "`````text", content, "`````", "", "## Notes"].join("\n"),
     );
-    await expect(fs.readFile(path.join(config.vault.path, "index.md"), "utf8")).resolves.toContain(
-      "[backticks](sources/backticks.md)",
-    );
+    await expect(read("index.md")).resolves.toContain("[backticks](sources/backticks.md)");
   });
 
   it("queues behind a held vault mutation instead of writing mid-transaction", async () => {
-    const rootDir = await createTempDir("memory-wiki-ingest-lock-");
-    const inputPath = path.join(rootDir, "meeting-notes.txt");
-    await fs.writeFile(inputPath, "hello from source\n", "utf8");
-    const { config } = await createVault({
-      rootDir: path.join(rootDir, "vault"),
-    });
+    const { config, ingest: startIngest } = await sourceFixture(
+      "meeting-notes.txt",
+      "hello from source\n",
+    );
     const pagePath = path.join(config.vault.path, "sources", "meeting-notes.md");
 
     const lockEntered = deferred();
@@ -151,20 +113,13 @@ hello from source
     });
     let ingest: ReturnType<typeof ingestMemoryWikiSource> | undefined;
     try {
-      ingest = ingestMemoryWikiSource({
-        config,
-        inputPath,
-        nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
-      });
-      // On fixed code this observes ingest joining the held queue before any
-      // filesystem work. On unfixed code it observes nested compile only after
-      // the source page was already written, so the assertion fails.
+      ingest = startIngest();
+      // Pre-fix, only nested compile queued, after the source page was already written.
       await ingestQueued.promise;
       await expect(fs.access(pagePath)).rejects.toThrow();
 
       releaseLock.resolve();
-      // Completion also proves the nested compile re-enters the held vault
-      // lock reentrantly instead of deadlocking.
+      // Completion proves nested compile re-enters instead of deadlocking.
       const result = await ingest;
       await holder;
       expect(result.created).toBe(true);

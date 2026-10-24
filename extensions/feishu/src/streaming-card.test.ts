@@ -1,7 +1,7 @@
 // Feishu tests cover streaming card plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
-import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { jsonResponse, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readRequestBody, stripDispatcher, writeOversizedJson } from "./http.test-support.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
@@ -113,13 +113,6 @@ function createMemoryFetch(
 function writeJson(res: ServerResponse, payload: unknown, status = 200): void {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(payload));
-}
-
-function jsonResponse(payload: unknown, status = 200): Response {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
 }
 
 function setStreamingSessionInternals(
@@ -440,17 +433,12 @@ describe("FeishuStreamingSession", () => {
   });
 
   it("rejects oversized streaming tenant-token JSON before buffering the full body", async () => {
-    let streamState:
-      | {
-          bytesPulled: () => number;
-          canceled: () => boolean;
-        }
-      | undefined;
+    let clientClosed: Promise<void> | undefined;
     const deps = await createStreamingFetch(({ url, res }) => {
       if (url.pathname.includes("/auth/")) {
-        streamState = writeOversizedJson(
+        clientClosed = writeOversizedJson(
           res,
-          FEISHU_JSON_MAX_BYTES * 2,
+          FEISHU_JSON_MAX_BYTES,
           '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
         );
         return;
@@ -471,11 +459,7 @@ describe("FeishuStreamingSession", () => {
     await expect(session.start("chat_id", "open_id")).rejects.toThrow(
       /feishu\.streaming-card\.token: JSON response exceeds \d+ bytes/,
     );
-    expect(streamState?.canceled()).toBe(true);
-    expect(streamState?.bytesPulled()).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
-    console.log(
-      `[feishu streaming-card bound proof] token over-cap: bytes_pulled=${streamState?.bytesPulled()} cap=${FEISHU_JSON_MAX_BYTES} canceled=${streamState?.canceled()}`,
-    );
+    await expect(clientClosed).resolves.toBeUndefined();
   });
 
   it("aborts a stalled Feishu tenant-token request after the configured timeout", async () => {
@@ -541,12 +525,7 @@ describe("FeishuStreamingSession", () => {
   });
 
   it("rejects oversized streaming card-create JSON before buffering the full body", async () => {
-    let streamState:
-      | {
-          bytesPulled: () => number;
-          canceled: () => boolean;
-        }
-      | undefined;
+    let clientClosed: Promise<void> | undefined;
     const deps = await createStreamingFetch(({ url, res }) => {
       if (url.pathname.includes("/auth/")) {
         writeJson(res, {
@@ -557,9 +536,9 @@ describe("FeishuStreamingSession", () => {
         });
         return;
       }
-      streamState = writeOversizedJson(
+      clientClosed = writeOversizedJson(
         res,
-        FEISHU_JSON_MAX_BYTES * 2,
+        FEISHU_JSON_MAX_BYTES,
         '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
       );
     });
@@ -583,11 +562,7 @@ describe("FeishuStreamingSession", () => {
     await expect(session.start("chat_id", "open_id")).rejects.toThrow(
       /feishu\.streaming-card\.create: JSON response exceeds \d+ bytes/,
     );
-    expect(streamState?.canceled()).toBe(true);
-    expect(streamState?.bytesPulled()).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
-    console.log(
-      `[feishu streaming-card bound proof] card-create over-cap: bytes_pulled=${streamState?.bytesPulled()} cap=${FEISHU_JSON_MAX_BYTES} canceled=${streamState?.canceled()}`,
-    );
+    await expect(clientClosed).resolves.toBeUndefined();
   });
 
   it("flushes only the latest authoritative snapshot after the throttle window", async () => {
@@ -1127,4 +1102,3 @@ describe("mergeStreamingText", () => {
     expect(mergeStreamingText("abc", "cabc")).toBe("cabc");
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

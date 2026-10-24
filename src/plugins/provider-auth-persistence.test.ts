@@ -76,6 +76,11 @@ describe("provider auth protected persistence", () => {
 
   const readSecret = (name: string, env: NodeJS.ProcessEnv) =>
     readSecretStoreValue({ scope: { kind: "team" }, name, database: { env } });
+  const listSecrets = (env: NodeJS.ProcessEnv) =>
+    listSecretStoreEntries({ scope: { kind: "team" }, database: { env } });
+  async function expectSecret(name: string, env: NodeJS.ProcessEnv, value: string) {
+    expect(await readSecret(name, env)).toEqual({ ok: true, value });
+  }
   const readStore = (agentDir: string) =>
     ensureAuthProfileStore(agentDir, { readOnly: true, syncExternalCli: false });
   const expectedProtectedProfile = (provider: string, prefix: string) => ({
@@ -166,9 +171,7 @@ describe("provider auth protected persistence", () => {
           error === revoked || (error instanceof Error && error.cause === revoked),
       );
       expect(readStore(agentDir).profiles["openai:revoked"]).toBeUndefined();
-      expect(await listSecretStoreEntries({ scope: { kind: "team" }, database: { env } })).toEqual(
-        [],
-      );
+      expect(await listSecrets(env)).toEqual([]);
     });
   });
 
@@ -203,10 +206,7 @@ describe("provider auth protected persistence", () => {
       if (!profile || profile.type !== "token" || !profile.tokenRef) {
         throw new Error("Expected persisted Copilot tokenRef");
       }
-      expect(await readSecret(profile.tokenRef.id, env)).toEqual({
-        ok: true,
-        value: "synthetic-device-token",
-      });
+      await expectSecret(profile.tokenRef.id, env, "synthetic-device-token");
 
       const audit = await runSecretsAudit({ env });
       expect(
@@ -277,8 +277,6 @@ describe("provider auth protected persistence", () => {
   it("reports unconfirmed protected rollback after a policy-only owner change", async () => {
     const fixture = persistenceFixture("openclaw-provider-auth-policy-rollback-");
     const { stateDir, env } = fixture;
-    const database = { env };
-
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       await fixture.persist("baseline-c");
       const staged = await fixture.stage("candidate-a");
@@ -288,22 +286,12 @@ describe("provider auth protected persistence", () => {
       expect(rollbackError).toBeInstanceOf(AggregateError);
       await expect(staged.rollback()).rejects.toBe(rollbackError);
       await expect(staged.commit()).rejects.toBe(rollbackError);
-      expect(await readSecret(name, env)).toEqual({
-        ok: true,
-        value: "candidate-a",
-      });
-      expect(
-        (await listSecretStoreEntries({ scope: { kind: "team" }, database }))[0],
-      ).toMatchObject({
-        allowedHosts: ["api.example.test"],
-      });
+      await expectSecret(name, env, "candidate-a");
+      expect((await listSecrets(env))[0]).toMatchObject({ allowedHosts: ["api.example.test"] });
 
       const successor = await fixture.stage("candidate-b");
       await successor.commit();
-      expect(await readSecret(name, env)).toEqual({
-        ok: true,
-        value: "candidate-b",
-      });
+      await expectSecret(name, env, "candidate-b");
     });
   });
 

@@ -9,6 +9,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
+import { withFeishuRuntimeDefaults } from "../bot.test-support.js";
 import { getFeishuLifecycleTestMocks } from "../lifecycle.test-support.js";
 import { createFeishuTestIngressQueue } from "../monitor.test-mocks.js";
 import { getFeishuRuntime, setFeishuRuntime } from "../runtime.js";
@@ -170,7 +171,7 @@ const lifecycleAccountDefaults = { ...lifecycleDefaults, connectionMode: "websoc
 
 export function createFeishuLifecycleConfig(params: LifecycleConfigParams): ClawdbotConfig {
   const extraConfig = params.extraConfig ?? {};
-  return {
+  return withFeishuRuntimeDefaults({
     ...extraConfig,
     channels: {
       ...(extraConfig.channels as Record<string, unknown> | undefined),
@@ -188,7 +189,7 @@ export function createFeishuLifecycleConfig(params: LifecycleConfigParams): Claw
       },
     },
     messages: { inbound: { debounceMs: 0, byChannel: { feishu: 0 } } },
-  } as ClawdbotConfig;
+  } as ClawdbotConfig);
 }
 
 export function createFeishuLifecycleFixture(params: LifecycleConfigParams) {
@@ -208,13 +209,14 @@ export function createResolvedFeishuLifecycleAccount(
 ): ResolvedFeishuAccount {
   return {
     accountId: params.accountId,
-    selectionSource: "config",
     enabled: true,
     configured: true,
     appId: params.appId,
     appSecret: params.appSecret, // pragma: allowlist secret
     domain: "feishu",
-    config: { ...lifecycleAccountDefaults, ...params.config },
+    config: withFeishuRuntimeDefaults({
+      channels: { feishu: { ...lifecycleAccountDefaults, ...params.config } },
+    }).channels?.feishu,
   } as unknown as ResolvedFeishuAccount;
 }
 

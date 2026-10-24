@@ -89,42 +89,30 @@ it.each([
       }
       releaseProvider.resolve();
       const result = await compaction;
-      const appended = sessionManager
-        .getEntries()
-        .filter((entry) => entry.type === "compaction")
-        .map(({ summary: text, fromHook, details }) => ({
-          summary: text,
-          fromHook,
-          qualityDegraded: (details as { qualityDegraded?: true } | undefined)?.qualityDegraded,
-        }));
-
+      const appended = sessionManager.getEntries().filter((entry) => entry.type === "compaction");
+      expect.soft(summarize).toHaveBeenCalledOnce();
       expect
-        .soft({
-          providerCalls: summarize.mock.calls.length,
-          callerAbortedAtProviderEntry,
-          callerAborted: callerSignal?.aborted,
-          result,
-          outcomes: compactionEnds.map((event) => event.outcome.status),
-          appended,
-        })
-        .toMatchObject({
-          providerCalls: 1,
-          callerAbortedAtProviderEntry: false,
-          callerAborted: cancelCaller,
-          result: !cancelCaller
-            ? { status: "resolved", summary: expect.stringContaining(summary) }
-            : { status: "rejected" },
-          outcomes: [cancelCaller ? "aborted" : "completed"],
-          appended: cancelCaller
-            ? []
-            : [
-                {
-                  summary: expect.stringContaining(summary),
-                  fromHook: true,
-                  qualityDegraded: outcome === "degraded" ? true : undefined,
-                },
-              ],
-        });
+        .soft([callerAbortedAtProviderEntry, callerSignal?.aborted])
+        .toEqual([false, cancelCaller]);
+      expect
+        .soft(result)
+        .toMatchObject(
+          cancelCaller
+            ? { status: "rejected" }
+            : { status: "resolved", summary: expect.stringContaining(summary) },
+        );
+      expect
+        .soft(compactionEnds.map((event) => event.outcome.status))
+        .toEqual([cancelCaller ? "aborted" : "completed"]);
+      expect.soft(appended).toHaveLength(cancelCaller ? 0 : 1);
+      if (!cancelCaller) {
+        expect
+          .soft(appended[0])
+          .toMatchObject({ summary: expect.stringContaining(summary), fromHook: true });
+        expect
+          .soft((appended[0]?.details as { qualityDegraded?: true } | undefined)?.qualityDegraded)
+          .toBe(outcome === "degraded" ? true : undefined);
+      }
       expect(subscription.getUsageTotals()?.total ?? 0).toBe(
         streamMocks.streamSimple.mock.calls.length * 2,
       );

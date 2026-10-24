@@ -73,13 +73,17 @@ describe("doctor SQLite session transcript header repair", () => {
   async function seedTranscript(
     events: readonly unknown[],
     options: { spawnedCwd?: string } = { spawnedCwd: SPAWNED_CWD },
-  ): Promise<void> {
-    await upsertSessionEntryCore(scope, {
+  ) {
+    const entry = await upsertSessionEntryCore(scope, {
       sessionId: SESSION_ID,
       ...(options.spawnedCwd ? { spawnedCwd: options.spawnedCwd } : {}),
       updatedAt: 10,
     });
+    if (!entry) {
+      throw new Error("Failed to seed session entry");
+    }
     expect(replaceTranscriptEventsSync(scope, [...events])).toBe(true);
+    return entry;
   }
 
   it("repairs headerless history with legacy projection and unchanged event bytes", async () => {
@@ -422,7 +426,7 @@ describe("doctor SQLite session transcript header repair", () => {
   });
 
   it("does not borrow the spawned cwd from a newer session on the same key", async () => {
-    await seedTranscript([
+    const seededEntry = await seedTranscript([
       {
         type: "message",
         id: "user-1",
@@ -439,7 +443,11 @@ describe("doctor SQLite session transcript header repair", () => {
         )
         .run(
           "newer-session",
-          JSON.stringify({ sessionId: "newer-session", spawnedCwd: "/workspace/newer" }),
+          JSON.stringify({
+            sessionId: "newer-session",
+            updatedAt: seededEntry.updatedAt,
+            spawnedCwd: "/workspace/newer",
+          }),
           SESSION_KEY,
         );
     }, databaseOptions);

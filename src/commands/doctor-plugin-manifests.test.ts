@@ -37,13 +37,11 @@ async function createManifestFixture(
     params: {
       config: { plugins: { load: { paths: [pluginsRoot] } } } satisfies OpenClawConfig,
       env: { ...process.env },
-      manifestRoots: [pluginsRoot],
       runtime,
       prompter: {
         ...createDoctorPrompter({ runtime, options: {} }),
         confirmAutoFix: vi.fn().mockResolvedValue(true),
       },
-      note: vi.fn(),
     },
   };
 }
@@ -76,6 +74,8 @@ describe("doctor plugin manifest legacy contract repair", () => {
     expect(legacyPluginManifestContractMigrationToHealthFinding(migration)).toStrictEqual({
       checkId: "core/doctor/legacy-plugin-manifests",
       severity: "warning",
+      category: "fix-now",
+      docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
       message: "Plugin manifest openai uses legacy top-level capability keys.",
       path: path.join(root, "openclaw.plugin.json"),
       target: "openai",
@@ -131,6 +131,41 @@ describe("doctor plugin manifest legacy contract repair", () => {
     expect(next.tools).toBeUndefined();
     expect(next.contracts).toEqual({
       tools: ["contract_tool"],
+    });
+  });
+
+  it("preserves undecodable manifests while migrating valid neighbors", async () => {
+    const { root, params } = await createManifestFixture("invalid-utf8", {
+      id: "invalid-utf8",
+      name: "Invalid byte: X",
+      tools: ["legacy_tool"],
+    });
+    const manifestPath = path.join(root, "openclaw.plugin.json");
+    const original = fs.readFileSync(manifestPath);
+    original[original.indexOf("X")] = 0xff;
+    fs.writeFileSync(manifestPath, original);
+
+    const neighbor = path.join(path.dirname(root), "valid-utf8");
+    fs.cpSync(root, neighbor, { recursive: true });
+    writeJson(neighbor, "openclaw.plugin.json", {
+      id: "valid-utf8",
+      name: "Valid replacement character: \ufffd",
+      configSchema: { type: "object" },
+      tools: ["valid_tool"],
+    });
+
+    expect(await maybeRepairLegacyPluginManifestContracts(params)).toBe(true);
+    expect(fs.readFileSync(manifestPath)).toEqual(original);
+    const warning = params.runtime.error.mock.calls.flat().join(" ");
+    expect(warning).toContain("UTF-8");
+    expect(warning).toContain(manifestPath);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(neighbor, "openclaw.plugin.json"), "utf-8")),
+    ).toEqual({
+      id: "valid-utf8",
+      name: "Valid replacement character: \ufffd",
+      configSchema: { type: "object" },
+      contracts: { tools: ["valid_tool"] },
     });
   });
 

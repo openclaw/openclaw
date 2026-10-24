@@ -37,6 +37,7 @@ import {
   TEST_WORKER_SOURCE,
   testNodeWorkerEnvironmentIdentity,
   testNodeWorkerLaunchIdentity,
+  testIsolatedWorkerLaunchInput as launchInput,
   testWorkerLaunchInput,
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
@@ -56,13 +57,6 @@ afterEach(() => {
 
 function supervisorFixture(options: Parameters<typeof createNodeWorkerSupervisor>[0] = {}) {
   return createNodeWorkerSupervisorFixture(tempDirs.make("node-worker-supervisor-"), options);
-}
-
-function launchInput(workspaceDir: string, launchId: string, prompt = "success") {
-  const input = testWorkerLaunchInput(workspaceDir, launchId, prompt);
-  input.descriptor.admission.environmentId = `environment-${launchId}`;
-  input.descriptor.admission.sessionId = `session-${launchId}`;
-  return input;
 }
 
 function readStarted(workspaceDir: string, launchId: string): { pid: number; starts: number } {
@@ -197,7 +191,6 @@ describe("node worker environment lifetime", () => {
     const capacitySnapshots: Array<{ total: number; available: number }> = [];
     const { env, supervisor, workspaceDir } = supervisorFixture({
       capacity: 1,
-      capacityWaitMs: 25,
       onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
     });
     const first = testWorkerLaunchInput(workspaceDir, "preview-start", "background-start");

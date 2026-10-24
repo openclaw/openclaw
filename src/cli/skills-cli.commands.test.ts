@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Chalk } from "chalk";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveConfiguredAgentId,
   type AgentSelectionContext,
@@ -63,14 +65,12 @@ vi.mock("../utils.js", async (importOriginal) => ({
   CONFIG_DIR: "/tmp/openclaw-config",
 }));
 // mock-isolation: Skill command fixtures own workspace selection and config without host state.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.config,
-  loadConfig: mocks.config,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.config>) =>
-    async () =>
-      mocks.config(...args),
-}));
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "config"),
+  };
+});
 // mock-isolation: Skill CLI fixtures own agent and workspace selection without host configuration.
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
@@ -422,6 +422,29 @@ describe("skills cli commands", () => {
     expect(errors).toEqual([]);
     expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
   });
+  it("renders sanitized colored skill names with normalized and fallback emoji", async () => {
+    setTty(false);
+    vi.stubEnv("TERM", "dumb");
+    const baseSkill = mocks.report.skills[0]!;
+    mocks.gateway.mockResolvedValue({
+      ...mocks.report,
+      skills: [
+        { ...baseSkill, name: "\u001b[31mcalendar\u001b[0m\u009f", emoji: "🎛\uFE0E" },
+        { ...baseSkill, name: "plain", emoji: undefined },
+      ],
+    });
+    const style = vi.spyOn(theme, "command").mockImplementation(new Chalk({ level: 1 }).cyan);
+    try {
+      await run("list");
+      expect(stdout).toHaveLength(1);
+      expect(stdout[0]).toContain("🎛\uFE0F \u001b[36mcalendar\u001b[39m");
+      expect(stdout[0]).toContain("\u001b[36mplain\u001b[39m");
+      expect(stdout[0]).not.toContain("\u009f");
+      expect(stdout[0]).not.toContain("📦");
+    } finally {
+      style.mockRestore();
+    }
+  });
   it.each([
     ["weather", "skills.entries.weather.apiKey"],
     ["acme.weather", `'skills.entries["acme.weather"].apiKey'`],
@@ -527,6 +550,18 @@ describe("skills cli commands", () => {
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
     ]);
     expect(mocks.workspace).not.toHaveBeenCalled();
+  });
+  it("canonicalizes a mixed-case --agent before selecting the configured agent", async () => {
+    mocks.explicitAgent.mockImplementation((_config, agent) =>
+      resolveConfiguredAgentId({ agents: { entries: { main: {}, writer: {} } } }, agent),
+    );
+    mocks.gateway.mockResolvedValue(mocks.report);
+    await run(["check", "--agent", " Writer ", "--json"]);
+    expect(errors).toEqual([]);
+    expect(mocks.explicitAgent).toHaveBeenCalledWith({}, "writer");
+    expect(mocks.gateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "skills.status", params: { agentId: "writer" } }),
+    );
   });
   it("redacts secrets from rendered skills CLI errors", async () => {
     const secret = "sk-abcdefghijklmnopqrstuv";

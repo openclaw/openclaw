@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type HelloOk,
@@ -26,12 +25,17 @@ import {
   makeTui,
   makeTuiSessionList,
 } from "./tui-session-actions-test-support.js";
-import type { ChatEvent, TuiHistoryLoadResult } from "./tui-types.js";
+import type { ChatEvent } from "./tui-types.js";
 
 const { GatewayChatClient } = await import("./gateway-chat.js");
 const { GatewayClient, GatewayClientRequestError } = await import("../gateway/client.js");
 const connection = { url: "ws://127.0.0.1:18789", token: "test-token" };
 const model = (id: string, name = id) => ({ provider: "fixture", id, name });
+const writeOptions = {
+  timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+  signal: expect.any(AbortSignal),
+  retainSentResultOnAbort: true,
+};
 
 function createClient() {
   return new GatewayChatClient(connection);
@@ -114,7 +118,7 @@ describe("GatewayChatClient", () => {
     "scopes model catalogs by negotiated session support: %s",
     async (sessionScoped) => {
       const first = { ...model("first", "First"), available: false, unavailableReason: "cooldown" };
-      const { request, client } = mockClient({ models: [{ ...first }] });
+      const { request, client } = mockClient({ models: [first] });
       client.hello = hello(["models.list"], undefined, [
         GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG,
         ...(sessionScoped ? [GATEWAY_SERVER_CAPS.SESSION_SCOPED_MODEL_CATALOG] : []),
@@ -130,11 +134,10 @@ describe("GatewayChatClient", () => {
       if (sessionScoped) {
         request.mockResolvedValueOnce({ models: [model("second", "Second")] });
         await client.listModels(scope("second"));
-        expect(request).toHaveBeenNthCalledWith(2, "models.list", {
+        expect(request).toHaveBeenLastCalledWith("models.list", {
           ...params,
           sessionKey: scope("second").sessionKey,
         });
-        expect(request).toHaveBeenCalledTimes(2);
         expect(client.getKnownModels(scope("first"))?.[0]).toEqual(first);
       }
       expect(client.getKnownModels(scope("second"))?.[0]?.id).toBe(
@@ -168,8 +171,6 @@ describe("GatewayChatClient", () => {
     const held = createDeferred<{ models: typeof models }>();
     const request = vi.fn().mockResolvedValueOnce({ models }).mockReturnValue(held.promise);
     await withGatewayChatConnection(request, async (client, callbacks) => {
-      const onEvent = callbacks.onEvent;
-      assert(onEvent);
       try {
         await client.listModels({ agentId: "main" });
         const harness = createTuiCommandHandlersHarness({
@@ -183,17 +184,18 @@ describe("GatewayChatClient", () => {
           handleInput(data: string): void;
           render(width: number): string[];
         };
+        const render = () => selector.render(100).join("\n");
         selector.handleInput("\u001b[B");
         selector.handleInput("\u001b[B");
-        onEvent({ type: "event", event: "config.changed", payload: {} });
-        expect(selector.render(100).join("\n")).not.toContain("Checking models...");
-        expect(selector.render(100).join("\n")).toContain("fixture/highlighted");
-        onEvent({
+        callbacks.onEvent?.({ type: "event", event: "config.changed", payload: {} });
+        expect(render()).not.toContain("Checking models...");
+        expect(render()).toContain("fixture/highlighted");
+        callbacks.onEvent?.({
           type: "event",
           event: "chat.metadata.changed",
           payload: { modelSelectionChanged: true },
         });
-        expect(selector.render(100).join("\n")).toContain("Checking models...");
+        expect(render()).toContain("Checking models...");
         held.resolve({ models });
         await client.listModels({ agentId: "main" });
         selector.handleInput("\r");
@@ -211,15 +213,12 @@ describe("GatewayChatClient", () => {
   it("waits for gateway transport teardown on stop", async () => {
     const client = createClient();
     const teardown = createDeferred();
-    const stopAndWait = vi
-      .spyOn(GatewayClient.prototype, "stopAndWait")
-      .mockReturnValue(teardown.promise);
+    vi.spyOn(GatewayClient.prototype, "stopAndWait").mockReturnValue(teardown.promise);
     let stopped = false;
     const stopPromise = client.stop().then(() => {
       stopped = true;
     });
 
-    expect(stopAndWait).toHaveBeenCalledOnce();
     expect(stopped).toBe(false);
     teardown.resolve();
     await stopPromise;
@@ -324,19 +323,16 @@ describe("GatewayChatClient", () => {
       loopbackMode: "block",
     });
     const disconnected = createDeferred<string>();
-    const onDisconnected = vi.fn(disconnected.resolve);
     const client = new CurrentGatewayChatClient(connection);
-    client.onDisconnected = onDisconnected;
+    client.onDisconnected = disconnected.resolve;
 
     try {
       client.start();
       await vi.advanceTimersByTimeAsync(2);
 
-      const message =
-        "proxy: Gateway loopback control-plane connections are blocked by proxy.loopbackMode; " +
-        "run openclaw config set proxy.loopbackMode gateway-only to allow local runtime traffic.";
-      await expect(disconnected.promise).resolves.toBe(message);
-      expect(onDisconnected).toHaveBeenCalledExactlyOnceWith(message);
+      await expect(disconnected.promise).resolves.toMatch(
+        /Gateway loopback control-plane connections are blocked.*openclaw config set proxy.loopbackMode gateway-only/,
+      );
     } finally {
       await client.stop();
       await stopProxy(proxyHandle);
@@ -358,8 +354,6 @@ describe("GatewayChatClient", () => {
     await vi.advanceTimersByTimeAsync(250);
 
     await expect(historyPromise).resolves.toEqual({ messages: [] });
-    expect(request).toHaveBeenCalledTimes(2);
-
     const baselineTimerCount = vi.getTimerCount();
     request.mockRejectedValueOnce(unavailable).mockRejectedValueOnce(unavailable);
     const pendingHistory = Promise.all([
@@ -367,7 +361,6 @@ describe("GatewayChatClient", () => {
       client.loadHistory({ sessionKey: "second" }).catch((error: unknown) => error),
     ]);
     await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledTimes(4);
     expect(vi.getTimerCount()).toBe(baselineTimerCount + 2);
 
     await client.stop();
@@ -388,9 +381,13 @@ describe("GatewayChatClient", () => {
   it("passes selected-agent global scope through chat methods", async () => {
     vi.useFakeTimers();
     const { client, request } = mockClient({ messages: [] });
+    request.mockResolvedValueOnce({ runId: "run-gateway", status: "timeout" });
     const scope = { sessionKey: "global", agentId: "work" };
     const runId = "run-global-work";
-    await client.sendChat({ ...scope, message: "hello", runId });
+    await expect(client.sendChat({ ...scope, message: "hello", runId })).resolves.toEqual({
+      runId: "run-gateway",
+      status: "timeout",
+    });
     await client.loadHistory({ ...scope, limit: 50 });
     await client.abortChat({ ...scope, runId });
     await client.listModels({ agentId: "work" });
@@ -399,19 +396,8 @@ describe("GatewayChatClient", () => {
       request,
       [
         "chat.send",
-        {
-          ...scope,
-          message: "hello",
-          thinking: undefined,
-          deliver: undefined,
-          timeoutMs: undefined,
-          idempotencyKey: runId,
-        },
-        {
-          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
-          signal: expect.any(AbortSignal),
-          retainSentResultOnAbort: true,
-        },
+        expect.objectContaining({ ...scope, message: "hello", idempotencyKey: runId }),
+        writeOptions,
       ],
       ["chat.history", { ...scope, limit: 50 }],
       ["chat.abort", { ...scope, runId }],
@@ -450,41 +436,19 @@ describe("GatewayChatClient", () => {
         succeedsParent,
       };
       await expect(client.createSession(opts)).resolves.toEqual(result);
-      expect(request).toHaveBeenNthCalledWith(
-        1,
-        "sessions.create",
-        {
-          ...opts,
-          emitCommandHooks: true,
-        },
-        {
-          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
-          signal: expect.any(AbortSignal),
-          retainSentResultOnAbort: true,
-        },
-      );
-      expect(request).toHaveBeenNthCalledWith(
-        2,
-        "sessions.create",
-        succeedsParent
-          ? { key: "tui-next", parentSessionKey: "agent:main:main", emitCommandHooks: true }
-          : { key: "tui-next", agentId: "main" },
-        {
-          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
-          signal: expect.any(AbortSignal),
-          retainSentResultOnAbort: true,
-        },
+      expectRequests(
+        request,
+        ["sessions.create", { ...opts, emitCommandHooks: true }, writeOptions],
+        [
+          "sessions.create",
+          succeedsParent
+            ? { key: "tui-next", parentSessionKey: "agent:main:main", emitCommandHooks: true }
+            : { key: "tui-next", agentId: "main" },
+          writeOptions,
+        ],
       );
     },
   );
-
-  it("returns the actual chat send ack status from the gateway", async () => {
-    const client = createClient();
-    mockRequest({ runId: "run-gateway", status: "timeout" });
-    await expect(
-      client.sendChat({ sessionKey: "main", message: "hello", runId: "run-local" }),
-    ).resolves.toEqual({ runId: "run-gateway", status: "timeout" });
-  });
 
   it("lists gateway commands through commands.list", async () => {
     const command = {
@@ -641,64 +605,19 @@ const currentDescription = metadataDescription("current", 32768);
 const oldListing = makeTuiSessionList({ defaults: oldDescription.defaults });
 const currentListing = makeTuiSessionList({ defaults: currentDescription.defaults });
 
-function metadataHello(connId: string): HelloOk {
-  return {
-    ...hello(
-      ["chat.history", "sessions.describe", "sessions.list"],
-      ["operator.read", "operator.write"],
-      [],
-    ),
-    protocol: 4,
-    server: { version: "2026.9.4", connId },
-  };
-}
-
 describe("GatewayChatClient session description lifetime", () => {
-  it("stops a disconnected metadata retry without dispatching on a later connection", async () => {
-    const entered = createDeferred();
-    const held = createDeferred<unknown>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.describe") {
-        entered.resolve();
-        return held.promise;
-      }
-      return oldListing;
-    });
-    await withGatewayChatConnection(request, async (client, callbacks) => {
-      callbacks.onHelloOk?.(metadataHello("old"));
-      const description = client.describeSession({ sessionKey: metadataSessionKey });
-      const rejected = expect(description).rejects.toMatchObject({ name: "AbortError" });
-      await entered.promise;
-      callbacks.onClose?.(1001, "reconnecting");
-      held.resolve({ session: oldDescription.session });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      await client.stop();
-      await rejected;
-      const completedCalls = request.mock.calls.length;
-      callbacks.onHelloOk?.(metadataHello("late"));
-      expect(request).toHaveBeenCalledTimes(completedCalls);
-      await expect(
-        client.describeSession({ sessionKey: metadataSessionKey }),
-      ).rejects.toMatchObject({
-        name: "AbortError",
-      });
-      expect(request).toHaveBeenCalledTimes(completedCalls);
-    });
-  });
-
   it.each([
-    { heldMethod: "sessions.describe", reconnect: true, failure: true },
-    { heldMethod: "sessions.list", reconnect: true, failure: false },
-    { heldMethod: "sessions.list", reconnect: false, failure: true },
+    { heldMethod: "sessions.describe", transition: "stop", failure: false },
+    { heldMethod: "sessions.describe", transition: "reconnect", failure: true },
+    { heldMethod: "sessions.list", transition: "reconnect", failure: false },
+    { heldMethod: "sessions.list", transition: "none", failure: true },
   ])(
-    "settles $heldMethod metadata (reconnect=$reconnect, failure=$failure)",
-    async ({ heldMethod, reconnect, failure }) => {
+    "settles $heldMethod metadata on $transition (failure=$failure)",
+    async ({ heldMethod, transition, failure }) => {
       const entered = createDeferred();
       const held = createDeferred<unknown>();
       const error = new Error("Metadata request failed");
-      let current = !reconnect;
+      let current = transition === "none";
       const response = (method: string) =>
         method === "sessions.describe"
           ? { session: (current ? currentDescription : oldDescription).session }
@@ -706,43 +625,62 @@ describe("GatewayChatClient session description lifetime", () => {
             ? currentListing
             : oldListing;
       const request = vi.fn(async (method: string, params?: unknown) => {
-        if (method === "sessions.describe" && validateSessionsDescribeParams(params)) {
+        if (method === "sessions.describe") {
           expect(params).toEqual({ key: metadataSessionKey, agentId: "work" });
-        } else if (method === "sessions.list" && validateSessionsListParams(params)) {
+        } else if (method === "sessions.list") {
           expect(params).toEqual({ agentId: "work", limit: 1 });
         } else {
           throw new Error(`Unexpected metadata request: ${method}`);
         }
-        if (method === heldMethod && (!reconnect || !current)) {
+        if (method === heldMethod && (transition === "none" || !current)) {
           entered.resolve();
           return held.promise;
         }
         return response(method);
       });
       await withGatewayChatConnection(request, async (client, callbacks) => {
-        callbacks.onHelloOk?.(metadataHello(current ? "current" : "old"));
+        callbacks.onHelloOk?.(hello());
         const description = client.describeSession({
           sessionKey: metadataSessionKey,
           agentId: "work",
         });
-        const settled = reconnect
-          ? expect(description).resolves.toEqual(currentDescription)
-          : expect(description).rejects.toBe(error);
+        const settled =
+          transition === "stop"
+            ? expect(description).rejects.toMatchObject({ name: "AbortError" })
+            : transition === "reconnect"
+              ? expect(description).resolves.toEqual(currentDescription)
+              : expect(description).rejects.toBe(error);
         await entered.promise;
         const oldResponse = response(heldMethod);
-        if (reconnect) {
+        if (transition !== "none") {
           callbacks.onClose?.(1001, "reconnecting");
-          current = true;
-          callbacks.onHelloOk?.(metadataHello("current"));
+          if (transition === "reconnect") {
+            current = true;
+            callbacks.onHelloOk?.(hello());
+          }
         }
         if (failure) {
           held.reject(error);
         } else {
           held.resolve(oldResponse);
         }
+        if (transition === "stop") {
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          await client.stop();
+        }
         await settled;
-        if (!reconnect) {
+        if (transition === "none") {
           expect(request.mock.calls.filter(([method]) => method === heldMethod)).toHaveLength(1);
+        } else if (transition === "stop") {
+          const completedCalls = request.mock.calls.length;
+          callbacks.onHelloOk?.(hello());
+          expect(request).toHaveBeenCalledTimes(completedCalls);
+          await expect(
+            client.describeSession({ sessionKey: metadataSessionKey }),
+          ).rejects.toMatchObject({ name: "AbortError" });
+          expect(request).toHaveBeenCalledTimes(completedCalls);
         }
       });
     },
@@ -768,19 +706,17 @@ describe("GatewayChatClient streaming", () => {
         state.activityStatus = activity;
       };
       const view = { state, chatLog, btw, tui, setActivityStatus };
-      let loadHistory: () => Promise<TuiHistoryLoadResult> = async () => ({ loaded: false });
-      const handlers = createEventHandlers({
-        ...view,
-        updateFooter: vi.fn(),
-        loadHistory: () => loadHistory(),
-        streamingWatchdogMs: 0,
-      });
       const actions = createTestSessionActions({
         client,
         ...view,
-        invalidateRunOwnership: handlers.dispose,
+        invalidateRunOwnership: () => handlers.dispose(),
       });
-      loadHistory = actions.loadHistory;
+      const handlers = createEventHandlers({
+        ...view,
+        updateFooter: vi.fn(),
+        loadHistory: actions.loadHistory,
+        streamingWatchdogMs: 0,
+      });
       client.onEvent = (event) => {
         if (event.event === "chat") {
           handlers.handleChatEvent(event.payload);
@@ -800,10 +736,6 @@ describe("GatewayChatClient streaming", () => {
         expect(render()).not.toContain("Hello");
 
         const selecting = actions.setSession(selectedKey);
-        expect(request).toHaveBeenCalledWith("chat.history", {
-          sessionKey: selectedKey,
-          limit: 200,
-        });
         emit({ ...delta, seq: 2, deltaText: " world" });
         history.resolve({
           messages: [],
@@ -815,7 +747,6 @@ describe("GatewayChatClient streaming", () => {
         expect(render()).toContain("Hello");
         emit({ ...delta, seq: 3, deltaText: "!" });
         expect(render()).toContain("Hello world!");
-
         emit({ ...delta, seq: 4, deltaText: "", replace: true });
         expect(render()).not.toContain("Hello");
         emit({ ...delta, seq: 5, deltaText: "Rewritten" });

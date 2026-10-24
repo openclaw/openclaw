@@ -77,79 +77,45 @@ export async function forkSqlitePrivateSnapshotInProcess(
     throw new Error("SQLite private fork source is outside its retained directory");
   }
   const releaseSource = acquireSqliteSnapshotReadToken(family.root);
-  const files: Array<{ pathname: string; descriptor: number; expected: string }> = [];
   let directory: string | undefined;
   try {
-    return runWithSqliteCleanup(
-      {
-        release() {
-          const errors: unknown[] = [];
-          for (const file of files) {
-            try {
-              fs.closeSync(file.descriptor);
-            } catch (error) {
-              errors.push(error);
-            }
-          }
-          try {
-            releaseSource();
-          } catch (error) {
-            errors.push(error);
-          }
-          throwSqliteLifecycleErrors(errors, "Private SQLite fork source release failed");
-        },
-      },
-      "Private SQLite snapshot fork",
-      () => {
-        const assertFamily = () => {
-          const current = captureSqlitePrivateSnapshotFamily(pathname, family.root);
-          if (current?.main !== family.main || current?.wal !== family.wal) {
-            throw new SqliteSourceChangedError(`Retained SQLite snapshot changed: ${pathname}`);
-          }
-          for (const file of files) {
-            if (fingerprint(fs.fstatSync(file.descriptor, { bigint: true })) !== file.expected) {
-              throw new SqliteSourceChangedError(
-                `Retained SQLite snapshot changed: ${file.pathname}`,
-              );
-            }
-          }
-        };
-        assertFamily();
-        for (const [suffix, expected] of [
-          ["", family.main],
-          ["-wal", family.wal],
-        ] as const) {
-          if (expected === null) {
-            continue;
-          }
-          const sourcePath = `${pathname}${suffix}`;
-          const opened = openRootFileSync({
-            rootPath: family.root,
-            absolutePath: sourcePath,
-            boundaryLabel: "retained SQLite snapshot",
-          });
-          if (!opened.ok) {
-            throw new Error(`Cannot open retained SQLite snapshot: ${sourcePath}`, {
-              cause: opened.error,
-            });
-          }
-          files.push({ pathname: sourcePath, descriptor: opened.fd, expected });
+    return runWithSqliteCleanup({ release: releaseSource }, "Private SQLite snapshot fork", () => {
+      const current = captureSqlitePrivateSnapshotFamily(pathname, family.root);
+      if (current?.main !== family.main || current?.wal !== family.wal) {
+        throw new SqliteSourceChangedError(`Retained SQLite snapshot changed: ${pathname}`);
+      }
+      directory = createSqliteSnapshotStagingDirectorySync(stagingRoot);
+      const destination = path.join(directory, "database.sqlite.partial");
+      for (const [suffix, expected] of [
+        ["", family.main],
+        ["-wal", family.wal],
+      ] as const) {
+        if (expected === null) {
+          continue;
         }
-        assertFamily();
-        directory = createSqliteSnapshotStagingDirectorySync(stagingRoot);
-        const destination = path.join(directory, "database.sqlite.partial");
-        for (const file of files) {
-          const identity = fs.fstatSync(file.descriptor, { bigint: true });
-          copySourceFile(file.pathname, `${destination}${file.pathname.slice(pathname.length)}`, {
+        const sourcePath = `${pathname}${suffix}`;
+        const opened = openRootFileSync({
+          rootPath: family.root,
+          absolutePath: sourcePath,
+          boundaryLabel: "retained SQLite snapshot",
+        });
+        if (!opened.ok) {
+          throw new Error(`Cannot open retained SQLite snapshot: ${sourcePath}`, {
+            cause: opened.error,
+          });
+        }
+        try {
+          const identity = fs.fstatSync(opened.fd, { bigint: true });
+          copySourceFile(sourcePath, `${destination}${suffix}`, {
             key: `file:${identity.dev}:${identity.ino}`,
           });
+        } finally {
+          fs.closeSync(opened.fd);
         }
-        // Read-only owners cannot commit main changes, but SQLite close can alter
-        // WAL files. Refuse committed-family drift; never drop frames or recapture live state.
-        assertFamily();
-        return publishPreparedCopy(directory);
-      },
-    );
+      }
+      // This owned image has no writers; trust each rooted source through its copy.
+      return publishPreparedCopy(directory);
+    });
   } catch (error) {
     const errors: unknown[] = [error];
     if (

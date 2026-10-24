@@ -9,13 +9,11 @@ import {
   snapshotStoreGeneration,
   subscribeSnapshotInvalidation,
 } from "./session-snapshot-invalidation-events.ts";
-import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 type PrewarmedSnapshot = {
   cacheKey: string;
   cancelled: boolean;
   promise: Promise<unknown>;
-  snapshot?: Promise<ChatSessionSnapshot | null>;
 };
 
 let pending: PrewarmedSnapshot | undefined;

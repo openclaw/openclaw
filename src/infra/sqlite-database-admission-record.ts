@@ -39,15 +39,15 @@ export type AdmissionFactValue = {
 
 export function readSqliteDatabaseAdmissionFact<T>(
   fact: AdmissionFactValue,
-  key: SqliteDatabaseAdmissionKey<T>,
+  key: SqliteDatabaseFactKey<T>,
 ): T | undefined {
-  fact[decodedValue] ??= { value: key.read(fact.value) };
-  // SAFETY: A private key name identifies one value type, decoded by that key at admission.
+  fact[decodedValue] ??= { value: key.read ? key.read(fact.value) : fact.value };
+  // SAFETY: Each key names its typed publisher's value; boundary keys retain their decoder.
   return fact[decodedValue].value as T | undefined;
 }
 
 export function admitSqliteDatabaseFactValue<T>(
-  key: SqliteDatabaseAdmissionKey<T>,
+  key: SqliteDatabaseFactKey<T>,
   value: T,
 ): AdmissionFactValue {
   const fact: AdmissionFactValue = { value };
@@ -161,6 +161,11 @@ export type SqliteDatabaseAdmissionExchange = (
   location?: string,
   create?: boolean,
 ) => SqliteDatabaseAdmissions;
+
+/** Internal typed publications need no decoder; public/custom keys retain their read contract. */
+export type SqliteDatabaseFactKey<T> = Omit<SqliteDatabaseAdmissionKey<T>, "read"> & {
+  read?: SqliteDatabaseAdmissionKey<T>["read"];
+};
 
 export function readSqliteDatabaseAdmissions(value: unknown): SqliteDatabaseAdmissions | undefined {
   // SAFETY: These facts come only from this process's paired worker and bootstrap transports.
@@ -419,6 +424,7 @@ export class SqliteDatabaseAdmissionRegistry {
   }
 
   releaseWorker(owner: number): void {
+    const changedRecords = new Set<Admission>();
     for (const record of this.records.values()) {
       const references = owner > 0 ? record.references.get(owner) : undefined;
       if (!references) {
@@ -427,8 +433,11 @@ export class SqliteDatabaseAdmissionRegistry {
       // Zero permits a live worker to reopen; negative cells cannot be revived by old snapshots.
       Atomics.store(new Int32Array(references), 0, -1);
       this.retireUnreferenced(record);
+      changedRecords.add(record);
     }
-    this.publish();
+    if (changedRecords.size > 0) {
+      this.publish(changedRecords);
+    }
   }
 
   observeLocation(location: string, identity: string): void {

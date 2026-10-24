@@ -23,15 +23,17 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager, type SessionMessageEntry } from "./session-manager.js";
 
 function makeTarget(state: OpenClawTestState, sessionId: string) {
-  return {
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-  };
+  return sessionScope(path.join(state.agentDir("main"), "openclaw-agent.sqlite"), sessionId);
+}
+
+function retainedManager(timestamp: number) {
+  const manager = SessionManager.inMemory("/retained");
+  manager.appendMessage(makeUserMessage("keep the original view", timestamp));
+  return { manager, before: { ...managerView(manager), cwd: "/retained", persisted: false } };
 }
 
 function managerView(manager: SessionManager) {
@@ -123,9 +125,7 @@ it("rejects a persisted quarantine through the history worker without retargetin
       env: state.env,
       reason,
     });
-    const manager = SessionManager.inMemory("/retained");
-    manager.appendMessage(makeUserMessage("keep the original view", 2));
-    const before = { ...managerView(manager), cwd: "/retained", persisted: false };
+    const { manager, before } = retainedManager(2);
     // The closed database makes this a cold read, which runs on the target-discovery lane.
     const dispatch = vi.spyOn(targetDiscoveryLane.pool, "run");
     try {
@@ -268,9 +268,7 @@ it.each([
         .run(corrupt, Buffer.byteLength(corrupt), target.sessionId, target.sessionId);
       expect(() => SessionManager.open(target)).toThrow(SyntaxError);
     }
-    const manager = SessionManager.inMemory("/retained");
-    manager.appendMessage(makeUserMessage("keep the original view", 10));
-    const before = { ...managerView(manager), cwd: "/retained", persisted: false };
+    const { manager, before } = retainedManager(10);
     const controller = new AbortController();
     const reason = new Error("cancelled streaming hydration");
     const gate = holdFirstChunk();

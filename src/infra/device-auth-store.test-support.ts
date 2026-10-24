@@ -1,49 +1,51 @@
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
 import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
-import {
-  readDeviceAuthTokenObservationFromDatabase,
-  readOriginDeviceTokenObservationFromDatabase,
-  storeDeviceAuthTokenInDatabase,
-  storeOriginDeviceTokenInDatabase,
-} from "./device-auth-store.kernel.js";
+import { runClientCredentialOperation } from "./client-credential-store.js";
+import { createDeviceAuthEntry, deviceAuthEntryFromRow } from "./device-auth-store.kernel.js";
 
 type Lookup = { deviceId: string; role: string; env?: NodeJS.ProcessEnv };
 type OriginLookup = Lookup & { gatewayScope: string };
-type Seed = Parameters<typeof storeDeviceAuthTokenInDatabase>[1] & { env?: NodeJS.ProcessEnv };
+type Seed = Lookup & { token: string; scopes?: string[]; updatedAtMs?: number };
 
-// Fixture acquisition bypasses runtime policy; owner tests exercise the real facade.
 export function readDeviceAuthTokenForTest(params: Lookup) {
-  return readDeviceAuthTokenObservationFromDatabase(
-    openOpenClawStateDatabase({ env: params.env }).db,
-    params,
-  ).entry;
+  const result = runClientCredentialOperation(params.env ?? process.env, {
+    kind: "token.read",
+    key: { device_id: params.deviceId, role: params.role },
+  });
+  return result.kind === "token" && result.token ? deviceAuthEntryFromRow(result.token) : null;
 }
 
 export function readOriginDeviceTokenReadOnlyForTest(params: OriginLookup) {
-  return (
-    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-      ({ db }) => readOriginDeviceTokenObservationFromDatabase(db, params).entry,
-      { env: params.env },
-    ) ?? null
-  );
+  const result = runClientCredentialOperation(params.env ?? process.env, {
+    kind: "token.read",
+    key: { device_id: params.deviceId, role: params.role, gateway_scope: params.gatewayScope },
+  });
+  return result.kind === "token" && result.token ? deviceAuthEntryFromRow(result.token) : null;
 }
 
+function seed(params: Seed & { gatewayScope?: string }) {
+  const entry = createDeviceAuthEntry(params);
+  runClientCredentialOperation(params.env ?? process.env, {
+    kind: "token.replace",
+    key: {
+      device_id: params.deviceId,
+      role: entry.role,
+      ...(params.gatewayScope === undefined ? {} : { gateway_scope: params.gatewayScope }),
+    },
+    token: {
+      device_id: params.deviceId,
+      role: entry.role,
+      token: entry.token,
+      scopes_json: JSON.stringify(entry.scopes),
+      updated_at_ms: entry.updatedAtMs,
+    },
+  });
+  return entry;
+}
 export function seedDeviceAuthToken(params: Seed) {
-  const input = { ...params, updatedAtMs: params.updatedAtMs ?? Date.now() };
-  return runOpenClawStateWriteTransaction(({ db }) => storeDeviceAuthTokenInDatabase(db, input), {
-    env: params.env,
-  });
+  return seed(params);
 }
-
 export function seedOriginDeviceToken(params: Seed & { gatewayScope: string }) {
-  const input = { ...params, updatedAtMs: params.updatedAtMs ?? Date.now() };
-  return runOpenClawStateWriteTransaction(({ db }) => storeOriginDeviceTokenInDatabase(db, input), {
-    env: params.env,
-  });
+  return seed(params);
 }
 
 /** Hold a synthetic native writer while the host proves its asynchronous admission. */

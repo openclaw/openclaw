@@ -157,7 +157,6 @@ function createMediaTask(
     requesterAgentId: "main",
     task: "Generate media",
     status: "running",
-    createdAt: 1,
     ...overrides,
   };
 }

@@ -9,6 +9,7 @@ import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { prepareCronJobNameResolver } from "../cron/store/job-name.js";
 import {
   isCompletionReportInputProvenance,
+  isCronExecutionInputProvenance,
   isSubagentCoordinationInputProvenance,
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
@@ -398,6 +399,9 @@ function shouldHideProjectedHistoryMessage(
   ) {
     // Internal repair instructions belong to the model transcript, not the chat feed.
     // Keep the agent's authored outcome visible, including requests for user help.
+    return true;
+  }
+  if (roleContent.role === "user" && isCronExecutionInputProvenance(provenance)) {
     return true;
   }
   if (roleContent.role === "user" && isCompletionReportInputProvenance(message.provenance)) {

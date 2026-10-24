@@ -5,6 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createContext } from "../../test-helpers/app-sidebar.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import {
   createGatewayRequestMock,
@@ -34,7 +35,7 @@ function createStore(
       return subscribe();
     }
     if (method === "sessions.groups.list") {
-      return { names: [], sectionOrder: [] };
+      return { groups: [], sectionOrder: [] };
     }
     if (method === "sessions.list") {
       return (params as { archived?: string })?.archived === "all"
@@ -47,17 +48,14 @@ function createStore(
 }
 
 function createStoreForRequest(request: ReturnType<typeof createGatewayRequestMock>) {
-  const source = createApplicationGateway({
-    client: createTestGatewayClient(request),
-    phase: "connected",
-    hello: null,
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
-    sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  });
+  const source = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client: createTestGatewayClient(request),
+      phase: "connected",
+      assistantAgentId: "main",
+      sessionKey: "agent:main:main",
+    }),
+  );
   const sessions = createTestSessionCapability(source.gateway);
   const context = createContext(source.gateway, sessions, {
     agents: [{ id: "main" }, { id: "ember" }],
@@ -140,7 +138,7 @@ describe("roster activity lifecycle", () => {
         return { subscribed: true };
       }
       if (method === "sessions.groups.list") {
-        return { names: [], sectionOrder: [] };
+        return { groups: [], sectionOrder: [] };
       }
       if (method === "sessions.list") {
         return { ...result(""), sessions: [row] };

@@ -104,6 +104,7 @@ describe("tui last session state", () => {
   it("persists scoped pointers off-thread and clears only retired session ownership", async () => {
     const { stateDir, options, read, write } = await createStore();
     const scopeKey = defaultScopeKey;
+    expect(scopeKey).toBe("e433a54b3bcb5ba081907f4ee903ddf5");
     await expectOffThread(async () => {
       await write(scopeKey, "agent:main:main");
       await expect(read(scopeKey)).resolves.toBe("agent:main:main");

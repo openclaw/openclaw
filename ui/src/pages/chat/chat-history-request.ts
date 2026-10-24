@@ -37,13 +37,14 @@ import {
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
-import { projectChatTranscriptMetadata } from "./session-message-cache.ts";
-import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
+import {
+  projectChatTranscriptMetadata,
+  type ChatSessionSnapshot,
+} from "./session-message-cache.ts";
 
 export const CHAT_HISTORY_REQUEST_LIMIT = 80;
 const CHAT_HISTORY_REQUEST_MAX_BYTES = 256 * 1024;
 const CHAT_HISTORY_TOOL_RESULT_MAX_CHARS = 2_000;
-const CHAT_HISTORY_PREFETCH_BUDGET = { limit: 20, maxBytes: 64 * 1024 };
 
 // Keep startup small, then amortize older-history reads and prepend work across
 // larger pages. The Gateway owns the response byte and single-message limits.
@@ -110,7 +111,6 @@ type SharedChatHistoryArgs = [
   consumerObservation: Pick<SharedChatHistoryConsumer, "isCurrent" | "captureRun" | "onRetry">,
   cursor?: string,
   inputRunIds?: string[],
-  budget?: { limit: number; maxBytes: number },
   historyState?: ChatHistoryState,
 ];
 
@@ -134,7 +134,6 @@ export function requestSharedHistory(
     consumerObservation,
     cursor,
     inputRunIds = [],
-    budget = { limit: CHAT_HISTORY_REQUEST_LIMIT, maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES },
     historyState,
   ]: SharedChatHistoryArgs
 ): Promise<ChatHistoryResponse & { observation?: ChatHistoryObservation }> {
@@ -173,7 +172,9 @@ export function requestSharedHistory(
       knownState,
       ...(requestAgentId ? { agentId: requestAgentId } : {}),
       ...(cursor !== undefined ? { cursor } : {}),
-      ...budget,
+      // Warm the same window that opening the conversation will display.
+      limit: CHAT_HISTORY_REQUEST_LIMIT,
+      maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
       ...(inputRunIds.length ? { inputRunIds } : {}),
     };
     const controller = new AbortController();
@@ -324,8 +325,6 @@ export async function requestChatSessionSnapshot(
     consumerOwner,
     { isCurrent: isCurrentConsumer },
     cursor,
-    undefined,
-    CHAT_HISTORY_PREFETCH_BUDGET,
   );
   if (isHistoryCursor(result)) {
     if (result.kind === "reset") {

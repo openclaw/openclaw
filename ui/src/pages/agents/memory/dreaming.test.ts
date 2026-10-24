@@ -111,7 +111,7 @@ describe("dreaming controller", () => {
 
     expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
     expect(state.dreamingStatus).toBe(payload.dreaming);
-    expect(state.dreamingStatusLoading).toBe(false);
+    expect(state.resourceReads.dreamingStatus?.pending ?? false).toBe(false);
     expect(state.dreamingStatusError).toBeNull();
   });
 
@@ -143,12 +143,12 @@ describe("dreaming controller", () => {
     const firstLoad = loadDreamingResource(state, "dreamingStatus");
     await loadDreamingResource(state, "dreamingStatus");
     expect(request).toHaveBeenCalledExactlyOnceWith("doctor.memory.status", { agentId: "main" });
-    expect(state.dreamingStatusLoading).toBe(true);
+    expect(state.resourceReads.dreamingStatus?.pending ?? false).toBe(true);
 
     pending.resolve({ dreaming: { enabled: true, shortTermCount: 3 } });
     await firstLoad;
     expect(state.dreamingStatus?.shortTermCount).toBe(3);
-    expect(state.dreamingStatusLoading).toBe(false);
+    expect(state.resourceReads.dreamingStatus?.pending ?? false).toBe(false);
     expect(state.dreamingStatusError).toBeNull();
   });
 
@@ -170,8 +170,6 @@ describe("dreaming controller", () => {
     expect(request).toHaveBeenCalledWith("wiki.importInsights", { agentId: "main" });
     expect(state).toMatchObject({
       wikiImportInsights: { totalItems: 1, totalClusters: 1 },
-      wikiImportInsightsError: null,
-      wikiImportInsightsLoading: false,
     });
   });
 
@@ -188,15 +186,13 @@ describe("dreaming controller", () => {
       truncated: false,
       clusters: [],
     };
-    state.wikiImportInsightsError = "unknown method: wiki.importInsights";
+    state.resourceReads.wikiImportInsights = { promise: Promise.resolve(), pending: false };
 
     await loadDreamingResource(state, "wikiImportInsights");
 
     expect(request).not.toHaveBeenCalled();
     expect(state).toMatchObject({
       wikiImportInsights: null,
-      wikiImportInsightsError: null,
-      wikiImportInsightsLoading: false,
     });
   });
 
@@ -214,14 +210,14 @@ describe("dreaming controller", () => {
       truncated: false,
       clusters: [],
     };
-    state.wikiImportInsightsError = "unknown method: wiki.importInsights";
+    state.resourceReads.wikiImportInsights = { promise: Promise.resolve(), pending: false };
 
     await loadDreamingResource(state, "wikiImportInsights");
 
     expect(request).not.toHaveBeenCalled();
     expect(state.wikiImportInsights).toBeNull();
-    expect(state.wikiImportInsightsError).toBeNull();
-    expect(state.wikiImportInsightsLoading).toBe(false);
+    expect(state.resourceReads.wikiImportInsights).toBeUndefined();
+    expect(state.resourceReads.wikiImportInsights?.pending ?? false).toBe(false);
   });
 
   it("patches config to update global dreaming enablement", async () => {
@@ -414,7 +410,7 @@ describe("dreaming controller", () => {
     expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
     expect(state.dreamDiaryPath).toBe("DREAMS.md");
     expect(state.dreamDiaryContent).toBe("## Dream Diary\n- recurring glacier thoughts");
-    expect(state.dreamDiaryError).toBeNull();
+    await expect(state.resourceReads.dreamDiary?.promise).resolves.toBeUndefined();
   });
 
   it("handles missing dream diary without error", async () => {
@@ -428,7 +424,7 @@ describe("dreaming controller", () => {
 
     expect(state.dreamDiaryPath).toBe("DREAMS.md");
     expect(state.dreamDiaryContent).toBeNull();
-    expect(state.dreamDiaryError).toBeNull();
+    await expect(state.resourceReads.dreamDiary?.promise).resolves.toBeUndefined();
   });
 
   it("records dream diary request errors", async () => {
@@ -437,8 +433,10 @@ describe("dreaming controller", () => {
 
     await loadDreamingResource(state, "dreamDiary");
 
-    expect(state.dreamDiaryError).toBe("dream diary read failed");
-    expect(state.dreamDiaryLoading).toBe(false);
+    await expect(state.resourceReads.dreamDiary?.promise).rejects.toThrow(
+      "dream diary read failed",
+    );
+    expect(state.resourceReads.dreamDiary?.pending ?? false).toBe(false);
   });
 
   it("does not run a write action with read-only operator access", async () => {

@@ -61,7 +61,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "config.changed": [READ_SCOPE],
   "agent.identity.changed": [READ_SCOPE],
   "users.prefs.changed": [SESSION_READ_SCOPE],
-  "mentions.changed": [READ_SCOPE],
+  "mentions.changed": [SESSION_READ_SCOPE],
   "skills.changed": [READ_SCOPE],
   "plugins.changed": [READ_SCOPE],
   "plugins.install.progress": [ADMIN_SCOPE],
@@ -80,7 +80,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "sessions.catalog.host": [READ_SCOPE],
   "sessions.changed": [SESSION_READ_SCOPE],
   "sessions.processes.changed": [SESSION_READ_SCOPE],
-  "controlUi.sessionPullRequests.changed": [READ_SCOPE],
+  "controlUi.sessionPullRequests.changed": [SESSION_READ_SCOPE],
   "plugins.controlUi.changed": [READ_SCOPE],
   "mcp.app.resourceUpdated": [READ_SCOPE],
   "mcp.app.hostContextChanged": [READ_SCOPE],
@@ -175,7 +175,7 @@ export function hasEventScope(
     return false;
   }
   const role = client.connect.role ?? "operator";
-  const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
+  const scopes = client.connect.scopes ?? [];
   const required = EVENT_SCOPE_GUARDS[event];
   const pluginScope =
     explicitPluginScope || (!required && event.startsWith("plugin.") ? WRITE_SCOPE : undefined);

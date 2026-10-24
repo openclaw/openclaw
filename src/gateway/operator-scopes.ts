@@ -29,8 +29,7 @@ const KNOWN_OPERATOR_SCOPES: ReadonlySet<string> = new Set(KNOWN_OPERATOR_SCOPE_
 export function hasGatewayAdminScope(
   client: { connect?: { scopes?: readonly string[] } } | null | undefined,
 ): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE);
+  return client?.connect?.scopes?.includes(ADMIN_SCOPE) ?? false;
 }
 
 /** Narrows untrusted auth-token scope entries to the gateway's closed scope set. */

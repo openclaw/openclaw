@@ -33,7 +33,6 @@ type FastModeState = {
   fastAutoOnSeconds: number;
 };
 
-/** Resolve the effective fast-mode setting and its source. */
 export function resolveFastModeState(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;

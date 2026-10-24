@@ -301,6 +301,27 @@ describe("authenticated profile avatar cache", () => {
     expect(cancel).not.toHaveBeenCalled();
   });
 
+  it("yields cold image admission and skips a retired credential context", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test", ["old-token"]);
+    const fetchAvatar = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => avatarResponse());
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:current-profile");
+    const path = "/api/users/profile-ada/avatar?v=7";
+    const retired = resolveAvatarImageUrl(path);
+    expect(resolveAvatarImageUrl(path)).toBe(retired);
+    expect(fetchAvatar).not.toHaveBeenCalled();
+
+    setAvatarGatewayOrigin("https://gateway.example.test", ["current-token"]);
+    const current = resolveAvatarImageUrl(path);
+    await expect(retired).resolves.toBeNull();
+    await expect(current).resolves.toBe("blob:current-profile");
+    expect(fetchAvatar).toHaveBeenCalledExactlyOnceWith(
+      `https://gateway.example.test${path}`,
+      expect.objectContaining({ headers: { Authorization: "Bearer current-token" } }),
+    );
+  });
+
   it("refetches when the gateway publishes a newer avatar revision", async () => {
     setAvatarGatewayOrigin("https://gateway.example.test", ["profile-token"]);
     const fetchAvatar = vi
@@ -454,7 +475,7 @@ describe("authenticated profile avatar cache", () => {
       Promise.resolve(resolveAvatarImageUrl(`/api/users/profile-${index}/avatar?v=1`)),
     );
     const releases = pending.map((request) => retainAvatarImageUrl(request));
-    expect(fetchAvatar).toHaveBeenCalledTimes(130);
+    await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledTimes(130));
     for (const finishRequest of finishRequests) {
       finishRequest(avatarResponse());
     }
@@ -566,6 +587,7 @@ describe("authenticated profile avatar cache", () => {
     const request = createDeferred<Response>();
     const fetchAvatar = vi.spyOn(globalThis, "fetch").mockReturnValue(request.promise);
     const pending = resolveAvatarImageUrl("/api/users/profile-ada/avatar");
+    await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledOnce());
     const signal = fetchAvatar.mock.calls[0]?.[1]?.signal;
     setAvatarGatewayOrigin("https://gateway.example.test", ["same-token", "new-password"]);
     expect(signal?.aborted).toBe(true);

@@ -5,10 +5,7 @@ import type { AuditRunInspectResult } from "../../../packages/gateway-protocol/s
 import type { GatewayFrame } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.ts";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../test/helpers/openclaw-test-instance.ts";
+import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import {
@@ -21,6 +18,7 @@ import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-u
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { withControlUiRunInspector } from "../test-helpers/control-ui-run-inspector.ts";
 import { showHeading, showText } from "./activity-assertions.test-support.ts";
+import { createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -59,33 +57,17 @@ const suite = createControlUiE2eSuite({
         () => provider.claim.release(),
       );
     try {
-      instance = await createOpenClawTestInstance({
+      instance = await createChatGatewayInstance({
         name: "inspector-pairing",
-        env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
+        provider: "inspector-fixture",
+        identity: "Inspector fixture",
+        model: "echo",
+        apiKey: "synthetic-unused-key",
+        baseUrl: `http://127.0.0.1:${provider.claim.port}/v1`,
+        models: [{ id: "echo", name: "Echo" }],
+        agents: { ownership: "explicit" },
         config: {
-          gateway: { controlUi: { enabled: true } },
           logging: { audit: { executionIdentity: true } },
-          cron: { enabled: false },
-          agents: {
-            ownership: "explicit",
-            defaults: {
-              model: "inspector-fixture/echo",
-              modelPolicy: { allow: ["inspector-fixture/*"] },
-            },
-            entries: { main: { identity: { name: "Inspector fixture" } } },
-          },
-          models: {
-            catalogRefresh: { enabled: false },
-            providers: {
-              "inspector-fixture": {
-                api: "openai-responses",
-                apiKey: "synthetic-unused-key",
-                baseUrl: `http://127.0.0.1:${provider.claim.port}/v1`,
-                models: [{ id: "echo", name: "Echo" }],
-              },
-            },
-          },
-          plugins: { allow: [] },
         },
       });
       await instance.startGateway();
@@ -98,16 +80,18 @@ const suite = createControlUiE2eSuite({
   },
 });
 
-async function runCli(args: string[]): Promise<string> {
-  const result = await instance.cli(args);
-  expect(result.code, result.stderr).toBe(0);
+async function runCli(args: string[], timeoutMs?: number): Promise<string> {
+  const result = await instance.cli(args, { timeoutMs });
+  expect(result.code, `${result.stderr}\n${result.stdout}`).toBe(0);
   return result.stdout;
 }
 
-async function rpc(method: string, params: Record<string, unknown>) {
-  return JSON.parse(
-    await runCli(["gateway", "call", method, "--params", JSON.stringify(params), "--json"]),
-  );
+async function rpc(method: string, params: Record<string, unknown>, timeoutMs?: number) {
+  const args = ["gateway", "call", method, "--params", JSON.stringify(params), "--json"];
+  if (timeoutMs !== undefined) {
+    args.push("--timeout", String(timeoutMs));
+  }
+  return JSON.parse(await runCli(args, timeoutMs === undefined ? undefined : timeoutMs + 10_000));
 }
 
 suite.define(() => {
@@ -123,7 +107,8 @@ suite.define(() => {
           message: "Complete the fixture.",
           idempotencyKey: runId,
         });
-        expect(await rpc("agent.wait", { runId, timeoutMs: 30_000 })).toMatchObject({
+        // Let the requested server wait finish before either CLI deadline expires.
+        expect(await rpc("agent.wait", { runId, timeoutMs: 30_000 }, 40_000)).toMatchObject({
           status: "ok",
           terminalReply: { disposition: "visible", text: replyText },
         });

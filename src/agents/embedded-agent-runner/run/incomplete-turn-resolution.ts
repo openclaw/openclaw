@@ -16,7 +16,10 @@ import { renderAssistantRequestFailureCopy } from "../../failover/assistant-requ
 import { resolveReplyFailoverFacts } from "../../failover/request-error-facts.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
-import { MISSING_REPLY_NOTICE_TEXT } from "../../reply-completion.js";
+import {
+  MISSING_REPLY_NOTICE_TEXT,
+  MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
+} from "../../reply-completion.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   resolveSourceReplyDelivery,
@@ -53,6 +56,7 @@ type TerminalAuthFailureContext = {
  */
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
+  rawPayloadCount?: number;
   aborted: boolean;
   externalAbort: boolean;
   timedOut: boolean;
@@ -90,6 +94,8 @@ export function resolveIncompleteTurnPayloadText(params: {
     !assistant?.openclawDelivery?.tts?.text?.trim() &&
     !hasTerminalOutput &&
     Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
+  const presentationHiddenAssistantReply =
+    (params.rawPayloadCount ?? params.payloadCount) > params.payloadCount;
 
   if (
     (params.payloadCount !== 0 &&
@@ -136,6 +142,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     !incompleteTerminalAssistant &&
     !assistantState.reasoningOnly &&
     !thinkingOnlyTerminal &&
+    !presentationHiddenAssistantReply &&
     !assistantState.emptyResponse &&
     stopReason !== "error"
   ) {
@@ -170,7 +177,9 @@ export function resolveIncompleteTurnPayloadText(params: {
         }))
       : undefined);
   if (params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects) {
-    return `${promptFailureText ?? MISSING_REPLY_NOTICE_TEXT} Note: some tool actions may have already been executed — please verify before retrying.`;
+    return promptFailureText
+      ? `${promptFailureText} Note: some tool actions may have already been executed — please verify before retrying.`
+      : MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT;
   }
   if (textToolCallFailureText) {
     return `${textToolCallFailureText} Please try again or use a model with native tool calling.`;
@@ -279,6 +288,9 @@ export const YIELD_DIAGNOSTIC_TEXT =
 
 export const TRUNCATED_REPLY_NOTICE_TEXT =
   "⚠️ Reply truncated at the model's output token limit. The text above is partial — ask to continue it.";
+
+export const CUT_OFF_SUMMARY_NOTICE_TEXT =
+  "⚠️ The model was cut off at its output token limit, so the summary above was written afterwards without tools. Some work may be unfinished — check before relying on it.";
 
 /**
  * Marks replay invalid whenever the recorded attempt might not be safe to

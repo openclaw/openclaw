@@ -2,8 +2,10 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { TsdownPlugin } from "tsdown";
 import {
   WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+  WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS,
   WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
 } from "../../src/shared/worker-bundle-hash.ts";
 import {
@@ -11,6 +13,11 @@ import {
   resolveFsSafePackageManifest,
   resolveFsSafeWindowsHelper,
 } from "./fs-safe-windows-helper-asset.mts";
+import {
+  prepareWorkerDarwinNativeAssets,
+  transformWorkerDarwinNativeLoader,
+  type WorkerNativeAsset,
+} from "./fs-safe-worker-native-assets.mts";
 
 const WORKER_DEPLOY_BUILD_PLUGIN_NAME = "openclaw:worker-deploy";
 export const WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID = `${path.resolve("src/worker/worker-deploy-runtime.ts")}?optional-native`;
@@ -72,6 +79,7 @@ export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
       path.resolve(rootDir, "node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm"),
     ),
     resolveFsSafePackageManifest(rootDir),
+    path.join(rootDir, "pnpm-lock.yaml"),
   ] as const;
 }
 
@@ -84,6 +92,7 @@ export function isUnstagedWorkerDeployRuntimeArtifact(
   return (
     !entrypoints.has(fileName) &&
     relative !== WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH &&
+    !Object.values<string>(WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS).includes(relative) &&
     !WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(relative) &&
     /\.(?:mjs|node|wasm|exe)$/u.test(fileName)
   );
@@ -129,6 +138,9 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   const fsSafeWatchIoPath = fs.realpathSync(
     path.join(path.dirname(require.resolve("@openclaw/fs-safe/package.json")), "dist/watch-io.js"),
   );
+  const fsSafeWatchWorkerPath = fs.realpathSync(
+    path.join(path.dirname(fsSafeWatchIoPath), "watch-io-worker.js"),
+  );
   const [packageJsonPath, browsersJsonPath, , treeSitterWasmPath, bashWasmPath, photonWasmPath] =
     resolveWorkerDeployGeneratorInputs(rootDir);
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
@@ -140,6 +152,10 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
     packageJSON = ${JSON.stringify({ name: packageJson.name, version: packageJson.version })};
     binPath = packageRoot;`;
 
+  const sealedBootstrapPath = fs.realpathSync(
+    path.join(rootDir, "src/infra/sealed-runtime-bootstrap.ts"),
+  );
+  let nativeAssets: WorkerNativeAsset[] = [];
   const fsSafeAssets = createFsSafeWindowsHelperAssetPlugin(
     rootDir,
     `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}`,
@@ -147,6 +163,19 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   return {
     ...fsSafeAssets,
     name: WORKER_DEPLOY_BUILD_PLUGIN_NAME,
+    async buildStart() {
+      fsSafeAssets.buildStart.call(this);
+      const manifest = resolveFsSafePackageManifest(rootDir);
+      this.addWatchFile(path.join(rootDir, "pnpm-lock.yaml"));
+      nativeAssets = await prepareWorkerDarwinNativeAssets(rootDir, manifest);
+      for (const asset of nativeAssets) {
+        this.emitFile({
+          type: "asset",
+          fileName: `worker/${asset.fileName}`,
+          source: asset.source,
+        });
+      }
+    },
     generateBundle(
       this: { error(message: string): never },
       _options: unknown,
@@ -174,13 +203,28 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
     transform(this: { error(message: string): never }, code: string, id: string) {
       const fsSafeTransform = fsSafeAssets.transform.call(this, code, id);
       if (fsSafeTransform !== null) {
-        return fsSafeTransform;
+        return transformWorkerDarwinNativeLoader(fsSafeTransform, nativeAssets);
       }
       let resolvedId: string;
       try {
         resolvedId = fs.realpathSync(path.resolve(id));
       } catch {
         return null;
+      }
+      if (resolvedId === fsSafeWatchWorkerPath) {
+        // This entry registers its message listener despite the dependency's sideEffects:false.
+        return { code, moduleSideEffects: "no-treeshake" };
+      }
+      if (resolvedId === sealedBootstrapPath) {
+        const mode = 'configureFsSafeNative({ mode: "off" });';
+        if (code.split(mode).length !== 2) {
+          this.error("sealed filesystem bootstrap changed; update the worker deploy transform");
+        }
+        // Only bundle-owned Darwin assets are enabled; recovery bundles keep native code off.
+        return code.replace(
+          mode,
+          'configureFsSafeNative({ mode: process.platform === "darwin" ? "require" : "off" });',
+        );
       }
       if (resolvedId === browserRuntimeBridgePath) {
         return WORKER_BROWSER_RUNTIME_COMPOSITION;
@@ -298,5 +342,5 @@ export const { WebSocket, WebSocketServer, createWebSocketStream } = bundledWebS
           `    registry = new Registry(${JSON.stringify(browsersJson)});`,
         );
     },
-  };
+  } satisfies TsdownPlugin;
 }

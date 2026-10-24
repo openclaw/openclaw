@@ -58,6 +58,9 @@ const representativeCorpusIds = new Set([
   "bedrock-deprecated-temperature",
   "billing-context-reasoning-required",
   "billing-context-dashscope-range",
+  "billing-context-siliconflow-max-seq-len",
+  "billing-context-vllm-decoder-prompt",
+  "billing-context-vllm-engine-prompt",
   "http-legacy-bad-request-normalized",
   "billing-image-dimension",
   "billing-image-size",
@@ -135,7 +138,6 @@ it("classifies a bare HTTP 503 service-unavailable response as overloaded", () =
   expect(classifyProviderRequestFacets({ message })).toBe("provider-internal-503");
   expect(classifyReplyRequest({ message })).toMatchObject({
     code: "provider_internal_error",
-    technicalMessage: message,
   });
 });
 

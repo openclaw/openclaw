@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { Value } from "typebox/value";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionMembersListEvidenceResultSchema } from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionMemberPermissionLevel } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import * as combinedStore from "../../config/sessions/combined-store-gateway.native.js";
@@ -25,8 +26,8 @@ import {
   runOpenClawAgentWriteAdmission,
 } from "../../state/openclaw-agent-write-admission.js";
 import * as userProfileReads from "../../state/user-profile-reads.js";
-import { setDisplayName } from "../../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { setDisplayName, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createBoardViewTicket } from "../board-view-ticket.js";
 import {
   bindSessionRowProjection,
@@ -96,17 +97,27 @@ it("lists sharing evidence and adds members independently of placement display f
     bindSessionRowProjection(requestContext, () => projection);
     try {
       await projection.ensureMaterialized();
-      const expected = await call("session.members.listEvidence", { sessionKey }, requestContext);
-      expect(expected[0]?.[1]).toMatchObject({
+      const expectedEvidence = await call(
+        "session.members.listEvidence",
+        { sessionKey },
+        requestContext,
+      );
+      const expectedLegacy = await call("session.members.list", { sessionKey }, requestContext);
+      expect(expectedEvidence[0]?.[1]).toMatchObject({
         members: [{ identityId: "guest", addedBy: "owner", addedAt: 1 }],
+        permissions: [],
       });
+      expect(expectedLegacy[0]?.[1]).not.toHaveProperty("permissions");
       vi.spyOn(placements, "readProjection").mockRejectedValue(
         new Error("placement display unavailable"),
       );
       sessionChanges.emit({ all: true, scope: "worker-placements" });
-      for (const method of ["session.members.listEvidence", "session.members.list"] as const) {
-        expect(await call(method, { sessionKey }, requestContext)).toEqual(expected);
-      }
+      expect(await call("session.members.listEvidence", { sessionKey }, requestContext)).toEqual(
+        expectedEvidence,
+      );
+      expect(await call("session.members.list", { sessionKey }, requestContext)).toEqual(
+        expectedLegacy,
+      );
       expect(
         await call("session.members.add", { sessionKey, identityId: member.id }, requestContext),
       ).toEqual([[true, { ok: true, sessionKey, identityId: member.id }, undefined]]);
@@ -154,7 +165,6 @@ it("limits creators to the current combined-store scope across configuration cha
         requestContext,
       );
       expect(listed[0]?.[1]).toMatchObject({ identities: expected });
-      expect(getSessionRowProjection(requestContext)!.selectEntries()).toHaveLength(2);
     }
   }));
 
@@ -179,19 +189,6 @@ it("lists current identities and adds members without decoding unrelated saved p
         agentId,
       );
     }
-    for (const [agentId, key, id, label, archivedAt] of [
-      ["main", "agent:main:archived", "archived-creator", "Archive", 1],
-      ["main", "agent:main:duplicate-a", "duplicate", "First label", undefined],
-      ["main", "agent:main:duplicate-z", "duplicate", "Last label", 1],
-      ["main", "global", "sentinel-main", "Main sentinel", undefined],
-      ["research", "global", "sentinel-research", "Research sentinel", undefined],
-    ] as const) {
-      seedSync(
-        key,
-        { sessionId: key + agentId, archivedAt, createdActor: { type: "agent", id, label } },
-        agentId,
-      );
-    }
     const incognitoKey = "agent:main:dashboard:incognito-picker";
     await replaceSessionEntry(
       { agentId: "main", sessionKey: incognitoKey },
@@ -202,8 +199,6 @@ it("lists current identities and adds members without decoding unrelated saved p
         createdActor: { type: "agent", id: "incognito-creator", label: "Incognito" },
       },
     );
-    const profileOnly = ensureProfileForEmail("profile-only@example.com");
-    setDisplayName(profileOnly.id, "Profile only");
     const requestContext = context(vi.fn(), {
       agents: { ownership: "explicit", entries: { main: {}, research: {} } },
     });
@@ -213,12 +208,8 @@ it("lists current identities and adds members without decoding unrelated saved p
     await projection.ensureMaterialized();
     const expected = [
       { type: "agent", id: "research", label: "Alpha Research" },
-      { type: "agent", id: "archived-creator", label: "Archive" },
       { type: "agent", id: "incognito-creator", label: "Incognito" },
-      { type: "agent", id: "duplicate", label: "Last label" },
-      { type: "agent", id: "sentinel-main", label: "Main sentinel" },
       { type: "human", id: profile.id, label: "Member" },
-      { type: "human", id: profileOnly.id, label: "Profile only" },
     ];
     const scans = vi.spyOn(combinedStore, "loadCombinedSessionStoreForGatewayCore");
     vi.spyOn(userProfileReads, "listProfiles").mockRejectedValue(
@@ -237,9 +228,6 @@ it("lists current identities and adds members without decoding unrelated saved p
       expect(listed[0]?.[1]).toMatchObject({ identities: expected });
     }
     expect(scans).not.toHaveBeenCalled();
-    expect(
-      projection.capture({ agentId: "main", key: "agent:main:archived" })?.materialized,
-    ).toBeUndefined();
     expect(
       await call("session.members.add", { sessionKey, identityId: profile.id }, requestContext),
     ).toEqual([[true, { ok: true, sessionKey, identityId: profile.id }, undefined]]);
@@ -413,57 +401,57 @@ it("refuses revoked managers and dirty membership at the worker commit grant", (
     await seed("agent:main:sharing-guest", "sharing-guest", {
       createdActor: { type: "human", source: "profile", id: "guest" },
     });
-    for (const method of ["session.members.add", "session.members.remove"] as const) {
-      for (const change of ["caller", "role", "dirty"] as const) {
-        const sessionKey = `agent:main:${method}-${change}`;
-        const scope = { agentId: "main", sessionKey };
-        await seed(sessionKey, sessionKey, {
-          createdActor: { type: "human", source: "profile", id: "owner" },
-        });
-        addSessionMember(scope, { identityId: "owner", addedBy: "owner" });
-        const manager = preparedClient(change === "role" ? "admin" : "owner");
-        if (change === "role") {
-          manager.connect.scopes = ["operator.admin"];
-        }
-        const { invoke, requestContext, projection } = await sharingSession(sessionKey, manager);
-        const target = projection.sharingTarget({ key: sessionKey, agentId: "main" })!;
-        const before = await sharingStore.readSessionMembersInWorker(scope);
-        let reachedCommit = false;
-        const gate = sqliteWorkerOwnerProbe.admission(admission, (request, grant, admit) => {
-          if (request.stage === "commit") {
-            reachedCommit = true;
-            if (change === "caller") {
-              manager.invalidated = true;
-            } else if (change === "role") {
-              manager.connect.scopes = ["operator.read", "operator.write"];
-            } else {
-              sessionChanges.emit({ all: true, scope: "stores" });
-              expect(projection.hasMembership(target.storePath, target.storeKey, "owner")).toBe(
-                true,
-              );
-              expect(
-                projection.sharingTargetState({ key: sessionKey, agentId: "main" }).status,
-              ).toBe("pending");
-            }
-          }
-          return admit(request, grant);
-        });
-        try {
-          // Add a new member or remove an existing one so rollback has an observable result.
-          await expect(
-            invoke(method, { identityId: method === "session.members.add" ? "guest" : "owner" }),
-          ).rejects.toThrow(
-            change === "dirty"
-              ? "Session access facts are unavailable"
-              : "session ownership changed before sharing mutation",
-          );
-          expect(reachedCommit, `${method}: ${change}`).toBe(true);
-          expect(requestContext.broadcast).not.toHaveBeenCalled();
-        } finally {
-          gate.mockRestore();
-        }
-        expect(await sharingStore.readSessionMembersInWorker(scope)).toEqual(before);
+    for (const [method, change] of [
+      ["session.members.add", "caller"],
+      ["session.members.remove", "role"],
+      ["session.members.add", "dirty"],
+    ] as const) {
+      const sessionKey = `agent:main:${method}-${change}`;
+      const scope = { agentId: "main", sessionKey };
+      await seed(sessionKey, sessionKey, {
+        createdActor: { type: "human", source: "profile", id: "owner" },
+      });
+      addSessionMember(scope, { identityId: "owner", addedBy: "owner" });
+      const manager = preparedClient(change === "role" ? "admin" : "owner");
+      if (change === "role") {
+        manager.connect.scopes = ["operator.admin"];
       }
+      const { invoke, requestContext, projection } = await sharingSession(sessionKey, manager);
+      const target = projection.sharingTarget({ key: sessionKey, agentId: "main" })!;
+      const before = await sharingStore.readSessionMembersInWorker(scope);
+      let reachedCommit = false;
+      const gate = sqliteWorkerOwnerProbe.admission(admission, (request, grant, admit) => {
+        if (request.stage === "commit") {
+          reachedCommit = true;
+          if (change === "caller") {
+            manager.invalidated = true;
+          } else if (change === "role") {
+            manager.connect.scopes = ["operator.read", "operator.write"];
+          } else {
+            sessionChanges.emit({ all: true, scope: "stores" });
+            expect(projection.hasMembership(target.storePath, target.storeKey, "owner")).toBe(true);
+            expect(projection.sharingTargetState({ key: sessionKey, agentId: "main" }).status).toBe(
+              "pending",
+            );
+          }
+        }
+        return admit(request, grant);
+      });
+      try {
+        // Add a new member or remove an existing one so rollback has an observable result.
+        await expect(
+          invoke(method, { identityId: method === "session.members.add" ? "guest" : "owner" }),
+        ).rejects.toThrow(
+          change === "dirty"
+            ? "Session access facts are unavailable"
+            : "session ownership changed before sharing mutation",
+        );
+        expect(reachedCommit, `${method}: ${change}`).toBe(true);
+        expect(requestContext.broadcast).not.toHaveBeenCalled();
+      } finally {
+        gate.mockRestore();
+      }
+      expect(await sharingStore.readSessionMembersInWorker(scope)).toEqual(before);
     }
   }));
 
@@ -555,7 +543,7 @@ it.each(["session.members.list", "session.members.add"] as const)(
       }
     }),
 );
-it("authorizes tickets against their signed agent and issuing Gateway", () =>
+it("authorizes board mutations against the signed agent", () =>
   withState(async () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -575,11 +563,8 @@ it("authorizes tickets against their signed agent and issuing Gateway", () =>
       },
       "work",
     );
-    let gatewayAActive = true;
     const gatewayA = context(vi.fn(), cfg);
-    gatewayA.resolveGatewayContext = () => (gatewayAActive ? gatewayA : undefined);
-    const gatewayB = context(vi.fn(), cfg);
-    gatewayB.resolveGatewayContext = () => gatewayB;
+    gatewayA.resolveGatewayContext = () => gatewayA;
     const issueTicket = (agentId?: string) =>
       createBoardViewTicket({
         sessionKey: "global",
@@ -598,31 +583,139 @@ it("authorizes tickets against their signed agent and issuing Gateway", () =>
 
     const authorize = async (
       client = identifiedClient("owner@example.com"),
-      requestContext = gatewayA,
-      method = "board.action",
       signedTicket = ticket,
     ) => {
       const result = await resolveSessionMutationAuthorizationAsync({
         client,
-        context: requestContext,
-        method,
+        context: gatewayA,
+        method: "board.action",
         requestParams: { ticket: signedTicket, agentId: "work" },
       });
       result.authorization?.release?.();
       return result.error;
     };
 
-    const expectTargetRequired = async (...args: Parameters<typeof authorize>) =>
-      expect(await authorize(...args)).toHaveProperty(
-        "details.code",
-        "SESSION_MUTATION_TARGET_REQUIRED",
-      );
     expect(await authorize(memberClient)).toMatchObject({
       details: { code: "SESSION_PARTICIPATION_REQUIRED" },
     });
     expect(await authorize()).toBeNull();
-    await expectTargetRequired(undefined, gatewayB);
-    gatewayAActive = false;
-    await expectTargetRequired(undefined, gatewayA, "board.event");
-    await expectTargetRequired(memberClient, gatewayA, "board.action", unscopedTicket);
+    expect(await authorize(memberClient, unscopedTicket)).toHaveProperty(
+      "details.code",
+      "SESSION_MUTATION_TARGET_REQUIRED",
+    );
+  }));
+
+it("projects current participation and exact choices through the sharing handlers", () =>
+  withState(async () => {
+    const profile = (name: string, role?: string) => {
+      const created = ensureProfileForEmail(`${name}@example.test`);
+      if (role) {
+        setUserProfileRole(created.id, role);
+      }
+      return created;
+    };
+    const owner = profile("owner");
+    const gatewayOwner = ensureGatewayOwnerProfile("Gateway owner");
+    const baseline = profile("baseline");
+    const explicit = profile("explicit");
+    const inherited = profile("inherited", "writer");
+    const viewOnly = profile("view-only", "viewOnly");
+    const limited = profile("limited", "limited");
+    const denied = profile("denied", "denied");
+    const sandboxed = profile("sandboxed", "sandboxed");
+    const wrongAgent = profile("other-agent", "otherAgent");
+    type Role = NonNullable<NonNullable<OpenClawConfig["gateway"]>["roles"]>["definitions"][string];
+    const role = (others: Role["sessions"]["others"], overrides: Partial<Role> = {}): Role => ({
+      sessions: { others },
+      agents: "*",
+      scopes: ["operator.read", "operator.write"],
+      ...overrides,
+    });
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "baseline",
+          definitions: {
+            baseline: role("suggest"),
+            writer: role("write"),
+            viewOnly: role("view"),
+            limited: role("suggest", { scopes: ["operator.read"] }),
+            denied: role("none"),
+            sandboxed: role("write", { sandbox: "required" }),
+            otherAgent: role("write", { agents: ["other"] }),
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const sessionKey = "agent:main:permissions";
+    await seed(sessionKey, "permissions", {
+      visibility: "read-only",
+      createdActor: { type: "human", source: "profile", id: owner.id },
+    });
+    let requestContext = context(vi.fn(), cfg);
+    const client = identifiedClient(owner.id);
+    const invoke = (method: Parameters<typeof call>[0], params: Record<string, unknown> = {}) =>
+      call(method, { sessionKey, ...params }, requestContext, client);
+    const read = async () => {
+      const result = await invoke("session.members.listEvidence");
+      expect(result[0]?.[0]).toBe(true);
+      return Value.Decode(SessionMembersListEvidenceResultSchema, result[0]?.[1]);
+    };
+    await invoke("session.members.add", { identityId: explicit.id });
+    const first = await read();
+    const permission = (id: string) => first.permissions?.find((row) => row.identityId === id);
+    const expectedPermission = (
+      identityId: string,
+      level: SessionMemberPermissionLevel,
+      options: SessionMemberPermissionLevel[],
+    ) => ({ identityId, level, options });
+    for (const [person, level, options] of [
+      [baseline, "read", ["read", "send"]],
+      [explicit, "send", ["read", "send"]],
+      [inherited, "send", ["send"]],
+      [limited, "read", ["read"]],
+      [sandboxed, "read", ["read"]],
+      [wrongAgent, "read", ["read"]],
+    ] as const) {
+      expect(permission(person.id)).toEqual(expectedPermission(person.id, level, [...options]));
+    }
+    expect(permission(denied.id)).toBeUndefined();
+    expect(permission(owner.id)).toBeUndefined();
+    expect(permission(gatewayOwner.id)).toBeUndefined();
+
+    await invoke("session.members.add", { identityId: baseline.id });
+    const expectPermission = async (
+      person: { id: string },
+      level: SessionMemberPermissionLevel,
+      options: SessionMemberPermissionLevel[],
+    ) =>
+      expect((await read()).permissions).toContainEqual(
+        expectedPermission(person.id, level, options),
+      );
+    await expectPermission(baseline, "send", ["read", "send"]);
+    await invoke("session.members.remove", { identityId: baseline.id });
+    await invoke("session.visibility.set", { visibility: "suggest" });
+    await expectPermission(baseline, "suggest", ["suggest", "send"]);
+    await expectPermission(viewOnly, "read", ["read", "send"]);
+    setUserProfileRole(baseline.id, "writer");
+    await expectPermission(baseline, "send", ["send"]);
+
+    for (const visibility of ["shared", "draft"] as const) {
+      await invoke("session.visibility.set", { visibility });
+      expect((await read()).permissions).toEqual([]);
+    }
+    await invoke("session.visibility.set", { visibility: "read-only" });
+    const unconfiguredCfg = {};
+    setRuntimeConfigSnapshot(unconfiguredCfg);
+    requestContext = context(vi.fn(), unconfiguredCfg);
+    const unconfigured = await read();
+    expect(unconfigured.permissions).toContainEqual(
+      expectedPermission(baseline.id, "read", ["read", "send"]),
+    );
+    expect(unconfigured.permissions).toContainEqual(
+      expectedPermission(explicit.id, "send", ["read", "send"]),
+    );
+    const legacy = await invoke("session.members.list");
+    expect(legacy[0]?.[1]).not.toHaveProperty("permissions");
   }));

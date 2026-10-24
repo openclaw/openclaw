@@ -385,7 +385,6 @@ describe("native SQLite schema snapshots and callbacks", () => {
       filename,
     );
     installSqliteTempTrackingSchema(database, {
-      kind: "transcript-index",
       statusTable: "local_status",
       pendingTable: "local_pending",
       pendingIndex: "local_pending_state",

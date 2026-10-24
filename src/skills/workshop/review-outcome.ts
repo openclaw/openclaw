@@ -191,6 +191,7 @@ export async function postWorkshopChangeNotice(params: {
             agentId,
             idempotencyKey,
             expectedSessionId: generation.sessionId,
+            deliveryMirror: marker,
           },
           bestEffort: true,
         },

@@ -10,7 +10,10 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
-import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import {
+  captureRemoteModelCatalogStartupSnapshot,
+  withRemoteModelCatalogSnapshot,
+} from "../model-catalog/remote-overlay.js";
 import { withHandedOffCodexClientVersion } from "../plugin-sdk/codex-client-version-handoff.internal.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
@@ -24,6 +27,8 @@ import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
 import { getLiveCatalogRetainedData } from "../plugins/provider-live-catalog-cache.js";
 import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
+import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import {
   listManifestSyntheticAuthProviderRefs,
@@ -74,7 +79,7 @@ import type { PreparedModelRuntimePluginGeneration } from "./prepared-model-runt
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 type WorkerGeneration = {
-  pluginGeneration: PreparedModelRuntimePluginGeneration;
+  pluginGeneration: PreparedModelRuntimePluginGeneration & { pluginRegistry: PluginRegistry };
   pluginIds: ReadonlySet<string>;
   staticProviderIds: ReadonlySet<string>;
   release: () => void | Promise<void>;
@@ -124,7 +129,6 @@ async function refreshAuthStore(params: {
         env: params.env,
         ...(params.providerIds ? { externalCliProviderIds: params.providerIds } : {}),
         ...(params.profileIds ? { externalCliProfileIds: params.profileIds } : {}),
-        allowKeychainPrompt: false,
       }),
   );
   return { authStore, displayPath };
@@ -467,6 +471,13 @@ async function runCatalogRequest(
     work.beginClose();
     await work.runWhenIdle(() => undefined);
     if (acquiredGeneration) {
+      const successor = getPluginRegistryInspectionResources(
+        acquiredGeneration.pluginGeneration.pluginRegistry,
+      );
+      if (!successor) {
+        throw new Error("Catalog scope growth has no inspection resource owner");
+      }
+      successor.adoptRetainedRegistrations(prepared.pluginGeneration.pluginRegistry);
       const releasePrevious = prepared.release;
       Object.assign(prepared, acquiredGeneration);
       acquiredGeneration = undefined;
@@ -510,7 +521,27 @@ if (parentPort) {
   serveWorkerTasks(
     async (input, channel) => {
       // SAFETY: The typed catalog host is the sole producer of this private task envelope.
-      const { value, request } = input as PreparedModelCatalogWorkerTask;
+      const task = input as PreparedModelCatalogWorkerTask;
+      const { request } = task;
+      let { value } = task;
+      if (value.remoteCatalog) {
+        // Transport clones share the publisher's content revision. Reuse an existing owner
+        // before registry callbacks capture the request scope; keep no extra revision cache.
+        const retained = [
+          captureRemoteModelCatalogStartupSnapshot(),
+          ...Array.from(
+            contexts.values(),
+            ({ prepared }) => prepared.pluginGeneration.remoteCatalog,
+          ),
+        ].find(
+          (catalog) =>
+            catalog?.sourceUrl === value.remoteCatalog?.sourceUrl &&
+            catalog?.revision === value.remoteCatalog?.revision,
+        );
+        if (retained) {
+          value = { ...value, remoteCatalog: retained };
+        }
+      }
       activeRequest = value;
       let reportAfter = 0;
       let reportedPlugin: string | undefined;

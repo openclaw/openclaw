@@ -30,6 +30,11 @@ import { buildSqliteMemorySourceFilter, type MemorySourceFilter } from "./source
 
 const EXACT_PATH_SPECIFICITY_SQL_FUNCTION = "openclaw_memory_exact_path_specificity";
 const NORMALIZED_CONTAINS_SQL_FUNCTION = "openclaw_memory_normalized_contains";
+// Since SQLite 3.47 a bare bound LIMIT value or LIKE pattern is plan-relevant
+// (sqlite3ExprIsInteger and isLikeOrGlob call sqlite3VdbeSetVarmask; 3.53.4
+// select.c:2538, whereexpr.c:208-215), and node:sqlite clears bindings before
+// every run, so such a statement recompiles each time. Search SQL binds them as
+// `LIMIT +?` and `LIKE (? || '')` instead; no LIKE here can use an index.
 
 function loadKeywordRowsWithFallback<T>(
   plan: { matchQuery: TextQuery | null; substringTerms: string[] },
@@ -181,14 +186,40 @@ export function prepareExactPathMatcher(
   };
 }
 
+type SearchSqlFunctionState = {
+  substringMatchers: ReadonlyMap<string, RegExp>;
+  matchExactPath: (candidatePath: string) => ExactPathSpecificity;
+};
+
+// Replacing a SQL function expires every prepared statement on the connection,
+// so register once per connection and let each search swap the state read here.
+// Searches set it and run their statements synchronously, so it is fixed for a
+// whole statement run; every call site passes a column, never a constant.
+const searchSqlFunctions = new WeakMap<DatabaseSync, SearchSqlFunctionState>();
+
+function resolveSearchSqlFunctions(db: DatabaseSync): SearchSqlFunctionState {
+  const registered = searchSqlFunctions.get(db);
+  if (registered) {
+    return registered;
+  }
+  const state: SearchSqlFunctionState = { substringMatchers: new Map(), matchExactPath: () => 0 };
+  db.function(NORMALIZED_CONTAINS_SQL_FUNCTION, { deterministic: true }, (value, query) =>
+    typeof value === "string" && typeof query === "string"
+      ? Number(state.substringMatchers.get(query)?.test(value.normalize("NFC")) === true)
+      : 0,
+  );
+  db.function(EXACT_PATH_SPECIFICITY_SQL_FUNCTION, { deterministic: true }, (candidatePath) =>
+    typeof candidatePath === "string" ? state.matchExactPath(candidatePath) : 0,
+  );
+  searchSqlFunctions.set(db, state);
+  return state;
+}
+
 function registerSubstringSqlFunction(db: DatabaseSync, terms: readonly string[]): void {
   // Prepare bound literals once. Unicode ignore-case uses simple folding;
   // lowercasing is contextual and LIKE/upper-lower anchors miss equivalent forms.
-  const matchers = new Map(terms.map((term) => [term, literalSearchMatcher(term)]));
-  db.function(NORMALIZED_CONTAINS_SQL_FUNCTION, { deterministic: true }, (value, query) =>
-    typeof value === "string" && typeof query === "string"
-      ? Number(matchers.get(query)?.test(value.normalize("NFC")) === true)
-      : 0,
+  resolveSearchSqlFunctions(db).substringMatchers = new Map(
+    terms.map((term) => [term, literalSearchMatcher(term)]),
   );
 }
 
@@ -345,7 +376,7 @@ export async function searchKeyword(params: {
     const ranked = `SELECT ${columns}, ${rank} AS rank
       FROM ${params.ftsTable}
       WHERE ${matchClause}${liveChunkClause}${sourceFilter.sql}
-      ORDER BY rank ${rankOrder} LIMIT ?`;
+      ORDER BY rank ${rankOrder} LIMIT +?`;
     // SQLite cannot combine MATCH with scalar OR predicates. Bound the BM25
     // leg first; substring-only trigram hits fill spare capacity without a score.
     const mixedOr = params.matchAny && matchQuery && terms.length > 0;
@@ -361,7 +392,7 @@ export async function searchKeyword(params: {
       : `SELECT ${columns}, ${matchQuery ? rank : "NULL"} AS rank
          FROM ${params.ftsTable}
          WHERE ${matchClause}${filter}${liveChunkClause}${sourceFilter.sql}
-         ${matchQuery ? `ORDER BY rank ${rankOrder}` : ""} LIMIT ?`;
+         ${matchQuery ? `ORDER BY rank ${rankOrder}` : ""} LIMIT +?`;
     return executeSqliteQuerySync<MemorySearchRow & { rank: number | null }>(params.db, {
       compile: () =>
         CompiledQuery.raw(sql, [
@@ -469,11 +500,7 @@ export async function searchPathKeyword(params: {
   const matchExactPath = prepareExactPathMatcher(params.query);
   // This reader consumes the query synchronously; substring plans can change
   // without replacing the original-query matcher.
-  params.db.function(
-    EXACT_PATH_SPECIFICITY_SQL_FUNCTION,
-    { deterministic: true },
-    (candidatePath) => (typeof candidatePath === "string" ? matchExactPath(candidatePath) : 0),
-  );
+  resolveSearchSqlFunctions(params.db).matchExactPath = matchExactPath;
   const projectPathRow = (
     row: MemorySearchRow,
     pathScore: number,
@@ -512,7 +539,7 @@ export async function searchPathKeyword(params: {
   // joins pin loop order and indexes so stale one-row statistics cannot cause scans.
   const loadExactRows = (useLexicalCandidates: boolean): ExactPathRow[] => {
     const qualifiedPatternClause = exactCandidatePatterns
-      .map(() => `${pathColumn} LIKE ? ESCAPE '\\'`)
+      .map(() => `${pathColumn} LIKE (? || '') ESCAPE '\\'`)
       .join(" OR ");
     const match = plan.matchQuery
       ? fullText.match(index, plan.matchQuery).compile(dialect)
@@ -524,7 +551,7 @@ export async function searchPathKeyword(params: {
         `   WHERE ${match?.sql ?? "1=1"}${planSubstringFilter}${sourceFilter.sql}\n` +
         `), pattern_candidates AS MATERIALIZED (\n` +
         `  SELECT path, source FROM candidates\n` +
-        `   WHERE (${exactCandidatePatterns.map(() => "path LIKE ? ESCAPE '\\'").join(" OR ")})\n` +
+        `   WHERE (${exactCandidatePatterns.map(() => "path LIKE (? || '') ESCAPE '\\'").join(" OR ")})\n` +
         `)`
       : `pattern_candidates AS MATERIALIZED (\n` +
         `  SELECT ${params.pathFtsTable}.path, ${params.pathFtsTable}.source\n` +
@@ -551,7 +578,7 @@ export async function searchPathKeyword(params: {
       `                  WHERE live.path = scored_paths.path\n` +
       `                    AND live.source = scored_paths.source)\n` +
       `   ORDER BY exact_path_specificity DESC, path ASC, source ASC\n` +
-      `   LIMIT ?\n` +
+      `   LIMIT +?\n` +
       `)\n` +
       projectFirstChunks("exact_paths", "exact_path_specificity", "DESC");
     return executeSqliteQuerySync<ExactPathRow>(params.db, {
@@ -601,7 +628,7 @@ export async function searchPathKeyword(params: {
       `                  WHERE live.path = ${params.pathFtsTable}.path\n` +
       `                    AND live.source = ${params.pathFtsTable}.source)\n` +
       `   ORDER BY rank ${rankOrder}, ${params.pathFtsTable}.path ASC, ${params.pathFtsTable}.source ASC\n` +
-      `   LIMIT ?\n` +
+      `   LIMIT +?\n` +
       `)\n` +
       projectFirstChunks("retained_paths", "rank", rankOrder);
     return executeSqliteQuerySync<PathLexicalRow>(params.db, {

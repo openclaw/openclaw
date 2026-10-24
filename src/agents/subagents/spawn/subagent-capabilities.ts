@@ -78,7 +78,7 @@ function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string
   return Boolean(leftAgentId) && leftAgentId === rightAgentId;
 }
 
-function resolveSessionCapabilityEntry(params: {
+export function resolveSessionCapabilityEntry(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
   store?: SessionCapabilityStore;
@@ -157,8 +157,6 @@ export function resolveSubagentCapabilities(params: { depth: number; maxSpawnDep
     depth,
     role,
     controlScope,
-    canSpawn: role === "main" || role === "orchestrator",
-    canControlChildren: controlScope === "children",
   };
 }
 

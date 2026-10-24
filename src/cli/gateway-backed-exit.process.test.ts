@@ -4,19 +4,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
-import {
-  readOriginDeviceTokenReadOnlyForTest,
-  seedOriginDeviceToken,
-} from "../infra/device-auth-store.test-support.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { readOriginDeviceTokenReadOnlyForTest } from "../infra/device-auth-store.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import {
   prepareGatewayCliFixture,
-  prepareSharedStateReadArtifacts,
   runIsolatedGatewayCli,
+  seedDeviceAuth,
   snapshotDirectoryContents,
   snapshotSharedStateArtifacts,
   tempDirs,
@@ -38,23 +33,7 @@ const TEST_TOKEN = "test-token";
 const cliEntrypoint = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli);
 
 async function remoteFixture(root: string, remote: { url: string; token?: string }) {
-  return { root, ...(await prepareGatewayCliFixture(root, { mode: "remote", remote })) };
-}
-
-function seedDeviceAuth(root: string, stateDir: string, url: string, token: string) {
-  const env = { ...process.env, HOME: root, OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir };
-  const identity = loadOrCreateDeviceIdentity({ env });
-  seedOriginDeviceToken({
-    gatewayScope: gatewayOriginScope(url),
-    deviceId: identity.deviceId,
-    role: "operator",
-    token,
-    scopes: ["operator.admin"],
-    env,
-  });
-  closeOpenClawStateDatabaseForTest();
-  prepareSharedStateReadArtifacts(stateDir);
-  return { identity, env };
+  return await prepareGatewayCliFixture(root, { mode: "remote", remote });
 }
 
 const statusArgs = (url: string, token: string) => [
@@ -248,6 +227,7 @@ it("rejects invalid remote config before a node pairing mutation without opening
       type: "cli_error",
       message: expect.stringContaining("OpenClaw config is invalid:"),
     },
+    repairHint: "Run `openclaw doctor --fix` to repair, then retry.",
     issues: [
       {
         path: "gateway.mode",

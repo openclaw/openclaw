@@ -1,34 +1,15 @@
 // @vitest-environment node
+import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
-import { coalesceActivityRuns, groupMessages } from "./chat-thread-grouping.ts";
+import { message as chatMessage } from "./chat-thread-fixtures.test-support.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
+import { coalesceActivityRuns } from "./chat-turn-presentation.ts";
 
 function preparedGroup(message: unknown, key: string): MessageGroup {
   const [group] = groupMessages([{ kind: "message", key, message }], {}, undefined, true);
-  if (group?.kind !== "group") {
-    throw new Error("expected a prepared message group");
-  }
+  assert(group?.kind === "group", "expected a prepared message group");
   return group;
-}
-
-function messageEntry(key: string, message: unknown): MessageGroup["messages"][number] {
-  const entry = preparedGroup(message, key).messages[0];
-  if (!entry) {
-    throw new Error("expected a prepared message entry");
-  }
-  return entry;
-}
-
-function assistantMessage(
-  content: unknown,
-  timestamp: number,
-  overrides: Record<string, unknown> = {},
-) {
-  return { role: "assistant", content, timestamp, ...overrides };
-}
-
-function userMessage(content: string, timestamp: number, overrides: Record<string, unknown> = {}) {
-  return { role: "user", content, timestamp, ...overrides };
 }
 
 describe("coalesceActivityRuns", () => {
@@ -48,9 +29,7 @@ describe("coalesceActivityRuns", () => {
     );
 
   function requireActivityRun(value: ReturnType<typeof coalesceActivityRuns>[number] | undefined) {
-    if (value?.kind !== "activity-run") {
-      throw new Error("expected an activity run");
-    }
+    assert(value?.kind === "activity-run", "expected an activity run");
     return value;
   }
 
@@ -62,40 +41,30 @@ describe("coalesceActivityRuns", () => {
           ? projectedToolGroups().map((group, index) =>
               Object.assign({}, group, { runId: `run-${index}` }),
             )
-          : [1, 2, 3].map((index): MessageGroup => ({
-              kind: "group",
-              key: `group:assistant:hb-${index}`,
-              role: "assistant",
-              messages: [
-                messageEntry(
+          : [1, 2, 3].map((index): MessageGroup => {
+              const tool = { id: `hb-call-${index}`, name: "heartbeat_respond" };
+              const content = [
+                { ...tool, type: "toolCall", arguments: {} },
+                { ...tool, type: "toolResult", text: "ok" },
+              ];
+              return Object.assign(
+                preparedGroup(
+                  chatMessage("assistant", content, 1_000 * index, { runId: `hb-run-${index}` }),
                   `hb-${index}`,
-                  assistantMessage(
-                    [
-                      {
-                        type: "toolCall",
-                        id: `hb-call-${index}`,
-                        name: "heartbeat_respond",
-                        arguments: {},
-                      },
-                      {
-                        type: "toolResult",
-                        id: `hb-call-${index}`,
-                        name: "heartbeat_respond",
-                        text: "ok",
-                      },
-                    ],
-                    1_000 * index,
-                    { runId: `hb-run-${index}` },
-                  ),
                 ),
-              ],
-              visibleContent: "none",
-              timestamp: 1_000 * index,
-              isStreaming: false,
-              runId: `hb-run-${index}`,
-            }));
+                {
+                  // Exercise legacy assistant-role activity, not only normalized tool groups.
+                  role: "assistant",
+                  key: `group:assistant:hb-${index}`,
+                  visibleContent: "none" as const,
+                  timestamp: 1_000 * index,
+                  isStreaming: false,
+                  runId: `hb-run-${index}`,
+                },
+              );
+            });
       const prompt = preparedGroup(
-        userMessage("Start", 500, { __openclaw: { idempotencyKey: "run-1:user" } }),
+        chatMessage("user", "Start", 500, { __openclaw: { idempotencyKey: "run-1:user" } }),
         "prompt",
       );
       const initial = coalesceActivityRuns([prompt, ...groups.slice(0, 2)]);
@@ -111,9 +80,6 @@ describe("coalesceActivityRuns", () => {
       expect(run.key).toBe(`activity:${groups[0]!.key}`);
       expect(requireActivityRun(appended[1]).key).toBe(run.key);
       expect(requireActivityRun(appended[1]).groups).toEqual(groups);
-      expect(run.groups.flatMap((group) => group.messages.map((entry) => entry.key))).toEqual(
-        groups.slice(0, 2).flatMap((group) => group.messages.map((entry) => entry.key)),
-      );
     },
   );
 
@@ -148,7 +114,7 @@ describe("coalesceActivityRuns", () => {
       content: "Message from the parent session.",
       provenance: { kind: "inter_session", sourceTool: "sessions_send" },
     },
-  ])("keeps $name between activity logs", ({ name, ...message }) => {
+  ])("keeps $name between activity logs", ({ name, ...fields }) => {
     const groups = projectedToolGroups();
     const boundary =
       name === "divider"
@@ -156,7 +122,7 @@ describe("coalesceActivityRuns", () => {
         : name === "stream"
           ? { kind: "stream-run" as const, key: "stream-run:live", runId: "run-2", parts: [] }
           : preparedGroup(
-              assistantMessage(message.content, 2_000, { ...message, runId: "run-2" }),
+              chatMessage("assistant", fields.content, 2_000, { ...fields, runId: "run-2" }),
               "boundary",
             );
     const first = { ...groups[0]!, runId: "run-1" };

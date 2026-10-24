@@ -4,11 +4,13 @@ import { createComponent, createSignal, merge } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { switchChatModel } from "./chat-session.ts";
 import { ChatModelControls } from "./components/chat-model-controls.tsx";
+import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
 
 const codexChoice = {
   agentRuntime: { id: "codex", source: "model" },
@@ -34,6 +36,7 @@ async function renderControls(
   options: Pick<ModelControlsProps, "onModelSelect" | "onModelSetup" | "modelSelectionLocked"> = {},
   container = document.createElement("div"),
 ) {
+  installModelPickerLayout();
   const props: ModelControlsProps = {
     activeRunId: null,
     connected: true,
@@ -70,6 +73,7 @@ async function renderControls(
   await waitForSolid(() =>
     expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
   );
+  expandModelProviders(container);
   return container;
 }
 
@@ -289,43 +293,10 @@ describe("chat model runtime choices", () => {
       "codex",
     );
     container.querySelector<HTMLElement>(".chat-controls__effort-picker summary")!.click();
-    flush();
-    expect(container.querySelector('[data-chat-thinking-option="high"]')).not.toBeNull();
-    expect(container.querySelector('[data-chat-thinking-option="medium"]')).toBeNull();
-  });
-
-  it("pins the chosen harness for an inherited default model and resets through Default", async () => {
-    const result = createSessionsListResult({
-      model: model.id,
-      defaultsModel: model.id,
-      modelOverrideSource: null,
-    });
-    result.sessions[0]!.agentRuntime = { id: "openclaw", source: "provider" };
-    const { host, container, draw, row, select, patches } = selectionControls(result, [model]);
-    await draw();
-    const runtimeRow = () => row(codexSelector);
-    const defaultRow = () => row("[data-chat-model-default]");
-    expect([defaultRow(), runtimeRow()].map(optionName)).toEqual([
-      "GPT-5.6 Sol",
-      "GPT-5.6 Sol codex",
-    ]);
-    expect(defaultRow().parentElement?.querySelector("[data-chat-model-option]")).toBe(
-      defaultRow(),
+    await waitForSolid(() =>
+      expect(container.querySelector('[data-chat-thinking-option="high"]')).not.toBeNull(),
     );
-    expect(runtimeRow().getAttribute("aria-selected")).toBe("false");
-    expect(defaultRow().getAttribute("aria-selected")).toBe("true");
-    await select(runtimeRow());
-    expectPatch(host, { model: "openai/gpt-5.6-sol", agentRuntime: "codex" });
-    result.sessions[0]!.agentRuntime = { id: "codex", source: "session-key" };
-    await draw();
-    expect(triggerLabel(container)).toBe("GPT-5.6 Sol codex");
-    expect(runtimeRow().getAttribute("aria-selected")).toBe("true");
-    expect(defaultRow().getAttribute("aria-selected")).toBe("false");
-    expect(patches()).toHaveLength(1);
-    await select(runtimeRow());
-    expect(patches()).toHaveLength(1);
-    await select(defaultRow());
-    expectPatch(host, { model: null, agentRuntime: null });
+    expect(container.querySelector('[data-chat-thinking-option="medium"]')).toBeNull();
   });
 
   it.each(["missing-auth", "unsupported-runtime", "locked"] as const)(

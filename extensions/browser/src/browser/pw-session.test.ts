@@ -261,7 +261,7 @@ describe("pw-session ensurePageState", () => {
     }
   });
 
-  it("waits only the requested first-event grace for a just-late action download", async () => {
+  it("captures a just-late action download within the first-event grace", async () => {
     const { page, send } = observedPage();
     const capture = beginActionDownloadCaptureOnPage(page);
     const saveAs = saveContents("late-action-download");
@@ -274,6 +274,7 @@ describe("pw-session ensurePageState", () => {
   });
 
   it("detaches ownership before waiting for slow file saves", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const { page, send } = observedPage();
     const firstSaveGate = Promise.withResolvers<void>();
     const beforeSave = vi.fn(async () => {});
@@ -282,6 +283,7 @@ describe("pw-session ensurePageState", () => {
     send("first.txt", firstSave);
 
     const drain = capture.drain();
+    await vi.advanceTimersByTimeAsync(250);
     const lateSave = saveContents("late");
     const lateDownload = send("late.txt", lateSave);
     firstSaveGate.resolve();
@@ -334,7 +336,7 @@ describe("pw-session ensurePageState", () => {
     send("first.txt", firstSave, "http://127.0.0.1/first.txt");
     setImmediate(() => send("second.txt", secondSave, "http://127.0.0.1/second.txt"));
 
-    await expect(capture.drain({ quietMs: 1_000 })).rejects.toBe(blocked);
+    await expect(capture.drain()).rejects.toBe(blocked);
     capture.dispose();
     expect(beforeSave).toHaveBeenCalledTimes(2);
     expect(firstSave).not.toHaveBeenCalled();
@@ -354,7 +356,7 @@ describe("pw-session ensurePageState", () => {
     const allowedDownload = send("allowed.txt", saveContents("allowed", allowedSaveGate.promise));
     setImmediate(() => send("blocked.txt"));
 
-    await expect(capture.drain({ quietMs: 100 })).rejects.toBe(blocked);
+    await expect(capture.drain()).rejects.toBe(blocked);
     allowedSaveGate.resolve();
     await expect(allowedDownload.path?.()).resolves.toMatch(/-allowed\.txt$/);
     capture.dispose();

@@ -1,9 +1,51 @@
 import type { JSX } from "@solidjs/web";
-import { onSettled } from "solid-js";
+import { For, onSettled } from "solid-js";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatComposerInvocationMenu } from "./chat-picker-overlay.ts";
 
-export { handleComposerMenuKeydown } from "../../../components/composer-menu.ts";
+/** Keep option semantics and geometry while their visual renderer loads. */
+export function ComposerMenuLoadingRows(props: {
+  rows: readonly {
+    id: string;
+    name: string;
+    description?: string;
+    select: () => void;
+    hover: () => void;
+  }[];
+  activeId: string | null | undefined;
+  preserveFocus?: boolean;
+}) {
+  const Option = renderComposerMenuOption;
+  return (
+    <div aria-busy="true">
+      <For each={props.rows} keyed={false}>
+        {(row) => (
+          <Option
+            id={row().id}
+            active={row().id === props.activeId}
+            preserveFocus={props.preserveFocus}
+            select={() => row().select()}
+            hover={() => row().hover()}
+            iconHidden={true}
+            icon={
+              <span class="skeleton" style={{ display: "block", width: "100%", height: "100%" }} />
+            }
+            name={
+              <span class="skeleton" style={{ display: "block" }}>
+                <span style={{ opacity: 0 }}>{row().name}</span>
+              </span>
+            }
+            description={
+              <span class="skeleton" style={{ display: "block" }}>
+                <span style={{ opacity: 0 }}>{row().description}</span>
+              </span>
+            }
+          />
+        )}
+      </For>
+    </div>
+  );
+}
 
 export function ComposerMenu(options: {
   id: string;
@@ -57,9 +99,11 @@ export function renderComposerMenuOption(options: {
       class={["slash-menu-item", { "slash-menu-item--active": options.active }]}
       role="option"
       aria-selected={options.active ? "true" : "false"}
-      onMouseDown={
-        options.preserveFocus === false ? undefined : (event: MouseEvent) => event.preventDefault()
-      }
+      onMouseDown={(event: MouseEvent) => {
+        if (options.preserveFocus !== false) {
+          event.preventDefault();
+        }
+      }}
       onClick={() => options.select()}
       onPointerMove={(event: PointerEvent) => {
         if (!options.active && event.pointerType !== "touch") {
@@ -71,7 +115,7 @@ export function renderComposerMenuOption(options: {
         {options.icon}
       </span>
       <span class="slash-menu-copy">
-        <span class="slash-menu-name">{options.name}</span>
+        <span class="slash-menu-name">{options.name}</span>{" "}
         <span class="slash-menu-desc">{options.description}</span>
       </span>
     </div>

@@ -19,6 +19,7 @@ import type {
 } from "openclaw/plugin-sdk/provider-onboard";
 import { WizardCancelledError } from "openclaw/plugin-sdk/setup";
 import { afterEach, expect, it, vi } from "vitest";
+import { createNoBrowserAuth } from "../test-support/no-browser-auth.test-support.js";
 import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import plugin from "./index.js";
 
@@ -87,14 +88,7 @@ async function runInteractiveAuth(params: {
     prompter: params.prompter,
     secretInputMode: "plaintext",
     isRemote: false,
-    openUrl: async () => {
-      throw new Error("Unexpected browser auth");
-    },
-    oauth: {
-      createVpsAwareHandlers: () => {
-        throw new Error("Unexpected OAuth");
-      },
-    },
+    ...createNoBrowserAuth(),
   });
 }
 

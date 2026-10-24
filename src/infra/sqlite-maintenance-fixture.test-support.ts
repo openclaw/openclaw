@@ -83,8 +83,8 @@ export function sqliteSchedulerClock(nowMs = 1_000) {
   const clock = createGatewaySchedulerClock(nowMs);
   const scheduler = new GatewayScheduler({ clock: clock.clock });
   const scope = GatewayScheduler.prototype.scope.bind(scheduler);
-  vi.spyOn(GatewayScheduler.prototype, "scope").mockImplementation(() => scope());
-  return clock;
+  const scopeSpy = vi.spyOn(GatewayScheduler.prototype, "scope").mockImplementation(() => scope());
+  return Object.assign(clock, { restore: () => scopeSpy.mockRestore() });
 }
 
 export function sqliteDiagnosticClock() {

@@ -26,7 +26,7 @@ function createBufferedPeer(connId: string, bufferedAmount: number) {
   const send = peer.socket.send.getMockImplementation()!;
   peer.socket.bufferedAmount = bufferedAmount;
   peer.socket.send.mockImplementation((wire, options, callback) => {
-    const bytes = Buffer.byteLength(wire);
+    const bytes = typeof wire === "string" ? Buffer.byteLength(wire) : wire.byteLength;
     peer.socket.bufferedAmount += bytes + (bytes < 126 ? 2 : bytes < 65536 ? 4 : 10);
     send(wire, options, callback);
   });
@@ -251,7 +251,7 @@ it.each([
   "owner",
   "membership",
   "invalidated",
-  "replacement socket",
+  "replacement client",
   "scope",
   "throwing visibility",
   "targeted subscription",
@@ -290,7 +290,10 @@ it.each([
     owner: () => (current = false),
     membership: () => clients.delete(peer.client),
     invalidated: () => (peer.client.invalidated = true),
-    "replacement socket": () => (peer.client.socket = createPeer("replacement").client.socket),
+    "replacement client": () => {
+      clients.delete(peer.client);
+      clients.add(createPeer("replacement").client);
+    },
     scope: () => (peer.client.connect.scopes = []),
     "throwing visibility": () => (visible = false),
     "targeted subscription": () => subscribers.unsubscribe(peer.client.connId, "agent:main:stream"),

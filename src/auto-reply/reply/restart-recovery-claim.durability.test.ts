@@ -1,18 +1,17 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { createHarnessCompletionSourceAssertion } from "../../agents/agent-harness-completion-recovery.js";
 import { claimAgentSessionWriter } from "../../agents/embedded-agent-runner/run/session-bootstrap.js";
+import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
+import { createOperatorRecoveryAuthority } from "../../agents/operator-recovery.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { HarnessCompletionRecovery } from "../../config/sessions/restart-recovery-types.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
@@ -21,14 +20,30 @@ import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
-import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
+import { createRecoveryControllerFixture } from "./recovery-controller.fixture.test-support.js";
+
+function recoveryScope(sessionsDir: string, name: string) {
+  return {
+    agentId: "main",
+    storePath: path.join(sessionsDir, "sessions.json"),
+    sessionKey: "agent:main:dashboard:" + name,
+  };
+}
+async function reopen(scope: ReturnType<typeof recoveryScope>, root: string) {
+  await closeOpenClawAgentDatabasesAsync(root);
+  closeOpenClawAgentDatabasesForTest(root);
+  return expectDefined(
+    loadSessionEntry({ ...scope, readConsistency: "latest" }),
+    "session survives reopen",
+  );
+}
 
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
@@ -38,36 +53,24 @@ it.each(["new input", "accepted input"] as const)(
   (admission) =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       setRuntimeConfigSnapshot({});
-      const scope = {
-        agentId: "main",
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-        sessionKey: "agent:main:dashboard:durable-admission",
-      };
+      const scope = recoveryScope(state.sessionsDir(), "durable-admission");
       const executionRunId = "admitted-execution";
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      let entry: InternalSessionEntry = {
+      const entry: InternalSessionEntry = {
         sessionId: "admitted-session",
         updatedAt: 1,
         startedAt: 1,
-        endedAt: 2,
-        runtimeMs: 1,
-        status: "done",
-        lastRunId: "previous-run",
         ...(admission === "accepted input"
           ? {
-              status: undefined,
-              endedAt: undefined,
-              runtimeMs: undefined,
-              lastRunId: undefined,
               lifecycleRunId: executionRunId,
               restartRecoveryDeliveryRunId: "admitted-input",
               restartRecoveryDeliverySourceRunId: "admitted-input",
               restartRecoverySourceIngress: "control-ui",
               restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
             }
-          : {}),
+          : { endedAt: 2, runtimeMs: 1, status: "done", lastRunId: "previous-run" }),
       };
-      await replaceSessionEntry(scope, entry);
+      const fixture = await createRecoveryControllerFixture(scope, entry);
       {
         const recorder =
           admission === "new input"
@@ -77,32 +80,15 @@ it.each(["new input", "accepted input"] as const)(
                 updateMode: "none",
               })
             : undefined;
-        await using actor = createReplyRecoveryActorFixture({
-          ...scope,
-          getSessionId: () => entry.sessionId,
-        });
-        const controller = createReplyRestartRecoveryClaimController({
-          acquireSessionActor: () => actor.acquireSessionActor(),
-          isRestartAbort: () => false,
-          resolveDeliveryContext: () => undefined,
-          ...scope,
+        await using actor = fixture;
+        const controller = actor.controller({
           admissionRunId: "admitted-input",
           executionRunId,
           lifecycleGeneration,
-          getEntry: () => entry,
-          getSessionId: () => entry.sessionId,
-          setEntry: (next) => {
-            entry = next;
-          },
         });
         await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
       }
-      await closeOpenClawAgentDatabasesAsync(state.root);
-      closeOpenClawAgentDatabasesForTest(state.root);
-      const admitted = expectDefined(
-        loadSessionEntry({ ...scope, readConsistency: "latest" }),
-        "admitted session survives restart",
-      );
+      const admitted = await reopen(scope, state.root);
       expect(admitted.lifecycleRunId).toBe(executionRunId);
       expect(admitted.status).toBeUndefined();
       expect(admitted.endedAt).toBeUndefined();
@@ -133,12 +119,7 @@ it.each(["new input", "accepted input"] as const)(
           data: { phase: "end", startedAt, endedAt: startedAt + 20 },
         },
       });
-      await closeOpenClawAgentDatabasesAsync(state.root);
-      closeOpenClawAgentDatabasesForTest(state.root);
-      const settled = expectDefined(
-        loadSessionEntry({ ...scope, readConsistency: "latest" }),
-        "settled session survives restart",
-      );
+      const settled = await reopen(scope, state.root);
       expect(settled).toMatchObject({
         status: "done",
         startedAt,
@@ -151,55 +132,67 @@ it.each(["new input", "accepted input"] as const)(
     }),
 );
 
+it.each([true, false])("keeps scheduled recovery bookkeeping quiet (scheduled=%s)", (scheduled) =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const scope = recoveryScope(state.sessionsDir(), "quiet-recovery");
+    const entry: InternalSessionEntry = { sessionId: "quiet-session", updatedAt: 1 };
+    let observed: number[];
+    {
+      await using fixture = await createRecoveryControllerFixture(scope, entry);
+      const controller = fixture.controller({
+        admissionRunId: "quiet-recovery-run",
+        requesterOrigin: { sessionKey: scope.sessionKey, operatorProfileId: "test-operator" },
+        inputProvenance: scheduled
+          ? { kind: "internal_system", sourceTool: "cron_execution" }
+          : { kind: "external_user" },
+      });
+      await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+      const admitted = expectDefined(loadSessionEntry(scope), "recovery admitted");
+      expect(admitted.restartRecoveryDeliveryRunId).toBe("quiet-recovery-run");
+      expect(admitted.startedAt).toBeGreaterThan(1);
+      await controller.beginBeforeAgentReply();
+      const pending = expectDefined(loadSessionEntry(scope), "hook pending");
+      expect(pending.restartRecoveryBeforeAgentReplyState).toBe("pending");
+      await controller.checkpointBeforeAgentReply({
+        state: "handled-reply",
+        pendingFinalDelivery: {
+          intentId: "quiet-intent",
+          text: "Review is ready.",
+          deliveries: [{ id: "quiet-delivery", state: "prepared" }],
+        },
+      });
+      const checkpoint = expectDefined(loadSessionEntry(scope), "hook checkpoint persisted");
+      expect(checkpoint.restartRecoveryBeforeAgentReplyState).toBe("handled-reply");
+      expect(checkpoint.pendingFinalDelivery).toMatchObject({
+        intentId: "quiet-intent",
+        text: "Review is ready.",
+        createdAt: expect.any(Number),
+      });
+      expect(checkpoint.pendingFinalDelivery?.createdAt).toBeGreaterThan(1);
+      observed = [admitted.updatedAt, pending.updatedAt, checkpoint.updatedAt];
+    }
+    const persisted = await reopen(scope, state.root);
+    expect(persisted.restartRecoveryDeliveryRunId).toBe("quiet-recovery-run");
+    expect(persisted.pendingFinalDelivery?.intentId).toBe("quiet-intent");
+    if (scheduled) {
+      expect([...observed, persisted.updatedAt]).toEqual([1, 1, 1, 1]);
+    } else {
+      expect(observed.every((timestamp) => timestamp > 1)).toBe(true);
+      expect(persisted.updatedAt).toBe(observed.at(-1));
+    }
+  }),
+);
+
 it("keeps an authenticated peer follow-up internal while retaining its operator source", () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot({});
-    const scope = {
-      agentId: "main",
-      storePath: path.join(state.sessionsDir(), "sessions.json"),
-      sessionKey: "agent:main:dashboard:peer-target",
-    };
-    let entry: InternalSessionEntry = { sessionId: "peer-session", updatedAt: 1 };
-    await replaceSessionEntry(scope, entry);
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "peer-operator",
-      scopes: ["operator.read"],
-      assertCurrent() {},
-      recoverySnapshot: {
-        profileId: "peer-operator",
-        scopes: ["operator.read"],
-        assignedRole: null,
-        githubLogin: null,
-        grant: null,
-        aliasBindingIds: [],
-        authPolicy: {
-          generation: "",
-          grantGeneration: "peer-grant",
-          role: "operator",
-          authMethod: "token",
-        },
-        controlUiAdmin: false,
-        localOperator: false,
-        sourceIngress: "control-ui",
-      },
-    });
+    const scope = recoveryScope(state.sessionsDir(), "peer-target");
+    const entry: InternalSessionEntry = { sessionId: "peer-session", updatedAt: 1 };
+    await using actor = await createRecoveryControllerFixture(scope, entry);
+    const operatorAuthority = createOperatorRecoveryAuthority("peer-operator", "peer-grant");
 
-    await using actor = createReplyRecoveryActorFixture({
-      ...scope,
-      getSessionId: () => entry.sessionId,
-    });
-    const controller = createReplyRestartRecoveryClaimController({
-      ...scope,
+    const controller = actor.controller({
       admissionRunId: "peer-run",
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      getEntry: () => entry,
-      getSessionId: () => entry.sessionId,
-      setEntry: (next) => {
-        entry = next;
-      },
-      acquireSessionActor: () => actor.acquireSessionActor(),
-      isRestartAbort: () => false,
-      resolveDeliveryContext: () => undefined,
       operatorAuthority,
       requesterOrigin: {
         sessionKey: "agent:main:dashboard:peer-source",
@@ -235,12 +228,8 @@ it.each([
   "source-replaced",
 ] as const)("retains accepted input custody until capacity admission (%s)", async (outcome) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      storePath: path.join(state.sessionsDir(), "sessions.json"),
-      sessionKey: "agent:main:dashboard:capacity-admission",
-    };
-    let entry: InternalSessionEntry = {
+    const scope = recoveryScope(state.sessionsDir(), "capacity-admission");
+    const entry: InternalSessionEntry = {
       sessionId: "capacity-session",
       lifecycleRevision: "capacity-revision",
       updatedAt: 1,
@@ -265,28 +254,16 @@ it.each([
           }
         : undefined;
     entry.restartRecoveryHarnessCompletion = completion;
-    await replaceSessionEntry(scope, entry);
+    const actorFixture = await createRecoveryControllerFixture(scope, entry);
     let activityAt = entry.updatedAt;
     {
-      await using fixture = createReplyRecoveryActorFixture({
-        ...scope,
-        getSessionId: () => entry.sessionId,
-      });
+      await using fixture = actorFixture;
       const { operation, operationAdmission } = await fixture.bind();
-      const controller = createReplyRestartRecoveryClaimController({
-        ...scope,
+      const controller = fixture.controller({
         operationAdmission,
-        acquireSessionActor: () => fixture.acquireSessionActor(),
         isRestartAbort: () => outcome === "restart",
-        resolveDeliveryContext: () => undefined,
         admissionRunId: "accepted-input",
         executionRunId: "capacity-execution",
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        getEntry: () => entry,
-        getSessionId: () => entry.sessionId,
-        setEntry: (next) => {
-          entry = next;
-        },
       });
       await waitForDiagnosticEventsDrained();
       const writes: string[] = [];
@@ -310,10 +287,7 @@ it.each([
           "capacity-execution",
           "main",
           "writer-test",
-          createHarnessCompletionSourceAssertion({
-            claim: completion,
-            storePath: scope.storePath,
-          }),
+          createHarnessCompletionSourceAssertion({ claim: completion, storePath: scope.storePath }),
         );
       try {
         const admittedRunContext = await sourceAdmission?.admit("embedded");
@@ -337,17 +311,19 @@ it.each([
             timeoutMs: 30_000,
             workspaceDir: state.workspaceDir,
           });
+        const patchEntry = (patch: Partial<InternalSessionEntry>, preserveActivity = false) =>
+          applySessionEntryOperation(
+            scope,
+            {
+              kind: "fields",
+              expected: { sessionId: entry.sessionId },
+              patch,
+            },
+            { skipMaintenance: true, preserveActivity },
+          );
         if (outcome === "execute") {
           const interleaved = expectDefined(
-            await applySessionEntryOperation(
-              scope,
-              {
-                kind: "fields",
-                expected: { sessionId: entry.sessionId },
-                patch: { label: "updated while waiting" },
-              },
-              { skipMaintenance: true },
-            ),
+            await patchEntry({ label: "updated while waiting" }),
             "activity recorded while waiting",
           );
           activityAt = interleaved.updatedAt;
@@ -366,16 +342,11 @@ it.each([
           await waitForDiagnosticEventsDrained();
           expect(writes).toEqual(["session.actor.adoptRun"]);
         } else if (outcome === "source-replaced" && completion) {
-          await applySessionEntryOperation(
-            scope,
+          await patchEntry(
             {
-              kind: "fields",
-              expected: { sessionId: entry.sessionId },
-              patch: {
-                restartRecoveryHarnessCompletion: { ...completion, taskId: "replacement-task" },
-              },
+              restartRecoveryHarnessCompletion: { ...completion, taskId: "replacement-task" },
             },
-            { skipMaintenance: true, preserveActivity: true },
+            true,
           );
           await waitForDiagnosticEventsDrained();
           writes.length = 0;
@@ -424,12 +395,29 @@ it.each([
                 kind: "unknown",
                 target: actor.target,
                 commandId: input.commandId,
-                error: { name: "Error", message: "Adoption receipt lost" },
+                error: {
+                  name: "Error",
+                  message: "Adoption receipt lost",
+                  cause: new Error("Worker response lost", {
+                    cause: Object.assign(new Error("database or disk is full"), {
+                      code: "SQLITE_FULL",
+                    }),
+                  }),
+                },
               };
             });
           const error =
             outcome === "rollback" ? "Canceled before adoption commit" : "Adoption receipt lost";
-          await expect(claimWriter()).rejects.toThrow(error);
+          const failure = await claimWriter().catch((caughtError: unknown) => caughtError);
+          expect(failure).toHaveProperty("message", error);
+          if (outcome === "unknown") {
+            expect(failure).toHaveProperty("code", "outcome-unknown");
+            const storageOutcome = classifyGatewayStorageFailure(failure);
+            expect(storageOutcome).toBe("session_actor_reconciliation");
+            expect(renderStorageFailureSummary(storageOutcome)).toMatch(
+              /check.*history.*before trying again/i,
+            );
+          }
           await expect(claimWriter()).rejects.toThrow(error);
           await controller.clear();
           await waitForDiagnosticEventsDrained();

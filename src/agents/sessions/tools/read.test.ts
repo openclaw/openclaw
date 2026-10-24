@@ -12,6 +12,7 @@ import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeyResolution,
 } from "./file-mutation-queue.js";
+import { readRenderContext } from "./read-render.test-support.js";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
 import { createWriteTool } from "./write.js";
@@ -385,6 +386,30 @@ describe("read tool", () => {
     expect(renderReadCall({ path: "notes.txt", limit: Number.POSITIVE_INFINITY })).toBe(
       `read notes.txt:1-${DEFAULT_MAX_LINES}`,
     );
+  });
+
+  it("renders sanitized text and a visible fallback when inline images are hidden", () => {
+    const tool = createReadToolDefinition("/workspace");
+    const component = tool.renderResult?.(
+      {
+        content: [
+          { type: "text", text: "alpha\u0000\r\n" },
+          { type: "image", data: ONE_PIXEL_PNG_BASE64, mimeType: "image/png" },
+          { type: "text", text: "beta\tend" },
+        ],
+        details: { kind: "text", content: "alpha\u0000\r\n\nbeta\tend" },
+      },
+      { expanded: true, isPartial: false },
+      plainTheme,
+      readRenderContext("notes.txt"),
+    );
+    expect(
+      component
+        ?.render(120)
+        .map((line) => line.trimEnd())
+        .join("\n")
+        .trim(),
+    ).toBe("alpha\\x00\n\nbeta   end\n[Image: [image/png] 1x1]");
   });
 
   it("rejects offset zero before accessing the file", async () => {

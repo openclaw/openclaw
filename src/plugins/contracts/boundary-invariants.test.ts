@@ -38,9 +38,6 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/workboard/index.ts": ["agent_end", "gateway_start", "gateway_stop", "subagent_ended"],
   "extensions/x/src/work-origin.ts": ["before_prompt_build"],
 } as const satisfies Record<string, readonly string[]>;
-const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = Object.keys(
-  BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS,
-).toSorted();
 const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
   "extensions/active-memory/index.ts": ["resolveLivePluginConfigObject(", '"active-memory"'],
   "extensions/codex/index.ts": ["resolveLivePluginConfigObject(", '"codex"'],
@@ -70,9 +67,7 @@ const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
     "const currentGuardrail = currentPluginConfig?.guardrail;",
   ],
   "extensions/amazon-bedrock-mantle/register.sync.runtime.ts": [
-    "resolvePluginConfigObject(",
-    "const startupPluginConfig = (api.pluginConfig ?? {})",
-    "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
+    "pluginConfig: resolvePluginConfigObject(ctx.config, providerId),",
   ],
   "extensions/ollama/index.ts": [
     "resolvePluginConfigObject(",
@@ -168,13 +163,6 @@ function isBundledExtensionImportHelperCall(expression: ts.Expression): boolean 
   return ts.isIdentifier(expression) && expression.text === "importActual";
 }
 
-function collectTypedHookNames(source: string): string[] {
-  return [...source.matchAll(/\bapi\.on\(\s*"([^"]+)"/gu)]
-    .map((match) => match[1])
-    .filter((hookName): hookName is string => typeof hookName === "string")
-    .toSorted();
-}
-
 function expectNoSources(
   root: string,
   filter: FileFilter,
@@ -255,19 +243,18 @@ describe("plugin contract boundary invariants", () => {
     expect(offenders).toStrictEqual([]);
   });
 
-  it("keeps bundled plugin typed hook registrations on an explicit allowlist", () => {
-    const files = listTsFiles("extensions", { excludeTests: true });
-    const hookRegistrationFiles = files.filter((file) => /\bapi\.on\(/u.test(readRepoSource(file)));
-    expect(hookRegistrationFiles).toEqual(BUNDLED_TYPED_HOOK_REGISTRATION_FILES);
-  });
-
-  it("keeps bundled plugin typed hook names on an explicit allowlist", () => {
+  it("keeps bundled plugin typed hook files and names on an explicit allowlist", () => {
     expect(
       Object.fromEntries(
-        BUNDLED_TYPED_HOOK_REGISTRATION_FILES.map((file) => [
-          file,
-          collectTypedHookNames(readRepoSource(file)),
-        ]),
+        listTsFiles("extensions", { excludeTests: true })
+          .filter((file) => /\bapi\.on\(/u.test(readRepoSource(file)))
+          .map((file) => [
+            file,
+            [...readRepoSource(file).matchAll(/\bapi\.on\(\s*"([^"]+)"/gu)]
+              .map((match) => match[1])
+              .filter((hookName): hookName is string => typeof hookName === "string")
+              .toSorted(),
+          ]),
       ),
     ).toEqual(BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS);
   });
@@ -284,6 +271,9 @@ describe("plugin contract boundary invariants", () => {
 
   it("keeps live provider config surfaces on runtime config lookups", () => {
     expectSnippetGuards(BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS);
+    expect(
+      readRepoSource("extensions/amazon-bedrock-mantle/register.sync.runtime.ts"),
+    ).not.toContain("api.pluginConfig");
   });
 
   it("keeps long-lived bundled hook handlers off startup-only registration gates", () => {

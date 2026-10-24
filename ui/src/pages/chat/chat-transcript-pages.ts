@@ -1,4 +1,4 @@
-import { readChatThreadMessageIdentity } from "./chat-thread-items.ts";
+import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 
 function transcriptEntryKey(message: unknown): string | undefined {
   const identity = readChatThreadMessageIdentity(message);
@@ -20,9 +20,6 @@ export function mergeChatTranscriptPages(earlier: unknown[], later: unknown[]) {
     const key = transcriptEntryKey(message);
     return key !== undefined && laterKeys.has(key);
   });
-  return {
-    // The newer page owns whole overlapping entries, including projected siblings.
-    messages: [...earlier.slice(0, overlap < 0 ? earlier.length : overlap), ...later],
-    hasOverlap: overlap >= 0,
-  };
+  // The newer page owns whole overlapping entries, including projected siblings.
+  return [...earlier.slice(0, overlap < 0 ? earlier.length : overlap), ...later];
 }

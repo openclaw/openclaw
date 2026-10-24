@@ -3,7 +3,6 @@ import { afterEach, expect, it } from "vitest";
 import { resolveDiffImageRenderOptions, resolveDiffsPluginDefaults } from "./config.js";
 import { renderDiffDocument } from "./render.js";
 import type { DiffFileDefaults, DiffRenderOptions } from "./types.js";
-import { parseViewerPayloadJson } from "./viewer-payload.js";
 
 const DEFAULT_DIFFS_TOOL_DEFAULTS = resolveDiffsPluginDefaults(undefined);
 function makeOptions(
@@ -39,7 +38,6 @@ it("renders before/after input into a complete viewer document", async () => {
   expect(rendered).toMatchObject({
     title: "src/example.ts",
     fileCount: 1,
-    viewerRuntime: "base",
   });
   expect(rendered.html).toContain("data-openclaw-diff-root");
   expect(rendered.html).toContain("src/example.ts");
@@ -56,23 +54,6 @@ it("renders before/after input into a complete viewer document", async () => {
   expect(rendered.imageHtml).toContain("--diffs-font-size: 16px;");
   expect(rendered.html).not.toContain("fonts.googleapis.com");
   expect(rendered.html).not.toContain('<nav class="oc-diff-card oc-diff-nav"');
-});
-
-it("uses the language-pack viewer runtime for uncommon languages when available", async () => {
-  const rendered = await renderDiffDocument(
-    { kind: "before_after", before: "REPORT z_demo.\n", after: "REPORT z_demo2.\n", lang: "abap" },
-    { ...renderOptions, languagePackAvailable: true },
-    "viewer",
-  );
-
-  const html = rendered.html ?? "";
-  const payload = parseViewerPayloadJson(
-    html.match(/data-openclaw-diff-payload>(.*?)<\/script>/)?.[1] ?? "",
-  );
-
-  expect(rendered.viewerRuntime).toBe("language-pack");
-  expect(html).toContain("../../../diffs-language-pack/assets/viewer.js");
-  expect(payload.langs).toEqual(["abap"]);
 });
 
 it("renders multi-file patch input with a changed-files summary nav", async () => {
@@ -116,18 +97,13 @@ it("renders multi-file patch input with a changed-files summary nav", async () =
 
 it("labels added, deleted, and renamed files in the summary nav and escapes names", async () => {
   const patch = [
-    "diff --git a/new.ts b/new.ts",
-    "new file mode 100644",
-    "--- /dev/null",
-    "+++ b/new.ts",
-    "@@ -0,0 +1 @@",
-    "+const created = true;",
-    "diff --git a/old.ts b/old.ts",
-    "deleted file mode 100644",
-    "--- a/old.ts",
-    "+++ /dev/null",
-    "@@ -1 +0,0 @@",
-    "-const removed = true;",
+    patchFile("new.ts", "+const created = true;", "@@ -0,0 +1 @@").replace(
+      "--- a/new.ts",
+      "new file mode 100644\n--- /dev/null",
+    ),
+    patchFile("old.ts", "-const removed = true;", "@@ -1 +0,0 @@")
+      .replace("--- a/old.ts", "deleted file mode 100644\n--- a/old.ts")
+      .replace("+++ b/old.ts", "+++ /dev/null"),
     "diff --git a/before.ts b/after.ts",
     "similarity index 90%",
     "rename from before.ts",
@@ -144,20 +120,21 @@ it("labels added, deleted, and renamed files in the summary nav and escapes name
 
   const html = rendered.html ?? "";
   expect(html).toContain("4 changed files");
-  expect(html).toContain('<span class="oc-diff-nav-badge" data-change="added">added</span>');
-  expect(html).toContain('<span class="oc-diff-nav-badge" data-change="deleted">deleted</span>');
-  expect(html).toContain('<span class="oc-diff-nav-badge" data-change="renamed">renamed</span>');
+  for (const change of ["added", "deleted", "renamed"]) {
+    expect(html).toContain(
+      `<span class="oc-diff-nav-badge" data-change="${change}">${change}</span>`,
+    );
+  }
   expect(html).toContain("before.ts &rarr; after.ts");
   expect(html).toContain("a&amp;b.ts");
 });
 
 it("omits the summary nav for single-file patches", async () => {
   const rendered = await renderDiffDocument(
-    { kind: "patch", patch: patchFile("solo.ts", "-const solo = 1;\n+const solo = 2;") },
+    { kind: "patch", patch: patchFile("solo.ts") },
     renderOptions,
     "viewer",
   );
-
   expect(rendered.fileCount).toBe(1);
   expect(rendered.html).not.toContain('<nav class="oc-diff-card oc-diff-nav"');
 });

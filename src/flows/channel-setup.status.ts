@@ -2,7 +2,6 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveAgentWorkspaceDir, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import { listChatChannels } from "../channels/chat-meta.js";
-import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type {
   ChannelSetupPlugin,
   ChannelSetupStatus,
@@ -16,7 +15,6 @@ import {
   resolveChannelSetupEntries,
   shouldShowChannelInSetup,
 } from "../commands/channel-setup/discovery.js";
-import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -28,11 +26,6 @@ import {
 } from "../plugins/bundled-sources.js";
 import { t, wizardT } from "../wizard/i18n/index.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
-
-type ChannelStatusSummary = {
-  statusByChannel: Map<ChannelChoice, ChannelSetupStatus>;
-  statusLines: string[];
-};
 
 type ChannelSetupSelectionEntry = {
   id: ChannelChoice;
@@ -262,10 +255,10 @@ export async function collectChannelStatus(params: {
   workspaceDir?: string;
   options?: SetupChannelsOptions;
   accountOverrides: Partial<Record<ChannelChoice, string>>;
-  installedPlugins?: ChannelSetupPlugin[];
-  resolveAdapter?: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
-}): Promise<ChannelStatusSummary> {
-  const installedPlugins = params.installedPlugins ?? listChannelSetupPlugins();
+  installedPlugins: ChannelSetupPlugin[];
+  resolveAdapter: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
+}) {
+  const { installedPlugins, resolveAdapter } = params;
   const workspaceDir = params.workspaceDir ?? resolveChannelSetupWorkspaceDir(params.cfg);
   const { installedCatalogEntries, installableCatalogEntries } = resolveChannelSetupEntries({
     cfg: params.cfg,
@@ -273,12 +266,6 @@ export async function collectChannelStatus(params: {
     workspaceDir,
   });
   const bundledSources = resolveBundledPluginSources({ workspaceDir });
-  const resolveAdapter =
-    params.resolveAdapter ??
-    ((channel: ChannelChoice) =>
-      resolveChannelSetupWizardAdapterForPlugin(
-        installedPlugins.find((plugin) => plugin.id === channel),
-      ));
   const statusEntries = (
     await Promise.all(
       installedPlugins
@@ -308,12 +295,10 @@ export async function collectChannelStatus(params: {
         }),
     )
   ).filter((status): status is ChannelSetupStatus => status !== undefined);
-  const statusByChannel = new Map(
-    statusEntries.map((entry: ChannelSetupStatus) => [entry.channel, entry]),
-  );
+  const statusChannels = new Set(statusEntries.map((entry) => entry.channel));
   const fallbackStatuses = listChatChannels()
     .filter((meta) => shouldShowChannelInSetup(meta))
-    .filter((meta) => !statusByChannel.has(meta.id))
+    .filter((meta) => !statusChannels.has(meta.id))
     .map((meta) => {
       const configured = isChannelConfigured(params.cfg, meta.id);
       const statusLabel = configured ? "configured (plugin disabled)" : "not configured";
@@ -326,7 +311,7 @@ export async function collectChannelStatus(params: {
       };
     });
   const discoveredPluginStatuses = installedCatalogEntries
-    .filter((entry) => !statusByChannel.has(entry.id as ChannelChoice))
+    .filter((entry) => !statusChannels.has(entry.id as ChannelChoice))
     .map((entry) => {
       const configured = isChannelConfigured(params.cfg, entry.id);
       const pluginEnabled =

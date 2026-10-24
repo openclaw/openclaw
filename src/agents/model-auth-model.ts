@@ -8,7 +8,7 @@ import {
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
-import type { Model } from "../llm/types.js";
+import type { Model, ModelRequestHeaders } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import { resolvePluginOwnedProviderAuth } from "../plugins/provider-runtime.js";
@@ -46,7 +46,10 @@ function resolvePluginOwnedAuthMode(
   provider: string,
   cfg?: OpenClawConfig,
   workspaceDir?: string,
-): ModelAuthMode {
+): ModelAuthMode | null {
+  if (resolveProviderAuthScope({ provider, config: cfg, workspaceDir }) !== "plugin") {
+    return null;
+  }
   try {
     return resolvePluginOwnedProviderAuth({ provider, config: cfg, workspaceDir }).mode;
   } catch {
@@ -65,14 +68,9 @@ export function resolveModelAuthMode(
   if (!resolved) {
     return undefined;
   }
-  if (
-    resolveProviderAuthScope({
-      provider: resolved,
-      config: cfg,
-      workspaceDir: options?.workspaceDir,
-    }) === "plugin"
-  ) {
-    return resolvePluginOwnedAuthMode(resolved, cfg, options?.workspaceDir);
+  const pluginAuthMode = resolvePluginOwnedAuthMode(resolved, cfg, options?.workspaceDir);
+  if (pluginAuthMode !== null) {
+    return pluginAuthMode;
   }
 
   const authOverride = authConfig.resolveProviderAuthOverride(cfg, resolved);
@@ -106,14 +104,9 @@ export async function resolveModelAuthModeAsync(
   if (!resolved) {
     return undefined;
   }
-  if (
-    resolveProviderAuthScope({
-      provider: resolved,
-      config: cfg,
-      workspaceDir: options?.workspaceDir,
-    }) === "plugin"
-  ) {
-    return resolvePluginOwnedAuthMode(resolved, cfg, options?.workspaceDir);
+  const pluginAuthMode = resolvePluginOwnedAuthMode(resolved, cfg, options?.workspaceDir);
+  if (pluginAuthMode !== null) {
+    return pluginAuthMode;
   }
   if (authConfig.resolveProviderAuthOverride(cfg, resolved) === "aws-sdk") {
     return "aws-sdk";
@@ -376,7 +369,7 @@ export function applySecretRefHeaderSentinels<T extends Pick<Model, "provider" |
   const runtimeAuth = runtimeProvider?.request?.auth;
   const attachedRequest = getModelProviderRequestTransport(model);
   let protectedRequest = attachedRequest;
-  let protectedRequestHeaders: Record<string, string> | undefined;
+  let protectedRequestHeaders: ModelRequestHeaders | undefined;
   for (const [name, sourceValue] of Object.entries(sourceProvider?.request?.headers ?? {})) {
     if (!isManagedSecret(sourceValue)) {
       continue;
@@ -430,7 +423,7 @@ export function applySecretRefHeaderSentinels<T extends Pick<Model, "provider" |
       addReplacement(headerName, `${prefix}${value}`, `${prefix}${sentinelize(value)}`);
     }
   }
-  let headers: Record<string, string> | undefined;
+  let headers: ModelRequestHeaders | undefined;
   for (const [name, value] of Object.entries(model.headers)) {
     const replacement = replacements.get(name.trim().toLowerCase());
     if (replacement?.value !== value) {
@@ -462,7 +455,7 @@ export function applyAuthHeaderOverride<T extends Model>(
 
   // Strip any existing authorization header (case-insensitive) before
   // injecting the canonical one so we don't produce a comma-joined value.
-  const headers: Record<string, string> = {};
+  const headers: ModelRequestHeaders = {};
   if (sentinelModel.headers) {
     for (const [key, value] of Object.entries(sentinelModel.headers)) {
       if (normalizeOptionalLowercaseString(key) !== "authorization") {

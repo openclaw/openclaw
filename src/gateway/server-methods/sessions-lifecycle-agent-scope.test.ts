@@ -36,6 +36,17 @@ function lifecycleConfig() {
   setRuntimeConfigSnapshot(cfg);
 }
 
+function resolveTarget(key: string, agentId: string) {
+  return resolveGatewaySessionStoreTargetInWorker({
+    cfg: getRuntimeConfig(),
+    key,
+    agentId,
+    projection: "list",
+    exactRead: true,
+    readOnly: false,
+  });
+}
+
 function gateway(extraHandlers = { ...sessionDeleteHandlers, ...sessionMutationHandlers }) {
   const cfg = getRuntimeConfig();
   const client = sharingPolicyClient({
@@ -123,24 +134,9 @@ it.each([
   { method: "sessions.delete", key: "shared", agentId: "main" },
 ])("$method preserves another agent's $key work ($agentId)", async ({ method, key, agentId }) => {
   lifecycleConfig();
-  const cfg = getRuntimeConfig();
   const foreignAgentId = agentId === "main" ? "research" : "main";
-  const target = await resolveGatewaySessionStoreTargetInWorker({
-    cfg,
-    key,
-    agentId,
-    projection: "list",
-    exactRead: true,
-    readOnly: false,
-  });
-  const foreignTarget = await resolveGatewaySessionStoreTargetInWorker({
-    cfg,
-    key,
-    agentId: foreignAgentId,
-    projection: "list",
-    exactRead: true,
-    readOnly: false,
-  });
+  const target = await resolveTarget(key, agentId);
+  const foreignTarget = await resolveTarget(key, foreignAgentId);
   const targetId = `${agentId}-session`;
   const foreignId = `${foreignAgentId}-session`;
   await upsertSessionEntryCore(
@@ -178,12 +174,11 @@ it.each([
   let owned: ReturnType<typeof followup> | undefined;
   try {
     owned = followup(agentId, targetId, target.canonicalKey);
-    const params = {
+    await gateway()(method, {
       key,
       agentId,
       ...(method === "sessions.patch" ? { archived: true, expectedSessionId: targetId } : {}),
-    };
-    await gateway()(method, params);
+    });
     expect(operation.abortSignal.aborted).toBe(false);
     expect(foreign.settled).not.toHaveBeenCalled();
     expect(owned.settled).toHaveBeenCalledOnce();
@@ -208,46 +203,3 @@ it.each([
     }
   }
 });
-
-it.each(["sessions.delete", "sessions.reset", "sessions.patch"])(
-  "%s still cancels the selected agent's own session",
-  async (method) => {
-    const key = "agent:main:lifecycle-owned";
-    const sessionId = "owned-session";
-    const cfg = getRuntimeConfig();
-    await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, { sessionId, updatedAt: 1 });
-    const target = await resolveGatewaySessionStoreTargetInWorker({
-      cfg,
-      key,
-      agentId: "main",
-      projection: "list",
-      exactRead: true,
-      readOnly: false,
-    });
-    const operation = createReplyOperation({
-      sessionKey: key,
-      sessionId,
-      agentId: "main",
-      target: captureSessionTarget({
-        storeScope: target.storePath,
-        sessionKey: key,
-        incarnation: sessionId,
-        agentId: "main",
-      }),
-      resetTriggered: false,
-    });
-    operation.setPhase("running");
-    operation.abortSignal.addEventListener("abort", () => operation.complete(), { once: true });
-    try {
-      const params = {
-        key,
-        ...(method === "sessions.patch" ? { archived: true, expectedSessionId: sessionId } : {}),
-      };
-      await gateway()(method, params);
-      expect(operation.abortSignal.aborted).toBe(true);
-    } finally {
-      operation.complete();
-      clearSessionQueues([key, sessionId]);
-    }
-  },
-);

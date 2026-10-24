@@ -9,7 +9,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
-import type { SkillWorkshopAccess } from "./access.ts";
+import type { resolveWorkshopAccess } from "./access.ts";
 import type { WorkshopMutation, WorkshopSnapshot } from "./api.ts";
 import type { SkillWorkshopMode } from "./mode.ts";
 
@@ -114,16 +114,21 @@ export function lastActivityMs(skill: SkillWorkshopSkillSummary, change?: SkillW
 
 export type WorkshopViewerTarget = { name: string; filePath: string; versionId?: string };
 
-export type WorkshopViewer =
-  | { target: WorkshopViewerTarget; status: "loading" }
-  | {
-      target: WorkshopViewerTarget;
-      status: "ready";
-      result: SkillsWorkshopReadResult;
-      /** Live SKILL.md, loaded when a past version of a live skill is open, for the diff. */
-      current?: string;
-    }
-  | { target: WorkshopViewerTarget; status: "error"; error: string };
+export type WorkshopViewerResult = {
+  target: WorkshopViewerTarget;
+  result: SkillsWorkshopReadResult;
+  /** Live SKILL.md, loaded when a past version of a live skill is open, for the diff. */
+  current?: string;
+};
+
+export type WorkshopViewer = { target: WorkshopViewerTarget } & Partial<WorkshopViewerResult>;
+
+export type WorkshopReads = {
+  listRequest: () => { result: Promise<unknown> } | null;
+  list: () => WorkshopSnapshot | null;
+  viewerRequest: () => { result: Promise<unknown> } | null;
+  viewer: () => WorkshopViewerResult | null;
+};
 
 export type WorkshopFilter = "active" | "archived";
 export type WorkshopSort = "uses" | "recent" | "name";
@@ -132,9 +137,8 @@ export type WorkshopTab = "instructions" | "files" | "history";
 type SkillWorkshopViewProps = {
   context: ApplicationContext;
   agentId: string | null;
-  access: SkillWorkshopAccess;
+  access: ReturnType<typeof resolveWorkshopAccess>;
   snapshot: WorkshopSnapshot | null;
-  loading: boolean;
   error: string | null;
   viewer: WorkshopViewer | null;
   filter: WorkshopFilter;

@@ -25,67 +25,43 @@ function systemAgentView(state: Partial<SystemAgentView> = {}): SystemAgentView 
   };
 }
 
-const cases: Array<{ state: Partial<SystemAgentView>; label: string; text: string }> = [
-  {
-    state: {},
-    label: "Allowed once",
-    text: "✅ OpenClaw change approved. Applying: restart the Gateway",
-  },
-  {
-    state: { decision: "allow-always" },
-    label: "Allowed always",
-    text: "✅ OpenClaw change approved. Applying: restart the Gateway",
-  },
-  {
-    state: { decision: "deny" },
-    label: "Denied",
-    text: "❌ OpenClaw change denied. No change was made.",
-  },
-  {
-    state: { applicationStatus: "applied" },
-    label: "Applied",
-    text: "✅ OpenClaw change approved and applied: restart the Gateway",
-  },
-  {
-    state: { applicationStatus: "not-applied" },
-    label: "Completion unconfirmed",
-    text: "⚠️ OpenClaw change approved, but completion could not be confirmed. Check the current settings before retrying.",
-  },
-  {
-    state: { decision: "deny", applicationStatus: "not-applied" },
-    label: "Denied",
-    text: "❌ OpenClaw change denied. No change was made.",
-  },
-  {
-    state: { decision: "deny", applicationStatus: "applied" },
-    label: "Applied",
-    text: "❌ OpenClaw change denied. No change was made.",
-  },
-  {
-    state: { decision: "deny", applicationStatus: "applied", terminalStatus: "cancelled" },
-    label: "Cancelled",
-    text: "⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry.",
-  },
+const applying = "✅ OpenClaw change approved. Applying: restart the Gateway";
+const denied = "❌ OpenClaw change denied. No change was made.";
+const applied = "✅ OpenClaw change approved and applied: restart the Gateway";
+const unconfirmed =
+  "⚠️ OpenClaw change approved, but completion could not be confirmed. Check the current settings before retrying.";
+const cancelled =
+  "⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry.";
+const cases: Array<[Partial<SystemAgentView>, string, string]> = [
+  [{}, "Allowed once", applying],
+  [{ decision: "allow-always" }, "Allowed always", applying],
+  [{ decision: "deny" }, "Denied", denied],
+  [{ applicationStatus: "applied" }, "Applied", applied],
+  [{ applicationStatus: "not-applied" }, "Completion unconfirmed", unconfirmed],
+  [{ decision: "deny", applicationStatus: "not-applied" }, "Denied", denied],
+  [{ decision: "deny", applicationStatus: "applied" }, "Applied", denied],
+  [
+    { decision: "deny", applicationStatus: "applied", terminalStatus: "cancelled" },
+    "Cancelled",
+    cancelled,
+  ],
 ];
 
 describe("approval terminal presentation", () => {
-  it.each(cases)("preserves rich and prose precedence for $state", ({ state, label, text }) => {
+  it.each(cases)("preserves rich and prose precedence for %j", (state, label, text) => {
     const view = systemAgentView(state);
     expect(formatChannelApprovalResolvedLabel(view)).toBe(label);
     expect(buildSystemAgentApprovalResolvedText(view)).toBe(text);
   });
 
   it("keeps decision spelling local without overriding application results", () => {
-    const formatDecision = (decision: ResolvedApprovalView["decision"]) => `Decision: ${decision}`;
-    expect(formatChannelApprovalResolvedLabel(systemAgentView(), formatDecision)).toBe(
-      "Decision: allow-once",
-    );
-    expect(
+    const label = (state: Partial<SystemAgentView> = {}) =>
       formatChannelApprovalResolvedLabel(
-        systemAgentView({ applicationStatus: "not-applied" }),
-        formatDecision,
-      ),
-    ).toBe("Completion unconfirmed");
+        systemAgentView(state),
+        (decision) => `Decision: ${decision}`,
+      );
+    expect(label()).toBe("Decision: allow-once");
+    expect(label({ applicationStatus: "not-applied" })).toBe("Completion unconfirmed");
   });
 
   it("uses the resolved event's decision for channel prose", () => {

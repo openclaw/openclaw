@@ -5,10 +5,7 @@ import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
-import {
-  adjustedParamsByToolCallId,
-  buildAdjustedParamsKey,
-} from "./agent-tools.before-tool-call.state.js";
+import { peekAdjustedParamsForToolCall } from "./agent-tools.before-tool-call.state.js";
 import { addSession, deleteSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { createProcessTool } from "./bash-tools.process.js";
@@ -90,7 +87,6 @@ export function registerToolChannelProgressTests({
       for (const explicitHide of [false, true]) {
         const { ctx, events } = contextWithEvents();
         const toolCallId = `rewrite-${explicitHide}`;
-        const adjustedKey = buildAdjustedParamsKey({ runId: ctx.params.runId, toolCallId });
         const toolRef = { toolName: "process", toolCallId };
         const args = { action: "poll", sessionId: "fixture" };
         const executedArgs = { ...args, action: "kill" };
@@ -110,7 +106,7 @@ export function registerToolChannelProgressTests({
         initializeGlobalHookRunner(registry);
         const execute = vi.fn(async (_toolCallId: string, _args: unknown) => {
           updateTool(ctx, { ...toolRef, partialResult: result });
-          expect(adjustedParamsByToolCallId.get(adjustedKey)).toEqual(executedArgs);
+          expect(peekAdjustedParamsForToolCall(toolCallId, ctx.params.runId)).toEqual(executedArgs);
           return result;
         });
         const tool = wrapToolWithBeforeToolCallHook(
@@ -129,7 +125,7 @@ export function registerToolChannelProgressTests({
           expect(settled).toHaveLength(4);
           expectProgressVisibility(start, true, explicitHide);
           expectProgressVisibility(settled, explicitHide, explicitHide);
-          expect(adjustedParamsByToolCallId.has(adjustedKey)).toBe(false);
+          expect(peekAdjustedParamsForToolCall(toolCallId, ctx.params.runId)).toBeUndefined();
         } finally {
           const emptyRegistry = createTestRegistry();
           setActivePluginRegistry(emptyRegistry);

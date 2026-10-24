@@ -120,10 +120,10 @@ describe("transcript turn physical identity", () => {
     const databasePath = `${fixture.storePath()}.custom.sqlite`;
     openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
-    const select = () =>
+    const select = (agentId = "main") =>
       withSessionStoreTarget(
         {
-          agentId: "main",
+          agentId,
           storePath,
           env: process.env,
           candidates: captureSessionStoreReadCandidates(storePath),
@@ -133,11 +133,17 @@ describe("transcript turn physical identity", () => {
           return target;
         },
       );
-    expect((await select()).database.path).toBe(databasePath);
+    const selected = await select();
+    expect(selected.database.path).toBe(databasePath);
     const initialReads = reads.mock.calls.length;
     expect(initialReads).toBeGreaterThan(0);
-    expect((await select()).database.path).toBe(databasePath);
+    expect(await select()).toBe(selected);
     expect(reads).toHaveBeenCalledTimes(initialReads);
+    expect(Reflect.set(selected.database, "path", "changed")).toBe(false);
+    expect((await select("other")).database.path).toBe(
+      `${fixture.storePath()}.custom.other.sqlite`,
+    );
+    expect(await select()).toBe(selected);
 
     unregisterOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     registerOpenClawAgentDatabase({ agentId: "other", path: databasePath });
@@ -163,11 +169,13 @@ describe("transcript turn physical identity", () => {
           ["other"],
         ),
       ).withRead(async (inventory) => inventory.agents[0]?.result);
-    expect(await select()).toEqual({ available: true, targets: [] });
+    const selected = await select();
+    expect(selected).toEqual({ available: true, targets: [] });
     const initialReads = reads.mock.calls.length;
     expect(initialReads).toBeGreaterThan(0);
-    expect(await select()).toEqual({ available: true, targets: [] });
+    expect(await select()).toBe(selected);
     expect(reads).toHaveBeenCalledTimes(initialReads);
+    expect(selected?.available && Reflect.set(selected.targets, "0", {})).toBe(false);
 
     replaceSessionEntrySync(
       { agentId: "other", storePath, sessionKey: "agent:other:global" },
@@ -328,7 +336,7 @@ describe("transcript turn physical identity", () => {
           messages: [{ message }],
           updateMode: "none",
         }),
-      ).resolves.toMatchObject({ appendedCount: 1 });
+      ).resolves.toMatchObject({ messages: [{ appended: true }] });
       expect(keys()).toEqual([{ session_key: stored }]);
       expect(loadTranscriptEventsSync(scope(stored))).toContainEqual(
         expect.objectContaining({ type: "message", message }),
@@ -417,7 +425,7 @@ describe("transcript turn physical identity", () => {
       }
       await expect(pending).resolves.toMatchObject({
         rejectedReason: "session-rebound",
-        appendedCount: 0,
+        messages: [],
       });
       if (change === "revision") {
         expect(loadSessionEntryReadOnly(scope())?.lifecycleRevision).toBe("successor");

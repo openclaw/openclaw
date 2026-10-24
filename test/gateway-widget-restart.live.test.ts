@@ -102,7 +102,6 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
               modelPolicy: { allow: [MODEL_REF] },
               models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
               thinkingDefault: "low",
-              heartbeat: { every: "0m" },
               skipBootstrap: true,
               skills: [],
               timeoutSeconds: 240,
@@ -125,10 +124,10 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
         await instance.state.writeConfig(config);
         await instance.startGateway();
         const deviceIdentity = loadOrCreateDeviceIdentity({
-          path: instance.state.path("proof-device.sqlite"),
+          path: instance.state.path("proof-device", "client", "credentials.sqlite"),
         });
         const observerDeviceIdentity = loadOrCreateDeviceIdentity({
-          path: instance.state.path("observer-device.sqlite"),
+          path: instance.state.path("observer-device", "client", "credentials.sqlite"),
         });
         const connect = (controlUi: boolean) =>
           acquireGatewayTestClient(

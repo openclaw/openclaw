@@ -16,6 +16,12 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 const sessionKey = "agent:main:main";
 const baseEntry: SessionEntry = { sessionId: "session-1", updatedAt: 100 };
+const storedEntry = (changes: Partial<SessionEntry>): SessionEntry => ({
+  ...baseEntry,
+  updatedAt: 400,
+  delivery: { kind: "none" },
+  ...changes,
+});
 
 function fixture(initialEntry: SessionEntry = baseEntry) {
   const scope = {
@@ -119,12 +125,7 @@ describe("persistReplySessionEntry", () => {
     {
       name: "rotated",
       initialEntry: { ...baseEntry, thinkingLevel: "low" },
-      currentEntry: {
-        sessionId: "session-2",
-        updatedAt: 400,
-        thinkingLevel: "medium",
-        delivery: { kind: "none" },
-      },
+      currentEntry: storedEntry({ sessionId: "session-2", thinkingLevel: "medium" }),
       changes: { thinkingLevel: "high" },
       error: "changed while starting work. Retry.",
     },
@@ -136,13 +137,7 @@ describe("persistReplySessionEntry", () => {
     {
       name: "archived (even for a same-value write)",
       initialEntry: { ...baseEntry, modelOverride: "gpt-5.5" },
-      currentEntry: {
-        ...baseEntry,
-        modelOverride: "gpt-5.5",
-        updatedAt: 400,
-        archivedAt: 300,
-        delivery: { kind: "none" },
-      },
+      currentEntry: storedEntry({ modelOverride: "gpt-5.5", archivedAt: 300 }),
       touchedFields: ["modelOverride"],
       error: "is archived. Restore it before starting new work.",
     },

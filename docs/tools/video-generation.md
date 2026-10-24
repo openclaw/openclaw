@@ -231,6 +231,11 @@ Without an explicit timeout, the polling budget starts after submission:
 20 minutes for Together and 120 seconds for Runway. Request and download
 limits remain separate.
 
+Default generated-video downloads block private-network URLs, including redirects.
+This covers BytePlus, Runway, Together, Novita, Z.AI, and Kie AI. BytePlus and
+Runway also use the configured proxy without forwarding task credentials or
+granting task-specific private-network access to result URLs.
+
 <ParamField path="providerOptions" type="object">
   Provider-specific options as a JSON object (e.g. `{"seed": 42, "draft": true}`).
   Providers that declare a typed schema validate the keys and types; unknown

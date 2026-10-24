@@ -22,82 +22,55 @@ import {
   uploadDirectoryToSshTarget,
 } from "./ssh.js";
 
+async function runSshRuntimeManagement(
+  { entry, config, agentId }: Parameters<SandboxBackendManager["describeRuntime"]>[0],
+  action: "describe" | "remove",
+) {
+  const effectiveAgentId = agentId ?? resolveSandboxAgentId(entry.sessionKey);
+  const cfg = resolveSandboxConfigForAgent(config, effectiveAgentId);
+  if (cfg.backend !== "ssh" || !cfg.ssh.target) {
+    return { cfg, result: undefined };
+  }
+  assertSshSandboxSecretOwnerAvailable({ config, scope: cfg.scope, agentId: effectiveAgentId });
+  const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
+  const session = await createSshSandboxSessionFromSettings({ ...cfg.ssh, target: cfg.ssh.target });
+  try {
+    const result = await runSshSandboxCommand({
+      session,
+      remoteCommand: buildRemoteCommand([
+        "/bin/sh",
+        "-c",
+        action === "describe"
+          ? 'if [ -d "$1" ]; then printf "1\\n"; else printf "0\\n"; fi'
+          : 'rm -rf -- "$1"',
+        action === "describe" ? "openclaw-sandbox-check" : "openclaw-sandbox-remove",
+        runtimePaths.runtimeRootDir,
+      ]),
+      allowFailure: action === "remove",
+    });
+    return { cfg, result };
+  } finally {
+    await disposeSshSandboxSession(session);
+  }
+}
+
 /** SSH backend lifecycle hooks for probing and removing remote sandbox copies. */
 export const sshSandboxBackendManager: SandboxBackendManager = {
-  async describeRuntime({ entry, config, agentId }) {
-    const effectiveAgentId = agentId ?? resolveSandboxAgentId(entry.sessionKey);
-    const cfg = resolveSandboxConfigForAgent(config, effectiveAgentId);
-    if (cfg.backend !== "ssh" || !cfg.ssh.target) {
-      return {
-        running: false,
-        actualConfigLabel: cfg.ssh.target,
-        configLabelMatch: false,
-      };
-    }
-    assertSshSandboxSecretOwnerAvailable({
-      config,
-      scope: cfg.scope,
-      agentId: effectiveAgentId,
-    });
-    const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
-    const session = await createSshSandboxSessionFromSettings({
-      ...cfg.ssh,
-      target: cfg.ssh.target,
-    });
-    try {
-      const result = await runSshSandboxCommand({
-        session,
-        remoteCommand: buildRemoteCommand([
-          "/bin/sh",
-          "-c",
-          'if [ -d "$1" ]; then printf "1\\n"; else printf "0\\n"; fi',
-          "openclaw-sandbox-check",
-          runtimePaths.runtimeRootDir,
-        ]),
-      });
-      return {
-        running: result.stdout.toString("utf8").trim() === "1",
-        actualConfigLabel: cfg.ssh.target,
-        configLabelMatch: entry.image === cfg.ssh.target,
-      };
-    } finally {
-      await disposeSshSandboxSession(session);
-    }
+  async describeRuntime(params) {
+    const { cfg, result } = await runSshRuntimeManagement(params, "describe");
+    return {
+      running: result?.stdout.toString("utf8").trim() === "1",
+      actualConfigLabel: cfg.ssh.target,
+      configLabelMatch: result !== undefined && params.entry.image === cfg.ssh.target,
+    };
   },
-  async removeRuntime({ entry, config, agentId }) {
-    const effectiveAgentId = agentId ?? resolveSandboxAgentId(entry.sessionKey);
-    const cfg = resolveSandboxConfigForAgent(config, effectiveAgentId);
-    if (cfg.backend !== "ssh" || !cfg.ssh.target) {
-      return;
-    }
-    assertSshSandboxSecretOwnerAvailable({
-      config,
-      scope: cfg.scope,
-      agentId: effectiveAgentId,
-    });
-    const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
-    const session = await createSshSandboxSessionFromSettings({
-      ...cfg.ssh,
-      target: cfg.ssh.target,
-    });
-    try {
-      const result = await runSshSandboxCommand({
-        session,
-        remoteCommand: buildRemoteCommand([
-          "/bin/sh",
-          "-c",
-          'rm -rf -- "$1"',
-          "openclaw-sandbox-remove",
-          runtimePaths.runtimeRootDir,
-        ]),
-        allowFailure: true,
-      });
-      if (result.code !== 0) {
-        const detail = result.stderr.toString("utf8").trim() || `exit ${result.code}`;
-        throw new Error(`Failed to remove SSH sandbox runtime ${entry.containerName}: ${detail}`);
-      }
-    } finally {
-      await disposeSshSandboxSession(session);
+  async removeRuntime(params) {
+    const { result } = await runSshRuntimeManagement(params, "remove");
+    if (result && result.code !== 0) {
+      const detail = result.stderr.toString("utf8").trim() || `exit ${result.code}`;
+      throw new Error(
+        `Failed to remove SSH sandbox runtime ${params.entry.containerName}: ${detail}`,
+      );
     }
   },
 };

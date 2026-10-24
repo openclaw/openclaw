@@ -1,9 +1,7 @@
-import { execFile } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -21,26 +19,18 @@ import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import * as allocation from "./allocation.js";
 import { captureWorktreeMutationHeartbeat } from "./allocation.test-support.js";
 import * as capacity from "./capacity.js";
-import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
+import {
+  createWorktreeCapacityStatfs,
+  useInProcessWorktreeCapacityTransport,
+} from "./capacity.test-support.js";
+import { isWorktreeHydration, isWorktreeAdd, git } from "./git-fixture.test-support.js";
 import { readPendingWorktrees } from "./pending-slots.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
-const execFileAsync = promisify(execFile);
 const GiB = 1024 ** 3;
-
-function isWorktreeAdd(argv: readonly string[]): boolean {
-  if (argv[0] !== "git") {
-    return false;
-  }
-  let command = 1;
-  while (argv[command] === "-c" || argv[command] === "-C") {
-    command += 2;
-  }
-  return argv[command] === "worktree" && argv[command + 1] === "add";
-}
 
 describe("ManagedWorktreeService capacity", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
@@ -50,10 +40,6 @@ describe("ManagedWorktreeService capacity", () => {
   let env: NodeJS.ProcessEnv;
   let service: ManagedWorktreeService;
   let availableBytes: number;
-
-  async function git(cwd: string, ...args: string[]) {
-    return (await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" })).stdout.trim();
-  }
 
   beforeEach(async () => {
     useInProcessWorktreeCapacityTransport();
@@ -70,16 +56,9 @@ describe("ManagedWorktreeService capacity", () => {
     });
     const stats = fsSync.statfsSync(root);
     availableBytes = 100 * GiB;
-    vi.spyOn(fsSync, "statfsSync").mockImplementation(() => ({
-      type: stats.type,
-      bsize: 4096,
-      bfree: Math.floor(availableBytes / 4096),
-      bavail: Math.floor(availableBytes / 4096),
-      blocks: (1024 * GiB) / 4096,
-      files: stats.files,
-      frsize: stats.frsize,
-      ffree: stats.ffree,
-    }));
+    vi.spyOn(fsSync, "statfsSync").mockImplementation(() =>
+      createWorktreeCapacityStatfs(stats, Math.floor(availableBytes / 4096) * 4096),
+    );
   });
 
   afterEach(async () => {
@@ -242,16 +221,7 @@ describe("ManagedWorktreeService capacity", () => {
       vi.mocked(fsSync.statfsSync).mockImplementation((target) => {
         const low = isData(target) === (limited === "destination");
         const available = (recovered ? (isData(target) ? 100 : 13) : low ? 3 : 100) * GiB;
-        return {
-          type: stats.type,
-          bsize: stats.bsize,
-          blocks: stats.blocks,
-          bfree: available / 4096,
-          bavail: available / 4096,
-          files: stats.files,
-          frsize: stats.frsize,
-          ffree: stats.ffree,
-        };
+        return createWorktreeCapacityStatfs(stats, available);
       });
 
       await expect(
@@ -395,12 +365,7 @@ describe("ManagedWorktreeService capacity", () => {
       const realRun = commandExec.runCommandWithTimeout;
       vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
         const result = await realRun(argv, options);
-        if (
-          argv[0] === "git" &&
-          argv.includes("read-tree") &&
-          argv.includes("-u") &&
-          result.code === 0
-        ) {
+        if (isWorktreeHydration(argv) && result.code === 0) {
           destination = argv[argv.indexOf("-C") + 1];
           const checkoutId =
             archived?.id ??
@@ -487,12 +452,7 @@ describe("ManagedWorktreeService capacity", () => {
     let pressureInjected = false;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       const result = await realRun(argv, options);
-      if (
-        argv[0] === "git" &&
-        argv.includes("read-tree") &&
-        argv.includes("-u") &&
-        result.code === 0
-      ) {
+      if (isWorktreeHydration(argv) && result.code === 0) {
         // The first checkout still passes its postchecks, but a second checkout
         // cannot fit its estimate. Without the shared lease both materializations can start.
         availableBytes = 4 * GiB;
@@ -649,12 +609,7 @@ describe("ManagedWorktreeService capacity", () => {
     let pressureInjected = false;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       const result = await realRun(argv, options);
-      if (
-        argv[0] === "git" &&
-        argv.includes("read-tree") &&
-        argv.includes("-u") &&
-        result.code === 0
-      ) {
+      if (isWorktreeHydration(argv) && result.code === 0) {
         availableBytes = GiB;
         pressureInjected = true;
       }

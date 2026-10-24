@@ -35,8 +35,20 @@ function renderAuthStatus(card: ModelProviderCard) {
   );
 }
 
-export function hasProviderCredentials(card: ModelProviderCard): boolean {
-  return card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
+/**
+ * Usable through OpenClaw: credentials it stores, or a catalog that reports the
+ * provider ready (for example a CLI backend or plugin that owns its own login).
+ */
+/** Usage the provider reported, even an error, proves a credential it accepted. */
+export function isProviderUsable(card: ModelProviderCard): boolean {
+  return (
+    card.configApiKeys.length > 0 ||
+    Boolean(card.apiKey) ||
+    card.profiles.length > 0 ||
+    card.availableModelCount > 0 ||
+    card.catalogStatus === "ready" ||
+    card.usage !== undefined
+  );
 }
 
 function needsAuthAttention(card: ModelProviderCard): boolean {
@@ -73,7 +85,7 @@ export function renderProviderStatus(card: ModelProviderCard) {
   if (card.catalogStatus === "unavailable") {
     return <SettingsStatus kind={"warn"} label={t("modelProviders.status.modelsUnavailable")} />;
   }
-  if (!hasProviderCredentials(card)) {
+  if (!isProviderUsable(card)) {
     return renderAuthStatus(card);
   }
   const verified = hasVerifiedProvider(card);
@@ -110,14 +122,12 @@ export function renderMutationMessage(message: ModelProviderRowMessage | undefin
   );
 }
 
-export type ModelProviderConnectActionProps = {
+export function ModelProviderConnectAction(props: {
   onConnect: () => void;
   connectDisabled: boolean;
   primary?: boolean;
   compact?: boolean;
-};
-
-export function ModelProviderConnectAction(props: ModelProviderConnectActionProps) {
+}) {
   return (
     <button
       class={["btn", { primary: props.primary, "btn--sm": props.compact }]}

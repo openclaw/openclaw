@@ -11,7 +11,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import type {
   ImageDescriptionRequest,
   ImagesDescriptionRequest,
@@ -42,11 +41,16 @@ import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandb
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { createImageTool } from "./image-tool.js";
 import {
+  createLargeColorBlockPng,
   createMinimaxImageConfig,
+  createRequiredImageTool,
+  executeImplicitImageTool,
+  expectToolText,
   ONE_PIXEL_PNG_B64,
+  readJpegDimensions,
   resolveConfiguredImageModelForTest,
-  resolveImageModelConfigForTool,
   testing,
+  type ToolTextResult,
 } from "./image-tool.test-support.js";
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
 import { createPdfTool } from "./pdf-tool.js";
@@ -305,45 +309,6 @@ async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promi
 
 const ONE_PIXEL_GIF_B64 = "R0lGODlhAQABAIABAP///wAAACwAAAAAAQABAAACAkQBADs=";
 
-function createLargeColorBlockPng(size: number): Buffer {
-  const buf = Buffer.alloc(size * size * 4, 255);
-  const centerStart = Math.floor(size * 0.25);
-  const centerEnd = Math.floor(size * 0.75);
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const inCenter = x >= centerStart && x < centerEnd && y >= centerStart && y < centerEnd;
-      fillPixel(buf, x, y, size, inCenter ? 230 : 30, inCenter ? 40 : 110, inCenter ? 35 : 220);
-    }
-  }
-  return encodePngRgba(buf, size, size);
-}
-
-function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
-  // The tests inspect JPEG SOF markers directly so resize assertions do not
-  // depend on an external decoder.
-  let offset = 2;
-  while (offset + 9 < buffer.length) {
-    if (buffer[offset] !== 0xff) {
-      offset += 1;
-      continue;
-    }
-    const marker = expectDefined(buffer[offset + 1], "buffer[offset + 1] test invariant");
-    offset += 2;
-    if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
-      continue;
-    }
-    const segmentLength = buffer.readUInt16BE(offset);
-    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
-      return {
-        height: buffer.readUInt16BE(offset + 3),
-        width: buffer.readUInt16BE(offset + 5),
-      };
-    }
-    offset += segmentLength;
-  }
-  throw new Error("JPEG dimensions not found");
-}
-
 function readPngDimensions(buffer: Buffer): { width: number; height: number } {
   if (buffer.length < 24 || buffer.toString("ascii", 12, 16) !== "IHDR") {
     throw new Error("PNG dimensions not found");
@@ -517,6 +482,12 @@ function installImageUnderstandingProviderDeps(
       Parameters<typeof testing.setProviderDepsForTest>[0]
     >["resolveModelAsync"];
     useDefaultResolveModelAsync?: boolean;
+    resolveAutoMediaKeyProviders?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["resolveAutoMediaKeyProviders"];
+    resolveDefaultMediaModel?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["resolveDefaultMediaModel"];
   },
 ) {
   imageProviderHarness.setProviders(providers);
@@ -541,10 +512,13 @@ function installImageUnderstandingProviderDeps(
     ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
     describeImageWithModel: options?.describeImageWithModel ?? describeGenericImageWithModel,
     describeImagesWithModel: options?.describeImagesWithModel ?? describeGenericImagesWithModel,
-    resolveAutoMediaKeyProviders: ({ capability }) =>
-      capability === "image" ? ["openai", "anthropic"] : [],
-    resolveDefaultMediaModel: ({ providerId, capability }) =>
-      capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
+    resolveAutoMediaKeyProviders:
+      options?.resolveAutoMediaKeyProviders ??
+      (({ capability }) => (capability === "image" ? ["openai", "anthropic"] : [])),
+    resolveDefaultMediaModel:
+      options?.resolveDefaultMediaModel ??
+      (({ providerId, capability }) =>
+        capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined),
     resolveRegisteredMediaUnderstandingProvider: ({ providerId }) =>
       imageProviderHarness.getMediaUnderstandingProvider(
         providerId,
@@ -643,20 +617,6 @@ async function expectImageToolExecOk(
   expect((result as ToolTextResult).details).toMatchObject({ text: "ok" });
 }
 
-type ToolTextResult = {
-  content?: Array<{
-    type?: string;
-    text?: string;
-    image_url?: { url?: string };
-  }>;
-  details?: Record<string, unknown>;
-};
-
-function expectToolText(result: unknown, text: string): void {
-  const content = (result as ToolTextResult).content ?? [];
-  expect(content.some((block) => block.type === "text" && block.text === text)).toBe(true);
-}
-
 function firstImageRequest(mock: { mock: { calls: unknown[][] } }): ImageDescriptionRequest {
   const request = mock.mock.calls.at(0)?.[0];
   if (!request) {
@@ -671,18 +631,6 @@ function fetchCallAt(mock: { mock: { calls: unknown[][] } }, index: number): unk
     throw new Error(`expected fetch call ${index + 1}`);
   }
   return call;
-}
-
-function requireImageTool<T>(tool: T | null | undefined): T {
-  expect(typeof (tool as { execute?: unknown } | null | undefined)?.execute).toBe("function");
-  if (!tool) {
-    throw new Error("expected image tool");
-  }
-  return tool;
-}
-
-function createRequiredImageTool(args: Parameters<typeof createImageTool>[0]) {
-  return requireImageTool(createImageTool(args));
 }
 
 type ImageToolInstance = ReturnType<typeof createRequiredImageTool>;
@@ -716,7 +664,6 @@ describe("image tool implicit imageModel config", () => {
   const openAiPrimaryCfg = {
     agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
   } satisfies OpenClawConfig;
-  const codexImageModel = { primary: "codex/gpt-5.5" };
 
   const openAiOAuthProfile = (provider = "openai"): AuthProfileCredential => ({
     provider,
@@ -777,24 +724,29 @@ describe("image tool implicit imageModel config", () => {
         if (cli) {
           vi.stubEnv("OPENCLAW_TEST_CODEX_CLI_OAUTH", "1");
         }
-        expect(
-          resolveImageModelConfigForTool({
-            cfg: openAiPrimaryCfg,
-            agentDir,
-            ...(persisted || cli
-              ? {
-                  authStore: scoped ? makeAuthStore({}) : readMockRuntimeAuthProfileStore(agentDir),
-                }
-              : {}),
-            ...(prepared
-              ? {
-                  preparedModelRuntime: {
-                    mediaCapabilityProviders: { mediaUnderstandingProviders: [] },
-                  } as never,
-                }
-              : {}),
-          }),
-        ).toEqual(cli ? codexImageModel : null);
+        const execution = executeImplicitImageTool({
+          config: openAiPrimaryCfg,
+          agentDir,
+          ...(persisted || cli
+            ? {
+                authProfileStore: scoped
+                  ? makeAuthStore({})
+                  : readMockRuntimeAuthProfileStore(agentDir),
+              }
+            : {}),
+          ...(prepared
+            ? {
+                preparedModelRuntime: {
+                  mediaCapabilityProviders: { mediaUnderstandingProviders: [] },
+                } as never,
+              }
+            : {}),
+        });
+        if (cli) {
+          expect((await execution).requests).toEqual(["codex/gpt-5.5"]);
+        } else {
+          await expect(execution).rejects.toThrow(/No image model is configured/);
+        }
       });
     },
   );
@@ -810,16 +762,15 @@ describe("image tool implicit imageModel config", () => {
         "minimax-portal:default": openAiOAuthProfile("minimax-portal"),
       });
 
-      const actual = resolveImageModelConfigForTool({
-        cfg,
-        agentDir,
-        authStore: readMockRuntimeAuthProfileStore(agentDir),
-      });
-      expect(actual).toEqual({
-        primary: "minimax-portal/MiniMax-VL-01",
-        fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
-      });
-      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
+      const { requests } = await executeImplicitImageTool(
+        { config: cfg, agentDir, authProfileStore: readMockRuntimeAuthProfileStore(agentDir) },
+        2,
+      );
+      expect(requests).toEqual([
+        "minimax-portal/MiniMax-VL-01",
+        "openai/gpt-5.4-mini",
+        "anthropic/claude-opus-4-6",
+      ]);
     });
   });
 
@@ -928,15 +879,7 @@ describe("image tool implicit imageModel config", () => {
           ["minimax-cn", "MiniMax-VL-01"],
           ["openai", "gpt-5.4-mini"],
         ]);
-        testing.setProviderDepsForTest({
-          buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
-            imageProviderHarness.buildProviderRegistry(overrides),
-          getMediaUnderstandingProvider: (
-            id: string,
-            registry: Map<string, MediaUnderstandingProvider>,
-          ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
-          describeImageWithModel: describeGenericImageWithModel,
-          describeImagesWithModel: describeGenericImagesWithModel,
+        installImageUnderstandingProviderDeps([minimaxProvider], {
           resolveAutoMediaKeyProviders: ({ capability }) =>
             capability === "image"
               ? cnCandidate
@@ -973,9 +916,12 @@ describe("image tool implicit imageModel config", () => {
         },
       } as const;
 
-      expect(resolveImageModelConfigForTool({ cfg, agentDir, authStore })).toEqual({
-        primary: `${cnCandidate ? "minimax-cn" : "minimax"}/MiniMax-VL-01`,
+      const { requests } = await executeImplicitImageTool({
+        config: cfg,
+        agentDir,
+        authProfileStore: authStore,
       });
+      expect(requests).toEqual([`${cnCandidate ? "minimax-cn" : "minimax"}/MiniMax-VL-01`]);
     });
   });
 
@@ -1049,15 +995,14 @@ describe("image tool implicit imageModel config", () => {
             },
           },
         };
-        expect(
-          resolveImageModelConfigForTool({
-            cfg,
-            agentDir,
-            authStore: createAuthProfileStoreFixture({
-              [`${provider}:default`]: { type: "api_key", provider, key: "sk-test" },
-            }),
+        const { requests } = await executeImplicitImageTool({
+          config: cfg,
+          agentDir,
+          authProfileStore: createAuthProfileStoreFixture({
+            [`${provider}:default`]: { type: "api_key", provider, key: "sk-test" },
           }),
-        ).toEqual({ primary: `${provider}/${model}` });
+        });
+        expect(requests).toEqual([`${provider}/${model}`]);
         if (checkTool) {
           // Direct image factories retain their shipped directory-backed auth contract.
           expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
@@ -1089,13 +1034,13 @@ describe("image tool implicit imageModel config", () => {
           },
         },
       };
-      expect(
-        resolveImageModelConfigForTool({
-          cfg,
+      await expect(
+        executeImplicitImageTool({
+          config: cfg,
           agentDir,
-          authStore: readMockRuntimeAuthProfileStore(agentDir),
+          authProfileStore: readMockRuntimeAuthProfileStore(agentDir),
         }),
-      ).toBeNull();
+      ).rejects.toThrow(/No image model is configured/);
     });
   });
 
@@ -1105,7 +1050,7 @@ describe("image tool implicit imageModel config", () => {
     imageModel: { primary: string; fallbacks?: string[] };
     providers?: string[];
     models?: string[];
-    expected: ReturnType<typeof resolveImageModelConfigForTool> | RegExp;
+    expected: string | RegExp;
   }>([
     {
       name: "ambiguous providerless model",
@@ -1117,7 +1062,7 @@ describe("image tool implicit imageModel config", () => {
     {
       name: "unmatched providerless model on default provider path",
       imageModel: { primary: "gpt-5.4-mini" },
-      expected: { primary: "gpt-5.4-mini" },
+      expected: "openai/gpt-5.4-mini",
     },
   ])("resolves $name", async ({ primary, imageModel, providers, models, expected }) => {
     await withTempAgentDir(async (agentDir) => {
@@ -1142,22 +1087,15 @@ describe("image tool implicit imageModel config", () => {
             }
           : {}),
       };
+      const execution = executeImplicitImageTool({
+        config: cfg,
+        agentDir,
+        authProfileStore: readMockRuntimeAuthProfileStore(agentDir),
+      });
       if (expected instanceof RegExp) {
-        expect(() =>
-          resolveImageModelConfigForTool({
-            cfg,
-            agentDir,
-            authStore: readMockRuntimeAuthProfileStore(agentDir),
-          }),
-        ).toThrow(expected);
+        await expect(execution).rejects.toThrow(expected);
       } else {
-        expect(
-          resolveImageModelConfigForTool({
-            cfg,
-            agentDir,
-            authStore: readMockRuntimeAuthProfileStore(agentDir),
-          }),
-        ).toEqual(expected);
+        expect((await execution).requests).toEqual([expected]);
       }
     });
   });

@@ -99,11 +99,9 @@ let eligibleBytes = 0;
 const usedHashMemo = new Map();
 const metrics = {
   contentHashCount: 0,
-  contentHashDurationMs: 0,
   memoHitCount: 0,
   memoTruncatedCount: 0,
 };
-const startedAt = performance.now();
 function fail(message) {
   throw new Error(message);
 }
@@ -368,7 +366,6 @@ async function hashFiles(entries) {
         if (sha256) {
           metrics.memoHitCount += 1;
         } else {
-          const hashStartedAt = performance.now();
           const hash = crypto.createHash("sha256");
           const stream = handle.createReadStream({ autoClose: false, signal: controller.signal });
           let bytes = 0;
@@ -379,8 +376,6 @@ async function hashFiles(entries) {
           }
           sha256 = hash.digest("hex");
           metrics.contentHashCount += 1;
-          // Concurrent samples overlap; their sum is hashing effort, not wall time.
-          metrics.contentHashDurationMs += performance.now() - hashStartedAt;
         }
         const after = await handle.stat({ bigint: true });
         if (workspaceStatIdentity("worker", after) !== identity) {
@@ -490,12 +485,11 @@ async function main() {
       usedHashMemo, MAX_WORKSPACE_HASH_MEMO_ENTRIES, MAX_WORKSPACE_HASH_MEMO_BYTES,
     );
     metrics.memoTruncatedCount = usedHashMemo.size - memo.length;
-    const measured = { ...metrics, totalDurationMs: performance.now() - startedAt };
     process.stdout.write(JSON.stringify({
       version: 1,
       manifestRef,
       memo,
-      metrics: measured,
+      metrics,
     }) + "\n");
   } else {
     process.stdout.write(manifestRef + "\n");

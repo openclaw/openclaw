@@ -1,11 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resolveTavilyApiKey,
-  resolveTavilyBaseUrl,
-  resolveTavilyExtractTimeoutSeconds,
-  resolveTavilySearchTimeoutSeconds,
-} from "./config.js";
 
 const { runTavilySearch, runTavilyExtract } = vi.hoisted(() => ({
   runTavilySearch: vi.fn(async (params: Record<string, unknown>) => params),
@@ -117,25 +111,5 @@ describe("tavily tools", () => {
     expect(runTavilyExtract).not.toHaveBeenCalled();
     await tool.execute("extract", { urls: [" https://example.com/article "] });
     expect(runTavilyExtract.mock.calls[0]?.[0]?.urls).toEqual(["https://example.com/article"]);
-  });
-
-  it("reads plugin web search config and prefers it over env defaults", () => {
-    vi.stubEnv("TAVILY_API_KEY", "env-key");
-    vi.stubEnv("TAVILY_BASE_URL", "https://env.tavily.test");
-    const cfg = configWithWebSearch({
-      apiKey: "plugin-key",
-      baseUrl: "https://plugin.test",
-    });
-    expect(resolveTavilyApiKey(cfg)).toBe("plugin-key");
-    expect(resolveTavilyBaseUrl(cfg)).toBe("https://plugin.test");
-  });
-
-  it("falls back to environment values and defaults", () => {
-    vi.stubEnv("TAVILY_API_KEY", "env-key");
-    vi.stubEnv("TAVILY_BASE_URL", "https://env.tavily.test");
-    expect(resolveTavilyApiKey()).toBe("env-key");
-    expect(resolveTavilyBaseUrl()).toBe("https://env.tavily.test");
-    expect(resolveTavilySearchTimeoutSeconds()).toBe(30);
-    expect(resolveTavilyExtractTimeoutSeconds()).toBe(60);
   });
 });

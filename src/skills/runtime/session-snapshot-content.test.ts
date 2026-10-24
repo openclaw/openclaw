@@ -52,15 +52,21 @@ const hash = (result: SnapshotResult) => result.snapshot.resolvedSkills?.[0]?.co
 const skillFile = (result: SnapshotResult) => result.snapshot.resolvedSkills?.[0]?.filePath;
 function expectUnchanged(result: SnapshotResult, previous: SnapshotResult) {
   expect(result.snapshot).toBe(previous.snapshot);
-  expect(result).toMatchObject({ shouldRefresh: false, snapshotVersion: previous.snapshotVersion });
+  expect(result.shouldRefresh).toBe(false);
 }
 
 async function completePassiveScan() {
   const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
   try {
+    let settledTasks = 0;
     for (let elapsed = 0; elapsed < 30 * 60_000 + 50; elapsed += 60_000) {
       await vi.advanceTimersByTimeAsync(Math.min(60_000, 30 * 60_000 + 50 - elapsed));
-      await Promise.all(tasks.mock.results.map((result) => result.value));
+      // Native events during a scan can start another pass before publication.
+      while (settledTasks < tasks.mock.results.length) {
+        const pending = tasks.mock.results.slice(settledTasks);
+        settledTasks += pending.length;
+        await Promise.all(pending.map((result) => result.value));
+      }
     }
   } finally {
     tasks.mockRestore();
@@ -111,7 +117,7 @@ it("reuses session snapshots after unchanged rebuilds and refreshes instruction-
     await completePassiveScan();
     const edited = await readSnapshot(first.snapshot);
     expect(edited.shouldRefresh).toBe(true);
-    expect(edited.snapshotVersion).toBeGreaterThan(version);
+    expect(edited.snapshot.version).toBeGreaterThan(version);
     expect(edited.snapshot.prompt).toBe(first.snapshot.prompt);
     expect(hash(edited)).not.toBe(hash(first));
     expect(changed).toHaveBeenCalledOnce();
@@ -212,4 +218,45 @@ it("ignores losing skill edits but refreshes when the precedence winner disappea
   expect(fallback.shouldRefresh).toBe(true);
   expect(fallback.snapshot.prompt).toContain("Loser");
   expect(skillFile(fallback)).toBe(path.join(loser, "SKILL.md"));
+});
+
+it("shares immutable catalog skills across interleaved agent selections and unchanged scans", async () => {
+  await writeDemo(skillDir, "Shared", "Original body");
+  await writeSkill({
+    dir: path.join(workspaceDir, "skills", "other"),
+    name: "other",
+    description: "Other",
+  });
+  const scopedConfig = {
+    ...config,
+    agents: { entries: { writer: { skills: ["demo"] }, reader: { skills: ["demo", "other"] } } },
+  };
+  const read = (agentId: string) =>
+    readSnapshot(undefined, { config: scopedConfig, agentId, watch: false });
+  const first = await read("writer");
+  const second = await read("reader");
+  await refreshSkillsDiscovery({ workspaceDir });
+  const third = await read("writer");
+  const shared = first.snapshot.resolvedSkills![0]!;
+  expect(first.snapshot.skills.map((skill) => skill.name)).toEqual(["demo"]);
+  expect(second.snapshot.skills.map((skill) => skill.name)).toEqual(["demo", "other"]);
+  expect(
+    new Set([shared, second.snapshot.resolvedSkills![0], third.snapshot.resolvedSkills![0]]).size,
+  ).toBe(1);
+  expect(second.snapshot.discoverySkills![0]).toBe(shared);
+  expect(Object.isFrozen(shared)).toBe(true);
+  expect(Object.isFrozen(shared.sourceInfo)).toBe(true);
+  expect(Object.isFrozen(shared.discoveryRoot)).toBe(true);
+
+  await refreshSkillsDiscovery({ workspaceDir, reason: "config-change" });
+  expect((await read("reader")).snapshot.resolvedSkills![0]).toBe(shared);
+
+  await writeDemo(skillDir, "Shared", "Changed instructions");
+  await refreshSkillsDiscovery({ workspaceDir });
+  const edited = await read("reader");
+  const next = edited.snapshot.resolvedSkills![0]!;
+  expect(next).not.toBe(shared);
+  expect(next.contentHash).not.toBe(shared.contentHash);
+  expect(edited.snapshot.resolvedSkills![1]).toBe(second.snapshot.resolvedSkills![1]);
+  expect((await read("writer")).snapshot.resolvedSkills![0]).toBe(next);
 });

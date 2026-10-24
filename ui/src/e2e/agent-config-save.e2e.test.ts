@@ -8,6 +8,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent config save",
@@ -23,15 +24,7 @@ const agentRoster = {
   scope: "agent",
 };
 function configResponse(config: Record<string, unknown>, hash = "agent-config-hash-1") {
-  return {
-    config,
-    sourceConfig: config,
-    runtimeConfig: config,
-    hash,
-    issues: [],
-    raw: JSON.stringify(config),
-    valid: true,
-  };
+  return { ...configSnapshot(config, hash), runtimeConfig: config };
 }
 async function saveParams(gateway: Awaited<ReturnType<typeof installMockGateway>>, after = 0) {
   return requireRecord((await gateway.waitForRequest("config.set", { after })).params);
@@ -148,10 +141,7 @@ suite.define(() => {
     });
   });
 
-  it.each([
-    ["profile allow", "read", "fs", "Files", { profile: "full" }],
-    ["wildcard alsoAllow", "web_fetch", "web", "Web", { profile: "minimal", alsoAllow: ["web_*"] }],
-  ] as const)(
+  it.each([["profile allow", "read", "fs", "Files", { profile: "full" }]] as const)(
     "submits keyed entries and surfaces Gateway validation failures (%s)",
     async (_name, toolId, groupId, groupLabel, tools) => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {

@@ -2,12 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { channelReadyPatch } from "./channel-status-patches.js";
+import * as accountLifetime from "./server-channel-account-lifetime.js";
 import {
   createTestPlugin,
   flushMicrotasks,
+  waitForMicrotaskCondition,
   type createTestChannelManager,
   type createTestChannelRegistry,
   type TestAccount,
@@ -33,6 +37,88 @@ export function registerChannelAutostartRecoveryTests({
     manager.setAutostartSuppression(suppression);
     return { manager, startAccount, suppression };
   }
+  it.each(["exited-run abort", "manual stop", "recovery stop"] as const)(
+    "settles restart backoff after %s",
+    async (cause) => {
+      const createLifetime = accountLifetime.createChannelAccountLifetime;
+      const controllers: AbortController[] = [];
+      const captureLifetime = vi
+        .spyOn(accountLifetime, "createChannelAccountLifetime")
+        .mockImplementation((...args) => {
+          const lifetime = createLifetime(...args);
+          controllers.push(lifetime.abort);
+          return lifetime;
+        });
+      const startAccount = vi.fn(async (context: ChannelGatewayContext<TestAccount>) => {
+        if (controllers.length === 1) {
+          return;
+        }
+        context.setStatus(channelReadyPatch({ accountId: context.accountId }));
+        await stayRunning(context);
+      });
+      installTestRegistry(createTestPlugin({ startAccount }));
+      const manager = createManager();
+
+      try {
+        await manager.startChannels();
+        await waitForMicrotaskCondition(
+          () => manager.isAutoRestartScheduled("discord", DEFAULT_ACCOUNT_ID),
+          "expected provider exit to schedule restart backoff",
+        );
+        expect(
+          manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]
+            ?.restartPending,
+        ).toBe(true);
+        const exitedRun = controllers[0];
+        if (!exitedRun) {
+          throw new Error("expected the exited account's abort controller");
+        }
+        if (cause === "exited-run abort") {
+          exitedRun.abort();
+        } else {
+          await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+            manual: cause === "manual stop",
+          });
+        }
+
+        await vi.advanceTimersByTimeAsync(200);
+        const restarted = cause === "exited-run abort";
+        expect(startAccount).toHaveBeenCalledTimes(restarted ? 2 : 1);
+        expect(exitedRun.signal.aborted).toBe(true);
+        expect(
+          manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+        ).toMatchObject({
+          running: restarted,
+          restartPending: false,
+        });
+        expect(manager.isAutoRestartScheduled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+      } finally {
+        captureLifetime.mockRestore();
+      }
+    },
+  );
+
+  it("records a rejected restart wait and clears pending state", async () => {
+    const startAccount = vi.fn(async () => {});
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+    vi.mocked(sleepWithAbort).mockRejectedValueOnce(new Error("restart wait failed"));
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+    ).toMatchObject({
+      running: false,
+      lifecycle: "stopped",
+      restartPending: false,
+      lastError: "restart wait failed",
+    });
+    expect(manager.isAutoRestartScheduled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+  });
+
   describe("crash-loop channel autostart recovery", () => {
     let originalEnv: ReturnType<typeof captureEnv>;
     beforeEach(() => {

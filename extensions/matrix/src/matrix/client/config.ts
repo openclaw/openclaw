@@ -328,14 +328,6 @@ function resolveMatrixAccountConfigSnapshot(
   };
 }
 
-export function resolveMatrixConfigForAccount(
-  cfg: CoreConfig,
-  accountId: string,
-  env: NodeJS.ProcessEnv = process.env,
-): MatrixResolvedConfig {
-  return resolveMatrixAccountConfigSnapshot(cfg, accountId, env).resolved;
-}
-
 function resolveImplicitMatrixAccountId(
   cfg: CoreConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -486,9 +478,6 @@ export async function resolveMatrixAuth(params?: {
         env,
         accountId,
       );
-    } else if (hasMatchingCachedToken) {
-      const { touchMatrixCredentials } = await loadMatrixCredentialsWriteRuntime();
-      await touchMatrixCredentials(env, accountId);
     }
     return buildResolvedMatrixAuth(resolved, {
       accountId,
@@ -501,8 +490,6 @@ export async function resolveMatrixAuth(params?: {
   }
 
   if (cachedCredentials) {
-    const { touchMatrixCredentials } = await loadMatrixCredentialsWriteRuntime();
-    await touchMatrixCredentials(env, accountId);
     return buildResolvedMatrixAuth(resolved, {
       accountId,
       homeserver: cachedCredentials.homeserver,

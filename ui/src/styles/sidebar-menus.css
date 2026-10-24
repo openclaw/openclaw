@@ -66,15 +66,11 @@
   --sidebar-filter-row-height: calc(var(--settings-control-height) + var(--space-1));
   --sidebar-filter-row-inset: var(--space-2);
 
-  box-sizing: border-box;
   width: calc(var(--space-8) * 8);
   max-width: calc(100dvw - var(--space-6));
   max-height: min(calc(100dvh - var(--space-6)), var(--auto-size-available-height, 100dvh));
-  overflow: auto;
-  overscroll-behavior: contain;
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
   font-size: calc((var(--control-ui-text-sm) + var(--control-ui-text-md)) / 2);
@@ -148,9 +144,23 @@
   white-space: nowrap;
 }
 
+/* Segments sit beside their label while every option fits; longer translations
+   move the whole control onto its own full-width line instead of clipping. */
+.sidebar-session-menu-row--segmented {
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+}
+
+.sidebar-session-menu-row--segmented > span {
+  flex: 0 0 calc(var(--space-6) * 4);
+}
+
 .sidebar-session-menu-segmented {
-  display: block;
-  width: 100%;
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  gap: calc(var(--space-1) / 2);
   min-width: 0;
   height: var(--settings-control-height);
 }
@@ -158,7 +168,6 @@
 .sidebar-session-menu-segmented > .settings-segmented__btn {
   flex: 1 1 auto;
   justify-content: center;
-  min-width: 0;
   min-height: calc(var(--settings-control-height) - var(--space-1) * 1.5);
   padding-inline: var(--space-1);
   font-size: var(--control-ui-text-xs);

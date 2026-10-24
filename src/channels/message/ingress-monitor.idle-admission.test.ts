@@ -11,99 +11,130 @@ import {
   type RawEvent,
   type StoredEvent,
 } from "./ingress-monitor.test-harness.js";
+import type { ChannelIngressQueue } from "./ingress-queue.js";
 
-const withQueue = useIngressMonitorQueueFixture();
+const runWithQueue = useIngressMonitorQueueFixture();
 const raw: RawEvent = { id: "fresh", lane: "a", text: "synthetic message" };
 const payload = { version: 1 as const, rawEvent: JSON.stringify(raw) };
 
-describe("idle ingress admission", () => {
-  it("persists a reconciled lane before delivering a fresh singleton", async () => {
-    await withQueue(async (queue) => {
-      let deliveredLaneKeys: Array<string | undefined> = [];
-      const deliver = vi.fn(async () => {
-        deliveredLaneKeys = (await queue.listClaims()).map((claim) => claim.laneKey);
-      });
-      const monitor = createChannelIngressMonitor<RawEvent, string, StoredEvent>({
-        queue,
-        inspect: (event, context) => ({
-          eventId: event.id,
-          laneKey: context.phase === "admission" ? "lane:old" : "lane:new",
-        }),
-        payload: {
-          storage: "raw-event",
-          version: 1,
-          serialize: (event) => JSON.stringify(event),
-          deserialize: (body) => JSON.parse(body) as RawEvent,
-          createClaimError: (kind) => new PermanentIngressError(kind),
-        },
-        deliver,
-        pollIntervalMs: 60_000,
-        retention: { pruneIntervalMs: 60_000 },
-        drain: {
-          deriveLaneKey: () => "lane:new",
-          reconcileStoredLaneKey: (_record, stored, derived) =>
-            stored === "lane:old" && derived === "lane:new",
-          resolveNonRetryableFailure: (error) =>
-            error instanceof PermanentIngressError
-              ? { reason: "invalid-event", message: error.message }
-              : null,
-        },
-      });
-      try {
-        monitor.start();
-        await monitor.waitForIdle();
-        await monitor.admit(raw);
-        await monitor.waitForIdle();
-        expect(deliver).toHaveBeenCalledOnce();
-        expect(deliveredLaneKeys).toEqual(["lane:new"]);
-        expect(await queue.enqueue(raw.id, payload)).toMatchObject({ kind: "completed" });
-      } finally {
+function createFixture(queue: ChannelIngressQueue<StoredEvent>) {
+  const monitors: ReturnType<typeof createMonitor>[] = [];
+  const entered = createDeferred();
+  const released = createDeferred();
+  const deliver = vi.fn();
+  const track = async (monitor: ReturnType<typeof createMonitor>) => {
+    monitors.push(monitor);
+    monitor.start();
+    await monitor.waitForIdle();
+    return monitor;
+  };
+  return {
+    queue,
+    deliver,
+    track,
+    entered: entered.promise,
+    release: released.resolve,
+    ack: async () => {
+      entered.resolve();
+      await released.promise;
+    },
+    start: (options: Parameters<typeof createMonitor>[2] = { pollIntervalMs: 60_000 }) =>
+      track(createMonitor(queue, deliver, options)),
+    stop: async () => {
+      released.resolve();
+      for (const monitor of monitors) {
         await monitor.stop();
       }
+    },
+  };
+}
+
+async function withQueue(run: (fixture: ReturnType<typeof createFixture>) => Promise<void>) {
+  await runWithQueue(async (queue) => {
+    const fixture = createFixture(queue);
+    try {
+      await run(fixture);
+    } finally {
+      await fixture.stop();
+    }
+  });
+}
+
+describe("idle ingress admission", () => {
+  it("persists a reconciled lane before delivering a fresh singleton", async () => {
+    await withQueue(async ({ queue, deliver, track }) => {
+      let deliveredLaneKeys: Array<string | undefined> = [];
+      deliver.mockImplementation(async () => {
+        deliveredLaneKeys = (await queue.listClaims()).map((claim) => claim.laneKey);
+      });
+      const monitor = await track(
+        createChannelIngressMonitor<RawEvent, string, StoredEvent>({
+          queue,
+          inspect: (event, context) => ({
+            eventId: event.id,
+            laneKey: context.phase === "admission" ? "lane:old" : "lane:new",
+          }),
+          payload: {
+            storage: "raw-event",
+            version: 1,
+            serialize: (event) => JSON.stringify(event),
+            deserialize: (body) => JSON.parse(body) as RawEvent,
+            createClaimError: (kind) => new PermanentIngressError(kind),
+          },
+          deliver,
+          pollIntervalMs: 60_000,
+          retention: { pruneIntervalMs: 60_000 },
+          drain: {
+            deriveLaneKey: () => "lane:new",
+            reconcileStoredLaneKey: (_record, stored, derived) =>
+              stored === "lane:old" && derived === "lane:new",
+            resolveNonRetryableFailure: (error) =>
+              error instanceof PermanentIngressError
+                ? { reason: "invalid-event", message: error.message }
+                : null,
+          },
+        }),
+      );
+      await monitor.admit(raw);
+      await monitor.waitForIdle();
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(deliveredLaneKeys).toEqual(["lane:new"]);
+      expect(await queue.enqueue(raw.id, payload)).toMatchObject({ kind: "completed" });
     });
   });
 
   it("owns the fresh claim before ACK and delivers once even when ACK fails", async () => {
-    await withQueue(async (queue) => {
-      const ackEntered = createDeferred();
-      const ackRelease = createDeferred();
+    await withQueue(async ({ queue, deliver, start, ack, entered, release }) => {
       const ackError = new Error("synthetic ACK failure");
-      const deliver = vi.fn();
-      const monitor = createMonitor(queue, deliver, {
+      const monitor = await start({
         pollIntervalMs: 60_000,
         onDurableAdmission: async () => {
-          ackEntered.resolve();
-          await ackRelease.promise;
+          await ack();
           throw ackError;
         },
       });
-      monitor.start();
-      await monitor.waitForIdle();
       const admission = monitor.admit(raw);
       const failedAdmission = expect(admission).rejects.toBe(ackError);
       try {
-        await ackEntered.promise;
+        await entered;
         expect(await queue.listClaims()).toEqual([
           expect.objectContaining({ id: raw.id, payload, attempts: 0 }),
         ]);
         expect(deliver).not.toHaveBeenCalled();
-        ackRelease.resolve();
+        release();
         await failedAdmission;
         await monitor.waitForIdle();
         expect(deliver).toHaveBeenCalledOnce();
         expect(await queue.enqueue(raw.id, payload)).toMatchObject({ kind: "completed" });
       } finally {
-        ackRelease.resolve();
+        release();
         await failedAdmission;
-        await monitor.stop();
       }
     });
   });
 
   it("refreshes the claim during a slow ACK without starting the dispatch watchdog", async () => {
-    await withQueue(async (queue) => {
-      const ackEntered = createDeferred();
-      const ackRelease = createDeferred();
+    await withQueue(async ({ queue, deliver, start, ack, entered, release }) => {
       const refreshed = createDeferred();
       const refresh = queue.refreshClaim!.bind(queue);
       vi.spyOn(queue, "refreshClaim").mockImplementation(async (...args) => {
@@ -114,21 +145,15 @@ describe("idle ingress admission", () => {
         }
       });
       let currentTime = Date.now();
-      const deliver = vi.fn();
-      const monitor = createMonitor(queue, deliver, {
+      const monitor = await start({
         now: () => currentTime,
         pollIntervalMs: 24 * 60 * 60 * 1_000,
-        onDurableAdmission: async () => {
-          ackEntered.resolve();
-          await ackRelease.promise;
-        },
+        onDurableAdmission: ack,
       });
-      monitor.start();
-      await monitor.waitForIdle();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
       const admission = monitor.admit(raw);
       try {
-        await ackEntered.promise;
+        await entered;
         expect(await queue.listClaims()).toHaveLength(1);
         currentTime += INGRESS_CLAIM_LEASE_MS / 3;
         await vi.advanceTimersByTimeAsync(INGRESS_CLAIM_LEASE_MS / 3);
@@ -141,12 +166,12 @@ describe("idle ingress admission", () => {
           }),
         ]);
         expect(deliver).not.toHaveBeenCalled();
-        ackRelease.resolve();
+        release();
         await admission;
         await monitor.waitForIdle();
         expect(deliver).toHaveBeenCalledOnce();
       } finally {
-        ackRelease.resolve();
+        release();
         await admission;
         await monitor.stop();
         vi.useRealTimers();
@@ -155,7 +180,7 @@ describe("idle ingress admission", () => {
   });
 
   it("recovers a committed claim after an unknown append receipt without retry or ACK", async () => {
-    await withQueue(async (queue) => {
+    await withQueue(async ({ queue, deliver, start }) => {
       const append = queue.enqueueAndClaim!.bind(queue);
       const failure = new Error("synthetic lost receipt", {
         cause: new AggregateError([new SqliteWorkerError("lost reply", "outcome-unknown")]),
@@ -165,48 +190,33 @@ describe("idle ingress admission", () => {
         throw failure;
       });
       const ack = vi.fn();
-      const deliver = vi.fn();
-      const monitor = createMonitor(queue, deliver, {
+      const monitor = await start({
         pollIntervalMs: 60_000,
         appendRetryDelaysMs: [0, 0, 0],
         onDurableAdmission: ack,
       });
-      try {
-        monitor.start();
-        await monitor.waitForIdle();
-        await expect(monitor.admit(raw)).rejects.toBe(failure);
-        await monitor.waitForIdle();
-        expect(enqueue).toHaveBeenCalledOnce();
-        expect(ack).not.toHaveBeenCalled();
-        expect(deliver).toHaveBeenCalledOnce();
-        expect(await queue.enqueue(raw.id, payload)).toMatchObject({ kind: "completed" });
-      } finally {
-        await monitor.stop();
-      }
+      await expect(monitor.admit(raw)).rejects.toBe(failure);
+      await monitor.waitForIdle();
+      expect(enqueue).toHaveBeenCalledOnce();
+      expect(ack).not.toHaveBeenCalled();
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(await queue.enqueue(raw.id, payload)).toMatchObject({ kind: "completed" });
     });
   });
 
   it.each(["stop", "suspend"] as const)(
     "returns an unstarted claim without consuming retries when %s wins during ACK",
     async (action) => {
-      await withQueue(async (queue) => {
-        const ackEntered = createDeferred();
-        const ackRelease = createDeferred();
-        const deliver = vi.fn();
-        const monitor = createMonitor(queue, deliver, {
+      await withQueue(async ({ queue, deliver, start, ack, entered, release }) => {
+        const monitor = await start({
           pollIntervalMs: 60_000,
-          onDurableAdmission: async () => {
-            ackEntered.resolve();
-            await ackRelease.promise;
-          },
+          onDurableAdmission: ack,
         });
         let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> = null;
         let stopping: Promise<void> | undefined;
-        monitor.start();
-        await monitor.waitForIdle();
         const admission = monitor.admit(raw);
         try {
-          await ackEntered.promise;
+          await entered;
           expect(await queue.listClaims()).toHaveLength(1);
           if (action === "stop") {
             stopping = monitor.stop();
@@ -214,7 +224,7 @@ describe("idle ingress admission", () => {
             suspension = tryBeginGatewaySuspendAdmission(() => {});
             expect(suspension?.drain()).toBe(true);
           }
-          ackRelease.resolve();
+          release();
           await admission;
           await stopping;
           await monitor.waitForIdle();
@@ -229,17 +239,11 @@ describe("idle ingress admission", () => {
             await monitor.waitForIdle();
             expect(deliver).toHaveBeenCalledOnce();
           } else {
-            const replacement = createMonitor(queue, deliver, { pollIntervalMs: 60_000 });
-            try {
-              replacement.start();
-              await replacement.waitForIdle();
-              expect(deliver).toHaveBeenCalledOnce();
-            } finally {
-              await replacement.stop();
-            }
+            await start();
+            expect(deliver).toHaveBeenCalledOnce();
           }
         } finally {
-          ackRelease.resolve();
+          release();
           await admission;
           await monitor.stop();
           suspension?.rollback();
@@ -250,7 +254,7 @@ describe("idle ingress admission", () => {
   );
 
   it("keeps a retry-delayed head ahead of fresh input", async () => {
-    await withQueue(async (queue) => {
+    await withQueue(async ({ queue, deliver, start }) => {
       const head = { ...raw, id: "head" };
       await queue.enqueue(
         head.id,
@@ -262,32 +266,23 @@ describe("idle ingress admission", () => {
       await queue.release(claim!, { releasedAt: 10_000, lastError: "retry later" });
       let currentTime = 10_000;
       const delivered: string[] = [];
-      const monitor = createMonitor(
-        queue,
-        (event) => {
-          delivered.push(event.id);
-        },
-        { pollIntervalMs: 60_000, now: () => currentTime },
-      );
-      try {
-        monitor.start();
-        await monitor.waitForIdle();
-        await monitor.admit(raw);
-        await monitor.waitForIdle();
-        expect(delivered).toEqual([]);
-        expect((await queue.listPending()).map((event) => event.id)).toEqual(["head", "fresh"]);
-        currentTime += 1_000;
-        monitor.requestDrain();
-        await monitor.waitForIdle();
-        expect(delivered).toEqual(["head", "fresh"]);
-      } finally {
-        await monitor.stop();
-      }
+      deliver.mockImplementation((event: RawEvent) => {
+        delivered.push(event.id);
+      });
+      const monitor = await start({ pollIntervalMs: 60_000, now: () => currentTime });
+      await monitor.admit(raw);
+      await monitor.waitForIdle();
+      expect(delivered).toEqual([]);
+      expect((await queue.listPending()).map((event) => event.id)).toEqual(["head", "fresh"]);
+      currentTime += 1_000;
+      monitor.requestDrain();
+      await monitor.waitForIdle();
+      expect(delivered).toEqual(["head", "fresh"]);
     });
   });
 
   it("preserves a peer claim and its payload on duplicate and later admissions", async () => {
-    await withQueue(async (queue) => {
+    await withQueue(async ({ queue }) => {
       const first = await queue.enqueueAndClaim!(raw.id, payload, {
         ownerId: "peer",
         laneKey: "lane:a",
@@ -315,25 +310,18 @@ describe("idle ingress admission", () => {
   });
 
   it("wakes retry settlement for a fused claim without waiting for the poll timer", async () => {
-    await withQueue(async (queue) => {
-      const deliver = vi
-        .fn()
+    await withQueue(async ({ queue, deliver, start }) => {
+      deliver
         .mockReturnValueOnce({ kind: "failed-retryable", error: new Error("retry once") })
         .mockReturnValue(undefined);
-      const monitor = createMonitor(queue, deliver, {
+      const monitor = await start({
         pollIntervalMs: 60_000,
         retryPolicy: { baseMs: 0, maxMs: 0 },
       });
-      try {
-        monitor.start();
-        await monitor.waitForIdle();
-        await monitor.admit(raw);
-        await monitor.waitForIdle();
-        expect(deliver).toHaveBeenCalledTimes(2);
-        expect(await queue.enqueue(raw.id, payload)).toMatchObject({ kind: "completed" });
-      } finally {
-        await monitor.stop();
-      }
+      await monitor.admit(raw);
+      await monitor.waitForIdle();
+      expect(deliver).toHaveBeenCalledTimes(2);
+      expect(await queue.enqueue(raw.id, payload)).toMatchObject({ kind: "completed" });
     });
   });
 });

@@ -45,7 +45,7 @@ vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
   return { ...actual, getSecretTargetRegistry: actual.getCoreSecretTargetRegistry };
 });
 
-import { makePrompter } from "./doctor-auth-flat-profiles.test-support.js";
+import { createDoctorPrompterFixture as makePrompter } from "../flows/doctor-health-context.test-support.js";
 import { collectSecurityWarnings, noteSecurityWarnings } from "./doctor-security.js";
 
 describe("noteSecurityWarnings gateway exposure", () => {
@@ -64,22 +64,23 @@ describe("noteSecurityWarnings gateway exposure", () => {
   const lastMessage = () => String(note.mock.calls[note.mock.calls.length - 1]?.[0] ?? "");
 
   it.each([
-    { name: "resolved env shorthand", botToken: "${TELEGRAM_BOT_TOKEN_FAKE_A}", plaintext: false },
+    { name: "resolved env shorthand", token: "${GATEWAY_AUTH_TOKEN_FAKE_A}", plaintext: false },
     {
       name: "explicit env reference",
-      botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN_FAKE_A" },
+      token: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_FAKE_A" },
       plaintext: false,
     },
-    { name: "literal token", botToken: "synthetic-telegram-token", plaintext: true },
-  ])("classifies $name after auth-profile migration", async ({ botToken, plaintext }) => {
+    { name: "literal token", token: "synthetic-gateway-token", plaintext: true },
+  ])("classifies $name after auth-profile migration", async ({ token, plaintext }) => {
     await withExecApprovalsFile({ version: 1 }, async () => {
-      vi.stubEnv("TELEGRAM_BOT_TOKEN_FAKE_A", "synthetic-telegram-token");
+      vi.stubEnv("GATEWAY_AUTH_TOKEN_FAKE_A", "synthetic-gateway-token");
       const configPath = path.join(process.env.OPENCLAW_STATE_DIR!, "openclaw.json");
       await fs.writeFile(
         configPath,
         JSON.stringify({
           plugins: { enabled: false },
-          channels: { telegram: { accounts: { default: { botToken } } } },
+          // Match this suite's core-only secret registry; channel targets are plugin-owned.
+          gateway: { auth: { mode: "token", token } },
         }),
       );
       const snapshot = await createConfigIO({
@@ -94,7 +95,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
         configPath,
         sourceConfigValid: true,
         options: { nonInteractive: true },
-        prompter: makePrompter(false),
+        prompter: makePrompter(false, true),
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         env: process.env,
       };

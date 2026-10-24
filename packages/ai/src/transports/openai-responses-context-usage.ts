@@ -5,6 +5,7 @@ import {
   responsesContinuationPrefixFingerprint,
   type ResponsesContinuationRequest,
 } from "./openai-responses-continuation.js";
+import { OPENAI_RESPONSES_TOOL_CALL_PROVIDERS } from "./openai-responses-contracts.js";
 import { readResponsesInputReplayState } from "./openai-responses-input-replay.js";
 import {
   convertProviderResponsesMessages,
@@ -18,13 +19,6 @@ import {
 import { sha256Hex } from "./transport-utils.js";
 
 type ReplayIdentity = NonNullable<Parameters<typeof buildProviderReplayContext>[1]>;
-type Projection = "transport" | "provider";
-const TOOL_CALL_PROVIDERS = new Set([
-  "openai",
-  "opencode",
-  "azure-openai-responses",
-  "github-copilot",
-]);
 
 function contextFingerprint(input: readonly unknown[], output: readonly unknown[] = []): string {
   // Continuation normalizes provider output into replayable input. Context accounting
@@ -48,7 +42,7 @@ export function recordResponsesContextUsage(
   identity: ReplayIdentity | undefined,
   request: ResponsesContinuationRequest,
   output: readonly unknown[],
-  projection: Projection,
+  projection: "transport" | "provider",
 ): void {
   const usage = message.usage.contextUsage;
   if (
@@ -72,10 +66,15 @@ export function recordResponsesContextUsage(
     projection === "transport" ? convertResponsesMessages : convertProviderResponsesMessages;
   // Standalone projection repairs unmatched calls; those synthetic results are
   // not response output and remain outside the measured prefix.
-  const replayOutput = convert(model, { messages: [message] }, TOOL_CALL_PROVIDERS, {
-    ...identity,
-    includeSystemPrompt: false,
-  }).filter((item) => item.type !== "function_call_output");
+  const replayOutput = convert(
+    model,
+    { messages: [message] },
+    OPENAI_RESPONSES_TOOL_CALL_PROVIDERS,
+    {
+      ...identity,
+      includeSystemPrompt: false,
+    },
+  ).filter((item) => item.type !== "function_call_output");
   const firstInput = request.input[0];
   const contextUsage = {
     ...buildProviderReplayContext(model, identity),
@@ -136,7 +135,7 @@ export function resolveResponsesContextUsageBoundary(
     const input = convert(
       model,
       { messages: messages.filter(isProviderMessage), systemPrompt },
-      TOOL_CALL_PROVIDERS,
+      OPENAI_RESPONSES_TOOL_CALL_PROVIDERS,
       { ...identity, includeSystemPrompt: includeSystemPrompt === true },
     );
     if (

@@ -157,13 +157,20 @@ describe("node.invoke approval bypass", () => {
   let port: number;
   const sockets: WebSocket[] = [];
   const nodes: GatewayClient[] = [];
+  const acknowledgements: Promise<PromiseSettledResult<unknown>[]>[] = [];
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const ws of sockets.splice(0)) {
       ws.close();
     }
-    for (const node of nodes.splice(0)) {
-      node.stop();
+    // The operator result can arrive before the node's acknowledgement settles.
+    const results = (await Promise.all(acknowledgements.splice(0))).flat();
+    results.push(...(await Promise.allSettled(nodes.splice(0).map((node) => node.stopAndWait()))));
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Node acknowledgement or shutdown failed");
     }
   });
 
@@ -311,7 +318,12 @@ describe("node.invoke approval bypass", () => {
         caps: ["system"],
         commands,
         deviceIdentity: resolvedDeviceIdentity,
-        onEvent: (event) => acknowledgeNodeInvokeRequestForTest({ client, event, onInvoke }),
+        onEvent: (event) => {
+          const acknowledgement = acknowledgeNodeInvokeRequestForTest({ client, event, onInvoke });
+          if (acknowledgement) {
+            acknowledgements.push(Promise.allSettled([acknowledgement]));
+          }
+        },
       });
       return client;
     };

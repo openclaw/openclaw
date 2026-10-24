@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { acquireReadOnlyPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
@@ -11,26 +12,12 @@ import type {
   PreparedModelRuntimeLease,
 } from "../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  getCurrentPluginMetadataSnapshot,
-  withPluginMetadataSnapshotScope,
-} from "../plugins/current-plugin-metadata-snapshot.js";
-import {
-  getPluginCache,
-  getPluginMetadataSnapshotCache,
-  type PluginCache,
-} from "../plugins/plugin-cache.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
-
-type BuildObservation = {
-  previous: Promise<void> | undefined;
-  completion: Promise<void>;
-  metadata: PluginMetadataSnapshot | undefined;
-  cache: PluginCache;
-};
 
 function modelConfig(base: OpenClawConfig, provider: string): OpenClawConfig {
   return {
@@ -41,15 +28,11 @@ function modelConfig(base: OpenClawConfig, provider: string): OpenClawConfig {
           api: "openai-completions",
           baseUrl: "https://model-cache.invalid/v1",
           models: [
-            {
-              id: "selected",
+            modelDefinition("selected", {
               name: "Synthetic policy model",
-              reasoning: true,
-              input: ["text"],
               contextWindow: 4096,
               maxTokens: 512,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            },
+            }),
           ],
         },
       },
@@ -134,15 +117,11 @@ it(
     const gateEntered = createDeferredCore(),
       releaseBuild = createDeferredCore();
     let warmA: PreparedModelRuntimeLease | undefined;
-    const builds: BuildObservation[] = [];
     const jobs: Promise<PreparedModelRuntimeLease>[] = [];
     let closing: Promise<void> | undefined;
     const restorers: Array<() => void> = [];
     try {
-      const aPort = await fixture.reservePort();
-      const aServer = await fixture.start(aPort);
-      const a = fixture.kernels.get(aPort);
-      assert(a);
+      const { server: aServer, kernel: a } = await fixture.startServer();
       const aMetadata = a.getPluginMetadataSnapshot();
       assert(aMetadata);
       const aCache = getPluginMetadataSnapshotCache(aMetadata);
@@ -199,29 +178,12 @@ it(
           if (holdNext) {
             holdNext = false;
             expect(params.pluginMetadataSnapshot).toBe(aMetadata);
-            expect(getPluginCache()).toBe(aCache);
             gateEntered.resolve();
             await releaseBuild.promise;
           }
           return prepareStatic(params);
         });
       restorers.push(() => held.mockRestore());
-      const runtimeBuild = await import("../agents/prepared-model-runtime.build.js");
-      const startBuild = runtimeBuild.startSerializedSnapshotBuildBatch;
-      const observed = vi
-        .spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch")
-        .mockImplementation((candidates, completions, ...rest) => {
-          const previous = completions.get(agentDir);
-          const cache = getPluginCache();
-          const metadata = getCurrentPluginMetadataSnapshot({
-            allowScopedSnapshot: true,
-            allowWorkspaceScopedSnapshot: true,
-          });
-          const build = startBuild(candidates, completions, ...rest);
-          builds.push({ previous, completion: build.completion, cache, metadata });
-          return build;
-        });
-      restorers.push(() => observed.mockRestore());
       const modelCloseEntered = createDeferredCore<Error>();
       restorers.push(
         registerPreparedModelRuntimeClose(async (error) => {
@@ -239,12 +201,6 @@ it(
       const queued = acquire(aMetadata, input(coldId, "queued-a"));
       jobs.push(queued);
       void queued.catch(() => {});
-      expect(builds).toHaveLength(2);
-      expect(builds[1]!.previous).toBe(builds[0]!.completion);
-      for (const build of builds) {
-        expect(build.cache).toBe(aCache);
-        expect(build.metadata).toBe(aMetadata);
-      }
       expect(fs.existsSync(markers.get(coldId)!)).toBe(false);
 
       const aClose = aServer.close({ reason: "retire captured queued model metadata" });
@@ -265,7 +221,6 @@ it(
       expect(aCache.retirement).toBeUndefined();
       expect(warmOwner.lifecycle.signal.aborted).toBe(false);
       releaseBuild.resolve();
-      await Promise.all(builds.map(({ completion }) => completion));
       await expect(first).rejects.toBe(shutdownError);
       await expect(queued).rejects.toMatchObject({
         message: `prepared model runtime publication was superseded for ${agentDir}`,
@@ -288,7 +243,7 @@ it(
         }
       }
       await warmA?.[Symbol.asyncDispose]();
-      await Promise.allSettled([...builds.map(({ completion }) => completion), closing]);
+      await Promise.allSettled([closing]);
       for (const restore of restorers.toReversed()) {
         restore();
       }

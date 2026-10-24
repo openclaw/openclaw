@@ -8,6 +8,7 @@ import {
   LINK_READER_PANEL_TOGGLE_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
@@ -31,23 +32,17 @@ afterEach(() => {
 });
 
 function setup(shouldOpenExternally?: () => boolean) {
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     phase: "connected",
     client: createTestGatewayClient(vi.fn()),
     hello: gatewayHelloForMethods(["forge.item"], ["operator.read"]),
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
-    sessionKey: "",
-    lastError: null,
-    lastErrorCode: null,
     pluginCapabilities: {
       ok: true,
       descriptors: [],
       methods: ["forge.item"],
       controlUiLinkReaders: [reader],
     },
-  };
+  });
   const router = startLinkReaderRouting(() => snapshot, { shouldOpenExternally });
   onTestFinished(router.dispose);
   const accept = vi.fn((event: Event) => event.preventDefault());
@@ -153,6 +148,14 @@ describe("Plugin reader link routing", () => {
       expect(accept).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps preview opt-out links routed through the original reader handler", () => {
+    const { anchor, accept, click } = setup();
+    anchor.setAttribute("data-link-reader-preview", "off");
+    expect(click()).toBe(false);
+    expect(accept).toHaveBeenCalledOnce();
+    expect((accept.mock.calls[0]![0] as CustomEvent).detail.url).toBe(anchor.href);
+  });
 
   it("does not swallow links without an available and accepting shell", () => {
     const { snapshot, accept, click } = setup();

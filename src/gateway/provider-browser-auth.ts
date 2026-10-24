@@ -41,7 +41,7 @@ export class ProviderBrowserSignInUnavailableError extends Error {
 
 export function resolveBrowserAuthOrigin(
   browser: GatewayWsBrowserOrigin | undefined,
-  signal: AbortSignal,
+  signal: AbortSignal = getGatewayRestartDrainSignal(),
 ) {
   const published = getTailscalePublishedOrigin();
   if (!browser || browser.origin === published?.origin) {

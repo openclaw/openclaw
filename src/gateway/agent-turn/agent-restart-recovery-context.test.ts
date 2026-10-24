@@ -87,6 +87,10 @@ describe("resolveAgentRestartRecoveryContext", () => {
     ).toBeUndefined();
   });
 
+  it("retains the WebChat fallback for an older internal claim without channel facts", () => {
+    expect(resolveContext(matchingInternalParams)).toEqual({ messageChannel: "webchat" });
+  });
+
   it("preserves WebChat policy context and pinned authoring for an admitted Control UI recovery", () => {
     expect(resolveContext(matchingUiParams)).toEqual({
       messageChannel: "webchat",

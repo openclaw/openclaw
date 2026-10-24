@@ -1,34 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { Browser, Locator, Page } from "playwright";
+import type { Page } from "playwright";
 import { expect } from "vitest";
-import {
-  takeControlUiElementScreenshot,
-  takeControlUiViewportScreenshot,
-  waitForControlUiProofSurface,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { openSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
-export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-
-export function createSessionOwnershipProofContext(
-  owner: { readonly artifactDir: string; readonly browser: Browser },
-  directory: "drafts-ux" | "session-owner-stack",
-) {
-  const viewport = { height: 800, width: 1200 };
-  return owner.browser.newContext({
-    viewport,
-    ...(captureUiProofEnabled
-      ? { recordVideo: { dir: path.join(owner.artifactDir, directory), size: viewport } }
-      : {}),
-  });
-}
-
-type AvatarFixture = {
-  id: string;
-  background: string;
-  label: string;
-};
+type AvatarFixture = { id: string; background: string; label: string };
 
 export async function routeAvatarFixtures(page: Page, fixtures: readonly AvatarFixture[]) {
   await Promise.all(
@@ -42,55 +17,6 @@ export async function routeAvatarFixtures(page: Page, fixtures: readonly AvatarF
         }),
       ),
     ),
-  );
-}
-
-export async function captureUiProof(
-  owner: { readonly artifactDir: string },
-  surface: Locator,
-  fileName: string,
-  content: readonly Locator[],
-) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(path.join(owner.artifactDir, "drafts-ux"), { recursive: true });
-  await writeFile(
-    path.join(owner.artifactDir, "drafts-ux", fileName),
-    await takeControlUiViewportScreenshot(surface.page(), surface, content),
-  );
-}
-
-export async function captureSessionOwnerProof(
-  owner: { readonly artifactDir: string },
-  page: Page,
-  fileName: string,
-) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(path.join(owner.artifactDir, "session-owner-stack"), { recursive: true });
-  await writeFile(
-    path.join(owner.artifactDir, "session-owner-stack", fileName),
-    await takeControlUiElementScreenshot(page, page.locator(".sidebar-sessions"), [
-      page.locator(".sidebar-recent-session").first(),
-    ]),
-  );
-}
-
-export async function captureSessionOwnerPageProof(
-  owner: { readonly artifactDir: string },
-  surface: Locator,
-  fileName: string,
-  content: readonly Locator[],
-) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(path.join(owner.artifactDir, "session-owner-stack"), { recursive: true });
-  await writeFile(
-    path.join(owner.artifactDir, "session-owner-stack", fileName),
-    await takeControlUiViewportScreenshot(surface.page(), surface, content),
   );
 }
 

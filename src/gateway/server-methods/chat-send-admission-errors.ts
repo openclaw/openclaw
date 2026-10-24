@@ -1,4 +1,3 @@
-import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_RESTART_UNAVAILABLE_REASON } from "../../../packages/gateway-protocol/src/restart-unavailable.js";
 import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
@@ -15,13 +14,7 @@ import { SESSION_SETTINGS_CHANGED_ERROR_REASON } from "./chat-send-session-setti
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export function resolveChatSendStorageErrorMessage(error: unknown): string | undefined {
-  for (const candidate of collectNestedErrorCandidates(error)) {
-    const message = renderStorageFailureSummary(classifyGatewayStorageFailure(candidate));
-    if (message) {
-      return message;
-    }
-  }
-  return undefined;
+  return renderStorageFailureSummary(classifyGatewayStorageFailure(error));
 }
 
 export function respondChatSessionRoutingChanged(respond: GatewayRequestHandlerOptions["respond"]) {

@@ -61,11 +61,11 @@ function agentJob(id: string, timeoutSeconds: number) {
   return dueJob(id, { payload: { kind: "agentTurn", message: "work", timeoutSeconds } });
 }
 
-function heartbeatJob(id: string, overrides: Partial<CronJob> = {}) {
+function sessionEventJob(id: string, overrides: Partial<CronJob> = {}) {
   return dueJob(id, {
     sessionTarget: "main",
     wakeMode: "now",
-    payload: { kind: "systemEvent", text: "check heartbeat work" },
+    payload: { kind: "systemEvent", text: "check scheduled work" },
     schedule: { kind: "every", everyMs: 60_000, anchorMs: SCHEDULED_AT - 60_000 },
     ...overrides,
   });
@@ -114,6 +114,43 @@ async function drain(...runs: Promise<unknown>[]) {
   await Promise.allSettled(runs);
   await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
 }
+
+it("does not spend a main-session execution deadline waiting for event adoption", async () => {
+  const { storePath } = fixtures.makeStorePath();
+  const queued = createDeferred();
+  const adoption = createDeferred();
+  const state = createCronRegressionState({
+    storePath,
+    runSessionEvent: async ({ onLaneWait, onExecutionStarted }) => {
+      onLaneWait?.({ waiting: true });
+      queued.resolve();
+      await adoption.promise;
+      onLaneWait?.({ waiting: false });
+      onExecutionStarted?.();
+      return { status: "ok" };
+    },
+    runIsolatedAgentJob: vi.fn(),
+  });
+  const settled = vi.fn();
+  const running = executeJobCoreWithTimeout(
+    state,
+    sessionEventJob("deferred-adoption", { wakeMode: "next-heartbeat" }),
+  ).then((result) => {
+    settled();
+    return result;
+  });
+  try {
+    await queued.promise;
+    // Controller lane admission can exceed Cron's ten-minute execution deadline.
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(settled).not.toHaveBeenCalled();
+    adoption.resolve();
+    await expect(running).resolves.toMatchObject({ status: "ok" });
+  } finally {
+    adoption.resolve();
+    await drain(running);
+  }
+});
 
 it("keeps timed-out cron runs from being overwritten by late cancellation", async () => {
   resetActiveCronTaskRunsForTests();
@@ -255,34 +292,31 @@ it("notifies setup timeout after startup catch-up finalization", async () => {
 });
 
 it.each(["finite", "unlimited", "trigger evaluating"] as const)(
-  "keeps the correct heartbeat deadline: %s",
+  "keeps the correct execution deadline: %s",
   async (mode) => {
     const finite = mode === "finite";
     const unlimited = mode === "unlimited";
-    const job = unlimited
-      ? dueJob("unlimited-systemEvent", {
-          sessionTarget: "main",
-          wakeMode: "now",
-          payload: { kind: "systemEvent", text: "check heartbeat work" },
-        })
-      : heartbeatJob(
-          finite ? "heartbeat-handoff-heartbeat" : "heartbeat-trigger-watchdog",
-          finite
-            ? { payload: { kind: "heartbeat" }, agentId: "   ", sessionKey: "agent:ops:main" }
-            : { trigger: { script: "return { fire: true };" } },
-        );
+    const job =
+      finite || unlimited
+        ? dueJob(`session-deadline-${mode}`, {
+            agentId: "ops",
+            sessionKey: "agent:ops:main",
+            sessionTarget: "main",
+            wakeMode: "now",
+            payload: {
+              kind: "agentTurn",
+              message: "check scheduled work",
+              timeoutSeconds: finite ? 15 * 60 : 0,
+            },
+          })
+        : sessionEventJob("session-trigger-watchdog", {
+            trigger: { script: "return { fire: true };" },
+          });
     const started = createDeferred<AbortSignal | undefined>();
     const release = createDeferred();
-    const resolveHeartbeatTimeoutMs = vi.fn(() => (unlimited ? undefined : 15 * 60_000));
-    const requestHeartbeatAndWait = vi.fn<NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>>(
-      async (_wake, { abortSignal, onQueued, onAttemptStarted }) => {
-        if (!finite && !unlimited) {
-          return { status: "ran", durationMs: 1 };
-        }
-        if (unlimited) {
-          onQueued?.();
-        }
-        onAttemptStarted?.();
+    const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(
+      async ({ abortSignal, onExecutionStarted }) => {
+        onExecutionStarted?.({ jobId: job.id, phase: "model_call_started" });
         started.resolve(abortSignal);
         if (unlimited) {
           await release.promise;
@@ -295,14 +329,13 @@ it.each(["finite", "unlimited", "trigger evaluating"] as const)(
             }
           });
         }
-        return finite ? { status: "failed", reason: "aborted" } : { status: "ran", durationMs: 1 };
+        return finite ? { status: "error", error: "aborted" } : { status: "ok" };
       },
     );
     const { state, advance } = await fixture(job, {
       nowMs: Date.now,
       defaultAgentId: "main",
-      resolveHeartbeatTimeoutMs,
-      requestHeartbeatAndWait,
+      runSessionEvent,
       ...(!finite && !unlimited
         ? {
             evaluateCronTrigger: vi.fn(async () => {
@@ -327,8 +360,10 @@ it.each(["finite", "unlimited", "trigger evaluating"] as const)(
         await timer;
         expect(signal?.aborted).toBe(true);
         expect(settled).toBe(true);
-        expect(resolveHeartbeatTimeoutMs).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ source: "interval", intent: "scheduled", agentId: "ops" }),
+        expect(runSessionEvent).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            job: expect.objectContaining({ agentId: "ops", sessionKey: "agent:ops:main" }),
+          }),
         );
       } else if (unlimited) {
         expect(settled).toBe(false);
@@ -338,10 +373,11 @@ it.each(["finite", "unlimited", "trigger evaluating"] as const)(
         return;
       } else {
         await timer;
-        expect(resolveHeartbeatTimeoutMs).not.toHaveBeenCalled();
-        expect(requestHeartbeatAndWait).not.toHaveBeenCalled();
+        expect(runSessionEvent).not.toHaveBeenCalled();
       }
-      expect(requireJob(state, job.id).state.lastError).toContain("job execution timed out");
+      expect(requireJob(state, job.id).state.lastError).toContain(
+        finite ? "job execution timed out" : "setup timed out before runner start",
+      );
     } finally {
       if (unlimited) {
         release.resolve();

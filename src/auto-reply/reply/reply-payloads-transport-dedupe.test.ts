@@ -49,7 +49,7 @@ describe("reply dedupe uses the plugin's delivery destination", () => {
       const result = await buildReplyPayloads({
         config: {},
         payloads,
-        isHeartbeat: false,
+
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
         replyToMode: mode,

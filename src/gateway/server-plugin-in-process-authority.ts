@@ -4,6 +4,7 @@ import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
+  withGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
@@ -17,13 +18,22 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
+import { isInProcessSessionRun } from "./in-process-session-run.js";
 import {
   bindInProcessSubagentResume,
   readInProcessSubagentResume,
 } from "./in-process-subagent-resume.js";
+import { projectOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { WRITE_SCOPE } from "./operator-scopes.js";
+import {
+  ADMIN_SCOPE,
+  READ_SCOPE,
+  SESSION_READ_SCOPE,
+  SESSION_WRITE_SCOPE,
+  WRITE_SCOPE,
+  isOperatorScope,
+} from "./operator-scopes.js";
 import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
@@ -35,7 +45,6 @@ import type {
   OperatorToolGatewayAuthority,
   ResolvedInProcessGatewayDispatch,
 } from "./server-plugin-in-process-dispatch.types.js";
-import { resolveInProcessGatewaySyntheticScopes } from "./server-plugin-in-process-scopes.js";
 import {
   createSyntheticPluginRuntimeClient,
   mergePluginRuntimeClientInternal,
@@ -131,12 +140,21 @@ export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
 }
 
 /** Captured while live; its accepting owner, not the original invocation, releases it. */
-export function captureOperatorToolGatewayContinuationContext(target?: {
-  sessionKey: string;
-  agentId?: string;
-}) {
+export function captureOperatorToolGatewayContinuationContext(
+  target?: { sessionKey: string; agentId?: string },
+  options?: { retainRequester?: true },
+) {
   const scope = getPluginRuntimeGatewayRequestScope();
   const caller = getGatewayToolCallerIdentity();
+  const requester =
+    options?.retainRequester && caller
+      ? {
+          agentId: caller.agentId,
+          sessionKey: caller.sessionKey,
+          origin: resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true })
+            .requesterOrigin,
+        }
+      : undefined;
   const resolveGatewayContext = caller?.gatewayContextResolver ?? scope?.resolveGatewayContext;
   if (!getInProcessGatewayRequestContext(resolveGatewayContext)) {
     return undefined;
@@ -202,15 +220,19 @@ export function captureOperatorToolGatewayContinuationContext(target?: {
         lifetime.signal.throwIfAborted();
         captured?.authority.assertCurrent();
         if (captured) {
-          if (
-            (resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== resolved.context
-          ) {
-            throw new Error("Gateway continuation instance binding is no longer active");
-          }
+          resolved.assertGatewayCurrent();
         } else {
           resolved.assertSourceCurrent();
         }
         lifetime.signal.throwIfAborted();
+      };
+      const runInScope = <T>(run: () => T): T => {
+        assertCurrent();
+        return withoutGatewayToolCallerIdentity(() =>
+          runOutsideOperatorToolGatewayAuthority(() =>
+            withPluginRuntimeGatewayRequestScope(continuationScope, run),
+          ),
+        );
       };
       return {
         assertCurrent,
@@ -218,12 +240,28 @@ export function captureOperatorToolGatewayContinuationContext(target?: {
         scopes: resolved.client.connect.scopes,
         signal: lifetime.signal,
         release,
-        run<T>(run: () => T): T {
-          assertCurrent();
-          return withoutGatewayToolCallerIdentity(() =>
-            runOutsideOperatorToolGatewayAuthority(() =>
-              withPluginRuntimeGatewayRequestScope(continuationScope, run),
-            ),
+        run: runInScope,
+        /** Re-enter only the requester selected before transfer, under this retained source. */
+        runWithRequester<T>(run: () => Promise<T>): Promise<T> {
+          return runInScope(() =>
+            requester?.origin
+              ? withGatewayToolCallerIdentity(
+                  {
+                    agentId: requester.agentId,
+                    sessionKey: requester.sessionKey,
+                    requesterOrigin: requester.origin,
+                    operatorAuthority: captured?.authority,
+                    personalToolIdentityScoped: true,
+                    personalToolSelection: Object.freeze({
+                      operatorAuthority: captured?.authority,
+                      requesterOrigin: requester.origin,
+                      assertCurrent,
+                    }),
+                    gatewayContextResolver: resolveGatewayContext,
+                  },
+                  run,
+                )
+              : run(),
           );
         },
       };
@@ -425,17 +463,61 @@ export function resolveInProcessGatewayDispatch(
     scopedSystemScopes && sourceScopes
       ? intersectOperatorScopes(sourceScopes, scopedSystemScopes)
       : (scopedSystemScopes ?? sourceScopes);
-  const syntheticScopes = resolveInProcessGatewaySyntheticScopes({
-    method,
-    requestParams: params,
-    syntheticScopes: options?.syntheticScopes,
-    syntheticScopeMode: options?.syntheticScopeMode,
-    operatorScopes,
-    scopedClientScopes: scope?.client?.connect.scopes,
-    registeredScope: context.getGatewayMethodRegistry?.().getScope(method),
-    allowOwnSessionScope: context.getGatewayMethodRegistry?.().getSessionAccess?.(method)
-      ?.allowOwnSessionScope,
+  const registeredScope = context.getGatewayMethodRegistry?.().getScope(method);
+  const allowOwnSessionScope = context
+    .getGatewayMethodRegistry?.()
+    .getSessionAccess?.(method)?.allowOwnSessionScope;
+  const syntheticScopeMode = options?.syntheticScopeMode;
+  const requestedSyntheticScopes = (
+    options?.syntheticScopes ??
+    (syntheticScopeMode === "exact"
+      ? (operatorScopes ?? scope?.client?.connect.scopes)
+      : undefined) ?? [WRITE_SCOPE]
+  ).map((requested) => {
+    const broad =
+      requested === SESSION_READ_SCOPE
+        ? READ_SCOPE
+        : requested === SESSION_WRITE_SCOPE
+          ? WRITE_SCOPE
+          : undefined;
+    return syntheticScopeMode === "minimum" &&
+      broad &&
+      operatorScopes &&
+      roleScopesAllow({ role: "operator", requestedScopes: [broad], allowedScopes: operatorScopes })
+      ? broad
+      : requested;
   });
+  // Narrow by authority, not literal membership: write also authorizes reads
+  // and Talk, including tools called by a synthetic continuation.
+  const syntheticScopes = operatorScopes
+    ? syntheticScopeMode === "exact"
+      ? requestedSyntheticScopes.filter((requestedScope) =>
+          roleScopesAllow({
+            role: "operator",
+            requestedScopes: [requestedScope],
+            allowedScopes: operatorScopes,
+          }),
+        )
+      : projectOperatorScopesForMethod({
+          method,
+          requestParams: params,
+          requestedScopes: requestedSyntheticScopes,
+          allowedScopes: operatorScopes,
+          ...(allowOwnSessionScope || isInProcessSessionRun(method, params)
+            ? { sessionScope: SESSION_WRITE_SCOPE }
+            : {}),
+          ...(isOperatorScope(registeredScope) ? { requiredScope: registeredScope } : {}),
+        })
+    : syntheticScopeMode === "exact"
+      ? requestedSyntheticScopes
+      : options?.syntheticScopes;
+  if (
+    syntheticScopeMode !== "exact" &&
+    operatorScopes?.includes(ADMIN_SCOPE) &&
+    !syntheticScopes?.includes(ADMIN_SCOPE)
+  ) {
+    syntheticScopes?.push(ADMIN_SCOPE);
+  }
   const hostApprovalRequestEligible =
     options?.allowHostPluginApprovalRequest === true &&
     method === "plugin.approval.request" &&
@@ -556,18 +638,19 @@ export function resolveInProcessGatewayDispatch(
     }
     bindInProcessSubagentResume(client.internal, resume);
   }
-  const assertSourceCurrent = composeSessionSourceAssertion(
-    [operatorRunAuthority?.assertCurrent],
-    (assertSource) => {
-      assertSource();
-      if ((resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== context) {
-        throw new Error(
-          `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
-        );
-      }
-    },
-  );
+  const assertGatewayCurrent = () => {
+    if ((resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== context) {
+      throw new Error(
+        `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
+      );
+    }
+  };
+  const assertSourceCurrent = composeSessionSourceAssertion([
+    operatorRunAuthority?.assertCurrent,
+    assertGatewayCurrent,
+  ]);
   return {
+    assertGatewayCurrent,
     assertSourceCurrent,
     assertInvocationCurrent,
     assertContextCurrent: composeSessionSourceAssertion([

@@ -12,10 +12,7 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import {
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "../../../routing/session-key.js";
+import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
@@ -28,10 +25,7 @@ import {
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
 import { bindSwarmRunReservation, ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
-import {
-  matchesSubagentChildSessionOwner,
-  resolveSubagentChildAgentId,
-} from "./subagent-child-owner-match.js";
+import { resolveSubagentChildAgentId } from "./subagent-child-owner-match.js";
 import { bindSubagentExecRequestOwners } from "./subagent-exec-request-ownership.js";
 import {
   getCurrentSubagentRunOwner,
@@ -45,6 +39,7 @@ import {
   SubagentRegistryMutationRejectedError,
   waitForPendingSubagentKillClaim,
 } from "./subagent-registry-persistence.js";
+import { resolveSwarmWaitOwnerSessionKeys } from "./subagent-registry-queries.js";
 import { registerRequiredQueuedSubagent } from "./subagent-registry-queued-registration.js";
 import {
   createFailedQueuedRun,
@@ -64,40 +59,8 @@ import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
   isSubagentRunGenerationCandidate,
-  latestSubagentRun,
   nextSubagentRunGeneration,
 } from "./subagent-run-generation.js";
-
-function resolveSwarmWaitOwnerSessionKeys(
-  getRunsForChildSession: (
-    childSessionKey: string,
-    childAgentId?: string,
-  ) => Iterable<SubagentRunRecord>,
-  requesterSessionKey: string,
-  requesterAgentId?: string,
-): string[] {
-  const ownerSessionKeys: string[] = [];
-  const visited: Array<{ childSessionKey: string; childAgentId?: string }> = [];
-  let currentSessionKey = requesterSessionKey.trim();
-  let currentAgentId = requesterAgentId;
-  while (
-    currentSessionKey &&
-    !visited.some((entry) =>
-      matchesSubagentChildSessionOwner(entry, currentSessionKey, currentAgentId),
-    )
-  ) {
-    visited.push({ childSessionKey: currentSessionKey, childAgentId: currentAgentId });
-    ownerSessionKeys.push(currentSessionKey);
-    const latestOwner = latestSubagentRun(
-      getRunsForChildSession(currentSessionKey, currentAgentId),
-    );
-    currentSessionKey =
-      latestOwner?.controllerSessionKey?.trim() || latestOwner?.requesterSessionKey.trim() || "";
-    currentAgentId =
-      parseAgentSessionKey(currentSessionKey)?.agentId ?? latestOwner?.requesterAgentId;
-  }
-  return ownerSessionKeys;
-}
 
 export class SubagentLaunchManager extends SubagentRecoveryManager {
   private findRunByIdentity(runId: string): SubagentRunRecord | undefined {
@@ -257,9 +220,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               settleFailedLaunch,
             }),
       );
-      authority = registerParams.collect
-        ? undefined
-        : await captureOperatorToolGatewayContinuationContext();
+      authority = await captureOperatorToolGatewayContinuationContext();
       const operator = authority?.operatorAuthority;
       let operatorRecoverySource: SubagentRunRecord["operatorRecoverySource"];
       if (
@@ -409,6 +370,10 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               return;
             }
             registered = entry;
+            bindGatewayContextResolver(entry, gatewayContextResolver);
+            options.retainAdmission?.(
+              this.captureAdmissionRejection(entry, options.admissionSessionEffects),
+            );
             try {
               options.assertPublicationCurrent?.();
               bindSubagentExecRequestOwners(entry, readExecRequestOwners(options), {
@@ -418,12 +383,11 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                   requesterAgentId,
                 ),
               });
-              if (authority) {
+              if (authority && !registerParams.collect) {
                 subagentRuns.bindCompletionAuthority(entry, authority);
                 custodyTransferred = true;
               }
             } finally {
-              bindGatewayContextResolver(entry, gatewayContextResolver);
               if (!registrationOwnership.superseded) {
                 registrationOwnership.accept(entry);
               }

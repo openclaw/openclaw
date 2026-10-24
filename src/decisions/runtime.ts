@@ -82,16 +82,20 @@ export function completeDecisionEvaluation<T extends Outcome>(
 export async function evaluateDecisionInRegistry(
   ...args: Parameters<typeof evaluateDecisionOperation>
 ): Promise<DecisionOutcome> {
-  const evaluation = await evaluateDecisionOperation(...args);
-  args[1].signal.throwIfAborted();
+  const [batch, inputOptions, ...context] = args;
+  const options = { ...inputOptions };
+  const evaluation = await evaluateDecisionOperation(batch, options, ...context);
+  options.signal.throwIfAborted();
   return completeDecisionEvaluation(evaluation);
 }
 
 export async function evaluateDecisionV2InRegistry(
   ...args: Parameters<typeof evaluateDecisionV2Operation>
 ): Promise<DecisionOutcomeV2> {
-  const evaluation = await evaluateDecisionV2Operation(...args);
-  args[1].signal.throwIfAborted();
+  const [batch, inputOptions, ...context] = args;
+  const options = { ...inputOptions };
+  const evaluation = await evaluateDecisionV2Operation(batch, options, ...context);
+  options.signal.throwIfAborted();
   return completeDecisionEvaluation(evaluation);
 }
 

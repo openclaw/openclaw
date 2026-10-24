@@ -249,60 +249,35 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       createTemplateModel("google", "gemini-3.1-flash-lite", { reasoning: true }),
     ];
 
-    expectModelFields(
-      resolveGoogleGeminiForwardCompatModel({
-        providerId: "google",
-        ctx: createContext({ provider: "google", modelId: "gemini-pro-latest", models }),
-      }),
-      {
-        provider: "google",
-        id: "gemini-pro-latest",
-        api: "google-generative-ai",
-        reasoning: true,
-      },
-    );
-    expectModelFields(
-      resolveGoogleGeminiForwardCompatModel({
-        providerId: "google",
-        ctx: createContext({ provider: "google", modelId: "gemini-flash-latest", models }),
-      }),
-      {
-        provider: "google",
-        id: "gemini-flash-latest",
-        api: "google-generative-ai",
-        reasoning: true,
-      },
-    );
-    expectModelFields(
-      resolveGoogleGeminiForwardCompatModel({
-        providerId: "google",
-        ctx: createContext({ provider: "google", modelId: "gemini-flash-lite-latest", models }),
-      }),
-      {
-        provider: "google",
-        id: "gemini-flash-lite-latest",
-        api: "google-generative-ai",
-        reasoning: true,
-      },
-    );
+    expectModelFields(resolveModel("google", "gemini-pro-latest", models), {
+      provider: "google",
+      id: "gemini-pro-latest",
+      api: "google-generative-ai",
+      reasoning: true,
+    });
+    expectModelFields(resolveModel("google", "gemini-flash-latest", models), {
+      provider: "google",
+      id: "gemini-flash-latest",
+      api: "google-generative-ai",
+      reasoning: true,
+    });
+    expectModelFields(resolveModel("google", "gemini-flash-lite-latest", models), {
+      provider: "google",
+      id: "gemini-flash-lite-latest",
+      api: "google-generative-ai",
+      reasoning: true,
+    });
   });
 
   it("resolves Antigravity Gemini 3.1 pro customtools from the low template", () => {
-    const model = resolveGoogleGeminiForwardCompatModel({
-      providerId: "google-antigravity",
-      ctx: createContext({
-        provider: "google-antigravity",
-        modelId: "gemini-3.1-pro-preview-customtools",
-        models: [
-          createTemplateModel("google-antigravity", "gemini-3-pro-low", {
-            api: "openai-completions",
-            baseUrl: "https://antigravity.example/v1",
-            contextWindow: 1_048_576,
-            reasoning: true,
-          }),
-        ],
+    const model = resolveModel("google-antigravity", "gemini-3.1-pro-preview-customtools", [
+      createTemplateModel("google-antigravity", "gemini-3-pro-low", {
+        api: "openai-completions",
+        baseUrl: "https://antigravity.example/v1",
+        contextWindow: 1_048_576,
+        reasoning: true,
       }),
-    });
+    ]);
 
     expectModelFields(model, {
       provider: "google-antigravity",
@@ -340,39 +315,19 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       }),
     ];
 
-    expectModelFields(
-      resolveGoogleGeminiForwardCompatModel({
-        providerId: "google-antigravity",
-        ctx: createContext({
-          provider: "google-antigravity",
-          modelId: "gemini-3.1-flash-preview",
-          models,
-        }),
-      }),
-      {
-        provider: "google-antigravity",
-        id: "gemini-3.1-flash-preview",
-        api: "openai-completions",
-        contextWindow: 1_048_576,
-      },
-    );
+    expectModelFields(resolveModel("google-antigravity", "gemini-3.1-flash-preview", models), {
+      provider: "google-antigravity",
+      id: "gemini-3.1-flash-preview",
+      api: "openai-completions",
+      contextWindow: 1_048_576,
+    });
 
-    expectModelFields(
-      resolveGoogleGeminiForwardCompatModel({
-        providerId: "google-antigravity",
-        ctx: createContext({
-          provider: "google-antigravity",
-          modelId: "gemini-3.1-flash-lite",
-          models,
-        }),
-      }),
-      {
-        provider: "google-antigravity",
-        id: "gemini-3.1-flash-lite",
-        api: "openai-completions",
-        contextWindow: 1_048_576,
-      },
-    );
+    expectModelFields(resolveModel("google-antigravity", "gemini-3.1-flash-lite", models), {
+      provider: "google-antigravity",
+      id: "gemini-3.1-flash-lite",
+      api: "openai-completions",
+      contextWindow: 1_048_576,
+    });
   });
 
   it("returns undefined for Antigravity Gemini 3.1 models without a matching template", () => {
@@ -448,19 +403,12 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     ["gemini-3.7-flash", "gemini-3-flash-preview"],
     ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"],
   ])("resolves future Gemini 3 text family %s from %s metadata", (modelId, templateId) => {
-    const model = resolveGoogleGeminiForwardCompatModel({
-      providerId: "google",
-      ctx: createContext({
-        provider: "google",
-        modelId,
-        models: [
-          createTemplateModel("google", templateId, {
-            reasoning: true,
-            contextWindow: 1_048_576,
-          }),
-        ],
+    const model = resolveModel("google", modelId, [
+      createTemplateModel("google", templateId, {
+        reasoning: true,
+        contextWindow: 1_048_576,
       }),
-    });
+    ]);
 
     expectModelFields(model, {
       provider: "google",
@@ -481,14 +429,7 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     ]) {
       expect(isGoogleTextGenerationModelId(modelId)).toBe(false);
       expect(
-        resolveGoogleGeminiForwardCompatModel({
-          providerId: "google",
-          ctx: createContext({
-            provider: "google",
-            modelId,
-            models: [createTemplateModel("google", "gemini-3-flash-preview")],
-          }),
-        }),
+        resolveModel("google", modelId, [createTemplateModel("google", "gemini-3-flash-preview")]),
       ).toBeUndefined();
     }
   });

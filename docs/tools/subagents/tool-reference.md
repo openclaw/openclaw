@@ -184,13 +184,13 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Optional stable handle for identifying a specific child in later status output. Must match `[a-z][a-z0-9_-]{0,63}` and cannot be a reserved target such as `last` or `all`.
 </ParamField>
 <ParamField path="label" type="string">
-  Optional short task title shown in session transcripts, and in the session sidebar for visible sessions. Name the work being done, not the agent; it is set on the child session at run start.
+  Optional short task title shown in session transcripts, and in the session sidebar for visible sessions. Name the work being done, not the agent; it is set on the child session at run start. Retained progress cards shorten this title to at most 120 UTF-16 code units without splitting surrogate pairs. The stored label stays unchanged.
 </ParamField>
 <ParamField path="agentId" type="string">
   Spawn under another configured agent id when allowed by `subagents.allowAgents`.
 </ParamField>
 <ParamField path="cwd" type="string">
-  Optional task working directory for the child run. Native sub-agents still load bootstrap files from the target agent workspace; `cwd` only changes where runtime tools and CLI harnesses do the delegated work. Workspace-contained file tools (`apply_patch`/file writes) resolve and contain paths against `cwd`; set `cwd` for edits outside the agent workspace. For visible sessions, paths outside configured agent workspaces require `operator.admin`. With `worktree: true`, omitting `cwd`, `projectId`, and `projectGitUrl` inherits the same-agent parent's live managed repository or directly selected registered project; otherwise the target agent workspace is used.
+  Optional task working directory for the child run. Native sub-agents still load bootstrap files from the target agent workspace; `cwd` only changes where runtime tools and CLI harnesses do the delegated work. Workspace-contained OpenClaw file tools resolve paths against `cwd` and, on the host, also admit registered linked worktrees of the same repository, checking registration at each write. Other repositories and Git metadata remain excluded; container mount boundaries still apply. Codex-native edits require a worktree selected as the turn cwd, including through `worktree: true`. For visible sessions, paths outside configured agent workspaces require `operator.admin`. With `worktree: true`, omitting `cwd`, `projectId`, and `projectGitUrl` inherits the same-agent parent's live managed repository or directly selected registered project; otherwise the target agent workspace is used.
 </ParamField>
 <ParamField path="projectId" type="string">
   Select a registered project through the same managed-project flow as New session. Native sub-agents only; hidden children require `worktree: true`. Mutually exclusive with `projectGitUrl` and `cwd`. Registry selection does not grant arbitrary host-path access or bypass sandbox containment.
@@ -253,10 +253,10 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Provision a managed git worktree for a hidden or visible native sub-agent. Acceptance returns before checkout and setup finish; the first turn waits for the managed workspace. ACP does not support this option.
 </ParamField>
 <ParamField path="worktreeName" type="string">
-  Optional managed-worktree name. Requires `worktree: true` and `runtime: "subagent"`.
+  Optional managed-worktree name matching `[a-z0-9][a-z0-9-]{0,63}`. Pass a lowercase slug, not a branch name such as `codex/review`; OpenClaw supplies the `openclaw/` branch prefix. Invalid names are rejected before child creation. Requires `worktree: true` and `runtime: "subagent"`.
 </ParamField>
 <ParamField path="worktreeBaseRef" type="string">
-  Optional git base ref for the managed worktree. Requires `worktree: true` and `runtime: "subagent"`.
+  Optional git base ref for the managed worktree. Omit to use the fetched or cached default branch from `origin`, or the primary checkout's current `HEAD` commit when no `origin` remote is configured. An unavailable configured `origin` never falls back to local `HEAD`. Requires `worktree: true` and `runtime: "subagent"`.
 </ParamField>
 
 <Warning>
@@ -419,7 +419,8 @@ without a result is settled by the first registry sweep after the registry
 restores, and `agents_wait` then returns it. The sweep keeps the outcome and end
 time that earlier version recorded: a row stored as `ok` returns `done` with the
 reply its yielded turn ended on, as a collector that yields now does. A row with
-no recorded outcome returns `failed` with an error that says why. Only collectors are settled this way: a child that declared a message wait
+no recorded outcome returns `failed` with an error that says why and
+`reason: "yielded_without_result"`. Only collectors are settled this way: a child that declared a message wait
 stays paused until a continuation reaches it, however long that takes.
 
 The registry also continues a yielded sub-agent when its announced children
@@ -467,13 +468,24 @@ Use `subagents` for on-demand status and debugging. Use `sessions_yield` for
 announced completions, or `action: "wait"` with returned `runIds` (1–32 IDs)
 and `timeoutSeconds` (0–60, default 30) when this turn needs a selected result.
 A zero timeout reads a snapshot. `reason` is `completed`, `attention`,
-`unavailable`, or `timeout`; `tasks` contains authorized native run snapshots.
+`unavailable`, `input`, or `timeout`; `tasks` contains authorized native run snapshots.
+In the built-in runtime, admitted human input or peer mail wakes the wait with
+`reason: "input"`, so the agent can respond without waiting for the child.
 Waiting does not cancel execution or consume completion delivery.
 
 List entries include the native `runId`, child `sessionKey`, status, outcome,
 and delivery status. A yielded child remains `waiting` until its continuation.
 For an external wait, its controlling parent can send a continuation with
 `sessions_send`; yielding itself does not schedule external work.
+
+A yielded child that only an external continuation can resume also reports
+`pausedForMs`, the milliseconds since it yielded, in list entries and in
+`action: "wait"` run snapshots. The list text appends it, for example
+`waiting for external continuation, paused 1d 18h`. The age comes from the
+recorded yield time (`endedAt`). It is absent for running or finished runs,
+parents waiting on children, and collectors. It is read-only: it does not expire
+the wait, change when anything settles, or say whether a continuation was sent
+or received.
 
 Use `action: "cancel"` with a returned `runId` to stop that native run and its
 descendants. Cancellation requires current controller authority; read access to

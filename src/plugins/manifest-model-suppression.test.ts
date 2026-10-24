@@ -37,27 +37,10 @@ function suppressionPlugin(id: string, suppressions: Record<string, unknown>[], 
 function providerConfig(provider: string, config: ModelProviderConfig) {
   return { models: { providers: { [provider]: config } } };
 }
-
-function qwenPlugin(provider: "qwen" | "modelstudio") {
-  return suppressionPlugin(
-    "qwen",
-    [
-      {
-        provider,
-        model: "qwen3.6-plus",
-        ...(provider === "qwen" && { reason: "Use qwen/qwen3.5-plus." }),
-        when: {
-          baseUrlHosts:
-            provider === "qwen"
-              ? ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"]
-              : ["coding-intl.dashscope.aliyuncs.com"],
-          providerConfigApiIn: ["qwen", "modelstudio"],
-        },
-      },
-    ],
-    provider === "qwen" ? ["qwen", "modelstudio"] : ["modelstudio"],
-  );
-}
+const suppressed = (reason: string) => ({
+  suppress: true,
+  errorMessage: `Unknown model: fixture/model. ${reason}`,
+});
 
 const native = { api: "openai-responses", baseUrl: "https://api.x.ai/v1", models: [] };
 const personalModel = makeProviderModelFixture<"openai-responses">({
@@ -114,12 +97,8 @@ describe("manifest model suppression", () => {
     const build = () => buildManifestBuiltInModelSuppressionResolver({ config, env: process.env });
     const first = withPluginCache(ownerA, build);
     const second = withPluginCache(ownerB, build);
-    expect(first({ provider: "fixture", id: "model" })?.errorMessage).toBe(
-      "Unknown model: fixture/model. first rules",
-    );
-    expect(second({ provider: "fixture", id: "model" })?.errorMessage).toBe(
-      "Unknown model: fixture/model. second rules",
-    );
+    expect(first({ provider: "fixture", id: "model" })).toEqual(suppressed("first rules"));
+    expect(second({ provider: "fixture", id: "model" })).toEqual(suppressed("second rules"));
     expect(withPluginCache(ownerA, build)).toBe(first);
   });
 
@@ -187,7 +166,7 @@ describe("manifest model suppression", () => {
             reason: "First route.",
             when: {
               baseUrlHosts: ["FIRST.EXAMPLE.", "shared.example"],
-              providerConfigApiIn: ["OPENAI-COMPLETIONS"],
+              providerConfigApiIn: ["OPENAI-COMPLETIONS", "fixture"],
             },
           },
           {
@@ -204,28 +183,27 @@ describe("manifest model suppression", () => {
     const resolver = buildManifestBuiltInModelSuppressionResolver({ config });
     const input = { provider: "fixture", id: "model" };
 
-    expect(resolver({ ...input, baseUrl: "https://shared.example/v1" })).toEqual({
-      suppress: true,
-      errorMessage: "Unknown model: fixture/model. First route.",
-    });
+    expect(resolver({ ...input, baseUrl: "https://shared.example/v1" })).toEqual(
+      suppressed("First route."),
+    );
+    expect(resolver({ ...input, baseUrl: " https://first.example./v1 " })).toEqual(
+      suppressed("First route."),
+    );
+    expect(buildManifestBuiltInModelSuppressionResolver({})(input)).toEqual(
+      suppressed("First route."),
+    );
     expect(resolver({ ...input, baseUrl: "https://second.example/v1" })).toMatchObject({
       retirement: { replacedBy: "successor" },
     });
     for (const baseUrl of ["https://other.example/v1", "invalid endpoint"]) {
-      expect(resolver({ ...input, baseUrl })?.errorMessage).toBe(
-        "Unknown model: fixture/model. Fallback.",
-      );
+      expect(resolver({ ...input, baseUrl })).toEqual(suppressed("Fallback."));
     }
     expect(
-      resolver({ ...input, baseUrl: "https://shared.example/v1", unconditionalOnly: true })
-        ?.errorMessage,
-    ).toBe("Unknown model: fixture/model. Fallback.");
-    expect(resolver(input)?.errorMessage).toBe("Unknown model: fixture/model. First route.");
+      resolver({ ...input, baseUrl: "https://shared.example/v1", unconditionalOnly: true }),
+    ).toEqual(suppressed("Fallback."));
+    expect(resolver(input)).toEqual(suppressed("First route."));
     fixture.baseUrl = "https://second.example/v1";
-    expect(resolver(input)).toEqual({
-      suppress: true,
-      errorMessage: "Unknown model: fixture/model. Fallback.",
-    });
+    expect(resolver(input)).toEqual(suppressed("Fallback."));
   });
 
   it.each([undefined, "current-model"])(
@@ -365,30 +343,5 @@ describe("manifest model suppression", () => {
       { ownedProviders: new Set(["fixture"]) },
     );
     expect(catalog?.suppressions).toBeUndefined();
-  });
-
-  it("matches conditional suppressions by base URL host", () => {
-    setPlugins(qwenPlugin("qwen"));
-    const resolver = buildManifestBuiltInModelSuppressionResolver({ env: process.env });
-    const input = { provider: "qwen", id: "qwen3.6-plus" };
-    const atUrl = (baseUrl: string) => resolver({ ...input, baseUrl });
-    expect(atUrl("https://coding-intl.dashscope.aliyuncs.com/v1")?.suppress).toBe(true);
-    expect(atUrl(" https://coding-intl.dashscope.aliyuncs.com./v1 ")?.suppress).toBe(true);
-    expect(resolver(input)?.suppress).toBe(true);
-    expect(atUrl("https://dashscope-intl.aliyuncs.com/compatible-mode/v1")).toBeUndefined();
-  });
-
-  it("does not apply conditional suppressions to custom providers with a foreign api owner", () => {
-    setPlugins(qwenPlugin("modelstudio"));
-    const resolver = buildManifestBuiltInModelSuppressionResolver({
-      config: providerConfig("modelstudio", {
-        api: "openai-completions",
-        baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-        models: [],
-      }),
-      env: process.env,
-    });
-
-    expect(resolver({ provider: "modelstudio", id: "qwen3.6-plus" })).toBeUndefined();
   });
 });

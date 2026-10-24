@@ -341,32 +341,26 @@ describe("ReefFriendManager pairing", () => {
     expect(issue).not.toHaveBeenCalled();
   });
 
-  it("accepts reapprove_required with unchanged keys after a fresh bound approval", async () => {
-    const reapproval = relayFriend("alice", "reapprove_required");
-    const { relay, store, pairing, manager } = pairingFixture(reapproval);
-    await pin(store, reapproval, "extended");
-    const issue = vi.fn(async () => {});
-    await manager.surfacePairingCandidates(issue);
-    expect(issue).toHaveBeenCalledOnce();
-    await addApproval(store, pairing, reapproval);
-    await expect(manager.reconcile()).resolves.toEqual(["alice"]);
-    expect(relay.respondFriend).toHaveBeenCalledWith(reapproval, true, undefined);
-    expect(await store.get("alice")).toMatchObject({
-      autonomy: "extended",
-      safetyNumberChanged: false,
-    });
-    expect(pairing.values).toEqual(new Set());
-  });
-
-  it("accepts an approved pending edge whose keys are already pinned", async () => {
-    const { friend: pending, relay, store, pairing, manager } = pairingFixture();
-    await pin(store, pending, "extended");
-    await addApproval(store, pairing, pending);
-    await expect(manager.reconcile()).resolves.toEqual(["alice"]);
-    expect(relay.respondFriend).toHaveBeenCalledWith(pending, true, undefined);
-    expect(await store.get("alice")).toMatchObject({ autonomy: "extended" });
-    expect(pairing.values).toEqual(new Set());
-  });
+  it.each(["pending", "reapprove_required"] as const)(
+    "accepts an approved %s edge whose keys are already pinned",
+    async (status) => {
+      const { friend, relay, store, pairing, manager } = pairingFixture(
+        relayFriend("alice", status),
+      );
+      await pin(store, friend, "extended");
+      const issue = vi.fn(async () => {});
+      await manager.surfacePairingCandidates(issue);
+      expect(issue).toHaveBeenCalledOnce();
+      await addApproval(store, pairing, friend);
+      await expect(manager.reconcile()).resolves.toEqual(["alice"]);
+      expect(relay.respondFriend).toHaveBeenCalledWith(friend, true, undefined);
+      expect(await store.get("alice")).toMatchObject({
+        autonomy: "extended",
+        safetyNumberChanged: false,
+      });
+      expect(pairing.values).toEqual(new Set());
+    },
+  );
 
   it("does not recreate trust when local removal races an approved relay response", async () => {
     const { friend: pending, relay, store, pairing, manager } = pairingFixture();

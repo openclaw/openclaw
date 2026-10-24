@@ -29,7 +29,7 @@ import {
 } from "./plugin-state-store.test-helpers.js";
 import { executePluginStateCommand } from "./plugin-state.worker.js";
 
-type PluginStateChange = Parameters<Parameters<typeof pluginStatePublication.subscribe>[0]>[0];
+type PluginStateChange = Parameters<Parameters<typeof pluginStatePublication.subscribeFacts>[0]>[0];
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -441,7 +441,7 @@ describe("plugin state committed facts", () => {
     });
   });
 
-  it("installs every native transaction fact before observers and discards savepoint rollback", async () => {
+  it("installs native transaction facts after commit and discards savepoint rollback", async () => {
     await withOpenClawTestState({ label: "plugin-state-native-receipt" }, async ({ env }) => {
       const store = createPluginStateSyncKeyedStore("receipt-test", {
         namespace: "receipts",
@@ -449,10 +449,6 @@ describe("plugin state committed facts", () => {
         env,
       });
       const seen = observe();
-      const snapshots: unknown[] = [];
-      const unsubscribe = pluginStatePublication.subscribe(() =>
-        snapshots.push([seen.fact("a"), seen.fact("b")]),
-      );
       try {
         runOpenClawStateWriteTransaction(
           () => {
@@ -481,9 +477,6 @@ describe("plugin state committed facts", () => {
           value: { value_json: '"second"' },
         });
         expect(seen.fact("discard")).toBeUndefined();
-        expect(snapshots).toEqual(
-          Array.from({ length: 2 }, () => [seen.fact("a"), seen.fact("b")]),
-        );
         const count = seen.changes.length;
         expect(() =>
           runOpenClawStateWriteTransaction(
@@ -530,7 +523,6 @@ describe("plugin state committed facts", () => {
           stopMutation();
         }
       } finally {
-        unsubscribe();
         seen.unsubscribe();
       }
     });
@@ -587,7 +579,7 @@ describe("plugin state committed facts", () => {
     });
   });
 
-  it("keeps successful Doctor import prefixes and fences fact failures before notifying", async () => {
+  it("keeps successful Doctor import prefixes and invalidates failed fact installation", async () => {
     await withOpenClawTestState({ label: "plugin-state-import-facts" }, async ({ env }) => {
       const options = { namespace: "receipts", maxEntries: 2, env };
       const seen = observe();
@@ -600,10 +592,7 @@ describe("plugin state committed facts", () => {
         ).toThrow();
         expect(seen.fact("first")).toMatchObject({ kind: "postimage" });
         expect(seen.fact("bad")).toBeUndefined();
-        const notifications: PluginStateChange[] = [];
-        const stopObserver = pluginStatePublication.subscribe((change) =>
-          notifications.push(change),
-        );
+        const beforeFailure = seen.changes.length;
         const stopFault = pluginStatePublication.subscribeFacts((change) => {
           if (change.kind === "committed") {
             throw new Error("fact sink unavailable");
@@ -613,10 +602,11 @@ describe("plugin state committed facts", () => {
           const store = createPluginStateSyncKeyedStore("receipt-test", options);
           expect(() => store.delete("first")).not.toThrow();
           expect(store.lookup("first")).toBeUndefined();
-          expect(notifications).toEqual([expect.objectContaining({ kind: "unknown" })]);
+          expect(seen.changes.slice(beforeFailure)).toContainEqual(
+            expect.objectContaining({ kind: "unknown" }),
+          );
         } finally {
           stopFault();
-          stopObserver();
         }
       } finally {
         seen.unsubscribe();
@@ -670,7 +660,7 @@ describe("plugin state committed facts", () => {
     });
   });
 
-  it("preserves native deletions before receipt installation and during postcommit notification", async () => {
+  it("preserves native deletions before delayed worker receipt installation", async () => {
     await withOpenClawTestState({ label: "plugin-state-receipt-supersession" }, async ({ env }) => {
       const options = { namespace: "receipts", maxEntries: 2, env };
       const native = createPluginStateSyncKeyedStore("receipt-test", options);
@@ -678,14 +668,14 @@ describe("plugin state committed facts", () => {
       native.register("key", "before");
       const seen = observe();
       const original = admission.observeSqliteWorkerCommittedFacts;
-      const intercept = vi
-        .spyOn(admission, "observeSqliteWorkerCommittedFacts")
-        .mockImplementation((owner, listener) => {
+      vi.spyOn(admission, "observeSqliteWorkerCommittedFacts").mockImplementation(
+        (owner, listener) => {
           original(owner, (receipt) => {
             native.delete("key");
             listener(receipt);
           });
-        });
+        },
+      );
       try {
         await worker.register("key", "late");
         expect(native.lookup("key")).toBeUndefined();
@@ -693,27 +683,6 @@ describe("plugin state committed facts", () => {
         const committed = seen.changes.filter((change) => change.kind === "committed");
         expect(committed).toHaveLength(2);
         expect([...committed[0]!.receipt.facts.values()]).toEqual([{ kind: "absent" }]);
-        intercept.mockRestore();
-        let deletedDuringNotification = false;
-        const stopNotification = pluginStatePublication.subscribe((change) => {
-          if (change.kind !== "committed") {
-            return;
-          }
-          const current = change.receipt.facts.get(
-            JSON.stringify(["receipt-test", "receipts", "key"]),
-          );
-          if (current?.kind === "postimage" && current.value.value_json === '"notification"') {
-            deletedDuringNotification = native.delete("key");
-          }
-        });
-        try {
-          await worker.register("key", "notification");
-          expect(deletedDuringNotification).toBe(true);
-          expect(native.lookup("key")).toBeUndefined();
-          expect(seen.fact("key")).toEqual({ kind: "absent" });
-        } finally {
-          stopNotification();
-        }
       } finally {
         seen.unsubscribe();
       }

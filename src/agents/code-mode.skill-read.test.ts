@@ -4,6 +4,7 @@ import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js"
 import { resolveCodeModeSkills } from "./code-mode-skills.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
+  createCatalogCodeModeHarness,
   createCodeModeHarness,
   resetCodeModeTestState,
   runUntilCompleted,
@@ -12,6 +13,36 @@ import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 
 afterEach(async () => {
   await resetCodeModeTestState();
+});
+
+it("reports bounded, redacted installed-skill failures returned by a Gateway", async () => {
+  const secret = `ghp_${"a".repeat(36)}`;
+  const tools = createInstalledSkillTools([
+    {
+      name: "demo",
+      description: "Demo",
+      location: "/skills/demo/SKILL.md",
+      source: { filePath: "/skills/demo/SKILL.md" },
+    },
+  ]);
+  tools[0]!.execute = async () => ({
+    isError: true,
+    content: [{ type: "text", text: "fallback" }],
+    details: {
+      status: "error",
+      error: `Cloud worker transcript requires prepared authority; token=${secret} ${"x".repeat(2_000)}`,
+    },
+  });
+  const h = createCatalogCodeModeHarness(tools);
+  const result = await h.complete('return await skills.search("demo", 1);');
+  expect(result).toMatchObject({
+    status: "failed",
+    failurePhase: "bridge",
+    code: "internal_error",
+    error: expect.stringContaining("Cloud worker transcript requires prepared authority"),
+  });
+  expect(String(result.error)).not.toContain(secret);
+  expect(String(result.error).length).toBeLessThan(1_200);
 });
 
 it("reads a known skill with resource context before discovery through the worker bridge", async () => {
@@ -26,8 +57,8 @@ it("reads a known skill with resource context before discovery through the worke
   const codeModeSkills = resolveCodeModeSkills({
     skillsPrompt: await resolveSkillsPrompt({ entries: [demo], workspaceDir: "/workspace" }),
     candidates: [demo.skill, hidden.skill],
-    reader,
   });
+  codeModeSkills[0]!.reader = reader;
   const h = createCodeModeHarness({ codeModeSkills });
   applyCodeModeCatalog({
     ...h.ctx,

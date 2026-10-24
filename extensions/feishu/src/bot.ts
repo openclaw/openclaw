@@ -45,9 +45,8 @@ import {
   resolveBroadcastAgents,
 } from "./bot-broadcast.js";
 import {
-  checkBotMentioned,
   normalizeFeishuCommandProbeBody,
-  parseMessageContent,
+  parseFeishuMessageEvent,
   resolveFeishuGroupSession,
   resolveFeishuMediaList,
 } from "./bot-content.js";
@@ -66,12 +65,7 @@ import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
-import {
-  extractMentionTargets,
-  isFeishuBroadcastMention,
-  isMentionForwardRequest,
-  normalizeMentions,
-} from "./mention.js";
+import { isFeishuBroadcastMention } from "./mention.js";
 import {
   hasExplicitFeishuGroupConfig,
   normalizeFeishuAllowEntry,
@@ -90,9 +84,9 @@ import { getFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-tar
 import {
   isFeishuGroupChatType,
   type FeishuMessageContext,
-  type FeishuMediaInfo,
   type FeishuMessageInfo,
 } from "./types.js";
+export { parseFeishuMessageEvent } from "./bot-content.js";
 export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 
 // App-scoped cooldown prevents repeated permission notifications.
@@ -103,97 +97,6 @@ function isFeishuTopicSessionScope(
   scope: ReturnType<typeof resolveConfiguredFeishuGroupSessionScope>,
 ): boolean {
   return scope === "group_topic" || scope === "group_topic_sender";
-}
-
-async function resolveFeishuAudioTranscript(params: {
-  cfg: ClawdbotConfig;
-  mediaList: FeishuMediaInfo[];
-  content: string;
-  messageType: string;
-  chatType: "direct" | "group";
-  log: (msg: string) => void;
-}): Promise<string | undefined> {
-  if (params.messageType !== "audio") {
-    return undefined;
-  }
-  const audioMedia = params.mediaList.filter(
-    (media) =>
-      Boolean(media.path) && (media.kind === "audio" || media.contentType?.startsWith("audio/")),
-  );
-  if (audioMedia.length === 0) {
-    return undefined;
-  }
-  // Audio content is the server transcript. Return it for the shared marker path,
-  // but only after the media check so failed downloads retain their notice.
-  if (params.content.trim()) {
-    return params.content;
-  }
-
-  try {
-    const { transcribeFirstAudio } = await import("openclaw/plugin-sdk/media-runtime");
-    return await transcribeFirstAudio({
-      ctx: {
-        media: audioMedia,
-        ChatType: params.chatType,
-      },
-      cfg: params.cfg,
-    });
-  } catch (err) {
-    params.log(`feishu: audio preflight transcription failed: ${String(err)}`);
-    return undefined;
-  }
-}
-
-export function parseFeishuMessageEvent(
-  event: FeishuMessageEvent,
-  botOpenId?: string,
-  preparedContent?: string,
-): FeishuMessageContext {
-  const mentionedBot = checkBotMentioned(event, botOpenId);
-  const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
-  // Strip bot addressing for commands (#35994); debounced content already expanded
-  // each message's own keys, so never reinterpret placeholder-like display names.
-  const content =
-    preparedContent ??
-    normalizeMentions(
-      parseMessageContent(event.message.content, event.message.message_type),
-      event.message.mentions,
-      botOpenId,
-    );
-  const senderOpenId = event.sender.sender_id.open_id?.trim();
-  const senderUserId = event.sender.sender_id.user_id?.trim();
-  const senderFallbackId = senderOpenId || senderUserId || "";
-
-  const ctx: FeishuMessageContext = {
-    chatId: event.message.chat_id,
-    messageId: event.message.message_id,
-    replyTargetMessageId: event.message.reply_target_message_id?.trim() || undefined,
-    typingTargetMessageId: event.message.typing_target_message_id?.trim() || undefined,
-    suppressReplyTarget: event.message.suppress_reply_target === true,
-    senderId: senderUserId || senderOpenId || "",
-    // Keep the historical field name, but fall back to user_id when open_id is unavailable
-    // (common in some mobile app deliveries).
-    senderOpenId: senderFallbackId,
-    senderType: event.sender.sender_type === "bot" ? "bot" : "user",
-    chatType: event.message.chat_type,
-    mentionedBot,
-    hasAnyMention,
-    rootId: event.message.root_id || undefined,
-    parentId: event.message.parent_id || undefined,
-    threadId: event.message.thread_id || undefined,
-    content,
-    contentType: event.message.message_type,
-  };
-
-  const mentionForwardBotOpenId = botOpenId?.trim();
-  if (mentionForwardBotOpenId && isMentionForwardRequest(event, mentionForwardBotOpenId)) {
-    const mentionTargets = extractMentionTargets(event, mentionForwardBotOpenId);
-    if (mentionTargets.length > 0) {
-      ctx.mentionTargets = mentionTargets;
-    }
-  }
-
-  return ctx;
 }
 
 async function shouldIncludeFetchedGroupContextMessage(params: {
@@ -414,7 +317,7 @@ export async function handleFeishuMessage(params: {
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
   // Optimization: skip if disabled to save API quota (Feishu free tier limit).
   let permissionErrorForAgent: FeishuPermissionError | undefined;
-  if (feishuCfg?.resolveSenderNames ?? true) {
+  if (feishuCfg.resolveSenderNames) {
     if (ctx.senderType === "bot") {
       const senderName = await resolveFeishuBotName({
         account,
@@ -511,7 +414,7 @@ export async function handleFeishuMessage(params: {
   const isTopicSession =
     isGroup && isFeishuTopicSessionScope(groupSession?.groupSessionScope ?? "group");
   const groupHistoryKey = isGroup ? (groupSession?.peerId ?? ctx.chatId) : undefined;
-  const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
+  const dmPolicy = feishuCfg.dmPolicy;
   const configAllowFrom = feishuCfg?.allowFrom ?? [];
   const rawBroadcastAgents = isGroup ? resolveBroadcastAgents(cfg, ctx.chatId) : null;
   const broadcastAgents = rawBroadcastAgents
@@ -571,7 +474,6 @@ export async function handleFeishuMessage(params: {
     }
 
     ({ requireMention } = resolveFeishuReplyPolicy({
-      isDirectMessage: false,
       cfg,
       accountId: account.accountId,
       groupId: ctx.chatId,
@@ -669,7 +571,7 @@ export async function handleFeishuMessage(params: {
         cfg: candidateCfg,
         accountId: account.accountId,
       });
-      const candidateDmPolicy = candidateAccount.config.dmPolicy ?? "pairing";
+      const candidateDmPolicy = candidateAccount.config.dmPolicy;
       const candidateConfigAllowFrom = candidateAccount.config.allowFrom ?? [];
       const ingress = await resolveFeishuDmIngressAccess({
         cfg: candidateCfg,
@@ -962,14 +864,31 @@ export async function handleFeishuMessage(params: {
       return;
     }
 
-    const audioTranscript = await resolveFeishuAudioTranscript({
-      cfg: effectiveCfg,
-      mediaList,
-      content: ctx.content,
-      messageType: event.message.message_type,
-      chatType: isGroup ? "group" : "direct",
-      log,
-    });
+    let audioTranscript: string | undefined;
+    if (event.message.message_type === "audio") {
+      const audioMedia = mediaList.filter(
+        (media) =>
+          Boolean(media.path) &&
+          (media.kind === "audio" || media.contentType?.startsWith("audio/")),
+      );
+      if (audioMedia.length > 0) {
+        // Audio content is the server transcript. Use it for the shared marker path,
+        // but only after the media check so failed downloads retain their notice.
+        if (ctx.content.trim()) {
+          audioTranscript = ctx.content;
+        } else {
+          try {
+            const { transcribeFirstAudio } = await import("openclaw/plugin-sdk/media-runtime");
+            audioTranscript = await transcribeFirstAudio({
+              ctx: { media: audioMedia, ChatType: isGroup ? "group" : "direct" },
+              cfg: effectiveCfg,
+            });
+          } catch (err) {
+            log(`feishu: audio preflight transcription failed: ${String(err)}`);
+          }
+        }
+      }
+    }
     const transcribedAudioIndex =
       audioTranscript === undefined
         ? -1
@@ -1352,6 +1271,23 @@ export async function handleFeishuMessage(params: {
       : isTopicSession || configReplyInThread
         ? topicReplyTargetMessageId
         : defaultReplyTargetMessageId;
+    // Inline directives still permit ordinary chat; only control messages stop here.
+    if (
+      isGroup &&
+      commandAuthorized === false &&
+      core.channel.commands.isControlCommandMessage(effectiveCommandProbeBody, effectiveCfg)
+    ) {
+      await sendMessageFeishu({
+        cfg: effectiveCfg,
+        to: feishuReplyTarget,
+        text: "You are not authorized to use this command. Ask an admin to add your user ID to the Feishu allowFrom list (or this group's allowFrom).",
+        replyToMessageId: replyTargetMessageId,
+        replyInThread,
+        mentions: requiredMentionTargets,
+        accountId: account.accountId,
+      });
+      return;
+    }
     const typingTargetMessageId =
       ctx.typingTargetMessageId ?? (ctx.suppressReplyTarget ? undefined : ctx.messageId);
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : directThreadReply;

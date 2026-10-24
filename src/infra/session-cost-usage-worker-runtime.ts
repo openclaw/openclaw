@@ -3,7 +3,6 @@ import {
   collectErrorGraphCandidates,
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
@@ -347,9 +346,6 @@ async function runPreparedUsageCostWorker(
                 context.signal.throwIfAborted();
               };
               assertRequestCurrent();
-              if (!isRecord(value) || typeof value.kind !== "string") {
-                throw new Error("Invalid usage worker host request");
-              }
               // SAFETY: The paired worker constructs this union; host effects still check current authority.
               const request = value as UsageCostWorkerHostRequest;
               let output: UsageCostWorkerHostEffects[keyof UsageCostWorkerHostEffects]["output"] =

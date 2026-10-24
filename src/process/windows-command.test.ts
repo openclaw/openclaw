@@ -32,9 +32,10 @@ async function writeArgvFixture(cwd: string, file: string, script = stdoutScript
 }
 
 it("leaves Linux commands unchanged", () => {
-  const platform = "linux";
+  using platform = vi.spyOn(process, "platform", "get");
+  platform.mockReturnValue("linux");
   const cmdCommands = ["pnpm"];
-  expect(resolveWindowsCommandShim({ command: "pnpm", platform, cmdCommands })).toBe("pnpm");
+  expect(resolveWindowsCommandShim({ command: "pnpm", cmdCommands })).toBe("pnpm");
 });
 
 type Dir = string | undefined;
@@ -71,6 +72,46 @@ windowsIt("honors PATHEXT precedence before package-manager shim fallback", ({ c
     args: ["--version"],
     command: path.join(cwd, "pnpm.exe"),
     usesWindowsExitCodeShim: false,
+  });
+});
+
+it("preserves trailing cwd whitespace when resolving bare commands from relative PATH", async () => {
+  await withTempDir("openclaw-windows-command-trailing-", async (base) => {
+    await mkdir(path.join(base, "job", "bin"), { recursive: true });
+    await mkdir(path.join(`${base}/job `, "bin"), { recursive: true });
+    await writeFile(path.join(base, "job", "bin", "tool.exe"), "");
+    await writeFile(path.join(`${base}/job `, "bin", "tool.exe"), "");
+    const cwd = `${path.join(base, "job")} `;
+    withMockedWindowsPlatform(() => {
+      expect(
+        resolveSafeChildProcessInvocation({
+          argv: ["tool.exe"],
+          cwd,
+          env: { PATH: "bin", PATHEXT: ".EXE" },
+        }).command,
+      ).toBe(path.join(`${base}/job `, "bin", "tool.exe"));
+    });
+  });
+});
+
+it("falls back to process cwd for blank cwd when resolving bare commands from relative PATH", async () => {
+  await withTempDir("openclaw-windows-command-blank-", async (base) => {
+    await mkdir(path.join(base, "bin"), { recursive: true });
+    await writeFile(path.join(base, "bin", "tool.exe"), "");
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(base);
+    try {
+      withMockedWindowsPlatform(() => {
+        expect(
+          resolveSafeChildProcessInvocation({
+            argv: ["tool.exe"],
+            cwd: "   ",
+            env: { PATH: "bin", PATHEXT: ".EXE" },
+          }).command,
+        ).toBe(path.join(base, "bin", "tool.exe"));
+      });
+    } finally {
+      cwdSpy.mockRestore();
+    }
   });
 });
 

@@ -2,7 +2,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/schema/error-codes.js";
 import { listChatChannels } from "../channels/chat-meta.js";
 import { normalizeChannelMeta } from "../channels/plugins/meta-normalization.js";
 import type { AnyChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -44,7 +44,6 @@ import {
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   OpenClawPluginApi,
-  OpenClawPluginHostedMediaResolver,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginMcpServerConnectionResolver,
   PluginRegistrationMode,
@@ -324,21 +323,6 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     replacePluginHttpRoutes(registry, registration, canonicalMatches, true);
   };
 
-  const registerHostedMediaResolver = (
-    record: PluginRecord,
-    resolver: OpenClawPluginHostedMediaResolver,
-  ) => {
-    if (typeof resolver !== "function") {
-      reportRegistrationError(record, "hosted media resolver registration missing resolver");
-      return;
-    }
-    registry.hostedMediaResolvers.push(
-      createRegistration(record, {
-        resolver,
-      }),
-    );
-  };
-
   const registerMcpServerConnectionResolver = (
     record: PluginRecord,
     resolver: OpenClawPluginMcpServerConnectionResolver,
@@ -513,7 +497,6 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     registerGatewayMethod,
     registerSessionCatalog,
     registerHttpRoute,
-    registerHostedMediaResolver,
     registerMcpServerConnectionResolver,
     registerChannel,
   };

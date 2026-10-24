@@ -1,7 +1,7 @@
 import { expect, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { createChatPageSessions } from "../pages/chat/chat-page.test-support.ts";
+import { createChatPageSessions } from "../pages/chat/chat-page-sessions.test-support.ts";
 import { createShellConfigFixture } from "./app-host.test-support.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
@@ -65,7 +65,7 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     activeSessionKey: "",
     lastLocalePrefSignature: null,
     outboxStoreImport: { load: vi.fn(async () => undefined) },
-    recoverDeletedActiveSession: vi.fn(),
+    shellNavigation: { recoverDeletedActiveSession: vi.fn() },
     invalidate,
     routeState: {},
   } as unknown as ShellGatewayHost;

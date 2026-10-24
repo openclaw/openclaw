@@ -1,7 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
 import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
@@ -29,31 +28,11 @@ import { createExecTool, createProcessTool } from "./bash-tools.js";
 import { getBashShellConfig } from "./shell-utils.js";
 
 // mock-isolation: Hold normal follow-up admission so factory tests can inspect exact queued routing.
-vi.mock("../auto-reply/dispatch.js", () => ({
-  dispatchInboundMessageWithRoutedChannelDispatcher: vi.fn<
-    typeof dispatchInboundMessageWithRoutedChannelDispatcher
-  >(async ({ replyOptions }) => {
-    const lifecycle = expectDefined(replyOptions?.turnAdoptionLifecycle, "notification lifecycle");
-    const signal = expectDefined(lifecycle.abortSignal, "notification cancellation");
-    lifecycle.onDeferred?.();
-    const onAbort = async () => {
-      try {
-        await lifecycle.onAbandoned?.();
-      } finally {
-        await lifecycle.onSettled?.();
-      }
-    };
-    signal.addEventListener("abort", () => void onAbort(), { once: true });
-    if (signal.aborted) {
-      await onAbort();
-    }
-    return {
-      deferredToActiveRun: "followup",
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    };
-  }),
-}));
+vi.mock("../auto-reply/dispatch.js", async () => {
+  const { createDeferredExecDispatchMock } =
+    await import("./bash-tools.exec-runtime.test-support.js");
+  return createDeferredExecDispatchMock();
+});
 
 vi.mock("../infra/channel-summary.js", () => ({
   buildChannelSummary: vi.fn(async () => []),
@@ -377,50 +356,6 @@ describe("background completion notifications", () => {
     await state.cleanup();
   });
 
-  it("routes an ordinary completion event to the originating session", async () => {
-    const id = await startAndFinish(
-      notifyTool({
-        messageProvider: "telegram",
-        currentChannelId: "telegram:-100123:topic:47",
-        currentThreadTs: "47",
-      }),
-      shellEcho("notify"),
-    );
-    const receipt = expectDefined(receipts[0], "completion receipt");
-    await expect(receipt.accepted).resolves.toEqual({ ok: true });
-    expect(getFinishedSession(id)).toMatchObject({ id, terminalStatus: "completed", exitCode: 0 });
-    expect(sessionEvents.enqueueSessionEventForHost).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("notify"),
-      expect.objectContaining({
-        agentId: "main",
-        sessionKey,
-        source: "exec",
-        expectedTarget: expect.objectContaining({ sessionId: "bash-origin", sessionKey }),
-      }),
-    );
-    expect(peekSystemEventEntries(sessionKey)).toContainEqual(
-      expect.objectContaining({
-        id: receipt.id,
-        contextKey: `exec:${id}`,
-        deliveryContext: {
-          channel: "telegram",
-          to: "telegram:-100123:topic:47",
-          threadId: "47",
-          accountId: undefined,
-        },
-      }),
-    );
-    expect(
-      await drainFormattedSystemEvents({
-        cfg: {},
-        agentId: "main",
-        sessionKey,
-        isMainSession: false,
-        isNewSession: false,
-      }),
-    ).toBeUndefined();
-  });
-
   it.each([
     {
       name: "defaults to notifying chat providers",
@@ -430,15 +365,40 @@ describe("background completion notifications", () => {
     { name: "honors an explicit silent override", notifyOnExitEmptySuccess: false, emits: false },
   ])("$name on empty success", async ({ notifyOnExitEmptySuccess, emits }) => {
     const id = await startAndFinish(
-      notifyTool({ messageProvider: " Telegram ", notifyOnExitEmptySuccess }),
+      notifyTool({
+        messageProvider: " Telegram ",
+        currentChannelId: "telegram:-100123:topic:47",
+        currentThreadTs: "47",
+        notifyOnExitEmptySuccess,
+      }),
       isWin ? "$null" : ":",
     );
-    expect(getFinishedSession(id)?.terminalStatus).toBe("completed");
+    expect(getFinishedSession(id)).toMatchObject({ id, terminalStatus: "completed", exitCode: 0 });
     expect(receipts).toHaveLength(emits ? 1 : 0);
     if (emits) {
-      await expect(expectDefined(receipts[0], "completion receipt").accepted).resolves.toEqual({
-        ok: true,
-      });
+      const receipt = expectDefined(receipts[0], "completion receipt");
+      await expect(receipt.accepted).resolves.toEqual({ ok: true });
+      expect(peekSystemEventEntries(sessionKey)).toContainEqual(
+        expect.objectContaining({
+          id: receipt.id,
+          contextKey: `exec:${id}`,
+          deliveryContext: {
+            channel: "telegram",
+            to: "telegram:-100123:topic:47",
+            threadId: "47",
+            accountId: undefined,
+          },
+        }),
+      );
+      expect(
+        await drainFormattedSystemEvents({
+          cfg: {},
+          agentId: "main",
+          sessionKey,
+          isMainSession: false,
+          isNewSession: false,
+        }),
+      ).toBeUndefined();
     }
     expect(peekSystemEvents(sessionKey)).toEqual(
       emits ? [`Exec completed (${id.slice(0, 8)}, code 0)`] : [],

@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resetGatewayWorkAdmission,
-  tryBeginGatewayRootWorkAdmission,
-} from "../process/gateway-work-admission.js";
+import * as acpTurns from "../acp/control-plane/active-turns.js";
+import * as backgroundExec from "../agents/bash-process-registry.js";
+import * as mediaRuns from "../agents/media-generation-activity.js";
+import * as replies from "../auto-reply/reply/dispatcher-registry.js";
+import * as cronJobs from "../cron/active-jobs.js";
+import * as cronTasks from "../cron/service/active-run-cancellation.js";
+import * as queue from "../process/command-queue.js";
+import * as gatewayWork from "../process/gateway-work-admission.js";
+import * as sessionRuns from "../sessions/session-controller.queries.js";
+import * as agentRuns from "./agent-run-registry.js";
 import {
   createSafeGatewayRestartPreflight,
   scheduleSafeGatewayRestart,
@@ -12,6 +18,15 @@ const scheduleGatewayRestart = vi.hoisted(() => vi.fn());
 
 // mock-isolation: Observe restart scheduling without signaling the test process.
 vi.mock("./restart.js", () => ({ scheduleGatewayRestart }));
+
+// The snapshot captures these counter functions when its module loads.
+vi.mock("../acp/control-plane/active-turns.js", { spy: true });
+vi.mock("../agents/bash-process-registry.js", { spy: true });
+vi.mock("../agents/media-generation-activity.js", { spy: true });
+vi.mock("../auto-reply/reply/dispatcher-registry.js", { spy: true });
+vi.mock("../process/command-queue.js", { spy: true });
+vi.mock("../sessions/session-controller.queries.js", { spy: true });
+vi.mock("./agent-run-registry.js", { spy: true });
 
 const restart = {
   ok: true,
@@ -24,32 +39,27 @@ const restart = {
 };
 
 beforeEach(() => {
-  resetGatewayWorkAdmission();
+  gatewayWork.resetGatewayWorkAdmission();
   scheduleGatewayRestart.mockReset().mockReturnValue(restart);
+  vi.mocked(queue.getTotalQueueSize).mockReturnValue(0);
+  vi.mocked(replies.getTotalPendingReplies).mockReturnValue(0);
+  vi.mocked(sessionRuns.getActiveSessionRunCount).mockReturnValue(0);
+  vi.mocked(backgroundExec.getActiveBackgroundExecSessionCount).mockReturnValue(0);
+  vi.mocked(agentRuns.getActiveAgentRunContextCount).mockReturnValue(0);
+  vi.mocked(acpTurns.getActiveAcpTurnCount).mockReturnValue(0);
+  vi.mocked(mediaRuns.getActiveMediaGenerationRunCount).mockReturnValue(0);
+  vi.spyOn(cronJobs, "getActiveCronJobCount").mockReturnValue(0);
+  vi.spyOn(cronTasks, "getSuspensionVisibleCronTaskRunCount").mockReturnValue(0);
 });
 
-afterEach(resetGatewayWorkAdmission);
-
-const idleInspect = {
-  getQueueSize: () => 0,
-  getPendingReplies: () => 0,
-  getEmbeddedRuns: () => 0,
-  getCronRuns: () => 0,
-  getAgentRuns: () => 0,
-  getAcpRuns: () => 0,
-  getMediaRuns: () => 0,
-};
+afterEach(() => {
+  gatewayWork.resetGatewayWorkAdmission();
+  vi.restoreAllMocks();
+});
 
 describe("safe gateway restart coordinator", () => {
-  const requestPreflight = (
-    inspect: NonNullable<Parameters<typeof scheduleSafeGatewayRestart>[0]>["inspect"],
-  ) => createSafeGatewayRestartPreflight({ ...idleInspect, ...inspect });
-
   it("reports safe when no restart blockers are active", () => {
-    const preflight = requestPreflight({
-      getBackgroundExecSessions: () => 0,
-      getRootRequests: () => 0,
-    });
+    const preflight = createSafeGatewayRestartPreflight();
 
     expect(preflight).toEqual({
       safe: true,
@@ -71,24 +81,24 @@ describe("safe gateway restart coordinator", () => {
   });
 
   it("returns structured blockers for active work", () => {
-    const preflight = requestPreflight({
-      getQueueSize: () => 2,
-      getPendingReplies: () => 1,
-      getEmbeddedRuns: () => 1,
-      getCronRuns: () => 1,
-      getBackgroundExecSessions: () => 0,
-      getRootRequests: () => 1,
-      getAgentRuns: () => 1,
-      getAcpRuns: () => 2,
-      getMediaRuns: () => 3,
-    });
+    vi.mocked(queue.getTotalQueueSize).mockReturnValue(2);
+    vi.mocked(replies.getTotalPendingReplies).mockReturnValue(1);
+    vi.mocked(sessionRuns.getActiveSessionRunCount).mockReturnValue(1);
+    vi.mocked(cronJobs.getActiveCronJobCount).mockReturnValue(1);
+    vi.mocked(backgroundExec.getActiveBackgroundExecSessionCount).mockReturnValue(2);
+    vi.spyOn(gatewayWork, "getActiveGatewayRootWorkCount").mockReturnValue(1);
+    vi.mocked(agentRuns.getActiveAgentRunContextCount).mockReturnValue(1);
+    vi.mocked(acpTurns.getActiveAcpTurnCount).mockReturnValue(2);
+    vi.mocked(mediaRuns.getActiveMediaGenerationRunCount).mockReturnValue(3);
+    const preflight = createSafeGatewayRestartPreflight();
 
     expect(preflight.safe).toBe(false);
-    expect(preflight.counts.totalActive).toBe(12);
+    expect(preflight.counts).toMatchObject({ totalActive: 14, backgroundExecSessions: 2 });
     expect(preflight.blockers.map((blocker) => blocker.kind)).toEqual([
       "queue",
       "reply",
       "embedded-run",
+      "background-exec",
       "cron-run",
       "agent-run",
       "acp-run",
@@ -97,41 +107,23 @@ describe("safe gateway restart coordinator", () => {
     ]);
     expect(preflight.summary).toContain("restart deferred");
     expect(preflight.summary).toContain("1 admitted agent run(s)");
-  });
-
-  it("defers restart for aggregate background exec sessions", () => {
-    const preflight = requestPreflight({
-      getBackgroundExecSessions: () => 2,
-      getRootRequests: () => 0,
+    expect(preflight.blockers).toContainEqual({
+      kind: "background-exec",
+      count: 2,
+      message: "2 active background exec session(s)",
     });
-
-    expect(preflight.safe).toBe(false);
-    expect(preflight.counts).toMatchObject({
-      backgroundExecSessions: 2,
-      totalActive: 2,
-    });
-    expect(preflight.blockers).toEqual([
-      {
-        kind: "background-exec",
-        count: 2,
-        message: "2 active background exec session(s)",
-      },
-    ]);
-    expect(preflight.summary).toBe("restart deferred: 2 active background exec session(s)");
+    expect(preflight.summary).toContain("2 active background exec session(s)");
   });
 
   it("counts an admitted spawn handoff while excluding the preflight request", async () => {
-    const handoff = tryBeginGatewayRootWorkAdmission("subagents:spawn-handoff");
-    const request = tryBeginGatewayRootWorkAdmission("ws:gateway.restart");
+    const handoff = gatewayWork.tryBeginGatewayRootWorkAdmission("subagents:spawn-handoff");
+    const request = gatewayWork.tryBeginGatewayRootWorkAdmission("ws:gateway.restart");
     expect(handoff).not.toBeNull();
     expect(request).not.toBeNull();
 
     try {
       await request?.run(async () => {
-        const preflight = createSafeGatewayRestartPreflight({
-          ...idleInspect,
-          getBackgroundExecSessions: () => 0,
-        });
+        const preflight = createSafeGatewayRestartPreflight();
 
         expect(preflight.counts).toMatchObject({ rootRequests: 1, totalActive: 1 });
         expect(preflight.blockers).toEqual([
@@ -158,10 +150,10 @@ describe("safe gateway restart coordinator", () => {
       coalesced,
       delayMs: coalesced ? 500 : 0,
     });
+    vi.mocked(queue.getTotalQueueSize).mockReturnValue(active);
     const result = scheduleSafeGatewayRestart({
       reason: coalesced ? undefined : "test.safe",
       skipDeferral,
-      inspect: { ...idleInspect, getQueueSize: () => active },
     });
     expect(result).toMatchObject({ status, preflight: { safe: active === 0 } });
     expect(scheduleGatewayRestart).toHaveBeenCalledWith({

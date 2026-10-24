@@ -200,7 +200,7 @@ it("uses allowFrom to disambiguate bare numeric DM delivery targets", () => {
   });
 });
 
-it("uses webhook persona delivery for bound thread text replies", async () => {
+it("uses webhook persona delivery for bound thread text without a native reply", async () => {
   mockDiscordBoundThreadManager(hoisted);
   const cfg = { channels: { discord: { token: "resolved-token" } } };
 
@@ -209,7 +209,6 @@ it("uses webhook persona delivery for bound thread text replies", async () => {
     cfg,
     text: "hello from persona",
     threadId: "thread-1",
-    replyToId: "reply-1",
     identity: {
       name: "Codex",
       avatarUrl: "https://example.com/avatar.png",
@@ -226,7 +225,6 @@ it("uses webhook persona delivery for bound thread text replies", async () => {
     username: "Codex",
     avatarUrl: "https://example.com/avatar.png",
   });
-  expect(options.replyTo).toEqual({ messageId: "reply-1", scope: "all" });
   expect(options.cfg).toBe(cfg);
   expect(sendMessage).not.toHaveBeenCalled();
   expect(result).toEqual(sendResult("msg-webhook-1", "thread-1"));
@@ -452,6 +450,32 @@ it("sends implicit all-mode video captions before media with replies", async () 
   const mediaOptions = expectMessage("", 1);
   expect(mediaOptions.mediaUrl).toBe("/tmp/render.mp4");
   expect(mediaOptions.reply).toEqual({ messageId: "reply-1", scope: "all" });
+});
+
+it.each([
+  ["plain local path", "/tmp/render.MP4?download=1", true],
+  ["encoded extension characters", "https://cdn.example/render%2Em%70%34", true],
+  ["malformed earlier segment", "https://cdn.example/bad%ZZ/render%2Emp4", true],
+  ["encoded suffix after extension", "https://cdn.example/render.mp4%2Fpreview", false],
+  ["double-encoded dot", "https://cdn.example/render%252Emp4", false],
+  ["non-video extension", "https://cdn.example/render%2Ejpg", false],
+])("separates video captions for %s", async (_name, mediaUrl, video) => {
+  await outbound.sendMedia?.({ ...sendContext(), text: "rendered clip", mediaUrl });
+
+  expect(
+    sendMessage.mock.calls.map((call, index) => [
+      call[0],
+      call[1],
+      mockObjectArg(sendMessage, index).mediaUrl,
+    ]),
+  ).toEqual(
+    video
+      ? [
+          ["channel:123456", "rendered clip", undefined],
+          ["channel:123456", "", mediaUrl],
+        ]
+      : [["channel:123456", "rendered clip", mediaUrl]],
+  );
 });
 
 it("keeps captioned video in the thread created by the forum starter", async () => {

@@ -112,6 +112,7 @@ export function registerDurableBlockRoutingTests(): void {
         suppressUserDelivery: true,
       }),
       expect.anything(),
+      expect.any(Function),
     );
   });
 

@@ -21,8 +21,11 @@ import type {
   AcpReplayAppendInput,
   AcpReplayStartInput,
   AcpReplayReadInput,
-  AcpReplayLimits,
 } from "./event-ledger.worker-contract.js";
+
+const MAX_SESSIONS = 200;
+const MAX_EVENTS_PER_SESSION = 5_000;
+const MAX_SERIALIZED_BYTES = 16 * 1024 * 1024;
 
 function normalizeSqliteInteger(value: number | bigint | null): number {
   return value === null ? 0 : sqliteNumber(value);
@@ -357,19 +360,19 @@ function deleteOldestSqliteEvents(db: EngineConnection, sessionId: string, limit
   return rows.length;
 }
 
-function trimSqliteLedger(db: EngineConnection, state: AcpReplayLimits): void {
+function trimSqliteLedger(db: EngineConnection): void {
   // Indexed sequence endpoints bound the count even when retained sequences have
   // gaps. Only histories that could exceed the cap need an exact count.
   const queries = getSqliteLedgerQueries(db);
-  const eventCapCandidates = queries.readEventCapCandidates(state.maxEventsPerSession).rows;
+  const eventCapCandidates = queries.readEventCapCandidates(MAX_EVENTS_PER_SESSION).rows;
   for (const row of eventCapCandidates) {
-    const overage = normalizeSqliteInteger(row.event_count) - state.maxEventsPerSession;
+    const overage = normalizeSqliteInteger(row.event_count) - MAX_EVENTS_PER_SESSION;
     if (overage > 0) {
       deleteOldestSqliteEvents(db, row.session_id, overage);
     }
   }
 
-  const oldSessions = queries.readExcessSessions(state.maxSessions).rows;
+  const oldSessions = queries.readExcessSessions(MAX_SESSIONS).rows;
   for (const session of oldSessions) {
     queries.deleteSession(session.session_id);
   }
@@ -378,7 +381,7 @@ function trimSqliteLedger(db: EngineConnection, state: AcpReplayLimits): void {
   // batches, dropping the session row itself once its events are exhausted.
   // Aggregates keep every recheck O(maxSessions); no event scans occur.
   let serializedBytes = estimateSqliteLedgerBytes(db);
-  while (serializedBytes > state.maxSerializedBytes) {
+  while (serializedBytes > MAX_SERIALIZED_BYTES) {
     const session = queries.readOldestSession().rows[0];
     if (!session) {
       break;
@@ -393,7 +396,6 @@ function trimSqliteLedger(db: EngineConnection, state: AcpReplayLimits): void {
 
 function appendSqliteUpdate(
   db: EngineConnection,
-  state: AcpReplayLimits,
   params: AcpReplayAppendInput["events"][number] & {
     sessionId: string;
     sessionKey: string;
@@ -427,7 +429,7 @@ function appendSqliteUpdate(
     updateJson,
     eventBytes,
   });
-  trimSqliteLedger(db, state);
+  trimSqliteLedger(db);
 }
 
 function readSqliteReplay(db: EngineConnection, input: AcpReplayReadInput): AcpEventLedgerReplay {
@@ -485,7 +487,7 @@ export const acpReplayOperations = {
     write(
       (database) => {
         upsertSqliteSession(database.db, input.now, input.session);
-        trimSqliteLedger(database.db, input.limits);
+        trimSqliteLedger(database.db);
       },
       { operationLabel: "acp.replay.start" },
     ),
@@ -493,7 +495,7 @@ export const acpReplayOperations = {
     write(
       (database) => {
         for (const event of input.events) {
-          appendSqliteUpdate(database.db, input.limits, { ...event, ...input.session });
+          appendSqliteUpdate(database.db, { ...event, ...input.session });
         }
       },
       { operationLabel: "acp.replay.append" },

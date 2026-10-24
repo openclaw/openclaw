@@ -21,11 +21,9 @@ import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   acknowledgeCompletedWorkerTurn,
-  attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   createWorkerTurnTunnel,
-  credential,
   openSessionManager,
   placements,
   reconcileUnchangedLocalWorkspace,
@@ -34,7 +32,7 @@ import {
   sessionTarget,
   setupWorkerTurnLauncherTest,
   turn,
-  unusedEnvironments,
+  workerTurnEnvironments,
 } from "./worker-turn-launcher.test-support.js";
 
 beforeEach(setupWorkerTurnLauncherTest);
@@ -166,13 +164,9 @@ it.each(["direct", "outer"] as const)("prepares and settles with %s ownership", 
   const provider = createWorkerSessionTurnPlacementProvider({
     placements,
     publishAcceptedWorkspace: published,
-    environments: {
-      ...unusedEnvironments(),
-      get: attachedEnvironment,
-      acquireTurnCredential: async () => credential(),
-      startTunnel: async () => tunnel,
+    environments: workerTurnEnvironments(tunnel, {
       acknowledgeCredentialDelivery: async () => true,
-    },
+    }),
   });
   try {
     const result = await provider.executeTurn(

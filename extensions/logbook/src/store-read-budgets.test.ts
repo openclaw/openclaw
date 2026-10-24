@@ -472,7 +472,7 @@ describe("Logbook native statement and read budgets", () => {
       reads.frameTextBytes = 0;
       backend.execute({
         type: "replaceCardsInWindow",
-        input: { day, startMs: 0, endMs: 120_000, drafts: keyframeDrafts, selectKeyframes: true },
+        input: { day, startMs: 0, endMs: 120_000, drafts: keyframeDrafts },
       });
       const expectedIds = count === 0 ? [undefined, undefined] : [41, 119];
       expect(backend.execute({ type: "cardsForDay", input: { day } })).toEqual(

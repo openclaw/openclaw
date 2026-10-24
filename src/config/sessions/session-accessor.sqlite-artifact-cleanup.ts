@@ -117,11 +117,11 @@ export async function cleanupSessionLifecycleArtifactsCore(
                     companions.settlement = capture(
                       entries.filter((entry) => removed.has(entry.sessionKey)),
                     );
-                    companions.settlement.beforeCommit();
+                    return companions.settlement.beforeCommit();
                   },
+                  settled: (settledOutcome) => companions.settlement?.settle(settledOutcome.kind),
                 },
               );
-              companions.settlement?.settle(outcome.kind);
               const result = readSessionActorStorageResult(outcome);
               return {
                 removedEntries: result.removedSessionKeys.length,

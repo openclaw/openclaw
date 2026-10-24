@@ -25,6 +25,7 @@ import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import type { GuestWelcomeHandle } from "./guest-welcome-handle.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import type { NativeDeviceSettingsCapability } from "./native-device-settings.ts";
@@ -39,12 +40,6 @@ import type { WebPushCapability } from "./web-push.ts";
 
 export type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 
-export type ApplicationThemeServerSelection = {
-  readonly revision: number;
-  readonly scope: string;
-  readonly theme: ThemeName | null;
-};
-
 export type ApplicationTheme = {
   readonly branding: ThemeBranding;
   readonly catalog?: ThemeCatalogSnapshot;
@@ -52,7 +47,6 @@ export type ApplicationTheme = {
   readonly settings: UiPreferences;
   readonly mode: ThemeMode;
   readonly resolvedMode: "dark" | "light";
-  readonly serverSelection: ApplicationThemeServerSelection | null;
   readonly appliedPalette: ApplicationThemePalette | null;
   recordServerSelection: (theme: ThemeName | null, scope: string) => void;
   setMode: (mode: ThemeMode, element?: HTMLElement | null) => void;
@@ -152,6 +146,8 @@ export type ApplicationContext<TRouteId extends string = RouteId> = {
   readonly sessions: SessionCapability;
   readonly placementStartup: ApplicationPlacementStartup;
   readonly plugins: ControlUiPluginCapability;
+  /** Visitor Access welcome-session setup for invited guests; app router documents only. */
+  readonly guestWelcome?: GuestWelcomeHandle;
   readonly assistantDock: AssistantDock;
   readonly overlays: ApplicationOverlays;
   readonly navigation: ApplicationNavigationPreferences;

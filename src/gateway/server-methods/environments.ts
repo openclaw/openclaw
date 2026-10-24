@@ -42,7 +42,7 @@ import {
   adoptSuggestedWorkerProfile,
   listSuggestedWorkerProfile,
 } from "./environments.suggested-profile.js";
-import { respondUnavailableOnThrow } from "./response.js";
+import { respondError, respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type {
   GatewayRequestContext,
@@ -207,15 +207,12 @@ function defineEnvironmentMutation<T extends Record<string, unknown>>(
     const { respond, context } = options;
     const service = context.workerEnvironmentService;
     if (!service) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          method === "destroy"
-            ? "unknown environmentId"
-            : "cloud worker environments are not configured",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        method === "destroy"
+          ? "unknown environmentId"
+          : "cloud worker environments are not configured",
       );
       return;
     }
@@ -257,7 +254,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateEnvironmentsListParams, "environments.list", respond)) {
       return;
     }
-    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+    const scopes = client?.connect.scopes ?? [];
     const includePreparedDetails =
       params.includePreparedDetails === true &&
       authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, scopes).allowed;
@@ -265,11 +262,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     if (params.runtimeId) {
       const access = authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, scopes);
       if (!access.allowed) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.FORBIDDEN, `missing scope: ${access.missingScope}`),
-        );
+        respondError(respond, ErrorCodes.FORBIDDEN, `missing scope: ${access.missingScope}`);
         return;
       }
     }
@@ -293,10 +286,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       authority.assertCurrent();
       const includeCurrentPreparedDetails =
         includePreparedDetails &&
-        authorizeOperatorScopesForRequiredScope(
-          ADMIN_SCOPE,
-          Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
-        ).allowed;
+        authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, client?.connect.scopes ?? []).allowed;
       const summarizedAtMs = Date.now();
       environments.push(
         ...workers.map((record) =>
@@ -352,11 +342,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       try {
         worker = context.workerEnvironmentService?.get(params.environmentId);
       } catch {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "environment status unavailable"),
-        );
+        respondError(respond, ErrorCodes.UNAVAILABLE, "environment status unavailable");
         return;
       }
       respond(
@@ -365,10 +351,8 @@ export const environmentsHandlers: GatewayRequestHandlers = {
           ? summarizeWorkerEnvironment(worker, Date.now(), {
               includePreparedDetails:
                 params.includePreparedDetails === true &&
-                authorizeOperatorScopesForRequiredScope(
-                  ADMIN_SCOPE,
-                  Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
-                ).allowed,
+                authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, client?.connect.scopes ?? [])
+                  .allowed,
             })
           : undefined,
         worker ? undefined : errorShape(ErrorCodes.INVALID_REQUEST, "unknown environmentId"),

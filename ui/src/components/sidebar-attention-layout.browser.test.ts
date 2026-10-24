@@ -5,6 +5,7 @@ import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/in
 import type { ApplicationContext } from "../app/context.ts";
 import type { MentionsCapability } from "../app/mentions.ts";
 import { client, createGatewayHarness } from "../app/overlays-access.test-support.ts";
+import { createApplicationOverlays } from "../app/overlays.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import {
@@ -95,11 +96,14 @@ function panelParams(entries: readonly SidebarInboxEntry[]): PanelFixtureParams 
       features: { methods: ["mentions.dismiss"] },
     },
   });
+  const overlays = createApplicationOverlays(gateway);
+  onTestFinished(() => overlays.dispose());
   return {
     context: {
       basePath: "",
       navigate: vi.fn(),
       gateway,
+      overlays,
     } as unknown as ApplicationContext,
     mentions: {
       snapshot: {

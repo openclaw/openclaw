@@ -35,18 +35,8 @@ type AnthropicTerminalFallbackCase = {
 
 export const anthropicTerminalFallbackCases: AnthropicTerminalFallbackCase[] = [
   { name: "sticky serving model", model: "claude-opus-4-8", fallback: true },
-  {
-    name: "repeated terminal metadata",
-    model: "claude-opus-4-8",
-    fallback: true,
-    repeat: true,
-  },
-  {
-    name: "existing content boundary",
-    model: "claude-opus-4-8",
-    fallback: true,
-    boundary: true,
-  },
+  { name: "repeated terminal metadata", model: "claude-opus-4-8", fallback: true, repeat: true },
+  { name: "existing content boundary", model: "claude-opus-4-8", fallback: true, boundary: true },
   { name: "start-model mismatch alone", marker: false },
   { name: "missing terminal model" },
   { name: "blank terminal model", model: " " },
@@ -66,31 +56,29 @@ export function createAnthropicTerminalFallbackEvents(
     cache_creation_input_tokens: 4,
     cache_creation: null,
   };
+  const iteration = (type: string, model: unknown, tokens = {}) => ({
+    type,
+    ...usage,
+    model,
+    ...tokens,
+  });
+  const iterations = [
+    iteration(testCase.marker === false ? "message" : "fallback_message", testCase.model),
+  ];
+  if (testCase.boundary) {
+    iterations.unshift(
+      iteration("message", "claude-fable-5", { input_tokens: 1_000, output_tokens: 2_000 }),
+    );
+  }
   const terminal = {
     type: "message_delta",
     delta: { stop_reason: "tool_use" },
-    usage: {
-      ...usage,
-      iterations: [
-        ...(testCase.boundary
-          ? [
-              {
-                type: "message",
-                ...usage,
-                model: "claude-fable-5",
-                input_tokens: 1_000,
-                output_tokens: 2_000,
-              },
-            ]
-          : []),
-        {
-          type: testCase.marker === false ? "message" : "fallback_message",
-          ...usage,
-          model: testCase.model,
-        },
-      ],
-    },
+    usage: { ...usage, iterations },
   };
+  const block = (index: number, content_block: Record<string, unknown>) => [
+    { type: "content_block_start", index, content_block },
+    { type: "content_block_stop", index },
+  ];
   return [
     {
       type: "message_start",
@@ -101,33 +89,15 @@ export function createAnthropicTerminalFallbackEvents(
       },
     },
     ...(testCase.boundary
-      ? [
-          {
-            type: "content_block_start",
-            index: 3,
-            content_block: {
-              type: "fallback",
-              from: { model: "claude-fable-5" },
-              to: { model: "claude-opus-4-8" },
-            },
-          },
-          { type: "content_block_stop", index: 3 },
-        ]
+      ? block(3, {
+          type: "fallback",
+          from: { model: "claude-fable-5" },
+          to: { model: "claude-opus-4-8" },
+        })
       : []),
-    {
-      type: "content_block_start",
-      index: 0,
-      content_block: { type: "thinking", thinking: "serving reasoning", signature: "sig_serving" },
-    },
-    { type: "content_block_stop", index: 0 },
-    { type: "content_block_start", index: 1, content_block: { type: "text", text: "answer" } },
-    { type: "content_block_stop", index: 1 },
-    {
-      type: "content_block_start",
-      index: 2,
-      content_block: { type: "tool_use", id: "call_serving", name: "lookup", input: {} },
-    },
-    { type: "content_block_stop", index: 2 },
+    ...block(0, { type: "thinking", thinking: "serving reasoning", signature: "sig_serving" }),
+    ...block(1, { type: "text", text: "answer" }),
+    ...block(2, { type: "tool_use", id: "call_serving", name: "lookup", input: {} }),
     terminal,
     ...(testCase.repeat ? [terminal] : []),
     ...(testCase.failure

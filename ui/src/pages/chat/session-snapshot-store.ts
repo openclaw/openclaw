@@ -17,6 +17,7 @@ import {
   MAX_CACHED_CHAT_WEIGHT,
   type ChatCacheObserver,
   type ChatMessageCache,
+  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import {
   isPersistableChatSnapshotKey,
@@ -41,11 +42,11 @@ import {
   discardPrewarmedChatSnapshot,
   peekPrewarmedChatSnapshot,
 } from "./session-snapshot-prewarm.ts";
-import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 const CHAT_SNAPSHOT_PROJECTION_VERSION = 3;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;
 const CHAT_SNAPSHOT_IDLE_TIMEOUT_MS = 1000;
+const parsedPrewarms = new WeakMap<object, Promise<ChatSessionSnapshot | null>>();
 
 const nonnegative = json.refine(json.number, (value) => value >= 0);
 const sessionKeySchema = json.refine(json.text, (value) => value.length > 0);
@@ -74,6 +75,9 @@ const paginationSchema = {
 };
 const snapshotSchema = json.object(
   {
+    board: json.optional(
+      json.nullable(json.object({ snapshot: json.unknown, receivedAtMs: nonnegative }, true)),
+    ),
     widgetHeights: json.optional(
       json.refine(
         json.record(json.refine(json.number, (height) => height >= 48 && height <= 8000)),
@@ -146,6 +150,7 @@ const activeStores = new Set<SessionSnapshotStore>();
 async function parseSnapshotRecord(
   value: unknown,
   sessionKey?: string,
+  onBoard?: (board: ChatSessionSnapshot["board"]) => void,
 ): Promise<SessionSnapshotRecord | null> {
   const parsed = json.parseSnapshot(recordSchema, value);
   if (!parsed || (sessionKey && parsed.sessionKey !== sessionKey)) {
@@ -153,6 +158,8 @@ async function parseSnapshotRecord(
   }
   const historyState = parsed.snapshot.historyState;
   if (historyState !== undefined) {
+    // Do not hold board restoration behind the lazy transcript validator.
+    onBoard?.(parsed.snapshot.board);
     const { isChatHistoryState } =
       await import("../../lib/protocol-validators.generated/history-state.js");
     if (!isChatHistoryState(historyState)) {
@@ -166,6 +173,7 @@ async function readSnapshotRecord(
   sessionKey: string,
   value: unknown,
   isCurrent: () => boolean,
+  onBoard?: (board: ChatSessionSnapshot["board"]) => void,
 ): Promise<ChatSessionSnapshot | null> {
   if (
     value === undefined ||
@@ -175,7 +183,7 @@ async function readSnapshotRecord(
   ) {
     return null;
   }
-  const record = await parseSnapshotRecord(value, sessionKey);
+  const record = await parseSnapshotRecord(value, sessionKey, onBoard);
   if (!isCurrent()) {
     return null;
   }
@@ -186,6 +194,18 @@ async function readSnapshotRecord(
   return record?.snapshot ?? null;
 }
 
+function readSharedPrewarm(
+  entry: object,
+  read: () => Promise<ChatSessionSnapshot | null>,
+): Promise<ChatSessionSnapshot | null> {
+  let snapshot = parsedPrewarms.get(entry);
+  if (!snapshot) {
+    snapshot = read();
+    parsedPrewarms.set(entry, snapshot);
+  }
+  return snapshot;
+}
+
 export async function readPrewarmedChatSnapshot(
   cacheKey: string,
 ): Promise<ChatSessionSnapshot | null> {
@@ -193,10 +213,11 @@ export async function readPrewarmedChatSnapshot(
   if (entry?.cacheKey !== cacheKey) {
     return null;
   }
-  entry.snapshot ??= entry.promise.then((value) =>
-    readSnapshotRecord(entry.cacheKey, value, () => !entry.cancelled),
+  const snapshot = await readSharedPrewarm(entry, () =>
+    entry.promise.then((value) =>
+      readSnapshotRecord(entry.cacheKey, value, () => !entry.cancelled),
+    ),
   );
-  const snapshot = await entry.snapshot;
   return snapshot && !entry.cancelled && peekPrewarmedChatSnapshot() === entry ? snapshot : null;
 }
 
@@ -394,15 +415,17 @@ async function accessSidebarSnapshot<Model>(
       store.put(incoming);
     }
     let bytes = 0;
+    let count = 0;
     let result: Model | null = null;
-    for (const [index, record] of retained.toSorted((a, b) => b.savedAt - a.savedAt).entries()) {
+    for (const record of retained.toSorted((a, b) => b.savedAt - a.savedAt)) {
       const admitted = validate(record.model);
       if (admitted === null) {
-        throw new Error("sidebar projection shape mismatch");
+        store.delete(record.sessionKey);
+        continue;
       }
       bytes += sidebarRecordBytes(record);
       if (
-        index >= 8 ||
+        count++ >= 8 ||
         bytes > 512 * 1024 ||
         Date.now() - record.savedAt > 30 * 24 * 60 * 60 * 1000
       ) {
@@ -520,14 +543,17 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     }
   }
 
-  async read(sessionKey: string): Promise<ChatSessionSnapshot | null> {
+  async read(
+    sessionKey: string,
+    onBoard?: (board: ChatSessionSnapshot["board"]) => void,
+  ): Promise<ChatSessionSnapshot | null> {
     const isCurrent = this.captureReadScope(sessionKey);
     const prewarm = consumePrewarmedChatSnapshot(sessionKey);
     const read = () =>
       (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey)).then((value) =>
-        readSnapshotRecord(sessionKey, value, isCurrent),
+        readSnapshotRecord(sessionKey, value, isCurrent, onBoard),
       );
-    const snapshot = await (prewarm ? (prewarm.snapshot ??= read()) : read());
+    const snapshot = await (prewarm ? readSharedPrewarm(prewarm, read) : read());
     if (!snapshot || !isCurrent()) {
       return null;
     }

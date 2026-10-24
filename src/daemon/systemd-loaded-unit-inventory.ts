@@ -7,6 +7,7 @@ import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import {
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
+  SystemdInspectionTimeout,
 } from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
@@ -55,21 +56,6 @@ export async function hasSystemdManager(
     ((await pathEntryExists(path.join(runtimeDir, "systemd/private"))) ||
       (await pathEntryExists(path.join(runtimeDir, "bus"))))
   );
-}
-
-function parseUnitNames(output: string): string[] {
-  const names: string[] = [];
-  for (const line of output.split(/\r?\n/)) {
-    if (!line.trim()) {
-      continue;
-    }
-    const name = line.trimStart().split(/\s+/, 1)[0];
-    if (!name?.endsWith(".service")) {
-      throw new Error("Loaded systemd service list could not be inspected.");
-    }
-    names.push(name);
-  }
-  return [...new Set(names)];
 }
 
 const unavailable = () => new Error("Loaded systemd service properties could not be inspected.");
@@ -185,19 +171,30 @@ export async function listLoadedSystemdUnits(
       ];
       const remaining = deadline - budget.now();
       if (remaining <= 0) {
-        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+        throw new SystemdInspectionTimeout(`systemctl --${scope} list-units`);
       }
       const listed =
         scope === "user"
           ? await execSystemctlUser(env, args, remaining)
           : await execSystemctl(["--system", ...args], undefined, remaining);
       if (budget.now() >= deadline) {
-        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+        throw new SystemdInspectionTimeout(`systemctl --${scope} list-units`);
       }
       if (listed.termination !== "exit" || listed.code !== 0) {
         throw new Error("Loaded systemd service list could not be inspected.");
       }
-      const names = parseUnitNames(listed.stdout);
+      const parsedNames: string[] = [];
+      for (const line of listed.stdout.split(/\r?\n/)) {
+        if (!line.trim()) {
+          continue;
+        }
+        const name = line.trimStart().split(/\s+/, 1)[0];
+        if (!name?.endsWith(".service")) {
+          throw new Error("Loaded systemd service list could not be inspected.");
+        }
+        parsedNames.push(name);
+      }
+      const names = [...new Set(parsedNames)];
       // Preserve the two bounded phases, but carry the original manager through both.
       deadline = budget.now() + INSPECTION_TIMEOUT_MS;
       phaseQuery = createQuery(names.length * 3 + (connection ? 1 : 2));
@@ -277,7 +274,7 @@ export async function listLoadedSystemdUnits(
       throw failure.error;
     }
     if (budget.now() >= deadline) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+      throw new SystemdInspectionTimeout("loaded unit inventory cleanup");
     }
     return units;
   });

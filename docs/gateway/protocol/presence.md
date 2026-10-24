@@ -25,8 +25,9 @@ How the Gateway reports which nodes are connected, and which server-pushed event
 ### Opt-in presence deltas
 
 Operator clients can advertise `presence-deltas` in connect `caps`. The Control
-UI does so; native clients retain the existing `presence` event payload
-`{ presence: [...] }` and the ordinary `system-presence` array response.
+UI and current macOS, iOS, and Android operator connections do so. Older app
+versions and clients without the capability retain the existing `presence` event
+payload `{ presence: [...] }`. Ordinary `system-presence` calls still return an array.
 
 For opted-in readers, the same `presence` event carries one of two payloads:
 
@@ -70,6 +71,12 @@ the last accepted version. On mismatch, request `system-presence` with
 `{ "snapshot": true }`; an opted-in client receives the reset shape above.
 Ordinary calls still return the existing array. The Control UI reconciles these
 updates in its Gateway store so downstream consumers receive full rosters.
+The shared macOS/iOS channel reconstructs rosters before bounded subscriber
+queues, and reconnects to resynchronize if a version or transport sequence gap
+occurs. It also accepts full snapshots from older Gateways. Android currently
+ignores roster events, so its operator sockets opt in without maintaining a roster.
+Node-only connections do not receive presence events. Native changes take effect
+with app updates; a Gateway restart does not upgrade connected app code.
 
 The hello snapshot remains `snapshot.presence` with `snapshot.stateVersion.presence`.
 This implementation sends a reset on the first post-hello presence event instead

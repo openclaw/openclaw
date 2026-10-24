@@ -23,6 +23,11 @@ title: "Store maintenance and retention"
 | `coldStorage.enabled`   | `false`               | move eligible inactive transcript payloads to compressed JSONL files in a background worker       |
 | `coldStorage.afterDays` | `30`                  | positive integer inactivity cutoff in days for cold storage                                       |
 
+The Gateway applies configured reset/deletion archive expiry at startup and once
+per minute, independently of cron and cold storage. `mode: "warn"` and disabled
+archive retention preserve these archives from age-based deletion. Live references
+and pending publication protect both the canonical archive and its derived file.
+
 Reset boundaries start a fresh history window without deleting earlier transcript rows. When session rollover advances the live `sessionKey -> sessionId` mapping, the previous SQLite session, transcript, trajectory, and search rows also remain; ordinary entry and session lists show only the live mapping. Retained reset history is bounded by the disk budget, not by `resetArchiveRetention`, which only ages archive artifacts. Explicit deletion is different: it stores and verifies the compressed transcript archive in SQLite in the same transaction that removes the deleted session's rows. It then publishes, syncs, and reads back the derived `*.jsonl.deleted.<timestamp>.zst` file before reporting success when zstd is available.
 
 If an archive file export fails after deletion commits, its stored archive
@@ -77,6 +82,14 @@ transcript versions, and session protection before committing. Unrelated writes 
 not cancel the plan. Conflicting inputs receive at most three immediate planning
 attempts before maintenance pauses until a later write; settled refusals retain the
 worker connection. Retention policies and stored data formats are unchanged.
+
+Automatic age retention scans at most 64 candidates per pass and releases the
+writer queue between settled passes. It finishes the age scan before applying
+the session-count cap, including when protected entries fill a page. Large
+backlogs therefore converge through several bounded passes while foreground
+writes can proceed between them. Each scan keeps its original age cutoff;
+newly due entries retain their deadline for the next scan. Explicit cleanup
+remains exhaustive.
 
 OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The current schema rejects the legacy `session.maintenance.rotateBytes` key, and `openclaw doctor --fix` removes it from older configs.
 

@@ -25,6 +25,12 @@ function setup(options: Partial<Parameters<typeof createApplicationConfigCapabil
   return createApplicationConfigCapability({ resourceBasePath: "", ...options });
 }
 
+function pendingResponse() {
+  const response = createDeferred<Response>();
+  fetchMock.mockImplementationOnce(() => response.promise);
+  return (version: string) => response.resolve(bootstrapResponse(version));
+}
+
 function documentConfig(payload: ControlUiBootstrapConfig) {
   document.documentElement.setAttribute(
     CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
@@ -165,15 +171,14 @@ it.each(["/other", "https://other.example"])(
 );
 
 it("shares concurrent bootstrap loads with equivalent credentials", async () => {
-  const response = createDeferred<Response>();
-  fetchMock.mockImplementation(() => response.promise);
+  const respond = pendingResponse();
   let token = "fixture-token";
   const config = setup({ getAuth: () => ({ settings: { token } }) });
 
   const first = config.refresh();
   token = " fixture-token ";
   const second = config.refresh({ ifNeeded: true });
-  response.resolve(bootstrapResponse("ready"));
+  respond("ready");
 
   await expect(first).resolves.toMatchObject({ serverVersion: "ready" });
   await expect(second).resolves.toMatchObject({ serverVersion: "ready" });
@@ -181,10 +186,8 @@ it("shares concurrent bootstrap loads with equivalent credentials", async () => 
 });
 
 it("refreshes without a bearer candidate at boot and after credentials change", async () => {
-  const oldResponse = createDeferred<Response>();
-  fetchMock
-    .mockImplementationOnce(() => oldResponse.promise)
-    .mockResolvedValueOnce(bootstrapResponse("cookie"));
+  const oldResponse = pendingResponse();
+  fetchMock.mockResolvedValueOnce(bootstrapResponse("cookie"));
   let token = "fixture-token";
   const config = setup({ getAuth: () => ({ settings: { token } }) });
   const loading = config.refresh({ ifNeeded: true });
@@ -192,7 +195,7 @@ it("refreshes without a bearer candidate at boot and after credentials change", 
   await expect(config.refresh({ ifNeeded: true })).resolves.toMatchObject({
     serverVersion: "cookie",
   });
-  oldResponse.resolve(bootstrapResponse("retired"));
+  oldResponse("retired");
   await expect(loading).resolves.toBeNull();
   expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
     credentials: "same-origin",
@@ -203,21 +206,18 @@ it("refreshes without a bearer candidate at boot and after credentials change", 
 });
 
 it.each([false, true])("rejects retired credentials (replacement refresh: %s)", async (replace) => {
-  const old = createDeferred<Response>();
-  const replacement = createDeferred<Response>();
-  fetchMock
-    .mockImplementationOnce(() => old.promise)
-    .mockImplementationOnce(() => replacement.promise);
+  const old = pendingResponse();
+  const replacement = pendingResponse();
   let token = "fixture-token";
   const config = setup({ getAuth: () => ({ settings: { token } }) });
   const loading = config.refresh();
   token = "replacement-fixture-token";
   if (replace) {
     const next = config.refresh();
-    replacement.resolve(bootstrapResponse("new"));
+    replacement("new");
     await expect(next).resolves.toMatchObject({ serverVersion: "new" });
   }
-  old.resolve(bootstrapResponse("retired"));
+  old("retired");
   await expect(loading).resolves.toBeNull();
   expect(config.current.serverVersion).toBe(replace ? "new" : null);
   expect(fetchMock).toHaveBeenCalledTimes(replace ? 2 : 1);
@@ -229,11 +229,8 @@ it.each([false, true])("rejects retired credentials (replacement refresh: %s)", 
 it.each([false, true])(
   "keeps independent callers valid and publishes the newest successful response (aborted: %s)",
   async (aborted) => {
-    const firstResponse = createDeferred<Response>();
-    const secondResponse = createDeferred<Response>();
-    fetchMock
-      .mockImplementationOnce(() => firstResponse.promise)
-      .mockImplementationOnce(() => secondResponse.promise);
+    const firstResponse = pendingResponse();
+    const secondResponse = pendingResponse();
     const config = setup();
     const abort = new AbortController();
     const first = config.refresh();
@@ -241,11 +238,11 @@ it.each([false, true])(
     if (aborted) {
       abort.abort();
     }
-    secondResponse.resolve(bootstrapResponse("new"));
+    secondResponse("new");
     expect(await second).toEqual(
       aborted ? null : expect.objectContaining({ serverVersion: "new" }),
     );
-    firstResponse.resolve(bootstrapResponse("old"));
+    firstResponse("old");
 
     await expect(first).resolves.toMatchObject({ serverVersion: "old" });
     expect(config.current.serverVersion).toBe(aborted ? "old" : "new");

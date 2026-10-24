@@ -225,6 +225,8 @@ describe("update.run acknowledgement", () => {
   it("merges explicit route fields and refuses a second prepared updater after acknowledgement", async () => {
     startHandoff.mockResolvedValueOnce({
       status: "joined",
+      message:
+        "Update blocked by cancelled update custody: owner previous-update; run openclaw update repair.",
       command: "openclaw update --yes",
       logPath: "/tmp/fixture.log",
     });
@@ -237,7 +239,13 @@ describe("update.run acknowledgement", () => {
       ackDelivered: true,
       ok: false,
       result: { reason: "managed-service-handoff-already-running" },
+      handoff: {
+        message: expect.stringContaining("cancelled update custody: owner previous-update"),
+      },
     });
+    expect(getUpdateRun(response!.runId)?.origin.nextAction).toContain(
+      "cancelled update custody: owner previous-update",
+    );
     expect(scheduleRestart).not.toHaveBeenCalled();
     expect(transferHandoff).not.toHaveBeenCalled();
     expect(recordSentinel).not.toHaveBeenCalled();
@@ -496,26 +504,6 @@ describe("update.run restart scheduling", () => {
     expect(scheduleRestart).not.toHaveBeenCalled();
   });
 
-  it("hands Windows fallback gateways to the CLI path before doctor activation", async () => {
-    detectSupervisor.mockReturnValueOnce("schtasks");
-    mockGitInstallSurface("C:\\openclaw");
-
-    const payload = await withEnvAsync(
-      {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-      },
-      () => captureUpdateRunPayload(),
-    );
-
-    expectHandoff({
-      supervisor: "schtasks",
-      handoffId: expect.any(String),
-    });
-    expect(payload?.ok).toBe(true);
-    expect(payload?.result?.reason).toBe("managed-service-handoff-started");
-  });
-
   it("does not pass the stored stable channel to supervised git handoff CLI", async () => {
     normalizeUpdateChannelMock.mockReturnValueOnce("stable");
     detectSupervisor.mockReturnValueOnce("launchd");
@@ -540,51 +528,49 @@ describe("update.run restart scheduling", () => {
     expectHandoff({ channel: "extended-stable" });
   });
 
-  it("hands systemd-supervised git/dev updates to handoff from the durable unit identity", async () => {
-    detectSupervisor.mockReturnValueOnce("systemd");
-    mockGitInstallSurface("/tmp/openclaw-git");
-
-    const payload = await withEnvAsync(
-      {
+  it.each([
+    {
+      name: "Windows fallback",
+      supervisor: "schtasks",
+      root: "C:\\openclaw",
+      env: { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" },
+    },
+    {
+      name: "systemd unit identity",
+      supervisor: "systemd",
+      root: "/tmp/openclaw-git",
+      env: {
         OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
         INVOCATION_ID: "8a77e69a8f604bf0b7984879b9f17a7c",
       },
-      () => captureUpdateRunPayload(),
-    );
-
-    expect(startHandoff).toHaveBeenCalledTimes(1);
-    expectHandoff({
-      root: "/tmp/openclaw-git",
+    },
+    {
+      name: "systemd marker-only identity",
       supervisor: "systemd",
-    });
-    expect(payload).toMatchObject({
-      ok: true,
-      handoff: { status: "started" },
-      result: { status: "skipped", reason: "managed-service-handoff-started", mode: "git" },
-    });
-  });
-
-  it("hands marker-only systemd git/dev updates to the helper for exact ownership verification", async () => {
-    detectSupervisor.mockReturnValueOnce("systemd");
-    mockGitInstallSurface("/tmp/openclaw-git");
-
-    const payload = await withEnvAsync(
-      {
+      root: "/tmp/openclaw-git",
+      env: {
         OPENCLAW_SYSTEMD_UNIT: undefined,
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",
       },
-      () => captureUpdateRunPayload(),
-    );
-    expectHandoff({ root: "/tmp/openclaw-git", supervisor: "systemd" });
-    expect(scheduleRestart).not.toHaveBeenCalled();
-    expect(transferHandoff).toHaveBeenCalledOnce();
-    expect(payload).toMatchObject({
-      ok: true,
-      handoff: { status: "started" },
-      result: { status: "skipped", reason: "managed-service-handoff-started", mode: "git" },
-    });
-  });
+    },
+  ] as const)(
+    "hands $name Git updates to the helper for ownership verification",
+    async ({ supervisor, root, env }) => {
+      detectSupervisor.mockReturnValueOnce(supervisor);
+      mockGitInstallSurface(root);
+      const payload = await withEnvAsync(env, () => captureUpdateRunPayload());
+      expect(startHandoff).toHaveBeenCalledOnce();
+      expectHandoff({ root, supervisor, handoffId: expect.any(String) });
+      expect(scheduleRestart).not.toHaveBeenCalled();
+      expect(transferHandoff).toHaveBeenCalledOnce();
+      expect(payload).toMatchObject({
+        ok: true,
+        handoff: { status: "started" },
+        result: { status: "skipped", reason: "managed-service-handoff-started", mode: "git" },
+      });
+    },
+  );
 
   it("accepts a foreground global install without inventing a native service identity", async () => {
     mockGlobalInstallSurface();

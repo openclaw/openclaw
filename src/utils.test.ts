@@ -57,16 +57,6 @@ describe("sleep", () => {
     await expect(sleep(0, new AbortController().signal)).resolves.toBeUndefined();
     expect(setTimeoutSpy).not.toHaveBeenCalled();
   });
-
-  it("removes abort listeners after normal resolution", async () => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    const removeListenerSpy = vi.spyOn(controller.signal, "removeEventListener");
-    const promise = sleep(5, controller.signal);
-    await vi.advanceTimersByTimeAsync(5);
-    await expect(promise).resolves.toBeUndefined();
-    expect(removeListenerSpy).toHaveBeenCalledWith("abort", expect.any(Function));
-  });
 });
 
 it.each([
@@ -77,13 +67,27 @@ it.each([
 });
 
 it.each([
-  { env: {}, expected: path.resolve("config-dir-home", ".openclaw") },
-  {
-    env: { HOME: "/tmp/openclaw-home", OPENCLAW_STATE_DIR: "~/state" },
-    expected: path.resolve("/tmp/openclaw-home", "state"),
-  },
-])("resolveConfigDir selects and expands its root: $env", ({ env, expected }) => {
-  expect(resolveConfigDir(env, () => path.resolve("config-dir-home"))).toBe(expected);
+  [undefined, ".openclaw"],
+  [" work ", ".openclaw-work"],
+  ["dev", ".openclaw-dev"],
+  ["Default", ".openclaw"],
+  ["bad profile", ".openclaw"],
+] as const)("resolveConfigDir selects profile %s", (profile, directory) => {
+  const home = path.resolve("config-dir-home");
+  expect(resolveConfigDir({ OPENCLAW_PROFILE: profile }, () => home)).toBe(
+    path.join(home, directory),
+  );
+});
+
+it.each([undefined, "~/state"])("resolveConfigDir expands config/state overrides: %s", (state) => {
+  expect(
+    resolveConfigDir({
+      HOME: "/tmp/openclaw-home",
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: state,
+      OPENCLAW_CONFIG_PATH: "~/custom/openclaw.json",
+    }),
+  ).toBe(path.resolve("/tmp/openclaw-home", state ? "state" : "custom"));
 });
 
 it("re-pins the exported configuration root after startup environment selection", () => {
@@ -104,20 +108,6 @@ it("shortenHomePath uses the effective home for OPENCLAW_HOME=undefined", () => 
     );
   });
 });
-
-it.skipIf(process.platform === "win32")("shortenHomePath: POSIX boundaries", () => {
-  withEnv({ OPENCLAW_HOME: "/srv/OpenClaw-Home", HOME: "/home/other" }, () => {
-    expect(shortenHomePath("/srv/openclaw-home/workspace")).toBe("/srv/openclaw-home/workspace");
-    expect(shortenHomePath("/srv/OpenClaw-Home\\workspace")).toBe("/srv/OpenClaw-Home\\workspace");
-    expect(shortenHomePath("/srv/OpenClaw-Home/work\\space")).toBe("$OPENCLAW_HOME/work\\space");
-  });
-});
-
-it.skipIf(process.platform !== "win32")("shortenHomePath: relative Windows paths", () => {
-  withEnv({ OPENCLAW_HOME: process.cwd() }, () => {
-    expect(shortenHomePath(`relative${path.sep}workspace`)).toBe(`relative${path.sep}workspace`);
-  });
-});
 it("shortenHomeInString uses the explicit OPENCLAW_HOME prefix", () => {
   withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
     expect(
@@ -126,16 +116,26 @@ it("shortenHomeInString uses the explicit OPENCLAW_HOME prefix", () => {
   });
 });
 
-it.skipIf(process.platform === "win32")(
-  "shortenHomeInString keeps POSIX home matching case-sensitive",
-  () => {
-    withEnv({ OPENCLAW_HOME: "/srv/OpenClaw-Home", HOME: "/home/other" }, () => {
-      expect(shortenHomeInString("config: /srv/openclaw-home/openclaw.json")).toBe(
-        "config: /srv/openclaw-home/openclaw.json",
-      );
-    });
-  },
-);
+it.skipIf(process.platform === "win32").each([
+  [shortenHomePath, "/srv/openclaw-home/workspace", "/srv/openclaw-home/workspace"],
+  [shortenHomePath, "/srv/OpenClaw-Home\\workspace", "/srv/OpenClaw-Home\\workspace"],
+  [shortenHomePath, "/srv/OpenClaw-Home/work\\space", "$OPENCLAW_HOME/work\\space"],
+  [
+    shortenHomeInString,
+    "config: /srv/openclaw-home/openclaw.json",
+    "config: /srv/openclaw-home/openclaw.json",
+  ],
+] as const)("%s respects POSIX boundaries: %s", (shorten, input, expected) => {
+  withEnv({ OPENCLAW_HOME: "/srv/OpenClaw-Home", HOME: "/home/other" }, () => {
+    expect(shorten(input)).toBe(expected);
+  });
+});
+
+it.skipIf(process.platform !== "win32")("shortenHomePath: relative Windows paths", () => {
+  withEnv({ OPENCLAW_HOME: process.cwd() }, () => {
+    expect(shortenHomePath(`relative${path.sep}workspace`)).toBe(`relative${path.sep}workspace`);
+  });
+});
 
 it.skipIf(process.platform === "win32")("shortenHomeInString: component boundaries", () => {
   withEnv({ OPENCLAW_HOME: undefined, HOME: "/home/al" }, () => {

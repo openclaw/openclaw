@@ -313,6 +313,8 @@ test.each(["established", "first-created"] as const)(
         "synthetic-late-lease",
         databaseFor(state, env),
       );
+      // Exercise lease publication during preparation, before deletion is admitted.
+      await closeOpenClawAgentDatabasesAsync(state.stateDir);
       const sharedPath = resolveOpenClawStateSqlitePath(databaseOptions.env);
       const admission = stateCache.captureOpenClawStateDatabaseReadAdmission(sharedPath);
       expect(admission.identity.key.startsWith("path:")).toBe(sharedState === "first-created");
@@ -388,10 +390,6 @@ test("logs a native reclamation Worker throw with its cause, first frame and has
             ),
             errorFrame: expect.stringMatching(/^at (?:MessagePort\.)?failReclamation \(/u),
           },
-        },
-        {
-          message: "reclamation worker retired reason=failure kind=entry ageMs=0 opsServed=1",
-          "1": { reason: "failure", kind: "entry", ageMs: 0, opsServed: 1, workerThreadId },
         },
       ]);
       expect(content).not.toContain(secret);

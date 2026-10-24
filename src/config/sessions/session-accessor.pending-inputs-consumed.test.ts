@@ -368,6 +368,35 @@ const transcriptRows = () =>
   rows("SELECT seq, event_json, created_at FROM transcript_events ORDER BY seq");
 const snapshot = () => ({ completions: completionRows(), transcript: transcriptRows() });
 
+it("retains collected source correlation when private completion commits", async () => {
+  const source = await stagePrivate();
+  const aggregate = collect([source], message("private-aggregate"));
+  await expect(promote(aggregate)).resolves.toMatchObject({
+    appended: true,
+    messageId: aggregate.inputId,
+  });
+  const consumed = [
+    {
+      runId: "announce:private-child",
+      state: "consumed",
+      consumedByEventId: aggregate.inputId,
+    },
+  ];
+  const readReceipts = () =>
+    listSessionPendingInputReceipts(scope(), {
+      runIds: ["announce:private-child"],
+    });
+  expect(await readReceipts(), "collected source after transcript promotion").toEqual(consumed);
+  const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
+  await expect(source.completeAsync!(outcome)).resolves.toEqual(outcome);
+  expect(await readReceipts(), "collected source after private completion").toEqual(consumed);
+  await restart();
+  const replay = await stagePrivate();
+  expect(replay.completion).toEqual(outcome);
+  expect(() => replay.run(() => "duplicate private work")).toThrow("already completed");
+  expect(await readReceipts(), "collected source after database reopen").toEqual(consumed);
+});
+
 it.each(["pending", "completed", "transcript", "prepared transcript", "public pending"] as const)(
   "matches a shipped settle source by its whole request hash (%s)",
   async (state) => {

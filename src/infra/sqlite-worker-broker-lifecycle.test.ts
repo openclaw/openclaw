@@ -19,7 +19,10 @@ import { readSqliteWorkerRequestCustody } from "./sqlite-worker-request-custody.
 
 const createCpuTrackedWorker = vi.hoisted(() => vi.fn());
 // mock-isolation: Synthetic carriers exercise admission and retirement without native threads.
-vi.mock("./worker-cpu.js", () => ({ createCpuTrackedWorker }));
+vi.mock("./worker-cpu.js", () => ({
+  createCpuTrackedWorker,
+  receiveWorkerMemoryPort: () => false,
+}));
 // mock-isolation: Use synthetic workers without selecting a native SQLite library.
 vi.mock("./bun-sqlite-library.js", () => ({ ensureSqliteLibrarySelected() {} }));
 
@@ -61,6 +64,24 @@ function runtimeFixture(
   const createSlot = (opening: Parameters<typeof lifecycle.createSlot>[0] = options) =>
     lifecycle.createSlot(opening, false, replyOwner);
   return { lifecycle, slots, workers, options, replyOwner, createSlot };
+}
+
+function activeJob(slot: Slot, id = 1) {
+  const completion = createDeferredCore<unknown>();
+  const custody = slot.custody.createRequest();
+  custody.activate();
+  custody.accept();
+  const job: Job = {
+    custody,
+    observation: { started() {}, completed() {} },
+    request: { type: "execute", id, actor: 1, input: new Uint8Array() },
+    bytes: 0,
+    result: completion.promise,
+    resolve: completion.resolve,
+    reject: completion.reject,
+    detach() {},
+  };
+  return { job, completion };
 }
 
 it("cancels slot waiters while retaining the worker until exit", async ({ signal }) => {
@@ -106,37 +127,13 @@ it("joins the first completing carrier's FIFO without canceling accepted work", 
     slot.actors.add(
       Object.defineProperty(createSqliteWorkerClientActor(), "slot", { value: slot }),
     );
-    const completion = createDeferredCore<unknown>();
-    const custody = slot.custody.createRequest();
-    custody.activate();
-    custody.accept();
-    const job: Job = {
-      custody,
-      observation: { started() {}, completed() {} },
-      request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
-      bytes: 0,
-      result: completion.promise,
-      resolve: completion.resolve,
-      reject: completion.reject,
-      detach() {},
-    };
+    const { job, completion } = activeJob(slot);
     slot.current = job;
     return { slot, job, completion };
   });
   const slow = busy[0]!;
   const fast = busy[1]!;
-  const nextCompletion = createDeferredCore<unknown>();
-  const nextCustody = fast.slot.custody.createRequest();
-  nextCustody.activate();
-  nextCustody.accept();
-  const nextJob: Job = {
-    ...fast.job,
-    custody: nextCustody,
-    request: { ...fast.job.request, id: 2 },
-    result: nextCompletion.promise,
-    resolve: nextCompletion.resolve,
-    reject: nextCompletion.reject,
-  };
+  const { job: nextJob, completion: nextCompletion } = activeJob(fast.slot, 2);
   const limits = { maxWorkers: 2, maxStores: 2 };
   const opening = lifecycle.acquireSlot(options, limits, replyOwner);
   const cancel = new AbortController();

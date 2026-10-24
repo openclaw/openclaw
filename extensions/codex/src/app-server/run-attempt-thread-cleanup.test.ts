@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
-import { turnCompleted } from "./protocol.test-helpers.js";
+import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
   createNativeRunParams as createParams,
@@ -250,19 +250,14 @@ describe("Codex app-server main thread cleanup", () => {
     const firstTurnStart = await waitForHarnessRequest(physical, "turn/start");
     physical.send({ id: firstTurnStart.id, result: turnStartResult("turn-1") });
 
-    physical.send({
-      method: "item/started",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          id: "cmd-silent",
-          type: "commandExecution",
-          command: "sleep 1",
-          status: "inProgress",
-        },
-      },
-    });
+    physical.send(
+      itemNotification("item/started", {
+        id: "cmd-silent",
+        type: "commandExecution",
+        command: "sleep 1",
+        status: "inProgress",
+      }),
+    );
 
     const secondRequestStart = physical.writes.length;
     const secondRun = runCodexAppServerAttempt(secondParams, {
@@ -337,21 +332,16 @@ describe("Codex app-server main thread cleanup", () => {
     });
     expect(firstSettled).toBe(false);
 
-    physical.send({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          id: "cmd-silent",
-          type: "commandExecution",
-          command: "sleep 1",
-          status: "completed",
-          aggregatedOutput: "silent command finished\n",
-          exitCode: 0,
-        },
-      },
-    });
+    physical.send(
+      itemNotification("item/completed", {
+        id: "cmd-silent",
+        type: "commandExecution",
+        command: "sleep 1",
+        status: "completed",
+        aggregatedOutput: "silent command finished\n",
+        exitCode: 0,
+      }),
+    );
     physical.send(turnCompleted({ id: "turn-1", status: "completed" }));
 
     const firstResult = await firstRun;
@@ -391,9 +381,7 @@ describe("Codex app-server main thread cleanup", () => {
       physical.send({ id: thread.id, result: threadStartResult() });
       const turn = await waitForHarnessRequest(physical, "turn/start");
       physical.send({ id: turn.id, result: turnStartResult() });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await yieldEventLoop();
 
       vi.useFakeTimers();
       for (const item of [
@@ -436,14 +424,7 @@ describe("Codex app-server main thread cleanup", () => {
       expect(physical.writes.map((write) => JSON.parse(write).method)).not.toContain(
         "turn/interrupt",
       );
-      physical.send({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          turn: { id: "turn-1", status: "completed", items: [] },
-        },
-      });
+      physical.send(turnCompleted({ id: "turn-1", status: "completed" }));
       vi.useRealTimers();
       expect(readAttemptTerminal(await run)).toMatchObject({
         aborted: false,
@@ -484,14 +465,7 @@ describe("Codex app-server main thread cleanup", () => {
     harness.send({ id: start.id, result: threadStartResult() });
     const turn = await waitForHarnessRequest(harness, "turn/start");
     harness.send({ id: turn.id, result: turnStartResult() });
-    harness.send({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: { id: "turn-1", status: "completed", items: [] },
-      },
-    });
+    harness.send(turnCompleted({ id: "turn-1", status: "completed" }));
 
     const result = await run;
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
@@ -785,9 +759,7 @@ describe("Codex app-server main thread cleanup", () => {
           turn: { id: "turn-unrelated", status: "interrupted", items: [] },
         },
       });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await yieldEventLoop();
       expect(settled).toBe(false);
 
       harness.send({
@@ -805,9 +777,7 @@ describe("Codex app-server main thread cleanup", () => {
         "thread/backgroundTerminals/terminate",
       );
       expect(terminate.params).toEqual({ threadId: "thread-1", processId: "42" });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await yieldEventLoop();
       expect(settled).toBe(false);
       expect(harness.writes.map((entry) => JSON.parse(entry).method)).not.toContain(
         "thread/unsubscribe",

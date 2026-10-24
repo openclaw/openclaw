@@ -20,9 +20,9 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { Icon } from "../solid/icon.tsx";
@@ -58,9 +58,8 @@ export type BoardDocumentProps = {
 function createBoardDocument(
   props: BoardDocumentProps,
   readPresentationScope: () => object | undefined,
+  notify: () => void,
 ) {
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
   let documentState: DashboardDocumentState = "loading";
   let ownedSnapshot: BoardSnapshot | undefined;
   let activeTabId = "";
@@ -193,6 +192,7 @@ function createBoardDocument(
       ownedProvider = provider;
       providerLease = lease;
       ownedBinding = { ...binding, session };
+      // Reconcile tab intent from provider receipts and preserve ordered focus commands.
       providerSubscriptions.push(
         provider.snapshot$.subscribe(() => reconcileProvider(provider)),
         provider.loadError$.subscribe(() => reconcileProvider(provider)),
@@ -216,24 +216,16 @@ function createBoardDocument(
     }
   }
 
-  function selectAvailableTab(): void {
-    const snapshot = ownedSnapshot;
-    if (!snapshot) {
-      return;
-    }
-    if (snapshot.tabs.some((tab) => tab.tabId === activeTabId)) {
-      return;
-    }
-    activeTabId = snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
-  }
-
   function reconcileProvider(provider: BoardProvider): void {
     if (ownedProvider !== provider) {
       return;
     }
     if (provider.hasLoadedSnapshot) {
-      ownedSnapshot = provider.snapshot$.value;
-      selectAvailableTab();
+      const snapshot = provider.snapshot$.value;
+      ownedSnapshot = snapshot;
+      if (!snapshot.tabs.some((tab) => tab.tabId === activeTabId)) {
+        activeTabId = snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
+      }
       documentState = "ready";
       notify();
       return;
@@ -313,12 +305,6 @@ function createBoardDocument(
       error: errorText,
       board: presentation(passive),
     }),
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
   };
 }
 
@@ -331,8 +317,10 @@ function BoardDocumentContent(
   const context = useOptionalApplication();
   const readPresentationScope = () =>
     context ? gatewayPresentationScope(context.gateway) : undefined;
-  const document = createBoardDocument(host, readPresentationScope);
-  const projection = projectOwner(document, (current) => current);
+  const { owner: document, view: projection } = projectCallbackOwner(
+    (notify) => createBoardDocument(host, readPresentationScope, notify),
+    (current) => current,
+  );
   onSettled(() => {
     let active = true;
     let pending = false;
@@ -349,6 +337,7 @@ function BoardDocumentContent(
       });
     };
     inputUpdates.set(host, scheduleUpdate);
+    // Gateway receipts rebind the provider lease and its admitted capabilities after settlement.
     const unsubscribeGateway = context?.gateway.subscribe(scheduleUpdate);
     document.update();
     return () => {

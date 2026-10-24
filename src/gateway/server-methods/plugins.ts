@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
@@ -21,12 +22,11 @@ import {
 import { fetchClawHubPluginSkill } from "../../infra/clawhub-plugin-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  encodePluginDiscoveryId,
-  encodeLocalPluginDiscoveryId,
   findLocalPluginByIdentity,
   joinClawHubPluginCatalog,
   joinClawHubPluginDetail,
   joinLocalPluginDetail,
+  pluginCatalogId,
   resolvePluginDiscoveryIdentity,
 } from "../../plugins/catalog-discovery.js";
 import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
@@ -34,6 +34,7 @@ import { searchInstallablePluginPackages } from "../../plugins/catalog-search.js
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
 import { inspectManagedPlugin, listManagedPlugins } from "../../plugins/management-service.js";
 import { readManagedPluginSkill } from "../../plugins/management-skill-read.js";
+import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { buildPluginSdkDeprecationNotices } from "../../plugins/sdk-deprecation-notices.js";
@@ -130,9 +131,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
             const error = failure ? `${failure.serviceId}: ${failure.error}` : record?.error;
             return Object.assign({}, plugin, {
               compatibilityNotices: buildPluginSdkDeprecationNotices(plugin.id),
-              catalogId: plugin.clawhubPackage
-                ? encodePluginDiscoveryId(plugin.clawhubPackage)
-                : encodeLocalPluginDiscoveryId(plugin.id),
+              catalogId: pluginCatalogId(plugin),
               runtime: {
                 state:
                   record?.status === "loaded"
@@ -142,7 +141,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
                     : record?.status === "disabled"
                       ? "disabled"
                       : "unloaded",
-                ...(error ? { error: error.slice(0, 2000) } : {}),
+                ...(error ? { error: truncateUtf16Safe(error, 2000) } : {}),
               },
             });
           }),
@@ -155,7 +154,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
   "plugins.inspect": defineValidatedGatewayHandler(
     "plugins.inspect",
     validatePluginsInspectParams,
-    async ({ params, respond, context }) => {
+    async ({ params, respond, context, client, signal, hasCurrentClientAuthority }) => {
       let target: { pluginId: string } | { clawhub: { packageName: string; version?: string } };
       if ("pluginId" in params) {
         target = { pluginId: params.pluginId };
@@ -187,10 +186,26 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         ...target,
       });
       const { inspectDecisionProviders } = await import("../../decisions/runtime.js");
+      // Cross-session acquisition IDs are administrator diagnostics, not catalog metadata.
+      // Recheck the connection after inventory/module I/O and immediately before disclosure.
+      const canInspectRetentions =
+        !remote &&
+        client &&
+        !client.invalidated &&
+        !client.connectionSignal?.aborted &&
+        !signal?.aborted &&
+        client.connect.scopes?.includes("operator.admin") &&
+        (!hasCurrentClientAuthority || hasCurrentClientAuthority());
+      const registry = canInspectRetentions ? getPluginRegistryForContext() : undefined;
+      const record = registry?.plugins.find((entry) => entry.id === inspected.plugin.id);
+      const instance = record && getPluginInstance(record);
       respond(
         true,
         {
           ...inspected,
+          ...(canInspectRetentions
+            ? { runtimeRetention: instance?.retentionSnapshot() ?? null }
+            : {}),
           decisions: remote
             ? []
             : inspectDecisionProviders(context.getRuntimeConfig()).filter(

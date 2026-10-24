@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import net from "node:net";
@@ -9,6 +10,8 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 
+type NativeConnection = { port: number; clientPort: number; pid: number; stdout: string };
+
 export async function listenServer(
   skip: TestContext["skip"],
   server: net.Server,
@@ -18,11 +21,7 @@ export async function listenServer(
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
-      if (host) {
-        server.listen(port, host, resolve);
-        return;
-      }
-      server.listen(port, resolve);
+      server.listen({ port, host }, resolve);
     });
   } catch (err) {
     const code = extractErrorCode(err);
@@ -33,20 +32,13 @@ export async function listenServer(
   }
 
   const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected tcp address");
-  }
+  assert(address && typeof address !== "string", "expected tcp address");
   return address;
 }
 
 export async function withNativeSsConnection(
   { skip, signal }: Pick<TestContext, "skip" | "signal">,
-  inspect: (fixture: {
-    port: number;
-    clientPort: number;
-    pid: number;
-    stdout: string;
-  }) => Promise<void>,
+  inspect: (fixture: NativeConnection) => Promise<void>,
 ): Promise<void> {
   const accepted = createDeferred<net.Socket>();
   const sockets = new Set<net.Socket>();
@@ -66,45 +58,37 @@ export async function withNativeSsConnection(
         "--eval",
         `
         import net from "node:net";
-        const port = Number(process.argv[1]);
         process.title = "node worker:1";
-        const socket = net.createConnection({ host: "127.0.0.1", port });
+        const socket = net.createConnection({ host: "127.0.0.1", port: Number(process.argv[1]) });
         socket.once("connect", () => process.send("ready"));
-        socket.once("error", (error) => {
-          process.send(error.code ?? "UNKNOWN", () => process.exit(1));
-        });
+        socket.once("error", (error) => process.send(error.code ?? "UNKNOWN", () => process.exit(1)));
         process.once("disconnect", () => socket.destroy());
       `,
         String(port),
       ],
       { stdio: ["ignore", "ignore", "inherit", "ipc"] },
     );
-    closed = once(child, "close");
-    const [message]: unknown[] = await withinTest(
-      awaitGateBeforeSettlement(
-        once(child, "message"),
-        closed,
-        "TCP fixture did not report readiness",
-      ),
-      signal,
+    const childClosed = (closed = once(child, "close"));
+    const wait = <T>(gate: PromiseLike<T>, message: string) =>
+      withinTest(awaitGateBeforeSettlement(gate, childClosed, message), signal);
+    const [message]: unknown[] = await wait(
+      once(child, "message"),
+      "TCP fixture did not report readiness",
     );
     if (message !== "ready") {
       throw Object.assign(new Error(`TCP fixture connection failed: ${String(message)}`), {
         code: message,
       });
     }
-    const socket = await withinTest(
-      awaitGateBeforeSettlement(accepted.promise, closed, "TCP fixture was not accepted"),
-      signal,
-    );
+    const socket = await wait(accepted.promise, "TCP fixture was not accepted");
     const clientPort = socket.remotePort;
     const pid = child.pid;
-    if (clientPort === undefined || pid === undefined) {
-      throw new Error("Native TCP fixture has no client port or child PID");
-    }
+    assert(
+      clientPort !== undefined && pid !== undefined,
+      "Native TCP fixture needs a port and PID",
+    );
     expect(socket.remoteAddress).toBe("127.0.0.1");
-    expect(child.exitCode).toBeNull();
-    expect(child.signalCode).toBeNull();
+    expect(child).toMatchObject({ exitCode: null, signalCode: null });
 
     const captured = spawnSync(
       "ss",
@@ -120,18 +104,16 @@ export async function withNativeSsConnection(
     if (captured.status !== 0) {
       throw new Error(`Native ss exited ${captured.status}: ${captured.stderr.trim()}`);
     }
-    const clientRow = captured.stdout
-      .split(/\r?\n/)
-      .find((line) =>
-        new RegExp(`\\b127\\.0\\.0\\.1:${clientPort}\\s+127\\.0\\.0\\.1:${port}(?:\\s|$)`).test(
-          line,
-        ),
-      );
-    expect(clientRow, "ss must capture the owned established client").toBeDefined();
+    const clientEndpoint = new RegExp(
+      `\\b127\\.0\\.0\\.1:${clientPort}\\s+127\\.0\\.0\\.1:${port}(?:\\s|$)`,
+    );
+    const clientRow = captured.stdout.split(/\r?\n/).find((line) => clientEndpoint.test(line));
     if (clientRow && !clientRow.includes("users:")) {
       skip("Native ss cannot expose process metadata for the owned client");
     }
-    expect(clientRow).toMatch(new RegExp(`users:\\(\\("node worker:1",pid=${pid},fd=\\d+\\)`));
+    expect(clientRow, "ss must capture the owned established client").toMatch(
+      new RegExp(`users:\\(\\("node worker:1",pid=${pid},fd=\\d+\\)`),
+    );
 
     await withinTest(inspect({ port, clientPort, pid, stdout: captured.stdout }), signal);
   } catch (error) {

@@ -1,12 +1,9 @@
-// Slack tests cover provider ingress startup cleanup behavior.
-import {
-  createServer,
-  request,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
+import { request, type IncomingMessage, type ServerResponse } from "node:http";
+import { text } from "node:stream/consumers";
+import { setImmediate } from "node:timers/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSlackHttpTestDispatcher,
@@ -50,29 +47,15 @@ describe("Slack ingress startup cleanup", () => {
     state.httpRequestListenerMock.mockImplementation((reqValue, resValue) => {
       const req = reqValue as IncomingMessage;
       const res = resValue as ServerResponse;
-      void (async () => {
-        for await (const chunk of req) {
-          // Bolt buffers the full body before signature verification.
-          void chunk;
-        }
+      // Bolt buffers the full body before signature verification.
+      void text(req).then(() => {
         if (!res.headersSent) {
           res.statusCode = 401;
           res.end();
         }
-      })();
+      });
     });
-    state.config = {
-      ...state.config,
-      channels: {
-        slack: {
-          mode: "http",
-          signingSecret: "test-signing-secret",
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          groupPolicy: "open",
-        },
-      },
-    };
+    state.config.channels = { slack: { mode: "http", signingSecret: "test-signing-secret" } };
     const controller = new AbortController();
     const run = monitorSlackProvider({
       scheduler: createTestPluginServiceScheduler(),
@@ -80,7 +63,6 @@ describe("Slack ingress startup cleanup", () => {
       abortSignal: controller.signal,
       config: state.config,
     });
-    let server: Server | undefined;
     let clientRequest: ReturnType<typeof request> | undefined;
 
     try {
@@ -92,65 +74,37 @@ describe("Slack ingress startup cleanup", () => {
         pluginId: "slack",
         source: "slack-webhook",
       });
-      let acceptRequest: (() => void) | undefined;
-      const accepted = new Promise<void>((resolve) => {
-        acceptRequest = resolve;
-      });
-      server = createServer((req, res) => {
-        acceptRequest?.();
-        void handleSlackHttpRequest(req, res);
-      });
-      await new Promise<void>((resolve) => {
-        server!.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("test server did not expose a TCP port");
-      }
-      clientRequest = request({
-        host: "127.0.0.1",
-        port: address.port,
-        path: "/slack/events",
-        method: "POST",
-        headers: { "transfer-encoding": "chunked" },
-      });
-      clientRequest.on("error", () => {});
-      const response = new Promise<{ statusCode: number | undefined; body: string }>(
-        (resolve, reject) => {
-          clientRequest!.once("response", (res) => {
-            let body = "";
-            res.setEncoding("utf8");
-            res.on("data", (chunk: string) => {
-              body += chunk;
-            });
-            res.once("end", () => resolve({ statusCode: res.statusCode, body }));
+      const accepted = createDeferred<void>();
+      await withServer(
+        (req, res) => {
+          accepted.resolve();
+          void handleSlackHttpRequest(req, res);
+        },
+        async (baseUrl) => {
+          clientRequest = request(`${baseUrl}/slack/events`, {
+            method: "POST",
+            headers: { "transfer-encoding": "chunked" },
           });
-          clientRequest!.once("error", reject);
+          clientRequest.on("error", () => {});
+          const response = new Promise<IncomingMessage>((resolve, reject) => {
+            clientRequest!.once("response", resolve).once("error", reject);
+          });
+          clientRequest.flushHeaders();
+
+          await accepted.promise;
+          await setImmediate();
+          clientRequest.write(Buffer.alloc(768 * 1024, 0x61));
+          clientRequest.end(Buffer.alloc(768 * 1024, 0x62));
+
+          const received = await response;
+          expect({ statusCode: received.statusCode, body: await text(received) }).toEqual({
+            statusCode: 413,
+            body: "Payload too large",
+          });
         },
       );
-      clientRequest.flushHeaders();
-
-      await accepted;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      clientRequest.write(Buffer.alloc(768 * 1024, 0x61));
-      clientRequest.end(Buffer.alloc(768 * 1024, 0x62));
-
-      await expect(response).resolves.toEqual({
-        statusCode: 413,
-        body: "Payload too large",
-      });
     } finally {
       clientRequest?.destroy();
-      server?.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        if (server) {
-          server.close(() => resolve());
-        } else {
-          resolve();
-        }
-      });
       controller.abort();
       await run;
       expect(registry.httpRoutes).toHaveLength(0);

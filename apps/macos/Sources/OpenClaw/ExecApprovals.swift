@@ -21,28 +21,10 @@ extension ExecApprovalsSecurity {
     }
 }
 
-extension ExecApprovalsAsk {
-    static func stricter(_ lhs: ExecAsk, _ rhs: ExecAsk) -> ExecAsk {
-        lhs.strictnessRank >= rhs.strictnessRank ? lhs : rhs
-    }
-
-    private var strictnessRank: Int {
-        switch self {
-        case .off: 0
-        case .onMiss: 1
-        case .always: 2
-        }
-    }
-}
-
 enum ExecApprovalDecision: String, Codable, Equatable {
     case allowOnce = "allow-once"
     case allowAlways = "allow-always"
     case deny
-}
-
-enum ExecAllowlistPatternValidationReason: String, Codable, Equatable, Sendable {
-    case empty
 }
 
 struct ExecAllowlistUse: Sendable {
@@ -60,14 +42,24 @@ struct ExecAllowlistEntryMatchKey: Hashable, Sendable {
     }
 }
 
-enum ExecApprovalsMutationError: Error, Equatable, Sendable {
-    case invalidPattern(ExecAllowlistPatternValidationReason)
-    case unavailable
+enum ExecApprovalsMutationError: Error, LocalizedError, Equatable, Sendable {
+    case unavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .unavailable(diagnostic): diagnostic
+        }
+    }
 }
 
-enum ExecApprovalsReadError: Error, Equatable, Sendable {
-    case migrationRequired(ExecApprovalsLegacyMigrationRequiredError)
-    case unavailable
+enum ExecApprovalsReadError: Error, LocalizedError, Equatable, Sendable {
+    case unavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .unavailable(diagnostic): diagnostic
+        }
+    }
 }
 
 struct ExecApprovalsResolved: Sendable {
@@ -76,6 +68,7 @@ struct ExecApprovalsResolved: Sendable {
     let agent: ExecApprovalsResolvedDefaults
     let allowlist: [ExecAllowlistEntry]
     var file: ExecApprovalsFile
+    var unavailableReason: String?
 }
 
 struct ExecApprovalsResolvedDefaults: Codable, Sendable {

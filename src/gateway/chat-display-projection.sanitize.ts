@@ -15,6 +15,7 @@ import {
   readTerminalSourceReplyDeliveryMirror,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
+import { findNativeToolMarkerTextBlocks } from "../shared/text/native-tool-marker.js";
 import {
   isToolHistoryBlockType,
   isToolResultHistoryBlockType,
@@ -138,10 +139,7 @@ function projectChatHistoryMediaBlock(entry: Record<string, unknown>, fact = fal
 }
 
 function projectChatHistoryAttachmentBlock(entry: Record<string, unknown>): boolean {
-  if (entry.type !== "attachment") {
-    return false;
-  }
-  const attachment = readRecord(entry.attachment);
+  const attachment = entry.type === "attachment" ? readRecord(entry.attachment) : undefined;
   if (!attachment) {
     return false;
   }
@@ -149,11 +147,9 @@ function projectChatHistoryAttachmentBlock(entry: Record<string, unknown>): bool
   for (const field of MEDIA_PRIVATE_FIELDS) {
     delete projected[field];
   }
-  const url = projectChatHistoryMediaReference(projected.url);
-  if (!url) {
+  projected.url = projectChatHistoryMediaReference(projected.url);
+  if (!projected.url) {
     delete projected.url;
-  } else {
-    projected.url = url;
   }
   entry.attachment = projected;
   return true;
@@ -177,6 +173,10 @@ export function sanitizeChatHistoryContentBlock(
     return { block, changed: false, truncated: false };
   }
   const entry = { ...(block as Record<string, unknown>) };
+  // Native inline blocks are host projections of admitted tool details, never transcript-authored UI.
+  if (entry.type === "plugin_view") {
+    return { block: { type: "text", text: "" }, changed: true, truncated: false };
+  }
   let changed = stripPrivateToolCallContextForDisplay(entry);
   // Display-cap truncation is a fact consumers need (to fetch the full row), so
   // it is tracked apart from `changed`, which also covers metadata stripping.
@@ -189,7 +189,7 @@ export function sanitizeChatHistoryContentBlock(
       ? opts?.toolResultMaxChars
       : undefined;
   if (isToolResultHistoryBlockType(entry.type) && "details" in entry) {
-    const projectedDetails = projectToolResultDetails(entry.details, maxChars);
+    const projectedDetails = projectToolResultDetails(entry.details, maxChars, entry);
     if (projectedDetails.details) {
       entry.details = projectedDetails.details;
     } else {
@@ -459,9 +459,17 @@ export function sanitizeChatHistoryMessage(
   const prepared = prepareAssistantHistoryMessage(message);
   const entry = { ...(prepared as Record<string, unknown>) };
   let changed = prepared !== message;
+  const nativeToolMarkerBlocks = findNativeToolMarkerTextBlocks(message);
+  if (nativeToolMarkerBlocks.size && Array.isArray(entry.content)) {
+    entry.content = entry.content.map((block, index) =>
+      nativeToolMarkerBlocks.has(index) ? { ...readRecord(block), text: "" } : block,
+    );
+    changed = true;
+  }
   let truncated = false;
-  if ("providerReplay" in entry) {
+  if ("providerReplay" in entry || "openclawResponsesInputReplay" in entry) {
     delete entry.providerReplay;
+    delete entry.openclawResponsesInputReplay;
     changed = true;
   }
   const openClawMeta = readRecord(entry["__openclaw"]);
@@ -517,7 +525,7 @@ export function sanitizeChatHistoryMessage(
     const conflictDetails = projectWorkspaceConflictDetails(entry);
     const toolResultDetails =
       !conflictDetails && messageHasToolResultShape(entry)
-        ? projectToolResultDetails(entry.details, maxChars)
+        ? projectToolResultDetails(entry.details, maxChars, entry)
         : undefined;
     // Only the terminal owner's presentation category crosses this report boundary.
     // Correlation is projected separately; raw diagnostics and report fields stay private.
@@ -671,9 +679,7 @@ function hasAssistantMixedToolVisibleText(message: unknown): boolean {
     if (!entry) {
       continue;
     }
-    if (isToolHistoryBlockType(entry.type)) {
-      hasToolHistoryBlock = true;
-    }
+    hasToolHistoryBlock ||= isToolHistoryBlockType(entry.type);
     if (
       isAssistantTextContentType(entry.type) &&
       typeof entry.text === "string" &&
@@ -710,9 +716,6 @@ export function sanitizeChatHistoryMessages(
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   opts?: { includeCommentaryFallbacks?: boolean; toolResultMaxChars?: number },
 ): unknown[] {
-  if (messages.length === 0) {
-    return messages;
-  }
   let changed = false;
   const next: unknown[] = [];
   for (const original of messages) {

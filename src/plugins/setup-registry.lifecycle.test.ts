@@ -6,7 +6,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
@@ -35,8 +34,8 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 const tempDirs: string[] = [];
 
 function pausedOperation(event: string, cleanup: string, env: NodeJS.ProcessEnv) {
-  const started = createDeferredCore();
-  const release = createDeferredCore();
+  const started = createDeferred();
+  const release = createDeferred();
   const before = process.listenerCount(event);
   let entered = false;
   let cache: ReturnType<typeof getScopedPluginCache>;
@@ -389,7 +388,7 @@ describe("plugin setup registry artifact lifecycle", () => {
     { artifactRootName: "dist", computed: true },
     { artifactRootName: "dist-runtime", computed: false },
   ])(
-    "reloads bundled setup artifacts from $artifactRootName (computed: $computed)",
+    "retains bundled setup artifacts from $artifactRootName after metadata refresh (computed: $computed)",
     ({ artifactRootName, computed }) => {
       const packageRoot = fs.realpathSync(
         makeTrackedTempDir("openclaw-bundled-setup-lifecycle", tempDirs),
@@ -438,7 +437,7 @@ describe("plugin setup registry artifact lifecycle", () => {
       clearPluginMetadataLifecycleCaches();
 
       expect(resolvePluginSetupRegistry({ manifestRegistry }).providers[0]?.provider.label).toBe(
-        "entry-after:dependency-after",
+        "entry-before:dependency-before",
       );
     },
   );

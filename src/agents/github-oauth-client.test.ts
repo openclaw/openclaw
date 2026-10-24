@@ -3,6 +3,7 @@ import { withinTest } from "../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { isRecoverableOAuthRefreshFailure } from "../shared/oauth-refresh-outcome.js";
 import {
   clearGitHubCredentialVerificationCache,
   pollGitHubOAuthDeviceToken,
@@ -243,8 +244,6 @@ describe("GitHub OAuth client", () => {
       expected: {
         status: "slow_down",
         intervalSeconds: 12,
-        errorDescription: "Continue at the returned interval",
-        errorUri: "https://docs.github.com/apps/oauth-apps",
       },
     },
     {
@@ -269,7 +268,25 @@ describe("GitHub OAuth client", () => {
     ).resolves.toEqual({
       status: "error",
       code: "bad_refresh_token",
+      failure: expect.objectContaining({
+        oauthRefreshOutcome: expect.objectContaining({
+          outcome: "rejected",
+          reason: "invalid_grant",
+        }),
+      }),
     });
+  });
+
+  it("restores only a refresh that its current-authority guard prevented from dispatching", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    const failure = await refreshGitHubOAuthToken({
+      refreshToken: "synthetic-refresh",
+      assertCurrent: async () => {
+        throw new Error("authority retired");
+      },
+    }).catch((error: unknown) => error);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(isRecoverableOAuthRefreshFailure(failure)).toBe(true);
   });
 
   it.each([

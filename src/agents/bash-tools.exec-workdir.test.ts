@@ -49,9 +49,6 @@ async function skillMount() {
   return { root, demo };
 }
 
-it("rejects whitespace-only explicit workdirs", async () => {
-  await expect(local({ workdir: "   " })).resolves.toEqual(unavailable("   "));
-});
 it("canonicalizes local workdirs before approval and execution", async () => {
   const target = path.join(workspaceDir, "target"),
     link = path.join(workspaceDir, "link");
@@ -76,6 +73,8 @@ it("rejects missing configured local cwd without falling back to current cwd", a
 it.each([
   [undefined, undefined, { kind: "node" }],
   ["/node/explicit", "/node/default", { kind: "node", remoteCwd: "/node/explicit" }],
+  ["/node/trailing ", "/node/default", { kind: "node", remoteCwd: "/node/trailing " }],
+  [" /node/leading", undefined, { kind: "node", remoteCwd: " /node/leading" }],
 ] as const)(
   "selects remote cwd for %s / %s without local validation",
   async (workdir, nodeCwd, expected) => {

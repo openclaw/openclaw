@@ -63,10 +63,7 @@ export function createCliEventHandlers(params: {
   };
   let commentaryCounter = 0;
   let assistantVisibleText = "";
-  const toolSummaryById = new Map<
-    string,
-    { name: string; failed: boolean; terminalObserved?: boolean }
-  >();
+  const toolSummaryById = new Map<string, { failed: boolean; terminalObserved?: boolean }>();
   // CLI results report an outcome without repeating the request, so the terminal
   // progress event would otherwise describe the output instead of the command.
   const toolArgsByCallId = new Map<
@@ -112,11 +109,8 @@ export function createCliEventHandlers(params: {
     let current = toolSummaryById.get(event.toolCallId);
     if (current) {
       current.failed ||= failed;
-      if (!current.name && event.name) {
-        current.name = event.name;
-      }
     } else {
-      current = { name: event.name, failed };
+      current = { failed };
       toolSummaryById.set(event.toolCallId, current);
     }
     if (event.name) {

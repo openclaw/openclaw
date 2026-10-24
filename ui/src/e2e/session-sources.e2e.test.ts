@@ -13,25 +13,20 @@ import { expectText, expectCount } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Session source settings" });
 const featureMethods = [...defaultControlUiFeatureMethods, "plugins.list"];
-const sources = ["Claude", "Codex", "OpenCode", "Pi"];
-const plugins = ["anthropic", "codex", "opencode", "acpx"];
+const plugins = ["codex", "acpx"];
 const objectSchema = (properties: Record<string, unknown>) => ({ type: "object", properties });
 const catalogConfigSchema = (key = "sessionCatalog") =>
   objectSchema({
     config: objectSchema({ [key]: objectSchema({ enabled: { type: "boolean", default: true } }) }),
   });
 const entriesSchema = {
-  anthropic: catalogConfigSchema(),
   codex: catalogConfigSchema(),
-  opencode: catalogConfigSchema(),
   acpx: catalogConfigSchema("piSessionCatalog"),
 };
 const config = {
   plugins: {
     entries: {
-      anthropic: { config: { sessionCatalog: { enabled: false } } },
       codex: { config: { sessionCatalog: { enabled: false }, supervision: { enabled: true } } },
-      opencode: { config: { sessionCatalog: { enabled: false } } },
       acpx: { enabled: false, config: { timeoutSeconds: 42 } },
     },
   },
@@ -125,10 +120,8 @@ suite.define(() => {
       await waitForControlUiRoute(page, { pathname: "/settings/about", routeId: "about" });
       const sidebar = page.locator(".settings-sidebar");
       const search = sidebar.getByRole("searchbox", { name: "Search settings" });
-      for (const source of sources) {
-        await search.fill(`${source} sessions`);
-        await sidebar.getByRole("link", { name: /Session sources/ }).waitFor();
-      }
+      await search.fill("Pi sessions");
+      await sidebar.getByRole("link", { name: /Session sources/ }).waitFor();
       await sidebar.getByRole("link", { name: /Session sources/ }).click();
       await gateway.waitForRequest("plugins.list");
       const section = page.locator("#settings-session-sources");
@@ -136,7 +129,7 @@ suite.define(() => {
       expect(await section.getByRole("switch").count()).toBe(0);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
       await gateway.resolveDeferred("plugins.list");
-      await expectCount(section.getByRole("switch"), 4);
+      await expectCount(section.getByRole("switch"), 2);
     });
   });
 
@@ -151,21 +144,12 @@ suite.define(() => {
       const section = page.locator("#settings-session-sources");
       const sourceRow = (source: string) =>
         section.locator(".settings-row", {
-          hasText: `Show ${source === "Claude" ? "Claude Code" : source} sessions`,
+          hasText: `Show ${source} sessions`,
         });
-      await expectSwitches(section, [false, false, false, true]);
+      await expectSwitches(section, [false, true]);
       await expect.poll(() => sourceRow("Codex").getByRole("switch").isDisabled()).toBe(false);
-      expect(await section.locator(".settings-row__title").allTextContents()).toEqual([
-        "Show Claude Code sessions",
-        "Show Codex sessions",
-        "Show OpenCode sessions",
-        "Show Pi sessions",
-      ]);
-
       for (const [source, pluginId, key, enabled] of [
         ["Codex", "codex", "sessionCatalog", true],
-        ["Claude", "anthropic", "sessionCatalog", true],
-        ["OpenCode", "opencode", "sessionCatalog", true],
         ["Pi", "acpx", "piSessionCatalog", false],
         ["Codex", "codex", "sessionCatalog", false],
       ] as const) {
@@ -188,39 +172,29 @@ suite.define(() => {
 
       await page.reload();
       await waitForControlUiSettingsTakeover(page);
-      await expectSwitches(section, [true, false, true, false]);
+      await expectSwitches(section, [false, false]);
     });
   });
 
-  it.each([true, false])(
-    "omits absent plugins with leftover config (OpenCode installed: %s)",
-    async (installed) => {
-      await suite.withPage({}, async ({ page }) => {
-        const { gateway, section } = await openSources(page, {
-          methodResponses: {
-            "plugins.list": {
-              plugins: methodResponses["plugins.list"].plugins.map((plugin) =>
-                Object.assign({}, plugin, { installed: installed && plugin.id === "opencode" }),
-              ),
-            },
+  it("omits absent plugins with leftover config", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const { gateway, section } = await openSources(page, {
+        methodResponses: {
+          "plugins.list": {
+            plugins: methodResponses["plugins.list"].plugins.map((plugin) =>
+              Object.assign({}, plugin, { installed: false }),
+            ),
           },
-        });
-        await gateway.waitForRequest("plugins.list");
-        await expectCount(section.getByRole("switch"), installed ? 1 : 0);
-        if (installed) {
-          expect(await section.locator(".settings-row__title").allTextContents()).toEqual([
-            "Show OpenCode sessions",
-          ]);
-        } else {
-          await expectText(section, "No supported session source plugins are installed");
-          expect(
-            await section.getByRole("link", { name: "Manage plugins" }).getAttribute("href"),
-          ).toBe("/settings/plugins");
-        }
-        expect(await gateway.getRequests("config.set")).toHaveLength(0);
+        },
       });
-    },
-  );
+      await expectCount(section.getByRole("switch"), 0);
+      await expectText(section, "No supported session source plugins are installed");
+      expect(await section.getByRole("link", { name: "Manage plugins" }).getAttribute("href")).toBe(
+        "/settings/plugins",
+      );
+      expect(await gateway.getRequests("config.set")).toHaveLength(0);
+    });
+  });
 
   it.each([false, true])(
     "keeps installed sources disabled (missing schema: %s)",
@@ -232,7 +206,7 @@ suite.define(() => {
             ? { methodResponses: { "config.schema": { schema: objectSchema({}), uiHints: {} } } }
             : { operatorScopes: ["operator.read"] },
         );
-        await expectCount(section.getByRole("switch"), 4);
+        await expectCount(section.getByRole("switch"), 2);
         if (missingSchema) {
           await expectText(section, "Session source settings are unavailable");
         }

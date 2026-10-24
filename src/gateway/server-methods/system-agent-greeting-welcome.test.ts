@@ -1,18 +1,13 @@
+import "./system-agent-transcript.mocks.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
+const { transcriptStoreMocks } = await import("./system-agent-transcript.mocks.test-support.js");
 const inferenceFallbackMocks = vi.hoisted(() => ({
   verifySystemAgentInferenceWithFallback: vi.fn(),
-}));
-const transcriptStoreMocks = vi.hoisted(() => ({
-  appendReset: vi.fn(),
-  appendTurn: vi.fn(),
-  readTranscriptTailAsync: vi
-    .fn<typeof import("../../system-agent/transcript-store.js").readTranscriptTailAsync>()
-    .mockResolvedValue([]),
 }));
 const greetingMocks = vi.hoisted(() => ({
   acknowledgeSystemAgentGreetingDelivery: vi.fn(),
@@ -25,19 +20,6 @@ const onboardingWelcomeMocks = vi.hoisted(() => ({ buildOnboardingWelcome: vi.fn
 vi.mock("../../system-agent/inference-fallback.js", () => ({
   verifySystemAgentInferenceWithFallback:
     inferenceFallbackMocks.verifySystemAgentInferenceWithFallback,
-}));
-// mock-isolation: Keep transcript effects local while checking welcome delivery and acknowledgement ordering.
-vi.mock("../../system-agent/transcript-store.js", () => ({
-  createSystemAgentTranscriptStore: () => ({
-    assertCurrent: () => undefined,
-    appendTurn: transcriptStoreMocks.appendTurn,
-    appendReset: transcriptStoreMocks.appendReset,
-    readTail: (limit: number, afterLastReset = false) =>
-      afterLastReset
-        ? transcriptStoreMocks.readTranscriptTailAsync(limit, { afterLastReset })
-        : transcriptStoreMocks.readTranscriptTailAsync(limit),
-  }),
-  readTranscriptTailAsync: transcriptStoreMocks.readTranscriptTailAsync,
 }));
 // mock-isolation: Use deterministic caretaker facts and avoid provider inference in welcome-policy tests.
 vi.mock("../../system-agent/greeting.js", () => ({
@@ -136,10 +118,7 @@ beforeEach(() => {
     recentExternalEdit: false,
     auditSequence: 0,
   });
-  greetingMocks.resolveSystemAgentGreeting.mockResolvedValue({
-    text: "I'm OpenClaw. All systems nominal.",
-    source: "model",
-  });
+  greetingMocks.resolveSystemAgentGreeting.mockResolvedValue("I'm OpenClaw. All systems nominal.");
   greetingMocks.buildSystemAgentGreetingQuestion.mockReturnValue(quickActions);
   onboardingWelcomeMocks.buildOnboardingWelcome.mockImplementation(
     async ({ engine }: { engine: { noteAssistantMessage: (text: string) => void } }) => {
@@ -300,10 +279,9 @@ describe("openclaw.chat caretaker welcome", () => {
 
   it("does not plan a greeting when a fresh session is created with a message", async () => {
     const sessions = new Map<string, SystemAgentChatSession>();
-    greetingMocks.resolveSystemAgentGreeting.mockResolvedValueOnce({
-      text: "Hi, I'm OpenClaw — caretaker of this gateway, config, channels, and agents.",
-      source: "template",
-    });
+    greetingMocks.resolveSystemAgentGreeting.mockResolvedValueOnce(
+      "Hi, I'm OpenClaw — caretaker of this gateway, config, channels, and agents.",
+    );
 
     const context = makeContext(sessions);
     const call = await callChat(context, { sessionId: "fresh-with-message", message: "status" });
@@ -338,7 +316,7 @@ describe("openclaw.chat caretaker welcome", () => {
         recentExternalEdit: true,
         auditSequence: 42,
       });
-      greetingMocks.resolveSystemAgentGreeting.mockResolvedValueOnce({ text, source: "model" });
+      greetingMocks.resolveSystemAgentGreeting.mockResolvedValueOnce(text);
       if (fails) {
         await expect(
           expectDefined(

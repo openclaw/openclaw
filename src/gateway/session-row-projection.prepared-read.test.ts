@@ -21,6 +21,8 @@ import {
   createTestProjection,
   holdForeground,
 } from "./session-row-projection.read-fixture.test-support.js";
+import { requestSessionRow } from "./session-row-projection.test-support.js";
+import { replaceSessionRowFacts } from "./session-utils-row.js";
 import { projectWorkerSessionPlacement } from "./worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
 import {
@@ -86,14 +88,15 @@ function describeSession(
   respond = vi.fn(),
 ) {
   const completion = Promise.resolve(
-    sessionByKeyReadHandlers["sessions.describe"]!({
-      req: { type: "req", id, method: "sessions.describe" },
-      params: { key },
-      client: null,
+    requestSessionRow(
+      sessionByKeyReadHandlers["sessions.describe"]!,
       context,
-      isWebchatConnect: () => false,
+      "sessions.describe",
+      { key },
       respond,
-    }),
+      null,
+      id,
+    ),
   );
   return { respond, completion };
 }
@@ -326,12 +329,9 @@ it("reuses settled exact placement facts while archived row preparation is compl
   });
 });
 
-it.each([
-  { scope: "stores", expectedReads: 2 },
-  { scope: "config", expectedReads: 1 },
-] as const)(
-  "keeps an exact placement read usable across an unrelated $scope publication",
-  async ({ scope, expectedReads }) => {
+it.each(["stores", "config"] as const)(
+  "keeps an exact placement read usable across an unrelated %s publication",
+  async (scope) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const fixture = await heldPlacementReads(2);
       const row = fixture.rows[0]!;
@@ -355,7 +355,7 @@ it.each([
         ).toBe("Unrelated update");
         expect(
           fixture.readProjection.mock.calls.filter(([ids]) => ids.includes(row.sessionId)),
-        ).toHaveLength(expectedReads);
+        ).toHaveLength(1);
       } finally {
         fixture.release.resolve();
         await completed;
@@ -598,20 +598,22 @@ it("prepares only the private response's child selections before consumption", a
       if (!row) {
         throw new Error("Expected the private parent fixture");
       }
-      row.materialized.row.swarm = {
-        otherActiveGroups: 0,
-        groups: [
-          {
-            groupId: "private-group",
-            createdAt: 1,
-            queued: 0,
-            running: 1,
-            done: 0,
-            failed: 0,
-            children: [{ sessionKey: childKey, status: "running" }],
-          },
-        ],
-      };
+      row.materialized = replaceSessionRowFacts(row.materialized, {
+        swarm: {
+          otherActiveGroups: 0,
+          groups: [
+            {
+              groupId: "private-group",
+              createdAt: 1,
+              queued: 0,
+              running: 1,
+              done: 0,
+              failed: 0,
+              children: [{ sessionKey: childKey, status: "running" }],
+            },
+          ],
+        },
+      });
       return row;
     });
     const select = vi.spyOn(projection, "selectEntries").mockImplementation(() => {

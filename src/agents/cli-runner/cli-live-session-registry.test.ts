@@ -22,7 +22,6 @@ import {
   restartCliLiveSession,
 } from "./cli-live-session-registry.js";
 import { settlePreparedCliRun } from "./cli-run-settlement.js";
-import { buildCliLiveSessionFingerprint } from "./live-session-fingerprint.js";
 
 const admissions: Array<ReturnType<typeof prepareSystemAgentRunAdmission>> = [];
 const sessions = new Set<CliBackendLiveSessionHandle>();
@@ -41,6 +40,10 @@ async function createOwner(
     skillsSnapshot?: SkillSnapshot;
     capture?: { token: string; key: string };
     requiredGeneration?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    nativeLogin?: string;
+    mcpConfigHash?: string;
   } = {},
 ) {
   const index = ++nextOwnerId;
@@ -63,6 +66,13 @@ async function createOwner(
   context.params.skillsSnapshot = options.skillsSnapshot;
   context.params.agentAccountId = options.agentAccountId;
   context.effectiveAuthProfileId = options.authProfileId;
+  context.preparedBackend.mcpConfigHash = options.mcpConfigHash;
+  if (options.nativeLogin) {
+    context.cliHistoryWriter = {
+      authFingerprint: options.nativeLogin,
+      bindsNativeLogin: true,
+    } as NonNullable<typeof context.cliHistoryWriter>;
+  }
   admissions.push(admission);
   context.params.admittedRunContext = await admission.admit("plugin-harness");
   const controller = new AbortController();
@@ -88,8 +98,8 @@ async function createOwner(
   const beginCapture = vi.fn();
   const capability: CliBackendLiveSessionCapability = createCliLiveSessionCapability({
     context,
-    argv: ["claude", "-p"],
-    env: { PATH: "/usr/bin:/bin" },
+    argv: ["claude", "-p", ...(options.args ?? [])],
+    env: options.env ?? { PATH: "/usr/bin:/bin" },
     beginCapture,
     abortSignal: controller.signal,
     ...(options.cleanup ? { claimResources: () => options.cleanup } : {}),
@@ -197,62 +207,43 @@ describe("generic plugin-owned live session registry", () => {
     );
   });
 
-  it("keeps fresh and resumed process fingerprints identical without hiding prompt changes", () => {
-    const fresh = buildPreparedCliRunContext({ systemPrompt: "Original system policy." });
-    const resumed = buildPreparedCliRunContext({ systemPrompt: "Original system policy." });
-    const changed = buildPreparedCliRunContext({ systemPrompt: "Changed system policy." });
-    const mcpFresh = buildPreparedCliRunContext({ systemPrompt: "Original system policy." });
-    const mcpResumed = buildPreparedCliRunContext({ systemPrompt: "Original system policy." });
-    mcpFresh.preparedBackend.mcpConfigHash = "stable-mcp-config";
-    mcpResumed.preparedBackend.mcpConfigHash = "stable-mcp-config";
-    const env = { PATH: "/usr/bin:/bin" };
-    const freshFingerprint = buildCliLiveSessionFingerprint({
-      context: fresh,
-      argv: ["claude", "-p", "--session-id", "native-session"],
-      env,
-    });
+  it("does not reuse a warm process across a native login owner change", async () => {
+    const withOwner = async (nativeLogin?: string) =>
+      (await createOwner({ nativeLogin })).capability.fingerprint;
+    const ownerA = await withOwner("a".repeat(64));
+    expect(await withOwner("a".repeat(64))).toBe(ownerA);
+    expect(await withOwner("b".repeat(64))).not.toBe(ownerA);
+    expect(await withOwner(undefined)).not.toBe(ownerA);
+  });
 
-    expect(
-      buildCliLiveSessionFingerprint({
-        context: resumed,
-        argv: ["claude", "-p", "--resume", "native-session"],
-        env,
-      }),
-    ).toBe(freshFingerprint);
-    expect(
-      buildCliLiveSessionFingerprint({
-        context: changed,
-        argv: ["claude", "-p", "--resume", "native-session"],
-        env,
-      }),
-    ).not.toBe(freshFingerprint);
-    expect(
-      buildCliLiveSessionFingerprint({
-        context: resumed,
-        argv: ["claude", "-p", "--resume", "native-session", "--effort", "max"],
-        env,
-      }),
-    ).not.toBe(freshFingerprint);
-    expect(
-      buildCliLiveSessionFingerprint({
-        context: resumed,
-        argv: ["claude", "-p", "--resume", "native-session"],
-        env: { ...env, CLAUDE_CODE_EFFORT_LEVEL: "max" },
-      }),
-    ).not.toBe(freshFingerprint);
-
-    const mcpFreshFingerprint = buildCliLiveSessionFingerprint({
-      context: mcpFresh,
-      argv: ["claude", "-p", "--session-id", "native-session", "--mcp-config", "/tmp/turn-a.json"],
-      env,
+  it.each<[NonNullable<Parameters<typeof createOwner>[0]>, boolean]>([
+    [{}, true],
+    [{ systemPrompt: "Changed system policy." }, false],
+    [{ args: ["--resume", "native-session", "--effort", "max"] }, false],
+    [{ env: { PATH: "/usr/bin:/bin", CLAUDE_CODE_EFFORT_LEVEL: "max" } }, false],
+    [
+      { mcpConfigHash: "stable", args: ["--resume", "native-session", "--mcp-config", "/tmp/b"] },
+      true,
+    ],
+  ])("normalizes only transient process inputs: %j", async (overrides, equal) => {
+    const shared = {
+      systemPrompt: "Original system policy.",
+      mcpConfigHash: overrides.mcpConfigHash,
+    };
+    const fresh = await createOwner({
+      ...shared,
+      args: [
+        "--session-id",
+        "native-session",
+        ...(overrides.mcpConfigHash ? ["--mcp-config", "/tmp/a"] : []),
+      ],
     });
-    expect(
-      buildCliLiveSessionFingerprint({
-        context: mcpResumed,
-        argv: ["claude", "-p", "--resume", "native-session", "--mcp-config", "/tmp/turn-b.json"],
-        env,
-      }),
-    ).toBe(mcpFreshFingerprint);
+    const resumed = await createOwner({
+      ...shared,
+      args: ["--resume", "native-session"],
+      ...overrides,
+    });
+    expect(resumed.capability.fingerprint === fresh.capability.fingerprint).toBe(equal);
   });
 
   it("exposes only an active registered generation and never revives a removed owner", async () => {

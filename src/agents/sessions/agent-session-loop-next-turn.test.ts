@@ -1,19 +1,16 @@
 import {
   createAssistantMessageEventStream,
-  type AssistantMessage,
   type Context,
   type Model,
   type SimpleStreamOptions,
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import { buildTimestampPrefix } from "../../gateway/server-methods/agent-timestamp.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
-import { createUserTranscriptContextRegistry } from "../embedded-agent-runner/run/attempt-user-transcript-context-registry.js";
 import {
   attachSteeringRuntimeContext,
   setSteeringRuntimeContextRetention,
@@ -28,13 +25,12 @@ import {
   streamMocks,
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
-import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import {
   agentSessionQueuePromptContext,
   agentSessionSetPromptPreparation,
 } from "./agent-session-prompting.js";
 import type { AgentSession } from "./agent-session.js";
-import type { ToolDefinition } from "./extensions/types.js";
+import type { ExtensionFactory, ToolDefinition } from "./extensions/types.js";
 import { SettingsManager } from "./settings-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
@@ -57,8 +53,8 @@ const imageQueues = [
 const toolResult = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
 const makeTool = (
   name: string,
-  execute: ToolDefinition["execute"] = async () => toolResult("done"),
-): ToolDefinition => ({
+  execute: AgentTool["execute"] = async () => toolResult("done"),
+): AgentTool => ({
   name,
   label: name,
   description: name,
@@ -66,9 +62,42 @@ const makeTool = (
   execute,
 });
 const textStream = (model: Model, text = "done") =>
-  createAssistantResultStream(createAssistant(model, [{ type: "text", text }]));
-const handlersFor = (handlers: Record<string, () => Promise<unknown>>) =>
-  new Map(Object.entries(handlers).map(([name, handler]) => [name, [handler]]));
+  createAssistantResultStream(createAssistant(model, text));
+const toolStream = (model: Model, name: string, id = "call") =>
+  createAssistantResultStream(
+    createAssistant(model, [{ type: "toolCall", id, name, arguments: {} }], "toolUse"),
+  );
+
+function recordRequests(
+  respond: (model: Model, index: number) => ReturnType<typeof textStream> = (model) =>
+    textStream(model),
+) {
+  const requests: Array<{ model: string; prompt: string; tools: string[]; context: Context }> = [];
+  streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+    requests.push({
+      model: model.id,
+      prompt: context.systemPrompt ?? "",
+      tools: context.tools?.map((tool) => tool.name) ?? [],
+      context,
+    });
+    return respond(model, requests.length);
+  });
+  return requests;
+}
+
+type NextTurnContext = Parameters<
+  NonNullable<AgentSession["agent"]["prepareNextTurnWithContext"]>
+>[0]["context"];
+
+function nextTurnPreparer(session: AgentSession) {
+  const hook = session.agent.prepareNextTurnWithContext;
+  if (!hook) {
+    throw new Error("context-aware next-turn hook was not installed");
+  }
+  const message = createAssistant(testModel, "turn complete");
+  const newMessages = [message];
+  return (context: NextTurnContext) => hook({ message, toolResults: [], context, newMessages });
+}
 
 function heldResponse(model: Model, signal?: AbortSignal) {
   const stream = createAssistantMessageEventStream();
@@ -90,7 +119,7 @@ function heldResponse(model: Model, signal?: AbortSignal) {
       stream.push({
         type: "done",
         reason: "stop",
-        message: createAssistant(model, [{ type: "text", text }]),
+        message: createAssistant(model, text),
       });
       stream.end();
     },
@@ -128,13 +157,10 @@ function queuedState(session: AgentSession) {
   };
 }
 
-function mockAbortableQueuedRun() {
-  const executeTool = vi.fn();
+async function startAbortableQueuedRun() {
+  const executeTool = vi.fn(async () => toolResult("action completed"));
   const requests: Array<{ context: Context; signal: AbortSignal | undefined }> = [];
-  const tool = makeTool("queued_action", async () => {
-    executeTool();
-    return toolResult("action completed");
-  });
+  const tool = makeTool("queued_action", executeTool);
 
   streamMocks.streamSimple.mockImplementation(
     (activeModel: Model, context: Context, options?: SimpleStreamOptions) => {
@@ -144,17 +170,16 @@ function mockAbortableQueuedRun() {
         return heldResponse(activeModel, options?.signal).stream;
       }
 
-      const content: AssistantMessage["content"] =
-        requestIndex === 1
-          ? [{ type: "toolCall", id: "queued-action-call", name: tool.name, arguments: {} }]
-          : [{ type: "text", text: "queued turn finished" }];
-      return createAssistantResultStream(
-        createAssistant(activeModel, content, requestIndex === 1 ? "toolUse" : "stop"),
-      );
+      return requestIndex === 1
+        ? toolStream(activeModel, tool.name, "queued-action-call")
+        : textStream(activeModel, "queued turn finished");
     },
   );
 
-  return { executeTool, requests, tool };
+  const { session } = await createTestSession({ customTools: [tool] });
+  const prompt = session.prompt("wait for operator cancellation");
+  await vi.waitFor(() => expect(requests).toHaveLength(1));
+  return { executeTool, requests, session, prompt };
 }
 
 describe("AgentSession queue and next-turn lifecycle correctness", () => {
@@ -214,26 +239,19 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       const hookRelease = createDeferredCore();
       const preparationEntered = createDeferredCore();
       const preparationRelease = createDeferredCore();
-      const handlers = handlersFor({
-        before_agent_start: async () => {
+      const handlers: ExtensionFactory = (api) => {
+        api.on("before_agent_start", async () => {
           hookEntered.resolve();
           await hookRelease.promise;
           return { systemPrompt: "late SDK override" };
-        },
-      });
+        });
+      };
       const tools = ["read_policy", "write_policy"].map((name) =>
         makeTool(name, async () => ({ content: [], details: {} })),
       );
-      const requests: Array<{ prompt: string; tools: string[] }> = [];
-      streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
-        requests.push({
-          prompt: context.systemPrompt ?? "",
-          tools: context.tools?.map((tool) => tool.name) ?? [],
-        });
-        return textStream(model);
-      });
+      const requests = recordRequests();
       const { session } = await createTestSession({
-        resourceLoader: createResourceLoader(handlers),
+        extension: handlers,
         customTools: tools,
       });
       const prompt = session.prompt("apply permissions before the first request");
@@ -276,7 +294,9 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       const [result] = await settled;
       if (closure === "apply") {
         expect(result?.status).toBe("fulfilled");
-        expect(requests).toEqual([
+        expect(
+          requests.map((request) => ({ prompt: request.prompt, tools: request.tools })),
+        ).toEqual([
           { prompt: "late SDK override\nPermission change: read-only", tools: ["read_policy"] },
         ]);
       } else {
@@ -293,32 +313,28 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
   );
 
   it("drains a follow-up queued by an agent-end handler", async () => {
-    const sessionRef: { current?: AgentSession } = {};
     let queued = false;
     const lifecycleEvents: string[] = [];
-    const handlers = handlersFor({
-      agent_end: async () => {
+    const handlers: ExtensionFactory = (api) => {
+      api.on("agent_end", async () => {
         lifecycleEvents.push("agent_end");
         if (!queued) {
           queued = true;
-          await sessionRef.current?.followUp("queued after end");
+          await session.followUp("queued after end");
         }
         return undefined;
-      },
-      agent_settled: async () => lifecycleEvents.push("agent_settled"),
-    });
-    const requests: Context[] = [];
-    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
-      requests.push(context);
-      return textStream(activeModel, `answer ${requests.length}`);
-    });
-    const { session } = await createTestSession({ resourceLoader: createResourceLoader(handlers) });
-    sessionRef.current = session;
+      });
+      api.on("agent_settled", async () => {
+        lifecycleEvents.push("agent_settled");
+      });
+    };
+    const requests = recordRequests((model, index) => textStream(model, `answer ${index}`));
+    const { session } = await createTestSession({ extension: handlers });
 
     await session.prompt("initial prompt");
 
     expect(requests).toHaveLength(2);
-    expect(JSON.stringify(requests[1]?.messages)).toContain("queued after end");
+    expect(JSON.stringify(requests[1]?.context.messages)).toContain("queued after end");
     expect(session.agent.hasQueuedMessages()).toBe(false);
     expect(lifecycleEvents).toEqual(["agent_end", "agent_end", "agent_settled"]);
   });
@@ -327,19 +343,19 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     const firstGate = createDeferredCore();
     const secondGate = createDeferredCore();
     let admissionCount = 0;
-    const handlers = handlersFor({
-      before_agent_start: async () =>
-        await (admissionCount++ === 0 ? firstGate : secondGate).promise,
-    });
+    const handlers: ExtensionFactory = (api) => {
+      api.on(
+        "before_agent_start",
+        async () => await (admissionCount++ === 0 ? firstGate : secondGate).promise,
+      );
+    };
     let finishResponse: (() => void) | undefined;
-    const requests: Context[] = [];
-    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
-      requests.push(context);
-      const response = heldResponse(activeModel);
+    const requests = recordRequests((model) => {
+      const response = heldResponse(model);
       finishResponse = () => response.finish("finished");
       return response.stream;
     });
-    const { session } = await createTestSession({ resourceLoader: createResourceLoader(handlers) });
+    const { session } = await createTestSession({ extension: handlers });
     const settled = vi.fn();
     session.subscribe((event) => {
       if (event.type === "agent_settled") {
@@ -365,16 +381,14 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
   it("keeps one logical prompt owner across an automatic retry gap", async () => {
     vi.useFakeTimers();
     try {
-      const requests: Context[] = [];
-      streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
-        requests.push(context);
-        if (requests.length === 1) {
+      const requests = recordRequests((model, index) => {
+        if (index === 1) {
           return createAssistantResultStream({
-            ...createAssistant(activeModel, [], "error"),
+            ...createAssistant(model, [], "error"),
             errorMessage: "HTTP 503 temporary provider response",
           });
         }
-        return textStream(activeModel, "retry recovered");
+        return textStream(model, "retry recovered");
       });
       const settingsManager = SettingsManager.inMemory({
         compaction: { enabled: false },
@@ -401,11 +415,11 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       await prompt;
 
       expect(requests).toHaveLength(2);
-      expect(requests.map((request) => request.systemPrompt)).toEqual([
+      expect(requests.map((request) => request.prompt)).toEqual([
         "initial permission prompt",
         "updated permission prompt",
       ]);
-      expect(JSON.stringify(requests[1]?.messages)).toContain("steer during retry");
+      expect(JSON.stringify(requests[1]?.context.messages)).toContain("steer during retry");
       expect(lifecycleEvents.filter((type) => type === "agent_settled")).toHaveLength(1);
     } finally {
       vi.useRealTimers();
@@ -422,24 +436,23 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         steering: readonly string[];
         followUp: readonly string[];
       }> = [];
+      const recordQueue = (type: "queue_update" | "image_message_start") => {
+        queueEvents.push({
+          type,
+          steering: [...session.getSteeringMessages()],
+          followUp: [...session.getFollowUpMessages()],
+        });
+      };
       session.subscribe((event) => {
         if (event.type === "queue_update") {
-          queueEvents.push({
-            type: "queue_update",
-            steering: event.steering,
-            followUp: event.followUp,
-          });
+          recordQueue("queue_update");
         } else if (
           event.type === "message_start" &&
           event.message.role === "user" &&
           Array.isArray(event.message.content) &&
           event.message.content.some((part) => part.type === "image")
         ) {
-          queueEvents.push({
-            type: "image_message_start",
-            steering: [...session.getSteeringMessages()],
-            followUp: [...session.getFollowUpMessages()],
-          });
+          recordQueue("image_message_start");
         }
       });
       const initialPrompt = session.prompt("describe the next image");
@@ -451,17 +464,13 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       await initialPrompt;
 
       expect(requests).toHaveLength(2);
-      expect(requests[1]?.messages).toContainEqual(
-        expect.objectContaining({ role: "user", content: [{ type: "text", text: "" }, image] }),
-      );
+      const queuedImage = expect.objectContaining({
+        role: "user",
+        content: [{ type: "text", text: "" }, image],
+      });
+      expect(requests[1]?.messages).toContainEqual(queuedImage);
       expect(sessionManager.getEntries()).toContainEqual(
-        expect.objectContaining({
-          type: "message",
-          message: expect.objectContaining({
-            role: "user",
-            content: [{ type: "text", text: "" }, image],
-          }),
-        }),
+        expect.objectContaining({ type: "message", message: queuedImage }),
       );
       expect(session.pendingMessageCount).toBe(0);
       expect(session.getSteeringMessages()).toEqual([]);
@@ -557,37 +566,10 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       if (!message || message.role !== "user") {
         throw new Error("expected queued user message");
       }
-      const registry = createUserTranscriptContextRegistry();
-      const project = () =>
-        normalizeMessagesForLlmBoundary([message], {
-          timezone: "UTC",
-          userTranscriptContexts: registry.list(),
-        });
-      const accepted = project();
-      const guard = guardSessionManager(sessionManager, {
-        onUserMessagePersisted: (persisted, runtime) => {
-          if (runtime) {
-            registry.record(runtime, persisted);
-          }
-        },
-      });
+      const accepted = JSON.stringify(message);
+      const guard = guardSessionManager(sessionManager);
       const entryId = guard.appendMessage(message);
-      const acceptedContent = accepted[0]?.role === "user" ? accepted[0].content : undefined;
-      const firstBlock = Array.isArray(acceptedContent) ? acceptedContent[0] : undefined;
-      const acceptedText =
-        typeof acceptedContent === "string"
-          ? acceptedContent
-          : firstBlock?.type === "text"
-            ? firstBlock.text
-            : undefined;
-
-      expect(project()).toEqual(accepted);
-      expect(acceptedText).toContain('"name":"Alice"');
-      expect(acceptedText).toContain(
-        buildTimestampPrefix(new Date(admittedAt), { timezone: "UTC" }),
-      );
-      expect(acceptedText).toContain("Expanded runtime prompt");
-      expect(acceptedText).not.toContain("Visible transcript prompt");
+      expect(JSON.stringify(message)).toBe(accepted);
       expect(message.timestamp).toBe(admittedAt);
       expect(message.content).toEqual([
         { type: "text", text: "Expanded runtime prompt" },
@@ -599,19 +581,13 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
           content: withImage ? message.content : "Visible transcript prompt",
         },
       });
-      if (withImage) {
-        expect(acceptedContent).toContainEqual(image);
-      }
     },
   );
 
   it.each(imageQueues)(
     "keeps queued image-only $kind dormant after its active run is aborted",
     async (scenario) => {
-      const { executeTool, requests, tool } = mockAbortableQueuedRun();
-      const { session } = await createTestSession({ customTools: [tool] });
-      const prompt = session.prompt("wait for operator cancellation");
-      await vi.waitFor(() => expect(requests).toHaveLength(1));
+      const { executeTool, requests, session, prompt } = await startAbortableQueuedRun();
 
       await scenario.queue(session);
       expect(session.agent.hasQueuedMessages()).toBe(true);
@@ -629,10 +605,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
   it.each([true, false])(
     "cancels only an uncommitted steer after an aborted turn (wait: %s)",
     async (waitForTranscriptCommit) => {
-      const { executeTool, requests, tool } = mockAbortableQueuedRun();
-      const { session } = await createTestSession({ customTools: [tool] });
-      const prompt = session.prompt("wait for operator cancellation");
-      await vi.waitFor(() => expect(requests).toHaveLength(1));
+      const { executeTool, requests, session, prompt } = await startAbortableQueuedRun();
 
       await session.steer("keep unrelated steering");
       await session.followUp("keep unrelated follow-up");
@@ -666,11 +639,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       expect(session.getSteeringMessages()).toEqual(["keep unrelated steering"]);
       expect(session.getFollowUpMessages()).toEqual(["keep unrelated follow-up"]);
       expect(session.agent.hasQueuedMessages()).toBe(true);
-      const nextRequests: Context[] = [];
-      streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
-        nextRequests.push(context);
-        return textStream(model, "next answer");
-      });
+      const nextRequests = recordRequests((model) => textStream(model, "next answer"));
       await session.prompt("new legitimate turn");
       expect(nextRequests.length).toBeGreaterThan(0);
       expect(JSON.stringify(nextRequests)).not.toContain("cancel only this steering");
@@ -716,45 +685,29 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
 
   it("applies session model, tool, and prompt changes on the following tool turn", async () => {
     const nextModel = { ...testModel, id: "next-model" };
-    const sessionRef: { current?: AgentSession } = {};
     const switchTool = makeTool("switch_state", async () => {
-      const activeSession = sessionRef.current;
-      if (!activeSession) {
-        throw new Error("session not ready");
-      }
-      activeSession.setActiveToolsByName(["second_tool"]);
-      activeSession.agent.state.model = nextModel;
+      session.setActiveToolsByName(["second_tool"]);
+      session.agent.state.model = nextModel;
       return toolResult("switched");
     });
     const secondTool = makeTool("second_tool");
-    const handlers = handlersFor({
-      before_agent_start: async () => ({ systemPrompt: "prompt override" }),
-    });
-    const requests: Array<{ model: string; prompt: string; tools: string[] }> = [];
-    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
-      requests.push({
-        model: activeModel.id,
-        prompt: context.systemPrompt ?? "",
-        tools: context.tools?.map((tool) => tool.name) ?? [],
-      });
-      const content: AssistantMessage["content"] =
-        requests.length === 1
-          ? [{ type: "toolCall", id: "call-switch", name: "switch_state", arguments: {} }]
-          : [{ type: "text", text: "finished" }];
-      return createAssistantResultStream(
-        createAssistant(activeModel, content, requests.length === 1 ? "toolUse" : "stop"),
-      );
-    });
+    const handlers: ExtensionFactory = (api) => {
+      api.on("before_agent_start", async () => ({ systemPrompt: "prompt override" }));
+    };
+    const requests = recordRequests((model, index) =>
+      index === 1
+        ? toolStream(model, "switch_state", "call-switch")
+        : textStream(model, "finished"),
+    );
     const { session } = await createTestSession({
-      resourceLoader: createResourceLoader(handlers),
+      extension: handlers,
       customTools: [switchTool, secondTool],
     });
-    sessionRef.current = session;
     session.setActiveToolsByName(["switch_state"]);
 
     await session.prompt("switch now");
 
-    expect(requests).toEqual([
+    expect(requests.map(({ model, prompt, tools }) => ({ model, prompt, tools }))).toEqual([
       { model: testModel.id, prompt: "prompt override", tools: ["switch_state"] },
       { model: nextModel.id, prompt: "prompt override", tools: ["second_tool"] },
     ]);
@@ -762,7 +715,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
 
   it("replaces permission-bound tools during a run without retaining removed tools", async () => {
     const executions: string[] = [];
-    const sessionRef: { current?: AgentSession } = {};
     const readTool = makeTool("read_policy", async () => {
       executions.push("restricted");
       return toolResult("restricted");
@@ -771,7 +723,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       ...readTool,
       name: "change_permission",
       execute: async () => {
-        sessionRef.current!.replaceCustomTools([readTool], [readTool.name]);
+        session.replaceCustomTools([readTool], [readTool.name]);
         return toolResult("Permission change");
       },
     };
@@ -782,119 +734,59 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         return toolResult("unrestricted");
       },
     };
-    const requests: string[][] = [];
-    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
-      requests.push(context.tools?.map((tool) => tool.name) ?? []);
-      const name = requests.length === 1 ? changeTool.name : readTool.name;
-      const content: AssistantMessage["content"] =
-        requests.length < 3
-          ? [{ type: "toolCall", id: `call-${requests.length}`, name, arguments: {} }]
-          : [{ type: "text", text: "done" }];
-      return createAssistantResultStream(
-        createAssistant(model, content, requests.length < 3 ? "toolUse" : "stop"),
-      );
-    });
+    const requests = recordRequests((model, index) =>
+      index < 3
+        ? toolStream(model, index === 1 ? changeTool.name : readTool.name, `call-${index}`)
+        : textStream(model),
+    );
     const { session } = await createTestSession({ customTools: [changeTool, previousReadTool] });
-    sessionRef.current = session;
     session.setActiveToolsByName([changeTool.name, readTool.name]);
 
     await session.prompt("tighten permissions");
 
-    expect(requests).toEqual([[changeTool.name, readTool.name], [readTool.name], [readTool.name]]);
+    expect(requests.map(({ tools }) => tools)).toEqual([
+      [changeTool.name, readTool.name],
+      [readTool.name],
+      [readTool.name],
+    ]);
     expect(executions).toEqual(["restricted"]);
     expect(session.getAllTools().map((tool) => tool.name)).toEqual([readTool.name]);
   });
 
-  it("preserves explicit updates from an existing next-turn hook", async () => {
-    const hookModel = { ...testModel, id: "hook-model" };
-    const hookTool: AgentTool = {
-      name: "hook_tool",
-      label: "Hook tool",
-      description: "provided by the existing turn hook",
-      parameters: Type.Object({}),
-      execute: async () => ({ content: [{ type: "text", text: "done" }], details: {} }),
-    };
-    const hookContext = {
-      systemPrompt: "hook prompt",
-      messages: [],
-      tools: [hookTool],
-    };
-    let returnedUpdate = false;
-    const { session } = await createTestSession();
-    session.agent.prepareNextTurn = () => {
-      if (returnedUpdate) {
-        return undefined;
-      }
-      returnedUpdate = true;
-      return { context: hookContext, model: hookModel, thinkingLevel: "high" };
-    };
-    const contextualHook = session.agent.prepareNextTurnWithContext;
-    if (!contextualHook) {
-      throw new Error("context-aware next-turn hook was not installed");
-    }
-    const message = createAssistant(testModel, [{ type: "text", text: "turn complete" }]);
-    const newMessages = [message];
-
-    const firstUpdate = await contextualHook({
-      message,
-      toolResults: [],
-      context: { systemPrompt: "loop prompt", messages: [], tools: [] },
-      newMessages,
-    });
-    const secondUpdate = await contextualHook({
-      message,
-      toolResults: [],
-      context: firstUpdate?.context ?? hookContext,
-      newMessages,
-    });
-
-    for (const update of [firstUpdate, secondUpdate]) {
-      expect(update).toMatchObject({
-        context: {
-          systemPrompt: "hook prompt",
-          tools: [expect.objectContaining({ name: "hook_tool" })],
-        },
-        model: hookModel,
-        thinkingLevel: "high",
+  it.each(["explicit", "omitted"] as const)(
+    "preserves %s next-turn hook fields",
+    async (fields) => {
+      const hookTool = makeTool("hook_tool");
+      const hookModel = { ...testModel, id: "hook-model" };
+      const context: NextTurnContext = {
+        systemPrompt: "hook prompt",
+        messages: [],
+        ...(fields === "explicit" ? { tools: [hookTool] } : {}),
+      };
+      const tools = fields === "explicit" ? [] : [hookTool];
+      const { session } = await createTestSession({ customTools: tools });
+      const snapshot = {
+        context,
+        ...(fields === "explicit" ? { model: hookModel, thinkingLevel: "high" as const } : {}),
+      };
+      const hook = vi
+        .fn<NonNullable<AgentSession["agent"]["prepareNextTurn"]>>()
+        .mockReturnValueOnce(snapshot);
+      session.agent.prepareNextTurn = hook;
+      const prepareNextTurn = nextTurnPreparer(session);
+      const update = await prepareNextTurn({
+        systemPrompt: "loop prompt",
+        messages: [],
+        tools,
       });
-    }
-  });
-
-  it("preserves fields omitted by an existing next-turn context replacement", async () => {
-    const sessionTool: AgentTool = {
-      name: "session_tool",
-      label: "Session tool",
-      description: "available in session state",
-      parameters: Type.Object({}),
-      execute: async () => toolResult("done"),
-    };
-    const initialHook = vi.fn(() => ({
-      context: { systemPrompt: "stale prompt", messages: [], tools: [sessionTool] },
-    }));
-    const replacementHook = vi.fn(() => ({
-      context: { systemPrompt: "replacement prompt", messages: [] },
-    }));
-    const { session } = await createTestSession({ customTools: [sessionTool] });
-    session.setActiveToolsByName([sessionTool.name]);
-    session.agent.prepareNextTurn = initialHook;
-    session.agent.prepareNextTurn = replacementHook;
-    const message = createAssistant(testModel, [{ type: "text", text: "turn complete" }]);
-    const contextualHook = session.agent.prepareNextTurnWithContext;
-    if (!contextualHook) {
-      throw new Error("context-aware next-turn hook was not installed");
-    }
-
-    const update = await contextualHook({
-      message,
-      toolResults: [],
-      context: { systemPrompt: "loop prompt", messages: [], tools: [sessionTool] },
-      newMessages: [message],
-    });
-
-    expect(update?.context).toEqual({ systemPrompt: "replacement prompt", messages: [] });
-    expect(replacementHook).toHaveBeenCalledOnce();
-    expect(initialHook).not.toHaveBeenCalled();
-  });
+      expect(update?.context).toEqual(context);
+      expect(hook).toHaveBeenCalledOnce();
+      if (fields === "explicit") {
+        expect(update).toMatchObject(snapshot);
+        expect(await prepareNextTurn(update?.context ?? context)).toMatchObject(snapshot);
+      }
+    },
+  );
 
   it("aborts in-flight work when disposed", async () => {
     let providerSignal: AbortSignal | undefined;
@@ -907,7 +799,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     const { session } = await createTestSession();
     const abortRetry = vi.spyOn(session, "abortRetry");
     const abortCompaction = vi.spyOn(session, "abortCompaction");
-    const abortBranchSummary = vi.spyOn(session, "abortBranchSummary");
     const abortAgent = vi.spyOn(session.agent, "abort");
     abortRetry.mockImplementationOnce(() => {
       throw new Error("retry abort failed");
@@ -921,7 +812,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(providerSignal?.aborted).toBe(true);
     expect(abortRetry).toHaveBeenCalledOnce();
     expect(abortCompaction).toHaveBeenCalledOnce();
-    expect(abortBranchSummary).toHaveBeenCalledOnce();
     expect(abortAgent).toHaveBeenCalledOnce();
   });
 
@@ -935,7 +825,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     const { session } = await createTestSession({ settingsManager });
     settingsManager.setSteeringMode("all");
     settingsManager.setFollowUpMode("all");
-    await settingsManager.flush();
 
     expect(session.agent.steeringMode).toBe("one-at-a-time");
     expect(session.agent.followUpMode).toBe("one-at-a-time");

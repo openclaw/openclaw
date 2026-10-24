@@ -1,17 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import {
   createPluginRuntimeMock,
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
-  createPluginStateKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -19,65 +13,28 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { startBuzzBus, type BuzzBus } from "./buzz-bus.js";
-import { createBuzzRelayFixture } from "./buzz-relay.test-harness.js";
+import { expect, it, vi } from "vitest";
+import type { BuzzBus } from "./buzz-bus.js";
+import { createBuzzRelayFixture, useBuzzRelayTestHarness } from "./buzz-relay.test-harness.js";
 import { startBuzzGatewayAccount } from "./gateway.js";
 import { setBuzzRuntime } from "./runtime.js";
 import { resolveBuzzAccount } from "./types.js";
 
-let stateDir: string;
 let fixture: Awaited<ReturnType<typeof createBuzzRelayFixture>>;
-let cleanupBus: BuzzBus | undefined;
 let cleanupAccount: (() => Promise<void>) | undefined;
-let messages: string[];
-let fatal: Error[];
-beforeEach(async () => {
-  // openclaw-temp-dir: allow extension tests cannot import root test helpers.
-  stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-buzz-socket-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  cleanupBus = undefined;
-  cleanupAccount = undefined;
-  messages = [];
-  fatal = [];
-  fixture = await createBuzzRelayFixture();
-});
-afterEach(async () => {
-  try {
-    await cleanupAccount?.();
-    await cleanupBus?.close();
-  } finally {
-    try {
-      await fixture.close();
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
-      vi.restoreAllMocks();
-      vi.unstubAllEnvs();
-      rmSync(stateDir, { recursive: true, force: true });
-    }
-  }
-});
-
-async function startBus(
-  options: Partial<
-    Pick<Parameters<typeof startBuzzBus>[0], "onMessage" | "onFatalError" | "onPresenceError">
-  > = {},
-) {
-  cleanupBus = await startBuzzBus({
-    scheduler: createTestPluginServiceScheduler(),
-    accountId: randomUUID(),
-    relayUrl: fixture.relayUrl,
-    privateKey: fixture.botPrivateKey,
-    channelIds: [fixture.roomId],
-    onMessage: async (message) => {
-      messages.push(message.text);
+const { messages, fatal, startBus, closeBus } = useBuzzRelayTestHarness(
+  (relay) => {
+    fixture = relay;
+    cleanupAccount = undefined;
+    return {};
+  },
+  {
+    beforeClose: async () => {
+      await cleanupAccount?.();
     },
-    onFatalError: (error) => fatal.push(error),
-    ...options,
-  });
-  return cleanupBus;
-}
+    afterClose: closeOpenClawStateDatabaseAsync,
+  },
+);
 
 function member(bus: BuzzBus, id = fixture.senderPublicKey) {
   return bus.directory
@@ -271,7 +228,7 @@ it("keeps explicit presence rejection nonfatal over a real socket", async () => 
     onPresenceError: (error) => errors.push(error),
     onFatalError: (error) => {
       fatal.push(error);
-      void cleanupBus?.close();
+      void closeBus();
     },
   });
   fixture.sendMessage("socket canary");

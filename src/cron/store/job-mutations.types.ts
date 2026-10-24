@@ -9,12 +9,16 @@ import type { CronSchedulerSnapshot } from "./scheduler-actor.types.js";
 /** Only captured facts cross this boundary; callbacks and live authority stay on the host. */
 type CronJobMutationOptions = Pick<
   CronAddOptions,
+  | "pluginCommand"
+  | "pluginCommandSourceDigest"
+  | "streamSandbox"
   | "enabledExplicit"
   | "systemOwned"
   | "createdActor"
   | "inferenceBinding"
   | "sourceConversation"
   | "operatorSource"
+  | "operatorSourceExecutionRevision"
   | "skillLibrarySelections"
   | "toolsAllowProvenance"
   | "toolsAllowExecTarget"
@@ -27,6 +31,7 @@ type CronJobMutationOptions = Pick<
 export type CronJobMutation =
   | {
       kind: "add";
+      createdAtMs?: number;
       input: CronJobCreate;
       matchingJobIds?: string[];
       options: CronJobMutationOptions;

@@ -315,7 +315,7 @@ function createSharedStateWorkerOwner() {
       context: OpenClawStateWorkerContext,
       options: Omit<OperationOptions, "createAdmission"> = {},
     ): Promise<Store | undefined> {
-      const { existingOnly = false, assertCurrent, preparation, signal } = options;
+      const { existingOnly = false, assertCurrent, signal } = options;
       const { admission } = context;
       const wait = <T>(pending: Promise<T>) => racePromiseWithAbortSignal(pending, signal);
       const source = captureRuntimeWorkerSource(moduleUrl);
@@ -388,7 +388,6 @@ function createSharedStateWorkerOwner() {
               openingGuard.assertCurrent,
               {
                 maintenanceScope: context.maintenanceScope,
-                preparation,
                 retireIdle: retireIdle.bind(undefined, admitted),
                 retainCleanup: (cleanup) => {
                   admitted.cleanup = cleanup;

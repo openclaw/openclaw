@@ -4,7 +4,6 @@ export const CHANNEL_PAIRING_COMPAT_RECORD = {
   code: "channel-pairing-sync-allowlist",
   status: "deprecated",
   owner: "sdk",
-  introduced: "2026-04-03",
   deprecated: "2026-10-03",
   warningStarts: "2026-10-03",
   removeAfter: "2026-12-31",
@@ -15,11 +14,4 @@ export const CHANNEL_PAIRING_COMPAT_RECORD = {
   diagnostics: [
     "TypeScript @deprecated annotation and migration documentation; bounded capability-family warnings on legacy preparation",
   ],
-  tests: [
-    "src/plugins/compat/registry.test.ts",
-    "test/type-contracts/channel-pairing-allowlist.ts",
-    "src/pairing/pairing-allowlist.worker.test.ts",
-  ],
-  releaseNote:
-    "Channel ingress reads pairing allowlists through the shared-state reader. Bundled callers await the existing async API; the synchronous SDK reader remains compatible. Missing-store reads grant no permission and no longer initialize storage.",
 } as const satisfies PluginCompatRecord;

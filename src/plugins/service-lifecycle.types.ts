@@ -8,15 +8,13 @@ import type { PluginRegistry, PluginServiceRegistration } from "./registry-types
 import type { PluginServiceCronHost } from "./service-cron.js";
 import type { PluginServiceSchedulerOwner } from "./service-scheduler.js";
 
-type PluginServiceStopResult = { errors: readonly unknown[] };
-
 export type PluginServicesHandle = {
   reload: (config: OpenClawConfig, serviceIds: ReadonlySet<string>) => Promise<void>;
   stop: (options?: {
     strict: true;
     deadlineAtMs?: number;
     pluginIds?: ReadonlySet<string>;
-  }) => Promise<void | PluginServiceStopResult>;
+  }) => Promise<void | { errors: readonly unknown[] }>;
 };
 
 export type StartPluginServicesParams = {

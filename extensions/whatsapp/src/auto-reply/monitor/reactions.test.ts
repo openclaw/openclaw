@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
-import { resolveWhatsAppAckEmoji } from "./ack-emoji.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { createWhatsAppStatusReactionController } from "./status-reaction.js";
 
@@ -18,10 +17,6 @@ vi.mock("../../send.js", () => ({
 vi.mock("./group-activation.js", () => ({
   resolveGroupActivationFor: hoisted.resolveGroupActivationFor,
 }));
-
-type AckReactionConfig = NonNullable<
-  NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>["ackReaction"]
->;
 
 function createMessage(
   overrides: NonNullable<Parameters<typeof createTestWebInboundMessage>[0]> = {},
@@ -47,21 +42,6 @@ function createConfig(reactionLevel: "off" | "ack" | "minimal" | "extensive"): O
     messages: { ackReaction: "👀", ackReactionScope: "all" },
     channels: { whatsapp: { reactionLevel } },
   } as OpenClawConfig;
-}
-
-function createAckEmojiConfig(ackReaction?: AckReactionConfig): OpenClawConfig {
-  return {
-    agents: { entries: { agent: { identity: { emoji: "🔥" } } } },
-    channels: { whatsapp: { ackReaction } },
-  } as OpenClawConfig;
-}
-
-function resolveAckEmoji(cfg: OpenClawConfig) {
-  return resolveWhatsAppAckEmoji({
-    cfg,
-    agentId: "agent",
-    ackConfig: cfg.channels?.whatsapp?.ackReaction,
-  });
 }
 
 const groupJid = "120363000000000000@g.us";
@@ -99,33 +79,54 @@ const runAckReaction = (overrides: Partial<AckReactionParams> = {}) =>
     ...overrides,
   });
 
-describe("resolveWhatsAppAckEmoji", () => {
+describe("maybeSendAckReaction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it.each([
     {
       name: "keeps missing ackReaction config disabled",
-      cfg: createAckEmojiConfig(),
+      configured: undefined,
+      identity: { emoji: "🔥" },
       expected: "",
     },
     {
       name: "falls back to the routed agent identity for an empty emoji",
-      cfg: createAckEmojiConfig({ emoji: " ", direct: true, group: "mentions" }),
+      configured: " ",
+      identity: { emoji: "🔥" },
       expected: "🔥",
     },
     {
       name: "uses the default ack emoji when configured without an emoji or agent identity",
-      cfg: {
-        channels: { whatsapp: { ackReaction: { direct: true, group: "mentions" } } },
-      } as OpenClawConfig,
+      configured: " ",
+      identity: undefined,
       expected: "👀",
     },
-  ])("$name", ({ cfg, expected }) => {
-    expect(resolveAckEmoji(cfg)).toBe(expected);
-  });
-});
-
-describe("maybeSendAckReaction", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+    {
+      name: "trims configured emoji before falling back to identity",
+      configured: " ✅ ",
+      identity: { emoji: "🔥" },
+      expected: "✅",
+    },
+  ])("$name", async ({ configured, identity, expected }) => {
+    const cfg: OpenClawConfig = {
+      messages: { ackReaction: configured, ackReactionScope: "all" },
+      agents: { entries: { agent: { identity } } },
+    };
+    const reaction = await runAckReaction({ cfg });
+    if (!expected) {
+      expect(reaction).toBeNull();
+      expect(hoisted.sendReactionWhatsApp).not.toHaveBeenCalled();
+      return;
+    }
+    await expect(reaction?.ackReactionPromise).resolves.toBe(true);
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(
+      "15551234567@s.whatsapp.net",
+      "msg-1",
+      expected,
+      { verbose: false, fromMe: false, accountId: "default", cfg },
+    );
   });
 
   it("suppresses ack reactions when reactionLevel is off", async () => {

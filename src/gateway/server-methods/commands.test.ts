@@ -135,28 +135,24 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import { commandsHandlers } from "./commands.js";
 
 function channelPlugin(provider: string) {
-  if (provider !== "discord") {
-    return undefined;
-  }
-  return {
-    commands: {
-      nativeCommandsAutoEnabled: true,
-      resolveNativeCommandName: ({
-        commandKey,
-        defaultName,
-      }: {
-        commandKey: string;
-        defaultName: string;
-      }) => (commandKey === "model" ? "set_model" : defaultName),
-    },
-  };
+  return provider !== "discord"
+    ? undefined
+    : {
+        commands: {
+          nativeCommandsAutoEnabled: true,
+          resolveNativeCommandName: ({
+            commandKey,
+            defaultName,
+          }: {
+            commandKey: string;
+            defaultName: string;
+          }) => (commandKey === "model" ? "set_model" : defaultName),
+        },
+      };
 }
 
 async function callHandler(params: Record<string, unknown> = {}) {
-  let result: { ok: boolean; payload?: unknown; error?: unknown } | undefined;
-  const respond = (ok: boolean, payload?: unknown, error?: unknown) => {
-    result = { ok, payload, error };
-  };
+  const respond = vi.fn<(ok: boolean, payload?: unknown, error?: unknown) => void>();
   await expectDefined(
     commandsHandlers["commands.list"],
     "commands.list handler",
@@ -168,7 +164,8 @@ async function callHandler(params: Record<string, unknown> = {}) {
     isWebchatConnect: () => false,
     context: { getRuntimeConfig: () => ({}) } as never,
   });
-  return expectDefined(result, "commands.list response");
+  const [ok, payload, error] = expectDefined(respond.mock.calls[0], "commands.list response");
+  return { ok, payload, error };
 }
 
 type ListedCommand = CommandEntry;
@@ -189,6 +186,15 @@ async function pluginCommand(
   params: Record<string, unknown> = {},
 ): Promise<ListedCommand | undefined> {
   return (await listCommands(params)).find((command) => command.source === "plugin");
+}
+
+function expectCommand(commands: ListedCommand[], name: string, expected?: object) {
+  const command = commands.find((entry) => entry.name === name);
+  if (expected) {
+    expect(command).toMatchObject(expected);
+  } else {
+    expect(command).toBeUndefined();
+  }
 }
 
 function createCommandRegistry(commands: RuntimeCommandRegistration[]) {
@@ -242,18 +248,13 @@ describe("commands.list handler", () => {
   });
 
   it("limits provider-specific native commands while keeping login text-visible", async () => {
-    expect(
-      (await listCommands({ provider: "discord" })).find((c) => c.name === "login"),
-    ).toBeUndefined();
-    expect(
-      (await listCommands({ provider: "slack", scope: "native" })).find((c) => c.name === "login"),
-    ).toBeUndefined();
-    expect(requireCommand(await listCommands({ provider: "telegram" }), "login").nativeName).toBe(
-      "login",
-    );
-    expect(
-      requireCommand(await listCommands({ provider: "discord", scope: "text" }), "login"),
-    ).toMatchObject({ name: "login", textAliases: ["/login"] });
+    expectCommand(await listCommands({ provider: "discord" }), "login");
+    expectCommand(await listCommands({ provider: "slack", scope: "native" }), "login");
+    expectCommand(await listCommands({ provider: "telegram" }), "login", { nativeName: "login" });
+    expectCommand(await listCommands({ provider: "discord", scope: "text" }), "login", {
+      name: "login",
+      textAliases: ["/login"],
+    });
   });
 
   it.each(["text", "native", "both"] as const)(
@@ -307,15 +308,13 @@ describe("commands.list handler", () => {
     ]);
 
     const commands = await listCommands();
-    expect(commands.find((c) => c.source === "plugin")).toEqual(
-      expect.objectContaining({
-        name: "demo",
-        description: "Demo command",
-        textAliases: ["/demo"],
-        acceptsArgs: true,
-        clientPresentation: { when: "no-arguments", action: { kind: "device-pairing" } },
-      }),
-    );
+    expect(commands.find((c) => c.source === "plugin")).toMatchObject({
+      name: "demo",
+      description: "Demo command",
+      textAliases: ["/demo"],
+      acceptsArgs: true,
+      clientPresentation: { when: "no-arguments", action: { kind: "device-pairing" } },
+    });
     expect(commands.find((c) => c.source === "plugin" && c.name === "tts")).toBeUndefined();
   });
 

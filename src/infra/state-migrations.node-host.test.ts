@@ -15,8 +15,8 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { withGatewayLockHeld } from "./state-migrations.gateway-lock.test-support.js";
 import {
   detectLegacyNodeHostConfig,
   migrateLegacyNodeHostConfig,
@@ -133,24 +133,22 @@ describe("legacy node-host Doctor migration", () => {
     expect((await loadNodeHostConfig(env))?.gateway?.contextPath).toBeUndefined();
   });
 
+  it("retains malformed UTF-8 without importing replacement characters", async () => {
+    const { env, sourcePath, migrate } = await legacyFixture({ displayName: "utf8-marker" });
+    const bytes = await fsp.readFile(sourcePath);
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    await fsp.writeFile(sourcePath, bytes);
+    const result = await migrate();
+    expect(result.changes).toEqual([]);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+    expect(await fsp.readFile(sourcePath)).toEqual(bytes);
+    expect(readCanonicalRow(env)).toBeUndefined();
+  });
+
   it("requires exclusive state ownership", async () => {
     const { env, sourcePath, migrate } = await legacyFixture();
-    const gatewayLock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: 10,
-      port: 18_789,
-      timeoutMs: 100,
-    });
-    if (!gatewayLock) {
-      throw new Error("expected test Gateway lock");
-    }
-    let blocked: Awaited<ReturnType<typeof migrateLegacyNodeHostConfig>>;
-    try {
-      blocked = await migrate();
-    } finally {
-      await gatewayLock.release();
-    }
+    const blocked = await withGatewayLockHeld(env, 18_789, () => migrate());
     expect(blocked.warnings[0]).toContain("OpenClaw state database is busy");
     expect(readCanonicalRow(env)).toBeUndefined();
     expect(fs.existsSync(sourcePath)).toBe(true);
@@ -230,20 +228,16 @@ describe("legacy node-host Doctor migration", () => {
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
   });
 
-  it("fails before mutation when the source changes after parsing or before claim", async () => {
-    const first = await legacyFixture();
-    const afterParse = await first.migrate({
-      beforeVerify: () => fs.appendFileSync(first.sourcePath, "\n"),
-    });
-    expect(afterParse.warnings[0]).toContain("source changed after Doctor loaded it");
-    expect(readCanonicalRow(first.env)).toBeUndefined();
-    const second = await legacyFixture();
-    const beforeClaim = await second.migrate({
-      beforeClaim: () => fs.appendFileSync(second.sourcePath, "\n"),
-    });
-    expect(beforeClaim.warnings[0]).toContain("source changed before Doctor could claim it");
-    expect(readCanonicalRow(second.env)).toBeUndefined();
-    expect(fs.existsSync(second.sourcePath)).toBe(true);
+  it.each([
+    ["beforeVerify", "source changed after Doctor loaded it"],
+    ["beforeClaim", "source changed before Doctor could claim it"],
+  ] as const)("fails before mutation when source changes at %s", async (hook, warning) => {
+    const { env, sourcePath, migrate } = await legacyFixture();
+    expect(
+      (await migrate({ [hook]: () => fs.appendFileSync(sourcePath, "\n") })).warnings[0],
+    ).toContain(warning);
+    expect(readCanonicalRow(env)).toBeUndefined();
+    expect(fs.existsSync(sourcePath)).toBe(true);
   });
 
   it("retains a fixed claim on cleanup failure and retries idempotently", async () => {

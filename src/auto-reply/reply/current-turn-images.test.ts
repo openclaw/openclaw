@@ -2,7 +2,7 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import type { MsgContext } from "../templating.js";
 import { resolveAgentTurnAttachments } from "./agent-turn-attachments.js";
@@ -29,8 +29,7 @@ const media = (base: string, name: string, contentType = "image/png") => ({
   workspaceDir: base,
   contentType,
 });
-const inDir = (run: (base: string) => Promise<void>) =>
-  withTestDir({ prefix: "openclaw-current-turn-images-" }, run);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function resolve({
   images,
   imageOrder,
@@ -57,97 +56,84 @@ describe("resolveCurrentTurnImages", () => {
   });
 
   it("hydrates Telegram-style state-relative media into native prompt images", async () => {
-    await inDir(async (base) => {
-      const stateDir = path.join(base, "state");
-      const cwd = path.join(base, "cwd");
-      const relativePath = "media/inbound/telegram.jpg";
-      const attachmentPath = path.join(stateDir, relativePath);
-      const imageBytes = Buffer.from("telegram-image");
-      await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
-      await fs.mkdir(cwd, { recursive: true });
-      await fs.writeFile(attachmentPath, imageBytes);
-      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-      vi.spyOn(process, "cwd").mockReturnValue(cwd);
+    const base = tempDirs.make("openclaw-current-turn-images-");
+    const stateDir = path.join(base, "state");
+    const cwd = path.join(base, "cwd");
+    const relativePath = "media/inbound/telegram.jpg";
+    const attachmentPath = path.join(stateDir, relativePath);
+    const imageBytes = Buffer.from("telegram-image");
+    await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
+    await fs.mkdir(cwd, { recursive: true });
+    await fs.writeFile(attachmentPath, imageBytes);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    vi.spyOn(process, "cwd").mockReturnValue(cwd);
 
-      const result = await resolve({ media: [{ path: relativePath, contentType: "image/jpeg" }] });
+    const result = await resolve({ media: [{ path: relativePath, contentType: "image/jpeg" }] });
 
-      expect(result).toStrictEqual({
-        images: [image(imageBytes, "image/jpeg")],
-        imageOrder: ["inline"],
-      });
+    expect(result).toStrictEqual({
+      images: [image(imageBytes, "image/jpeg")],
+      imageOrder: ["inline"],
     });
   });
 
   it("rejects PDF bytes despite a spoofed image kind, MIME, and filename", async () => {
-    await inDir(async (base) => {
-      await fs.writeFile(path.join(base, "spoofed.png"), PDF_BYTES);
+    const base = tempDirs.make("openclaw-current-turn-images-");
+    await fs.writeFile(path.join(base, "spoofed.png"), PDF_BYTES);
 
-      const result = await resolve({ media: [{ ...media(base, "spoofed.png"), kind: "image" }] });
+    const result = await resolve({ media: [{ ...media(base, "spoofed.png"), kind: "image" }] });
 
-      expect(result.images).toBeUndefined();
-    });
+    expect(result.images).toBeUndefined();
   });
 
   it("does not duplicate a prepared host-staged image during runner hydration", async () => {
-    await inDir(async (base) => {
-      const stagingRoot = path.join(base, "media", "inbound", "staged");
-      const imagePath = path.join(stagingRoot, "photo.png");
-      const imageBytes = Buffer.from("host-staged-image");
-      await fs.mkdir(path.dirname(imagePath), { recursive: true });
-      await fs.writeFile(imagePath, imageBytes);
-      const attachment = { path: imagePath, contentType: "image/png" };
+    const base = tempDirs.make("openclaw-current-turn-images-");
+    const stagingRoot = path.join(base, "media", "inbound", "staged");
+    const imagePath = path.join(stagingRoot, "photo.png");
+    const imageBytes = Buffer.from("host-staged-image");
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.writeFile(imagePath, imageBytes);
+    const attachment = { path: imagePath, contentType: "image/png" };
 
-      const prepared = await resolve({
-        media: [{ ...attachment, workspaceDir: stagingRoot }],
-      });
-      const runner = await resolve({
-        media: [attachment],
-        images: prepared.images,
-        imageOrder: prepared.imageOrder,
-      });
-
-      expect(prepared.images).toHaveLength(1);
-      expect(Buffer.from(prepared.images?.[0]?.data ?? "", "base64")).toEqual(imageBytes);
-      expect(runner.images).toEqual(prepared.images);
+    const prepared = await resolve({
+      media: [{ ...attachment, workspaceDir: stagingRoot }],
     });
+    const runner = await resolve({
+      media: [attachment],
+      images: prepared.images,
+      imageOrder: prepared.imageOrder,
+    });
+
+    expect(prepared.images).toHaveLength(1);
+    expect(Buffer.from(prepared.images?.[0]?.data ?? "", "base64")).toEqual(imageBytes);
+    expect(runner.images).toEqual(prepared.images);
   });
 
   it("does not let a staging root expose sibling workspace images", async () => {
-    await inDir(async (base) => {
-      const stagingRoot = path.join(base, "media", "inbound", "staged");
-      const rejectedPath = path.join(base, "private.png");
-      await fs.mkdir(stagingRoot, { recursive: true });
-      await fs.writeFile(rejectedPath, "private-workspace-image");
-
-      const result = await resolve({
-        media: [{ path: rejectedPath, contentType: "image/png", workspaceDir: stagingRoot }],
-      });
-
-      expect(result.images).toBeUndefined();
-    });
-  });
-
-  it("preserves all-offloaded image order without inline payloads", async () => {
-    const result = await resolve({ images: [], imageOrder: ["offloaded", "offloaded"] });
-
-    expect(result).toEqual({
-      imageOrder: ["offloaded", "offloaded"],
-    });
-  });
-
-  it("preserves interleaved offloaded slots around inline image payloads", async () => {
-    const inlineImages = ["first", "second"].map((data) => image(data));
+    const base = tempDirs.make("openclaw-current-turn-images-");
+    const stagingRoot = path.join(base, "media", "inbound", "staged");
+    const rejectedPath = path.join(base, "private.png");
+    await fs.mkdir(stagingRoot, { recursive: true });
+    await fs.writeFile(rejectedPath, "private-workspace-image");
 
     const result = await resolve({
-      images: inlineImages,
-      imageOrder: ["inline", "offloaded", "inline"],
+      media: [{ path: rejectedPath, contentType: "image/png", workspaceDir: stagingRoot }],
     });
 
-    expect(result).toEqual({
-      images: inlineImages,
-      imageOrder: ["inline", "offloaded", "inline"],
-    });
+    expect(result.images).toBeUndefined();
   });
+
+  it.each([
+    { images: [], imageOrder: ["offloaded", "offloaded"] },
+    { images: [image("first"), image("second")], imageOrder: ["inline", "offloaded", "inline"] },
+  ] satisfies Parameters<typeof resolve>[0][])(
+    "preserves provided image slots: $imageOrder",
+    async (input) => {
+      expect(await resolve(input)).toEqual({
+        ...(input.images.length ? { images: input.images } : {}),
+        imageOrder: input.imageOrder,
+      });
+    },
+  );
 
   it("does not rehydrate a managed copy of an already-provided inline image", async () => {
     vi.mocked(resolveAgentTurnAttachments).mockClear();
@@ -170,56 +156,53 @@ describe("resolveCurrentTurnImages", () => {
   });
 
   it("orders extracted PDF page images before later current image attachments", async () => {
-    await inDir(async (base) => {
-      await fs.writeFile(path.join(base, "photo.png"), "current-photo");
-      const result = await resolve({
-        media: [media(base, "scan.pdf", "application/pdf"), media(base, "photo.png")],
-        extractedFileImages: [{ ...image("pdf-page"), attachmentIndex: 0 }],
-      });
-
-      expect(result.images?.map((entry) => Buffer.from(entry.data, "base64").toString())).toEqual([
-        "pdf-page",
-        "current-photo",
-      ]);
-      expect(result.imageOrder).toEqual(["inline", "inline"]);
+    const base = tempDirs.make("openclaw-current-turn-images-");
+    await fs.writeFile(path.join(base, "photo.png"), "current-photo");
+    const result = await resolve({
+      media: [media(base, "scan.pdf", "application/pdf"), media(base, "photo.png")],
+      extractedFileImages: [{ ...image("pdf-page"), attachmentIndex: 0 }],
     });
+
+    expect(result.images?.map((entry) => Buffer.from(entry.data, "base64").toString())).toEqual([
+      "pdf-page",
+      "current-photo",
+    ]);
+    expect(result.imageOrder).toEqual(["inline", "inline"]);
   });
 
   it("retains undescribed native images when a described sibling and missing sibling coexist", async () => {
-    await inDir(async (base) => {
-      const imageBytes = Buffer.from("present-image");
-      await fs.writeFile(path.join(base, "present.png"), imageBytes);
+    const base = tempDirs.make("openclaw-current-turn-images-");
+    const imageBytes = Buffer.from("present-image");
+    await fs.writeFile(path.join(base, "present.png"), imageBytes);
 
-      const result = await resolve({
-        media: ["described.png", "present.png", "missing.png"].map((name) => media(base, name)),
-        MediaUnderstanding: [
-          {
-            kind: "image.description",
-            attachmentIndex: 0,
-            provider: "imageModel",
-            text: "an already described image",
-          },
-        ],
-      });
-
-      expect(result.images).toEqual([image(imageBytes)]);
-      expect(result.imageOrder).toEqual(["inline"]);
-      expect(result.imageSourceIndexes).toEqual([1]);
-      expect(result.unresolvedSourceIndexes).toEqual([2]);
+    const result = await resolve({
+      media: ["described.png", "present.png", "missing.png"].map((name) => media(base, name)),
+      MediaUnderstanding: [
+        {
+          kind: "image.description",
+          attachmentIndex: 0,
+          provider: "imageModel",
+          text: "an already described image",
+        },
+      ],
     });
+
+    expect(result.images).toEqual([image(imageBytes)]);
+    expect(result.imageOrder).toEqual(["inline"]);
+    expect(result.imageSourceIndexes).toEqual([1]);
+    expect(result.unresolvedSourceIndexes).toEqual([2]);
   });
 
   it("proceeds without native images when current media resolution throws", async () => {
     vi.mocked(resolveAgentTurnAttachments).mockRejectedValueOnce(new Error("boom"));
-    await inDir(async (base) => {
-      await fs.writeFile(path.join(base, "present.png"), "present-image");
+    const base = tempDirs.make("openclaw-current-turn-images-");
+    await fs.writeFile(path.join(base, "present.png"), "present-image");
 
-      const result = await resolve({ media: [media(base, "present.png")] });
+    const result = await resolve({ media: [media(base, "present.png")] });
 
-      expect(result.images).toBeUndefined();
-      expect(result.imageOrder).toBeUndefined();
-      expect(result.imageSourceIndexes).toBeUndefined();
-      expect(result.unresolvedSourceIndexes).toEqual([0]);
-    });
+    expect(result.images).toBeUndefined();
+    expect(result.imageOrder).toBeUndefined();
+    expect(result.imageSourceIndexes).toBeUndefined();
+    expect(result.unresolvedSourceIndexes).toEqual([0]);
   });
 });

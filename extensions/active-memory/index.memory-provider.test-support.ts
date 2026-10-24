@@ -21,20 +21,24 @@ type MemoryProviderTestParams = {
   lastRuntimeEmbeddedRunParams: () => Record<string, unknown>;
 };
 
+function emptyTriggerProvider(search: Mock) {
+  return {
+    provider: {
+      search,
+      capabilities: { candidates: ["trigger"] },
+      candidates: vi.fn(async () => ({ hits: [] })),
+      close: vi.fn(),
+    },
+  };
+}
+
 /** Registers legacy and provider-neutral Active Memory recall, cache, authority, and tool-selection coverage. */
 export function registerActiveMemoryProviderTests(params: MemoryProviderTestParams): void {
   it("does not reuse trigger candidates or recall summaries across memory audiences", async () => {
     params.useNativeProvider();
     params.registerPluginConfig({ mode: "always", cacheTtlMs: 1_000 });
     const search = vi.fn(async () => ({ hits: [] }));
-    params.getActiveMemoryProvider.mockResolvedValue({
-      provider: {
-        search,
-        capabilities: { candidates: ["trigger"] },
-        candidates: vi.fn(async () => ({ hits: [] })),
-        close: vi.fn(),
-      },
-    });
+    params.getActiveMemoryProvider.mockResolvedValue(emptyTriggerProvider(search));
     let recall = 0;
     params.runEmbeddedAgent.mockImplementation(async (run: { sessionFile: string }) => {
       const summary = ++recall === 1 ? "owner-private memory" : "conversation memory";
@@ -125,14 +129,7 @@ export function registerActiveMemoryProviderTests(params: MemoryProviderTestPara
       params.useNativeProvider();
       params.registerPluginConfig({ mode: "always" });
       const search = vi.fn(async () => ({ hits: [] }));
-      params.getActiveMemoryProvider.mockResolvedValue({
-        provider: {
-          search,
-          capabilities: { candidates: ["trigger"] },
-          candidates: vi.fn(async () => ({ hits: [] })),
-          close: vi.fn(),
-        },
-      });
+      params.getActiveMemoryProvider.mockResolvedValue(emptyTriggerProvider(search));
       await params.runPromptBuild({
         prompt: "What do you remember about my preferences?",
         currentUserMessage,
@@ -148,14 +145,7 @@ export function registerActiveMemoryProviderTests(params: MemoryProviderTestPara
     params.useNativeProvider();
     params.registerPluginConfig({ mode: "escalate" });
     const search = vi.fn(async () => ({ hits: [] }));
-    params.getActiveMemoryProvider.mockResolvedValue({
-      provider: {
-        search,
-        capabilities: { candidates: ["trigger"] },
-        candidates: vi.fn(async () => ({ hits: [] })),
-        close: vi.fn(),
-      },
-    });
+    params.getActiveMemoryProvider.mockResolvedValue(emptyTriggerProvider(search));
     for (const [history, fingerprint, admission] of [
       ["old history", "authority-a", "same-admission"],
       ["rebuilt history", "authority-a", "same-admission"],

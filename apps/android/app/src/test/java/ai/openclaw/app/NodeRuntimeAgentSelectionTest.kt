@@ -176,10 +176,12 @@ class NodeRuntimeAgentSelectionTest {
   fun publicationsRefreshOnlySelectedAgentCatalogsWithoutDiscovery() =
     runBlocking {
       val runtime = createConnectedRuntime()
-      val runtimeJob = ReflectionHelpers.getField<CoroutineScope>(runtime, "scope").coroutineContext.job
+      val originalScope = ReflectionHelpers.getField<CoroutineScope>(runtime, "scope")
       val catalogRequests = Channel<Pair<JsonObject, Job>>(Channel.UNLIMITED)
       val revision = AtomicInteger(0)
       try {
+        // Settle these synchronous request stubs inline without joining unrelated runtime work.
+        ReflectionHelpers.setField(runtime, "scope", CoroutineScope(originalScope.coroutineContext + Dispatchers.Unconfined))
         runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
           when (method) {
             "models.list" -> {
@@ -237,7 +239,6 @@ class NodeRuntimeAgentSelectionTest {
           )
         for ((event, payload, refreshes) in publications) {
           revision.incrementAndGet()
-          val previousJobs = runtimeJob.children.toSet()
           ReflectionHelpers.callInstanceMethod<Unit>(
             runtime,
             "handleGatewayEvent",
@@ -245,11 +246,6 @@ class NodeRuntimeAgentSelectionTest {
             ReflectionHelpers.ClassParameter.from(String::class.java, payload),
           )
           withTimeout(2_000) {
-            // The owner registers launched reads synchronously; drain them before checking omissions.
-            runtimeJob.children
-              .filterNot { it in previousJobs }
-              .toList()
-              .forEach { it.join() }
             if (refreshes) {
               publishedRevision = revision.get()
               repeat(2) {
@@ -272,6 +268,7 @@ class NodeRuntimeAgentSelectionTest {
           )
         }
       } finally {
+        ReflectionHelpers.setField(runtime, "scope", originalScope)
         closeNodeRuntimeTestFixture(runtime)
         catalogRequests.close()
       }

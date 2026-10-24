@@ -38,7 +38,6 @@ const observation = vi.hoisted(() => ({
   previousDriver: "dead" as "dead" | "alive",
   context: vi.fn(),
   http: vi.fn(),
-  inspect: vi.fn(),
   settle: vi.fn(),
 }));
 // Keep the real ledger kernels; worker transport has separate boundary coverage.
@@ -107,13 +106,9 @@ vi.mock("../cli/daemon-cli/restart-health-probe.js", () => ({
   resolveGatewayRestartProbeContext: observation.context,
   waitForGatewayHttpReadiness: observation.http,
 }));
-vi.mock("../cli/daemon-cli/restart-health.js", () => ({
-  inspectGatewayRestart: observation.inspect,
+vi.mock("../cli/daemon-cli/restart-health.js", async (original) => ({
+  ...(await original<typeof import("../cli/daemon-cli/restart-health.js")>()),
   waitForGatewayHealthyRestart: observation.settle,
-  isSameGatewayRestartGeneration: (
-    left: { gatewayBootId: string },
-    right: { gatewayBootId: string },
-  ) => left.gatewayBootId === right.gatewayBootId,
 }));
 vi.mock("./update-run-notice.runtime.js", () => ({ notifyUpdateRunPhase: vi.fn() }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
@@ -138,7 +133,6 @@ beforeEach(() => {
   observation.previousDriver = "dead";
   observation.context.mockReset().mockResolvedValue({ config: { gateway: { port: 18789 } } });
   observation.http.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
-  observation.inspect.mockReset().mockImplementation(async () => health());
   observation.settle.mockReset().mockImplementation(async () => health());
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.mocked(note).mockClear();
@@ -277,14 +271,14 @@ it.each(["absent", "driver-revived", "newer-completed-run"])(
     const candidate = candidateState === "absent" ? undefined : getUpdateRun(runId);
     vi.mocked(readInterruptedUpdateCandidateAsync).mockClear();
     if (candidateState !== "absent") {
-      observation.inspect.mockImplementationOnce(async () => {
+      observation.http.mockImplementationOnce(async () => {
         if (candidateState === "driver-revived") {
           observation.driver = "alive";
         } else {
           const newer = createUpdateRun({ trigger: "cli" });
           finishUpdateRun(newer.runId, { status: "succeeded" });
         }
-        return health();
+        return { healthz: 200, readyz: 200 };
       });
     }
     expect(await reconcileInterruptedUpdateRuns({ candidate })).toEqual([]);
@@ -367,7 +361,7 @@ it.each(["missing-receipt", "read-only", "settle", "repair", "acknowledgement"])
         "Update history",
       );
       expect(getUpdateRun(runId)?.reason).toBe("abandoned");
-      expect(observation.inspect).not.toHaveBeenCalled();
+      expect(observation.settle).not.toHaveBeenCalled();
     } else {
       expect(observation.settle).not.toHaveBeenCalled();
       if (evidence === "repair" || evidence === "acknowledgement") {
@@ -454,7 +448,6 @@ it("records an unmanaged skip when the restart step is skipped", async () => {
   expect(observation.context).not.toHaveBeenCalled();
   expect(observation.settle).not.toHaveBeenCalled();
   expect(observation.http).not.toHaveBeenCalled();
-  expect(observation.inspect).not.toHaveBeenCalled();
 });
 
 it("records cleanup uncertainty instead of settling an interrupted update", async () => {

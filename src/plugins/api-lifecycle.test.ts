@@ -35,23 +35,57 @@ function captureRegisteredPluginApi(handlers: Parameters<typeof buildPluginApi>[
 }
 
 describe("plugin api lifecycle", () => {
+  it("omits retired registrations and exposes runtime capabilities through grouped namespaces", () => {
+    const api = captureRegisteredPluginApi({});
+    for (const method of [
+      "emitAgentEvent",
+      "setRunContext",
+      "getRunContext",
+      "clearRunContext",
+      "registerSessionAction",
+      "sendSessionAttachment",
+      "scheduleSessionTurn",
+      "unscheduleSessionTurnsByTag",
+      "steerActiveRun",
+      "registerCodexAppServerExtensionFactory",
+      "registerHostedMediaResolver",
+      "registerTextTransforms",
+      "registerAgentExecutorController",
+    ]) {
+      expect(method in api).toBe(false);
+    }
+    expect(
+      api.agent.events.emitAgentEvent({ runId: "run", stream: "lifecycle", data: {} }),
+    ).toEqual({
+      emitted: false,
+      reason: "not wired",
+    });
+  });
+
   it("returns inert results for unwired runtime and scheduler handlers", async () => {
     const api = createPluginApi();
     const sessionKey = "agent:main:main";
 
     expect({
-      event: api.emitAgentEvent({ runId: "run", stream: "lifecycle", data: {} }),
-      setContext: api.setRunContext({ runId: "run", namespace: "workflow", value: 1 }),
-      getContext: api.getRunContext({ runId: "run", namespace: "workflow" }),
+      event: api.agent.events.emitAgentEvent({ runId: "run", stream: "lifecycle", data: {} }),
+      setContext: api.runContext.setRunContext({ runId: "run", namespace: "workflow", value: 1 }),
+      getContext: api.runContext.getRunContext({ runId: "run", namespace: "workflow" }),
       registerJob: api.registerSessionSchedulerJob({ id: "job", sessionKey, kind: "session-turn" }),
       injection: await api.enqueueNextTurnInjection({ sessionKey, text: "queued" }),
       steering: await api.session.workflow.steerActiveRun({ sessionKey, text: "guidance" }),
-      attachment: await api.sendSessionAttachment({
+      attachment: await api.session.workflow.sendSessionAttachment({
         sessionKey,
         files: [{ path: "/tmp/attachment.txt" }],
       }),
-      schedule: await api.scheduleSessionTurn({ sessionKey, message: "wake", delayMs: 1_000 }),
-      unschedule: await api.unscheduleSessionTurnsByTag({ sessionKey, tag: "wake" }),
+      schedule: await api.session.workflow.scheduleSessionTurn({
+        sessionKey,
+        message: "wake",
+        delayMs: 1_000,
+      }),
+      unschedule: await api.session.workflow.unscheduleSessionTurnsByTag({
+        sessionKey,
+        tag: "wake",
+      }),
     }).toStrictEqual({
       event: { emitted: false, reason: "not wired" },
       setContext: false,
@@ -101,76 +135,39 @@ describe("plugin api lifecycle", () => {
     expect(reads).toEqual(["cli", "tool", "hook"]);
   });
 
-  it("keeps both next-turn injection APIs callable after registration", async () => {
-    const enqueueNextTurnInjection = vi.fn(async (injection) => ({
-      enqueued: true,
-      id: `injection-${injection.text}`,
-      sessionKey: injection.sessionKey,
-    }));
-    const api = captureRegisteredPluginApi({ enqueueNextTurnInjection });
-    const grouped = { sessionKey: "global", text: "grouped", agentId: "work" };
-    const flat = { sessionKey: "global", text: "flat", agentId: "main" };
-    expect([
-      await api.session.workflow.enqueueNextTurnInjection(grouped),
-      await api.enqueueNextTurnInjection(flat),
-    ]).toEqual([
-      { enqueued: true, id: "injection-grouped", sessionKey: "global" },
-      { enqueued: true, id: "injection-flat", sessionKey: "global" },
-    ]);
-    expect(enqueueNextTurnInjection.mock.calls).toEqual([[grouped], [flat]]);
-  });
-
-  it("keeps workflow steering callable after registration", async () => {
-    const steerActiveRun = vi.fn<OpenClawPluginApi["steerActiveRun"]>(async () => ({
-      steered: true,
-      runId: "active-run",
-    }));
-    const api = captureRegisteredPluginApi({ steerActiveRun });
-    const input = { sessionKey: "agent:main:main", text: "guidance", idempotencyKey: "review-1" };
-    await expect(api.session.workflow.steerActiveRun(input)).resolves.toEqual({
-      steered: true,
-      runId: "active-run",
-    });
-    expect(steerActiveRun).toHaveBeenCalledExactlyOnceWith(input);
-  });
-
-  it("blocks registration-phase methods after registration", () => {
-    const registerSessionExtension = vi.fn();
-    const api = captureRegisteredPluginApi({ registerSessionExtension });
-
-    expect(
-      api.session.state.registerSessionExtension({
-        namespace: "workflow",
-        description: "workflow",
-      }),
-    ).toBeUndefined();
-    expect(registerSessionExtension).not.toHaveBeenCalled();
-  });
-
   it.each<[string, boolean]>([
-    ["clearRunContext", true],
-    ["emitAgentEvent", true],
+    ["runContext.clearRunContext", true],
+    ["agent.events.emitAgentEvent", true],
     ["enqueueNextTurnInjection", true],
-    ["steerActiveRun", true],
-    ["getRunContext", true],
-    ["sendSessionAttachment", true],
-    ["scheduleSessionTurn", true],
-    ["setRunContext", true],
-    ["unscheduleSessionTurnsByTag", true],
+    ["session.workflow.enqueueNextTurnInjection", true],
+    ["session.workflow.steerActiveRun", true],
+    ["runContext.getRunContext", true],
+    ["session.workflow.sendSessionAttachment", true],
+    ["session.workflow.scheduleSessionTurn", true],
+    ["runContext.setRunContext", true],
+    ["session.workflow.unscheduleSessionTurnsByTag", true],
     ["registerTool", false],
     ["registerSessionExtension", false],
+    ["session.state.registerSessionExtension", false],
+    ["session.controls.registerSessionAction", false],
     ["unknown", false],
     ["", false],
     ["constructor", false],
     ["toString", false],
     ["__proto__", false],
-  ])("enforces post-registration call eligibility for %j as %s", (methodName, expected) => {
-    const handler = vi.fn();
-    const api = captureRegisteredPluginApi({ [methodName]: handler });
-    const method = Reflect.get(api, methodName);
-    const result = typeof method === "function" ? Reflect.apply(method, api, []) : undefined;
+  ])("enforces post-registration call eligibility for %j as %s", async (methodName, expected) => {
+    const input = { sessionKey: "agent:main:main", text: "guidance", namespace: "workflow" };
+    const output = { forwarded: true };
+    const handler = vi.fn(async () => output);
+    const path = methodName.split(".");
+    const api = captureRegisteredPluginApi({ [path.at(-1)!]: handler });
+    const method = path.reduce<unknown>(
+      (value, key) => (value && typeof value === "object" ? Reflect.get(value, key) : undefined),
+      api,
+    );
+    const result = typeof method === "function" ? Reflect.apply(method, api, [input]) : undefined;
 
-    expect(handler).toHaveBeenCalledTimes(expected ? 1 : 0);
-    expect(result).toBeUndefined();
+    expect(handler.mock.calls).toEqual(expected ? [[input]] : []);
+    expect(await result).toBe(expected ? output : undefined);
   });
 });

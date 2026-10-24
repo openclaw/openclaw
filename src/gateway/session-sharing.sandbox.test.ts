@@ -9,6 +9,7 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import {
   authorizeResolvedSessionMutationAsync,
@@ -22,20 +23,9 @@ function sandboxRoleClient(role: "view" | "write"): GatewayClient {
   const profile = ensureProfileForEmail(`sandbox-required-${role}@example.test`);
   setUserProfileRole(profile.id, role);
   return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-    },
+    connect: gatewayConnect(["operator.read", "operator.write"]),
     authenticatedUserId: profile.id,
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: gatewayProfile(profile.id),
   };
 }
 

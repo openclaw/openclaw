@@ -13,6 +13,8 @@ import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 import { sha256 as digest, workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
 import {
   captureWorkspaceManifest,
+  captureWorkspaceManifestDocument,
+  captureWorkspaceManifestReference,
   captureWorkspaceSnapshot,
   parseWorkspaceManifestPair,
 } from "./workspace-manifest-worker.js";
@@ -128,7 +130,6 @@ it("does not create or return an implicit hash memo for an uncached capture", as
   expect(result.hashes).toEqual([]);
   expect(result.metrics).toEqual({
     contentHashCount: 0,
-    contentHashDurationMs: 0,
     memoHitCount: 0,
   });
 });
@@ -152,7 +153,7 @@ it("captures eligible files outside the Gateway thread and returns the canonical
     return await lstat(...args);
   });
   const memo = new Map<string, string>();
-  const metrics = { contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 };
+  const metrics = { contentHashCount: 0, memoHitCount: 0 };
   const capture = () =>
     withWorkspaceHashMemo(memo, () => captureWorkspaceManifest(selection), metrics);
   const first = await capture();
@@ -166,9 +167,23 @@ it("captures eligible files outside the Gateway thread and returns the canonical
   );
   expect({ manifest: snapshot.manifest, manifestRef: snapshot.manifestRef }).toEqual(first);
   expect(snapshot.manifestRef).toBe(`sha256:${digest(snapshot.rawManifest)}`);
+  const document = await withWorkspaceHashMemo(
+    memo,
+    () => captureWorkspaceManifestDocument(selection),
+    metrics,
+  );
+  expect(document).toEqual({
+    manifestRef: snapshot.manifestRef,
+    rawManifest: snapshot.rawManifest,
+  });
+  const reference = () =>
+    withWorkspaceHashMemo(memo, () => captureWorkspaceManifestReference(selection), metrics);
+  expect(await reference()).toBe(first.manifestRef);
   const empty = await captureWorkspaceManifest({ ...selection, includePaths: new Set<string>() });
   expect(empty.manifest).toMatchObject({ entries: [], directories: [] });
-  expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 1 });
+  expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 3 });
+  await fs.unlink(path.join(root, "input.txt"));
+  expect(await reference()).not.toBe(first.manifestRef);
 });
 
 it("authenticates both manifests before selecting changed transfer payloads", async () => {

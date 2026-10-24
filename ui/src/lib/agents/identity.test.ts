@@ -7,6 +7,7 @@ import type { ApplicationGatewayPhase, ApplicationGatewaySnapshot } from "../../
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { createGatewayHarness } from "../sessions/session-capability.test-support.ts";
 import { createAgentIdentityCapability, fetchAgentIdentity } from "./identity.ts";
 
 afterEach(() => {
@@ -231,26 +232,8 @@ it("rejects stale identities after reconnecting the same client", async () => {
     .mockImplementationOnce(() => oldRequest.promise)
     .mockImplementationOnce(() => currentRequest.promise);
   const client = createTestGatewayClient(request);
-  let snapshot: { client: GatewayBrowserClient | null; phase: ApplicationGatewayPhase } = {
-    client,
-    phase: "connected",
-  };
-  const listeners = new Set<(next: typeof snapshot) => void>();
-  const capability = createAgentIdentityCapability({
-    get snapshot() {
-      return snapshot;
-    },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  });
-  const publish = (connected: boolean) => {
-    snapshot = { client, phase: connected ? "connected" : "reconnecting" };
-    for (const listener of listeners) {
-      listener(snapshot);
-    }
-  };
+  const { gateway, publish } = createGatewayHarness(client);
+  const capability = createAgentIdentityCapability(gateway);
 
   const stale = capability.ensure(["main"]);
   publish(false);

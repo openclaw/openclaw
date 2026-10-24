@@ -1,3 +1,4 @@
+import fsSync, { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -5,7 +6,13 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as lifecycleWriteCustody from "../infra/lifecycle-write-custody.js";
 import { readLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+});
 
 const mocks = vi.hoisted(() => ({
   createGitBackup: vi.fn(),
@@ -17,15 +24,14 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
+  const { createTestConfigReadMocks } = await import("./test-runtime-config-helpers.js");
   return {
     ...actual,
     getRuntimeConfig: mocks.getRuntimeConfig,
     loadConfig: mocks.getRuntimeConfig,
     readConfigFileSnapshot: async () => ({ config: mocks.getRuntimeConfig() }),
-    captureRuntimeConfigAsyncReader:
-      (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
-      async () =>
-        mocks.getRuntimeConfig(...args),
+    captureRuntimeConfigAsyncReader: createTestConfigReadMocks(mocks, "getRuntimeConfig")
+      .captureRuntimeConfigAsyncReader,
   };
 });
 
@@ -38,8 +44,9 @@ vi.mock("../snapshot/git-backup.js", () => ({
 }));
 
 // mock-isolation: Git backup settlement uses a controlled outcome; routing has real-ledger coverage.
-vi.mock("./backup-outcome.js", () => ({
-  recordBackupRunOutcomeWithOwner: mocks.recordBackupRunOutcome,
+vi.mock("../cli/local-state-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/local-state-owner.js")>()),
+  runWithLocalStateOwner: mocks.recordBackupRunOutcome,
 }));
 
 import {
@@ -82,6 +89,10 @@ describe("Git backup command agent selection", () => {
       agents: { entries: { main: {}, "ops-team": {} } },
     });
     mocks.recordBackupRunOutcome.mockReset();
+    const databasePath = resolveOpenClawStateSqlitePath();
+    vi.mocked(existsSync)
+      .mockReset()
+      .mockImplementation((value) => value === databasePath || fsSync.existsSync(value));
     mocks.restoreGitBackupRef.mockReset().mockResolvedValue({
       commit: "backup-commit",
       excludedTables: [],

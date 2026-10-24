@@ -12,7 +12,7 @@ import {
   matchesCodexSnapshotTurn,
   shouldClearTerminalPresentationForNativeItem,
 } from "./event-projector-items.js";
-import { CodexTurnProjection } from "./event-projector-result.js";
+import { CodexTurnProjection, type CodexAppServerToolTelemetry } from "./event-projector-result.js";
 import { buildCodexSteeringMessagesSnapshot } from "./event-projector-snapshot.js";
 import type { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import {
@@ -62,18 +62,25 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
   }
 
   /** Native completion owns the answer independently of unfinished host projection. */
-  recoverCompletedAnswer(): boolean {
+  recoverCompletedAnswer(
+    toolTelemetry: CodexAppServerToolTelemetry,
+    options?: { readRetainedNativeCommands?: () => ReadonlyMap<string, string> },
+  ): boolean {
     const completed = this.settlement.completedAnswer;
     if (!completed || this.aborted || this.promptError) {
       return false;
     }
+    this.completedTurn = completed.turn;
+    this.assistantProjection.recordItemCompleted(completed.answer);
+    this.assistantProjection.finalizeAnswerCandidate(completed.turn);
+    // Settlement expiry abandons blocked checkpoint writes. Materialize any
+    // missing native result first so the final transcript mirror retains the
+    // unknown outcome instead of presenting the recovered answer as clean.
+    this.prepareTerminalToolResultCheckpoint(toolTelemetry, options);
     // Retire accepted writes before the enriched final enters the same mirror owner.
     this.closeCompactionProgress();
     this.projectionController.abort();
     this.transcriptCheckpoint.abandon();
-    this.completedTurn = completed.turn;
-    this.assistantProjection.recordItemCompleted(completed.answer);
-    this.assistantProjection.finalizeAnswerCandidate(completed.turn);
     return true;
   }
 
@@ -418,6 +425,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         return;
       }
       this.activeCompactionItemIds.add(itemId);
+      this.usageProjection.beginCompaction();
     }
     await this.assistantProjection.recordItemStarted(item, itemId);
     if (
@@ -491,10 +499,12 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       this.activeItemIds.delete(itemId);
       this.completedItemIds.add(itemId);
     }
+    let tokensAfter: number | undefined;
     if (item?.type === "contextCompaction" && itemId) {
       // Native history is already installed; pending observers cannot undo completion.
       this.activeCompactionItemIds.delete(itemId);
       this.completedCompactionCount += 1;
+      tokensAfter = this.usageProjection.completeCompaction();
     }
     if (!this.asyncDeliveryProjection.allows(item, true)) {
       return;
@@ -531,6 +541,9 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         config: this.params.config,
         cwd: this.params.workspaceDir,
         runId: this.params.runId,
+        provider: this.params.provider,
+        model: this.params.modelId,
+        tokensAfter,
         threadId: this.threadId,
         turnId: this.turnId,
         itemId,

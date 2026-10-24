@@ -16,11 +16,8 @@ const computerUseServiceMocks = vi.hoisted(() => ({
     async () => undefined,
   ),
   ensureCodexComputerUseServiceApp: vi.fn<
-    (_params?: unknown) => Promise<{
-      status: "already_current" | "source_missing";
-      changed: boolean;
-    }>
-  >(async () => ({ status: "already_current", changed: false })),
+    typeof import("./computer-use-service.js").ensureCodexComputerUseServiceApp
+  >(async () => undefined),
   resolveCodexManagedBundledMarketplaceSource: vi.fn<
     (params: {
       candidates?: readonly MockDesktopCandidate[];

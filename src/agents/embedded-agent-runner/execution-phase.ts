@@ -20,6 +20,18 @@ const EMBEDDED_AGENT_EXECUTION_PHASES = {
 
 export type EmbeddedAgentExecutionPhase = keyof typeof EMBEDDED_AGENT_EXECUTION_PHASES;
 
+export type EmbeddedAgentExecutionPhaseInfo = {
+  phase: EmbeddedAgentExecutionPhase;
+  provider?: string;
+  model?: string;
+  backend?: string;
+  source?: string;
+  tool?: string;
+  toolCallId?: string;
+  itemId?: string;
+  firstModelCallStarted?: boolean;
+};
+
 export function formatEmbeddedAgentExecutionPhase(
   phase?: EmbeddedAgentExecutionPhase,
 ): string | undefined {

@@ -1,10 +1,8 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { captureFrame } from "./sidebar-assertions.test-support.ts";
+import { sidebarSessionList } from "./sidebar-contract.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Sidebar rail alignment" });
@@ -17,35 +15,28 @@ suite.define(() => {
         { hasTouch, viewport: { width: 1280, height: 800 } },
         async ({ page }) => {
           const sessions = [
-            {
-              key: "agent:main:current",
+            ...["Sidebar alignment review", "Release notes"].map((label, index) => ({
+              key: `agent:main:${index === 0 ? "current" : "notes"}`,
               kind: "direct",
-              label: "Sidebar alignment review",
+              label,
               updatedAt: Date.now(),
-            },
-            {
-              key: "agent:main:notes",
-              kind: "direct",
-              label: "Release notes",
-              updatedAt: Date.now(),
-            },
+            })),
+            // Home renders its session glyph only when the main session row exists.
+            { key: "agent:main:main", kind: "direct", label: "Home", updatedAt: Date.now() },
           ];
           await installMockGateway(page, {
             sessionKey: "agent:main:current",
             presenceUsers: [{ id: "riley", name: "Riley", self: true }],
             sessions,
             methodResponses: {
-              "sessions.list": {
-                ts: 1,
-                path: "",
-                count: sessions.length,
-                defaults: { model: null, modelProvider: null, contextTokens: null },
-                owners: [
+              "sessions.list": sidebarSessionList(
+                sessions,
+                { model: null, modelProvider: null, contextTokens: null },
+                [
                   { type: "human", id: "riley", label: "Riley" },
                   { type: "human", id: "devon", label: "Devon" },
                 ],
-                sessions,
-              },
+              ),
             },
           });
           await page.emulateMedia({ colorScheme: "dark" });
@@ -77,35 +68,6 @@ suite.define(() => {
               return { control: control.className, offset: box.x + box.width / 2 - center };
             });
           });
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            const dir = createControlUiE2eArtifactDir(
-              hasTouch ? "rail-alignment-touch" : "rail-alignment-desktop",
-            );
-            const capture = async (name: string) => {
-              const frame = await takeControlUiScreenshotFrame(
-                page,
-                page.locator(".shell"),
-                [rail, owner],
-                {
-                  animations: "disabled",
-                  elements: [page.locator("openclaw-app-sidebar .sidebar")],
-                },
-              );
-              await writeFile(path.join(dir, name + ".png"), frame.elements[0]!.png);
-            };
-            // Reproduce the two changed declarations, retaining identical app/data/viewport.
-            const baseline = await page.addStyleTag({
-              content:
-                ".sidebar-rail { align-items: stretch; } .shell:not(.shell--mobile-nav) .sidebar-rail { padding-top: 8px; }",
-            });
-            try {
-              await capture("before");
-            } finally {
-              await baseline.evaluate((element) => element.parentNode?.removeChild(element));
-            }
-            await capture("after");
-            await writeFile(path.join(dir, "geometry.json"), JSON.stringify(geometry, null, 2));
-          }
           for (const measured of geometry) {
             expect(Math.abs(measured.offset), measured.control).toBeLessThanOrEqual(0.5);
           }
@@ -116,6 +78,31 @@ suite.define(() => {
           expect(
             Math.abs(agentBox!.y + agentBox!.height / 2 - ownerBox!.y - ownerBox!.height / 2),
           ).toBeLessThanOrEqual(0.5);
+          await rail.locator(".sidebar-footer-bar__home .session-glyph svg").waitFor();
+          const iconInk = await rail.evaluate((element) =>
+            [".sidebar-footer-bar__home svg", ".sidebar-issues-button svg"].map((selector) => {
+              const icon = element.querySelector<SVGElement>(selector)!;
+              let opacity = 1;
+              for (let node: Element | null = icon; node && node !== element;) {
+                opacity *= Number(getComputedStyle(node).opacity);
+                node = node.parentElement;
+              }
+              return { color: getComputedStyle(icon).color, opacity };
+            }),
+          );
+          expect(iconInk[0]).toEqual(iconInk[1]);
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && !hasTouch) {
+            const sidebar = page.locator(".sidebar.sidebar--rail");
+            await captureFrame(suite.artifactDir, "sidebar.png", sidebar, [owner]);
+          }
+          const toolbarBox = await page.locator(".sidebar-session-toolbar").boundingBox();
+          const firstRowBox = await page
+            .locator(".sidebar-sessions .sidebar-recent-session")
+            .first()
+            .boundingBox();
+          expect(toolbarBox).not.toBeNull();
+          expect(firstRowBox).not.toBeNull();
+          expect(firstRowBox!.y - toolbarBox!.y - toolbarBox!.height).toBe(4);
         },
       );
     },

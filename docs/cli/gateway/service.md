@@ -223,6 +223,8 @@ prevent OpenClaw from reading the previous environment file.
 
 Use `--wrapper` when the managed service must start through another executable, for example a secrets manager shim or a run-as helper. The wrapper receives the normal Gateway args and is responsible for eventually exec'ing `openclaw` or Node with those args.
 
+Service inspection preserves empty quoted arguments in systemd commands and Windows batch launchers, keeping later arguments in their original positions.
+
 ```bash
 cat > ~/.local/bin/openclaw-doppler <<'EOF'
 #!/usr/bin/env bash

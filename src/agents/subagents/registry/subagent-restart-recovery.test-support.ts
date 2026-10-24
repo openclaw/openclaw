@@ -14,6 +14,7 @@ import {
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { hasErrnoCode } from "../../../infra/errno.js";
+import { throwCollectedErrors } from "../../../infra/error-graph-internal.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import {
@@ -85,7 +86,7 @@ export function useSubagentRestartRecoveryFixture(
       resolveGatewayContext: () => gatewayContext as never,
     };
     bindGatewayContextResolver(gatewayRuntime, gatewayContext.resolveGatewayContext);
-    await activateSubagentRegistry(gatewayContext.resolveGatewayContext);
+    await activateSubagentRegistry(gatewayContext.resolveGatewayContext).settled;
   };
 
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -190,11 +191,7 @@ export function useSubagentRestartRecoveryFixture(
         tempStateDir = null;
       });
     }
-    if (failures.length) {
-      throw failures.length === 1
-        ? failures[0]
-        : new AggregateError(failures, "Subagent restart recovery cleanup failed");
-    }
+    throwCollectedErrors(failures, "Subagent restart recovery cleanup failed");
   });
 
   return {

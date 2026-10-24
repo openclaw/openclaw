@@ -30,14 +30,15 @@ import {
 import { createOpenClawCodingToolsInternalAsync } from "../../agent-tools.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import { advancePreparedModelRuntimeConfig } from "../../prepared-model-runtime.js";
-import type { RequesterOrigin } from "../../requester-origin.js";
+import { requesterCreatorProfileId, type RequesterOrigin } from "../../requester-origin.js";
 import { createSessionsSendTool } from "../../tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
-import { closeSwarmScheduler, enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { closeSwarmScheduler, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
   createBoundSpawnInvocation,
   createSpawnOperatorSource,
+  holdSpawnCapacity,
   type createSpawnBoundaryParent,
 } from "./subagent-spawn.production-boundary.test-support.js";
 
@@ -123,18 +124,10 @@ export function registerParticipantSpawnCases(
       const groupId = "participant-queued";
       if (queued) {
         context.getRuntimeConfig = () => currentConfig;
-        const capacity = createDeferred();
-        enqueueSwarmRun({
-          groupId: JSON.stringify(["main", parentSessionKey, groupId]),
-          runId: "participant-capacity",
-          maxConcurrent: 1,
-          activeRunIds: [],
-          start: async () => {
-            capacity.resolve();
-          },
-          onStartFailure: () => true,
-        });
-        await capacity.promise;
+        await holdSpawnCapacity(
+          JSON.stringify(["main", parentSessionKey, groupId]),
+          "participant-capacity",
+        );
       }
       const modelResult = createDeferred<EmbeddedAgentRunResult>();
       let entered = createDeferred<ChildExecution>();
@@ -289,6 +282,17 @@ export function registerParticipantSpawnCases(
                 );
                 expect(authority.profileId).toBe(profileId);
                 expectOrigin(requesterOrigin, profileId);
+                expect(requesterCreatorProfileId(requesterOrigin)).toBe("alice");
+                const persisted = loadSessionEntry({
+                  storePath: bound.storePath,
+                  sessionKey: details.childSessionKey,
+                });
+                expect(persisted?.createdActor?.delegatedBy).toEqual({
+                  type: "human",
+                  source: "profile",
+                  id: "alice",
+                });
+                expect(persisted?.createdActor?.type).toBe("agent");
                 if (queued) {
                   expect(tools).toContain("read");
                   expect(tools).not.toContain("write");

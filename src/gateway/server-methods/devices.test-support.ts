@@ -1,10 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
-import { runNodeWakeAttempt, runNodeWakeNudgeAttempt } from "../node-wake-state.js";
 import { resetNodeWakeStateForTest } from "../node-wake-state.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -35,6 +35,8 @@ vi.mock("../../infra/device-pairing-tokens.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/device-pairing-tokens.js")>()),
   ...mocks.tokens,
 }));
+
+const { deviceHandlers } = await import("./devices.js");
 
 export function createClient(
   scopes: string[],
@@ -88,6 +90,17 @@ export function expectDeviceSuccess(opts: GatewayRequestHandlerOptions, payload:
   expect(opts.respond).toHaveBeenCalledWith(true, payload, undefined);
 }
 
+export async function invokeDevice(opts: GatewayRequestHandlerOptions) {
+  await expectDefined(deviceHandlers[opts.req.method], opts.req.method)(opts);
+}
+
+export function expectPrivate(events: unknown, secrets: string[]) {
+  const text = JSON.stringify(events);
+  for (const secret of secrets) {
+    expect(text).not.toContain(secret);
+  }
+}
+
 export function mockRotateOperatorTokenSuccess(): void {
   mocks.tokens.rotateDeviceToken.mockResolvedValue({
     ok: true,
@@ -122,24 +135,6 @@ export async function captureSecurityEvents(run: () => Promise<unknown>) {
   } finally {
     stop();
   }
-}
-
-export async function seedNodeWakeState(nodeId: string): Promise<void> {
-  await runNodeWakeAttempt({
-    nodeId,
-    force: true,
-    throttleMs: 60_000,
-    attempt: async (markAttempted) => {
-      markAttempted();
-      return { available: true, throttled: false, path: "sent", durationMs: 1 };
-    },
-  });
-  await runNodeWakeNudgeAttempt({
-    nodeId,
-    throttleMs: 60_000,
-    throttled: () => ({ sent: false, throttled: true, reason: "throttled", durationMs: 0 }),
-    attempt: async () => ({ sent: true, throttled: false, reason: "sent", durationMs: 1 }),
-  });
 }
 
 export function resetDeviceHandlerTestState(): void {

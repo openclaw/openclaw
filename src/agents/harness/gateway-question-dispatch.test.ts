@@ -107,7 +107,7 @@ function startQuestion(
   if (!reservation) {
     throw new Error("expected prompt reservation");
   }
-  const run = createAskUserTool({ sessionKey, gatewayCall })
+  const run = createAskUserTool({ sessionKey })
     .execute(
       toolCallId,
       { questions: [askUserQuestion], timeoutSeconds: 60 },

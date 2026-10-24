@@ -267,7 +267,6 @@ describe("clawhub artifacts", () => {
       if (artifact === "clawpack") {
         expect(archive).toMatchObject({
           clawpackHeaderSha256: sha256Digest,
-          clawpackHeaderSpecVersion: 3,
           npmIntegrity: `sha512-${digest("sha512", "base64")}`,
           npmShasum: digest("sha1"),
           npmTarballName: "NUL.tgz",

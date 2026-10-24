@@ -7,19 +7,21 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import { clearMcpOAuthCredentials } from "../agents/mcp-oauth.js";
+import * as pidAlive from "../shared/pid-alive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
+import { withRestoredMocks } from "../test-utils/vitest-spies.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "./sqlite-worker-contract.js";
+import { withGatewayLockHeld } from "./state-migrations.gateway-lock.test-support.js";
 import {
   measureMcpMigrationHostSql,
   observeLegacyMcpOAuthImport,
@@ -555,22 +557,7 @@ it.each(["symlink", "hardlink", "oversized", "invalid-utf8"])(
 
 it("requires exclusive state ownership", async () => {
   const sourcePath = await writeLegacy();
-  const gatewayLock = await acquireGatewayLock({
-    allowInTests: true,
-    env,
-    pollIntervalMs: 10,
-    port: 18_790,
-    timeoutMs: 100,
-  });
-  if (!gatewayLock) {
-    throw new Error("expected test Gateway lock");
-  }
-  let result: Awaited<ReturnType<typeof migrateLegacyMcpOAuthStores>>;
-  try {
-    result = await migrate();
-  } finally {
-    await gatewayLock.release();
-  }
+  const result = await withGatewayLockHeld(env, 18_790, () => migrate());
 
   expect(result.warnings[0]).toContain("OpenClaw state database is busy");
   expect(fs.existsSync(sourcePath)).toBe(true);
@@ -586,22 +573,24 @@ function lockPayload(overrides: Record<string, unknown> = {}): string {
 }
 
 it("fails closed for live, young, and malformed owner evidence", () => {
-  for (const raw of [
-    lockPayload(),
-    lockPayload({ createdAt: "2026-07-16T00:01:30.000Z" }),
-    lockPayload({ createdAt: "invalid" }),
-    lockPayload({ starttime: "456" }),
-    "not json",
-  ]) {
-    expect(
-      isDefinitelyStaleLegacyMcpOAuthLock({
-        raw,
-        nowMs: Date.parse("2026-07-16T00:02:00.000Z"),
-        isPidDefinitelyDead: () => false,
-        getProcessStartTime: () => 456,
-      }),
-    ).toBe(false);
-  }
+  return withRestoredMocks(
+    [
+      vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false),
+      vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(456),
+      vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-07-16T00:02:00.000Z")),
+    ],
+    () => {
+      for (const raw of [
+        lockPayload(),
+        lockPayload({ createdAt: "2026-07-16T00:01:30.000Z" }),
+        lockPayload({ createdAt: "invalid" }),
+        lockPayload({ starttime: "456" }),
+        "not json",
+      ]) {
+        expect(isDefinitelyStaleLegacyMcpOAuthLock({ raw })).toBe(false);
+      }
+    },
+  );
 });
 
 it("reports a stale sidecar without unlinking a replacement-prone path", async () => {

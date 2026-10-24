@@ -9,7 +9,7 @@ import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../components/link-reader-hovercard-registration.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   orderSessionPullRequests,
   sessionPullRequestStateIcons,
@@ -100,11 +100,7 @@ function SessionGit(
   const token = {};
   const store = sessionPullRequestsForGateway(source.gateway);
   const gatewayProjection = projectGateway(source.gateway);
-  const projection = projectSource(source.key, {
-    read: (key) => store.get(key),
-    subscribe: (_key, notify) => store.subscribe(notify),
-    equality: "revision",
-  });
+  const projection = projectOwner(store, (owner) => owner.get(source.key));
   // Each keyed Gateway/session scope owns exactly one remote watch.
   onSettled(() => {
     store.watch(token, [source.key], { foreground: true });

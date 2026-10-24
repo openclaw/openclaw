@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { runInThisContext } from "node:vm";
+import { JSDOM } from "jsdom";
 import { describe, expect, it, vi } from "vitest";
 import { isRepoOwnedRegistrationStack } from "./jsdom-compat.mts";
 import {
@@ -16,6 +17,28 @@ describe("jsdom custom element tracking", () => {
     expect(Array.isArray(definitions)).toBe(true);
     customElements.define("openclaw-jsdom-contract-probe", class extends HTMLElement {});
     expect(definitions?.some((entry) => entry.name === "openclaw-jsdom-contract-probe")).toBe(true);
+  });
+
+  it("reports a rejected registration without hiding the native failure", () => {
+    const { window } = new JSDOM();
+    const registry = window.customElements;
+    trackCustomElementRegistry(registry);
+    const report = vi.spyOn(console, "error").mockImplementation(() => {});
+    const tag = "openclaw-duplicate-registration-probe";
+    try {
+      registry.define(tag, class extends window.HTMLElement {});
+      expect(report).not.toHaveBeenCalled();
+      expect(() => registry.define(tag, class extends window.HTMLElement {})).toThrow(
+        "This name has already been registered in the registry.",
+      );
+      expect(report).toHaveBeenCalledExactlyOnceWith(
+        "[jsdom-custom-elements:registration-failed]",
+        expect.objectContaining({ tag, alreadyDefined: true, trackedForCleanup: true }),
+      );
+    } finally {
+      report.mockRestore();
+      window.close();
+    }
   });
 
   it.each(["direct", "spy", "forwarding-spy"] as const)(

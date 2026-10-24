@@ -15,7 +15,7 @@ import {
   admitSqliteDatabaseFactValue,
   type Admission,
   type AdmissionFactValue,
-  type SqliteDatabaseAdmissionKey,
+  type SqliteDatabaseFactKey,
   type StagedAdmissionFact,
   type SqliteDatabaseAdmissionRegistry,
 } from "./sqlite-database-admission-record.js";
@@ -42,7 +42,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
   release: (record: Admission) => void;
   publishFact: <T>(
     record: Admission,
-    key: SqliteDatabaseAdmissionKey<T>,
+    key: SqliteDatabaseFactKey<T>,
     value: AdmissionFactValue,
     revision: number,
   ) => void;
@@ -66,8 +66,8 @@ export function createSqliteDatabaseAdmissionReader(owner: {
   }
   function getSqliteDatabaseAdmission<T>(
     database: DatabaseSync | PostgresSqlConnection,
-    key: SqliteDatabaseAdmissionKey<T>,
-    options: { existingOnly?: boolean } = {},
+    key: SqliteDatabaseFactKey<T>,
+    options: { existingOnly?: boolean; refresh?: boolean } = {},
   ): T | undefined {
     const anchor = sqlPublicationAnchor(database);
     if (!anchor.isOpen || state.suspended.has(anchor)) {
@@ -99,7 +99,8 @@ export function createSqliteDatabaseAdmissionReader(owner: {
       state.rolledBack.delete(anchor);
     }
     let fact = record.facts.get(key.name);
-    if (!fact || !valid(record, fact)) {
+    // A retry may have physical facts while later schema publications are still in transit.
+    if (!fact || !valid(record, fact) || (options.refresh && key.writer !== "host")) {
       if (key.writer === "host") {
         if (
           database.isTransaction ||
@@ -115,7 +116,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
       const revision = readSqliteDatabaseGeneration(record, "publicationRevision");
       const misses = state.misses.get(record) ?? new Map<string, number>();
       state.misses.set(record, misses);
-      if (!database.isTransaction && misses.get(key.name) !== revision) {
+      if (!database.isTransaction && (options.refresh || misses.get(key.name) !== revision)) {
         exchange(record);
         fact = record.facts.get(key.name);
         misses.set(key.name, readSqliteDatabaseGeneration(record, "publicationRevision"));
@@ -126,7 +127,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
 
   function getOrLoadSqliteDatabaseAdmissionForPath<T>(
     location: string,
-    key: SqliteDatabaseAdmissionKey<T>,
+    key: SqliteDatabaseFactKey<T>,
     load: () => T | undefined,
   ): T | undefined {
     const read = (record: Admission | undefined): T | undefined => {
@@ -150,6 +151,18 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     return key.lifetime === "process"
       ? withPathAdmission(location, read)
       : read(pathAdmission(location));
+  }
+
+  /** Optional preparation consumes only facts already delivered to this isolate. */
+  function peekSqliteDatabaseAdmissionForPath<T>(
+    location: string,
+    key: SqliteDatabaseFactKey<T>,
+  ): T | undefined {
+    const record = state.registry.forLocation(location);
+    const fact = record?.facts.get(key.name);
+    return record && fact && valid(record, fact)
+      ? readSqliteDatabaseAdmissionFact(fact, key)
+      : undefined;
   }
 
   function getSqliteDatabaseSchemaRevision(
@@ -187,6 +200,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     getSqliteDatabaseAdmission,
     getSqliteDatabaseSchemaRevision,
     getOrLoadSqliteDatabaseAdmissionForPath,
+    peekSqliteDatabaseAdmissionForPath,
     hasSqliteDatabaseSchemaAdmissionForPath,
     getSqliteDatabaseAdmissionIdentityForPath,
     hasSqliteDatabaseSchemaAdmissionForIdentity,

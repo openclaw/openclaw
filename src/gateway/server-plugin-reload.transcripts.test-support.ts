@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import { expect, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import type { createPluginRegistryOwner } from "../plugins/runtime.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -12,8 +10,7 @@ import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
 } from "../transcripts/provider-types.js";
-import type { reloadGatewayPlugins } from "./server-plugin-reload.js";
-import type { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
+import type { RecoveryFixtureFactory } from "./server-plugin-reload.recovery.test-support.js";
 import {
   installGatewayStartupModuleMocks,
   installGatewaySubagentModuleLoad,
@@ -21,18 +18,17 @@ import {
 import { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
 
 export async function startTranscriptReloadFixtureSidecars(
-  fixture: {
-    runtime: Parameters<typeof reloadGatewayPlugins>[0]["runtime"];
-    getConfig: () => OpenClawConfig;
-    registryOwner: ReturnType<typeof createPluginRegistryOwner>;
-    owner: ReturnType<typeof createGatewayPluginRuntimeGeneration>;
-  },
+  fixture: Pick<
+    Awaited<ReturnType<RecoveryFixtureFactory>>,
+    "runtime" | "getConfig" | "registryOwner" | "owner"
+  >,
   workspaceDir: string,
   log: Parameters<typeof startGatewayPostAttachRuntime>[0]["logHooks"],
   cleanups: Array<() => Promise<void>>,
   waitForPostReadyWork?: () => Promise<void>,
 ) {
-  const { runtime } = fixture;
+  const { runtime, getConfig, registryOwner, owner } = fixture;
+  const idle = async () => {};
   const startupWork = new AsyncWorkScope();
   const startupModuleRestorers: Array<() => void> = [];
   const sidecars = runtime.runtimeState.gatewayLifetimeSidecars;
@@ -43,17 +39,18 @@ export async function startTranscriptReloadFixtureSidecars(
       await runtime.runtimeState.postReadySidecars.stop().catch(() => {});
       await startupWork.drain();
     } finally {
-      for (const restore of startupModuleRestorers.toReversed()) {
-        restore();
-      }
+      startupModuleRestorers.toReversed().forEach((restore) => restore());
     }
   });
   await installGatewaySubagentModuleLoad(
-    async () => {},
-    async () => {},
+    idle,
+    () => {
+      const settled = Promise.resolve();
+      return { initial: settled, pending: new Map(), settled };
+    },
     startupModuleRestorers,
   );
-  const config = fixture.getConfig();
+  const config = getConfig();
   const unusedRecovery = async (): Promise<never> => {
     throw new Error("unexpected main-session recovery");
   };
@@ -68,9 +65,9 @@ export async function startTranscriptReloadFixtureSidecars(
           installReceipt: null,
         }),
         start: () => {},
-        stop: async () => {},
+        stop: idle,
       }),
-      warmSystemCa: async () => {},
+      warmSystemCa: idle,
     },
     startupModuleRestorers,
   );
@@ -78,8 +75,8 @@ export async function startTranscriptReloadFixtureSidecars(
     scheduler: runtime.scheduler,
     minimalTestGateway: false,
     cfgAtStart: config,
-    getConfig: fixture.getConfig,
-    getReadiness: () => ({ ready: true, failing: [], uptimeMs: 0 }),
+    getConfig,
+    getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 0 }),
     port: 0,
     log,
     isNixMode: false,
@@ -88,11 +85,12 @@ export async function startTranscriptReloadFixtureSidecars(
     gatewayPluginConfigAtStart: config,
     activationSourceConfig: config,
     pluginManifestRecords: [],
-    pluginRegistry: fixture.registryOwner.registry,
+    pluginRegistry: registryOwner.registry,
     defaultWorkspaceDir: workspaceDir,
     deps: {},
-    startChannels: async () => {},
+    startChannels: idle,
     mainSessionRecoveryStartupCheckedStorePaths: new Set<string>(),
+    isRestartRecoverySuppressed: () => false,
     recoveryRuntime: {
       prepareRestartRecovery: unusedRecovery,
       dispatchSessionMethod: unusedRecovery,
@@ -107,9 +105,9 @@ export async function startTranscriptReloadFixtureSidecars(
     unlockStartupMethods: () => {},
     waitForPostReadyWork,
     isClosing: () => startupWork.isClosing,
-    getCurrentPluginRegistry: () => fixture.registryOwner.registry,
+    getCurrentPluginRegistry: () => registryOwner.registry,
     shouldStartPluginServices: () =>
-      fixture.owner.currentServices() === null && fixture.owner.getReloadStatus() === undefined,
+      owner.currentServices() === null && owner.getReloadStatus() === undefined,
     onPostReadySidecars: runtime.runtimeState.postReadySidecars.publish,
     onGatewayLifetimeSidecars: sidecars.publish,
     unregisterConnectionDependentSidecar: vi.fn(),
@@ -118,9 +116,7 @@ export async function startTranscriptReloadFixtureSidecars(
       return startupWork.track(() => operation);
     },
   });
-  cleanups.push(async () => {
-    await startup.stopGatewayUpdateCheck();
-  });
+  cleanups.push(() => startup.stopGatewayUpdateCheck());
   return sidecars;
 }
 

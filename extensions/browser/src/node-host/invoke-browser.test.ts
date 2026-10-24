@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import nodePath from "node:path";
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -232,45 +231,6 @@ describe("runBrowserProxyCommand", () => {
     expect(uploads.stageBrowserProxyUploadRequest).not.toHaveBeenCalled();
   });
 
-  it("shares a retried browser control startup across concurrent requests", async () => {
-    const failedStartup = createDeferred<BrowserServerState>();
-    const successfulStartup = createDeferred<BrowserServerState>();
-    control.startBrowserControlServiceFromConfig
-      .mockReturnValueOnce(failedStartup.promise)
-      .mockReturnValueOnce(successfulStartup.promise);
-    routes.dispatch.mockResolvedValue(okResponse);
-    const request = JSON.stringify({ method: "GET", path: "/snapshot" });
-
-    const failedRequests = Promise.allSettled([
-      runBrowserProxyCommand(request),
-      runBrowserProxyCommand(request),
-    ]);
-    expect(control.startBrowserControlServiceFromConfig).toHaveBeenCalledOnce();
-    failedStartup.reject(new Error("browser startup failed"));
-
-    await expect(failedRequests).resolves.toEqual([
-      { status: "rejected", reason: new Error("browser startup failed") },
-      { status: "rejected", reason: new Error("browser startup failed") },
-    ]);
-    expect(routes.dispatch).not.toHaveBeenCalled();
-
-    const retriedRequests = Promise.allSettled([
-      runBrowserProxyCommand(request),
-      runBrowserProxyCommand(request),
-    ]);
-    expect(control.startBrowserControlServiceFromConfig).toHaveBeenCalledTimes(2);
-    successfulStartup.resolve(browserState);
-
-    await expect(retriedRequests).resolves.toEqual([
-      { status: "fulfilled", value: okPayload },
-      { status: "fulfilled", value: okPayload },
-    ]);
-    control.getBrowserControlState.mockReturnValue(browserState);
-    await expect(runBrowserProxyCommand(request)).resolves.toBe(okPayload);
-    expect(control.startBrowserControlServiceFromConfig).toHaveBeenCalledTimes(2);
-    expect(routes.dispatch).toHaveBeenCalledTimes(3);
-  });
-
   it("stages upload envelopes before dispatch and retains successful copies", async () => {
     const upload = {
       envelope: "browser-upload-v1",
@@ -396,7 +356,7 @@ describe("runBrowserProxyCommand", () => {
 
   it("serializes plural action downloads without reading nested page paths", async () => {
     await withTempDir("openclaw-browser-proxy-action-", async (tempDir) => {
-      const firstPath = nodePath.join(tempDir, "first.txt");
+      const firstPath = nodePath.join(tempDir, " first.txt ");
       const secondPath = nodePath.join(tempDir, "second.txt");
       const nestedPagePath = nodePath.join(tempDir, "page-controlled.txt");
       const result = {

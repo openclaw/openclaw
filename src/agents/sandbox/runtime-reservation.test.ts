@@ -1,18 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { runExecProcess } from "../bash-tools.exec-runtime.js";
@@ -30,6 +23,7 @@ import { SandboxRuntimeRetiredError } from "./provisioning-error.js";
 import { maybePruneSandboxes } from "./prune.js";
 import * as registry from "./registry.js";
 import { readRegistry, readRegistryEntry, updateRegistry } from "./registry.js";
+import { acquireSandboxGatewayOwner, useSandboxRegistryState } from "./registry.test-support.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 
 vi.mock("../../skills/loading/workspace-skill-sync.runtime.js", () => ({
@@ -41,18 +35,10 @@ vi.mock("../exec-defaults.js", () => ({
   resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
 }));
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    disposeBackend?.();
-    disposeBackend = undefined;
-    vi.restoreAllMocks();
-    await closeOpenClawAgentDatabasesAsync();
-    await closeStateDatabaseForTest();
-    clearRuntimeConfigSnapshot();
-    vi.unstubAllEnvs();
-    cleanup();
-  }),
-);
+const state = useSandboxRegistryState("sandbox-reservation-", () => {
+  disposeBackend?.();
+  disposeBackend = undefined;
+});
 let config: OpenClawConfig;
 let workspaceDir: string;
 let disposeBackend: (() => void) | undefined;
@@ -68,8 +54,7 @@ function pruneImmediately() {
 }
 
 beforeEach(() => {
-  const stateDir = tempDirs.make("sandbox-reservation-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const stateDir = state.root;
   workspaceDir = path.join(stateDir, "workspace");
   nextId = 0;
   const sandbox = {
@@ -162,15 +147,7 @@ async function seedLegacyRuntime() {
 
 describe("durable sandbox runtime generations", () => {
   it("rejects hosted custody released during reserved backend discovery before allocation", async () => {
-    const owner = acquireGatewayStateOwner({
-      databasePath: resolveOpenClawStateSqlitePath(),
-      payload: {
-        pid: process.pid,
-        createdAt: new Date().toISOString(),
-        configPath: path.join(workspaceDir, "openclaw.json"),
-        role: "gateway",
-      },
-    });
+    using owner = acquireSandboxGatewayOwner(workspaceDir);
     const entered = createDeferred();
     const resume = createDeferred();
     const allocate = vi.fn();
@@ -199,7 +176,6 @@ describe("durable sandbox runtime generations", () => {
     } finally {
       resume.resolve();
       await preparation.catch(() => {});
-      owner.release();
     }
   });
 
@@ -232,7 +208,7 @@ describe("durable sandbox runtime generations", () => {
   });
 
   it("rejects a prepared exec removed during supervisor admission and finalizes its artifacts", async () => {
-    const marker = path.join(tempDirs.make("sandbox-admission-"), "spawned");
+    const marker = path.join(state.make("sandbox-admission-"), "spawned");
     const finalizeExec = vi.fn(async () => {});
     const token = {};
     install(async (params) => ({

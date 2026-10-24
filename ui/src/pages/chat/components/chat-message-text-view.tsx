@@ -19,11 +19,12 @@ import { partitionMarkdownHtml, toSanitizedJsonHtml } from "../../../components/
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MarkdownDomMedia, MarkdownMediaRoot } from "../../../lib/markdown-dom-reconciler.ts";
+import { elementRef as registerElementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
-import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
+import { hydrateLinkFavicons, releaseLinkFavicons } from "../link-favicon-loader.ts";
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { messageOverflowRef, shouldCollapseUserMessage } from "./chat-message-overflow.ts";
 import {
@@ -298,16 +299,19 @@ export function MarkdownText(
   let element!: HTMLDivElement;
   const hydrate = createMemo(() => {
     const fetcher = props.fetchLinkFavicon;
-    return fetcher ? () => hydrateLinkFavicons(element, fetcher) : undefined;
+    return () => hydrateLinkFavicons(element, fetcher);
   });
   return (
     <div
       class={props.class ?? "chat-text"}
       dir={props.direction}
-      ref={(node) => {
-        element = node;
-        props.elementRef?.(node);
-      }}
+      ref={[
+        registerElementRef((node: HTMLDivElement) => {
+          element = node;
+          props.elementRef?.(node);
+          return () => releaseLinkFavicons(node);
+        }),
+      ]}
     >
       <MarkdownContent {...props} onUpdate={hydrate()} />
     </div>

@@ -1,31 +1,41 @@
 import fs from "node:fs";
 import path from "node:path";
 import { buildTypedExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
-import {
-  createMessageReceiptFromOutboundResults,
-  sendDurableMessageBatch,
-  verifyChannelMessageAdapterCapabilityProofs,
-} from "openclaw/plugin-sdk/channel-outbound";
-import {
-  createTestRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearIMessageApprovalReactionTargetsForTest,
-  resolveIMessageApprovalReactionTargetWithPersistence,
-} from "./approval-reactions.js";
-import { imessagePlugin } from "./channel.js";
-import * as cliOutput from "./cli-output.js";
 import type { IMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
-import { sendMessageIMessage } from "./send.js";
 
-beforeEach(clearIMessageApprovalReactionTargetsForTest);
+let createMessageReceiptFromOutboundResults: typeof import("openclaw/plugin-sdk/channel-outbound").createMessageReceiptFromOutboundResults;
+let sendDurableMessageBatch: typeof import("openclaw/plugin-sdk/channel-outbound").sendDurableMessageBatch;
+let verifyChannelMessageAdapterCapabilityProofs: typeof import("openclaw/plugin-sdk/channel-outbound").verifyChannelMessageAdapterCapabilityProofs;
+let createTestRegistry: typeof import("openclaw/plugin-sdk/channel-test-helpers").createTestRegistry;
+let resetPluginRuntimeStateForTest: typeof import("openclaw/plugin-sdk/channel-test-helpers").resetPluginRuntimeStateForTest;
+let setActivePluginRegistry: typeof import("openclaw/plugin-sdk/channel-test-helpers").setActivePluginRegistry;
+let drainPendingDeliveries: typeof import("openclaw/plugin-sdk/delivery-queue-runtime").drainPendingDeliveries;
+let resolveIMessageApprovalReactionTargetWithPersistence: typeof import("./approval-reactions.js").resolveIMessageApprovalReactionTargetWithPersistence;
+let imessagePlugin: typeof import("./channel.js").imessagePlugin;
+let cliOutput: typeof import("./cli-output.js");
+let sendMessageIMessage: typeof import("./send.js").sendMessageIMessage;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({
+    createMessageReceiptFromOutboundResults,
+    sendDurableMessageBatch,
+    verifyChannelMessageAdapterCapabilityProofs,
+  } = await import("openclaw/plugin-sdk/channel-outbound"));
+  ({ createTestRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
+    await import("openclaw/plugin-sdk/channel-test-helpers"));
+  ({ drainPendingDeliveries } = await import("openclaw/plugin-sdk/delivery-queue-runtime"));
+  ({ resolveIMessageApprovalReactionTargetWithPersistence } =
+    await import("./approval-reactions.js"));
+  ({ imessagePlugin } = await import("./channel.js"));
+  cliOutput = await import("./cli-output.js");
+  ({ sendMessageIMessage } = await import("./send.js"));
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -377,7 +387,7 @@ describe("imessagePlugin contracts", () => {
         createTestRegistry([{ pluginId: "imessage", plugin: imessagePlugin, source: "test" }]),
       );
     });
-    afterEach(resetPluginRuntimeStateForTest);
+    afterEach(() => resetPluginRuntimeStateForTest());
 
     it("preserves provider-accepted attachment progress through actual durable core without replay", async () => {
       const captionError = new Error("caption failed after native attachment acceptance");

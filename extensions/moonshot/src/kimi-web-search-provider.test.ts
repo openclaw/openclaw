@@ -149,6 +149,35 @@ it("returns and caches an empty result list", async () => {
   expect(fetchMock).toHaveBeenCalledOnce();
 });
 
+it("keeps cached searches scoped to the request credential", async () => {
+  fetchMock.mockImplementation(async (_url, init) => {
+    const credential = new Headers(init?.headers).get("authorization");
+    const account =
+      credential === "Bearer kimi-account-a"
+        ? "account-a"
+        : credential === "Bearer kimi-account-b"
+          ? "account-b"
+          : undefined;
+    if (!account) {
+      throw new Error("Unexpected synthetic Kimi credential");
+    }
+    return jsonResponse({
+      search_results: [searchResult(account, `https://example.com/${account}`, account)],
+    });
+  });
+  const accountA = searchTool({}, { apiKey: "kimi-account-a" });
+  const accountB = searchTool({}, { apiKey: "kimi-account-b" });
+  const args = { query };
+
+  const first = await accountA.execute(args);
+  expect(first).toMatchObject({ results: [{ url: "https://example.com/account-a" }] });
+  expect(await accountB.execute(args)).toMatchObject({
+    results: [{ url: "https://example.com/account-b" }],
+  });
+  expect(await accountA.execute(args)).toEqual({ ...first, cached: true });
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
 it.each([
   ["malformed JSON", () => new Response("{ nope"), malformed],
   ["wrong root", () => jsonResponse([]), malformed],

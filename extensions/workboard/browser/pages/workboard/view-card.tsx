@@ -3,12 +3,11 @@ import { asDateTimestampMs } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMemo, For } from "solid-js";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
+import type { createElementRefs } from "../../lib/element-refs.ts";
 import { getCardAlerts, visibleCardAlerts } from "../../lib/workboard/card-alerts.ts";
-import {
-  getWorkboardDependencyState,
-  getWorkboardLifecycle,
-  type WorkboardCard,
-} from "../../lib/workboard/index.ts";
+import { getWorkboardDependencyState } from "../../lib/workboard/card-state.ts";
+import { getWorkboardLifecycle } from "../../lib/workboard/lifecycle.ts";
+import type { WorkboardCard } from "../../lib/workboard/types.ts";
 import {
   getCardActionState,
   CardAction,
@@ -38,6 +37,7 @@ export function WorkboardCardView(input: {
   workboard: WorkboardProps;
   card: WorkboardCard;
   surface: WorkboardCardSurface;
+  cardRefs?: ReturnType<typeof createElementRefs<HTMLElement>>;
 }) {
   const action = createMemo(() => {
     void input.workboard.revision;
@@ -264,6 +264,7 @@ export function WorkboardCardView(input: {
   );
   return (
     <article
+      ref={input.cardRefs?.ref(() => input.card.id)}
       class={[
         "workboard-card",
         input.surface === "list" ? "workboard-card--list" : "",

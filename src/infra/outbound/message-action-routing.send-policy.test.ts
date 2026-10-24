@@ -7,6 +7,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
 import { runMessageAction } from "./message-action-runner.js";
+import { registerSlackTextPlugin } from "./message-action-runner.test-support.js";
 
 const ttsMocks = vi.hoisted(() => ({
   maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
@@ -24,44 +25,26 @@ const slackConfig = {
   },
 } as OpenClawConfig;
 
-function registerSlackTextPlugin(accountIds: string[] = ["default"]) {
-  const sendText = vi.fn().mockResolvedValue({
-    channel: "slack",
-    messageId: "m1",
-    chatId: "C123",
-  });
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "slack",
-        source: "test",
-        plugin: {
-          ...createOutboundTestPlugin({
-            id: "slack",
-            outbound: {
-              deliveryMode: "direct",
-              sendText,
-            },
-          }),
-          config: {
-            listAccountIds: () => accountIds,
-            resolveAccount: () => ({ enabled: true }),
-            isConfigured: () => true,
-          },
-          threading: { threadAddressing: "message" },
-        },
-      },
-    ]),
-  );
-  return sendText;
-}
-
 describe("runMessageAction core send routing", () => {
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
     ttsMocks.maybeApplyTtsToPayload
       .mockReset()
       .mockImplementation(async (params: { payload: unknown }) => params.payload);
+  });
+
+  it("tells a routeless caller how to recover from a targetless send", async () => {
+    const sendText = registerSlackTextPlugin();
+    await expect(
+      runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: { message: "progress" },
+      }),
+    ).rejects.toThrow(
+      "This turn has no current conversation; pass an explicit target, or reply in normal text.",
+    );
+    expect(sendText).not.toHaveBeenCalled();
   });
 
   it.each([

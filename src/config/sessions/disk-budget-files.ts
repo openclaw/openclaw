@@ -9,9 +9,7 @@ import { resolveSessionArtifactDirectory } from "./paths.js";
 import { listDurableSqliteTargetPathsForSessionStorePath } from "./session-sqlite-target.js";
 
 export type SessionPhysicalDiskUsage = {
-  databaseMainBytes: number;
   databaseWalBytes: number;
-  sessionFilesBytes: number;
   totalBytes: number;
 };
 
@@ -99,9 +97,6 @@ export async function readSessionPhysicalDiskUsage(
       ["-shm", ".seal"].map((suffix) => canonicalizePathForComparison(`${databasePath}${suffix}`)),
     ),
   );
-  const databaseMainPaths = new Set(
-    databaseFiles.filter((file) => !file.path.endsWith("-wal")).map((file) => file.canonicalPath),
-  );
   const databaseWalPaths = new Set(
     databaseFiles.filter((file) => file.path.endsWith("-wal")).map((file) => file.canonicalPath),
   );
@@ -116,19 +111,13 @@ export async function readSessionPhysicalDiskUsage(
       uniqueFiles.set(file.canonicalPath, file);
     }
   }
-  const databaseMainBytes = [...databaseMainPaths].reduce(
-    (sum, databasePath) => sum + (uniqueFiles.get(databasePath)?.size ?? 0),
-    0,
-  );
   const databaseWalBytes = [...databaseWalPaths].reduce(
     (sum, databasePath) => sum + (uniqueFiles.get(databasePath)?.size ?? 0),
     0,
   );
   const totalBytes = [...uniqueFiles.values()].reduce((sum, file) => sum + file.size, 0);
   return {
-    databaseMainBytes,
     databaseWalBytes,
-    sessionFilesBytes: totalBytes - databaseMainBytes - databaseWalBytes,
     totalBytes,
   };
 }

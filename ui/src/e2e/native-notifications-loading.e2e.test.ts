@@ -144,4 +144,45 @@ suite.define(() => {
       );
     },
   );
+  it("retires notification presentation before a held native acknowledgement", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1360, height: 1000 } },
+      async ({ page }) => {
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.addInitScript(() => {
+          Object.assign(window, {
+            __OPENCLAW_NATIVE_NOTIFICATIONS__: { permission: "granted", test: null },
+            webkit: { messageHandlers: { openclawNotifications: { postMessage() {} } } },
+          });
+        });
+        await installMockGateway(page, { awaitInitialRoster: false });
+        await page.goto(`${suite.server.baseUrl}settings/notifications`);
+        const send = page.getByRole("button", { name: "Send test", exact: true });
+        await send.click();
+        const pending = page.getByRole("button", { name: "Sending test…", exact: true });
+        await expect.poll(() => pending.isDisabled()).toBe(true);
+        await page.locator('a[href="/settings/appearance"]').first().click();
+        // The title can advance while Solid still retains the old body.
+        const themes = page.locator(".settings-theme-card").first();
+        await themes.waitFor();
+        await expect.poll(() => pending.count()).toBe(0);
+        await page.evaluate(() => {
+          for (const test of [{ state: "pending" }, { state: "sent" }]) {
+            window.dispatchEvent(
+              new CustomEvent("openclaw:native-notifications-status", {
+                detail: { permission: "granted", test },
+              }),
+            );
+          }
+        });
+        await themes.waitFor();
+        expect(await send.count()).toBe(0);
+        await page.locator('a[href="/settings/notifications"]').first().click();
+        await expect.poll(() => send.isEnabled()).toBe(true);
+        await page.getByText("Test notification queued", { exact: true }).waitFor();
+        expect(errors).toEqual([]);
+      },
+    );
+  });
 });

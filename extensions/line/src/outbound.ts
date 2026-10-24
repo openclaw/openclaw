@@ -79,7 +79,6 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         }
       : undefined;
     const sendOptions = {
-      verbose: false,
       cfg,
       accountId: accountId ?? undefined,
       authorize,
@@ -339,7 +338,6 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       await (
         await loadLineOutboundRuntime()
       ).pushMessageLine(to, text, {
-        verbose: false,
         mediaUrl,
         cfg,
         accountId: accountId ?? undefined,

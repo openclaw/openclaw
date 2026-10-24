@@ -7,15 +7,16 @@ import type {
   ArtifactsDownloadResult,
   ArtifactsListResult,
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../test/helpers/openai-responses-sse.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import {
+  closeProvider,
+  listenProvider,
+  writeToolCallResponse,
+} from "./gateway-provider-fixture.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -171,29 +172,7 @@ it(
             }),
             status: "completed",
           };
-          writeOpenAiResponsesSse(response, [
-            {
-              type: "response.output_item.added",
-              output_index: 0,
-              item: { ...item, status: "in_progress", arguments: "" },
-            },
-            {
-              type: "response.function_call_arguments.done",
-              item_id: item.id,
-              output_index: 0,
-              arguments: item.arguments,
-            },
-            { type: "response.output_item.done", output_index: 0, item },
-            {
-              type: "response.completed",
-              response: {
-                id: `response_${selected.name}`,
-                status: "completed",
-                output: [item],
-                usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
-              },
-            },
-          ]);
+          writeToolCallResponse(response, item, `response_${selected.name}`, 10, 10);
         } else {
           writeOpenAiResponsesText(response, {
             text: selected.finalText ?? "NO_REPLY",
@@ -205,14 +184,7 @@ it(
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     try {
-      const listening = createDeferred();
-      provider.once("error", listening.reject);
-      provider.listen(0, "127.0.0.1", listening.resolve);
-      await listening.promise;
-      const address = provider.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing completion endpoint address");
-      }
+      const baseUrl = await listenProvider(provider);
       gateway = await startGatewayWithClient({
         cfg: {
           agents: {
@@ -230,7 +202,7 @@ it(
             mode: "replace",
             providers: {
               openai: {
-                baseUrl: `http://127.0.0.1:${address.port}/v1`,
+                baseUrl,
                 apiKey: "test",
                 api: "openai-responses",
                 request: { allowPrivateNetwork: true },
@@ -352,10 +324,7 @@ it(
           await gateway.server.close();
         }
       } finally {
-        provider.closeAllConnections();
-        const closed = createDeferred();
-        provider.close(() => closed.resolve());
-        await closed.promise;
+        await closeProvider(provider);
         snapshot.restore();
         clearRuntimeConfigSnapshot();
         clearConfigCache();

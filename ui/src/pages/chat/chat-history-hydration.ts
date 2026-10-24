@@ -27,10 +27,10 @@ import {
   ownsHistoryRequest,
   acceptsHistoryResult,
   resetChatHistoryProjection,
+  retireInitialChatSnapshot,
   setChatError,
   setChatHistoryLoad,
   setChatHistoryRetrying,
-  waitForInitialChatSnapshot,
 } from "./chat-history-state.ts";
 import {
   materializeVisibleAssistantStreamMessages,
@@ -128,7 +128,6 @@ export async function hydrateChatHistory(
       },
       cursor,
       inputRunIds,
-      undefined,
       historyState,
     );
   };
@@ -157,10 +156,8 @@ export async function hydrateChatHistory(
       }
       admission = requests.subscriptionReady;
     }
-    // A pane mounted after hello can still be hydrating its retained cursor and
-    // receipts. Join that data read before constructing the first request.
-    const hydration = waitForInitialChatSnapshot(state);
-    if ((hydration && !(await hydration)) || !isCurrent()) {
+    // Use a restored cursor when ready, but never hold live history on browser storage.
+    if (!isCurrent()) {
       return undefined;
     }
     // The snapshot covers activity emitted before the foreground observer was
@@ -177,6 +174,8 @@ export async function hydrateChatHistory(
         return undefined;
       }
     }
+    // Live history wins even if a pending IndexedDB read settles in the next microtask.
+    retireInitialChatSnapshot(state);
     const previousMessages = state.chatMessages;
     const previousPagination = state.chatHistoryPagination;
     const previousSessionId = state.currentSessionId ?? null;
@@ -226,7 +225,6 @@ export async function hydrateChatHistory(
             ? response.inputReceipts
             : undefined,
       });
-      state.chatThinkingLevel = response.sessionInfo.thinkingLevel ?? null;
       state.chatQueueModeOverride = response.sessionInfo.queueMode;
       state.chatEffectiveQueueMode = response.sessionInfo.effectiveQueueMode;
       applyHistoryRun({
@@ -335,10 +333,12 @@ export async function hydrateChatHistory(
     ) {
       state.reconnectResumeSessionId = null;
     }
-    state.chatThinkingLevel = res.sessionInfo?.thinkingLevel ?? res.thinkingLevel ?? null;
     state.chatVerboseLevel = res.verboseLevel ?? null;
     state.chatQueueModeOverride = res.sessionInfo?.queueMode;
     state.chatEffectiveQueueMode = res.sessionInfo?.effectiveQueueMode;
+    const observedRunActivity = Boolean(
+      res.inFlightRun && state.knownAgentRunIds?.has(res.inFlightRun.runId),
+    );
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
       const streamReconciliation = {
@@ -420,6 +420,7 @@ export async function hydrateChatHistory(
     applyHistoryRun({
       state,
       run: res.inFlightRun,
+      observedRunActivity,
       sessionInfo: res.sessionInfo,
       historyRun: res.observation.run,
       previousRunProjections,
@@ -436,7 +437,6 @@ export async function hydrateChatHistory(
     const missingReadScope = isMissingOperatorReadScopeError(err);
     if (missingReadScope) {
       resetChatHistoryProjection(state, requestAgentId);
-      state.chatThinkingLevel = null;
       state.chatVerboseLevel = null;
     }
     setChatHistoryLoad(state, {

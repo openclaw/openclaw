@@ -8,6 +8,11 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createEmptyPluginRegistry,
   createRuntimeEnv,
@@ -15,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { createMockIncomingRequest, createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedZaloAccount } from "./accounts.js";
 
@@ -96,6 +102,8 @@ describe("monitorZaloProvider lifecycle", () => {
     testStateDir = await fs.realpath(createdDir);
     vi.stubEnv("OPENCLAW_STATE_DIR", testStateDir);
     const core = createPluginRuntimeMock();
+    core.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
+      createPluginStateKeyedStoreForTests<T>("zalo", options);
     core.state.openChannelIngressQueue = (<T>(options: { accountId?: string }) =>
       createChannelIngressQueueForTests<T>({
         channelId: "zalo",
@@ -114,6 +122,7 @@ describe("monitorZaloProvider lifecycle", () => {
     // can reopen it during teardown and leave Windows handles under the state dir.
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
+    resetPluginStateStoreForTests({ closeDatabase: false });
     if (testStateDir) {
       await fs.rm(testStateDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
       testStateDir = undefined;
@@ -232,7 +241,7 @@ describe("monitorZaloProvider lifecycle", () => {
     expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=polling");
   });
 
-  it("waits for webhook deletion before finishing webhook shutdown", async () => {
+  it("preserves registered HTTP responses and waits for webhook deletion on shutdown", async () => {
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry);
 
@@ -264,6 +273,41 @@ describe("monitorZaloProvider lifecycle", () => {
     await settleLifecycleWork();
     expect(setWebhookMock).toHaveBeenCalledTimes(1);
     expect(registry.httpRoutes).toHaveLength(2);
+
+    for (const [source, handledPath, handledStatus, handledBody] of [
+      ["zalo-hosted-media", "/hooks/zalo/media/invalid", 404, "Not Found"],
+      ["zalo-webhook", "/hooks/zalo", 405, "Method Not Allowed"],
+    ] as const) {
+      const route = expectDefined(
+        registry.httpRoutes.find((entry) => entry.source === source),
+        source,
+      );
+      for (const started of [false, true]) {
+        const req = createMockIncomingRequest([]);
+        req.method = "POST";
+        req.url = "/unmatched";
+        const res = createMockServerResponse();
+        if (started) {
+          res.statusCode = 202;
+          res.setHeader("Content-Type", "text/plain");
+          res.end("Already handled");
+        }
+        await route.handler(req, res);
+        expect(res.statusCode).toBe(started ? 202 : 404);
+        expect(res.getHeader("Content-Type")).toBe(
+          started ? "text/plain" : "text/plain; charset=utf-8",
+        );
+        expect(res.body).toBe(started ? "Already handled" : "Not Found");
+      }
+      const req = createMockIncomingRequest([]);
+      req.method = "GET";
+      req.url = handledPath;
+      const res = createMockServerResponse();
+      await route.handler(req, res);
+      expect(res.statusCode).toBe(handledStatus);
+      expect(res.getHeader("Content-Type")).toBeUndefined();
+      expect(res.body).toBe(handledBody);
+    }
 
     abort.abort();
 

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { OpenClawPluginNodeInvokePolicy } from "openclaw/plugin-sdk/plugin-entry";
@@ -53,14 +54,11 @@ describe("logbook registration", () => {
       const ids: number[] = [];
       for (const [index, offset] of [0, 0, 2000].entries()) {
         const capturedAtMs = startMs + offset;
-        const id = await store.insertFrame({
+        const id = await store.captureFrame({
           capturedAtMs,
           day,
-          path: store.frameFilePath(day, capturedAtMs),
           screenIndex: 0,
-          byteSize: 9,
-          contentHash: `synthetic-${ids.length}`,
-          idle: index === 1,
+          buffer: Buffer.from(index < 2 ? "synthetic initial" : "synthetic changed"),
         });
         ids.push(id);
       }
@@ -112,7 +110,17 @@ describe("logbook registration", () => {
     ["extensions/logbook/index.ts", "extensions/logbook/src/store.worker.ts"],
     ["plugins/logbook/dist/index.js", "plugins/logbook/dist/src/store.worker.js"],
   ] as const)("locates the worker for runtime entry %s", async (entry, worker) => {
-    const { service } = registerLogbook(path.resolve(entry));
+    const root = tempDirs.make("logbook-worker-layout-");
+    const runtimeSource = path.resolve(root, entry);
+    if (entry.endsWith(".js")) {
+      const packageRoot = path.dirname(path.dirname(runtimeSource));
+      fs.mkdirSync(packageRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "@openclaw/logbook" }),
+      );
+    }
+    const { service } = registerLogbook(runtimeSource);
     const config = { database: { engine: "postgres" as const } };
     const stopBeforeOpening = new Error("worker location captured");
     const open = vi.spyOn(LogbookStore, "open").mockRejectedValueOnce(stopBeforeOpening);
@@ -123,7 +131,7 @@ describe("logbook registration", () => {
       ).rejects.toBe(stopBeforeOpening);
       expect(open).toHaveBeenCalledExactlyOnceWith(
         path.join("/unused", "logbook"),
-        pathToFileURL(path.resolve(worker)),
+        pathToFileURL(path.resolve(root, worker)),
       );
     } finally {
       await scheduler.stop();

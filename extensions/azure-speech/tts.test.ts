@@ -1,17 +1,15 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../test-support/streaming-error-response.js";
-import {
-  azureSpeechTTS,
-  inferAzureSpeechFileExtension,
-  isAzureSpeechVoiceCompatible,
-  listAzureSpeechVoices,
-} from "./tts.js";
+import { buildAzureSpeechProvider } from "./speech-provider.js";
 
 describe("azure speech tts", () => {
   installPinnedHostnameTestHooks();
+  const provider = buildAzureSpeechProvider();
+  const listVoices = expectDefined(provider.listVoices, "Azure voice-list provider");
   const synthesisRequest = {
     text: "hello",
     apiKey: "fixture-value",
@@ -22,9 +20,24 @@ describe("azure speech tts", () => {
     timeoutMs: 1234,
   };
   const voiceRequest = { apiKey: "speech-key", baseUrl: "https://custom.example.com/" };
-  const synthesize = (overrides: Partial<Parameters<typeof azureSpeechTTS>[0]> = {}) =>
-    azureSpeechTTS({ ...synthesisRequest, ...overrides });
-  const expectMalformedAudio = (overrides: Partial<Parameters<typeof azureSpeechTTS>[0]>) =>
+  type SynthesisOverrides = Partial<typeof synthesisRequest> & {
+    endpoint?: string;
+    maxBytes?: number;
+  };
+  const synthesize = (overrides: SynthesisOverrides = {}) => {
+    const { text, timeoutMs, maxBytes, ...providerConfig } = { ...synthesisRequest, ...overrides };
+    return provider.synthesize({
+      text,
+      timeoutMs,
+      providerConfig,
+      target: "audio-file",
+      cfg:
+        maxBytes === undefined
+          ? {}
+          : { agents: { defaults: { mediaMaxMb: maxBytes / (1024 * 1024) } } },
+    });
+  };
+  const expectMalformedAudio = (overrides: SynthesisOverrides) =>
     expect(synthesize(overrides)).rejects.toThrow(
       "Azure Speech TTS API error: malformed audio response",
     );
@@ -45,18 +58,25 @@ describe("azure speech tts", () => {
     vi.restoreAllMocks();
   });
 
-  it("maps Azure output formats to attachment metadata", () => {
-    expect(inferAzureSpeechFileExtension("audio-24khz-48kbitrate-mono-mp3")).toBe(".mp3");
-    expect(inferAzureSpeechFileExtension("ogg-24khz-16bit-mono-opus")).toBe(".ogg");
-    expect(inferAzureSpeechFileExtension("riff-24khz-16bit-mono-pcm")).toBe(".wav");
-    expect(inferAzureSpeechFileExtension("raw-8khz-8bit-mono-mulaw")).toBe(".pcm");
-    expect(inferAzureSpeechFileExtension("webm-24khz-16bit-mono-opus")).toBe(".webm");
-    expect(inferAzureSpeechFileExtension("amr-wb-16000hz")).toBe(".amr");
-    expect(inferAzureSpeechFileExtension("RIFF-24KHZ-16BIT-MONO-PCM")).toBe(".wav");
-    expect(inferAzureSpeechFileExtension("ogg-mp3")).toBe(".mp3");
-    expect(inferAzureSpeechFileExtension("unknown")).toBe(".audio");
-    expect(isAzureSpeechVoiceCompatible("ogg-24khz-16bit-mono-opus")).toBe(true);
-    expect(isAzureSpeechVoiceCompatible("webm-24khz-16bit-mono-opus")).toBe(false);
+  it("maps Azure output formats to attachment metadata", async () => {
+    for (const [outputFormat, fileExtension, voiceCompatible] of [
+      ["audio-24khz-48kbitrate-mono-mp3", ".mp3", false],
+      ["ogg-24khz-16bit-mono-opus", ".ogg", true],
+      ["riff-24khz-16bit-mono-pcm", ".wav", false],
+      ["raw-8khz-8bit-mono-mulaw", ".pcm", false],
+      ["webm-24khz-16bit-mono-opus", ".webm", false],
+      ["amr-wb-16000hz", ".amr", false],
+      ["RIFF-24KHZ-16BIT-MONO-PCM", ".wav", false],
+      ["ogg-mp3", ".mp3", false],
+      ["unknown", ".audio", false],
+    ] satisfies Array<[string, string, boolean]>) {
+      mockResponse(new Response(Buffer.from("mp3"), { headers: { "Content-Type": "audio/mpeg" } }));
+      await expect(synthesize({ outputFormat })).resolves.toMatchObject({
+        outputFormat,
+        fileExtension,
+        voiceCompatible,
+      });
+    }
   });
 
   it("posts SSML to the region endpoint with Azure Speech headers", async () => {
@@ -66,7 +86,7 @@ describe("azure speech tts", () => {
       voice: `en-US-JennyNeural" xml:lang="evil`,
       lang: `en-US" bad="1`,
     });
-    expect(result).toEqual(Buffer.from("mp3"));
+    expect(result.audioBuffer).toEqual(Buffer.from("mp3"));
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://eastus.tts.speech.microsoft.com/cognitiveservices/v1");
@@ -124,7 +144,7 @@ describe("azure speech tts", () => {
       },
     ]);
 
-    const voices = await listAzureSpeechVoices({ ...voiceRequest, timeoutMs: 4321 });
+    const voices = await listVoices({ ...voiceRequest, timeoutMs: 4321 });
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://custom.example.com/cognitiveservices/voices/list");
@@ -139,7 +159,7 @@ describe("azure speech tts", () => {
 
   it("returns an empty catalog for a malformed top-level voice payload", async () => {
     mockVoiceCatalog(null);
-    await expect(listAzureSpeechVoices(voiceRequest)).resolves.toEqual([]);
+    await expect(listVoices(voiceRequest)).resolves.toEqual([]);
   });
 
   it("rejects empty synthesized audio", async () => {

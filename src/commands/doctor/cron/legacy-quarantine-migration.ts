@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronQuarantinedJob } from "../../../cron/store.js";
+import { decodeUtf8Input } from "../../../infra/utf8-input.js";
 import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
 
 export type LegacyCronQuarantine = {
@@ -19,7 +20,7 @@ export async function loadLegacyCronQuarantineForMigration(
   const quarantinePath = `${storePath.endsWith(".json") ? storePath.slice(0, -5) : storePath}-quarantine.json`;
   let raw: string;
   try {
-    raw = await fs.readFile(quarantinePath, "utf-8");
+    raw = decodeUtf8Input(await fs.readFile(quarantinePath), quarantinePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;

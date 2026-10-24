@@ -1,39 +1,33 @@
 // Plugin tool allowlist warning tests cover doctor warnings for stale tool allowlists.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import * as fixture from "../../../plugins/plugin-metadata.test-support.js";
 import { collectPluginToolAllowlistWarnings } from "./plugin-tool-allowlist-warnings.js";
+
+vi.mock("../../../plugins/manifest-contract-eligibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/manifest-contract-eligibility.js")>()),
+  loadManifestMetadataSnapshot: () => fixture.createPluginMetadataSnapshotFixture(manifestRegistry),
+}));
 
 const manifestRegistry: PluginManifestRegistry = {
   diagnostics: [],
   plugins: [
-    {
+    fixture.createPluginManifestRecordFixture({
       id: "firecrawl",
-      channels: [],
-      cliBackends: [],
-      hooks: [],
-      manifestPath: "/virtual/firecrawl/openclaw.plugin.json",
-      origin: "bundled",
-      providers: [],
       rootDir: "/virtual/firecrawl",
-      skills: [],
       source: "/virtual/firecrawl/index.ts",
+      manifestPath: "/virtual/firecrawl/openclaw.plugin.json",
       contracts: {
         tools: ["firecrawl_search", "firecrawl_scrape"],
       },
-    },
-    {
+    }),
+    fixture.createPluginManifestRecordFixture({
       id: "lobster",
-      channels: [],
-      cliBackends: [],
-      hooks: [],
-      manifestPath: "/virtual/lobster/openclaw.plugin.json",
-      origin: "bundled",
-      providers: [],
       rootDir: "/virtual/lobster",
-      skills: [],
       source: "/virtual/lobster/index.ts",
-    },
+      manifestPath: "/virtual/lobster/openclaw.plugin.json",
+    }),
   ],
 };
 
@@ -44,7 +38,6 @@ function mcpWarnings(cfg: OpenClawConfig) {
       mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
       ...cfg,
     },
-    manifestRegistry,
   });
 }
 
@@ -55,7 +48,6 @@ describe("collectPluginToolAllowlistWarnings", () => {
         plugins: { allow: ["telegram"] },
         tools: { allow: ["*"] },
       },
-      manifestRegistry,
     });
 
     expect(warnings).toEqual([
@@ -69,7 +61,6 @@ describe("collectPluginToolAllowlistWarnings", () => {
         plugins: { allow: ["telegram"] },
         tools: { allow: ["firecrawl_search"] },
       },
-      manifestRegistry,
     });
 
     expect(warnings).toEqual([
@@ -89,7 +80,6 @@ describe("collectPluginToolAllowlistWarnings", () => {
           },
         },
       },
-      manifestRegistry,
     });
 
     expect(warnings).toEqual([
@@ -163,6 +153,30 @@ describe("collectPluginToolAllowlistWarnings", () => {
 
     expect(warnings).toStrictEqual([]);
   });
+
+  it.each(["google/gemini-2.5-pro", "openai/gpt-4.1"])(
+    "uses the agent alias target %s for MCP policy warnings",
+    (target) => {
+      const warnings = mcpWarnings({
+        agents: {
+          entries: {
+            worker: {
+              model: "fast",
+              models: { [target]: { alias: "fast" } },
+              sandbox: { mode: "all" },
+              tools: { sandbox: { tools: { alsoAllow: ["web_fetch"] } } },
+            },
+          },
+        },
+        tools: { byProvider: { google: { profile: "minimal" } } },
+      });
+      expect(warnings).toEqual(
+        target.startsWith("google/")
+          ? []
+          : [expect.stringContaining("agents.entries.worker.tools.sandbox.tools.alsoAllow")],
+      );
+    },
+  );
 
   it("still warns when the active provider allowlist allows MCP tools but sandbox policy hides them", () => {
     const warnings = mcpWarnings({

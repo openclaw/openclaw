@@ -38,6 +38,13 @@ export const optimisticSessionRowFields = [
   "pinnedAt",
   "unread",
   "category",
+  "label",
+  "icon",
+  "color",
+  "archived",
+  "archivedAt",
+  "archivedBy",
+  "archiveReason",
   "thinkingLevel",
   "fastMode",
   "effectiveFastMode",
@@ -60,6 +67,8 @@ export type SessionPatchRowFact = {
   readCutoff?: number;
   fields:
     | { label: GatewaySessionRow["label"] }
+    | { icon: GatewaySessionRow["icon"] }
+    | { color: GatewaySessionRow["color"] }
     | { category: GatewaySessionRow["category"] }
     | SessionPinFields
     | { pinned: true }
@@ -186,7 +195,7 @@ export function resolvePredecessorRowTarget(
     : null;
 }
 
-function createOptimisticRowPatches<T>(
+export function createOptimisticRowPatches<T>(
   host: PendingRowHost,
   fields: {
     read: (row: GatewaySessionRow | undefined) => T;
@@ -317,7 +326,14 @@ function createOptimisticRowPatches<T>(
 }
 
 export function createOptimisticRowField<
-  Field extends "category" | "unread" | "thinkingLevel" | "contextWindow",
+  Field extends
+    | "label"
+    | "icon"
+    | "color"
+    | "category"
+    | "unread"
+    | "thinkingLevel"
+    | "contextWindow",
 >(host: PendingRowCopyHost, field: Field) {
   return createOptimisticRowPatches(host, {
     read: (row) => row?.[field],

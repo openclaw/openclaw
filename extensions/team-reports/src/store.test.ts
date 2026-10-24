@@ -5,6 +5,7 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { describePeriod } from "./periods.js";
+import { reportMember } from "./reports-data.test-support.js";
 import { githubCounts as counts } from "./reports.fixtures.js";
 import { buildRoster } from "./roster.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
@@ -36,15 +37,9 @@ function report(key = "2026-08-20", logins = ["alice", "bob"]): ReportDocument {
       github: counts(logins.length),
       discord: { messages: logins.length * 2, channels: { general: logins.length * 2 } },
     },
-    members: logins.map((login) => ({
-      login,
-      display: login,
-      access: [],
-      areas: [],
-      aliases: [],
-      github: { ...counts(1), items: [] },
-      discord: { total: 2, channels: { general: 2 }, excerpts: [] },
-    })),
+    members: logins.map((login) =>
+      reportMember(login, { discord: { total: 2, channels: { general: 2 }, excerpts: [] } }),
+    ),
     otherActors: [],
     unmatchedDiscord: [],
     sources: { github: { ok: true, warnings: [], stats: { apiCalls: 1 } } },
@@ -246,8 +241,13 @@ describe("Team Reports storage", () => {
 
   it("reads half-open day ranges and indexes newest first without projecting week rows onto people", async () => {
     const { store } = await openStore();
-    for (const key of ["2026-08-18", "2026-08-19", "2026-08-20"]) {
-      await store.upsertPeriod({ report: report(key), markdown: key });
+    for (const [index, key] of ["2026-08-18", "2026-08-19", "2026-08-20"].entries()) {
+      const day = report(key);
+      day.totals.github = counts((index + 1) * day.members.length);
+      for (const member of day.members) {
+        member.github = { ...counts(index + 1), items: [] };
+      }
+      await store.upsertPeriod({ report: day, markdown: key });
     }
     const week = report();
     week.period = {
@@ -258,14 +258,21 @@ describe("Team Reports storage", () => {
       untilMs: Date.parse("2026-08-24T00:00:00Z"),
     };
     await store.upsertPeriod({ report: week, markdown: "week" });
-    expect(
-      (
-        await store.getDayReports(
-          Date.parse("2026-08-19T00:00:00Z"),
-          Date.parse("2026-08-20T00:00:00Z"),
-        )
-      ).map((day) => day.period.key),
-    ).toEqual(["2026-08-19"]);
+    const aggregated = await store.aggregatePeriod({
+      period: {
+        ...week.period,
+        sinceMs: Date.parse("2026-08-19T00:00:00Z"),
+        untilMs: Date.parse("2026-08-20T00:00:00Z"),
+      },
+      nowMs: week.period.untilMs,
+      orgs: ["example"],
+      roster: buildRoster([{ github: ["alice"] }, { github: ["bob"] }]),
+    });
+    expect(aggregated.totals.github.total).toBe(4);
+    expect(aggregated.members.map((member) => [member.login, member.github.total])).toEqual([
+      ["alice", 2],
+      ["bob", 2],
+    ]);
     expect(
       (await store.listPeriods({ period: "day", limit: 2 })).map((entry) => entry.key),
     ).toEqual(["2026-08-20", "2026-08-19"]);

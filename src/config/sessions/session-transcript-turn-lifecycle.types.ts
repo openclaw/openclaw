@@ -26,6 +26,7 @@ export type SessionTranscriptTurnExpectedState = {
   restartRecoveryOperatorSource: SessionEntry["restartRecoveryOperatorSource"];
   restartRecoveryRequesterSource?: SessionEntry["restartRecoveryRequesterSource"];
   restartRecoverySourceIngress: SessionRestartRecoveryState["restartRecoverySourceIngress"];
+  restartRecoverySourceMessageChannel?: SessionRestartRecoveryState["restartRecoverySourceMessageChannel"];
   restartRecoverySourceReplyDeliveryMode: SessionRestartRecoveryState["restartRecoverySourceReplyDeliveryMode"];
   restartRecoveryTerminalRunIds: SessionRestartRecoveryState["restartRecoveryTerminalRunIds"];
   status: PersistedSessionRunStatus | undefined;
@@ -54,6 +55,7 @@ export type SessionTranscriptTurnLifecyclePatch = {
   restartRecoveryOperatorSource?: SessionEntry["restartRecoveryOperatorSource"];
   restartRecoveryRequesterSource?: SessionEntry["restartRecoveryRequesterSource"];
   restartRecoverySourceIngress?: SessionRestartRecoveryState["restartRecoverySourceIngress"];
+  restartRecoverySourceMessageChannel?: SessionRestartRecoveryState["restartRecoverySourceMessageChannel"];
   restartRecoverySourceReplyDeliveryMode?: SessionRestartRecoveryState["restartRecoverySourceReplyDeliveryMode"];
   restartRecoveryForceSafeTools?: SessionEntry["restartRecoveryForceSafeTools"];
   restartRecoveryRuns?: SessionEntry["restartRecoveryRuns"];

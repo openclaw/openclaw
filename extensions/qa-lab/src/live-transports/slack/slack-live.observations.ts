@@ -131,27 +131,17 @@ export function collectSlackActionValues(blocks?: unknown[]) {
 
 export function recordSlackObservedMessage(params: {
   channelId: string;
-  matchedScenario: boolean;
   message: SlackMessage;
   observedMessages: SlackObservedMessage[];
-  scenarioId: string;
-  scenarioTitle: string;
 }) {
   if (!params.message.ts) {
     return;
   }
   params.observedMessages.push({
-    actionValues: collectSlackActionValues(params.message.blocks),
     blockText: collectSlackBlockText(params.message.blocks),
-    botId: params.message.bot_id,
     channelId: params.channelId,
-    matchedScenario: params.matchedScenario,
-    scenarioId: params.scenarioId,
-    scenarioTitle: params.scenarioTitle,
     text: params.message.text ?? "",
-    threadTs: params.message.thread_ts,
     ts: params.message.ts,
-    userId: params.message.user,
   });
 }
 
@@ -316,35 +306,6 @@ export async function waitForSlackStoredMessage(params: {
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack ${params.description}`);
 }
 
-async function waitForSlackStoredMessages(params: {
-  channelId: string;
-  client: WebClient;
-  description: string;
-  messageIds: readonly string[];
-  oldestTs: string;
-  sutIdentity: SlackAuthIdentity;
-  timeoutMs: number;
-}) {
-  const startedAt = Date.now();
-  while (true) {
-    const messages = await listSlackMessages(params);
-    const messagesById = new Map(
-      messages
-        .filter((message) => message.ts && isSutSlackMessage(message, params.sutIdentity))
-        .map((message) => [message.ts as string, message]),
-    );
-    if (params.messageIds.every((messageId) => messagesById.has(messageId))) {
-      return params.messageIds.map((messageId) => messagesById.get(messageId) as SlackMessage);
-    }
-    const remainingMs = params.timeoutMs - (Date.now() - startedAt);
-    if (remainingMs <= 0) {
-      break;
-    }
-    await sleep(Math.min(1_000, remainingMs));
-  }
-  throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack ${params.description}`);
-}
-
 export async function runSlackTableInvalidBlocksFallbackScenario(
   context: SlackQaDirectTransportScenarioContext,
 ): Promise<SlackQaDirectTransportScenarioResult> {
@@ -440,15 +401,30 @@ export async function runSlackTableInvalidBlocksFallbackScenario(
     );
   }
 
-  const messages = await waitForSlackStoredMessages({
-    channelId: context.channelId,
-    client: context.sutReadClient,
-    description: "stored invalid_blocks fallback messages",
-    messageIds: receiptMessageIds,
-    oldestTs,
-    sutIdentity: context.sutIdentity,
-    timeoutMs: context.timeoutMs,
-  });
+  const { channelId, sutReadClient: client, sutIdentity, timeoutMs } = context;
+  async function waitForSlackStoredMessages() {
+    const startedAt = Date.now();
+    while (true) {
+      const messages = await listSlackMessages({ channelId, client, oldestTs });
+      const messagesById = new Map(
+        messages
+          .filter((message) => message.ts && isSutSlackMessage(message, sutIdentity))
+          .map((message) => [message.ts as string, message]),
+      );
+      if (receiptMessageIds.every((messageId) => messagesById.has(messageId))) {
+        return receiptMessageIds.map((messageId) => messagesById.get(messageId) as SlackMessage);
+      }
+      const remainingMs = timeoutMs - (Date.now() - startedAt);
+      if (remainingMs <= 0) {
+        break;
+      }
+      await sleep(Math.min(1_000, remainingMs));
+    }
+    throw new Error(
+      `timed out after ${timeoutMs}ms waiting for Slack stored invalid_blocks fallback messages`,
+    );
+  }
+  const messages = await waitForSlackStoredMessages();
   if (messages.some((message) => countSlackNativeDataBlocks(message.blocks) !== 0)) {
     throw new Error("stored Slack fallback retained a native data block");
   }

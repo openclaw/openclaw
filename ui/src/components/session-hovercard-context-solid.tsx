@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
-import { i18nRevision, t } from "../lib/reactive/i18n.ts";
+import { registerSessionProgressEnglish } from "../i18n/locales/en-session-progress.ts";
+import { registerEnglishCatalog, i18nRevision, t } from "../lib/reactive/i18n.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import {
   SessionHovercardAutomations,
@@ -9,6 +10,8 @@ import {
 import { sessionMachineParts } from "./session-machine.ts";
 import type { progressCardHeadsUp } from "./session-progress-card.ts";
 import { Icon } from "./solid/icon.tsx";
+
+registerEnglishCatalog(registerSessionProgressEnglish);
 
 export type SessionHovercardContextInput = {
   row?: SidebarSessionHovercardRow;

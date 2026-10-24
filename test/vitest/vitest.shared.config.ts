@@ -125,6 +125,7 @@ export const sharedVitestConfig = {
     ...controlUiSolidPlugin([
       `${repoRoot.replaceAll("\\", "/")}/ui/**/*.tsx`,
       `${repoRoot.replaceAll("\\", "/")}/extensions/*/browser/**/*.tsx`,
+      `${repoRoot.replaceAll("\\", "/")}/extensions/*/src/control-ui.tsx`,
     ]),
     createStateSchemaInlinePlugin(repoRoot),
     compiledSubprocessesPlugin(),

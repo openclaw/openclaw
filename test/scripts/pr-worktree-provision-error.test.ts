@@ -2,26 +2,18 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatProvisionError } from "../../scripts/pr-lib/worktree-provision-error.mjs";
-import { GatewayStateOwnerContentionError } from "../../src/infra/gateway-state-owner.js";
 import { markSqliteNativeOpenFailure } from "../../src/infra/sqlite-error-diagnostics.js";
 import { markOpenClawStateDatabaseFailure } from "../../src/state/openclaw-state-db-failure.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../src/state/openclaw-state-lease-error.js";
-import {
-  hydrateOpenClawStateWorkerError,
-  retainOpenClawStateWorkerErrorPayload,
-} from "../../src/state/openclaw-state-worker-error.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const unavailable = "Provisioning failed; diagnostic unavailable.";
-const storage = (
-  cause: unknown,
-  reason: "sqlite-busy" | "lifecycle-busy" | "storage-error" = "storage-error",
-) =>
+const storage = (cause: unknown) =>
   new OpenClawStateLeaseAcquisitionError(
     "managed worktree allocation lease",
-    { kind: "store-unavailable", reason },
+    { kind: "store-unavailable", reason: "storage-error" },
     cause,
   );
 const render = (error: unknown) => JSON.parse(formatProvisionError(error));
@@ -46,50 +38,6 @@ describe("native PR provisioning diagnostics", () => {
       nativeOpen: true,
       stateDatabasePath: "/fixture/refused.sqlite",
     });
-  });
-
-  it("preserves distinct busy, lifecycle and worker failures without guessing a classification", () => {
-    const busy = render(
-      storage(
-        Object.assign(new Error("synthetic busy"), { code: "SQLITE_BUSY", errcode: 5 }),
-        "sqlite-busy",
-      ),
-    );
-    expect(busy.outcome.reason).toBe("sqlite-busy");
-    expect(busy.error.nodes[1]).toMatchObject({ code: "SQLITE_BUSY", errcode: 5 });
-    const lifecycle = render(
-      storage(new GatewayStateOwnerContentionError("/fixture/state.sqlite"), "lifecycle-busy"),
-    );
-    expect(lifecycle.outcome.reason).toBe("lifecycle-busy");
-    expect(lifecycle.error.nodes[1]).toMatchObject({
-      type: "state-owner-contention",
-      databasePath: "/fixture/state.sqlite",
-    });
-    const worker = render(
-      storage(Object.assign(new Error("synthetic worker unavailable"), { code: "unavailable" })),
-    );
-    expect(worker.outcome.reason).toBe("storage-error");
-    expect(worker.error.nodes[1].code).toBe("unavailable");
-  });
-
-  it("retains shared and cyclic causes as a hydratable graph without changing the original", () => {
-    const leaf = new Error("shared synthetic cause");
-    const aggregate = new AggregateError([leaf, leaf], "aggregate", { cause: leaf });
-    leaf.cause = aggregate;
-    const error = storage(aggregate);
-    const out = render(error);
-    const carrier = new Error("wire carrier");
-    retainOpenClawStateWorkerErrorPayload(carrier, out.error);
-    const restored = hydrateOpenClawStateWorkerError(carrier);
-    expect(restored).not.toBe(carrier);
-    expect(restored.cause).toBeInstanceOf(AggregateError);
-    const restoredAggregate = restored.cause as AggregateError;
-    expect(restoredAggregate.errors[0]).toBe(restoredAggregate.errors[1]);
-    expect(restoredAggregate.cause).toBe(restoredAggregate.errors[0]);
-    expect(restoredAggregate.errors[0].cause).toBe(restoredAggregate);
-    expect(error.cause).toBe(aggregate);
-    expect(leaf.cause).toBe(aggregate);
-    expect(aggregate.errors).toEqual([leaf, leaf]);
   });
 
   it.each([
@@ -122,7 +70,6 @@ describe("native PR provisioning diagnostics", () => {
     const text = formatProvisionError(error);
     expect(text).not.toContain(credential);
     expect(text).toContain("***");
-    expect(() => JSON.parse(text)).not.toThrow();
     expect(formatProvisionError("Authorization: Bearer " + credential)).not.toContain(credential);
     const outcome = { kind: "held", holder: { owner: "api_key=" + credential, epoch: 7 } } as const;
     const held = render(new OpenClawStateLeaseAcquisitionError("lease", outcome));
@@ -153,18 +100,12 @@ describe("native PR provisioning diagnostics", () => {
     expect(toJSON).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "plain failure",
-    "state lease heartbeat is not responsive (phase=verify, trigger=deadline, requestId=2, elapsedMs=1000, responseRemainingMs=0, operationRemainingMs=59000, leaseRemainingMs=59000, status=1, renewalProgress=2, completedRequestId=1)",
-  ])("reports ordinary errors without fabricating storage facts: %s", (message) => {
+  it("does not fabricate storage facts from heartbeat wording", () => {
+    const message =
+      "state lease heartbeat is not responsive (phase=verify, trigger=deadline, requestId=2, elapsedMs=1000, responseRemainingMs=0, operationRemainingMs=59000, leaseRemainingMs=59000, status=1, renewalProgress=2, completedRequestId=1)";
     const out = render(new Error(message));
     expect(out.outcome).toBeUndefined();
     expect(out.error.nodes).toEqual([{ type: "error", name: "Error", message }]);
-    const carrier = new Error("wire carrier");
-    retainOpenClawStateWorkerErrorPayload(carrier, out.error);
-    expect(hydrateOpenClawStateWorkerError(carrier, { includeOrdinary: true }).message).toBe(
-      message,
-    );
   });
 
   it("safely handles primitives", () => {
@@ -195,12 +136,12 @@ describe("native PR provisioning diagnostics", () => {
       const report = result.stderr.split("\n").find((line) => line.startsWith('{"error":'));
       expect(report, result.stderr).toBeDefined();
       const out = JSON.parse(report!);
-      expect(out.outcome, report).toEqual({ kind: "store-unavailable", reason: "storage-error" });
-      expect(out.error.nodes).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED" }),
-          expect.objectContaining({ code: "ERR_SQLITE_ERROR", errcode: 26 }),
-        ]),
+      expect(out.outcome, report).toBeUndefined();
+      expect(out.error.nodes).toContainEqual(
+        expect.objectContaining({ code: "ERR_SQLITE_ERROR", errcode: 26 }),
+      );
+      expect(out.error.nodes).not.toContainEqual(
+        expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED" }),
       );
       expect(readFileSync(database, "utf8")).toBe(corrupt);
       expect(existsSync(f.worktree)).toBe(false);

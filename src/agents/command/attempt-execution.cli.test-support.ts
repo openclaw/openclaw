@@ -244,8 +244,8 @@ export async function runTrustedClaudeCompletionForTest({
     agentId: "main",
     modelProvider: "claude-cli",
     modelId: "opus",
-    toolsAllow: ["read", "exec"],
   });
+  context.toolsAllow = ["read", "exec"];
   return { context, childSessionKey: trustedChildSessionKey, childEntry: trustedChildEntry };
 }
 
@@ -311,7 +311,6 @@ export function registerCommandCliAdmissionTests({
       const onRuntimeTurnStarted = vi.fn();
       const callbacks = createAgentAttemptLifecycleCallbacks(
         {
-          currentTurnUserMessagePersisted: false,
           lifecycleFinishing: false,
           lifecycleEnded: false,
         },

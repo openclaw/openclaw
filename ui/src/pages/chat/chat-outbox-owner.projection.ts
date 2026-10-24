@@ -1,12 +1,9 @@
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { storedChatOutboxItemNeedsReview } from "../../lib/chat/outbox-owner-registry.ts";
-import type { StoredChatOutbox } from "../../lib/chat/outbox-store-projection.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 
 export type ChatOutboxHostProjection = {
   byScope: Map<string, { scope: StoredChatOutboxScope; queue: ChatQueueItem[] }>;
   durableSeen: Set<string>;
-  retryable: Set<string>;
 };
 
 export function reconcileChatOutboxProjection(
@@ -42,34 +39,12 @@ export function projectChatOutboxItem(item: ChatQueueItem, local: ChatQueueItem)
   return projected;
 }
 
-export function projectChatOutboxAttention(
-  outboxes: readonly StoredChatOutbox[],
-  owner?: { needsReview(scope: StoredChatOutboxScope, item: ChatQueueItem): boolean },
-) {
-  return outboxes.flatMap((outbox) =>
-    outbox.queue
-      .filter((item) =>
-        owner ? owner.needsReview(outbox, item) : storedChatOutboxItemNeedsReview(item),
-      )
-      .map((item) => ({
-        id: item.id,
-        sessionKey: outbox.sessionKey,
-        agentId: outbox.agentId,
-        unconfirmed: item.sendState === "unconfirmed" || item.sendState === "held",
-        command: Boolean(item.localCommandName),
-      })),
-  );
-}
-
 export function isActiveLocal(
-  state: { durableSeen: ReadonlySet<string>; retryable: ReadonlySet<string> },
+  state: { durableSeen: ReadonlySet<string> },
   item: ChatQueueItem,
 ): boolean {
   return Boolean(
-    item.pendingRunId ||
-    item.sendState === "waiting-model" ||
-    state.retryable.has(item.id) ||
-    !state.durableSeen.has(item.id),
+    item.pendingRunId || item.sendState === "waiting-model" || !state.durableSeen.has(item.id),
   );
 }
 

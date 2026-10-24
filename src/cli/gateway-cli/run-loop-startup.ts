@@ -26,11 +26,7 @@ export async function prepareGatewayRunLoop(
     "cli.bootstrap.lifecycle-runtime",
     () => lifecycleRuntimeLoader.load(),
   );
-  const supervisor = lifecycleRuntime.detectGatewayRespawnSupervisorIdentity(
-    process.env,
-    process.platform,
-    { includeLinuxOpenClawGatewayServiceMarker: true },
-  );
+  const supervisor = lifecycleRuntime.detectGatewayRespawnSupervisorIdentity();
   const supervisorMode = supervisor?.kind ?? null;
   const restartDecision = lifecycleRuntime.resolveGatewayRestartDecision();
   // Resolve the native deadline before acquiring custody that needs final settlement.

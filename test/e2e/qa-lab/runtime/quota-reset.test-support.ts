@@ -39,6 +39,7 @@ export const BACKUP_RESPONSES_PATH = "/quota-backup/responses";
 
 const MODEL = "openai/gpt-5.5";
 export const UTILITY_MODEL_ID = "quota-test-utility";
+export const ORDINARY_RATE_LIMIT_RETRY_AFTER_MS = 30_000;
 const PROFILE_ID = "openai:quota";
 export const ACCOUNT_ID = "quota-test-account";
 export const MARKER = "QUOTA_TURN_OK";
@@ -210,8 +211,14 @@ export async function startQuotaProvider(
     };
   };
   const failure = () => {
-    const headers: Record<string, string> =
-      primaryExhausted() && source === "codex_rate_limits"
+    const ordinaryRateLimit =
+      phase === "ordinary-rate-limit" ||
+      phase === "ordinary-rate-limit-with-capacity" ||
+      phase === "ordinary-rate-limit-with-exhausted-usage";
+    // Ordinary throttles carry the provider's retry timing; it alone sets the cooldown.
+    const headers: Record<string, string> = ordinaryRateLimit
+      ? { "retry-after": String(ORDINARY_RATE_LIMIT_RETRY_AFTER_MS / 1000) }
+      : primaryExhausted() && source === "codex_rate_limits"
         ? {
             "x-codex-primary-used-percent": "100",
             "x-codex-primary-window-minutes": "300",
@@ -231,9 +238,7 @@ export async function startQuotaProvider(
               code: "invalid_api_key",
               message: "Invalid authentication token",
             }
-          : phase === "ordinary-rate-limit" ||
-              phase === "ordinary-rate-limit-with-capacity" ||
-              phase === "ordinary-rate-limit-with-exhausted-usage"
+          : ordinaryRateLimit
             ? {
                 type: "rate_limit_error",
                 code: "rate_limit_exceeded",

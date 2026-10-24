@@ -16,6 +16,9 @@ import { withTempHome } from "./test-helpers.js";
 const { runRegisteredConfigCommand: run, withConfigFileHarness: withConfig } =
   useConfigCliIntegrationHarness();
 const set = (key: string, value: string) => run(["config", "set", key, value]);
+const loggingRoot = '{"gateway":{"mode":"local"},"logging":{"$include":"logging.json"}}\n';
+const withLoggingConfig = (body: Parameters<typeof withConfig>[2]) =>
+  withConfig("openclaw-config-include-backup-", loggingRoot, body);
 async function expectFile(file: string, raw: string, mode?: number) {
   await expect(fs.readFile(file, "utf8")).resolves.toBe(raw);
   if (mode !== undefined) {
@@ -75,55 +78,45 @@ describe("config backup rotation", () => {
 
   it("openclaw config set preserves original include bytes in private recovery backups", async () => {
     const original = '{"level":"info"}\n';
-    const rootRaw = '{"gateway":{"mode":"local"},"logging":{"$include":"logging.json"}}\n';
-    await withConfig(
-      "openclaw-config-private-backup-",
-      rootRaw,
-      async ({ configPath, tempDir }) => {
-        const target = path.join(tempDir, "logging.json");
-        await fs.writeFile(target, original, { mode: 0o600 });
-        const previousBackup = '{"level":"warn"}\n';
-        await fs.writeFile(`${target}.bak`, previousBackup, { mode: 0o644 });
+    await withLoggingConfig(async ({ configPath, tempDir }) => {
+      const target = path.join(tempDir, "logging.json");
+      await fs.writeFile(target, original, { mode: 0o600 });
+      const previousBackup = '{"level":"warn"}\n';
+      await fs.writeFile(`${target}.bak`, previousBackup, { mode: 0o644 });
 
-        await set("logging.level", "debug");
+      await set("logging.level", "debug");
 
-        const saved = JSON.parse(await fs.readFile(target, "utf8"));
-        expect(saved.level).toBe("debug");
-        await expectFile(`${target}.bak`, original, 0o600);
-        await expectFile(`${target}.bak.1`, previousBackup, 0o600);
-        await expectFile(configPath, rootRaw);
-      },
-    );
+      const saved = JSON.parse(await fs.readFile(target, "utf8"));
+      expect(saved.level).toBe("debug");
+      await expectFile(`${target}.bak`, original, 0o600);
+      await expectFile(`${target}.bak.1`, previousBackup, 0o600);
+      await expectFile(configPath, loggingRoot);
+    });
   });
 
   it.skipIf(IS_WINDOWS).each(["symlink", "hardlink"])(
     "openclaw config set leaves an external file unchanged through an include backup %s",
     async (linkKind) => {
-      const rootRaw = '{"gateway":{"mode":"local"},"logging":{"$include":"logging.json"}}\n';
-      await withConfig(
-        "openclaw-config-linked-backup-",
-        rootRaw,
-        async ({ configPath, tempDir }) => {
-          const includePath = path.join(tempDir, "logging.json");
-          const externalPath = path.join(tempDir, "external.txt");
-          const externalRaw = "external file must stay unchanged\n";
-          await fs.writeFile(includePath, '{"level":"info"}\n');
-          await fs.writeFile(externalPath, externalRaw, { mode: 0o644 });
-          // Establish the fixture mode independently of the process umask.
-          await fs.chmod(externalPath, 0o644);
-          expectPosixMode((await fs.stat(externalPath)).mode, 0o644);
-          const backupPath = `${includePath}.bak`;
-          await (linkKind === "symlink" ? fs.symlink : fs.link)(externalPath, backupPath);
+      await withLoggingConfig(async ({ configPath, tempDir }) => {
+        const includePath = path.join(tempDir, "logging.json");
+        const externalPath = path.join(tempDir, "external.txt");
+        const externalRaw = "external file must stay unchanged\n";
+        await fs.writeFile(includePath, '{"level":"info"}\n');
+        await fs.writeFile(externalPath, externalRaw, { mode: 0o644 });
+        // Establish the fixture mode independently of the process umask.
+        await fs.chmod(externalPath, 0o644);
+        expectPosixMode((await fs.stat(externalPath)).mode, 0o644);
+        const backupPath = `${includePath}.bak`;
+        await (linkKind === "symlink" ? fs.symlink : fs.link)(externalPath, backupPath);
 
-          await set("logging.level", "debug");
+        await set("logging.level", "debug");
 
-          expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({ level: "debug" });
-          await expectFile(configPath, rootRaw);
-          await expectFile(externalPath, externalRaw, 0o644);
-          await expectFile(backupPath, externalRaw);
-          await expectPathMissing(`${backupPath}.1`);
-        },
-      );
+        expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({ level: "debug" });
+        await expectFile(configPath, loggingRoot);
+        await expectFile(externalPath, externalRaw, 0o644);
+        await expectFile(backupPath, externalRaw);
+        await expectPathMissing(`${backupPath}.1`);
+      });
     },
   );
 

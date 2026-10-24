@@ -10,6 +10,7 @@ import {
   createBrowserPanelTestTab,
   flushBrowserResponses as flush,
   setupBrowserPanelTestCleanup,
+  openBrowserActions,
   stubScreenshotMedia,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
@@ -44,8 +45,10 @@ function sendInput(
 function key(input: HTMLTextAreaElement, options: KeyboardEventInit) {
   input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...options }));
 }
-function button(panel: HTMLElement, label: string) {
-  return panel.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+async function action(panel: HTMLElement, label: string) {
+  return (await openBrowserActions(panel)).querySelector<HTMLElement>(
+    `[role="menuitem"][aria-label="${label}"]`,
+  )!;
 }
 
 setupBrowserPanelTestCleanup();
@@ -113,7 +116,7 @@ it.each([
   { outcome: "failed", text: "synthetic password" },
 ])("consumes paste and redacts $outcome errors", async ({ outcome, text }) => {
   const { panel, request } = await mount({ evaluateDisabled: true });
-  expect(button(panel, "Inspect element").disabled).toBe(true);
+  expect((await action(panel, "Inspect element")).getAttribute("aria-disabled")).toBe("true");
   if (outcome === "failed") {
     request.mockRejectedValueOnce(new Error(`Request failed: ${text}`));
   }
@@ -187,7 +190,7 @@ it.each(["committed", "route changed", "capture mode"])("commits IME: %s", async
       new CustomEvent("openclaw:browser-toggle", { detail: { open: false } }),
     );
   } else if (outcome === "capture mode") {
-    button(panel, "Annotate page").click();
+    (await action(panel, "Annotate page")).click();
   }
   input.value = "日本語";
   input.dispatchEvent(new CompositionEvent("compositionend", { data: "日本語", bubbles: true }));
@@ -310,7 +313,7 @@ it.each(["empty", "files", "disconnected", "changing tab", "captured view"])(
       panel.selectHostedTab("previous-tab");
     }
     if (reason === "captured view") {
-      button(panel, "Annotate page").click();
+      (await action(panel, "Annotate page")).click();
       await panel.updateComplete;
       expect(panel.querySelector(".bp-input")).toBeNull();
     }

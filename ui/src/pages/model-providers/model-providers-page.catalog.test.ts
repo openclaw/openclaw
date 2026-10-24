@@ -247,7 +247,7 @@ describe("Models page catalog publication", () => {
     },
   );
 
-  it("retires an old agent's queued publication when selection changes during auth refresh", async () => {
+  it("retires an old agent's read when selection changes during auth refresh", async () => {
     const {
       context,
       request,
@@ -343,7 +343,7 @@ describe("Models page catalog publication", () => {
     const warnings = page.querySelectorAll('.model-providers__catalog-progress[role="alert"]');
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.textContent).toContain("More models could not be discovered.");
-    expect(page.querySelector(".model-providers__provider-list .provider-usage-error")).toBeNull();
+    expect(page.querySelector(".model-providers__provider-list .provider-usage__error")).toBeNull();
     expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
     expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
     await openModelPicker(page);
@@ -480,7 +480,11 @@ describe("Models page catalog publication", () => {
       createCatalogHarness();
     const page = appendPage(context);
     await waitForProviders(page, savedModelConfig);
-    readPublished.mockReturnValue({ models: [], refreshFailed: true });
+    readPublished.mockReturnValue({
+      models: [],
+      refreshFailed: true,
+      pendingProviders: ["openai"],
+    });
 
     publishEvent({ type: "event", event: "config.changed", payload: {} });
     await waitForSolid(() =>
@@ -488,6 +492,7 @@ describe("Models page catalog publication", () => {
         page.querySelector('.model-providers__catalog-progress[role="alert"]')?.textContent,
       ).toContain("More models could not be discovered."),
     );
+    expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).not.toBeNull();
     await openModelPicker(page);
     expect(displayedCatalog(page)?.models).toEqual([]);
     const selected: (string | null | undefined)[] = [];
@@ -516,10 +521,14 @@ describe("Models page catalog publication", () => {
     );
   });
 
-  it("Models page Retry retains choices after a rejected request and displays the recovered catalog", async () => {
+  it("Models page Retry recovers partial provider discovery without replacing saved choices", async () => {
     const { context, discover, readPublished, runtimeConfig } =
       createCatalogHarness(preparedCatalog);
-    readPublished.mockReturnValue({ ...preparedCatalog, refreshFailed: true });
+    readPublished.mockReturnValue({
+      ...preparedCatalog,
+      refreshFailed: true,
+      providerOutcomes: [{ provider: "openai", status: "unavailable" }],
+    });
     const pending = deferred<ModelCatalogResult>();
 
     discover.mockRejectedValueOnce(new Error("discovery failed"));
@@ -527,7 +536,11 @@ describe("Models page catalog publication", () => {
     discover.mockReturnValueOnce(pending.promise);
     const page = appendPage(context);
     await waitForProviders(page, savedModelConfig);
+    expect(page.querySelector('[data-provider-id="openai"]')?.textContent).toContain(
+      "Models unavailable",
+    );
 
+    const retainedPicker = modelPicker(page, "primary");
     await retryCatalog(page);
     await waitForSolid(() =>
       expect(
@@ -537,7 +550,13 @@ describe("Models page catalog publication", () => {
     expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
     await retryCatalog(page);
     expect(discover).toHaveBeenCalledTimes(2);
-    expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).not.toBeNull();
+    await waitForSolid(() =>
+      expect(
+        page.querySelector('.model-providers__catalog-progress[role="status"]'),
+      ).not.toBeNull(),
+    );
+    expect(page.querySelector('.model-providers__catalog-progress[role="alert"]')).toBeNull();
+    expect(modelPicker(page, "primary")).toBe(retainedPicker);
     await openModelPicker(page);
     expect(discover).toHaveBeenCalledTimes(2);
     pending.resolve({
@@ -545,15 +564,105 @@ describe("Models page catalog publication", () => {
         ...preparedCatalog.models,
         { id: "recovered", name: "Recovered model", provider: "openai", available: true },
       ],
+      providerOutcomes: [{ provider: "openai", status: "ready" }],
     });
     await waitForSolid(() => expect(displayedCatalog(page)?.models?.at(-1)?.id).toBe("recovered"));
     await drainPageUpdates(page);
     expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
+    expect(modelPicker(page, "primary")).toBe(retainedPicker);
     expect(page.querySelector('[role="option"][data-value="openai/recovered"]')).not.toBeNull();
     expect(page.view.props.catalogDiscoveryError).toBeNull();
+    expect(page.querySelector('[data-provider-id="openai"]')?.textContent).not.toContain(
+      "Models unavailable",
+    );
     expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
   });
+
+  it.each(["page refresh", "agent switch"] as const)(
+    "Models page retires a rejected catalog error on %s",
+    async (replacement) => {
+      const {
+        context,
+        discover,
+        readPublished,
+        request,
+        catalogRequest,
+        settingsAgentSelection,
+        notifySelection,
+      } = createCatalogHarness(preparedCatalog);
+      const pending = deferred<ModelCatalogResult>();
+      readPublished.mockReturnValue({ ...preparedCatalog, refreshFailed: true });
+      discover.mockRejectedValueOnce(new Error("Previous catalog request failed"));
+      discover.mockReturnValueOnce(pending.promise);
+      const page = appendPage(context);
+      await waitForProviders(page, savedModelConfig);
+      const retainedPicker = modelPicker(page, "primary");
+      await retryCatalog(page);
+      await waitForSolid(() =>
+        expect(
+          page.querySelector('.model-providers__catalog-progress[role="alert"]')?.textContent,
+        ).toContain("Previous catalog request failed"),
+      );
+      await drainPageUpdates(page);
+      const retainedFeedback = page.querySelector(".model-providers__catalog-feedback");
+      expect(retainedFeedback?.textContent).toContain("Previous catalog request failed");
+
+      readPublished.mockReturnValue(preparedCatalog);
+      request.mockImplementation(
+        (method: string, params?: { refresh?: boolean; agentId?: string }) =>
+          method === "models.list" && params?.agentId === "writer"
+            ? pending.promise
+            : catalogRequest(method, params),
+      );
+      if (replacement === "page refresh") {
+        page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
+      } else {
+        settingsAgentSelection.state.selectedId = "writer";
+        settingsAgentSelection.state.scopeId = "writer";
+        notifySelection();
+      }
+
+      await waitForSolid(() => {
+        expect(requestCount(request, "models.list")).toBe(3);
+        expect(page.querySelector(".model-providers__catalog-feedback")?.textContent).not.toContain(
+          "Previous catalog request failed",
+        );
+      });
+      if (replacement === "page refresh") {
+        expect(discover).toHaveBeenCalledTimes(2);
+        expect(page.querySelector(".model-providers__catalog-feedback")).toBe(retainedFeedback);
+        expect(modelPicker(page, "primary")).toBe(retainedPicker);
+      }
+      pending.resolve({
+        ...preparedCatalog,
+        models: [
+          ...preparedCatalog.models,
+          {
+            id: "replacement-recovered",
+            name: "Replacement recovered model",
+            provider: "openai",
+            available: true,
+          },
+        ],
+      });
+      await waitForSolid(() => {
+        expect(page.view.props.catalogDiscoveryError).toBeNull();
+        expect(displayedCatalog(page)?.models?.at(-1)?.id).toBe("replacement-recovered");
+        expect(page.querySelector('.model-providers__catalog-progress[role="alert"]')).toBeNull();
+      });
+      if (replacement === "page refresh") {
+        expect(modelPicker(page, "primary")).toBe(retainedPicker);
+      } else {
+        expect(page.view.props.credentialAgentLabel).toBe("Writer");
+      }
+      await openModelPicker(page);
+      expect(
+        page.querySelector('[role="option"][data-value="openai/replacement-recovered"]'),
+      ).not.toBeNull();
+      expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
+    },
+  );
 
   it("Models page keeps its new Retry active when a retired Retry completes with reject", async () => {
     const { context, discover, readPublished, snapshot } = createCatalogHarness(preparedCatalog);
@@ -575,7 +684,11 @@ describe("Models page catalog publication", () => {
         updatedAt: 2,
       },
     };
-    await page.updateComplete;
+    await waitForSolid(() =>
+      expect(
+        page.querySelector('.model-providers__catalog-progress[role="alert"]')?.textContent,
+      ).toContain("Catalog unavailable"),
+    );
     await retryCatalog(page);
 
     retired.reject(new Error("Retired discovery failed"));
@@ -610,8 +723,8 @@ describe("Models page catalog publication", () => {
     await waitForProviders(second, savedModelConfig);
     await retryCatalog(first);
     await retryCatalog(second);
-    expect(first.view.props.usageAgentId).toBe("main");
-    expect(second.view.props.usageAgentId).toBe("writer");
+    expect(first.view.props.credentialAgentLabel).toBe("Main");
+    expect(second.view.props.credentialAgentLabel).toBe("Writer");
     publishCatalog(context, "main", preparedCatalog);
     first.routeData = {
       ...createEmptyModelProvidersRouteData(context),

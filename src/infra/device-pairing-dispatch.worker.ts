@@ -22,6 +22,9 @@ type DevicePairingMutationContext = {
     facts: NonNullable<DevicePairingCommitReceipt["workerEnvironment"]>,
   ) => void;
   recordNodeApproval: (facts: NonNullable<DevicePairingCommitReceipt["nodeApproval"]>) => void;
+  recordRetiredNodeToken: (
+    facts: NonNullable<DevicePairingCommitReceipt["retiredNodeToken"]>,
+  ) => void;
 };
 
 export function devicePairingMutation<Input, Result>(
@@ -51,6 +54,7 @@ export function devicePairingMutation<Input, Result>(
               let tokensReplaced: DevicePairingCommitReceipt["tokensReplaced"];
               let workerEnvironment: DevicePairingCommitReceipt["workerEnvironment"];
               let nodeApproval: DevicePairingCommitReceipt["nodeApproval"];
+              let retiredNodeToken: DevicePairingCommitReceipt["retiredNodeToken"];
               const result = operation(input, {
                 database,
                 recordTokenReplacement: (facts) => {
@@ -58,6 +62,9 @@ export function devicePairingMutation<Input, Result>(
                 },
                 recordWorkerEnvironment: (facts) => {
                   workerEnvironment = facts;
+                },
+                recordRetiredNodeToken: (facts) => {
+                  retiredNodeToken = facts;
                 },
                 recordNodeApproval: (facts) => {
                   nodeApproval = facts;
@@ -78,6 +85,7 @@ export function devicePairingMutation<Input, Result>(
                 revision: revision.value,
                 changed,
                 ...(tokensReplaced ? { tokensReplaced } : {}),
+                ...(retiredNodeToken ? { retiredNodeToken } : {}),
                 ...(workerEnvironment ? { workerEnvironment } : {}),
                 ...(nodeApproval ? { nodeApproval } : {}),
               } satisfies DevicePairingCommitReceipt);

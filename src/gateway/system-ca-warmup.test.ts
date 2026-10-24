@@ -1,97 +1,105 @@
 import { EventEmitter } from "node:events";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { warmMacOSSystemCaOffMainThread } from "./system-ca-warmup.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+const { createWorker } = vi.hoisted(() => ({
+  createWorker: vi.fn<(_source: string | URL) => FakeWorker>(),
+}));
+
+vi.mock("../infra/worker-cpu.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/worker-cpu.js")>()),
+  createCpuTrackedWorker: createWorker,
+}));
+vi.mock("../infra/env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/env.js")>()),
+  isVitestRuntimeEnv: () => false,
+}));
 
 class FakeWorker extends EventEmitter {
   terminate = vi.fn(async () => 0);
   unref = vi.fn();
 }
 
-describe("warmMacOSSystemCaOffMainThread", () => {
-  afterEach(() => {
-    vi.useRealTimers();
+beforeEach(() => {
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  createWorker.mockReset();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+  Object.defineProperty(process, "platform", platformDescriptor);
+  vi.restoreAllMocks();
+});
+
+describe("beginMacOSSystemCaWarmupOnce", () => {
+  let beginMacOSSystemCaWarmupOnce: typeof import("./system-ca-warmup.js").beginMacOSSystemCaWarmupOnce;
+  let worker: FakeWorker;
+  let log: { warn: ReturnType<typeof vi.fn<(message: string) => void>> };
+
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ beginMacOSSystemCaWarmupOnce } = await import("./system-ca-warmup.js"));
+    worker = new FakeWorker();
+    log = { warn: vi.fn<(message: string) => void>() };
+    createWorker.mockReturnValue(worker);
   });
+  it("shares Node's default CA warmup across concurrent and settled macOS calls", async () => {
+    const warmup = beginMacOSSystemCaWarmupOnce();
+    expect(beginMacOSSystemCaWarmupOnce()).toBe(warmup);
 
-  it("lets Node resolve the effective default CA set on macOS", async () => {
-    const worker = new FakeWorker();
-    const createWorker = vi.fn((_source: string) => worker);
-    const warmup = warmMacOSSystemCaOffMainThread({
-      platform: "darwin",
-      env: {},
-      createWorker,
-    });
-
-    worker.emit("message", { ok: true, certificateCount: 42 });
+    worker.emit("message", { ok: true });
     await warmup;
 
     expect(createWorker).toHaveBeenCalledOnce();
-    const workerSource = createWorker.mock.calls[0]?.[0];
-    expect(workerSource).toContain('getCACertificates("default")');
-    expect(workerSource).not.toContain('getCACertificates("system")');
     expect(worker.unref).toHaveBeenCalledOnce();
     expect(worker.terminate).not.toHaveBeenCalled();
+    expect(beginMacOSSystemCaWarmupOnce()).toBe(warmup);
+    expect(createWorker).toHaveBeenCalledOnce();
   });
 
   it("bounds a stalled trust lookup and continues startup", async () => {
     vi.useFakeTimers();
-    const worker = new FakeWorker();
-    const log = { warn: vi.fn() };
-    const warmup = warmMacOSSystemCaOffMainThread({
-      platform: "darwin",
-      env: {},
-      timeoutMs: 10,
-      log,
-      createWorker: vi.fn(() => worker),
-    });
+    const warmup = beginMacOSSystemCaWarmupOnce({ log });
 
     let mainTurnRan = false;
     setImmediate(() => {
       mainTurnRan = true;
     });
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(10_000);
     await warmup;
 
     expect(mainTurnRan).toBe(true);
     expect(log.warn).toHaveBeenCalledWith(
-      "macOS CA warmup timed out after 10ms; gateway startup will continue and trust settings will load lazily",
+      "macOS CA warmup timed out after 10000ms; gateway startup will continue and trust settings will load lazily",
     );
     expect(worker.unref).toHaveBeenCalledOnce();
     expect(worker.terminate).toHaveBeenCalledOnce();
 
-    worker.emit("message", { ok: true, certificateCount: 42 });
+    worker.emit("message", { ok: true });
     worker.emit("exit", 0);
     expect(log.warn).toHaveBeenCalledOnce();
   });
 
-  it("falls back to lazy CA loading when Node denies worker-thread permission", async () => {
-    const permissionError = Object.assign(new Error("worker permission denied"), {
-      code: "ERR_ACCESS_DENIED",
-    });
-    const log = { warn: vi.fn() };
-
-    await warmMacOSSystemCaOffMainThread({
-      platform: "darwin",
-      env: { NODE_USE_SYSTEM_CA: "0" },
-      log,
-      createWorker: vi.fn(() => {
-        throw permissionError;
-      }),
-    });
-
-    expect(log.warn).toHaveBeenCalledWith(
-      "macOS CA warmup skipped because Node denied worker-thread permission; trust settings will load lazily",
-    );
-  });
+  it.each([
+    ["ERR_ACCESS_DENIED", "worker permission denied", "Node denied worker-thread permission"],
+    [undefined, "worker unavailable", "worker creation failed: worker unavailable"],
+  ])(
+    "falls back to lazy loading after worker creation fails (%s)",
+    async (code, message, reason) => {
+      vi.stubEnv("NODE_USE_SYSTEM_CA", "0");
+      createWorker.mockImplementation(() => {
+        throw Object.assign(new Error(message), { code });
+      });
+      await beginMacOSSystemCaWarmupOnce({ log });
+      expect(log.warn).toHaveBeenCalledWith(
+        `macOS CA warmup skipped because ${reason}; trust settings will load lazily`,
+      );
+    },
+  );
 
   it("continues startup when the worker cannot populate the cache", async () => {
-    const worker = new FakeWorker();
-    const log = { warn: vi.fn() };
-    const warmup = warmMacOSSystemCaOffMainThread({
-      platform: "darwin",
-      env: {},
-      log,
-      createWorker: vi.fn(() => worker),
-    });
+    const warmup = beginMacOSSystemCaWarmupOnce({ log });
 
     worker.emit("message", { ok: false, error: "trust store unavailable" });
     await warmup;
@@ -102,51 +110,10 @@ describe("warmMacOSSystemCaOffMainThread", () => {
     expect(worker.terminate).toHaveBeenCalledOnce();
   });
 
-  it("continues startup when worker creation fails", async () => {
-    const log = { warn: vi.fn() };
-
-    await warmMacOSSystemCaOffMainThread({
-      platform: "darwin",
-      env: {},
-      log,
-      createWorker: vi.fn(() => {
-        throw new Error("worker unavailable");
-      }),
-    });
-
-    expect(log.warn).toHaveBeenCalledWith(
-      "macOS CA warmup skipped because worker creation failed: worker unavailable; trust settings will load lazily",
-    );
-  });
-});
-
-describe("beginMacOSSystemCaWarmupOnce", () => {
-  it("shares one worker across concurrent and settled calls", async () => {
-    vi.resetModules();
-    const { beginMacOSSystemCaWarmupOnce } = await import("./system-ca-warmup.js");
-    const worker = new FakeWorker();
-    const createWorker = vi.fn(() => worker);
-    const options = { platform: "darwin" as const, env: {}, createWorker };
-
-    const first = beginMacOSSystemCaWarmupOnce(options);
-    const concurrent = beginMacOSSystemCaWarmupOnce(options);
-
-    expect(concurrent).toBe(first);
-    expect(createWorker).toHaveBeenCalledOnce();
-
-    worker.emit("message", { ok: true, certificateCount: 42 });
-    await first;
-
-    expect(beginMacOSSystemCaWarmupOnce(options)).toBe(first);
-    expect(createWorker).toHaveBeenCalledOnce();
-  });
-
   it("settles without creating a worker outside macOS", async () => {
-    vi.resetModules();
-    const { beginMacOSSystemCaWarmupOnce } = await import("./system-ca-warmup.js");
-    const createWorker = vi.fn(() => new FakeWorker());
+    Object.defineProperty(process, "platform", { value: "linux" });
 
-    await beginMacOSSystemCaWarmupOnce({ platform: "linux", env: {}, createWorker });
+    await beginMacOSSystemCaWarmupOnce();
 
     expect(createWorker).not.toHaveBeenCalled();
   });

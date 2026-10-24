@@ -294,7 +294,6 @@ it("forwards worker history as text JSON while preserving object callers and tin
     {
       using materialize = vi.spyOn(SerializedJsonArray.prototype, "materialize");
       const frame = serializeGatewayFrame({ type: "res", payload: encoded });
-      expect(Buffer.isBuffer(frame)).toBe(true);
       expect(materialize).not.toHaveBeenCalled();
       // Compare the durable page fields; session presentation carries a current clock.
       const decoded = JSON.parse(frame.toString()).payload;

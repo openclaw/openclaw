@@ -62,10 +62,8 @@ type ParsedLogTailPayload = Omit<LogTailPayload, "lines"> & {
   lines: ParsedLogLine[];
 };
 
-type ResolvedLogFile = { file: string; stat: Stats | null };
-
 /** Resolves a rolling daily log path to the newest existing rolling log when needed. */
-async function resolveLogFile(file: string, rolling: boolean): Promise<ResolvedLogFile> {
+async function resolveLogFile(file: string, rolling: boolean) {
   const stat = await fs.stat(file).catch(missingPathToNull);
   const source = { file, stat };
   if (stat || !rolling) {
@@ -336,7 +334,6 @@ export async function readConfiguredLogTail(
 
 /** Reads the canonical configured tail and parses its already-redacted lines. */
 export async function readConfiguredParsedLogTail(params?: {
-  cursor?: number;
   limit?: number;
   maxBytes?: number;
   filter?: (line: Pick<ParsedLogLine, "subsystem" | "module" | "plugin">) => boolean;

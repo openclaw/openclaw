@@ -1,5 +1,4 @@
 /** Resolves and validates session-target keys used by cron jobs and delivery. */
-import type { CronDelivery } from "./types.js";
 
 const INVALID_CRON_SESSION_TARGET_ID_ERROR = "invalid cron sessionTarget session id";
 
@@ -35,6 +34,26 @@ export function isDetachedCronSessionTarget(sessionTarget?: string | null): bool
   return sessionTarget === "isolated" || sessionTarget === "current";
 }
 
+/**
+ * Whether a captured operator source's session is this job's parent: the session
+ * an in-session job runs in, or the conversation a detached child reports to.
+ */
+export function isCronOperatorSourceParent(
+  job: {
+    sessionTarget?: string | null;
+    sourceConversation?: { sessionKey: string };
+  },
+  sessionKey: string,
+): boolean {
+  if (job.sessionTarget === `session:${sessionKey}`) {
+    return true;
+  }
+  return (
+    isDetachedCronSessionTarget(job.sessionTarget) &&
+    job.sourceConversation?.sessionKey === sessionKey
+  );
+}
+
 /** Preserves `current` with a creation-time sessionKey so future active UI state is irrelevant. */
 export function resolveCronCurrentSessionTarget(params: {
   sessionTarget?: string | null;
@@ -52,8 +71,6 @@ export function resolveCronDeliverySessionKey(job: {
   sessionTarget?: string | null;
   sessionKey?: string | null;
   sourceConversation?: { sessionKey: string };
-  payload?: { kind: string };
-  delivery?: CronDelivery;
 }): string | undefined {
   const conversationKey = job.sourceConversation?.sessionKey.trim();
   if (conversationKey) {

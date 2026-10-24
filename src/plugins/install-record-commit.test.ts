@@ -26,9 +26,16 @@ import {
   markRetainedManagedNpmInstall,
   resolveRetainedManagedNpmInstallMarkerPath,
 } from "./managed-npm-retention.js";
+import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const configFiles = createTestConfigFileStore();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    vi.restoreAllMocks();
+    mocks.lease.assertOwned.mockReset();
+    cleanup();
+  }),
+);
 
 const mocks = vi.hoisted(() => {
   const lease = {
@@ -117,6 +124,28 @@ function managedRecord(stateDir: string, pluginId: string, version: string) {
   };
 }
 
+function commitRecords(
+  previousInstallRecords: Record<string, PluginInstallRecord>,
+  nextInstallRecords: Record<string, PluginInstallRecord>,
+  stateDir?: string,
+) {
+  const commit = () =>
+    commitPluginInstallRecordsWithConfig({
+      previousInstallRecords,
+      nextInstallRecords,
+      nextConfig: {},
+    });
+  return stateDir ? withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, commit) : commit();
+}
+
+function mark(installPath: string, pluginId: string) {
+  return markRetainedManagedNpmInstall({
+    packageDir: installPath,
+    pluginId,
+    reason: "test-retained-generation",
+  });
+}
+
 function withInstalls(installs: Record<string, PluginInstallRecord>): OpenClawConfig {
   return { plugins: { installs } };
 }
@@ -133,6 +162,54 @@ function indexWriteOptions(config: OpenClawConfig) {
     assertCurrent: undefined,
     onAcknowledged: expect.any(Function),
   };
+}
+
+function createRetainedMarkerFixture(stateDir: string, pluginId = "retained-fence") {
+  const packageName = `@openclaw/${pluginId}`;
+  const installPath = writeManagedNpmPlugin({
+    stateDir,
+    packageName,
+    pluginId,
+    version: "1.0.0",
+  });
+  return {
+    installPath,
+    markerPath: resolveRetainedManagedNpmInstallMarkerPath(installPath),
+    record: { source: "npm" as const, spec: `${packageName}@1.0.0`, installPath },
+  };
+}
+
+function authority() {
+  const auth = {
+    current: true,
+    failure: new Error("update authority revoked"),
+    assert: () => {
+      if (!auth.current) {
+        throw auth.failure;
+      }
+    },
+  };
+  return auth;
+}
+
+async function expectRefusal(
+  stateDir: string,
+  failure: Error,
+  params: Omit<Parameters<typeof commitPluginInstallRecordsWithConfig>[0], "nextConfig">,
+) {
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+    expect(commitPluginInstallRecordsWithConfig({ ...params, nextConfig: {} })).rejects.toBe(
+      failure,
+    ),
+  );
+}
+
+function markFixture(fixture: ReturnType<typeof createRetainedMarkerFixture>) {
+  return markRetainedManagedNpmInstall({
+    packageDir: fixture.installPath,
+    pluginId: "retained-fence",
+    reason: "retained-package",
+  });
 }
 
 describe("commitConfigWithPendingPluginInstalls", () => {
@@ -219,10 +296,10 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       ["__proto__"]: npmRecord("proto@1.0.0"),
     });
     const existingRecords: Record<string, PluginInstallRecord> = {
-      stale: { source: "npm", spec: "stale@2.0.0" },
-      codex: { source: "npm", spec: "codex@2.0.0" },
-      constructor: { source: "npm", spec: "constructor@2.0.0" } satisfies PluginInstallRecord,
-      ["__proto__"]: { source: "npm", spec: "proto@2.0.0" },
+      stale: npmRecord("stale@2.0.0"),
+      codex: npmRecord("codex@2.0.0"),
+      constructor: npmRecord("constructor@2.0.0"),
+      ["__proto__"]: npmRecord("proto@2.0.0"),
     };
     const nextConfig = withInstalls({
       ...sourceConfig.plugins?.installs,
@@ -247,7 +324,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         codex: nextConfig.plugins?.installs?.codex,
         concurrent: nextConfig.plugins?.installs?.concurrent,
         constructor: existingRecords.constructor,
-        ["__proto__"]: { source: "npm", spec: "proto@2.0.0" },
+        ["__proto__"]: npmRecord("proto@2.0.0"),
       },
       indexWriteOptions({}),
     );
@@ -265,7 +342,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     "preserves source records and the runtime application receipt with intent %j",
     async (afterWrite) => {
       const sourceConfig = withInstalls({ other: npmRecord("other@1.0.0") });
-      const codexRecord: PluginInstallRecord = { source: "npm", spec: "codex@2.0.0" };
+      const codexRecord = npmRecord("codex@2.0.0");
       const snapshot = { sourceConfig };
       const application = createRuntimeConfigWriteApplication();
       mocks.replaceConfigFile.mockImplementationOnce(
@@ -339,13 +416,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     const previous = managedRecord(outsideRoot, "codex", "1");
     const next = managedRecord(stateDir, "codex", "2");
 
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await commitPluginInstallRecordsWithConfig({
-        previousInstallRecords: { codex: previous },
-        nextInstallRecords: { codex: next },
-        nextConfig: {},
-      });
-    });
+    await commitRecords({ codex: previous }, { codex: next }, stateDir);
 
     expect(hasRetainedManagedNpmInstallMarker(previous.installPath)).toBe(false);
   });
@@ -355,13 +426,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     const previous = managedRecord(stateDir, "voice-call", "1");
     const next = managedRecord(stateDir, "voice-call", "2");
 
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await commitPluginInstallRecordsWithConfig({
-        previousInstallRecords: { "voice-call": previous },
-        nextInstallRecords: { "@openclaw/voice-call": next },
-        nextConfig: {},
-      });
-    });
+    await commitRecords({ "voice-call": previous }, { "@openclaw/voice-call": next }, stateDir);
 
     expect(hasRetainedManagedNpmInstallMarker(previous.installPath)).toBe(true);
   });
@@ -380,15 +445,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       "utf8",
     );
 
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await expect(
-        commitPluginInstallRecordsWithConfig({
-          previousInstallRecords: previous,
-          nextInstallRecords: next,
-          nextConfig: {},
-        }),
-      ).rejects.toThrow();
-    });
+    await expect(commitRecords(previous, next, stateDir)).rejects.toThrow();
 
     expect(hasRetainedManagedNpmInstallMarker(previous.codex.installPath)).toBe(false);
   });
@@ -399,12 +456,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       createManagedInstallPath(stateDir, `${pluginId}-v2`, pluginId),
     );
     for (const [index, installPath] of installPaths.entries()) {
-      await markRetainedManagedNpmInstall({
-        packageDir: installPath,
-        pluginId: index === 0 ? "codex" : "voice-call",
-        retainedAt: "2026-04-25T00:00:00.000Z",
-        reason: "test-retained-generation",
-      });
+      await mark(installPath, index === 0 ? "codex" : "voice-call");
     }
     const laterMarkerPath = resolveRetainedManagedNpmInstallMarkerPath(installPaths[1] ?? "");
     const realRm = fs.promises.rm.bind(fs.promises);
@@ -419,16 +471,15 @@ describe("commitConfigWithPendingPluginInstalls", () => {
 
     try {
       await expect(
-        commitPluginInstallRecordsWithConfig({
-          previousInstallRecords: {},
-          nextInstallRecords: Object.fromEntries(
+        commitRecords(
+          {},
+          Object.fromEntries(
             installPaths.map((installPath, index) => {
               const pluginId = index === 0 ? "codex" : "voice-call";
               return [pluginId, npmRecord(`@openclaw/${pluginId}@2.0.0`, installPath)];
             }),
           ),
-          nextConfig: {},
-        }),
+        ),
       ).rejects.toThrow("marker clear failed");
 
       expect(installPaths.every(hasRetainedManagedNpmInstallMarker)).toBe(true);
@@ -440,22 +491,163 @@ describe("commitConfigWithPendingPluginInstalls", () => {
   it("leaves marker state intact when a successor owns the plugin index", async () => {
     const stateDir = tempDirs.make("openclaw-record-commit-");
     const installPath = createManagedInstallPath(stateDir, "codex-v2");
-    await markRetainedManagedNpmInstall({
-      packageDir: installPath,
-      pluginId: "codex",
-      retainedAt: "2026-04-25T00:00:00.000Z",
-      reason: "test-successor-owned-marker",
-    });
+    await mark(installPath, "codex");
     mocks.restoreIndex.mockResolvedValueOnce(false);
     mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config changed"));
 
     await expect(
-      commitPluginInstallRecordsWithConfig({
-        previousInstallRecords: {},
-        nextInstallRecords: { codex: npmRecord("@openclaw/codex@2.0.0", installPath) },
-        nextConfig: {},
-      }),
+      commitRecords({}, { codex: npmRecord("@openclaw/codex@2.0.0", installPath) }),
     ).rejects.toThrow("config changed");
     expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(false);
+  });
+  describe("plugin install record marker fencing", () => {
+    beforeEach(() => {
+      mocks.replaceConfigFile.mockReset();
+    });
+
+    it.each([
+      ["retirement", "lease", "preparation"],
+      ["retirement", "invoker", "preparation"],
+      ["activation", "lease", "preparation"],
+      ["activation", "invoker", "removal"],
+      ["activation", "invoker", "directory cleanup"],
+    ] as const)(
+      "fences awaited %s markers using %s authority at %s",
+      async (transition, owner, boundary) => {
+        const stateDir = tempDirs.make("openclaw-record-marker-fence-");
+        const fixture = createRetainedMarkerFixture(stateDir);
+        if (transition === "activation") {
+          await markFixture(fixture);
+        }
+        const before =
+          transition === "activation" ? fs.readFileSync(fixture.markerPath, "utf8") : undefined;
+        const siblingMarker = path.join(path.dirname(fixture.markerPath), "unrelated.json");
+        if (boundary === "directory cleanup") {
+          fs.writeFileSync(siblingMarker, "unrelated marker");
+        }
+        const records = { "retained-fence": fixture.record };
+        const auth = authority();
+        const targetPath =
+          boundary === "preparation" && transition === "retirement"
+            ? fixture.installPath
+            : boundary === "directory cleanup"
+              ? path.dirname(fixture.markerPath)
+              : fixture.markerPath;
+        const after = async <T>(operation: Promise<T>, target: unknown) => {
+          let completed = false;
+          try {
+            const result = await operation;
+            completed = true;
+            return result;
+          } finally {
+            if ((completed || boundary === "directory cleanup") && String(target) === targetPath) {
+              auth.current = false;
+            }
+          }
+        };
+        const stat = fs.promises.stat.bind(fs.promises);
+        const readFile = fs.promises.readFile.bind(fs.promises);
+        const rm = fs.promises.rm.bind(fs.promises);
+        const rmdir = fs.promises.rmdir.bind(fs.promises);
+        if (boundary === "preparation" && transition === "retirement") {
+          vi.spyOn(fs.promises, "stat").mockImplementation((target, options) =>
+            after(stat(target, options), target),
+          );
+        } else if (boundary === "preparation") {
+          vi.spyOn(fs.promises, "readFile").mockImplementation((target, options) =>
+            after(readFile(target, options), target),
+          );
+        } else if (boundary === "removal") {
+          vi.spyOn(fs.promises, "rm").mockImplementation((target, options) =>
+            after(rm(target, options), target),
+          );
+        } else {
+          vi.spyOn(fs.promises, "rmdir").mockImplementation((target) =>
+            after(rmdir(target), target),
+          );
+        }
+        if (owner === "lease") {
+          mocks.lease.assertOwned.mockImplementation(auth.assert);
+        }
+        await expectRefusal(stateDir, auth.failure, {
+          previousInstallRecords: transition === "retirement" ? records : {},
+          nextInstallRecords: transition === "activation" ? records : {},
+          ...(owner === "invoker"
+            ? { writeOptions: { assertConfigPathForWrite: auth.assert } }
+            : {}),
+        });
+        expect(auth.current).toBe(false);
+        expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+        expect(mocks.restoreIndex).toHaveBeenCalledTimes(owner === "invoker" ? 1 : 0);
+        if (before !== undefined) {
+          expect(fs.readFileSync(fixture.markerPath, "utf8")).toBe(before);
+        } else {
+          expect(fs.existsSync(path.dirname(fixture.markerPath))).toBe(false);
+        }
+        expect(fs.existsSync(fixture.installPath)).toBe(true);
+        if (boundary === "directory cleanup") {
+          expect(fs.readFileSync(siblingMarker, "utf8")).toBe("unrelated marker");
+        }
+      },
+    );
+
+    it("preserves later retirement markers when rollback loses authority after an awaited removal", async () => {
+      const stateDir = tempDirs.make("openclaw-record-marker-rollback-fence-");
+      const first = createRetainedMarkerFixture(stateDir, "first-retained");
+      const second = createRetainedMarkerFixture(stateDir, "second-retained");
+      const auth = authority();
+      const rm = fs.promises.rm.bind(fs.promises);
+      vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+        await rm(target, options);
+        if (String(target) === first.markerPath) {
+          auth.current = false;
+        }
+      });
+      mocks.lease.assertOwned.mockImplementation(auth.assert);
+      let markerBeforeRollback = "";
+      mocks.replaceConfigFile.mockImplementationOnce(async () => {
+        markerBeforeRollback = fs.readFileSync(second.markerPath, "utf8");
+        throw new Error("config changed");
+      });
+      await expectRefusal(stateDir, auth.failure, {
+        previousInstallRecords: {
+          "first-retained": first.record,
+          "second-retained": second.record,
+        },
+        nextInstallRecords: {},
+      });
+      expect(mocks.restoreIndex).toHaveBeenCalledOnce();
+      expect(fs.existsSync(first.markerPath)).toBe(false);
+      expect(markerBeforeRollback).not.toBe("");
+      expect(fs.readFileSync(second.markerPath, "utf8")).toBe(markerBeforeRollback);
+      expect(fs.existsSync(first.installPath)).toBe(true);
+      expect(fs.existsSync(second.installPath)).toBe(true);
+    });
+
+    it("fences marker restoration after rollback directory preparation loses authority", async () => {
+      const stateDir = tempDirs.make("openclaw-record-marker-restore-fence-");
+      const fixture = createRetainedMarkerFixture(stateDir);
+      await markFixture(fixture);
+      const auth = authority();
+      const mkdir = fs.promises.mkdir.bind(fs.promises);
+      vi.spyOn(fs.promises, "mkdir").mockImplementation(async (target, options) => {
+        const result = await mkdir(target, options);
+        if (String(target) === path.dirname(fixture.markerPath)) {
+          auth.current = false;
+        }
+        return result;
+      });
+      mocks.lease.assertOwned.mockImplementation(auth.assert);
+      mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config changed"));
+      await expectRefusal(stateDir, auth.failure, {
+        previousInstallRecords: {},
+        nextInstallRecords: { "retained-fence": fixture.record },
+      });
+      expect(auth.current).toBe(false);
+      expect(mocks.restoreIndex).toHaveBeenCalledOnce();
+      expect(fs.existsSync(fixture.markerPath)).toBe(false);
+      expect(fs.existsSync(path.dirname(fixture.markerPath))).toBe(true);
+      expect(fs.existsSync(fixture.installPath)).toBe(true);
+    });
   });
 });

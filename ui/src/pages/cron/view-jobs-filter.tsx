@@ -1,8 +1,8 @@
-import { For } from "solid-js";
 import type { CronJobsScheduleKindFilter } from "../../api/types.ts";
 import type { PickerOption } from "../../components/select-picker.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { CronProps } from "./view-types.ts";
@@ -28,24 +28,16 @@ function JobsFilter(
   return (
     <label class="field">
       <span>{props.label}</span>
-      <select
-        class="settings-select"
+      <SettingsSelect
         data-test-id={props.testId}
         value={props.value}
         onChange={(event) =>
-          void props.onJobsFiltersChange({
+          props.onJobsFiltersChange({
             [props.field]: event.currentTarget.value,
           })
         }
-      >
-        <For each={props.options} keyed={(option) => option.value}>
-          {(option) => (
-            <option value={option().value} selected={option().value === props.value}>
-              {option().label}
-            </option>
-          )}
-        </For>
-      </select>
+        options={props.options}
+      />
     </label>
   );
 }
@@ -145,7 +137,7 @@ export function JobsFilterPopover(
             class="btn btn--sm"
             data-test-id="cron-jobs-filters-reset"
             disabled={!props.active}
-            onClick={() => void props.onJobsFiltersReset()}
+            onClick={() => props.onJobsFiltersReset()}
           >
             {t("cron.jobs.reset")}
           </button>

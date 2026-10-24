@@ -104,15 +104,13 @@ const settingsRowRoutes = [
 
 const mobileSettingsRoutes = [...settingsRowRoutes, "logs"] as const satisfies readonly RouteId[];
 
-const mobileStandaloneSettingsPageRoutes = [
-  "usage",
-  "cron",
-  "memory-import",
-] as const satisfies readonly RouteId[];
+const mobileStandaloneSettingsPageRoutes = ["memory-import"] as const satisfies readonly RouteId[];
 
 const mobileGeometryCases = [
   { route: "sessions", contentSelector: ".settings-page" },
   { route: "worktrees", contentSelector: ".settings-page" },
+  { route: "usage", contentSelector: ".settings-page" },
+  { route: "cron", contentSelector: ".settings-page" },
   { route: "appearance", contentSelector: ".settings-page" },
   { route: "model-providers", contentSelector: ".settings-page" },
   { route: "memory", contentSelector: ".memory-page__panel .settings-page" },
@@ -942,28 +940,29 @@ suite.define(() => {
         );
       }
 
-      for (const viewport of responsiveViewports) {
-        await page.setViewportSize(viewport);
-        for (const sectionCase of actionSectionCases) {
-          await page.goto(`${suite.server.baseUrl}settings/${sectionCase.route}`);
-          await waitForControlUiRoute(page, {
-            pathname: `/settings/${sectionCase.route}`,
-            routeId: sectionCase.route,
-          });
-          const heading = page.getByRole("heading", {
-            name: sectionCase.heading,
-            exact: true,
-          });
-          const section = page.locator(".settings-section").filter({ has: heading });
-          const description = section.locator(".settings-section__desc");
-          const actions = section.locator(".settings-section__actions");
-          const group = section.locator(":scope > .settings-group");
-          await Promise.all([
-            heading.waitFor(),
-            description.waitFor(),
-            actions.waitFor(),
-            group.waitFor(),
-          ]);
+      for (const sectionCase of actionSectionCases) {
+        await page.goto(`${suite.server.baseUrl}settings/${sectionCase.route}`);
+        await waitForControlUiRoute(page, {
+          pathname: `/settings/${sectionCase.route}`,
+          routeId: sectionCase.route,
+        });
+        const heading = page.getByRole("heading", {
+          name: sectionCase.heading,
+          exact: true,
+        });
+        const section = page.locator(".settings-section").filter({ has: heading });
+        const description = section.locator(".settings-section__desc");
+        const actions = section.locator(".settings-section__actions");
+        const group = section.locator(":scope > .settings-group");
+        await Promise.all([
+          heading.waitFor(),
+          description.waitFor(),
+          actions.waitFor(),
+          group.waitFor(),
+        ]);
+        // Cold route styles are covered above; this matrix checks responsive geometry.
+        for (const viewport of responsiveViewports) {
+          await page.setViewportSize(viewport);
           await expect
             .poll(async () => {
               const [sectionBox, headingBox, descriptionBox, actionsBox, groupBox] =

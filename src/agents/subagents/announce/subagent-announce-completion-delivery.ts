@@ -145,6 +145,13 @@ export async function runAnnounceAgentCall(params: {
           clearTimeout(timer);
           params.onAccepted?.(payload);
         },
+        onStartOwner: (owner) => {
+          // Private callers still time out their observation while admission keeps custody.
+          // Public handoffs transfer their cancelling deadline at source registration.
+          if (!params.privateCompletion && owner.observe()) {
+            clearTimeout(timer);
+          }
+        },
         onExecutionStarted: () => {
           executionSignal.throwIfAborted();
           if (!params.isExecutionAllowed()) {
@@ -194,6 +201,7 @@ export function isGatewayAgentRunPending(response: unknown): boolean {
 export function resolveRequesterRecoveryDelivery(
   entry: SessionEntry | undefined,
   runId: string,
+  replaySafeTranscriptConflict = false,
 ):
   | { kind: "result"; result: RestartRecoveryTerminalDeliveryEvidence }
   | { kind: "delivery"; delivery: SubagentAnnounceDeliveryResult }
@@ -214,6 +222,20 @@ export function resolveRequesterRecoveryDelivery(
     };
   }
   if (hasRestartRecoveryTerminalRun(entry, runId)) {
+    // Only the live failed dispatch can prove this was a rejected write with no
+    // effects. A missing receipt alone (including after restart) never permits
+    // fresh execution. The wake owner bounds retries and rechecks original custody.
+    if (replaySafeTranscriptConflict) {
+      return {
+        kind: "delivery",
+        delivery: {
+          delivered: false,
+          path: "direct",
+          reason: "requester_transcript_conflict",
+          disposition: "retryable",
+        },
+      };
+    }
     return {
       kind: "delivery",
       delivery: {
@@ -524,7 +546,6 @@ export async function deliverCompletionDirect(params: {
         terminal: true,
         disposition: "permanent_failure",
         error: `text completion direct delivery was incomplete; automatic retry would duplicate sent chunks: ${summarizeDeliveryError(err)}`,
-        ...(mediaUrls.length > 0 ? { missingMediaUrls: mediaUrls } : {}),
       };
     }
     if (err instanceof SourceOwnerChangedError) {

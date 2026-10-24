@@ -258,6 +258,15 @@ export function createCodexAppServerAgentHarness(
         pluginConfig: resolveAttemptPluginConfig(params.config),
       });
     },
+    readNativeSubagents: async (params) => {
+      const { readCodexNativeSubagents } =
+        await import("./src/app-server/native-subagent-roster.js");
+      assertOwnershipCurrent(params);
+      return await readCodexNativeSubagents(
+        { ...params, assertCurrent: () => assertOwnershipCurrent(params) },
+        { bindingStore: options.bindingStore },
+      );
+    },
     loadMcpToolCatalog: async (params) => {
       const { loadCodexEffectiveMcpCatalog } =
         await import("./src/app-server/effective-mcp-catalog.js");

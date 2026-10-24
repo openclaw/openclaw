@@ -1,4 +1,4 @@
-import type { WorkspaceSetupState } from "../agents/workspace-state-store.kernel.js";
+import type { WorkspaceSetupState } from "../agents/workspace-state-types.js";
 
 export type ClawAddStateWorkerOperations = {
   "claws.add.mergeBootstrapSetupState": {

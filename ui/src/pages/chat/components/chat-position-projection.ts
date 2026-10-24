@@ -3,7 +3,7 @@ import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibili
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
+import { prepareChatStreamRender } from "./chat-message-markdown-view.tsx";
 
 type ChatPositionMarker = {
   id: string;
@@ -12,16 +12,17 @@ type ChatPositionMarker = {
   message: unknown;
 };
 
-export type ChatPositionIndex = {
-  markers: ChatPositionMarker[];
-  /** Transcript order, including continuations after an intervening user steer. */
-  markerIdsByMessageId: Map<string, string>;
-};
+export type ChatPositionIndex = Readonly<{
+  markers: readonly Readonly<ChatPositionMarker>[];
+  markerIdsByMessageId: ReadonlyMap<string, string>;
+  /** Current tail previews over the immutable marker membership. */
+  liveMarkers?: readonly Readonly<ChatPositionMarker>[];
+}>;
 
 type RenderItem = SystemEventRenderItem;
 
 export function projectChatPositions(
-  items: readonly RenderItem[],
+  items: Iterable<RenderItem>,
   expandedWork: ReadonlyMap<string, boolean>,
   messageRowKeysById: Map<string, string>,
   searchActive = false,
@@ -92,12 +93,7 @@ export function projectChatPositions(
         if (part.kind !== "stream") {
           continue;
         }
-        const message = {
-          role: "assistant",
-          content: [{ type: "text", text: part.text }],
-          timestamp: part.startedAt,
-        };
-        const { normalizedMessage, displayMarkdown } = prepareChatMessageRender(message);
+        const { message, normalizedMessage, displayMarkdown } = prepareChatStreamRender(part);
         if (
           resolveMessageVisibleContent(message, normalizedMessage) !== "non-text" &&
           !displayMarkdown.trim()
@@ -111,5 +107,6 @@ export function projectChatPositions(
   for (const item of items) {
     visit(item, item.key);
   }
+  // Transcript order includes continuations after an intervening user steer.
   return { markers: [...markers.values()], markerIdsByMessageId };
 }

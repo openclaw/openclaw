@@ -2,18 +2,19 @@ import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema"
 import { runAgentLoop, type AgentEvent, type StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream, validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { Type, type TSchema } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
+import { createShowWidgetTool } from "../canvas/widget-tool.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import {
   assertRequiredParams,
   REQUIRED_PARAM_GROUPS,
   normalizeFileToolPathParam,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
-import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import {
@@ -93,6 +94,24 @@ describe("direct process tool schema", () => {
       executionStarted: false,
       errorKind: "argument-validation",
     });
+  });
+});
+
+it("returns HTML migration guidance for a retired A2UI call before argument validation blocks execution", async () => {
+  const tool = createShowWidgetTool();
+  const execute = vi.spyOn(tool, "execute");
+  expect(tool.parameters).toHaveProperty("properties.kind.enum", ["html"]);
+  const { events } = await runToolCall(
+    tool,
+    { title: "Retired widget", kind: "a2ui", widget_code: "{}" },
+    "retired-widget",
+  );
+  expect(execute).not.toHaveBeenCalled();
+  expect(events.find((event) => event.type === "tool_execution_end")).toMatchObject({
+    executionStarted: false,
+    isError: true,
+    errorKind: "argument-validation",
+    result: { content: [{ type: "text", text: 'A2UI widgets were removed; use kind "html"' }] },
   });
 });
 
@@ -209,23 +228,28 @@ function makeTool(parameters: TSchema, overrides: Partial<AnyAgentTool> = {}): A
   };
 }
 
-describe("normalizeToolParameters", () => {
+describe("finalized tool parameter schemas", () => {
   it("keeps deeply nested plugin tools callable through argument validation", async () => {
     let metadata: TSchema = { type: "string" };
     for (let depth = 0; depth < 5_000; depth++) {
       metadata = { type: "object", properties: { next: metadata } };
     }
     const execute = vi.fn().mockResolvedValue({ content: [], details: { called: true } });
-    const normalized = normalizeToolParameters(
-      makeTool(
-        {
-          type: "object",
-          properties: { message: { type: "string" }, metadata },
-          required: ["message"],
-        },
-        { execute },
-      ),
-    );
+    const [normalized] = finalizeAgentTools({
+      tools: [
+        makeTool(
+          {
+            type: "object",
+            properties: { message: { type: "string" }, metadata },
+            required: ["message"],
+          },
+          { execute },
+        ),
+      ],
+      hookContext: {},
+      wrapBeforeToolCallHook: false,
+    });
+    assert.ok(normalized);
 
     const { messages } = await runToolCall(normalized, { message: "proof" }, "deep-call");
 
@@ -240,7 +264,12 @@ describe("normalizeToolParameters", () => {
     const hookContext = { agentId: "main", sessionId: "session-before-normalize" };
     const wrapped = wrapToolWithBeforeToolCallHook(source, hookContext);
 
-    const normalized = normalizeToolParameters(wrapped);
+    const [normalized] = finalizeAgentTools({
+      tools: [wrapped],
+      hookContext: {},
+      wrapBeforeToolCallHook: false,
+    });
+    assert.ok(normalized);
     expect(isToolWrappedWithBeforeToolCallHook(normalized)).toBe(true);
     expect(getBeforeToolCallSourceTool(normalized)).toBe(source);
     expect(getBeforeToolCallHookContext(normalized)).toBe(hookContext);
@@ -255,7 +284,12 @@ describe("normalizeToolParameters", () => {
       { name: "query" },
     );
 
-    const normalized = normalizeToolParameters(tool);
+    const [normalized] = finalizeAgentTools({
+      tools: [tool],
+      hookContext: {},
+      wrapBeforeToolCallHook: false,
+    });
+    assert.ok(normalized);
 
     expect(normalized.prepareArguments).toBeUndefined();
     expect(() =>
@@ -273,9 +307,14 @@ describe("normalizeToolParameters", () => {
       content: [{ type: "text", text: "wiki ok" }],
       details: { ok: true },
     });
-    const normalized = normalizeToolParameters(
-      makeTool({ type: "object", properties: {}, required: [] }, { name: "wiki_lint", execute }),
-    );
+    const [normalized] = finalizeAgentTools({
+      tools: [
+        makeTool({ type: "object", properties: {}, required: [] }, { name: "wiki_lint", execute }),
+      ],
+      hookContext: {},
+      wrapBeforeToolCallHook: false,
+    });
+    assert.ok(normalized);
     const tool = wrapToolWithBeforeToolCallHook(normalized, {
       agentId: "main",
       sessionKey: "e2e-null-args",

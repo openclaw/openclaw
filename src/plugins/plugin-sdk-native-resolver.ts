@@ -8,7 +8,6 @@ import { isPathInside, isPathStrictlyInside } from "../infra/path-guards.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import {
   isPluginSourceModulePath,
-  supportsNativeModuleAliasHooks,
   useNodeModuleHooks,
   type BunPluginRuntime,
   type ResolveFilename,
@@ -30,7 +29,6 @@ type ModuleWithResolver = typeof Module & {
 
 /** Resolver install options for CJS `_resolveFilename` and modern ESM loader hooks. */
 type InstallOpenClawPluginSdkNativeResolverOptions = {
-  modulePath?: string;
   pluginModulePath?: string;
   allowedParentRoots?: readonly string[];
   argv1?: string;
@@ -64,6 +62,7 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
       ["types", "types.ts"],
       ["validation", "validation.ts"],
       ["internal/anthropic", path.join("internal", "anthropic.ts")],
+      ["internal/google", path.join("internal", "google.ts")],
       ["internal/google-model-family", path.join("internal", "google-model-family.ts")],
       ["internal/openai", path.join("internal", "openai.ts")],
       [
@@ -109,7 +108,7 @@ const BUN_NATIVE_ALIAS_FILTER = new RegExp(
 let installed = false;
 
 function resolveLoaderModulePath(options: InstallOpenClawPluginSdkNativeResolverOptions): string {
-  return options.modulePath ?? fileURLToPath(options.moduleUrl ?? import.meta.url);
+  return fileURLToPath(options.moduleUrl ?? import.meta.url);
 }
 
 function isNativeLoadableSdkTarget(targetPath: string): boolean {
@@ -364,7 +363,7 @@ function installResolver(): void {
   }
   const previousResolveFilename = moduleWithResolver[nodeResolveFilenameProperty];
   // Packaged runtimes without aliases must retain the runtime's native resolution path.
-  if (!previousResolveFilename || !supportsNativeModuleAliasHooks()) {
+  if (!previousResolveFilename) {
     installed = Boolean(bun);
     return;
   }

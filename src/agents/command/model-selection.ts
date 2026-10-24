@@ -5,6 +5,7 @@ import {
   normalizeThinkLevel,
   type ThinkLevel,
 } from "../../auto-reply/thinking.js";
+import { formatThinkingLevelClampNotice } from "../../auto-reply/thinking.shared.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { hasSessionAutoModelSelection } from "../../config/sessions/model-override-provenance.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
@@ -72,13 +73,41 @@ import {
   parseAgentCommandModelRef,
 } from "./model-ref.js";
 import { prepareCommandModelCatalog } from "./model-selection-catalog.js";
+import type { AgentAttemptResult } from "./runtime-loaders.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
+
+export function withCommandThinkingClamp(
+  result: AgentAttemptResult,
+  params: {
+    requestedLevel?: ThinkLevel;
+    candidateThinkLevel?: ThinkLevel;
+    provider: string;
+    model: string;
+  },
+): AgentAttemptResult {
+  const thinking = result.meta.requestShaping?.thinking ?? params.candidateThinkLevel;
+  const thinkingClamp = formatThinkingLevelClampNotice({
+    requested: params.requestedLevel,
+    effective: thinking,
+    provider: result.meta.agentMeta?.provider ?? params.provider,
+    model: result.meta.agentMeta?.model ?? params.model,
+  });
+  return thinkingClamp
+    ? {
+        ...result,
+        meta: {
+          ...result.meta,
+          requestShaping: { ...result.meta.requestShaping, thinking, thinkingClamp },
+        },
+      }
+    : result;
+}
 
 export async function resolveEmbeddedModelSelection(params: {
   cfg: OpenClawConfig;
   opts: AgentCommandOpts;
   sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
+  sessionStore: Record<string, SessionEntry>;
   sessionKey?: string;
   sessionId: string;
   storePath: string;
@@ -151,7 +180,6 @@ export async function resolveEmbeddedModelSelection(params: {
     (!hasExplicitRunOverride || !operatorAuthority?.modelPolicy) &&
     !isModelSelectionLocked(sessionEntry) &&
     sessionEntry &&
-    params.sessionStore &&
     params.sessionKey &&
     hasStoredOverride &&
     !isValidAgentHarnessSessionStoreEntry(params.sessionKey, sessionEntry) &&
@@ -451,6 +479,7 @@ export async function resolveEmbeddedModelSelection(params: {
       });
     const preserveUnavailableSelection = shouldPreserveUnavailableSessionAuthProfileOverride({
       store,
+      recordedProvider: { provider: profile?.provider },
       cfg: authConfig,
       agentDir,
       entry,
@@ -466,11 +495,7 @@ export async function resolveEmbeddedModelSelection(params: {
           authProfileOverrideSource: undefined,
           authProfileOverrideCompactionCount: undefined,
         };
-      } else if (
-        params.sessionStore &&
-        params.sessionKey &&
-        !params.suppressVisibleSessionEffects
-      ) {
+      } else if (params.sessionKey && !params.suppressVisibleSessionEffects) {
         const authEntry = { ...entry };
         sessionEntryForAttempt = authEntry;
         if (sessionEntry === entry) {
@@ -562,12 +587,7 @@ export async function resolveEmbeddedModelSelection(params: {
       );
     }
   }
-  if (
-    params.thinkOverride &&
-    params.sessionStore &&
-    params.sessionKey &&
-    !params.suppressVisibleSessionEffects
-  ) {
+  if (params.thinkOverride && params.sessionKey && !params.suppressVisibleSessionEffects) {
     const now = Date.now();
     const entry = params.sessionStore[params.sessionKey] ??
       sessionEntry ?? { sessionId: params.sessionId, updatedAt: now, sessionStartedAt: now };
@@ -599,7 +619,7 @@ export async function resolveEmbeddedModelSelection(params: {
   // Fallback tokens must not adopt entries from a store without a nonempty session key.
   const sessionFile = params.sessionKey ?? params.sessionId;
   if (params.sessionKey && !params.suppressVisibleSessionEffects) {
-    sessionEntry ??= params.sessionStore?.[params.sessionKey];
+    sessionEntry ??= params.sessionStore[params.sessionKey];
   }
 
   return {

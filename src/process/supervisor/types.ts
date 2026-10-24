@@ -7,6 +7,7 @@ export type TerminationReason =
   | "manual-cancel"
   | "overall-timeout"
   | "no-output-timeout"
+  | "memory-limit"
   | "spawn-error"
   | "signal"
   | "exit";
@@ -86,6 +87,8 @@ export type ProcessCleanupResult = {
 
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   pid?: number;
+  /** Retained tree root, including descendants adopted after the command exits. */
+  memoryRootPid?: number;
   stdin?: ManagedRunStdin;
   oomScoreWrapperSelected?: boolean;
   /** Both output subscriptions observe bytes separately from decoded text. */
@@ -126,6 +129,8 @@ type SpawnBaseInput = {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
+  /** Internal host-exec policy; sandbox transports keep their backend's limits. */
+  memoryLimitBytes?: number;
   /**
    * When false, stdout/stderr are streamed via callbacks only and not retained in RunExit payload.
    */

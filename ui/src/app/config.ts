@@ -100,7 +100,6 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
       agentId: parsed.assistantAgentId,
       name: parsed.assistantName,
       avatar: parsed.assistantAvatar,
-      avatarSource: parsed.assistantAvatarSource,
       avatarStatus: parsed.assistantAvatarStatus,
       avatarReason: parsed.assistantAvatarReason,
     }),

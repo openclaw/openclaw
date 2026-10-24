@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { AgentsListResult } from "../../api/types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { listStoredChatOutboxes as listOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission as captureAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -31,7 +32,6 @@ import {
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
-import { listStoredChatOutboxes as listOutboxes } from "./composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import {
   activeQueuedMessageEdit as activeEdit,
@@ -387,8 +387,8 @@ it("preserves the prior global agent's queued row", async () => {
   expect(byAgent).toEqual({ lily: ["message 1"], nova: ["message 1, corrected"] });
 });
 
-it("refuses to edit a delivery-uncertain row", () => {
-  const { host } = queueHost([{ sendState: "unconfirmed" }]);
+it("refuses to edit an attempted pending row", () => {
+  const { host } = queueHost([{ sendState: "waiting-reconnect", sendAttempts: 1 }]);
   expect(beginEdit(host as never, "queued-1")).toBe("unavailable");
 });
 

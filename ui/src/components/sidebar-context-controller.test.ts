@@ -1,9 +1,7 @@
 /* @vitest-environment jsdom */
-import { createRouter, definePage } from "@openclaw/uirouter";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { ApplicationRouter, RouteId } from "../app-routes.ts";
 import { createSidebarTestRouter } from "../test-helpers/app-sidebar-router.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
@@ -12,11 +10,11 @@ import { getAppSidebarOwner } from "./app-sidebar.tsx";
 
 setupSidebarTest();
 
+const mountEmptySidebar = () =>
+  mountSidebar(createGateway({} as GatewayBrowserClient), createSessions("main", []));
+
 it("restores destination offsets and updates fades after content commits", async () => {
-  const { sidebar } = await mountSidebar(
-    createGateway({} as GatewayBrowserClient),
-    createSessions("main", []),
-  );
+  const { sidebar } = await mountEmptySidebar();
   const scroller = sidebar.querySelector<HTMLElement>(".sidebar-shell__body")!;
   let contentHeight = 500;
   Object.defineProperties(scroller, {
@@ -43,50 +41,30 @@ it("restores destination offsets and updates fades after content commits", async
   expect(scroller.scrollTop).toBe(140);
 
   const router = createSidebarTestRouter(() => "machine inventory");
+  const navigate = async (route: "systems" | "cron", offset: number) => {
+    await router.navigate(route, {});
+    await sidebar.updateComplete;
+    expect(scroller.scrollTop).toBe(offset);
+  };
   sidebar.router = router;
-  await router.navigate("systems", {});
-  await sidebar.updateComplete;
-  expect(scroller.scrollTop).toBe(0);
+  await navigate("systems", 0);
   // Navigation must also capture an offset whose native scroll event has not arrived yet.
   scroller.scrollTop = 35;
-  await router.navigate("cron", {});
-  await sidebar.updateComplete;
-  expect(scroller.scrollTop).toBe(140);
-  await router.navigate("systems", {});
-  await sidebar.updateComplete;
-  expect(scroller.scrollTop).toBe(35);
+  await navigate("cron", 140);
+  await navigate("systems", 35);
 
   contentHeight = 80;
   await router.navigate("cron", {});
   await expectFade("none");
 });
 
-type RouteModule = NonNullable<
-  ReturnType<ApplicationRouter["getState"]>["matches"][number]["module"]
->;
-
 it("updates contextual navigation from its router and retires the subscription on detach", async () => {
   const loaded = createDeferred<unknown>();
-  const router = createRouter<RouteId, unknown, RouteModule>({
-    routes: [
-      definePage({
-        id: "systems",
-        path: "/systems",
-        component: () => ({
-          renderSolid: () => "workspace",
-          renderSidebar: (_data: unknown, pending: boolean) =>
-            pending ? "loading machines" : "machine inventory",
-        }),
-        loader: () => loaded.promise,
-      }),
-      definePage({ id: "cron", path: "/cron", component: () => ({ renderSolid: () => "cron" }) }),
-    ],
-  });
-  onTestFinished(() => router.stop());
-  const { provider, sidebar } = await mountSidebar(
-    createGateway({} as GatewayBrowserClient),
-    createSessions("main", []),
+  const router = createSidebarTestRouter((_data, pending) =>
+    pending ? "loading machines" : "machine inventory",
   );
+  router.getRoute("systems")!.loader = () => loaded.promise;
+  const { provider, sidebar } = await mountEmptySidebar();
   const element = provider.querySelector<HTMLElement>("openclaw-app-sidebar")!;
   const owner = getAppSidebarOwner(element);
   expect(owner).toBeDefined();

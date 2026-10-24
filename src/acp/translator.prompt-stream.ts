@@ -477,22 +477,25 @@ export class AcpTranslatorPromptStream {
       }
     }
 
+    const atTokenLimit = payload.stopReason === "length" || payload.stopReason === "max_tokens";
     if (state === "final") {
-      const rawStopReason = payload.stopReason as string | undefined;
-      const stopReason: StopReason = rawStopReason === "max_tokens" ? "max_tokens" : "end_turn";
+      const stopReason: StopReason = atTokenLimit ? "max_tokens" : "end_turn";
       await this.finishPrompt(pending.sessionId, pending, stopReason);
       return;
     }
+    const interruption =
+      typeof payload.errorMessage === "string" ? payload.errorMessage : undefined;
     if (state === "aborted") {
-      const interruption =
-        typeof payload.errorMessage === "string" ? payload.errorMessage : undefined;
       await this.finishPrompt(pending.sessionId, pending, "cancelled", { interruption });
       return;
     }
     if (state === "error") {
-      const errorKind = payload.errorKind as string | undefined;
-      const stopReason: StopReason = errorKind === "refusal" ? "refusal" : "end_turn";
-      void this.finishPrompt(pending.sessionId, pending, stopReason);
+      const stopReason: StopReason = atTokenLimit
+        ? "max_tokens"
+        : payload.errorKind === "refusal"
+          ? "refusal"
+          : "end_turn";
+      await this.finishPrompt(pending.sessionId, pending, stopReason, { interruption });
     }
   }
 
@@ -644,6 +647,10 @@ export class AcpTranslatorPromptStream {
       `[OpenClaw interruption] ${message}`,
       false,
     );
+    if (result.stopReason === "length" || result.stopReason === "max_tokens") {
+      await this.finishPrompt(sessionId, pending, "max_tokens", { claimed: true });
+      return;
+    }
     await this.rejectPendingPrompt(pending, new Error(message), { claimed: true });
   }
 

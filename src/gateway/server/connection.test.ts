@@ -7,6 +7,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { HealthSummary } from "../health/types.js";
+import type { SerializedGatewayFrame } from "../serialized-json.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
 import { GatewayClientRegistry } from "./client-registry.js";
 import type { GatewayConnectionTransport } from "./connection-transport.js";
@@ -48,7 +49,7 @@ it.each(["written", "failed"] as const)(
           readyState: 1,
           bufferedAmount: 0,
           send: (
-            encoded: string | Buffer,
+            encoded: string | Buffer | SerializedGatewayFrame,
             options?: { binary: false } | ((error?: Error) => void),
             onSent?: (error?: Error) => void,
           ) => {

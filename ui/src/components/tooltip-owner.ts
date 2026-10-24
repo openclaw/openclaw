@@ -132,11 +132,21 @@ export class TooltipOwner {
     return this.#triggerElement;
   }
   get resolvedPlacement(): OverlayPlacement {
-    const placement = this.options.props().placement ?? "top";
+    const placement = this.options.props().placement ?? this.#inheritedPlacement() ?? "top";
     return (placement === "right-start" || placement === "right") &&
       this.host.ownerDocument.defaultView?.matchMedia?.("(max-width: 640px)").matches
       ? "bottom-start"
       : placement;
+  }
+  /** Edge rails declare one hint side for every control, including adapted titles. */
+  #inheritedPlacement(): OverlayPlacement | undefined {
+    for (const node of composedAncestors(this.#triggerElement)) {
+      const side = node instanceof HTMLElement ? node.dataset.tooltipPlacement : undefined;
+      if (side === "top" || side === "right" || side === "bottom" || side === "left") {
+        return side;
+      }
+    }
+    return undefined;
   }
   refresh() {
     this.#attachTrigger();

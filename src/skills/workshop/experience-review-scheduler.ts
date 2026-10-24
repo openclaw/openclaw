@@ -34,18 +34,14 @@ type ExperienceReviewAgentEndEvent = {
 };
 
 type ExperienceReviewAgentContext = {
-  agentId?: string;
   runId?: string;
   sessionKey?: string;
-  sessionId?: string;
   workspaceDir?: string;
   modelProviderId?: string;
   modelId?: string;
-  modelContextWindowTokens?: number;
   authProfileId?: string;
   modelIterations?: number;
   skillWorkshopAvailable?: boolean;
-  compacted?: boolean;
   foregroundPromptContext: EmbeddedForegroundPromptContext;
 };
 

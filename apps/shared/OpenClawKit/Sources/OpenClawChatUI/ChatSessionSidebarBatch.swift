@@ -64,7 +64,7 @@ final class ChatSessionSidebarBatch {
             guard self.valid else { throw CocoaError(.coderReadCorrupt) }
             // ui/src/app-navigation.ts:59: absence uses page defaults; explicit [] hides them.
             return self.config.ui?.prefs?.sidebarEntries ??
-                ["route:agents-home", "route:dashboards", "route:systems", "route:cron", "route:plugins"]
+                ["route:dashboards", "route:systems", "route:cron", "route:plugins"]
         }
     }
 

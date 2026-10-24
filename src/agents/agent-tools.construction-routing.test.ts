@@ -9,6 +9,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "./cron-creator-authority-context.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => {
@@ -60,6 +61,9 @@ function firstOpenClawToolsOptions(): { cronSelfRemoveOnlyJobId?: string } | und
     | { cronSelfRemoveOnlyJobId?: string }
     | undefined;
 }
+
+const openClawPlan = createOpenClawOnlyToolConstructionPlan();
+const shellPlan = { ...openClawPlan, includeShellTools: true, includeOpenClawTools: false };
 
 describe("createOpenClawCodingTools cron scope", () => {
   beforeEach(() => {
@@ -182,13 +186,7 @@ describe("createOpenClawCodingTools cron scope", () => {
             runId,
             senderIsOwner: false,
             wrapBeforeToolCallHook: false,
-            toolConstructionPlan: {
-              includeBaseCodingTools: false,
-              includeShellTools: false,
-              includeChannelTools: false,
-              includeOpenClawTools: true,
-              includePluginTools: false,
-            },
+            toolConstructionPlan: openClawPlan,
           }),
       ),
     );
@@ -229,13 +227,7 @@ describe("createOpenClawCodingTools exec notification routing", () => {
       sessionKey: "agent:main:scope",
       abortSignal: generation.signal,
       wrapBeforeToolCallHook: false,
-      toolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: false,
-        includeChannelTools: false,
-        includeOpenClawTools: true,
-        includePluginTools: false,
-      },
+      toolConstructionPlan: openClawPlan,
     });
     const tool = tools.find((candidate) => candidate.name === AUTOMATIONS_TOOL_NAME);
     if (!tool) {
@@ -253,13 +245,7 @@ describe("createOpenClawCodingTools exec notification routing", () => {
     createOpenClawCodingTools({
       sessionKey: policySessionKey,
       runSessionKey: liveSessionKey,
-      toolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: true,
-        includeChannelTools: false,
-        includeOpenClawTools: false,
-        includePluginTools: false,
-      },
+      toolConstructionPlan: shellPlan,
     });
 
     expect(createLazyExecToolMock).toHaveBeenLastCalledWith(
@@ -285,13 +271,7 @@ describe("createOpenClawCodingTools sandbox filesystem ownership", () => {
       agentId: "work",
       sessionKey: "agent:main:policy",
       runSessionKey: "agent:work:run",
-      toolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: false,
-        includeChannelTools: false,
-        includeOpenClawTools: true,
-        includePluginTools: true,
-      },
+      toolConstructionPlan: { ...openClawPlan, includePluginTools: true },
     });
 
     expect(tools.map((tool) => tool.name)).toContain(AUTOMATIONS_TOOL_NAME);
@@ -305,13 +285,7 @@ describe("createOpenClawCodingTools sandbox filesystem ownership", () => {
     expect(() =>
       createOpenClawCodingTools({
         sandbox,
-        toolConstructionPlan: {
-          includeBaseCodingTools: false,
-          includeShellTools: true,
-          includeChannelTools: false,
-          includeOpenClawTools: false,
-          includePluginTools: false,
-        },
+        toolConstructionPlan: shellPlan,
       }),
     ).toThrow("Sandbox filesystem bridge is unavailable.");
   });

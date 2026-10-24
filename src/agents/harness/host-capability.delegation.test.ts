@@ -57,7 +57,10 @@ async function callCatalog(
 }
 
 describe("harness tool delegation through the catalog", () => {
-  support.setupWorkerEnvironmentServiceSuite();
+  support.setupWorkerEnvironmentServiceSuite((config, root) => {
+    config.tools = { profile: "full" };
+    config.session = { store: path.join(root, "sessions.json") };
+  });
 
   it.each([true, false])(
     "preserves captured screen permission=%s when presenting an environment",
@@ -69,10 +72,8 @@ describe("harness tool delegation through the catalog", () => {
       };
       const runId = "delegation-preview-run";
       const config = support.testState.config;
-      config.tools = { profile: "full" };
-      config.session = { store: path.join(support.testState.root, "sessions.json") };
       ensureSessionEntrySync(
-        { ...identity, storePath: config.session.store },
+        { ...identity, storePath: config.session!.store },
         { sessionId: identity.sessionId, updatedAt: 1 },
       );
       const provision = vi.fn(async () => ({

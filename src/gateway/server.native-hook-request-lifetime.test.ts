@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
 import { nativeHookRelayState } from "../agents/harness/native-hook-relay-state.js";
 import {
@@ -170,6 +171,8 @@ it.for([false, true])(
   "keeps accepted approval ownership across a lost callback (admitted host: %s)",
   async (owned, { signal }) => {
     const accepted = createDeferredCore<string>();
+    const otherRecorded = createDeferredCore();
+    const retryRecorded = createDeferredCore();
     const records = new Map<string, ApprovalRecord[]>();
     const responses: Array<() => void> = [];
     const handlers: Promise<unknown>[] = [];
@@ -190,6 +193,11 @@ it.for([false, true])(
           claimId: params.record.agentRuntimeDelegatedAuthority?.claimId,
         });
         records.set(toolCallId, calls);
+        if (toolCallId === "call-b") {
+          otherRecorded.resolve();
+        } else if (toolCallId === "call-a" && calls.length === 2) {
+          retryRecorded.resolve();
+        }
         const holdAck = toolCallId === "call-a" && calls.length === 1;
         const run = originalRequest({
           ...params,
@@ -284,8 +292,16 @@ it.for([false, true])(
       );
       await expectApproval(id, "pending");
       const other = owned ? invoke("call-b") : undefined;
-      if (owned) {
-        await vi.waitFor(() => expect(records.get("call-b")).toHaveLength(1));
+      if (other) {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            otherRecorded.promise,
+            other,
+            "second relay completed before its approval request",
+          ),
+          signal,
+        );
+        expect(records.get("call-b")).toHaveLength(1);
         expect(records.get("call-a")?.[0]?.claimId).toBeDefined();
         expect(records.get("call-b")?.[0]?.claimId).toBeDefined();
         expect(records.get("call-b")?.[0]?.claimId).not.toBe(records.get("call-a")?.[0]?.claimId);
@@ -310,7 +326,15 @@ it.for([false, true])(
         ).toBe(true),
       );
       if (owned) {
-        await vi.waitFor(() => expect(records.get("call-a")).toHaveLength(2));
+        await withinTest(
+          awaitGateBeforeSettlement(
+            retryRecorded.promise,
+            retry,
+            "retry relay completed before its approval request",
+          ),
+          signal,
+        );
+        expect(records.get("call-a")).toHaveLength(2);
       } else {
         expect(records.get("call-a")).toHaveLength(1);
       }

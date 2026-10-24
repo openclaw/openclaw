@@ -42,6 +42,8 @@ import { sendPayloadWithChunkedTextAndMedia } from "openclaw/plugin-sdk/reply-pa
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
+  resolveEnabledConfiguredAccountId,
+  standardDmPolicyOpenIssue,
 } from "openclaw/plugin-sdk/status-helpers";
 import {
   chunkTextForOutbound,
@@ -62,7 +64,6 @@ import type { ZaloProbeResult } from "./probe.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveZaloOutboundSessionRoute } from "./session-route.js";
 import { createZaloSetupWizardProxy, zaloSetupContract } from "./setup-core.js";
-import { collectZaloStatusIssues } from "./status-issues.js";
 
 const meta = {
   id: "zalo",
@@ -84,11 +85,6 @@ function normalizeZaloMessagingTarget(raw: string): string | undefined {
   return trimmed.replace(/^(zalo|zl):/i, "").trim();
 }
 
-function looksLikeZaloChatId(raw: string, normalized?: string): boolean {
-  const target = normalizeZaloMessagingTarget(normalized ?? raw);
-  return Boolean(target);
-}
-
 const loadZaloChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 const zaloSetupWizard = createZaloSetupWizardProxy(
   async () => (await import("./setup-surface.js")).zaloSetupWizard,
@@ -103,7 +99,7 @@ async function sendZaloDelivery(ctx: {
   mediaUrl?: string;
   assertDirectAdapterHandoff?: () => void;
 }): Promise<{ messageId: string; receipt: MessageReceipt }> {
-  const result = await (
+  return await (
     await loadZaloChannelRuntime()
   ).sendMessageZalo(ctx.to, ctx.text, {
     accountId: ctx.accountId ?? undefined,
@@ -111,10 +107,6 @@ async function sendZaloDelivery(ctx: {
     cfg: ctx.cfg,
     assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
   });
-  if (!result.ok) {
-    throw new Error(result.error ?? `Failed to send Zalo ${ctx.mediaUrl ? "media" : "message"}`);
-  }
-  return { messageId: result.messageId ?? "", receipt: result.receipt };
 }
 
 const zaloSendResultAdapter = createAttachedChannelResultAdapter({
@@ -247,9 +239,10 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
           const target = normalizeZaloMessagingTarget(to);
           return target ? (/^group:/i.test(target) ? "group" : "direct") : undefined;
         },
-        resolveOutboundSessionRoute: (params) => resolveZaloOutboundSessionRoute(params),
+        resolveOutboundSessionRoute: resolveZaloOutboundSessionRoute,
         targetResolver: {
-          looksLikeId: looksLikeZaloChatId,
+          looksLikeId: (raw, normalized) =>
+            Boolean(normalizeZaloMessagingTarget(normalized ?? raw)),
           hint: "<chatId>",
         },
       },
@@ -265,7 +258,20 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       }),
       status: createComputedAccountStatusAdapter<ResolvedZaloAccount, ZaloProbeResult>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
-        collectStatusIssues: collectZaloStatusIssues,
+        collectStatusIssues: (accounts) =>
+          accounts.flatMap((account) => {
+            const accountId = resolveEnabledConfiguredAccountId(account);
+            return accountId && account.dmPolicy === "open"
+              ? [
+                  standardDmPolicyOpenIssue({
+                    channel: "zalo",
+                    accountId,
+                    channelLabel: "Zalo",
+                    configPath: "channels.zalo",
+                  }),
+                ]
+              : [];
+          }),
         buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
         probeAccount: async ({ account, timeoutMs }) =>
           await (await loadZaloChannelRuntime()).probeZaloAccount({ account, timeoutMs }),

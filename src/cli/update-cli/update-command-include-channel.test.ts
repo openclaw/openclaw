@@ -165,6 +165,7 @@ it.each([
     );
     const dir = path.dirname(include);
     const now = Date.now();
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     let reached = false;
     let committed = "";
     const operation = executor.run(

@@ -15,16 +15,6 @@ import {
 
 const APPLICATIONS_PATH = "/Applications";
 type GenerationOwner = ReturnType<typeof createCodexDesktopGenerationOwner>;
-type WatchFactory = (
-  watchedPath: string,
-  options: { recursive: boolean },
-  listener: (eventType: string, filename: string | Buffer | null) => void,
-) => FSWatcher;
-type DesktopGenerationRuntime = {
-  platform: NodeJS.Platform;
-  readFingerprint: () => Promise<string>;
-  watchPath: WatchFactory;
-};
 type DesktopGenerationState = {
   owner?: GenerationOwner;
   lastGeneration?: CodexDesktopGeneration;
@@ -43,28 +33,22 @@ export function waitForCodexDesktopGeneration(): Promise<CodexDesktopGeneration 
   return (current.watcher ? owner?.wait() : owner?.refresh()) ?? Promise.resolve(undefined);
 }
 
-export function createCodexDesktopGenerationService(
-  params: {
-    onGenerationChange: (generation: CodexDesktopGeneration) => void;
-  },
-  runtime: DesktopGenerationRuntime = {
-    platform: process.platform,
-    readFingerprint: readMacOSDesktopGenerationFingerprint,
-    watchPath: (watchedPath, options, listener) => watch(watchedPath, options, listener),
-  },
-): OpenClawPluginServiceV2 {
+export function createCodexDesktopGenerationService(params: {
+  onGenerationChange: (generation: CodexDesktopGeneration) => void;
+}): OpenClawPluginServiceV2 {
+  const platform = process.platform;
   return {
     apiVersion: 2,
     id: "codex-desktop-generation",
     async start(ctx) {
-      if (runtime.platform !== "darwin") {
+      if (platform !== "darwin") {
         return;
       }
       const current = state();
       current.context = ctx;
       const owner = createCodexDesktopGenerationOwner({
         signal: ctx.scheduler.signal,
-        readFingerprint: runtime.readFingerprint,
+        readFingerprint: readMacOSDesktopGenerationFingerprint,
         onGenerationChange: params.onGenerationChange,
         initialGeneration: current.lastGeneration,
       });
@@ -75,20 +59,16 @@ export function createCodexDesktopGenerationService(
       try {
         // Managed candidates live under this stable parent. Bundle replacement
         // needs no per-bundle watcher handoff; manual nested edits are best effort.
-        current.watcher = runtime.watchPath(
-          APPLICATIONS_PATH,
-          { recursive: false },
-          (_eventType, filename) => {
-            if (
-              ctx.scheduler.signal.aborted ||
-              (filename && !candidateNames.has(filename.toString().split(path.sep)[0] ?? ""))
-            ) {
-              return;
-            }
-            owner.markDirty();
-            void refreshGeneration(current, owner.wait());
-          },
-        );
+        current.watcher = watch(APPLICATIONS_PATH, { recursive: false }, (_eventType, filename) => {
+          if (
+            ctx.scheduler.signal.aborted ||
+            (filename && !candidateNames.has(filename.split(path.sep)[0] ?? ""))
+          ) {
+            return;
+          }
+          owner.markDirty();
+          void refreshGeneration(current, owner.wait());
+        });
         current.watcher.on("error", (error) => reportWatcherFailure(current, error));
       } catch (error) {
         reportWatcherFailure(current, error);

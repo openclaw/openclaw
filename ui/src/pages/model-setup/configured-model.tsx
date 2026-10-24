@@ -132,7 +132,7 @@ export function ConfiguredModel(
   const displayRef = createMemo(() =>
     props.verify.phase === "ok" ? props.verify.modelRef : configuredRef(),
   );
-  const providerId = createMemo(() => providerIdFromModelRef(displayRef()));
+  const providerId = () => providerIdFromModelRef(displayRef());
   const configuredCandidate = createMemo(() =>
     displayRef() === configuredRef()
       ? props.result.candidates.find(
@@ -145,7 +145,7 @@ export function ConfiguredModel(
     const id = providerId();
     return id ? providerDisplayLabel(id) : displayRef();
   };
-  const description = createMemo(() => {
+  const description = () => {
     const name = displayRef().slice(displayRef().indexOf("/") + 1);
     const detail = configuredCandidate()?.detail.trim();
     return !detail || configuredCandidate()?.kind === "existing-model"
@@ -153,7 +153,7 @@ export function ConfiguredModel(
       : detail.toLowerCase().includes(name.toLowerCase())
         ? detail
         : `${name} · ${detail}`;
-  });
+  };
 
   return (
     <section class="settings-section model-setup__current" data-verify-phase={props.verify.phase}>

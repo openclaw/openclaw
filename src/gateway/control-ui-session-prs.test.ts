@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runGitWorkerOperation } from "../infra/git-worker.js";
 import {
   createSessionPullRequestsFixture,
@@ -549,14 +550,8 @@ describe("loadControlUiSessionPullRequests", () => {
   });
 
   it("queues one forced refresh behind an ordinary in-flight lookup", async () => {
-    let resolveInitialPulls!: (response: Response) => void;
-    let signalInitialPullStarted!: () => void;
-    const initialPulls = new Promise<Response>((resolve) => {
-      resolveInitialPulls = resolve;
-    });
-    const initialPullStarted = new Promise<void>((resolve) => {
-      signalInitialPullStarted = resolve;
-    });
+    const { promise: initialPulls, resolve: resolveInitialPulls } = createDeferred<Response>();
+    const { promise: initialPullStarted, resolve: signalInitialPullStarted } = createDeferred();
     let pullListCalls = 0;
     const fetchImpl = routedFetch([
       {

@@ -2,6 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DiscordError } from "../internal/rest.js";
 import {
   bindTestThread,
   createTestThreadBindingManager,
@@ -56,36 +57,49 @@ describe("thread binding clock-controlled lifecycle", () => {
     }
   });
 
-  it.each(["max-age", "transient", "missing"] as const)("sweeps bindings at %s", async (reason) => {
-    const expires = reason === "max-age";
-    const manager = await createTestThreadBindingManager({
-      enableSweeper: true,
-      ...(expires ? { idleTimeoutMs: 0, maxAgeMs: 60_000 } : {}),
-    });
-    const binding = await bindTestThread(manager, expires ? { introText: "intro" } : {});
-    if (expires) {
-      expect(binding).toMatchObject({
-        threadId: "thread-1",
-        targetSessionKey: target.targetSessionKey,
+  it.each(["max-age", "transient", "missing", "forbidden", "unknown-channel"] as const)(
+    "sweeps bindings at %s",
+    async (reason) => {
+      const expires = reason === "max-age";
+      const manager = await createTestThreadBindingManager({
+        enableSweeper: true,
+        ...(expires ? { idleTimeoutMs: 0, maxAgeMs: 60_000 } : {}),
       });
-      hoisted.sendMessageDiscord.mockClear();
-      hoisted.sendWebhookMessageDiscord.mockClear();
-    } else {
-      hoisted.restGet.mockRejectedValueOnce(
-        reason === "transient"
-          ? new Error("ECONNRESET")
-          : { status: 404, rawError: { code: 10003, message: "Unknown Channel" } },
+      const binding = await bindTestThread(manager, expires ? { introText: "intro" } : {});
+      if (expires) {
+        expect(binding).toMatchObject({
+          threadId: "thread-1",
+          targetSessionKey: target.targetSessionKey,
+        });
+        hoisted.sendMessageDiscord.mockClear();
+        hoisted.sendWebhookMessageDiscord.mockClear();
+      } else {
+        hoisted.restGet.mockRejectedValueOnce(
+          reason === "transient"
+            ? new Error("ECONNRESET")
+            : new DiscordError(
+                new Response(null, {
+                  status: reason === "forbidden" ? 403 : reason === "unknown-channel" ? 400 : 404,
+                }),
+                {
+                  code: reason === "unknown-channel" ? "10003" : undefined,
+                  message: "Unknown Channel",
+                },
+              ),
+        );
+      }
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(manager.getByThreadId("thread-1")).toEqual(
+        reason === "transient" ? binding : undefined,
       );
-    }
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(manager.getByThreadId("thread-1")).toEqual(reason === "transient" ? binding : undefined);
-    expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
-    if (expires) {
-      expect(hoisted.restGet).not.toHaveBeenCalled();
-      expect(hoisted.sendMessageDiscord).toHaveBeenCalledOnce();
-      expect(hoisted.sendMessageDiscord.mock.calls[0]?.[1]).toContain("max age of 1m");
-    }
-  });
+      expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
+      if (expires) {
+        expect(hoisted.restGet).not.toHaveBeenCalled();
+        expect(hoisted.sendMessageDiscord).toHaveBeenCalledOnce();
+        expect(hoisted.sendMessageDiscord.mock.calls[0]?.[1]).toContain("max age of 1m");
+      }
+    },
+  );
 
   it("preserves explicitly updated lifecycle windows when rebinding", async () => {
     vi.setSystemTime(new Date("2026-02-20T10:00:00.000Z"));

@@ -8,7 +8,7 @@ import {
 } from "@openclaw/fs-safe/atomic";
 import { GUEST_FILESYSTEM_PYTHON } from "@openclaw/fs-safe/guest";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type {
   CreateSandboxBackendParams,
@@ -68,7 +68,7 @@ type OpenShellWorkspaceLease = {
 };
 
 // Mirror commands own their snapshot until publication; remote runtimes only serialize initialization.
-const openShellWorkspaceOperations = new KeyedAsyncQueue();
+const openShellWorkspaceOperations = new Map<string, Promise<void>>();
 let openShellDetachedCreateSupport: { key: string; promise: Promise<boolean> } | undefined;
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
 // Prints "0" when every managed root is missing or empty, "1" otherwise. Any
@@ -326,20 +326,13 @@ class OpenShellSandboxBackendImpl {
         sandboxName,
       ])}`,
     ].toSorted();
-    const releases: Array<() => void> = [];
-    for (const key of keys) {
-      const acquired = createDeferred<() => void>();
-      void openShellWorkspaceOperations.enqueue(key, () => new Promise<void>(acquired.resolve));
-      releases.push(await acquired.promise);
-    }
-    return {
-      release: () => {
-        for (const release of releases.toReversed()) {
-          // Deferred resolution is idempotent, including repeated finalization cleanup.
-          release();
-        }
-      },
-    };
+    const acquired = createDeferred<() => void>();
+    void enqueueKeyedTask({
+      tails: openShellWorkspaceOperations,
+      keys,
+      task: () => new Promise<void>(acquired.resolve),
+    });
+    return { release: await acquired.promise };
   }
 
   async prepareExec(params: {

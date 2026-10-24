@@ -44,6 +44,7 @@ import {
 import * as dispatchHarness from "./dispatch-from-config.test-support.js";
 import {
   type ResolveInboundConversationParams,
+  mockPluginBoundDiscordBinding,
   dispatchReplyFromConfig,
   runWithReplyOperationLifecycleAdmission,
   setNoAbort,
@@ -54,7 +55,12 @@ import {
 } from "./dispatch-from-config.test-support.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
-import { buildTestCtx } from "./test-ctx.js";
+import {
+  buildTestCtx,
+  createDiscordPluginBindingCtx,
+  createRemoteImessageMediaCtx,
+  createRoutedTestCtx,
+} from "./test-ctx.js";
 
 function mockPendingPluginClaim(params: {
   bindingId: string;
@@ -87,6 +93,25 @@ function mockPendingPluginClaim(params: {
   return (outcome: PluginTargetedInboundClaimOutcome) => resolveClaim?.(outcome);
 }
 
+function createDiagnosticSlackContext() {
+  return buildTestCtx({
+    Provider: "slack",
+    Surface: "slack",
+    SessionKey: "agent:main:main",
+    MessageSid: "msg-1",
+    To: "slack:C123",
+  });
+}
+
+function createPluginBindingData() {
+  return {
+    kind: "codex-app-server-session",
+    version: 1,
+    sessionFile: "/tmp/session.jsonl",
+    workspaceDir: "/workspace/openclaw",
+  };
+}
+
 beforeAll(dispatchHarness.globalBeforeAll0);
 
 describe("dispatchReplyFromConfig", () => {
@@ -101,13 +126,7 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.runner.runInboundClaim.mockResolvedValue({ handled: true } as never);
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:-10099",
-      To: "telegram:-10099",
-      AccountId: "default",
+    const ctx = createRoutedTestCtx("telegram", "telegram:-10099", {
       SenderId: "user-9",
       SenderUsername: "ada",
       MessageThreadId: 77,
@@ -249,7 +268,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
-  it("routes native-command-redirect replies using the redirect target sessionKey for outbound delivery", async () => {
+  for (const [name, commandSource, expectedSessionKey] of [
     // Regression test for the native redirect session-key contract:
     // when a native command targets a different session via
     // `CommandTargetSessionKey`, the agent runtime resolves its
@@ -260,73 +279,54 @@ describe("dispatchReplyFromConfig", () => {
     // see the same canonical key. Without this alignment, plugins
     // correlating per-turn state across `agent_end` and `message_sending`
     // would receive divergent keys on every native redirect.
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    installThreadingTestPlugin({ id: "telegram" });
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      AccountId: "acc-1",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-      CommandSource: "native",
-      SessionKey: "agent:main:slack:channel:CHAN1",
-      CommandTargetSessionKey: "agent:main:telegram:direct:999",
-    });
-
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
-    expect(mocks.routeReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        to: "telegram:999",
-        sessionKey: "agent:main:telegram:direct:999",
-        policySessionKey: "agent:main:telegram:direct:999",
-      }),
-    );
-  });
-
-  it("routes non-native (text) command replies using the inbound sessionKey for outbound delivery", async () => {
+    [
+      "routes native-command-redirect replies using the redirect target sessionKey for outbound delivery",
+      "native",
+      "agent:main:telegram:direct:999",
+    ],
     // Companion regression test: for non-native commands the routed
     // reply must keep the inbound `SessionKey` as both the canonical
     // session key and the policy key, even if `CommandTargetSessionKey`
     // happens to be set on the context. This guards against accidental
     // generalization of the native-redirect branch.
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    installThreadingTestPlugin({ id: "telegram" });
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      AccountId: "acc-1",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-      CommandSource: "text",
-      SessionKey: "agent:main:slack:channel:CHAN1",
-      CommandTargetSessionKey: "agent:main:telegram:direct:999",
+    [
+      "routes non-native (text) command replies using the inbound sessionKey for outbound delivery",
+      "text",
+      "agent:main:slack:channel:CHAN1",
+    ],
+  ] as const) {
+    it(name, async () => {
+      setNoAbort();
+      mocks.routeReply.mockClear();
+      installThreadingTestPlugin({ id: "telegram" });
+      const cfg = emptyConfig;
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        AccountId: "acc-1",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+        CommandSource: commandSource,
+        SessionKey: "agent:main:slack:channel:CHAN1",
+        CommandTargetSessionKey: "agent:main:telegram:direct:999",
+      });
+
+      const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+      await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+      expect(mocks.routeReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "telegram",
+          to: "telegram:999",
+          sessionKey: expectedSessionKey,
+          policySessionKey: expectedSessionKey,
+        }),
+      );
     });
-
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
-    expect(mocks.routeReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        to: "telegram:999",
-        sessionKey: "agent:main:slack:channel:CHAN1",
-        policySessionKey: "agent:main:slack:channel:CHAN1",
-      }),
-    );
-  });
+  }
 
   it("audits completed inbound message processing", async () => {
     setNoAbort();
@@ -563,13 +563,7 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      SessionKey: "agent:main:main",
-      MessageSid: "msg-1",
-      To: "slack:C123",
-    });
+    const ctx = createDiagnosticSlackContext();
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
@@ -590,7 +584,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(diagnosticMocks.logMessageQueued).toHaveBeenCalledTimes(1);
     expect(diagnosticMocks.logSessionStateChange).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
-      state: "processing",
+      state: "waiting",
       reason: "message_start",
     });
     const processedEvent = dispatchHarness.firstMockArg(
@@ -609,13 +603,7 @@ describe("dispatchReplyFromConfig", () => {
     };
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      SessionKey: "agent:main:main",
-      MessageSid: "msg-1",
-      To: "slack:C123",
-    });
+    const ctx = createDiagnosticSlackContext();
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
@@ -630,7 +618,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(diagnosticMocks.logSessionStateChange).toHaveBeenCalledWith({
       sessionId: "test-uuid-1234",
       sessionKey: "agent:main:main",
-      state: "processing",
+      state: "waiting",
       reason: "message_start",
     });
   });
@@ -783,42 +771,18 @@ describe("dispatchReplyFromConfig", () => {
       ]),
     );
     mockPluginBindingClaim();
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-1",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-      data: {
-        kind: "codex-app-server-session",
-        version: 1,
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/workspace/openclaw",
-      },
+      data: createPluginBindingData(),
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:1481858418548412579",
-      To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
+    const ctx = createDiscordPluginBindingCtx({
       OwnerAllowFrom: ["user-9"],
       GatewayClientScopes: ["operator.write"],
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "who are you",
-      RawBody: "who are you",
-      Body: "who are you",
       MessageSid: "msg-claim-plugin-1",
-      SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
@@ -891,25 +855,15 @@ describe("dispatchReplyFromConfig", () => {
       ]),
     );
     mockPluginBindingClaim(undefined, { pluginId: "test-plugin", receiveMessages: false });
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-null-rejection",
       targetSessionKey: "plugin-binding:test:null-rejection",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:null-rejection",
-      },
       pluginId: "test-plugin",
       pluginRoot: "/plugins/test-plugin",
+      conversationId: "channel:null-rejection",
     });
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:null-rejection",
-      To: "discord:channel:null-rejection",
-      AccountId: "default",
+    const ctx = createRoutedTestCtx("discord", "discord:channel:null-rejection", {
       Body: "keep the rejection",
       MessageSid: "msg-claim-null-rejection",
       SessionKey: "agent:main:discord:channel:null-rejection",
@@ -1415,16 +1369,12 @@ describe("dispatchReplyFromConfig", () => {
       },
       { pluginLoaded: false, receiveMessages: false },
     );
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-interrupted-fallback",
       targetSessionKey: "plugin-binding:test:interrupted-fallback",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:interrupted-fallback",
-      },
       pluginId: "missing-plugin",
       pluginRoot: "/tmp/missing-plugin",
+      conversationId: "channel:interrupted-fallback",
     });
     const sessionKey = "agent:main:discord:channel:interrupted-fallback";
     const sessionId = "interrupted-fallback-session";
@@ -1557,33 +1507,15 @@ describe("dispatchReplyFromConfig", () => {
         conversationId: "chat:abc",
       },
       pluginRoot: "/plugins/openclaw-codex-app-server",
-      data: {
-        kind: "codex-app-server-session",
-        version: 1,
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/workspace/openclaw",
-      },
+      data: createPluginBindingData(),
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "imessage",
-      Surface: "imessage",
-      OriginatingChannel: "imessage",
-      OriginatingTo: "imessage:chat:abc",
-      To: "imessage:chat:abc",
-      AccountId: "default",
-      SenderId: "user-9",
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "what is this?",
-      RawBody: "what is this?",
-      Body: "what is this?",
-      MessageSid: "msg-claim-imessage-media",
-      SessionKey: "agent:main:imessage:direct:user",
-      media: [{ path: rawPath, url: rawPath, contentType: "image/jpeg" }],
-      MediaRemoteHost: "user@gateway-host",
-    });
+    const ctx = createRemoteImessageMediaCtx(
+      "imessage:chat:abc",
+      "msg-claim-imessage-media",
+      rawPath,
+    );
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
@@ -1611,24 +1543,11 @@ describe("dispatchReplyFromConfig", () => {
     const rawPath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "imessage",
-      Surface: "imessage",
-      OriginatingChannel: "imessage",
-      OriginatingTo: "imessage:chat:ordinary",
-      To: "imessage:chat:ordinary",
-      AccountId: "default",
-      SenderId: "user-9",
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "what is this?",
-      RawBody: "what is this?",
-      Body: "what is this?",
-      MessageSid: "msg-ordinary-imessage-media",
-      SessionKey: "agent:main:imessage:direct:user",
-      media: [{ path: rawPath, url: rawPath, contentType: "image/jpeg" }],
-      MediaRemoteHost: "user@gateway-host",
-    });
+    const ctx = createRemoteImessageMediaCtx(
+      "imessage:chat:ordinary",
+      "msg-ordinary-imessage-media",
+      rawPath,
+    );
     const replyResolver = vi.fn(async (receivedCtx: MsgContext) => {
       expect(receivedCtx.media).toEqual([
         expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
@@ -1655,24 +1574,11 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = finalizeInboundContextForSdk(
-      buildTestCtx({
-        Provider: "imessage",
-        Surface: "imessage",
-        OriginatingChannel: "imessage",
-        OriginatingTo: "imessage:chat:ordinary-hook",
-        To: "imessage:chat:ordinary-hook",
-        AccountId: "default",
-        SenderId: "user-9",
-        CommandAuthorized: true,
-        WasMentioned: false,
-        CommandBody: "what is this?",
-        RawBody: "what is this?",
-        Body: "what is this?",
-        MessageSid: "msg-ordinary-imessage-hook-media",
-        SessionKey: "agent:main:imessage:direct:user",
-        media: [{ path: rawPath, url: rawPath, contentType: "image/jpeg" }],
-        MediaRemoteHost: "user@gateway-host",
-      }),
+      createRemoteImessageMediaCtx(
+        "imessage:chat:ordinary-hook",
+        "msg-ordinary-imessage-hook-media",
+        rawPath,
+      ),
     );
     const replyResolver = vi.fn(async (receivedCtx: MsgContext) => {
       expect(receivedCtx.media).toEqual([
@@ -1796,13 +1702,7 @@ describe("dispatchReplyFromConfig", () => {
           : null,
     );
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "channel:1510164477642014740",
-      To: "channel:1510164477642014740",
-      AccountId: "default",
+    const ctx = createRoutedTestCtx("discord", "channel:1510164477642014740", {
       SenderId: "user-9",
       CommandAuthorized: true,
       WasMentioned: false,
@@ -1853,42 +1753,18 @@ describe("dispatchReplyFromConfig", () => {
       status: "handled",
       result: { handled: true, reply: { text: "should not send" } },
     });
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-aborted-1",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginRoot: "/workspace/openclaw-app-server",
-      data: {
-        kind: "codex-app-server-session",
-        version: 1,
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/workspace/openclaw",
-      },
+      data: createPluginBindingData(),
     });
     const abortController = new AbortController();
     abortController.abort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:1481858418548412579",
-      To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "who are you",
-      RawBody: "who are you",
-      Body: "who are you",
+    const ctx = createDiscordPluginBindingCtx({
       MessageSid: "msg-claim-plugin-aborted-1",
-      SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
@@ -1928,42 +1804,21 @@ describe("dispatchReplyFromConfig", () => {
       ),
     ).toEqual({ ok: true });
     mockPluginBindingClaim();
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-command-escape-1",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
       detachHint: "/codex detach",
-      data: {
-        kind: "codex-app-server-session",
-        version: 1,
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/workspace/openclaw",
-      },
+      data: createPluginBindingData(),
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:1481858418548412579",
-      To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
-      CommandAuthorized: true,
-      WasMentioned: false,
+    const ctx = createDiscordPluginBindingCtx({
       CommandBody: "/codex detach",
       BodyForCommands: "/codex detach",
       RawBody: "/codex detach",
       Body: "/codex detach",
       MessageSid: "msg-claim-plugin-command-escape",
-      SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
     const replyResolver = vi.fn(async () => ({ text: "detached" }) satisfies ReplyPayload);
 
@@ -1993,35 +1848,19 @@ describe("dispatchReplyFromConfig", () => {
   it("keeps authorized unknown slash text in a plugin-owned binding routed to the bound plugin", async () => {
     setNoAbort();
     mockPluginBindingClaim();
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-command-unknown-slash",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:1481858418548412579",
-      To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
+    const ctx = createDiscordPluginBindingCtx({
       CommandSource: "text",
-      CommandAuthorized: true,
-      WasMentioned: false,
       CommandBody: "/notes keep this with the bound plugin",
       RawBody: "/notes keep this with the bound plugin",
       Body: "/notes keep this with the bound plugin",
       MessageSid: "msg-claim-plugin-command-unknown-slash",
-      SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 

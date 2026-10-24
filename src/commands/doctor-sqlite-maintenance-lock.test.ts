@@ -1,14 +1,14 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { mockLinuxNamespace } from "../infra/gateway-lock-namespace.test-support.js";
 import {
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
-  readGatewayLockProcessNamespace,
   type LockPayload,
 } from "../infra/gateway-lock-payload.js";
+import * as gatewayLockProcessModule from "../infra/gateway-lock-process.js";
 import {
   acquireGatewayLock,
   GatewayLockError,
@@ -18,7 +18,6 @@ import * as gatewayLockModule from "../infra/gateway-lock.js";
 import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
 import { prepareGithubIssue } from "../infra/github-issue.js";
 import { createSessionSqliteMigrationRun } from "../infra/session-sqlite-migration-manifest.js";
-import * as bootReader from "../infra/update-managed-service-handoff-boot.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   claimSessionSqliteMigrationGithubIssue,
@@ -26,6 +25,7 @@ import {
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
 import {
+  assertDoctorSqliteMaintenancePathsNotAliased,
   DoctorSqliteMaintenanceLockUnavailableError,
   isDestructiveDoctorSessionSqliteMode,
   withDoctorSqliteMaintenanceLock,
@@ -49,6 +49,9 @@ async function createLockFixture() {
     VITEST: "1",
   };
   const acquireLock = gatewayLockModule.acquireGatewayLock;
+  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessCmdline").mockImplementation(() => [
+    "openclaw-gateway",
+  ]);
   vi.spyOn(gatewayLockModule, "acquireGatewayLock").mockImplementation((options) =>
     acquireLock(
       options?.role === "sqlite-maintenance"
@@ -57,7 +60,6 @@ async function createLockFixture() {
             lockDir,
             platform: "darwin",
             pollIntervalMs: 2,
-            readProcessCmdline: () => ["openclaw-gateway"],
             timeoutMs: 15,
           }
         : options,
@@ -126,28 +128,6 @@ async function seedGatewayOwner(
   return { ownerLockPath, databasePath, raw };
 }
 
-function mockLinuxNamespace(root: string) {
-  if (process.platform !== "linux") {
-    vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
-      platform: "linux",
-      identity: "01234567-89ab-cdef-0123-456789abcdef",
-    }));
-    const namespaceLink = `pid:[${fsSync.statSync(root, { bigint: true }).ino}]`;
-    const readlink = fsSync.readlinkSync.bind(fsSync);
-    vi.spyOn(fsSync, "readlinkSync").mockImplementation((file, options) =>
-      file === "/proc/self/ns/pid" ? namespaceLink : readlink(file, options),
-    );
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    readGatewayLockProcessNamespace();
-    platform.mockRestore();
-  }
-  const namespace = readGatewayLockProcessNamespace();
-  if (!namespace || !("pidNsInode" in namespace)) {
-    throw new Error("Expected Linux process namespace identity");
-  }
-  return namespace;
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -199,19 +179,18 @@ describe("doctor SQLite maintenance lock", () => {
       const run = vi.fn(async () => fs.writeFile(marker, "reclaimed\n"));
 
       await expect(fixture.maintain(run, [marker])).rejects.toThrow(
-        /cannot verify Gateway ownership.*heartbeat is fresh.*inside the Gateway container/,
+        /cannot verify Gateway ownership.*heartbeat age does not prove.*inside the Gateway container/,
       );
 
       expect(run).not.toHaveBeenCalled();
       await expect(fs.readFile(marker, "utf8")).resolves.toBe("Gateway data\n");
       await expect(fs.readFile(owner.ownerLockPath, "utf8")).resolves.toBe(owner.raw);
-      expect(() => assertStateDatabaseAccessAllowed(owner.databasePath)).toThrow(
-        /cannot verify Gateway ownership.*heartbeat is fresh.*inside the Gateway container/,
-      );
+      // Ordinary SQLite access does not grant the maintenance custody refused above.
+      expect(() => assertStateDatabaseAccessAllowed(owner.databasePath)).not.toThrow();
     },
   );
 
-  it.each(["same namespace", "previous boot", "legacy record", "expired heartbeat"] as const)(
+  it.each(["same namespace", "previous boot"] as const)(
     "recovers a stopped Gateway's %s ownership through maintenance",
     async (kind) => {
       const fixture = await createLockFixture();
@@ -224,27 +203,45 @@ describe("doctor SQLite maintenance lock", () => {
                 digit === "1" ? "2" : "1",
               ),
             }
-          : kind === "expired heartbeat"
-            ? { ...namespace, pidNsInode: `${namespace.pidNsInode}-foreign` }
-            : namespace;
+          : namespace;
       const owner = await seedGatewayOwner(fixture, {
         pid: kind === "previous boot" ? process.pid : 2_147_483_647,
         ...(kind === "previous boot"
           ? { startTime: getFileLockProcessStartTime(process.pid) ?? undefined }
           : {}),
-        ...(kind === "legacy record" ? {} : { processNamespace }),
+        processNamespace,
       });
-      if (kind === "expired heartbeat") {
-        const expired = new Date(Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1000);
-        await fs.utimes(owner.ownerLockPath, expired, expired);
-        expect(() => assertStateDatabaseAccessAllowed(owner.databasePath)).not.toThrow();
-      }
       const run = vi.fn(() => "done");
 
       await expect(fixture.maintain(run)).resolves.toBe("done");
 
       expect(run).toHaveBeenCalledOnce();
       await expect(fs.stat(owner.ownerLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.each(["legacy record", "expired foreign heartbeat"] as const)(
+    "preserves unverifiable %s ownership before maintenance",
+    async (kind) => {
+      const fixture = await createLockFixture();
+      const namespace = mockLinuxNamespace(fixture.env.OPENCLAW_STATE_DIR);
+      const owner = await seedGatewayOwner(fixture, {
+        pid: 2_147_483_647,
+        ...(kind === "legacy record"
+          ? {}
+          : { processNamespace: { ...namespace, pidNsInode: `${namespace.pidNsInode}-foreign` } }),
+      });
+      const expired = new Date(Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1000);
+      await fs.utimes(owner.ownerLockPath, expired, expired);
+      const run = vi.fn();
+
+      expect(() => assertStateDatabaseAccessAllowed(owner.databasePath)).not.toThrow();
+      await expect(fixture.maintain(run)).rejects.toThrow(
+        /cannot verify Gateway ownership.*openclaw gateway recover-lock/,
+      );
+
+      expect(run).not.toHaveBeenCalled();
+      await expect(fs.readFile(owner.ownerLockPath, "utf8")).resolves.toBe(owner.raw);
     },
   );
 
@@ -273,10 +270,15 @@ describe("doctor SQLite maintenance lock", () => {
     });
     await maintenanceStarted.promise;
 
+    vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessCmdline").mockImplementation(() => [
+      "openclaw",
+      "doctor",
+      "--session-sqlite",
+      "compact",
+    ]);
     await expect(
       fixture.gateway({
         pollIntervalMs: 2,
-        readProcessCmdline: () => ["openclaw", "doctor", "--session-sqlite", "compact"],
         timeoutMs: 15,
       }),
     ).rejects.toBeInstanceOf(GatewayLockError);
@@ -442,6 +444,30 @@ describe("doctor SQLite maintenance lock", () => {
       await fs.symlink(targetPath, sidecarPath);
       await expectPathRefused(fixture, sidecarPath, /symbolic-link path/);
       await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("owned target\n");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps mutation roots when observations include a narrower root",
+    async () => {
+      const root = tempDirs.make("openclaw-doctor-observation-root-");
+      const physical = path.join(root, "physical");
+      const alias = path.join(root, "alias");
+      await fs.mkdir(physical);
+      await fs.writeFile(path.join(physical, "selected.sqlite"), "selected");
+      await fs.writeFile(path.join(physical, "held.sqlite"), "held");
+      await fs.symlink(physical, alias, "dir");
+      const selected = path.join(alias, "selected.sqlite");
+      const held = path.join(alias, "held.sqlite");
+
+      expect(() =>
+        assertDoctorSqliteMaintenancePathsNotAliased("session SQLite import", [selected], [root], {
+          paths: [held, selected],
+          ownershipRoots: [alias, root],
+        }),
+      ).toThrow(`symbolic-link path component: ${alias}`);
+      await expect(fs.readFile(selected, "utf8")).resolves.toBe("selected");
+      await expect(fs.readFile(held, "utf8")).resolves.toBe("held");
     },
   );
 

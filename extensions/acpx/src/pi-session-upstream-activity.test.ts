@@ -1,48 +1,11 @@
-import fs, { type FileHandle } from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createPiStoreFixture,
-  piJsonl,
-  piMessage,
-  restorePiEnvironment,
-} from "./pi-session-catalog.test-support.js";
+import { describe, expect, it } from "vitest";
+import { injectFileShortReads } from "../../test-support/file-short-reads.test-support.js";
+import { piJsonl, piMessage, usePiFixtures } from "./pi-session-catalog.test-support.js";
 import { checkPiUpstreamActivity, linkContinuedPiSession } from "./pi-session-upstream-activity.js";
 
-const temporaryDirectories: string[] = [];
-const originalEnvironment = {
-  PI_CODING_AGENT_SESSION_DIR: process.env.PI_CODING_AGENT_SESSION_DIR,
-  PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
-};
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  restorePiEnvironment(originalEnvironment);
-  await Promise.all(
-    temporaryDirectories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
-});
-
-async function injectFileShortReads(filePath: string, maxBytes: number): Promise<void> {
-  const handle = await fs.open(filePath, "r");
-  const prototype = Object.getPrototypeOf(handle) as FileHandle;
-  const realRead = Object.getOwnPropertyDescriptor(prototype, "read")?.value;
-  await handle.close();
-  if (typeof realRead !== "function") {
-    throw new Error("FileHandle.read is unavailable");
-  }
-  vi.spyOn(prototype, "read").mockImplementation(function (
-    this: FileHandle,
-    buffer: Buffer,
-    offset: number,
-    length: number,
-    position: number,
-  ) {
-    return Reflect.apply(realRead, this, [buffer, offset, Math.min(length, maxBytes), position]);
-  } as FileHandle["read"]);
-}
+const { createStore } = usePiFixtures();
 
 const userRow = (content: string, timestamp: string, extra: Record<string, unknown> = {}) =>
   piMessage({ role: "user", content }, { timestamp, ...extra });
@@ -53,13 +16,7 @@ const activity = (fields: Record<string, unknown>) => [
 ];
 
 async function createActivityFixture(ownRecentUserTexts: string[] = []) {
-  const sessionDirectory = await createPiStoreFixture(
-    temporaryDirectories,
-    "hi",
-    "Pi catalog session",
-    { command: "pwd" },
-    true,
-  );
+  const sessionDirectory = await createStore("hi", "Pi catalog session", { command: "pwd" }, true);
   const continued = await linkContinuedPiSession("agent:main:pi", "pi-session");
   return {
     file: path.join(sessionDirectory, "session.jsonl"),

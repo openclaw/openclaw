@@ -1,4 +1,4 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
+import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
 import { Show, createMemo, createStore, onSettled } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
@@ -112,6 +112,7 @@ export function ConfigCollectionDraft(
   const usesTextInput = createMemo(() =>
     ["string", "number", "integer"].includes(valueType() ?? ""),
   );
+  const ValueInput = dynamic(() => (usesTextInput() ? "input" : "textarea"));
   const errorId = () => `${props.id}-error`;
   const valueLabel = () => `${t("configForm.add")}: ${props.label}`;
 
@@ -233,37 +234,24 @@ export function ConfigCollectionDraft(
                       <span>{t("configForm.nullValue")}</span>
                     </label>
                   </Show>
-                  <Show
-                    when={usesTextInput()}
-                    fallback={
-                      <textarea
-                        ref={(element) => (valueInput = element)}
-                        data-collection-draft-value
-                        class="settings-input"
-                        aria-label={valueLabel()}
-                        aria-describedby={errorId()}
-                        aria-invalid={draft.invalidTarget === "value" ? "true" : "false"}
-                        placeholder={t("configForm.jsonValue")}
-                        rows={2}
-                        value={draft.value}
-                        disabled={draft.isNull}
-                        onInput={onValueInput}
-                      />
+                  <ValueInput
+                    ref={(element: HTMLInputElement | HTMLTextAreaElement) =>
+                      (valueInput = element)
                     }
-                  >
-                    <input
-                      ref={(element) => (valueInput = element)}
-                      data-collection-draft-value
-                      type={valueType() === "string" ? "text" : "number"}
-                      class="settings-input"
-                      aria-label={valueLabel()}
-                      aria-describedby={errorId()}
-                      aria-invalid={draft.invalidTarget === "value" ? "true" : "false"}
-                      value={draft.value}
-                      disabled={draft.isNull}
-                      onInput={onValueInput}
-                    />
-                  </Show>
+                    data-collection-draft-value
+                    type={
+                      usesTextInput() ? (valueType() === "string" ? "text" : "number") : undefined
+                    }
+                    class="settings-input"
+                    aria-label={valueLabel()}
+                    aria-describedby={errorId()}
+                    aria-invalid={draft.invalidTarget === "value" ? "true" : "false"}
+                    placeholder={usesTextInput() ? undefined : t("configForm.jsonValue")}
+                    rows={usesTextInput() ? undefined : 2}
+                    value={draft.value}
+                    disabled={draft.isNull}
+                    onInput={onValueInput}
+                  />
                   <span id={errorId()} class="cfg-field__error" role="alert" hidden={!draft.error}>
                     {draft.error}
                   </span>

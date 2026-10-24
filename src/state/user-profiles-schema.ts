@@ -30,12 +30,14 @@ const ensureUserProfileTables = createSqliteSchemaEnsurer(
 );
 
 const ensureUserProfileIdentityIndexes = createSqliteSchemaEnsurer(
-  () =>
-    getOpenClawStateFeatureSchemaSql("user_profile_identities", {
+  () => {
+    const schema = getOpenClawStateFeatureSchemaSql("user_profile_identities", {
       endMarker: "ON user_profile_identities(authorization_id);",
-    }),
+    });
+    return schema.slice(schema.indexOf("CREATE INDEX"));
+  },
   {
-    tables: ["user_profile_identities"],
+    tables: [],
     indexes: [
       "idx_user_profile_identities_profile_id",
       "idx_user_profile_identities_authorization",

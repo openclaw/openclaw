@@ -6,17 +6,21 @@ export function openAIImageConfig(provider: Omit<ModelProviderConfig, "models">)
   return { models: { providers: { openai: { ...provider, models: [] } } } };
 }
 
+export function createOpenAIOAuthProfile(access = "codex-access", refresh = "codex-refresh") {
+  return {
+    type: "oauth" as const,
+    provider: "openai",
+    access,
+    refresh,
+    expires: Date.now() + 60_000,
+  };
+}
+
 export function createCodexOAuthAuthStore() {
   return {
     version: 1 as const,
     profiles: {
-      "openai:default": {
-        type: "oauth" as const,
-        provider: "openai",
-        access: "codex-access",
-        refresh: "codex-refresh",
-        expires: Date.now() + 60_000,
-      },
+      "openai:default": createOpenAIOAuthProfile(),
     },
   };
 }
@@ -61,13 +65,7 @@ export function createMixedOpenAIAuthStore() {
   return {
     version: 1 as const,
     profiles: {
-      "openai:chatgpt": {
-        type: "oauth" as const,
-        provider: "openai",
-        access: "codex-access",
-        refresh: "codex-refresh",
-        expires: Date.now() + 60_000,
-      },
+      "openai:chatgpt": createOpenAIOAuthProfile(),
       "openai:default": {
         type: "api_key" as const,
         provider: "openai",

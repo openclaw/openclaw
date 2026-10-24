@@ -58,18 +58,6 @@ function shouldResolveLocalGatewayPasswordSecret(
   return !envToken && !configTokenConfigured;
 }
 
-function emitQrSecretResolveDiagnostics(diagnostics: string[], opts: QrCliOptions): void {
-  const toStderr = opts.json === true || opts.setupCodeOnly === true;
-  for (const entry of diagnostics) {
-    const message = theme.warn(`[secrets] ${entry}`);
-    if (toStderr) {
-      defaultRuntime.error(message);
-    } else {
-      defaultRuntime.log(message);
-    }
-  }
-}
-
 export function registerQrCli(program: Command) {
   program
     .command("qr")
@@ -134,7 +122,15 @@ export function registerQrCli(program: Command) {
             },
           },
         };
-        emitQrSecretResolveDiagnostics(remoteDiagnostics, opts);
+        const toStderr = opts.json === true || opts.setupCodeOnly === true;
+        for (const entry of remoteDiagnostics) {
+          const message = theme.warn(`[secrets] ${entry}`);
+          if (toStderr) {
+            defaultRuntime.error(message);
+          } else {
+            defaultRuntime.log(message);
+          }
+        }
 
         const authToken =
           token || (wantsRemote && !password ? trimToUndefined(cfg.gateway.remote?.token) : "");

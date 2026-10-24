@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
@@ -241,6 +242,110 @@ describe("reference source candidate preparation", () => {
       },
     });
   }
+
+  it.each([false, true])(
+    "refreshes final dependency links after exposure (corrupt: %s)",
+    async (corrupt) => {
+      const linker = pathToFileURL(
+        path.resolve("scripts/lib/bundled-plugin-dependency-links.mjs"),
+      ).href;
+      const script = "scripts/copy-bundled-plugin-metadata.mjs";
+      await fs.mkdir(path.join(root, "scripts"));
+      await fs.writeFile(
+        path.join(root, script),
+        [
+          'import fs from "node:fs";',
+          'import path from "node:path";',
+          "import { linkSourcePluginDependencies } from " + JSON.stringify(linker) + ";",
+          'const destination = path.resolve("dist/extensions/x/node_modules");',
+          "fs.rmSync(destination, { recursive: true, force: true });",
+          'linkSourcePluginDependencies(path.resolve("extensions/x"), destination);',
+        ].join("\n"),
+      );
+      await fs.mkdir(path.join(root, "extensions/x"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "extensions/x/package.json"),
+        JSON.stringify({ dependencies: { payload: "1" } }),
+      );
+      await git(root, "add", script, "extensions/x/package.json");
+      await git(root, "commit", "-m", "candidate metadata entrypoint");
+      base = await git(root, "rev-parse", "HEAD");
+      let built = false;
+      let exposed = false;
+      let validated = false;
+      const runCommand: CommandRunner = async (argv, options) => {
+        if (argv[0] === "pnpm") {
+          if (argv[1] === "build") {
+            assert(options.cwd);
+            const candidate = options.cwd;
+            for (const directory of [
+              "dist/control-ui",
+              "extensions/x/node_modules",
+              "node_modules/first",
+            ]) {
+              await fs.mkdir(path.join(candidate, directory), { recursive: true });
+            }
+            await writeFixtureFiles(candidate, {
+              "dist/control-ui/index.html": "ready",
+              "node_modules/first/index.js": "module.exports = 'old';",
+            });
+            await fs.symlink(
+              path.join(candidate, "node_modules/first"),
+              path.join(candidate, "extensions/x/node_modules/payload"),
+              "junction",
+            );
+            const linked = await runCommandWithTimeout(["node", script], {
+              ...options,
+              cwd: candidate,
+            });
+            expect(linked.code, linked.stderr).toBe(0);
+            built = true;
+          }
+          return { code: 0, stdout: argv[1] === "--version" ? "12.0.0" : "", stderr: "" };
+        }
+        return runCommandWithTimeout(argv, options);
+      };
+      const result = await prepare(runCommand, {
+        prepareGitExposure: async (candidate) => {
+          expect(built).toBe(true);
+          await expectHead(root, base);
+          const link = path.join(candidate, "extensions/x/node_modules/payload");
+          await fs.rm(link);
+          await fs.rm(path.join(candidate, "node_modules/first"), { recursive: true });
+          if (corrupt) {
+            await fs.symlink("payload", link);
+          } else {
+            await fs.mkdir(path.join(candidate, "node_modules/final"), { recursive: true });
+            await writeFixtureFiles(candidate, {
+              "node_modules/final/index.js": "module.exports = 'final';",
+            });
+            await fs.symlink(path.join(candidate, "node_modules/final"), link, "junction");
+          }
+          exposed = true;
+        },
+        validateCandidate: async (candidate) => {
+          expect(exposed).toBe(true);
+          const imported = await runCommandWithTimeout(
+            [
+              "node",
+              "-e",
+              'require("node:assert/strict").equal(require(require("node:path").resolve("dist/extensions/x/node_modules/payload")), "final");',
+            ],
+            { cwd: candidate, timeoutMs: 5000 },
+          );
+          expect(imported.code, imported.stderr).toBe(0);
+          validated = true;
+        },
+      });
+      expect(result.status).toBe(corrupt ? "error" : "ok");
+      expect(validated).toBe(!corrupt);
+      expectStep(steps, {
+        name: "preflight-bundled-plugin-dependency-links",
+        exitCode: corrupt ? 1 : 0,
+      });
+      await expectHead(root, base);
+    },
+  );
 
   it("refuses divergent main before install or copying operator inputs", async () => {
     const beforeSha = await commit("local.txt", "local\n");

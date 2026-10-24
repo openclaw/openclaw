@@ -142,7 +142,7 @@ async function createMediaFixture(state: OpenClawTestState, channel: "discord" |
   };
   return {
     state,
-    dispose: () => lifecycle.failTaskRun({ handle, error: new Error("fixture cleanup") }),
+    dispose: () => lifecycle.failTaskRun({ handle }),
     scope,
     binding,
     original,
@@ -223,7 +223,7 @@ describe("original requester media handoff", () => {
         await expect(drain(id)).resolves.toBeNull();
         await expect(drain(id)).resolves.toBeNull();
         expect(dispatch).toHaveBeenCalledOnce();
-        expect(dispatch.mock.calls[0]?.[2]?.controllerInput).toBeDefined();
+        expect(dispatch.mock.calls[0]?.[1]?.controllerInput).toBeDefined();
         expect(send).not.toHaveBeenCalled();
         expect(await pending()).toEqual([]);
       } finally {
@@ -329,7 +329,7 @@ describe("original requester media handoff", () => {
           await mutate();
         }
         if (change === "store-during-dispatch") {
-          dispatch.mockImplementationOnce(async (_method, _params, options) => {
+          dispatch.mockImplementationOnce(async (_params, options) => {
             await mutate();
             options?.assertAdmissionCurrent?.();
             throw new Error("retired requester was allowed through Gateway admission");
@@ -340,7 +340,7 @@ describe("original requester media handoff", () => {
         if (change === "current") {
           // Outbound custody carries the requester so a replay cannot outlive it.
           expect(send.mock.calls[0]?.[3]).toEqual(fixture.binding);
-          expect(dispatch.mock.calls[0]?.[1]).toMatchObject({
+          expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
             agentId: "main",
             sessionKey: scope.sessionKey,
             expectedExistingSessionId: "original-requester",
@@ -404,7 +404,6 @@ describe("original requester media handoff", () => {
       if (exhausted) {
         expect(f.operation()).toMatchObject({
           terminalOutcome: "blocked",
-          terminalSummary: expect.stringContaining(f.mediaPath),
         });
         expect(diagnostic).toHaveBeenCalledWith(
           "image_generate blocked completion retention failed",

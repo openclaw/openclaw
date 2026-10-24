@@ -20,6 +20,20 @@ import {
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 
+export function addDeferredPluginSessions(storePath: string, count: number) {
+  const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
+  for (let index = 2; index < count; index++) {
+    const sessionId = `legacy-volume-${index}`;
+    const sessionFile = `${sessionId}.jsonl`;
+    entries[`agent:main:volume-${index}`] = { sessionId, sessionFile, updatedAt: 20 };
+    fs.writeFileSync(
+      path.join(path.dirname(storePath), sessionFile),
+      `${JSON.stringify({ type: "session", version: 3, id: sessionId })}\n`,
+    );
+  }
+  fs.writeFileSync(storePath, JSON.stringify(entries));
+}
+
 export async function seedStaleDeferredPluginSessionImport(state: OpenClawTestState) {
   const fixture = await seedDeferredPluginSessionSource(state, "default", "brave");
   const index = JSON.parse(fs.readFileSync(fixture.storePath, "utf8"));

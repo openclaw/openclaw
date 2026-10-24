@@ -6,7 +6,11 @@ import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ModelProviderCard } from "./data.ts";
-import { ProviderProfiles, type ProviderProfilesViewProps } from "./profiles-view.tsx";
+import {
+  ProviderAccountSummary,
+  ProviderProfiles,
+  type ProviderProfilesViewProps,
+} from "./profiles-view.tsx";
 import { card as viewCard, props as makeViewProps } from "./view.test-support.tsx";
 
 function makeProfile(profileId: string): ModelProviderCard["profiles"][number] {
@@ -37,8 +41,6 @@ function rowFor(container: ParentNode, id: string) {
 function props(overrides: Partial<ProviderProfilesViewProps> = {}): ProviderProfilesViewProps {
   return {
     ...makeViewProps(),
-    onAddAccount: () => undefined,
-    addAccountDisabled: false,
     ...overrides,
   };
 }
@@ -110,6 +112,61 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   Reflect.deleteProperty(document, "elementFromPoint");
+});
+
+it("retains account summary focus while refreshed snapshots update account data and recovery", () => {
+  const profileId = "account:shared";
+  const cards = [
+    card({
+      id: "route-one",
+      profiles: [{ ...makeProfile(profileId), source: "saved", email: "one@example.invalid" }],
+      profileProviderIds: { [profileId]: "owner-one" },
+      apiKey: { source: "env", envVar: "EXAMPLE_API_KEY" },
+    }),
+    card({
+      id: "route-two",
+      profiles: [{ ...makeProfile(profileId), source: "saved", email: "two@example.invalid" }],
+      profileProviderIds: { [profileId]: "owner-two" },
+    }),
+  ];
+  const originalUse = vi.fn();
+  const [current, setCurrent] = createSignal({
+    cards,
+    recovery: { authProvider: "owner-one", disabled: false, onUse: originalUse },
+  });
+  const { container } = mountSolid(() => <ProviderAccountSummary {...current()} />);
+  flush();
+  const rows = [...container.querySelectorAll(".model-provider-login__account")];
+  expect(rows).toHaveLength(2);
+  const button = rows[0]!.querySelector<HTMLButtonElement>("[data-models-use-account]")!;
+  expect(rows[1]!.querySelector("[data-models-use-account]")).toBeNull();
+  button.focus();
+
+  const refreshed = structuredClone(cards);
+  refreshed[0]!.profiles[0]!.email = "updated-one@example.invalid";
+  refreshed[0]!.catalogStatus = "auth-rejected";
+  refreshed[0]!.apiKey = { source: "config" };
+  refreshed[1]!.profiles[0]!.email = "updated-two@example.invalid";
+  const latestUse = vi.fn();
+  setCurrent({
+    cards: refreshed,
+    recovery: { authProvider: "owner-one", disabled: false, onUse: latestUse },
+  });
+  flush();
+
+  const updatedRows = [...container.querySelectorAll(".model-provider-login__account")];
+  expect(updatedRows[0]).toBe(rows[0]);
+  expect(updatedRows[1]).toBe(rows[1]);
+  expect(rows[0]!.textContent).toContain("updated-one@example.invalid");
+  expect(rows[0]!.textContent).toContain("Credentials configured");
+  expect(rows[1]!.textContent).toContain("updated-two@example.invalid");
+  expect(container.querySelector("p.muted")?.textContent).toBe("API key set in config");
+  expect(container.textContent).not.toContain("EXAMPLE_API_KEY");
+  expect(rows[0]!.querySelector("[data-models-use-account]")).toBe(button);
+  expect(document.activeElement).toBe(button);
+  button.click();
+  expect(latestUse).toHaveBeenCalledExactlyOnceWith(profileId);
+  expect(originalUse).not.toHaveBeenCalled();
 });
 
 it("shows account provenance and removes drag handles for config-locked priority", () => {
@@ -248,6 +305,27 @@ it.each(["Escape", "pointercancel", "lostpointercapture", "outside-section", "ot
   },
 );
 
+it("names hidden identities by credential kind, numbering only repeated kinds", () => {
+  const { container } = mount(
+    card({
+      profiles: [
+        { profileId: "openai:token-a", type: "token", status: "static", source: "saved" },
+        { profileId: "openai:oauth", type: "oauth", status: "ok", source: "saved" },
+        { profileId: "openai:token-b", type: "token", status: "static", source: "saved" },
+        { profileId: "openai:named", type: "token", status: "static", email: "ops@example.com" },
+      ],
+      profileOrders: {
+        openai: ["openai:token-a", "openai:oauth", "openai:token-b", "openai:named"],
+      },
+    }),
+  );
+  expect(
+    [...container.querySelectorAll(".model-providers__profile-copy strong")].map(
+      (identity) => identity.textContent,
+    ),
+  ).toEqual(["Access token 1", "Signed-in account", "Access token 2", "ops@example.com"]);
+});
+
 it("releases a removed row's drag without handling the next Escape", () => {
   const onProfileOrderChange = vi.fn();
   const { container, update, grip, row, rows, hitTest, providerCard } = pointerFixture(
@@ -304,8 +382,8 @@ it("keeps focus on the drag handle through repeated keyboard moves", async () =>
   const { container, update } = mount(providerCard, viewProps);
   const grip = container.querySelector<HTMLButtonElement>(gripSelector)!;
   grip.focus();
-  const details = grip.closest(rowSelector)!.querySelector("details")!;
-  details.open = true;
+  // The moved row keeps its element, so focus and row state survive reordering.
+  const movedRow = grip.closest(rowSelector)!;
   expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(0);
   expect(grip.getAttribute("aria-keyshortcuts")).toBe("ArrowUp ArrowDown");
 
@@ -321,8 +399,7 @@ it("keeps focus on the drag handle through repeated keyboard moves", async () =>
         ),
       ).toEqual(order);
       expect(document.activeElement).toBe(grip);
-      expect(grip.closest(rowSelector)!.querySelector("details")).toBe(details);
-      expect(details).toMatchObject({ open: true });
+      expect(grip.closest(rowSelector)).toBe(movedRow);
       expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(3);
     });
   }

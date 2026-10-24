@@ -46,7 +46,6 @@ type DiscordListenerConfig = {
   dangerouslyAllowNameMatching?: boolean;
   intents?: { presence?: boolean };
 };
-type DiscordEventQueueOptions = NonNullable<ConstructorParameters<typeof Client>[0]["eventQueue"]>;
 
 export async function createDiscordMonitorClient(params: {
   scheduler: PluginServiceSchedulerV1;
@@ -67,9 +66,6 @@ export async function createDiscordMonitorClient(params: {
   const gateway = createDiscordGatewayPlugin(params);
   const voicePlugin = params.voiceEnabled ? new VoicePlugin() : undefined;
 
-  const eventQueueOpts = {
-    slowListenerThreshold: 30_000,
-  } satisfies DiscordEventQueueOptions;
   const readyDiscordConfig = params.discordConfig;
   const readyListener = new (class DiscordStatusReadyListener extends ReadyListener {
     async handle(_data: unknown) {
@@ -89,7 +85,7 @@ export async function createDiscordMonitorClient(params: {
         timeout: DISCORD_REST_TIMEOUT_MS,
         ...(params.restFetch ? { fetch: params.restFetch } : {}),
       },
-      eventQueue: eventQueueOpts,
+      eventQueue: {},
     },
     {
       commands: params.commands,
@@ -121,7 +117,6 @@ export async function createDiscordMonitorClient(params: {
     gateway,
     gatewaySupervisor,
     autoPresenceController,
-    eventQueueOpts,
   };
 }
 

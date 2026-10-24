@@ -34,12 +34,17 @@ it.each(
     const base = { ...original, archived: false, category: undefined };
     const writer = { key: "agent:writer:first", sessionId: "writer", kind: "direct" as const };
     const reply = createDeferred<unknown>();
+    const dispatched = createDeferred();
     const blocked = createDeferred<SessionsListResult>();
     let holdMain = false;
     let committed = false;
+    const dispatchMutation = () => {
+      dispatched.resolve();
+      return reply.promise;
+    };
     const { sessions, request } = selectionHarness({
-      "sessions.patch": () => reply.promise,
-      "sessions.delete": () => reply.promise,
+      "sessions.patch": dispatchMutation,
+      "sessions.delete": dispatchMutation,
       "sessions.subscribe": () => ({ subscribed: true }),
       "sessions.list": (raw) => {
         const params = (raw ?? {}) as Record<string, unknown>;
@@ -76,6 +81,7 @@ it.each(
       if (foreground !== "queued") {
         await selecting;
       }
+      await dispatched.promise;
       committed = true;
       reply.resolve(
         operation === "delete"

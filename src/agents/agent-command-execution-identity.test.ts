@@ -152,7 +152,6 @@ describe("Gateway agent command execution identity", () => {
         });
         const callbacks = createAgentAttemptLifecycleCallbacks(
           {
-            currentTurnUserMessagePersisted: false,
             lifecycleFinishing: false,
             lifecycleEnded: false,
           },

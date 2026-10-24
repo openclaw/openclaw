@@ -1,10 +1,13 @@
 import { createMemo, For, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 const BAR_GAINS = [0.38, 0.62, 0.84, 1, 0.84, 0.62, 0.38];
 
@@ -116,14 +119,6 @@ export function ChatVoiceStatus(props: ChatVoiceStatusProps) {
       </div>
     </Show>
   );
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-microphone-activity": HTMLAttributes<HTMLElement>;
-    }
-  }
 }
 
 export function ComposerDictationStatus(props: {

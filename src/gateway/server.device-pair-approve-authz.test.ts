@@ -11,6 +11,7 @@ import {
   loadDeviceIdentity,
   openTrackedWs,
 } from "./device-authz.test-helpers.js";
+import { browserProxyAuth } from "./server.auth.test-helpers.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -52,14 +53,7 @@ async function withPairingSession(
   const proxyHeaders = { ...TRUSTED_PROXY_HEADERS, "x-openclaw-scopes": callerScopes.join(",") };
   if (options.auth === "proxy") {
     const { replaceConfigFile } = await import("../config/config.js");
-    const auth = {
-      mode: "trusted-proxy" as const,
-      trustedProxy: {
-        userHeader: "x-forwarded-user",
-        requiredHeaders: ["x-forwarded-proto"],
-        allowLoopback: true,
-      },
-    };
+    const auth = browserProxyAuth();
     testState.gatewayAuth = auth;
     await replaceConfigFile({
       nextConfig: {

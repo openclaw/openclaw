@@ -68,7 +68,7 @@ const runtimeConsumers = [
   {
     file: "src/gateway/setup-inference.first-signin.integration.test.ts",
     configs: [
-      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway-server-isolated.config.ts",
       "test/vitest/vitest.gateway.config.ts",
     ],
     mode: "runtime",
@@ -115,6 +115,7 @@ const runtimeConsumers = [
     "test/openai-model-discovery-auth-order.test.ts",
     "test/plugin-npm-runtime-build.test.ts",
     "test/scripts/plugin-inventory-module-refs.test.ts",
+    "test/scripts/qa-flow-bundle.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.tooling.config.ts"],
@@ -170,6 +171,13 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "src/agents",
   })),
+  {
+    // Its cold catalog worker imports the bundled provider's built public SDK.
+    file: "src/agents/clawrouter-catalog-discovery.e2e.test.ts",
+    configs: ["test/vitest/vitest.e2e.config.ts"],
+    mode: "runtime",
+    dir: "src/agents",
+  },
   {
     file: "src/plugins/plugin-module-generation.sdk.test.ts",
     configs: ["test/vitest/vitest.plugins.config.ts"],
@@ -670,25 +678,10 @@ export async function runE2eGlobalSetup(
   if (isE2eBuildSkipped(env)) {
     return;
   }
-  const commands = [
-    {
-      args: ["scripts/prepare-vitest-runtime.mjs"],
-      env: {
-        ...env,
-        OPENCLAW_BUILD_PRIVATE_QA: "1",
-        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
-      },
-    },
-    {
-      args: ["--import", "tsx", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"],
-      env,
-    },
-  ];
-  for (const { args, env: commandEnv } of commands) {
-    const status = await runCommand(args, commandEnv);
-    if (status !== 0) {
-      throw new Error(`E2E setup command failed with exit code ${status}: ${args.join(" ")}`);
-    }
+  const args = ["scripts/prepare-vitest-runtime.mjs", "--with-ai-package"];
+  const status = await runCommand(args, env);
+  if (status !== 0) {
+    throw new Error(`E2E setup command failed with exit code ${status}: ${args.join(" ")}`);
   }
 }
 

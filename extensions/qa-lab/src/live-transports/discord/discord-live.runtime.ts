@@ -113,7 +113,6 @@ type DiscordStatusReactionTimeline = {
   scenarioTitle: string;
   seenSequence: string[];
   snapshots: DiscordReactionSnapshot[];
-  triggerMessageId: string;
 };
 
 type DiscordThreadReplyAttachmentEvidence = {
@@ -321,16 +320,8 @@ function validateDiscordQaRuntimeEnv(runtimeEnv: DiscordQaRuntimeEnv, prefix: st
 
 export function parseDiscordQaCredentialPayload(payload: unknown): DiscordQaRuntimeEnv {
   const parsed = discordQaCredentialPayloadSchema.parse(payload);
-  const runtimeEnv = {
-    guildId: parsed.guildId,
-    channelId: parsed.channelId,
-    driverBotToken: parsed.driverBotToken,
-    sutBotToken: parsed.sutBotToken,
-    sutApplicationId: parsed.sutApplicationId,
-    ...(parsed.voiceChannelId ? { voiceChannelId: parsed.voiceChannelId } : {}),
-  };
-  validateDiscordQaRuntimeEnv(runtimeEnv, "Discord credential payload");
-  return runtimeEnv;
+  validateDiscordQaRuntimeEnv(parsed, "Discord credential payload");
+  return parsed;
 }
 
 export function buildDiscordQaConfig(
@@ -748,7 +739,6 @@ export async function observeStatusReactionTimeline(params: {
     scenarioTitle: params.scenarioTitle,
     seenSequence,
     snapshots,
-    triggerMessageId: params.messageId,
   } satisfies DiscordStatusReactionTimeline;
 }
 
@@ -764,11 +754,6 @@ export async function pollChannelMessages(params: {
   afterSnowflake: string;
   timeoutMs: number;
   predicate: (message: DiscordObservedMessage) => boolean;
-  observedMessages: DiscordObservedMessage[];
-  observationScenarioId: string;
-  observationScenarioTitle: string;
-  triggerMessageId?: string;
-  triggerTimestamp?: string;
 }) {
   const startedAt = Date.now();
   let afterSnowflake = params.afterSnowflake;
@@ -787,18 +772,8 @@ export async function pollChannelMessages(params: {
       if (!normalized) {
         continue;
       }
-      const matchedScenario = params.predicate(normalized);
-      const observedMessage: DiscordObservedMessage = {
-        ...normalized,
-        scenarioId: params.observationScenarioId,
-        scenarioTitle: params.observationScenarioTitle,
-        matchedScenario,
-        triggerMessageId: params.triggerMessageId,
-        triggerTimestamp: params.triggerTimestamp,
-      };
-      params.observedMessages.push(observedMessage);
-      if (matchedScenario) {
-        return { message: observedMessage, afterSnowflake };
+      if (params.predicate(normalized)) {
+        return { message: normalized, afterSnowflake };
       }
     }
     await sleep(1_000);
@@ -930,8 +905,6 @@ export async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
       outputDir: params.outputDir,
     });
     return {
-      id: params.scenario.id,
-      title: params.scenario.title,
       status,
       details:
         status === "pass"

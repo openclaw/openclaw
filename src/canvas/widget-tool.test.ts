@@ -1,5 +1,6 @@
 import { access, readFile, readdir } from "node:fs/promises";
 import { expect, it, vi } from "vitest";
+import * as gateway from "../agents/tools/in-process-gateway.js";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
 import { readBoardHtml, createTestBoardStore } from "../boards/board-store.test-support.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
@@ -7,10 +8,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { createBoardHandlers } from "../gateway/server-methods/board.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { readCanvasDocumentHtmlSource, resolveCanvasDocumentsDir } from "./documents.js";
-import { registerTestWidgetContentKind as registerDiagramContentKind } from "./widget-tool.content-kinds.test-support.js";
 import {
   asGatewayCaller,
   createBoardPutCaller,
@@ -40,7 +38,7 @@ function createLiveBoardCaller(
     getRuntimeConfig: () => cfg,
   } as unknown as GatewayRequestContext;
   context.resolveGatewayContext = () => context;
-  return asGatewayCaller(async (method, params) => {
+  const callGateway = asGatewayCaller(async (method, params) => {
     const respond = vi.fn<RespondFn>();
     await handlers[method]!({
       req: { type: "req", id: "show-widget", method, params },
@@ -52,9 +50,11 @@ function createLiveBoardCaller(
     });
     return respond;
   });
+  vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(callGateway);
+  return callGateway;
 }
 
-const diagram = { title: "Diagram", widget_code: "diagram:ready", kind: "diagram" };
+const html = { title: "Diagram", widget_code: "<p>ready</p>", kind: "html" };
 const failingPresenter = () =>
   currentPresenter(async () => ({
     ok: false,
@@ -62,7 +62,7 @@ const failingPresenter = () =>
   }));
 
 async function executeWidget(
-  params: Pick<WidgetToolOptions, "agentId" | "agentSessionKey" | "callGateway" | "presenters"> & {
+  params: Pick<WidgetToolOptions, "agentId" | "agentSessionKey" | "presenters"> & {
     title?: string;
     widgetCode: string;
     pin?: boolean;
@@ -79,7 +79,6 @@ async function executeWidget(
   const {
     agentId = "main",
     agentSessionKey,
-    callGateway,
     presenters,
     title = "Widget title",
     widgetCode,
@@ -89,7 +88,6 @@ async function executeWidget(
     sessionId: "widget-session",
     agentId,
     agentSessionKey,
-    callGateway,
     presenters,
   });
   const result = await tool.execute("widget-call", { title, widget_code: widgetCode, ...input });
@@ -114,52 +112,28 @@ async function executeWidget(
   };
 }
 
-function pinner(callGateway: InProcessGatewayCaller, agentSessionKey = "agent:main:pinned") {
+function pinner(agentSessionKey = "agent:main:pinned") {
   return (title: string, widgetCode: string) =>
-    executeWidget({ agentSessionKey, title, widgetCode, pin: true, callGateway });
+    executeWidget({ agentSessionKey, title, widgetCode, pin: true });
 }
 
-it("builds a sorted kind enum and routes registered source through board put", async () => {
-  registerDiagramContentKind();
-  const { mock: callGatewayMock, callGateway } = createBoardPutCaller();
-  const tool = createTool({
-    agentSessionKey: "agent:main:registered",
-    callGateway,
-  });
-  expect(tool.parameters).toHaveProperty("properties.kind.enum", ["html", "diagram"]);
-  await tool.execute("registered", { ...diagram, pin: true });
-  expect(callGatewayMock).toHaveBeenCalledWith(
-    "board.widget.put",
-    expect.objectContaining({
-      content: { kind: "registered", contentKind: "diagram", source: "diagram:ready" },
-    }),
-  );
-
-  setActivePluginRegistry(createEmptyPluginRegistry());
-  await expect(tool.execute("stale", diagram)).rejects.toThrow(
-    'widget kind "diagram" is unavailable; enable the plugin that provides it and retry',
-  );
-});
-
 it("uses board-only delivery when inline hosting is disabled", async () => {
-  registerDiagramContentKind();
-  const { mock: callGatewayMock, callGateway } = createBoardPutCaller();
+  const { mock: callGatewayMock } = createBoardPutCaller();
   const tool = createTool({
     agentSessionKey: "agent:main:board-only",
     inlineHostEnabled: false,
-    callGateway,
   });
 
   expect(tool.description).toContain(
     "Inline previews are unavailable this turn; set pin=true to save to the session dashboard",
   );
   expect(tool.description).not.toContain("Keep one-off visualizations inline");
-  await expect(tool.execute("unpinned", diagram)).rejects.toThrow(
+  await expect(tool.execute("unpinned", html)).rejects.toThrow(
     "inline widget hosting is disabled; set pin=true to place the widget on the session dashboard",
   );
   await expectNoDocument();
 
-  const result = await tool.execute("pinned", { ...diagram, pin: true });
+  const result = await tool.execute("pinned", { ...html, pin: true });
   expect(payload(result)).toEqual({
     status: "pinned",
     boardWidgetName: "diagram",
@@ -169,7 +143,7 @@ it("uses board-only delivery when inline hosting is disabled", async () => {
   expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
     "board.widget.put",
     expect.objectContaining({
-      content: { kind: "registered", contentKind: "diagram", source: "diagram:ready" },
+      content: { kind: "html", html: "<p>ready</p>" },
     }),
   );
   await expectNoDocument();
@@ -260,7 +234,6 @@ it.each([
 );
 
 it("enforces current-presenter source kinds and byte limits in core", async () => {
-  registerDiagramContentKind();
   const presenter = currentPresenter(
     async () => {
       throw new Error("present must not run");
@@ -273,12 +246,11 @@ it("enforces current-presenter source kinds and byte limits in core", async () =
     presenterContext: {},
   });
   expect(tool.parameters).toHaveProperty("properties.kind.enum", ["html"]);
-  expect(tool.description).not.toContain("registered kinds are diagram");
   await expect(
     tool.execute("oversized-current", { title: "Large", widget_code: "123456789" }),
   ).rejects.toThrow("widget_code exceeds maximum size (8 bytes)");
-  await expect(tool.execute("unsupported-current", diagram)).rejects.toThrow(
-    "inline widget hosting is disabled",
+  await expect(tool.execute("unsupported-current", { ...html, kind: "diagram" })).rejects.toThrow(
+    'Unsupported widget kind "diagram"; use kind "html"',
   );
 });
 
@@ -298,9 +270,9 @@ it("fails visibly without inline fallback and uses a real inline route when avai
 });
 
 it("reports pin success and presentation failure as an explicit partial outcome", async () => {
+  createBoardPutCaller();
   const tool = createTool({
     agentSessionKey: "agent:main:partial",
-    callGateway: createBoardPutCaller().callGateway,
     inlineClientAvailable: false,
     presenters: [failingPresenter()],
     presenterContext: {},
@@ -344,6 +316,7 @@ it.each([true, false])(
   "rejects multibyte input over the wrapped UTF-8 budget (pin=%s)",
   async (pin) => {
     const callGateway = vi.fn();
+    vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(callGateway);
     const title = "Multibyte";
     const wrapperBytes = Buffer.byteLength(buildWidgetDocument(title, ""), "utf8");
     const widgetCode = "é".repeat(Math.floor((WIDGET_HTML_MAX_UTF8_BYTES - wrapperBytes) / 2) + 1);
@@ -354,7 +327,6 @@ it.each([true, false])(
     const tool = createTool({
       sessionId: "wrapped-budget",
       agentSessionKey: "agent:main:wrapped-budget",
-      callGateway,
     });
 
     await expect(tool.execute("pin", { title, widget_code: widgetCode, pin })).rejects.toThrow(
@@ -371,6 +343,7 @@ it("does not create an inline Canvas document when dashboard pinning fails", asy
   const callGateway = vi.fn(async () => {
     throw new Error("board tab not found: missing");
   });
+  vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(callGateway);
 
   await expect(
     executeWidget({
@@ -378,7 +351,6 @@ it("does not create an inline Canvas document when dashboard pinning fails", asy
       widgetCode: "<p>never materialized</p>",
       pin: true,
       tab: "missing",
-      callGateway,
     }),
   ).rejects.toThrow("board tab not found: missing");
   expect(callGateway).toHaveBeenCalledOnce();
@@ -398,18 +370,18 @@ it("wraps SVG widgets with the stable result and sandbox contracts", async () =>
     presentation: { target: "assistant_message", title: "<Status>", sandbox: "scripts" },
     text: `Widget hosted at ${url}`,
   });
-  const html = await readFile(documentFile(viewId), "utf8");
-  expect(html).toContain(
+  const documentHtml = await readFile(documentFile(viewId), "utf8");
+  expect(documentHtml).toContain(
     `Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://cdnjs.cloudflare.com`,
   );
-  expect(html).toContain("font-src data:");
-  expect(html).toContain("img-src data:; media-src data: https: blob:; connect-src 'none'");
-  expect(html).toContain("<title>&lt;Status&gt;</title>");
-  expect(html).toContain("--accent:#bd4531");
-  expect(html).toContain("--accent:#ff5c5c");
-  expect(html).toContain("--accent-fill:#d13c3c");
-  expect(html).toContain('<body class="svg-widget"><script>');
-  expect(html).toContain("openclaw:widget-size");
+  expect(documentHtml).toContain("font-src data:");
+  expect(documentHtml).toContain("img-src data:; media-src data: https: blob:; connect-src 'none'");
+  expect(documentHtml).toContain("<title>&lt;Status&gt;</title>");
+  expect(documentHtml).toContain("--accent:#bd4531");
+  expect(documentHtml).toContain("--accent:#ff5c5c");
+  expect(documentHtml).toContain("--accent-fill:#d13c3c");
+  expect(documentHtml).toContain('<body class="svg-widget"><script>');
+  expect(documentHtml).toContain("openclaw:widget-size");
   const manifest = JSON.parse(await readFile(documentFile(viewId, "manifest.json"), "utf8")) as {
     cspSandbox?: string;
   };
@@ -450,7 +422,6 @@ it.each([
         ...(withPlacement
           ? { tab: "main", size: "lg" as const, presentation: { frame: "frameless" as const } }
           : {}),
-        callGateway,
       });
     const initialHtml =
       _label === "large HTML" ? `<p>${"é".repeat(2 * 1024 * 1024)}</p>` : "<p>ready</p>";
@@ -467,9 +438,7 @@ it.each([
     });
     expect(result.resultText).toContain("pinned to dashboard tab main as release-status (lg)");
     expect(result.boardWidgetName).toBe("release-status");
-    expect(
-      (await readCanvasDocumentHtmlSource(result.viewId, { stateDir: harness.stateDir })).html,
-    ).toContain(initialHtml);
+    expect((await readCanvasDocumentHtmlSource(result.viewId)).html).toContain(initialHtml);
     expect(broadcast).toHaveBeenCalledWith(
       "board.changed",
       { sessionKey: eventSessionKey, revision: 1, widget: "release-status" },
@@ -503,6 +472,7 @@ it.each([
 
 it("pins a granted-CSP document and declaration without networking in the inline preview", async () => {
   const store = createTestBoardStore({ stateDir: harness.stateDir });
+  createLiveBoardCaller(store);
   const result = await executeWidget({
     agentSessionKey: "agent:main:weather",
     title: "Weather",
@@ -512,7 +482,6 @@ it("pins a granted-CSP document and declaration without networking in the inline
       netOrigins: ["https://api.open-meteo.com"],
       tools: ["health", "prompt"],
     },
-    callGateway: createLiveBoardCaller(store),
   });
   const inlineHtml = await readFile(documentFile(result.viewId), "utf8");
   const pinned = await readBoardHtml(store, { sessionKey: "agent:main:weather" }, "weather");
@@ -531,8 +500,8 @@ it("pins a granted-CSP document and declaration without networking in the inline
 });
 
 it("keeps generated pin names distinct when titles cannot fit a plain slug", async () => {
-  const { callGateway } = createBoardPutCaller();
-  const pinWidget = pinner(callGateway);
+  createBoardPutCaller();
+  const pinWidget = pinner();
   const unicodeA = await pinWidget("状态", "<p>one</p>");
   const unicodeB = await pinWidget("天气", "<p>two</p>");
   const longA = await pinWidget(`${"shared ".repeat(20)}alpha`, "<p>three</p>");
@@ -549,7 +518,8 @@ it("keeps generated pin names distinct when titles cannot fit a plain slug", asy
 it("keeps colliding generated pins distinct and canonical spellings stable", async () => {
   const store = createTestBoardStore({ stateDir: harness.stateDir });
   const sessionKey = "agent:main:generated-collision";
-  const pinWidget = pinner(createLiveBoardCaller(store), sessionKey);
+  createLiveBoardCaller(store);
+  const pinWidget = pinner(sessionKey);
   const [slash, plus] = await Promise.all([
     pinWidget("Revenue / Cost", "<p>slash</p>"),
     pinWidget("Revenue + Cost", "<p>plus</p>"),

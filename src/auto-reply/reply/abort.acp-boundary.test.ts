@@ -45,13 +45,10 @@ import {
   type SessionEffectRef,
 } from "../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
 import { captureChannelSessionStop } from "./abort-operation.js";
 import { tryFastAbortFromMessage } from "./abort.js";
 import { buildTestCtx } from "./test-ctx.js";
+import { createAcpTestBindingRegistry } from "./test-fixtures/acp-runtime.js";
 
 const fixture = useChatAbortRegistryFixture();
 
@@ -109,18 +106,7 @@ it.each(["idle", "active", "native failure"])(
     const cfg = getRuntimeConfig();
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
     const registry = captureActivePluginRegistrySnapshot();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "stop-test",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "stop-test" }),
-            conversationBindings: { supportsCurrentConversationBinding: true },
-          },
-        },
-      ]),
-    );
+    setActivePluginRegistry(createAcpTestBindingRegistry("stop-test"));
     const binding = await getSessionBindingService().bind({
       targetSessionKey: acpKey,
       targetKind: "session",
@@ -325,15 +311,30 @@ it.each(["idle", "active", "native failure"])(
         (result) => ({ result }),
         (error: unknown) => ({ error }),
       );
-      if (nativeFailure) {
+      if (active) {
+        if (!nativeFailure) {
+          await nativeInterrupted.promise;
+          expect(native.abortSignal.aborted).toBe(true);
+          expect(isSessionControllerWorkActive(storePath, [runningKey, "running-session"])).toBe(
+            true,
+          );
+        }
         await beforeSettlement(entered.promise, outcome);
-        expect(native.abortSignal.aborted).toBe(true);
+        if (nativeFailure) {
+          expect(native.abortSignal.aborted).toBe(true);
+        }
         expect(acpSignal?.aborted).toBe(true);
         expect(stopSettled).toBe(false);
+        if (!nativeFailure) {
+          expect(cancel).toHaveBeenCalledOnce();
+          expect(selectedDispatch).not.toHaveBeenCalled();
+        }
         proceed.resolve();
         await settleCancelRpc();
         expect(stopSettled).toBe(false);
         childAdmission?.release();
+      }
+      if (nativeFailure) {
         expect(await outcome).toEqual({ error: nativeError });
         expect(manager.getObservabilitySnapshot().turns.active).toBe(1);
         finishTurn.resolve();
@@ -341,27 +342,6 @@ it.each(["idle", "active", "native failure"])(
         await expect(turn).rejects.toBe(runtimeError);
         expect(cancel).toHaveBeenCalledOnce();
         return;
-      }
-      if (active) {
-        await nativeInterrupted.promise;
-        expect(native.abortSignal.aborted).toBe(true);
-        expect(isSessionControllerWorkActive(storePath, [runningKey, "running-session"])).toBe(
-          true,
-        );
-        await Promise.race([
-          entered.promise,
-          pending.then(() => {
-            throw new Error("Stop missed the bound ACP turn");
-          }),
-        ]);
-        expect(acpSignal?.aborted).toBe(true);
-        expect(cancel).toHaveBeenCalledOnce();
-        expect(stopSettled).toBe(false);
-        expect(selectedDispatch).not.toHaveBeenCalled();
-        proceed.resolve();
-        await settleCancelRpc();
-        expect(stopSettled).toBe(false);
-        childAdmission?.release();
       }
       await vi.waitFor(() => expect(native.abortSignal.aborted).toBe(true));
       // Native terminal publication is independent of the still-held ACP completion.

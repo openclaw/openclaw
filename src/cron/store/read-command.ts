@@ -1,9 +1,6 @@
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
-import type {
-  OpenClawStateReadCommand,
-  OpenClawStateReadResult,
-} from "../../state/openclaw-state-read.types.js";
+import type { OpenClawStateReadCommand } from "../../state/openclaw-state-read.types.js";
 import { readCronScratchSnapshotInDatabase } from "../scratch-read.kernel.js";
 import { readCronJobNamesInDatabase } from "./job-name.kernel.js";
 import { resolveCronJobsStorePath } from "./paths.js";
@@ -30,7 +27,7 @@ export function isCronStateReadCommand(
 export function readCronStateCommandInDatabase(
   db: EngineConnection,
   command: CronStateReadCommand,
-): Extract<OpenClawStateReadResult, { type: `cron.${string}` }> {
+) {
   switch (command.type) {
     case "cron.currentReceipt":
       return {

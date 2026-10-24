@@ -39,8 +39,9 @@ import {
 } from "../session-sharing.js";
 import { canReceivePreparedSessionEvent } from "../session-sharing.test-utils.js";
 import type { SessionsListResult } from "../session-utils.types.js";
-import { createControlUiHandlers } from "./control-ui.js";
+import { controlUiHandlers } from "./control-ui.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
+import { fixedStoreOwnershipConfig } from "./sessions-fixed-store.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { sessionReadHandlers as registeredSessionReadHandlers } from "./sessions-read.js";
 import {
@@ -178,18 +179,17 @@ it("preserves profile actors and distinguishes unknown from absent profileless e
       ]);
       const listed = await request("session.members.listEvidence");
       const listing = sessionMembersListEvidenceResult(listed);
-      const memberEvidence = listing.members[0];
-      expect(listing).toMatchObject({ members: [{ identityId: member.id }] });
-      if (item.name === "present") {
-        expect(memberEvidence).toMatchObject({ addedBy: "profile-ada" });
-      } else {
-        expect(memberEvidence).not.toHaveProperty("addedBy");
-        if (item.name === "unknown") {
-          expect(memberEvidence).toMatchObject({ addedByState: "unknown" });
-        } else {
-          expect(memberEvidence).not.toHaveProperty("addedByState");
-        }
-      }
+      expect(listing.members).toEqual([
+        {
+          identityId: member.id,
+          addedAt: expect.any(Number),
+          ...(item.name === "present"
+            ? { addedBy: "profile-ada" }
+            : item.name === "unknown"
+              ? { addedByState: "unknown" }
+              : {}),
+        },
+      ]);
       const legacyListed = await request("session.members.list");
       expect(legacyListed[0]?.[0]).toBe(item.name === "present");
       if (item.name === "present") {
@@ -281,23 +281,13 @@ it("admits bare fixed-store keys only through their persisted owner", () =>
       { agentId: "ops", sessionKey: "global", storePath },
       { sessionId: "session-ops-global", updatedAt: 1, visibility: "shared" },
     );
-    const ownedConfig = {
-      session: { scope: "global", store: storePath },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+    const ownedConfig = fixedStoreOwnershipConfig(storePath);
 
     expect(
       await call("session.members.list", { sessionKey: "global" }, context(vi.fn(), ownedConfig)),
     ).toMatchObject([[true, { sessionKey: "global", role: "owner" }, undefined]]);
 
-    const ownerlessConfig = {
-      ...ownedConfig,
-      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-    } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+    const ownerlessConfig = fixedStoreOwnershipConfig(storePath, false);
     const rejected = await call(
       "session.members.list",
       { sessionKey: "global" },
@@ -346,7 +336,7 @@ it("never previews sessions hidden from sessions.list", () =>
     await initializeSessionReadContext(previewContext);
     const previewFor = async (client: GatewayClient) => {
       const responses: Parameters<RespondFn>[] = [];
-      await createControlUiHandlers()["controlUi.sessionPreview"]?.({
+      await controlUiHandlers["controlUi.sessionPreview"]?.({
         params: { sessionKey },
         client,
         context: previewContext,

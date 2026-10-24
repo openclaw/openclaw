@@ -179,7 +179,7 @@ export class SidebarPeopleRuntime {
       active.gateway === gateway &&
       active.client === gateway.snapshot.client &&
       active.scope === this.scope() &&
-      this.host.contains(active.row),
+      this.host.hostElement.contains(active.row),
     );
   }
 

@@ -1,7 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { connect, type AddressInfo } from "node:net";
+import { connect } from "node:net";
 import { withEnvAsync, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { buildDeepInfraVideoGenerationProvider } from "./video-generation-provider.js";
 import { WEBM_VIDEO } from "./video-generation.test-support.js";
 
@@ -104,20 +105,10 @@ async function startConnectProxy(upstreamBaseUrl: string): Promise<{
     clientSocket.on("error", () => upstreamSocket.destroy());
     upstreamSocket.on("error", () => clientSocket.destroy());
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address() as AddressInfo | null;
-  if (!address) {
-    throw new Error("CONNECT proxy did not bind to a TCP port");
-  }
+  const port = await listenOnLoopback(server);
   return {
     connectTargets,
-    proxyUrl: `http://127.0.0.1:${address.port}`,
+    proxyUrl: `http://127.0.0.1:${port}`,
     stop: async () => {
       for (const socket of sockets) {
         socket.destroy();

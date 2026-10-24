@@ -1,11 +1,11 @@
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionSessionCreateRequest,
 } from "openclaw/plugin-sdk/realtime-transcription-session";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 
 const { resolveApiKeyMock } = vi.hoisted(() => ({ resolveApiKeyMock: vi.fn() }));
 
@@ -71,9 +71,7 @@ async function createRealtimeServer(
       }
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const port = await listenOnLoopback(server);
   cleanup = async () => {
     for (const ws of wss.clients) {
       ws.terminate();
@@ -85,7 +83,7 @@ async function createRealtimeServer(
       server.close(() => resolve());
     });
   };
-  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  return `http://127.0.0.1:${port}`;
 }
 
 describe("buildElevenLabsRealtimeTranscriptionProvider", () => {

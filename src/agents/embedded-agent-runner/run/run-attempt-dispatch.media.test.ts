@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import { readRuntimePromptImageFactIndexes } from "../../../media/runtime-prompt-image-provenance.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+import { describedImageUnderstanding } from "./image-description.test-support.js";
+import { suppressedInlineImageFacts } from "./image-media-facts.test-support.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
 type Attempt = Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0]["attempt"];
@@ -170,14 +172,7 @@ describe("plugin harness prompt media", () => {
       preparePluginHarnessPromptImages({
         images: [{ type: "image", data: "%%%", mimeType: "image/png" }],
         imageOrder: ["inline"],
-        media: [
-          {
-            path: "/tmp/described-missing.png",
-            contentType: "image/png",
-            hydrationSuppressed: true,
-          },
-          { path: "/tmp/inline.png", contentType: "image/png" },
-        ],
+        media: suppressedInlineImageFacts(),
       }),
     ).rejects.toThrow("failed to hydrate 1 structured image attachment");
   });
@@ -185,14 +180,7 @@ describe("plugin harness prompt media", () => {
   it("retains an intentionally non-hydrating remote-only image as a type-only fact", async () => {
     const media = buildInboundMediaNoteProjection({
       media: [{ url: "https://example.com/described.png", contentType: "image/png" }],
-      MediaUnderstanding: [
-        {
-          kind: "image.description",
-          attachmentIndex: 0,
-          text: "already described",
-          provider: "test",
-        },
-      ],
+      MediaUnderstanding: describedImageUnderstanding(),
     }).media;
     const result = await preparePluginHarnessPromptImages({ media });
 

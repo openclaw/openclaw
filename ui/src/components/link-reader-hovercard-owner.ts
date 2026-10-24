@@ -15,7 +15,7 @@ import type {
 } from "./link-reader-hovercard.types.ts";
 import { renderPagePreview, type PageActivation } from "./link-reader-page-preview.tsx";
 import { LinkReaderPreviewCache } from "./link-reader-preview-cache.ts";
-import { disposePreview } from "./link-reader-preview-root.ts";
+import { disposePreview } from "./link-reader-preview-root.tsx";
 import {
   previewContextFor,
   type PreviewContext,
@@ -25,6 +25,7 @@ import {
   type LinkPreview,
 } from "./link-reader-preview.tsx";
 import {
+  LINK_READER_METADATA_REQUEST_EVENT,
   LINK_READER_METADATA_UPDATED_EVENT,
   type LinkReaderMetadataUpdate,
 } from "./link-reader-response.ts";
@@ -92,6 +93,12 @@ export class HovercardOwner {
       this.host.dispatchEvent(new Event("link-reader-capabilities-changed"));
     }
     this.update();
+    if (
+      this.connected &&
+      (key === "client" || key === "agentId" || key === "sessionKey" || key === "readers")
+    ) {
+      window.dispatchEvent(new Event(LINK_READER_METADATA_REQUEST_EVENT));
+    }
   }
 
   private watchPageContext(): void {
@@ -100,6 +107,7 @@ export class HovercardOwner {
     }
     this.stopGateway?.();
     this.stopConfig?.();
+    // Retire connection-bound reads before a replacement client can publish.
     this.stopGateway = this.host.pagePreviewContext?.gateway.subscribe(() => {
       this.retirePage();
       const page = this.page;
@@ -126,6 +134,7 @@ export class HovercardOwner {
       this.retirePage();
       this.update();
     };
+    // Fetch-policy changes retire cached previews and in-flight reads synchronously.
     this.stopConfig = this.host.pagePreviewContext?.config.subscribe(syncConfig);
     syncConfig();
   }
@@ -338,6 +347,8 @@ export class HovercardOwner {
       attributeFilter: ["href"],
     });
     this.watchPageContext();
+    // Reader details may have settled before this lazy provider was loaded.
+    window.dispatchEvent(new Event(LINK_READER_METADATA_REQUEST_EVENT));
     // Restore focus intent after the bridge finishes adopting its caller's nodes.
     queueMicrotask(() => {
       const root = this.host.getRootNode();

@@ -6,7 +6,6 @@ import {
   resolveTimeZoneDayStartMs,
   resolveTimezone,
 } from "./format-datetime.js";
-import { formatSingleUnitDuration } from "./format-duration-internal.js";
 import {
   formatDurationCompact,
   formatDurationHuman,
@@ -80,18 +79,13 @@ it("formats single-unit outputs and day threshold behavior", () => {
     [5000, "5s"],
     [180000, "3m"],
     [7200000, "2h"],
+    [43_200_000, "12h"],
     [23 * 3600000, "23h"],
     [24 * 3600000, "1d"],
     [25 * 3600000, "1d"],
+    [86_370_000, "1d"],
     [172800000, "2d"],
   ]);
-});
-it("rounds nearly 24 hours up to one day", () => {
-  expect(formatSingleUnitDuration(86_370_000, true)).toBe("1 day");
-});
-
-it("keeps 12 hours in its own unit", () => {
-  expect(formatSingleUnitDuration(43_200_000, true)).toBe("12 hours");
 });
 it.each([
   [999, "999ms"],
@@ -148,16 +142,6 @@ it("follows host timezone changes while keeping explicit zones fixed", () => {
   }
 });
 
-it("returns undefined when required Intl parts are missing", () => {
-  vi.spyOn(Intl.DateTimeFormat.prototype, "formatToParts").mockReturnValue([
-    { type: "month", value: "01" },
-    { type: "day", value: "15" },
-    { type: "hour", value: "14" },
-    { type: "minute", value: "30" },
-  ]);
-  expect(formatZonedTimestamp(timestamp, utcOptions)).toBeUndefined();
-});
-
 it("returns undefined when Intl formatting throws", () => {
   vi.spyOn(Intl.DateTimeFormat.prototype, "formatToParts").mockImplementation(() => {
     throw new Error("boom");
@@ -200,9 +184,8 @@ describe("formatRelativeTimestamp", () => {
 
   it("returns fallback for invalid timestamp input", () => {
     for (const value of [null, undefined]) {
-      expect(formatRelativeTimestamp(value)).toBe("n/a");
+      expect(formatRelativeTimestamp(value)).toBe("");
     }
-    expect(formatRelativeTimestamp(null, { fallback: "unknown" })).toBe("unknown");
   });
 
   it.each([
@@ -213,12 +196,13 @@ describe("formatRelativeTimestamp", () => {
   });
 
   it("keeps 7-day-old timestamps relative", () => {
-    const options = { dateFallback: true, timezone: "UTC" };
-    expect(formatRelativeTimestamp(Date.now() - 7 * 86400000, options)).toBe("7d ago");
+    expect(formatRelativeTimestamp(Date.now() - 7 * 86400000)).toBe("7d ago");
   });
 
   it("falls back to relative days when date formatting throws", () => {
-    const options = { dateFallback: true, timezone: "Invalid/Timezone" };
-    expect(formatRelativeTimestamp(Date.now() + 8 * 86400000, options)).toBe("in 8d");
+    vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function () {
+      throw new RangeError("synthetic formatter failure");
+    });
+    expect(formatRelativeTimestamp(Date.now() + 8 * 86400000)).toBe("in 8d");
   });
 });

@@ -26,10 +26,12 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
+import { makeClaimInput } from "./worker-environments/placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import {
   WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
   WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+  WORKSPACE_HISTORY_NOTE_TRANSCRIPT_TYPE,
   WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE,
 } from "./worker-environments/workspace-conflicts.js";
 import { createWorkerWorkspaceConflictTranscriptHandlers } from "./worker-workspace-conflict-transcript.js";
@@ -216,16 +218,9 @@ it("records historical recovery failures while preserving the live pending-resul
   }
   harness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
   harness.markEnvironmentNodeDeviceId("workspace-recovery-worker-node");
-  const claim = await placements.claimTurn({
-    ...REQUEST,
-    claimId: "workspace-recovery-claim",
-    runId: "workspace-recovery-run",
-    owner: {
-      kind: "worker",
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-    },
-  });
+  const claim = await placements.claimTurn(
+    makeClaimInput(active, "workspace-recovery-claim", "workspace-recovery-run"),
+  );
   await placements.markWorkspaceResultPending(claim);
   await placements.handoffWorkspaceResultRecovery(claim);
   const { reportFailure } = await createHandlers(REQUEST);
@@ -289,6 +284,23 @@ it("persists bounded recovery failures and deduplicates identical consecutive at
     {},
     { content: expect.stringContaining("snapshot verification failed") },
   ]);
+});
+
+it("records a visible commit fallback note without reporting a recovery failure", async () => {
+  await seedSession();
+  const { reportNote } = await createHandlers();
+  const note =
+    "Cloud worker commits were not adopted because the Gateway branch moved; file changes were reconciled.";
+  await reportNote(note);
+  await reportNote(note);
+
+  const events = (await loadTranscriptEvents(IDENTITY)).filter(
+    (event) => isRecord(event) && event.type === "custom_message",
+  );
+  expect(events).toMatchObject([
+    { customType: WORKSPACE_HISTORY_NOTE_TRANSCRIPT_TYPE, content: note, display: true },
+  ]);
+  expect(await readRecoveryEvents()).toEqual([]);
 });
 
 it("rejects a rebound session identity without touching its replacement transcript", async () => {

@@ -27,6 +27,7 @@ import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.j
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {
+  authorizeControlUiSessionOwnerReadRequestOrReply,
   authorizeGatewayHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
   resolveSharedSecretHttpOperatorScopes,
@@ -34,12 +35,14 @@ import {
 import { GatewayOperatorAccessDeniedError } from "./operator-access-policy.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const { authorize, ensureOwner } = vi.hoisted(() => ({ authorize: vi.fn(), ensureOwner: vi.fn() }));
 vi.mock("./auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./auth.js")>()),
   authorizeHttpGatewayConnect: authorize,
+  authorizeControlUiReadHttpGatewayConnect: authorize,
 }));
 vi.mock("../infra/host-account-name.js", () => ({
   resolveHostAccountName: async () => "Gateway Person",
@@ -358,13 +361,7 @@ describe("HTTP gateway owner profiles", () => {
         // The child keeps its source after the parent releases it and its response disconnects.
         const captured = await captureGatewayOperatorRunAuthority({
           client: {
-            connect: {
-              minProtocol: 1,
-              maxProtocol: 1,
-              client: { id: "test", version: "test", platform: "test", mode: "test" },
-              role: "operator",
-              scopes: ["operator.read"],
-            },
+            connect: gatewayConnect(["operator.read"], { id: "test", mode: "test" }),
             internal: { operatorRoleActor: { kind: "operator", profileId: person.id } },
           },
           context: { getRuntimeConfig: () => cfg },
@@ -411,6 +408,13 @@ describe("HTTP gateway owner profiles", () => {
         const result = await authenticate(method);
         assert(result.ok, "Expected authenticated request");
         expect(result.requestAuth.user).toBeUndefined();
+        if (method === "token" || method === "password") {
+          expect(result.requestAuth).toMatchObject({
+            authMethod: method,
+            trustDeclaredOperatorScopes: false,
+            operatorRoleActor: { kind: "system" },
+          });
+        }
         expect(result.requestAuth.authenticatedUserProfile).toMatchObject({
           displayName: profileId ? "Saved Owner" : "Gateway Person",
         });
@@ -473,5 +477,90 @@ describe("HTTP gateway owner profiles", () => {
         }
       });
     },
+  );
+});
+
+describe("Control UI session owner reads", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+    resetPluginRuntimeStateForTest();
+  });
+
+  const rolesWithIsolation = {
+    ...roles,
+    definitions: {
+      ...roles.definitions,
+      isolated: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+      admin: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
+    },
+  } satisfies NonNullable<NonNullable<OpenClawConfig["gateway"]>["roles"]>;
+  const sessionBy = (profileId: string, visibility: "shared" | "draft" = "shared") => ({
+    createdActor: { type: "human" as const, source: "profile" as const, id: profileId },
+    visibility,
+  });
+
+  async function authorizeSessionRead(cfg: OpenClawConfig, email: string) {
+    setRuntimeConfigSnapshot(cfg);
+    authorize.mockResolvedValueOnce({ ok: true, method: "trusted-proxy", user: email });
+    const response = makeMockHttpResponse();
+    const result = await authorizeControlUiSessionOwnerReadRequestOrReply({
+      req,
+      res: response.res,
+      auth: noAuth,
+      cfg,
+      getRuntimeConfig: () => cfg,
+    });
+    return { result, response };
+  }
+
+  it(
+    "lets a profile read its own sessions and shared sessions within its role cap",
+    inState(async () => {
+      const cfg: OpenClawConfig = { gateway: { roles: rolesWithIsolation } };
+      const creator = await ensureCanonicalUserProfileForEmail("creator@example.test");
+      const other = await ensureCanonicalUserProfileForEmail("other@example.test");
+
+      const viewer = await authorizeSessionRead(cfg, "creator@example.test");
+      assert(viewer.result, "Expected the creating profile to be admitted");
+      expect(viewer.response.end).not.toHaveBeenCalled();
+      expect(viewer.result.canReadSession("agent:main:own", sessionBy(creator.id, "draft"))).toBe(
+        true,
+      );
+      expect(viewer.result.canReadSession("agent:main:shared", sessionBy(other.id))).toBe(true);
+      expect(viewer.result.canReadSession("agent:main:draft", sessionBy(other.id, "draft"))).toBe(
+        false,
+      );
+      expect(
+        viewer.result.canReadSession("agent:main:incognito", {
+          ...sessionBy(other.id),
+          incognito: true,
+        }),
+      ).toBe(false);
+
+      await setCanonicalUserProfileRole(creator.id, "isolated");
+      invalidateOperatorRolePolicy(creator.id);
+      const isolated = await authorizeSessionRead(cfg, "creator@example.test");
+      assert(isolated.result, "Expected the isolated profile to be admitted");
+      expect(isolated.result.canReadSession("agent:main:own", sessionBy(creator.id))).toBe(true);
+      expect(isolated.result.canReadSession("agent:main:shared", sessionBy(other.id))).toBe(false);
+    }),
+  );
+
+  it(
+    "keeps the unfiltered view for admin scope",
+    inState(async () => {
+      const cfg: OpenClawConfig = { gateway: { roles: rolesWithIsolation } };
+      const other = await ensureCanonicalUserProfileForEmail("other@example.test");
+      const operator = await ensureCanonicalUserProfileForEmail("admin@example.test");
+      await setCanonicalUserProfileRole(operator.id, "admin");
+      invalidateOperatorRolePolicy(operator.id);
+      const admin = await authorizeSessionRead(cfg, "admin@example.test");
+      assert(admin.result, "Expected the admin-role profile to be admitted");
+      expect(admin.result.operatorScopes).toContain("operator.admin");
+      expect(admin.result.canReadSession("agent:main:draft", sessionBy(other.id, "draft"))).toBe(
+        true,
+      );
+    }),
   );
 });

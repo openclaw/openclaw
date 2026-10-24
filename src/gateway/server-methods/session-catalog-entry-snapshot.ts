@@ -7,13 +7,20 @@ import {
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionEntrySummary } from "../../config/sessions/session-accessor.js";
-import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
+import {
+  resolveSessionCreatorActor,
+  sessionCreatorProfileId,
+} from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   SessionCatalogEntrySnapshot,
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { projectSessionActor } from "../session-identity-projection.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
@@ -101,11 +108,16 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   let catalogEntries:
     | ReturnType<NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]>>
     | undefined = cachedPlanning?.catalogEntries;
-  const entryAgentId = (sessionKey: string) =>
-    resolveAgentIdFromSessionKey(
+  const entryAgentId = (sessionKey: string) => {
+    const parsed = parseAgentSessionKey(sessionKey);
+    if (parsed?.agentId) {
+      return normalizeAgentId(parsed.agentId);
+    }
+    return resolveAgentIdFromSessionKey(
       sessionKey,
       tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey) ?? params.fallbackAgentId,
     );
+  };
   let selectedKeysByAgentId: Map<string, Set<string>> | undefined;
 
   const entriesForAgent = (rawAgentId: string): readonly SessionEntrySummary[] => {
@@ -197,7 +209,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
     }
     const entry = entryForSession(sessionKey);
     const actor = projectSessionActor(
-      entry?.createdActor,
+      resolveSessionCreatorActor(entry?.createdActor),
       userProfileIdentityById,
       params.cfg,
       Boolean(sessionCreatorProfileId(entry?.createdActor)),

@@ -10,10 +10,9 @@ import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage, formatErrorMessageWithCode, hasErrnoCode, isErrno } from "./errors.js";
 import { isRemovalIoError, removePathWithinRoot } from "./fs-safe-remove.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
-import {
-  type createPackageIntegrityReader,
-  type PackageLauncherFingerprint,
-  packageLauncherDifferences,
+import type {
+  createPackageIntegrityReader,
+  PackageLauncherFingerprint,
 } from "./package-update-integrity.js";
 import type { StagedPackageSwapParams } from "./package-update-swap-contract.js";
 import { pathEntryExists as packagePathEntryExists } from "./path-existence.js";
@@ -62,31 +61,6 @@ export function createPackagePathAssertion(
 }
 
 export { packagePathEntryExists };
-
-export async function packagePathEntriesMatch(left: string, right: string): Promise<boolean> {
-  const [leftStat, rightStat] = await Promise.all([
-    fs.lstat(left).catch(() => null),
-    fs.lstat(right).catch(() => null),
-  ]);
-  if (!leftStat || !rightStat) {
-    return false;
-  }
-  if (leftStat.isSymbolicLink() || rightStat.isSymbolicLink()) {
-    return (
-      leftStat.isSymbolicLink() &&
-      rightStat.isSymbolicLink() &&
-      (await fs.readlink(left)) === (await fs.readlink(right))
-    );
-  }
-  if (!leftStat.isFile() || !rightStat.isFile()) {
-    return false;
-  }
-  if ((leftStat.mode & 0o777) !== (rightStat.mode & 0o777) || leftStat.size !== rightStat.size) {
-    return false;
-  }
-  const [leftContents, rightContents] = await Promise.all([fs.readFile(left), fs.readFile(right)]);
-  return leftContents.equals(rightContents);
-}
 
 export async function activateStagedNpmPackageRoot(
   source: string,
@@ -438,7 +412,6 @@ export async function copyPackagePathEntry(
 
 export type PackageLauncherBackup = {
   backupDir?: string;
-  failedCopy?: string;
   entries: Array<{
     source: string;
     destination: string;
@@ -494,18 +467,6 @@ export async function capturePackageLaunchers(
       const fingerprint = backup && !native ? await reader.launcher(destination) : undefined;
       if (backup) {
         await copyPackagePathEntry(destination, backup);
-        if (fingerprint) {
-          // Keep failed verification evidence even when activation never starts.
-          snapshot.failedCopy = backup;
-          const actual = await reader.launcher(backup);
-          const differences = packageLauncherDifferences(fingerprint, actual);
-          if (differences.length > 0) {
-            throw new Error(
-              `Package rollback launcher backup changed: ${destination}; differing fields: ${differences.join(", ")}`,
-            );
-          }
-          snapshot.failedCopy = undefined;
-        }
       }
       snapshot.entries.push({
         source: path.join(params.stage.layout.binDir, entry),
@@ -639,9 +600,6 @@ export async function discardPackageLauncherBackup(
   assertCurrent?: () => void,
   cleanupDeadlineAtMs?: number,
 ): Promise<string | null> {
-  if (snapshot.failedCopy) {
-    return `failed copy retained at ${snapshot.failedCopy}; inspect it before retrying`;
-  }
   return snapshot.backupDir
     ? await discardPackageUpdateBackup(
         snapshot.backupDir,

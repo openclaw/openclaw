@@ -14,25 +14,23 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
-import {
-  isTerminalAgentWaitTimeout,
-  readLatestAssistantReply,
-  waitForAgentRunReply,
-} from "../run-wait.js";
+import { isTerminalAgentWaitTimeout, waitForAgentRunReply } from "../run-wait.js";
 import { resolveSubagentAnnounceTimeoutMs } from "../subagents/announce/subagent-announce-delivery-retry.js";
 import type { FollowupCompletionOwner } from "../subagents/completion/session-followup-completion.types.js";
-import type { AgentStepSession } from "./agent-step.js";
-import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
+} from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   runWithGatewayToolContinuationContext,
 } from "./in-process-gateway.js";
 import { recordSessionToolActionFact } from "./sessions-access.js";
-import { sendReplyResult } from "./sessions-send-helpers.js";
+import { resolveSessionsSendReply, sendReplyResult } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import type { SessionsSendStart } from "./sessions-send-tool.delivery.js";
+import type { AgentStepSession } from "./sessions-send-tool.types.js";
 import { jsonResult } from "./tool-results.js";
 const log = createSubsystemLogger("agents/sessions-send");
 
@@ -48,7 +46,12 @@ export function startSessionsSendReplyFlow(
   }
   const { completion } = params;
   const continueOwned = async <T>(run: () => Promise<T>) =>
-    completion ? completion.request.custody.run(run) : runWithGatewayToolContinuationContext(run);
+    completion
+      ? completion.request.custody.run(run)
+      : runWithGatewayToolContinuationContext(
+          run,
+          params.replyMode === "peer" ? { retainRequester: true } : undefined,
+        );
   const run = async () => {
     const settledReply = params.reply ?? (await completion?.take());
     const deliverRequesterReply: Parameters<
@@ -238,13 +241,15 @@ export function prepareSessionsSendReplyContext(params: {
   >;
 }): SessionsSendReplyContext {
   const caller = getGatewayToolCallerIdentity();
-  const requester = caller?.requesterOrigin
-    ? {
-        agentId: caller.agentId,
-        sessionKey: caller.sessionKey,
-        requesterOrigin: caller.requesterOrigin,
-      }
-    : undefined;
+  const { requesterOrigin } = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
+  const requester =
+    caller && requesterOrigin
+      ? {
+          agentId: caller.agentId,
+          sessionKey: caller.sessionKey,
+          requesterOrigin,
+        }
+      : undefined;
   const requesterSessionEntry = params.requesterTarget.store[params.requesterTarget.canonicalKey];
   const requesterSessionId = params.requesterSessionId ?? requesterSessionEntry?.sessionId;
   const requesterSession = requesterSessionId
@@ -289,6 +294,7 @@ export async function finishSessionsSendReply(params: {
   start: SessionsSendStart;
   completion?: FollowupCompletionOwner;
   registryCompletion: boolean;
+  requesterTurnRunId?: string;
   watchField: { watched?: boolean };
   replyContext: SessionsSendReplyContext;
   targetSession: GatewaySessionStoreTargetWithStore;
@@ -378,12 +384,13 @@ export async function finishSessionsSendReply(params: {
       notifyRequesterOnWaitFailure: notifyRequesterOnWaitFailure && !isIsolatedCronRequester,
     });
   const result =
-    timeoutSeconds === 0
+    // An active turn has no final-response identity correlated to this accepted input.
+    timeoutSeconds === 0 || start.targetDisposition === "steered"
       ? undefined
       : completion
         ? await completion.take(timeoutMs)
         : await waitForAgentRunReply({ runId, timeoutMs, callGateway: replyContext.callGateway });
-  if (!result) {
+  if (!result || result.yielded === true || result.status === "pending") {
     await startReplyFlow(true);
     return accepted();
   }
@@ -407,6 +414,25 @@ export async function finishSessionsSendReply(params: {
       return accepted();
     }
   }
+  if (
+    registryCompletion &&
+    params.requesterTurnRunId &&
+    (result.status === "ok" ||
+      isTerminalAgentWaitTimeout(result) ||
+      (result.status === "error" && result.endedAt !== undefined))
+  ) {
+    if (!replyContext.requesterSessionKey) {
+      throw new Error("Inline child result is missing its requester session.");
+    }
+    const { acknowledgeSubagentResultForRequesterTurn } =
+      await import("../subagents/registry/subagent-registry-requester-claim.js");
+    await acknowledgeSubagentResultForRequesterTurn({
+      runId,
+      requesterSessionKey: replyContext.requesterSessionKey,
+      requesterAgentId,
+      requesterTurnRunId: params.requesterTurnRunId,
+    });
+  }
   if (result.status === "timeout" || result.status === "error") {
     return jsonResult({
       runId,
@@ -417,25 +443,14 @@ export async function finishSessionsSendReply(params: {
       ...watchField,
     });
   }
-  let { replyText } = result;
-  let replyTruncated: true | undefined;
-  // Whitespace trimming can shorten a truncated preview; its length is not evidence of completeness.
-  if (replyText?.endsWith("…")) {
-    const stored = await readLatestAssistantReply({
-      runId,
-      sessionKey: acceptedTargetSessionKey,
-      agentId: replyContext.targetAgentId,
-      callGateway: replyContext.callGateway,
-    }).catch(() => undefined);
-    const snapshot = stored === undefined ? undefined : sanitizeAgentRunTerminalReply(stored);
-    if (snapshot?.disposition === "visible" && snapshot.text === replyText) {
-      replyText = stored;
-    } else {
-      replyTruncated = true;
-    }
-  }
+  const reply = await resolveSessionsSendReply(result, {
+    runId,
+    sessionKey: acceptedTargetSessionKey,
+    agentId: replyContext.targetAgentId,
+    callGateway: replyContext.callGateway,
+  });
   return sendReplyResult(
     { runId, sessionKey: replyContext.displayKey, ...watchField },
-    { ...result, replyText, replyTruncated },
+    { ...result, ...reply },
   );
 }

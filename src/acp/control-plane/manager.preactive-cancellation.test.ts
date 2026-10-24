@@ -9,14 +9,9 @@ import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
 import { cancelledEvent, createAcceptedFixture, gate } from "./manager.ownership.test-support.js";
 import { getAcpSessionResetControls } from "./manager.reset-controls.js";
 import {
-  AcpSessionManager,
-  baseCfg,
-  createRuntime,
   disposeAcpSessionManagerInstance,
-  hoisted,
   installAcpSessionManagerTestLifecycle,
   mockParentedAcpSessionEntries,
-  readySessionMeta,
 } from "./manager.test-helpers.js";
 
 installAcpSessionManagerTestLifecycle();
@@ -85,16 +80,16 @@ it("retains a silent successor after the retired predecessor settles", async () 
   await withStateDirEnv("openclaw-acp-manager-", async () => {
     const sessionKey = "agent:codex:acp:reset-liveness";
     const ownerSessionKey = "agent:quant:telegram:quant:direct:822430204";
-    const runtimeState = createRuntime();
+    const state = createAcceptedFixture({ sessionKey });
     const oldGate = gate();
     const freshGate = gate();
     let ensureCount = 0;
-    runtimeState.ensureSession.mockImplementation(async (input) => ({
+    state.ensureSession.mockImplementation(async (input) => ({
       sessionKey: input.sessionKey,
       backend: "acpx",
       runtimeSessionName: `runtime-${++ensureCount}`,
     }));
-    runtimeState.runTurn.mockImplementation(async function* (input) {
+    state.runTurn.mockImplementation(async function* (input) {
       if (input.text === "old turn") {
         await oldGate.wait();
       } else {
@@ -102,32 +97,20 @@ it("retains a silent successor after the retired predecessor settles", async () 
       }
       yield { type: "done" as const };
     });
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
     mockParentedAcpSessionEntries({
       childSessionKey: sessionKey,
       parentSessionKey: ownerSessionKey,
     });
-    const manager = new AcpSessionManager();
-    const input = {
-      provenance: "system" as const,
-      cfg: baseCfg,
-      sessionKey,
-      mode: "prompt" as const,
-    };
-    const old = manager.runTurn({ ...input, text: "old turn", requestId: "retired-turn" });
+    const old = state.run("retired-turn", { text: "old turn" });
     const oldSettled = old.catch(() => undefined);
     let fresh: Promise<void> | undefined;
     try {
       await awaitGateBeforeSettlement(oldGate.entered, old, "Predecessor ended before runtime");
-      await getAcpSessionResetControls(manager).forceDiscardSessionRuntime({
-        cfg: baseCfg,
-        sessionKey,
+      await getAcpSessionResetControls(state.manager).forceDiscardSessionRuntime({
+        ...state.target,
         reason: "session-reset",
       });
-      fresh = manager.runTurn({ ...input, text: "fresh turn", requestId: "successor-turn" });
+      fresh = state.run("successor-turn", { text: "fresh turn" });
       oldGate.release();
       await oldSettled;
       await awaitGateBeforeSettlement(freshGate.entered, fresh, "Successor ended before runtime");
@@ -149,10 +132,7 @@ it("retains a silent successor after the retired predecessor settles", async () 
 const { disposeAcpSessionManager, getAcpSessionManager } = await import("./manager.js");
 
 it("builds a fresh manager that submits prompts after shutdown disposal", async () => {
-  const state = createRuntime();
-  const sessionKey = "agent:codex:acp:restart";
-  hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });
-  hoisted.readAcpSessionEntryMock.mockReturnValue({ sessionKey, acp: readySessionMeta() });
+  const state = createAcceptedFixture({ sessionKey: "agent:codex:acp:restart" });
   const beforeRestart = getAcpSessionManager();
 
   await disposeAcpSessionManager("gateway-shutdown");
@@ -160,9 +140,8 @@ it("builds a fresh manager that submits prompts after shutdown disposal", async 
   const afterRestart = getAcpSessionManager();
   const events: AcpRuntimeEvent[] = [];
   await afterRestart.runTurn({
+    ...state.target,
     provenance: "system",
-    cfg: baseCfg,
-    sessionKey,
     text: "after restart",
     mode: "prompt",
     requestId: "after-restart-turn",

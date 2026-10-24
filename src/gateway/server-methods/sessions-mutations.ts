@@ -32,6 +32,7 @@ import {
   projectSessionActor,
 } from "../session-identity-projection.js";
 import { loadSessionLifecycleRuntime } from "../session-lifecycle-runtime-loader.js";
+import { sessionMutationForbiddenError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
 import {
@@ -88,7 +89,7 @@ function createSessionPatchHandler(
         request = { many: false, params };
       }
       const inputPatch = request.many ? request.params.patch : request.params;
-      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+      const scopes = client?.connect.scopes ?? [];
       if (
         (inputPatch.permissionMode === "full" ||
           inputPatch.sandboxMode !== undefined ||
@@ -309,11 +310,8 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
                   current.entry,
                 ) === false
               ) {
-                throw new SessionMutationAuthorizationChangedError(
-                  errorShape(
-                    ErrorCodes.FORBIDDEN,
-                    "Session access changed. Refresh the session list.",
-                  ),
+                throw sessionMutationForbiddenError(
+                  "Session access changed. Refresh the session list.",
                 );
               }
             },
@@ -527,8 +525,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       if (!key) {
         return;
       }
-      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-      if (!scopes.includes(ADMIN_SCOPE)) {
+      if (!client?.connect.scopes?.includes(ADMIN_SCOPE)) {
         respond(
           false,
           undefined,

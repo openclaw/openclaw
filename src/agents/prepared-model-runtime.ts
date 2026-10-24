@@ -2,6 +2,7 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { throwSettledAggregate } from "../infra/error-graph-internal.js";
+import { readOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { enqueueKeyedTask } from "../plugin-sdk/keyed-async-queue.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
@@ -313,39 +314,30 @@ export async function activateStandalonePreparedModelRuntime(
   return await enqueueKeyedTask({
     tails: standaloneActivationTails,
     key: ownerKey(input),
-    task: () => activateStandalonePreparedModelRuntimeNow(input, assertLifetime, options),
-  });
-}
-
-async function activateStandalonePreparedModelRuntimeNow(
-  input: PreparedModelRuntimeInput,
-  assertLifetime: () => void,
-  options: Pick<
-    PreparedModelRuntimePublicationOptions,
-    "catalogMode" | "force" | "providerDiscoveryTimeoutMs"
-  >,
-): Promise<PreparedModelRuntimeSnapshot | undefined> {
-  assertLifetime();
-  const overlapsConfiguredOwner = [...owners.values()].some(
-    (owner) =>
-      owner.provenance === "configured" &&
-      owner.input.agentDir === input.agentDir &&
-      (input.agentId === undefined || owner.input.agentId === input.agentId) &&
-      (input.workspaceDir === undefined || owner.input.workspaceDir === input.workspaceDir),
-  );
-  if (gatewayLifecycleActive && (!input.readOnly || overlapsConfiguredOwner)) {
-    // Gateway startup/reload owns configured identities. Isolated read-only drafts may publish
-    // separately, but stale drafts must never replace an overlapping configured generation.
-    return undefined;
-  }
-  // A crossing reload fails this standalone request; the next request selects its new owner.
-  return await publishPreparedModelRuntimeSnapshot(
-    {
-      ...input,
-      preserveWorkspaceDirOnRefresh: input.workspaceDir !== undefined,
+    task: async () => {
+      assertLifetime();
+      const overlapsConfiguredOwner = [...owners.values()].some(
+        (owner) =>
+          owner.provenance === "configured" &&
+          owner.input.agentDir === input.agentDir &&
+          (input.agentId === undefined || owner.input.agentId === input.agentId) &&
+          (input.workspaceDir === undefined || owner.input.workspaceDir === input.workspaceDir),
+      );
+      if (gatewayLifecycleActive && (!input.readOnly || overlapsConfiguredOwner)) {
+        // Gateway startup/reload owns configured identities. Isolated read-only drafts may publish
+        // separately, but stale drafts must never replace an overlapping configured generation.
+        return undefined;
+      }
+      // A crossing reload fails this standalone request; the next request selects its new owner.
+      return await publishPreparedModelRuntimeSnapshot(
+        {
+          ...input,
+          preserveWorkspaceDirOnRefresh: input.workspaceDir !== undefined,
+        },
+        { ...options, provenance: "standalone" },
+      );
     },
-    { ...options, provenance: "standalone" },
-  );
+  });
 }
 
 const preparedModelRuntimeLeaseContext = {
@@ -661,19 +653,15 @@ async function drainPendingAuthMutations(
 }
 
 function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): void {
-  const normalizedEvent = {
-    ...event,
-    agentDir: normalizeOptionalDir(event.agentDir),
-  };
   const { invalidatedOwners, invalidatedConfiguredAgentIds } =
-    invalidatePreparedModelRuntimeOwnersForAuthMutation(owners, normalizedEvent);
+    invalidatePreparedModelRuntimeOwnersForAuthMutation(owners, event);
   if (invalidatedOwners.length === 0) {
     // A first owner reads the already-published auth snapshot while it builds. Replaying an earlier
     // mutation would immediately stale that initial generation even though no prior owner existed.
     return;
   }
   replyDispatchPublication.remove(invalidatedConfiguredAgentIds);
-  const transaction = authPublication.enqueue(invalidatedOwners, normalizedEvent.profileSetChanged);
+  const transaction = authPublication.enqueue(invalidatedOwners, event.profileSetChanged);
   if (getBlockingReplacement()) {
     // The active config transaction drains this event before its atomic dispatch commit. Retire
     // the superseded build gate; queuing another task would make this commit depend on future work.
@@ -709,9 +697,11 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
       }
     });
   };
-  // Auth revocation fences its affected owners immediately; publication must wait for the
-  // plugin reservation to settle without occupying the queue needed by replacement recovery.
-  const publication = modelRuntimeDrain.runAfter(publicationQueue, publish);
+  // Wait for plugin replacement without occupying its queue. Publication owns its reads
+  // and must outlive the auth emitter's temporary SQLite reader scope.
+  const publication = readOnlyWorkerScope.exit(() =>
+    modelRuntimeDrain.runAfter(publicationQueue, publish),
+  );
   notifyPreparedModelRuntimePublication({ phase: "invalidated" });
   void publication.catch((error: unknown) => {
     if (!authPublication.isCurrent(transaction)) {

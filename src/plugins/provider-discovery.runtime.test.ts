@@ -1,6 +1,7 @@
 /** Covers provider discovery runtime loading from plugin manifests and registries. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import {
   prepareSyntheticAuthWithProvider,
   resolveSyntheticAuthWithProvider,
@@ -47,20 +48,15 @@ vi.mock("./plugin-setup-module.js", () => ({
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 
 function createManifestPlugin(id: string): PluginManifestRecord {
-  return {
+  return createPluginManifestRecordFixture({
     id,
     enabledByDefault: true,
-    channels: [],
     providers: [id],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
-    rootDir: `/tmp/${id}`,
     source: "bundled",
+    rootDir: `/tmp/${id}`,
     manifestPath: `/tmp/${id}/openclaw.plugin.json`,
     providerDiscoverySource: `/tmp/${id}/provider-discovery.ts`,
-  };
+  });
 }
 
 function configureCapturedRuntimeManifest() {
@@ -116,33 +112,11 @@ function createManifestPluginWithModelCatalog(
   );
 }
 
-function createManifestPluginWithMixedCatalogDiscovery(): PluginManifestRecord {
+function manifestProvider(id: string): CatalogProvider {
   return {
-    ...catalogManifest(
-      "xiaomi",
-      {
-        xiaomi: {
-          baseUrl: "https://api.xiaomimimo.com/v1",
-          api: "openai-completions",
-          models: [
-            catalogModel("mimo-v2-flash", "MiMo V2 Flash", 262144, 8192, {
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            }),
-          ],
-        },
-        "xiaomi-token-plan": {
-          baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
-          api: "openai-completions",
-          models: [
-            catalogModel("mimo-v2.5-pro", "MiMo V2.5 Pro", 1048576, 32000, {
-              cost: { input: 1, output: 3, cacheRead: 0.2, cacheWrite: 0 },
-            }),
-          ],
-        },
-      },
-      { xiaomi: "static", "xiaomi-token-plan": "runtime" },
-    ),
-    providers: ["xiaomi", "xiaomi-token-plan"],
+    baseUrl: "https://catalog.example.test/v1",
+    api: "openai-completions",
+    models: [catalogModel(id, id, 128000, 4096)],
   };
 }
 
@@ -187,15 +161,9 @@ function mockManifestPlugins(plugins: PluginManifestRecord[]) {
   });
 }
 
-function requireResolvePluginProvidersParams(index = 0): {
-  onlyPluginIds?: string[];
-} {
-  const params = (
-    mocks.resolvePluginProvidersCore.mock.calls[index] as [unknown] | undefined
-  )?.[0] as
-    | {
-        onlyPluginIds?: string[];
-      }
+function requireResolvePluginProvidersParams(index = 0) {
+  const params = mocks.resolvePluginProvidersCore.mock.calls[index]?.[0] as
+    | { onlyPluginIds?: string[] }
     | undefined;
   if (!params) {
     throw new Error(`resolvePluginProvidersCore call ${index} missing`);
@@ -203,17 +171,9 @@ function requireResolvePluginProvidersParams(index = 0): {
   return params;
 }
 
-function requireDiscoveredProviderIdsParams(index = 0): {
-  registry?: unknown;
-  manifestRegistry?: unknown;
-} {
-  const params = (
-    mocks.resolveDiscoveredProviderPluginIds.mock.calls[index] as [unknown] | undefined
-  )?.[0] as
-    | {
-        registry?: unknown;
-        manifestRegistry?: unknown;
-      }
+function requireDiscoveredProviderIdsParams(index = 0) {
+  const params = mocks.resolveDiscoveredProviderPluginIds.mock.calls[index]?.[0] as
+    | { registry?: unknown; manifestRegistry?: unknown }
     | undefined;
   if (!params) {
     throw new Error(`resolveDiscoveredProviderPluginIds call ${index} missing`);
@@ -274,7 +234,17 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["deepseek", "xiaomi"]);
     mockManifestPlugins([
       createManifestPlugin("deepseek"),
-      createManifestPluginWithMixedCatalogDiscovery(),
+      {
+        ...catalogManifest(
+          "xiaomi",
+          {
+            xiaomi: manifestProvider("mimo-v2-flash"),
+            "xiaomi-token-plan": manifestProvider("mimo-v2.5-pro"),
+          },
+          { xiaomi: "static", "xiaomi-token-plan": "runtime" },
+        ),
+        providers: ["xiaomi", "xiaomi-token-plan"],
+      },
     ]);
 
     const providers = resolvePluginDiscoveryProvidersRuntime({
@@ -531,11 +501,11 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
                   {
                     id: "configured",
                     name: "Configured",
-                    reasoning: false,
                     input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                     contextWindow: 10000,
                     maxTokens: 1000,
+                    reasoning: false,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   },
                 ],
               },

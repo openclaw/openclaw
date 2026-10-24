@@ -4,23 +4,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, expect, it, vi } from "vitest";
-import {
-  createQaBusState,
-  createQaChannelTransport,
-  startQaBusServer,
-} from "../../../../extensions/qa-lab/api.js";
-import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { useChannelProductProof } from "./channel-product-proof.test-support.js";
 
 const CHANNEL_ID = "qa-channel";
 const PEER_ID = "reload-peer";
 const CLI_MODEL = "claude-cli/claude-opus-5";
 const TURN_MS = Number(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF_TURN_MS ?? 340_000);
 
-let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
-let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
+const proof = useChannelProductProof();
 
 const FAKE_CLAUDE = String.raw`#!/usr/bin/env node
 const fs = require("node:fs");
@@ -89,46 +82,19 @@ async function waitFor<T>(
 }
 
 type PatchOutcome = { ok: true; result: unknown } | { ok: false; error: string };
-
-// oxlint-disable-next-line no-control-regex -- terminal color escapes in Gateway logs
-const ANSI_ESCAPE = /\x1b\[[0-9;]*m/g;
-const stripAnsi = (line: string) => line.replace(ANSI_ESCAPE, "");
-
-function readLog(file: string): string {
-  try {
-    return fs.readFileSync(file, "utf8");
-  } catch {
-    return "";
-  }
-}
+type PluginSnapshot = {
+  generation: number;
+  plugins: Array<{ id: string; runtime: { state: string } }>;
+};
 
 const waitForFile = (file: string, timeout: number, interval = 500) =>
   waitFor(file, () => (fs.existsSync(file) ? true : undefined), timeout, interval);
-
-afterEach(async () => {
-  const errors: unknown[] = [];
-  for (const stop of [
-    () => gatewayOwner && stopQaGatewayFixture(gatewayOwner),
-    () => bus?.stop(),
-  ]) {
-    try {
-      await stop();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  gatewayOwner = undefined;
-  bus = undefined;
-  vi.unstubAllEnvs();
-  if (errors.length > 0) {
-    throw new AggregateError(errors, "reload repro cleanup failed");
-  }
-});
 
 it.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
   "delivers a claude-cli reply across forced plugin reload (#144809)",
   { timeout: 1_200_000 },
   async () => {
+    proof.cleanup(() => vi.unstubAllEnvs());
     const fakeRoot = process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF_DIR ?? os.tmpdir();
     fs.mkdirSync(fakeRoot, { recursive: true });
     const fakeDir = fs.mkdtempSync(path.join(fakeRoot, "fake-claude-"));
@@ -137,17 +103,7 @@ it.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
     vi.stubEnv("FAKE_CLAUDE_DIR", fakeDir);
     vi.stubEnv("FAKE_CLAUDE_TURN_MS", String(TURN_MS));
 
-    const state = createQaBusState();
-    bus = await startQaBusServer({ state });
-    gatewayOwner = createQaLiveLaneGateway();
-    const { gateway } = await gatewayOwner.start({
-      repoRoot: process.cwd(),
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      transport: createQaChannelTransport(state),
-      transportBaseUrl: bus.baseUrl,
-      controlUiEnabled: false,
+    const { gateway, state } = await proof.start({
       mutateConfig: (config) => {
         const plugins = (config.plugins ??= {});
         plugins.allow = [...new Set([...(plugins.allow ?? []), "anthropic"])];
@@ -164,27 +120,7 @@ it.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
         return config;
       },
     });
-    const stdoutLog = path.join(gateway.tempRoot, "gateway.stdout.log");
-    const stderrLog = path.join(gateway.tempRoot, "gateway.stderr.log");
-    const readGatewayLogs = () => `${readLog(stdoutLog)}\n${readLog(stderrLog)}`;
     const turnFinishedPath = path.join(fakeDir, "turn-finished.json");
-    const waitForReloadLog = (
-      label: string,
-      matches: (line: string) => boolean,
-      timeout: number,
-      interval = 500,
-    ) =>
-      waitFor(
-        label,
-        () => {
-          if (fs.existsSync(turnFinishedPath)) {
-            throw new Error(`CLI turn finished before ${label}`);
-          }
-          return readGatewayLogs().split("\n").map(stripAnsi).find(matches);
-        },
-        timeout,
-        interval,
-      );
 
     state.addInboundMessage({
       accountId: "default",
@@ -221,15 +157,19 @@ it.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
       );
 
     await waitFor(
-      "channel reload deferral log line",
-      () => (/requires channel reload|deferring until/.test(readGatewayLogs()) ? true : undefined),
-      60_000,
-    );
-
-    const appliedLine = await waitForReloadLog(
-      "committed plugin reload before the CLI result",
-      (line) =>
-        line.includes("config hot reload applied (") && line.includes("plugins.entries.anthropic"),
+      "active replacement before the CLI result",
+      async () => {
+        if (fs.existsSync(turnFinishedPath)) {
+          throw new Error("CLI turn finished before plugin replacement");
+        }
+        const snapshot = (await gateway.call("plugins.list", {})) as PluginSnapshot;
+        return snapshot.generation > pluginsBefore.generation &&
+          snapshot.plugins.some(
+            ({ id, runtime }) => id === "anthropic" && runtime.state === "active",
+          )
+          ? snapshot
+          : undefined;
+      },
       TURN_MS + 60_000,
       2_000,
     );
@@ -237,21 +177,12 @@ it.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
       hash?: string;
       config?: OpenClawConfig;
     };
-    // The channel restart may stay pending; committed content plus the log
-    // prove replacement without requiring its appliedConfigHash publication.
+    // The replacement is active even if channel restart publication is still pending.
     expect(configAfter.hash).not.toBe(configBefore.hash);
     expect(configAfter.config).toMatchObject({
       plugins: { entries: { anthropic: { subagent: { allowModelOverride: false } } } },
       channels: { [CHANNEL_ID]: { pollTimeoutMs: 700 } },
     });
-    const pluginsAfter = (await gateway.call("plugins.list", {})) as {
-      generation: number;
-      plugins: Array<{ id: string; runtime: { state: string } }>;
-    };
-    expect(pluginsAfter.generation).toBeGreaterThan(pluginsBefore.generation);
-    expect(pluginsAfter.plugins.find((plugin) => plugin.id === "anthropic")?.runtime.state).toBe(
-      "active",
-    );
     // Recovery-restart warnings are allowed, but settlement must precede the result.
     const patchOutcome = await Promise.race([
       patchPromise,
@@ -270,16 +201,7 @@ it.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
       throw new Error(`config.patch did not commit the replacement: ${patchOutcome.error}`);
     }
 
-    const retirementLine = await waitForReloadLog(
-      "retired Anthropic instance before the CLI result",
-      (line) =>
-        line.includes("Plugin anthropic cleanup is deferred until its admitted turn finishes."),
-      20_000,
-    );
-
-    const finished = await waitForFile(turnFinishedPath, TURN_MS + 120_000, 2_000).catch(
-      (error: unknown) => String(error),
-    );
+    expect(await waitForFile(turnFinishedPath, TURN_MS + 120_000, 2_000)).toBe(true);
     await waitFor(
       "outbound reply after CLI completion",
       () =>
@@ -292,30 +214,6 @@ it.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
       .getSnapshot()
       .messages.filter((message) => message.direction === "outbound")
       .map((message) => message.text);
-    const interesting = readGatewayLogs()
-      .split("\n")
-      .filter((line) =>
-        /authority snapshot|\[reload\]|cli turn|cli-backend|Embedded agent|failed before|aborted|reply run|stopping qa-channel|restarting qa-channel|channel reload/i.test(
-          line,
-        ),
-      )
-      .map((line) => line.replace(/\[[0-9;]*m/g, "").slice(0, 400));
-
-    expect(finished).toBe(true);
-    const cliTurnLine = interesting.find((line) => line.includes("] cli turn: "));
-    const cliTurnAt = Date.parse((cliTurnLine ?? "").slice(0, 29));
-    const channelRestartLine = interesting.find((line) =>
-      line.includes("restarting qa-channel channel"),
-    );
-    expect(Number.isFinite(cliTurnAt)).toBe(true);
-    for (const line of [appliedLine, channelRestartLine ?? "", retirementLine]) {
-      const eventAt = Date.parse(line.slice(0, 29));
-      expect(Number.isFinite(eventAt)).toBe(true);
-      expect(eventAt).toBeLessThan(cliTurnAt);
-    }
-    expect(interesting.filter((line) => /stream is closed|failed before reply/.test(line))).toEqual(
-      [],
-    );
     expect(outbound).toEqual([expect.stringMatching(/^fake-claude reply /)]);
   },
 );

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
+  wrapSqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
 import {
   readDatabasePathIdentitySync,
@@ -267,13 +267,15 @@ export function runSessionNativeBindingWorkerOperation<
           }
         }
         if ((!committed && !rolledBack) || publicationFailure) {
-          const error = new SqliteWorkerError(
+          const error = wrapSqliteWorkerError(
             publicationFailure
               ? "Native binding settlement could not publish current lease facts; this generation cannot be reused"
               : "Native binding settlement is unknown; this generation cannot be reused",
             "outcome-unknown",
+            publicationFailure?.cause,
+            outcome.ok ? undefined : outcome.error,
+            settlement && settlement.kind !== "completed" ? settlement.error : undefined,
           );
-          error.cause = publicationFailure?.cause ?? (outcome.ok ? undefined : outcome.error);
           if (receipt?.compensationFailure) {
             const compensation = new Error("Native binding compensation failed");
             retainOpenClawStateWorkerErrorPayload(compensation, receipt.compensationFailure);

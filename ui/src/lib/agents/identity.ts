@@ -14,13 +14,6 @@ type AgentIdentityGatewaySnapshot = Pick<
 > &
   Partial<Pick<ApplicationGatewaySnapshot, "hello" | "selfUser">>;
 
-type AgentIdentityGateway = {
-  readonly snapshot: AgentIdentityGatewaySnapshot;
-  readonly connectionRevision?: number;
-  subscribe: (listener: (snapshot: AgentIdentityGatewaySnapshot) => void) => () => void;
-  subscribeEvents?: (listener: (event: { event: string; payload?: unknown }) => void) => () => void;
-};
-
 type AgentIdentityCacheEntry = {
   pending: Promise<AgentIdentityResult | null>;
   result?: { identity: AgentIdentityResult | null };
@@ -31,7 +24,6 @@ type AgentIdentityCacheEntry = {
 const AGENT_IDENTITY_CACHE_LIMIT = 128;
 const identityRequests = new WeakMap<GatewayBrowserClient, Map<string, AgentIdentityCacheEntry>>();
 
-/** Retire every UI surface's cached request when its connection or roster revision changes. */
 function invalidateAgentIdentityCache(
   client: GatewayBrowserClient | null,
   agentIds?: readonly string[],
@@ -103,7 +95,12 @@ export function fetchAgentIdentity(
 
 export type AgentIdentityCapability = ReturnType<typeof createAgentIdentityCapability>;
 
-export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
+export function createAgentIdentityCapability(gateway: {
+  readonly snapshot: AgentIdentityGatewaySnapshot;
+  readonly connectionRevision?: number;
+  subscribe: (listener: (snapshot: AgentIdentityGatewaySnapshot) => void) => () => void;
+  subscribeEvents?: (listener: (event: { event: string; payload?: unknown }) => void) => () => void;
+}) {
   let cachedClient: GatewayBrowserClient | null = gateway.snapshot.client;
   let cachedConnected = gateway.snapshot.phase === "connected";
   let presentationKey = gatewayPresentationScope(gateway).key;
@@ -142,6 +139,7 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
     }
   };
 
+  // This Gateway-lifetime owner retires identity caches across connection, access, and roster changes.
   gateway.subscribe(resetForGateway);
 
   const invalidate = (agentIds: readonly (string | null | undefined)[]) => {

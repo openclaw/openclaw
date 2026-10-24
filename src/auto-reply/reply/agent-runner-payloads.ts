@@ -9,7 +9,6 @@ import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   copyReplyPayloadMetadata,
@@ -17,6 +16,7 @@ import {
   isReplyPayloadTerminalContent,
   setReplyPayloadMetadata,
   isRenderablePayload,
+  shouldKeepPayloadDuringSilentTurn,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
@@ -65,13 +65,6 @@ async function normalizeSentMediaUrlsForDedupe(params: {
   return [...normalizedUrls];
 }
 
-function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
-  if (payload.isError || getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression) {
-    return true;
-  }
-  return payload.audioAsVoice === true && resolveSendableOutboundReplyParts(payload).hasMedia;
-}
-
 function sanitizeFinalReplyText(
   payload: ReplyPayload,
   text: string | undefined,
@@ -85,35 +78,11 @@ function sanitizeFinalReplyText(
     : sanitizeUserFacingText(text, { conversationContext });
 }
 
-function copyPayloadWithSanitizedText(
-  payload: ReplyPayload,
-  text: string | undefined,
-  conversationContext?: string,
-): ReplyPayload {
-  const sanitizedText = sanitizeFinalReplyText(payload, text, conversationContext);
-  const next = copyReplyPayloadMetadata(payload, {
-    ...payload,
-    text: sanitizedText,
-  });
-  const mirror = getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
-  if (!mirror?.text) {
-    return next;
-  }
-  setReplyPayloadMetadata(next, {
-    sourceReplyTranscriptMirror: {
-      ...mirror,
-      text: sanitizeFinalReplyText(payload, mirror.text, conversationContext) || undefined,
-    },
-  });
-  return next;
-}
-
 export async function buildReplyPayloads(params: {
   config?: OpenClawConfig;
   payloads: ReplyPayload[];
   /** Exact prompt bytes from this turn's finalized inbound owner. */
   conversationContext?: string;
-  isHeartbeat: boolean;
   silentExpected?: boolean;
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
@@ -140,25 +109,33 @@ export async function buildReplyPayloads(params: {
   const sanitizedPayloads: ReplyPayload[] = [];
   for (const payload of params.payloads) {
     let text = payload.text;
-    if (params.isHeartbeat) {
-      if (text) {
-        text = stripLegacyBracketToolCallBlocks(text);
-      }
-    } else {
-      if (payload.isError && text && BUN_FETCH_SOCKET_ERROR_RE.test(text)) {
-        text =
-          "⚠️ Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
-      }
-
-      if (text?.includes("HEARTBEAT_OK")) {
-        const stripped = stripHeartbeatToken(text, { mode: "message" });
-        if (stripped.shouldSkip && !resolveSendableOutboundReplyParts(payload).hasMedia) {
-          continue;
-        }
-        text = stripped.text;
-      }
+    if (payload.isError && text && BUN_FETCH_SOCKET_ERROR_RE.test(text)) {
+      text =
+        "⚠️ Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
     }
-    sanitizedPayloads.push(copyPayloadWithSanitizedText(payload, text, params.conversationContext));
+    if (text?.includes("HEARTBEAT_OK")) {
+      const stripped = stripHeartbeatToken(text, { mode: "message" });
+      if (stripped.shouldSkip && !resolveSendableOutboundReplyParts(payload).hasMedia) {
+        continue;
+      }
+      text = stripped.text;
+    }
+    const conversationContext = params.conversationContext;
+    const sanitizedText = sanitizeFinalReplyText(payload, text, conversationContext);
+    const next = copyReplyPayloadMetadata(payload, {
+      ...payload,
+      text: sanitizedText,
+    });
+    const mirror = getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
+    if (mirror?.text) {
+      setReplyPayloadMetadata(next, {
+        sourceReplyTranscriptMirror: {
+          ...mirror,
+          text: sanitizeFinalReplyText(payload, mirror.text, conversationContext) || undefined,
+        },
+      });
+    }
+    sanitizedPayloads.push(next);
   }
 
   const messageProvider = resolveOriginMessageProvider({

@@ -7,6 +7,8 @@ import {
   type SignalRpcEnvelope,
 } from "./signal-rpc.test-support.js";
 
+const reactionStores = await vi.hoisted(() => import("./approval-reactions.test-support.js"));
+
 const signalRpcRequestMock = vi.hoisted(() => vi.fn());
 const resolveOutboundAttachmentFromUrlMock = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => ({ path: "/tmp/image.png", contentType: "image/png" })),
@@ -27,10 +29,8 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 
-const {
-  clearSignalApprovalReactionTargetsForTest,
-  resolveSignalApprovalReactionTargetWithPersistence,
-} = await import("./approval-reactions.js");
+const { resolveSignalApprovalReactionTargetWithPersistence } =
+  await import("./approval-reactions.js");
 const { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } = await import("./send.js");
 
 const SIGNAL_TEST_CFG = accountConfig("external-native", "http://signal.test");
@@ -50,7 +50,7 @@ function receiptAt(timestamp: number) {
 
 describe("sendMessageSignal receipts", () => {
   beforeEach(() => {
-    clearSignalApprovalReactionTargetsForTest();
+    reactionStores.clearSignalApprovalReactionStoresForTest();
     signalRpcRequestMock.mockReset();
     resolveOutboundAttachmentFromUrlMock.mockClear();
   });

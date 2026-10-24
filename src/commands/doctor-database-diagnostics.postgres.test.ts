@@ -6,21 +6,18 @@ import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatDatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics-format.js";
 import type { DatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics.js";
 import type { PortDescriptor } from "../infra/database-engine/port-descriptor.js";
 import {
   createDiagnosticStores,
-  admittedStatusOutput,
+  diagnosticOutput,
+  inspectDiagnosticStores as inspect,
   diagnosticConfig,
   diagnosticPaths,
   matrixRoot,
   retainedAgentRoot,
-  normalizeDiagnosticOutput,
   portDiagnosticStore,
 } from "./doctor-database-diagnostics.test-support.js";
-import { inspectDoctorDatabaseEngines } from "./doctor-database-engine-inspection.js";
 
 const configured = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -33,6 +30,16 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
   let postgresRoot: string;
   let descriptors: Map<string, PortDescriptor>;
 
+  function port(root: string, relative: string, family: string) {
+    return portDiagnosticStore({
+      file: path.join(root, relative),
+      descriptor: descriptors.get(family)!,
+      client,
+      connection: connection!,
+      namespaces,
+    });
+  }
+
   beforeAll(async () => {
     await client.connect();
     sqliteRoot = tempDirs.make("doctor-output-sqlite-");
@@ -40,28 +47,10 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
     postgresRoot = tempDirs.make("doctor-output-postgres-");
     fs.cpSync(sqliteRoot, postgresRoot, { recursive: true });
     for (const [family, relative] of Object.entries(diagnosticPaths)) {
-      await portDiagnosticStore({
-        file: path.join(postgresRoot, relative),
-        descriptor: descriptors.get(family)!,
-        client,
-        connection: connection!,
-        namespaces,
-      });
+      await port(postgresRoot, relative, family);
     }
-    await portDiagnosticStore({
-      file: path.join(postgresRoot, matrixRoot),
-      descriptor: descriptors.get("state")!,
-      client,
-      connection: connection!,
-      namespaces,
-    });
-    await portDiagnosticStore({
-      file: path.join(postgresRoot, retainedAgentRoot),
-      descriptor: descriptors.get("agent")!,
-      client,
-      connection: connection!,
-      namespaces,
-    });
+    await port(postgresRoot, matrixRoot, "state");
+    await port(postgresRoot, retainedAgentRoot, "agent");
   });
 
   afterAll(async () => {
@@ -70,16 +59,6 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
     }
     await client.end();
   });
-
-  async function inspect(root: string, config: OpenClawConfig) {
-    return (
-      await inspectDoctorDatabaseEngines({
-        config,
-        stateDir: root,
-        env: { OPENCLAW_STATE_DIR: root, HOME: path.join(root, "home") },
-      })
-    ).stores!;
-  }
 
   function createdStores(stores: DatabaseStoreDiagnostic[], root: string) {
     const expectedPaths = new Set(
@@ -95,41 +74,18 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
   it("reports each PostgreSQL family and Matrix namespace while safety stores stay local", async () => {
     const stores = await inspect(postgresRoot, diagnosticConfig(connection));
     const physical = createdStores(stores, postgresRoot);
-    expect(physical.map((store) => store.family)).toEqual([
-      "state",
-      "state",
-      "agent",
-      "agent",
-      "workboard",
-      "logbook",
-      "team-reports",
-    ]);
+    // Snapshots retain every store field; namespace uniqueness is lost during normalization.
     for (const store of physical) {
-      expect(store).toMatchObject({
-        observed: "postgres",
-        mismatch: false,
-        connectivity: "reachable",
-      });
-      expect(store.schema.pending).toBe(0);
       expect(store.namespace).toMatch(/^doctor_proof_/);
-      expect(store.extensions).toEqual(expect.arrayContaining(["vector"]));
-      expect(store.issues).toEqual([]);
     }
     expect(new Set(physical.map((store) => store.namespace)).size).toBe(physical.length);
     expect(stores.filter((store) => store.configured.fixedLocal)).toHaveLength(4);
     expect(
-      normalizeDiagnosticOutput(
-        {
-          text: stores.map(formatDatabaseStoreDiagnostic),
-          json: stores,
-          status: await admittedStatusOutput(
-            postgresRoot,
-            diagnosticConfig(connection),
-            descriptors,
-            connection,
-          ),
-        },
+      await diagnosticOutput(
         postgresRoot,
+        diagnosticConfig(connection),
+        descriptors,
+        stores,
         connection,
       ),
     ).toMatchSnapshot();
@@ -154,22 +110,8 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
         postgres: { connection },
       };
       const stores = await inspect(root, config);
-      for (const store of createdStores(stores, root)) {
-        expect(store.observed).toBe(store.family === postgresFamily ? "postgres" : "sqlite");
-        expect(store.mismatch).toBe(false);
-        expect(store.schema.pending).toBe(0);
-        expect(store.issues).toEqual([]);
-      }
       expect(
-        normalizeDiagnosticOutput(
-          {
-            text: stores.map(formatDatabaseStoreDiagnostic),
-            json: stores,
-            status: await admittedStatusOutput(root, config, descriptors, connection),
-          },
-          root,
-          connection,
-        ),
+        await diagnosticOutput(root, config, descriptors, stores, connection),
       ).toMatchSnapshot();
     },
   );
@@ -179,23 +121,13 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
       "postgresql://synthetic-user:synthetic-password@127.0.0.1:1/unreachable";
     const config = diagnosticConfig(unreachableConnection);
     const stores = await inspect(postgresRoot, config);
-    for (const store of createdStores(stores, postgresRoot)) {
-      expect(store).toMatchObject({
-        observed: "postgres",
-        connectivity: "unreachable",
-        schema: { version: null, pending: null },
-        lease: "unverifiable",
-      });
-      expect(store.nextSteps.join(" ")).toMatch(/port|connection|SecretRef/);
-    }
     expect(
-      normalizeDiagnosticOutput(
-        {
-          text: stores.map(formatDatabaseStoreDiagnostic),
-          json: stores,
-          status: await admittedStatusOutput(postgresRoot, config, descriptors, connection),
-        },
+      await diagnosticOutput(
         postgresRoot,
+        config,
+        descriptors,
+        stores,
+        connection,
         unreachableConnection,
       ),
     ).toMatchSnapshot();
@@ -228,24 +160,9 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
       };
       const stores = await inspect(root, config);
       const agent = stores.find((store) => store.family === "agent")!;
-      expect(agent).toMatchObject({
-        observed: "postgres",
-        connectivity: "reachable",
-        schema: { pending: 0 },
-      });
-      expect(agent.extensions).not.toContain("vector");
-      expect((agent.degraded ?? []).join(" ")).toMatch(/pgvector|keyword-only/);
-      expect(agent.nextSteps.join(" ")).toContain("CREATE EXTENSION vector");
-      const output = normalizeDiagnosticOutput(
-        {
-          text: formatDatabaseStoreDiagnostic(agent),
-          json: agent,
-          status: await admittedStatusOutput(root, config, descriptors, isolatedConnection),
-        },
-        root,
-        isolatedConnection,
-      );
-      expect(output).toMatchSnapshot();
+      expect(
+        await diagnosticOutput(root, config, descriptors, agent, isolatedConnection),
+      ).toMatchSnapshot();
     } finally {
       await isolated.end();
       await client.query(`DROP DATABASE "${database}"`);

@@ -1,9 +1,6 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+import * as config from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import { broadcastSessionActivitySummary } from "./session-activity-summary-events.js";
@@ -13,13 +10,9 @@ import { createSessionRowProjectionFixture } from "./session-row-projection.test
 function summaryFixture() {
   vi.useFakeTimers();
   const cfg = { agents: { entries: { main: {} } } };
-  setRuntimeConfigSnapshot(cfg);
-  const target = {
-    key: "agent:main:summary",
-    agentId: "main",
-    storePath: "/summary/first.sqlite",
-  };
-  const other = { ...target, storePath: "/summary/second.sqlite" };
+  config.setRuntimeConfigSnapshot(cfg);
+  const owner = { key: "agent:main:summary", agentId: "main" };
+  const target = (store: string) => ({ ...owner, storePath: `/summary/${store}.sqlite` });
   const initial: SessionEntry = {
     sessionId: "summary-session",
     lifecycleRevision: "original",
@@ -30,15 +23,15 @@ function summaryFixture() {
     cfg,
     store: { first: initial, second: { ...initial, label: "other store" } },
     targetsBySessionKey: new Map(
-      [target, other].map((row, index) => [
-        index === 0 ? "first" : "second",
+      ["first", "second"].map((store) => [
+        store,
         {
-          agentId: row.agentId,
-          storeKey: row.key,
-          storeTarget: { agentId: row.agentId, storePath: row.storePath },
+          agentId: owner.agentId,
+          storeKey: owner.key,
+          storeTarget: target(store),
           entry: initial,
           readSourceEntry: () => undefined,
-          resolveSourceKey: (key: string) => key,
+          resolveSourceKey: (sourceKey: string) => sourceKey,
         },
       ]),
     ),
@@ -54,12 +47,10 @@ function summaryFixture() {
       return prepare(queries, consume, options);
     });
   const broadcast = vi.fn<GatewayBroadcastFn>();
+  const publisher = { getSessionRowProjection: () => projection, broadcast };
   const publications: Promise<void>[] = [];
-  const publish = (selected = target) => {
-    const work = broadcastSessionActivitySummary(selected, {
-      getSessionRowProjection: () => projection,
-      broadcast,
-    });
+  const publish = (store = "first") => {
+    const work = broadcastSessionActivitySummary(target(store), publisher);
     publications.push(work);
     return work;
   };
@@ -69,11 +60,27 @@ function summaryFixture() {
     await Promise.allSettled(publications);
     await drainSessionEventPublications(projection);
     projection.dispose();
-    clearRuntimeConfigSnapshot();
+    config.clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
-  return { target, other, initial, projection, preparation, entered, ready, broadcast, publish };
+  return { initial, projection, preparation, entered, ready, broadcast, publish };
+}
+
+type Fixture = ReturnType<typeof summaryFixture>;
+async function enterPreparation(f: Fixture) {
+  await vi.advanceTimersByTimeAsync(1_000);
+  await f.entered.promise;
+}
+async function deliver(f: Fixture, ...work: Promise<unknown>[]) {
+  f.ready.resolve();
+  await vi.runAllTimersAsync();
+  await Promise.all(work);
+}
+function expectRecaps(f: Fixture, ...labels: string[]) {
+  expect(f.broadcast.mock.calls.map(([, payload]) => payload)).toMatchObject(
+    labels.map((label) => ({ reason: "activity-summary", session: { label } })),
+  );
 }
 
 it("publishes the latest recap once per window without extending a busy session's deadline", async () => {
@@ -85,10 +92,7 @@ it("publishes the latest recap once per window without extending a busy session'
     await vi.advanceTimersByTimeAsync(75);
     expect(f.broadcast).toHaveBeenCalledTimes(Math.floor((index + 1) / 10));
   }
-  expect(f.broadcast.mock.calls.map(([, payload]) => payload)).toMatchObject([
-    { reason: "activity-summary", session: { label: "recap-9" } },
-    { reason: "activity-summary", session: { label: "recap-19" } },
-  ]);
+  expectRecaps(f, "recap-9", "recap-19");
 });
 
 it("joins deferred recaps, coalesces the latest row, and admits changes made during delivery", async () => {
@@ -98,8 +102,7 @@ it("joins deferred recaps, coalesces the latest row, and admits changes made dur
   const drain = drainSessionEventPublications(f.projection).then(() => {
     drained = true;
   });
-  await vi.advanceTimersByTimeAsync(1_000);
-  await f.entered.promise;
+  await enterPreparation(f);
   await Promise.resolve();
   expect(drained).toBe(false);
   expect(f.broadcast).not.toHaveBeenCalled();
@@ -111,50 +114,32 @@ it("joins deferred recaps, coalesces the latest row, and admits changes made dur
     f.projection.setEntry("first", { ...f.initial, label: "after delivery" });
     following = f.publish();
   });
-  f.ready.resolve();
-  await vi.runAllTimersAsync();
-  await Promise.all([first, second, drain]);
+  await deliver(f, first, second, drain);
   await following;
   expect(drained).toBe(true);
-  expect(f.broadcast.mock.calls.map(([, payload]) => payload)).toMatchObject([
-    { reason: "activity-summary", session: { label: "latest" } },
-    { reason: "activity-summary", session: { label: "after delivery" } },
-  ]);
+  expectRecaps(f, "latest", "after delivery");
 });
 
 it.each([
-  { sessionId: "replacement", lifecycleRevision: "original" },
-  { sessionId: "summary-session", lifecycleRevision: "reset" },
-])("keeps replacement recap ownership for $sessionId/$lifecycleRevision", async (replacement) => {
+  ["session", { sessionId: "replacement" }],
+  ["revision", { lifecycleRevision: "reset" }],
+  ["store", null],
+] as const)("isolates recap ownership by %s", async (_kind, patch) => {
   const f = summaryFixture();
   const first = f.publish();
-  await vi.advanceTimersByTimeAsync(1_000);
-  await f.entered.promise;
-  f.projection.setEntry("first", { ...f.initial, ...replacement, label: "replacement" });
-  const second = f.publish();
-  f.ready.resolve();
-  await vi.runAllTimersAsync();
-  await Promise.all([first, second]);
-  expect(f.broadcast).toHaveBeenCalledOnce();
-  expect(f.broadcast.mock.calls[0]?.[1]).toMatchObject({
-    reason: "activity-summary",
-    session: { sessionId: replacement.sessionId, label: "replacement" },
-  });
-});
-
-it("keeps identically named rows in different physical stores independent", async () => {
-  const f = summaryFixture();
-  const first = f.publish();
-  await vi.advanceTimersByTimeAsync(1_000);
-  await f.entered.promise;
-  const second = f.publish(f.other);
-  f.ready.resolve();
-  await vi.runAllTimersAsync();
-  await Promise.all([first, second]);
-  expect(f.broadcast.mock.calls.map(([, payload]) => payload)).toMatchObject([
-    { session: { label: "first" } },
-    { session: { label: "other store" } },
-  ]);
+  await enterPreparation(f);
+  const replacement = { ...f.initial, ...patch, label: "replacement" };
+  if (patch) {
+    f.projection.setEntry("first", replacement);
+  }
+  const second = f.publish(patch ? "first" : "second");
+  await deliver(f, first, second);
+  const sessions = patch
+    ? [{ sessionId: replacement.sessionId, label: "replacement" }]
+    : [{ label: "first" }, { label: "other store" }];
+  expect(f.broadcast.mock.calls.map(([, payload]) => payload)).toMatchObject(
+    sessions.map((session) => ({ reason: "activity-summary", session })),
+  );
 });
 
 it.each(["preparation", "publication"])(
@@ -174,8 +159,7 @@ it.each(["preparation", "publication"])(
       });
     }
     const first = f.publish();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await f.entered.promise;
+    await enterPreparation(f);
     const second = f.publish();
     const settled = Promise.allSettled([first, second]);
     f.ready.resolve();

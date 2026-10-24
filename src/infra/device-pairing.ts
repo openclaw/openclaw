@@ -173,19 +173,12 @@ export async function pruneSupersededSilentPairedDevices(params: {
   });
 }
 
-export async function removePairedDeviceRole(params: {
-  deviceId: string;
-  role: string;
-  baseDir?: string;
-}) {
+export async function removePairedDeviceRole(params: { deviceId: string }) {
   return await withDevicePairingLock(() =>
-    executeDevicePairingMutation(
-      {
-        type: "devicePairing.removeRole",
-        input: { deviceId: params.deviceId, role: params.role, nowMs: Date.now() },
-      },
-      { baseDir: params.baseDir },
-    ),
+    executeDevicePairingMutation({
+      type: "devicePairing.removeRole",
+      input: { deviceId: params.deviceId, role: "node", nowMs: Date.now() },
+    }),
   );
 }
 

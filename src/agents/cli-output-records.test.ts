@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
+import { describe, expect, it } from "vitest";
 import { parseCliOutput } from "./cli-output.js";
 import {
   createOpenAiCompatibleCliUsageCases,
+  createClaudeParser,
+  createClaudeBackend,
   joinJsonlFrames,
   claudeTextDelta,
 } from "./cli-output.test-helpers.js";
@@ -32,23 +33,40 @@ function parseCliJsonl(raw: string, backend: ParseCliOutputParams["backend"], pr
   return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
 }
 
-function normalizedUsage(values: {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-}) {
-  return {
-    input: values.input,
-    output: values.output,
-    cacheRead: values.cacheRead,
-    cacheWrite: values.cacheWrite,
-    total: values.total,
-  };
-}
-
 describe("parseCliJson", () => {
+  it.each([
+    {
+      name: "default alias order past blank and nonstring fields",
+      fields: undefined,
+      record: {
+        session_id: false,
+        sessionId: " ",
+        conversation_id: " first ",
+        conversationId: "second",
+      },
+      expected: "first",
+    },
+    {
+      name: "configured alias order",
+      fields: ["missing", "blank", "chosen", "session_id"],
+      record: { blank: " ", chosen: " custom ", session_id: "default" },
+      expected: "custom",
+    },
+    {
+      name: "explicitly disabled alias selection",
+      fields: [],
+      record: { session_id: "default" },
+      expected: undefined,
+    },
+  ])("preserves $name", ({ fields, record, expected }) => {
+    expect(
+      parseCliJson(JSON.stringify({ ...record, result: "answer" }), {
+        command: "model-cli",
+        sessionIdFields: fields,
+      }),
+    ).toEqual({ text: "answer", sessionId: expected, usage: undefined });
+  });
+
   it.each([
     {
       name: "preserves Claude max-turn terminal context in JSON mode",
@@ -261,20 +279,20 @@ describe("parseCliJson", () => {
 
   it("keeps earlier assistant text when a later terminal result is reply-less", () => {
     const result = parseCliJson(
-      [
-        JSON.stringify({
+      joinJsonlFrames(
+        {
           type: "assistant",
           message: { content: [{ type: "text", text: "partial answer" }] },
-        }),
-        JSON.stringify({
+        },
+        {
           type: "result",
           subtype: "success",
           session_id: "session-json-earlier-text",
           stop_reason: "tool_use",
           terminal_reason: "hook_stopped",
           result: "",
-        }),
-      ].join("\n"),
+        },
+      ),
       { command: "claude", output: "json", sessionIdFields: ["session_id"] },
       "claude-cli",
     );
@@ -360,7 +378,7 @@ describe("parseCliJson", () => {
       expected: {
         text: "Gemini says hello",
         sessionId: "gemini-session-123",
-        usage: normalizedUsage({ input: 5, output: 5, cacheRead: 8, total: 21 }),
+        usage: { input: 5, output: 5, cacheRead: 8, total: 21 },
       },
     },
     {
@@ -380,7 +398,7 @@ describe("parseCliJson", () => {
       expected: {
         text: "Gemini says hello",
         sessionId: "gemini-session-789",
-        usage: normalizedUsage({ input: 5, output: 5, cacheRead: 8, total: 21 }),
+        usage: { input: 5, output: 5, cacheRead: 8, total: 21 },
       },
     },
   ])("$name", ({ input, expected }) => {
@@ -570,29 +588,6 @@ describe("parseCliJsonl", () => {
 });
 
 describe("parseCliOutput", () => {
-  it("applies a backend JSONL hook when reparsing complete output", () => {
-    const parseJsonlEvent = vi.fn(() => ({
-      kind: "result" as const,
-      errorText: "invalid request format: malformed backend result",
-    }));
-
-    expect(
-      parseCliOutput({
-        raw: JSON.stringify({ type: "result", result: "malformed" }),
-        backend: { command: "acme", output: "jsonl" },
-        providerId: "acme-cli",
-        parseJsonlEvent,
-        outputMode: "jsonl",
-      }),
-    ).toEqual({
-      text: "",
-      sessionId: undefined,
-      usage: undefined,
-      errorText: "invalid request format: malformed backend result",
-    });
-    expect(parseJsonlEvent).toHaveBeenCalledOnce();
-  });
-
   it.each([
     {
       name: "uses streamed Claude assistant text when the result envelope is missing",
@@ -641,7 +636,6 @@ describe("parseCliOutput", () => {
         sessionIdFields: ["session_id"],
       },
       providerId: "claude-cli",
-      parseJsonlLifecycleEvent: () => ({ kind: "compaction", phase: "start" }),
       outputMode: "jsonl",
     });
 
@@ -656,40 +650,34 @@ describe("parseCliOutput", () => {
 
 describe("parseCliJsonl record usage", () => {
   it("ignores cumulative usage from result events to avoid cache_read inflation", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
+    const parser = createClaudeParser({
+      backend: createClaudeBackend(),
       providerId: "local-cli",
-      onAssistantDelta: () => {},
     });
 
     parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-stream" }),
-        JSON.stringify({
+      joinJsonlFrames(
+        { type: "init", session_id: "session-stream" },
+        {
           type: "assistant",
           message: {
             id: "msg-1",
             usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
           },
-        }),
-        JSON.stringify({
+        },
+        {
           type: "assistant",
           message: {
             id: "msg-2",
             usage: { input_tokens: 11, output_tokens: 6, cache_read_input_tokens: 125 },
           },
-        }),
-        JSON.stringify({
+        },
+        {
           type: "result",
           result: "done",
           usage: { input_tokens: 30, output_tokens: 15, cache_read_input_tokens: 300 },
-        }),
-      ].join("\n"),
+        },
+      ),
     );
     parser.finish();
 

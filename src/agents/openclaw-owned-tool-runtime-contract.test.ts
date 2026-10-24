@@ -8,7 +8,7 @@ import {
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
-import { createBaseToolHandlerState } from "./agent-tool-handler-state.test-helpers.js";
+import { createToolHandlerMocks } from "./agent-tool-handler-state.test-helpers.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
 import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.tools.start.js";
@@ -36,17 +36,7 @@ const session = {
 
 function createToolHandlerCtx(runId: string): ToolHandlerContext {
   // Minimal embedded-agent tool handler context used to drive start/end events.
-  return {
-    params: { ...session, runId },
-    state: createBaseToolHandlerState(),
-    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
-    flushBlockReplyBuffer: vi.fn(),
-    shouldEmitToolResult: () => false,
-    shouldEmitToolOutput: () => false,
-    emitToolSummary: vi.fn(),
-    emitToolOutput: vi.fn(),
-    trimMessagingToolSent: vi.fn(),
-  };
+  return { params: { ...session, runId }, ...createToolHandlerMocks() };
 }
 
 async function startContract(
@@ -83,6 +73,21 @@ async function startContract(
     ctx,
     result,
     toolCallId,
+    expectAfter: (
+      hooks: ReturnType<typeof installOpenClawOwnedToolHooks>,
+      payload: Record<string, unknown>,
+      context: Record<string, unknown> = {},
+    ) => {
+      expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
+      // after_tool_call fires asynchronously after the execution-end event.
+      return vi.waitFor(() => {
+        expect(hooks.afterToolCall).toHaveBeenCalledTimes(1);
+        expect(hooks.afterToolCall).toHaveBeenCalledWith(
+          expect.objectContaining({ toolName, toolCallId, ...payload }),
+          expect.objectContaining({ runId, toolCallId, ...context }),
+        );
+      });
+    },
     finish: (isError = false) =>
       handleToolExecutionEnd(
         ctx,
@@ -98,81 +103,42 @@ async function startContract(
   };
 }
 
-async function expectAfterToolCall(
-  hooks: ReturnType<typeof installOpenClawOwnedToolHooks>,
-  payload: Record<string, unknown>,
-  context: Record<string, unknown>,
-) {
-  // after_tool_call fires asynchronously after the execution-end event is processed.
-  await vi.waitFor(() => {
-    expect(hooks.afterToolCall).toHaveBeenCalledTimes(1);
-    expect(hooks.afterToolCall).toHaveBeenCalledWith(
-      expect.objectContaining(payload),
-      expect.objectContaining(context),
-    );
-  });
-}
-
 describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => {
   afterEach(resetOpenClawOwnedToolHooks);
 
-  it("preserves partially adjusted before_tool_call params through execution and after_tool_call", async () => {
-    const adjustedParams = { mode: "safe" };
-    const mergedParams = { command: "pwd", mode: "safe" };
-    const hooks = installOpenClawOwnedToolHooks({ adjustedParams });
-    const execute = vi.fn(async () => textToolResult("done", { ok: true }));
-    const { toolCallId, finish } = await startContract(
-      "exec",
-      execute,
-      { command: "pwd" },
-      "contract",
-    );
-    await finish();
-
-    expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
-    expect(execute).toHaveBeenCalledWith(toolCallId, mergedParams, undefined, undefined);
-    await expectAfterToolCall(
-      hooks,
-      {
-        toolName: "exec",
-        toolCallId,
-        params: mergedParams,
-        result: { content: [{ type: "text", text: "done" }], details: { ok: true } },
-      },
-      { ...session, runId: "run-contract", toolCallId },
-    );
-  });
-
-  it("reports embedded agent dynamic tool execution errors through after_tool_call", async () => {
-    const adjustedParams = { timeoutSec: 1 };
-    const mergedParams = { command: "false", timeoutSec: 1 };
-    const hooks = installOpenClawOwnedToolHooks({ adjustedParams });
-    const execute = vi.fn(async () => {
-      throw new Error("tool failed");
-    });
-    const { result, toolCallId, finish } = await startContract(
-      "exec",
-      execute,
-      { command: "false" },
-      "error",
-    );
-    const resultDetails = (result as { details?: Record<string, unknown> }).details;
-    expect(resultDetails).toMatchObject({ status: "error", error: "tool failed" });
-    await finish(true);
-
-    expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
-    expect(execute).toHaveBeenCalledWith(toolCallId, mergedParams, undefined, undefined);
-    await expectAfterToolCall(
-      hooks,
-      {
-        toolName: "exec",
-        toolCallId,
-        params: mergedParams,
-        error: "tool failed",
-      },
-      { runId: "run-error", toolCallId },
-    );
-  });
+  it.each([
+    { outcome: "success", command: "pwd", adjustedParams: { mode: "safe" }, fails: false },
+    { outcome: "error", command: "false", adjustedParams: { timeoutSec: 1 }, fails: true },
+  ])(
+    "preserves adjusted params through execution and after_tool_call on $outcome",
+    async ({ command, adjustedParams, fails }) => {
+      const params = { command, ...adjustedParams };
+      const hooks = installOpenClawOwnedToolHooks({ adjustedParams });
+      const expected = { content: [{ type: "text", text: "done" }], details: { ok: true } };
+      const execute = vi.fn(async () => {
+        if (fails) {
+          throw new Error("tool failed");
+        }
+        return textToolResult("done", { ok: true });
+      });
+      const { result, toolCallId, finish, expectAfter } = await startContract(
+        "exec",
+        execute,
+        { command },
+        fails ? "error" : "contract",
+      );
+      if (fails) {
+        expect(result).toMatchObject({ details: { status: "error", error: "tool failed" } });
+      }
+      await finish(fails);
+      expect(execute).toHaveBeenCalledWith(toolCallId, params, undefined, undefined);
+      await expectAfter(
+        hooks,
+        { params, ...(fails ? { error: "tool failed" } : { result: expected }) },
+        fails ? {} : session,
+      );
+    },
+  );
 
   it("commits successful embedded agent messaging text, media, and target telemetry", async () => {
     const hooks = installOpenClawOwnedToolHooks();
@@ -185,7 +151,7 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
       to: "chat-1",
     };
 
-    const { ctx, toolCallId, finish } = await startContract(
+    const { ctx, finish, expectAfter } = await startContract(
       "message",
       execute,
       originalParams,
@@ -204,16 +170,10 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
         mediaUrls: ["/tmp/openclaw-reply.png"],
       }),
     ]);
-    await expectAfterToolCall(
-      hooks,
-      {
-        toolName: "message",
-        toolCallId,
-        params: originalParams,
-        result: expect.objectContaining({ content: [{ type: "text", text: "sent" }] }),
-      },
-      { runId: "run-message", toolCallId },
-    );
+    await expectAfter(hooks, {
+      params: originalParams,
+      result: expect.objectContaining({ content: [{ type: "text", text: "sent" }] }),
+    });
   });
 
   it("fails closed when before_tool_call blocks an embedded agent dynamic tool", async () => {
@@ -226,39 +186,33 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
       to: "chat-1",
     };
 
-    const { result, toolCallId, finish } = await startContract(
+    const { result, finish, expectAfter } = await startContract(
       "message",
       execute,
       originalParams,
       "blocked",
     );
     const resultDetails = (result as { details?: Record<string, unknown> }).details;
-    expect(resultDetails).toMatchObject({
+    const blocked = {
       status: "blocked",
       deniedReason: "plugin-before-tool-call",
       reason: "blocked by policy",
-    });
+    };
+    expect(resultDetails).toMatchObject(blocked);
     await finish(true);
 
-    expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
     expect(execute).not.toHaveBeenCalled();
-    await expectAfterToolCall(
+    await expectAfter(
       hooks,
       {
-        toolName: "message",
-        toolCallId,
         params: originalParams,
         result: {
           content: [{ type: "text", text: "blocked by policy" }],
-          details: {
-            status: "blocked",
-            deniedReason: "plugin-before-tool-call",
-            reason: "blocked by policy",
-          },
+          details: blocked,
         },
         error: "blocked by policy",
       },
-      { ...session, runId: "run-blocked", toolCallId },
+      session,
     );
   });
 });

@@ -55,6 +55,7 @@ const RETAINED_STEP_NAMES = [
   "post-update verification",
   "diagnostic:database snapshot",
   "diagnostic:database migration writes",
+  "warning:database migration writes",
   "diagnostic:database rollback",
   "task-delivery-recovery",
   "driver:adopted",
@@ -63,6 +64,9 @@ const RETAINED_STEP_NAMES = [
   "reconcile:superseded",
   "reconcile:acknowledged",
   "reconcile:settle",
+  "recovery-artifact-cleanup",
+  "warning:recovery-artifact-cleanup",
+  "diagnostic:recovery-artifact-cleanup",
 ];
 export type UpdateRunLedgerOptions = OpenClawStateDatabaseOptions & {
   busyTimeoutMs?: number;
@@ -159,6 +163,7 @@ function boundedJson(
           item.step !== "task-delivery-recovery" &&
           item.step !== "diagnostic:database snapshot" &&
           item.step !== "diagnostic:database migration writes" &&
+          item.step !== "warning:database migration writes" &&
           item.step !== "diagnostic:database rollback" &&
           item.step !== "finalize:data-at-risk" &&
           !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))

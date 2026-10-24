@@ -14,11 +14,14 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
+  createCallerModeExecutionFixture,
   createCallerModeSnapshot,
   expectBlockedTailInPlanOrder,
   snapshotFiles,
+  writeLegacyDoctorAndTuiSources as writeLegacyDoctorSources,
   writeLegacyStateSchemaV1,
 } from "./state-migrations.caller-mode.test-helpers.js";
 import * as deviceIdentityMigrations from "./state-migrations.device-identity.js";
@@ -40,50 +43,9 @@ function candidateAt(
   return { root, version: "test" };
 }
 
-function writeLegacyDoctorSources(
-  stateDir: string,
-  tuiValue: unknown,
-): {
-  execPath: string;
-  tuiPath: string;
-} {
-  const execPath = path.join(stateDir, "exec-approvals.json");
-  const tuiPath = path.join(stateDir, "tui", "last-session.json");
-  fs.mkdirSync(path.dirname(tuiPath), { recursive: true });
-  fs.writeFileSync(
-    execPath,
-    `${JSON.stringify({
-      version: 1,
-      defaults: { security: "allowlist", ask: "on-miss" },
-      agents: { main: { allowlist: [{ pattern: "/usr/bin/rg" }] } },
-    })}\n`,
-  );
-  fs.writeFileSync(tuiPath, `${JSON.stringify(tuiValue)}\n`);
-  return { execPath, tuiPath };
-}
-
 async function makeFixture() {
   const root = await tempDirs.make("openclaw-doctor-caller-refusal-");
-  const homeDir = path.join(root, "home");
-  const stateDir = path.join(root, "copied-state");
-  const configPath = path.join(root, "copied-openclaw.json");
-  fs.mkdirSync(homeDir, { recursive: true });
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.symlinkSync(
-    path.resolve("extensions"),
-    path.join(root, "extensions"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  fs.writeFileSync(configPath, "{}\n");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    HOME: homeDir,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-  };
-  return { root, homeDir, stateDir, configPath, env };
+  return createCallerModeExecutionFixture(root, true);
 }
 
 async function makeCallerModeFixture() {
@@ -286,6 +248,30 @@ describe("legacy state migration read-only refusals", () => {
       expect(snapshotFiles(fixture.root)).toEqual(before);
     },
   );
+
+  it("refuses a configured auth owner outside the copied snapshot without reading it", async () => {
+    const fixture = await makeFixture();
+    const ownerDir = path.join(fixture.homeDir, "ops-agent");
+    fs.writeFileSync(
+      fixture.configPath,
+      JSON.stringify({
+        agents: {
+          ownership: "explicit",
+          defaults: { authInheritance: { agentId: "ops" } },
+          entries: { ops: { agentDir: ownerDir } },
+        },
+      }),
+    );
+    const inspect = vi.spyOn(sharedAuthBootstrap, "inspectSharedAuthLegacyRowsReadOnly");
+    const plan = await planFixture(fixture);
+
+    expect(plan.refusal?.code).toBe("shared-auth-source-outside-snapshot");
+    expect(plan.steps.find((step) => step.id === "migration-detection")?.source).toContainEqual({
+      kind: "sqlite",
+      path: path.join(ownerDir, "openclaw-agent.sqlite"),
+    });
+    expect(inspect).not.toHaveBeenCalled();
+  });
 
   it("preserves a snapshot-bound OAuth directory in the read-only plan", async () => {
     const fixture = await makeFixture();
@@ -802,13 +788,15 @@ module.exports = { stateMigrations: [{
       },
     }) as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({
-      cfg,
-      doctorOnlyStateMigrations: true,
-      env: fixture.env,
-      homedir: () => fixture.homeDir,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    });
+    const result = await withStateMigrationBackupForTest({ env: fixture.env }, () =>
+      autoMigrateLegacyState({
+        cfg,
+        doctorOnlyStateMigrations: true,
+        env: fixture.env,
+        homedir: () => fixture.homeDir,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      }),
+    );
 
     expectBlockedTailInPlanOrder({
       plan,

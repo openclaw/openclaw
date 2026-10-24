@@ -51,6 +51,8 @@ describe("Gateway index over Harness workspace files", () => {
     await manager.sync({ reason: "initial", force: true });
     return { cfg, manager };
   }
+  const idle = (manager: MemoryIndexManager) =>
+    (manager as unknown as { awaitManagerIdle(): Promise<void> }).awaitManagerIdle();
   const search = (manager: MemoryIndexManager, query: string, maxResults?: number) =>
     manager.search(query, { minScore: 0, ...(maxResults === undefined ? {} : { maxResults }) });
   async function expectFile(
@@ -190,7 +192,6 @@ describe("Gateway index over Harness workspace files", () => {
       await resume.promise;
       return read(file);
     });
-    const sync = vi.spyOn(manager, "sync");
     await write(harness, "memory/first.md", "beta first updated.");
     changed();
     await entered.promise;
@@ -204,7 +205,7 @@ describe("Gateway index over Harness workspace files", () => {
     } finally {
       resume.resolve();
     }
-    await Promise.all(sync.mock.results.map((result) => result.value));
+    await idle(manager);
     using index = new DatabaseSync(manager.status().dbPath!, { readOnly: true });
     // Search can synchronize a dirty index and hide a stranded watch generation.
     // Observe publication before any consumer can repair the missing update.
@@ -245,7 +246,6 @@ describe("Gateway index over Harness workspace files", () => {
         await resume.promise;
         return original(params);
       });
-      const sync = vi.spyOn(manager, "sync");
       changed();
       await entered.promise;
       try {
@@ -255,7 +255,8 @@ describe("Gateway index over Harness workspace files", () => {
       } finally {
         resume.resolve();
       }
-      const settled = await Promise.allSettled(sync.mock.results.map((result) => result.value));
+      await idle(manager);
+      const settled = await Promise.allSettled(run.mock.results.map((result) => result.value));
       expect(manager.status().dirty).toBe(true);
       expect(run).toHaveBeenCalledTimes(outcome === "newer-index" ? 2 : 1);
       expect(
@@ -295,12 +296,13 @@ describe("Gateway index over Harness workspace files", () => {
         "sync",
       ]);
       expect(Object.keys(watchRequest!.settings.sync)).toEqual(["watchDebounceMs"]);
-      const sync = vi.spyOn(manager, "sync");
       await fs.writeFile(note, "beta changed host note.");
       changed?.();
-      expect(sync).toHaveBeenCalledWith({ reason: "watch" });
-      await sync.mock.results.at(-1)!.value;
-      expect((await search(manager, "beta"))[0]?.snippet).toContain("changed host note");
+      await idle(manager);
+      using index = new DatabaseSync(manager.status().dbPath!, { readOnly: true });
+      expect(index.prepare(`SELECT path, text FROM ${MEMORY_INDEX_CHUNKS_TABLE}`).all()).toEqual([
+        { path: "memory/notes.md", text: "beta changed host note." },
+      ]);
       const closed = vi.fn();
       const closing = manager.close().then(closed);
       try {
@@ -344,7 +346,7 @@ describe("Gateway index over Harness workspace files", () => {
     const oldTime = new Date(Date.now() - 90 * 86_400_000);
     await fs.utimes(old, oldTime, oldTime);
     // Native search applies a 30-day half-life; the Gateway has no copy of these files.
-    const { manager } = await createIndexedManager({ extraPaths: ["imports"] });
+    const { cfg, manager } = await createIndexedManager({ extraPaths: ["imports"] });
     const before = await search(manager, "alpha", 10);
     const oldScore = before.find((hit) => hit.path === "imports/old.md")?.score;
     const newScore = before.find((hit) => hit.path === "imports/new.md")?.score;
@@ -356,6 +358,17 @@ describe("Gateway index over Harness workspace files", () => {
     await write(fixture.paths.workspace, "imports/old.md", "Gateway decoy.");
     const after = await search(manager, "alpha", 10);
     expect(after.find((hit) => hit.path === "imports/old.md")?.score).toBeCloseTo(oldScore, 5);
+
+    // A same-content save changes host recency even though its content hash stays stable.
+    const refreshedTime = new Date();
+    await fs.utimes(old, refreshedTime, refreshedTime);
+    await manager.close();
+    const reopened = await fixture.getFreshManager(cfg, "cli", true);
+    await reopened.sync({ reason: "cli" });
+    const refreshed = await search(reopened, "alpha", 10);
+    expect(refreshed.find((hit) => hit.path === "imports/old.md")?.score).toBeGreaterThan(
+      oldScore * 4,
+    );
   });
 
   it("rechecks Harness content before publishing and does not adopt a Gateway decoy", async () => {

@@ -2,25 +2,30 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import "../test-utils/prepare-compiled-subprocesses.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ContextWindowCatalog } from "./context-cache-projection.js";
-import { replaceDiscoveredContextTokenCache } from "./context-cache.js";
+import { getContextWindowCaches, replaceDiscoveredContextTokenCache } from "./context-cache.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
-import { resetContextWindowCacheForTest } from "./context.test-support.js";
-type Owner = { config: OpenClawConfig; modelCatalog: ContextWindowCatalog };
+import {
+  type ContextWindowCatalogFixture,
+  resetContextWindowCacheForTest,
+} from "./context.test-support.js";
+type Owner = { config: OpenClawConfig; modelCatalog: ContextWindowCatalogFixture };
 
 const state = vi.hoisted(() => {
   const initialConfig: OpenClawConfig = {};
-  const catalog: ContextWindowCatalog = { entries: [], staticEntries: [] };
+  const catalog: ContextWindowCatalogFixture = { entries: [], staticEntries: [] };
   return {
     config: initialConfig,
     catalog,
-    loadConfig: vi.fn<() => OpenClawConfig>(),
+    loadConfig: vi.fn<() => OpenClawConfig | null>(),
     loadOwner: vi.fn<(_params: unknown) => Promise<Pick<Owner, "modelCatalog">>>(),
     publishedOwner: vi.fn<(_params: unknown) => Owner | undefined>(),
   };
 });
 
-vi.mock("../config/config.js", () => ({ getRuntimeConfig: state.loadConfig }));
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  getRuntimeConfigSnapshot: state.loadConfig,
+}));
 vi.mock("../config/runtime-source-projection.js", () => ({
   projectConfigOntoRuntimeSourceSnapshot: (snapshot: OpenClawConfig) => snapshot,
 }));
@@ -101,20 +106,24 @@ describe("context cache lifecycle", () => {
     expect(state.loadConfig).not.toHaveBeenCalled();
   });
 
-  it("retries config loading only after backoff", async () => {
-    vi.useFakeTimers();
-    state.config = config("openrouter", model(sonnet, 654_321));
-    state.loadConfig.mockImplementationOnce(() => {
-      throw new Error("transient");
-    });
-    expectTokens(sonnet, undefined);
-    expect(state.loadConfig).toHaveBeenCalledTimes(1);
-    expectTokens(sonnet, undefined);
-    expect(state.loadConfig).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expectTokens(sonnet, 654_321);
-    expect(state.loadConfig).toHaveBeenCalledTimes(2);
-    await context.ensureContextWindowCacheLoaded();
+  it("reads newly published context limits on the next lookup", async () => {
+    const runtime = await import("../config/runtime-snapshot.js");
+    const previous = runtime.getRuntimeConfigSnapshot();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+    state.loadConfig.mockImplementation(runtime.getRuntimeConfigSnapshot);
+    try {
+      runtime.clearRuntimeConfigSnapshot();
+      expectTokens(sonnet, undefined, sync);
+      runtime.setRuntimeConfigSnapshot(config("openrouter", model(sonnet, 654_321)));
+      expectTokens(sonnet, 654_321, sync);
+    } finally {
+      if (previous) {
+        runtime.setRuntimeConfigSnapshot(previous);
+      } else {
+        runtime.clearRuntimeConfigSnapshot();
+      }
+      clock.mockRestore();
+    }
   });
 
   it("replaces configured token overrides before refreshing discovery", async () => {
@@ -134,7 +143,8 @@ describe("context cache lifecycle", () => {
     state.catalog.entries = [
       discovered("anthropic/claude-opus-4.7-20260219", 200_000, "anthropic"),
     ];
-    await context.ensureContextWindowCacheLoaded(cfg);
+    state.config = cfg;
+    await context.ensureContextWindowCacheLoaded();
     expect(state.loadOwner).toHaveBeenCalledWith({ config: cfg, readOnly: true });
     expect(state.publishedOwner).not.toHaveBeenCalled();
     expectTokens("anthropic/claude-opus-4.7-20260219", 1_000_000, sync);
@@ -144,7 +154,7 @@ describe("context cache lifecycle", () => {
     "keeps refreshed discovery when an older load finishes with %s",
     async (outcome) => {
       const started = Promise.withResolvers<void>();
-      const older = Promise.withResolvers<{ modelCatalog: ContextWindowCatalog }>();
+      const older = Promise.withResolvers<{ modelCatalog: ContextWindowCatalogFixture }>();
       state.loadOwner.mockImplementationOnce(() => {
         started.resolve();
         return older.promise;
@@ -207,9 +217,8 @@ describe("context cache lifecycle", () => {
   it("retires stale discovery when exact catalog loading fails", async () => {
     replaceDiscoveredContextTokenCache(new Map([["stale-model", 999_000]]));
     state.loadOwner.mockRejectedValueOnce(new Error("catalog unavailable"));
-    await context.ensureContextWindowCacheLoaded(
-      config("synthetic", model("current-model", 96_000)),
-    );
+    state.config = config("synthetic", model("current-model", 96_000));
+    await context.ensureContextWindowCacheLoaded();
     expectTokens("stale-model", undefined, { cfg: {} });
   });
 
@@ -234,9 +243,84 @@ describe("context cache lifecycle", () => {
     expectTokens("cancelled-599", undefined, { cfg: {} });
     expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).toBeNull();
   });
+
+  it("keeps the prior generation visible until a cooperative prewarm is complete", async () => {
+    const caches = getContextWindowCaches();
+    caches.configuredTokenCache.set("prior-model", 48_000);
+    state.config = config("synthetic", model("next-model", 96_000));
+    const entries = Array.from({ length: 600 }, (_, index) =>
+      discovered(`discovered-${index}`, 64_000, "synthetic"),
+    );
+    const projecting = Promise.withResolvers<void>();
+    state.catalog = {
+      get entries() {
+        queueMicrotask(() => projecting.resolve());
+        return entries;
+      },
+      staticEntries: [],
+    };
+    const pending = context.prewarmContextWindowCacheAfterReady({ config: state.config });
+    await projecting.promise;
+    expectTokens("prior-model", 48_000, { cfg: {} });
+    expectTokens("next-model", undefined, { cfg: {} });
+    expectTokens("discovered-0", undefined, { cfg: {} });
+
+    await pending;
+    expectTokens("prior-model", undefined, { cfg: {} });
+    expectTokens("next-model", 96_000, { cfg: {} });
+    expectTokens("discovered-599", 64_000, { cfg: {} });
+  });
 });
 
 describe("provider-owned context lookup", () => {
+  it("keeps unowned CLI discovery at its reported window", async () => {
+    state.catalog.entries = [{ id: "claude-cli/claude-opus-4.7-20260219", contextWindow: 200_000 }];
+    await context.ensureContextWindowCacheLoaded();
+    expectTokens("claude-cli/claude-opus-4.7-20260219", 200_000, sync);
+  });
+
+  it("does not replace unknown captured capacity with a sibling's bare cache", async () => {
+    state.catalog.entries = [{ provider: "other", id: "shared-model", contextTokens: 128_000 }];
+    await context.ensureContextWindowCacheLoaded();
+    const selected = { cfg: {}, provider: "custom", ...sync };
+    expectTokens("shared-model", 128_000, selected);
+    expectTokens("shared-model", undefined, { ...selected, allowCacheLookup: false });
+    expectTokens("shared-model", 32_000, {
+      ...selected,
+      allowCacheLookup: false,
+      fallbackContextTokens: 32_000,
+    });
+  });
+
+  it("can exclude unscoped discovery from provider-owned lookup", async () => {
+    state.catalog.entries = [{ id: "large", contextTokens: 32_000 }];
+    await context.ensureContextWindowCacheLoaded();
+    expectTokens("large", undefined, {
+      provider: "claude-cli",
+      allowUnscopedModelLookup: false,
+      ...sync,
+    });
+    expectTokens("large", 32_000, { provider: "claude-cli", ...sync });
+  });
+
+  it("keeps configured token caps authoritative over lower discovery", async () => {
+    state.catalog.entries = [discovered("gpt-5.5", 272_000, "openai")];
+    await context.ensureContextWindowCacheLoaded();
+    context.resetContextWindowCache(config("openai", model("gpt-5.5", 200_000, 350_000)));
+    expectTokens("gpt-5.5", 350_000, { provider: "openai", ...sync });
+  });
+
+  it("keeps provider discovery ahead of static caps under configured windows", async () => {
+    state.catalog.entries = [{ provider: "openai", id: "gpt-5.5", contextTokens: 200_000 }];
+    await context.ensureContextWindowCacheLoaded();
+    expectTokens("gpt-5.5", 200_000, {
+      cfg: config("openai", model("gpt-5.5", 1_000_000)),
+      provider: "openai",
+      modelContextTokens: 272_000,
+      ...sync,
+    });
+  });
+
   it("uses self-prefixed provider discovery ahead of the bare cross-provider minimum", async () => {
     state.catalog.entries = [
       discovered("gemini-3.1-pro-preview", 128_000, "github-copilot"),
