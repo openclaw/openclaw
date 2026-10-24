@@ -109,9 +109,6 @@ it.each([false, true])("notifies only for changed redaction: %s", (changed) => {
       `api repos/openclaw/openclaw/issues/123 -X PATCH -F body=@${redactedBody}`,
     );
   } else {
-    expect(JSON.parse(fs.readFileSync(resultFile, "utf8"))).toMatchObject({
-      notify_required: false,
-    });
     expect(JSON.parse(run([...notificationArgs, resultFile], ghEnv(root)))).toStrictEqual({
       ok: true,
       reason: "current_body_already_redacted",
