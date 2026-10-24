@@ -3,6 +3,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, onSettled } from "solid-js";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
+import { createElementRefs } from "../../lib/element-refs.ts";
 import { isActiveWorkboardCard } from "../../lib/workboard/card-state.ts";
 import { moveWorkboardCard } from "../../lib/workboard/mutations.ts";
 import type { WorkboardCard, WorkboardStatus } from "../../lib/workboard/types.ts";
@@ -19,12 +20,11 @@ import {
 } from "./view-helpers.tsx";
 import { workboardPopoverRef } from "./view-popover.ts";
 import { workboardScrollFadeRef } from "./view-scroll-fade.ts";
-function dropBeforeCardId(event: DragEvent, draggedCardId: string | null): string | null {
-  const column = event.currentTarget;
-  if (!(column instanceof HTMLElement)) {
-    return null;
-  }
-  const items = column.querySelectorAll<HTMLElement>(".workboard-column__item");
+function dropBeforeCardId(
+  event: DragEvent,
+  draggedCardId: string | null,
+  items: Iterable<HTMLElement>,
+): string | null {
   for (const item of items) {
     if (item.dataset.cardId === draggedCardId) {
       continue;
@@ -45,6 +45,12 @@ export function WorkboardColumn(input: {
     boardFilter?: string;
   };
 }) {
+  const rows = createElementRefs<HTMLElement>();
+  const orderedRows = () =>
+    input.cards.flatMap((card) => {
+      const row = rows.get(card.id);
+      return row ? [row] : [];
+    });
   const state = workboardViewState(() => input.workboard);
   const writable = createMemo(() => {
     state();
@@ -182,7 +188,7 @@ export function WorkboardColumn(input: {
           if (event.dataTransfer) {
             event.dataTransfer.dropEffect = "move";
           }
-          const beforeCardId = dropBeforeCardId(event, state().draggedCardId);
+          const beforeCardId = dropBeforeCardId(event, state().draggedCardId, orderedRows());
           if (
             state().dragOverStatus !== input.status ||
             state().dragBeforeCardId !== beforeCardId
@@ -211,7 +217,7 @@ export function WorkboardColumn(input: {
       onDrop={(event: DragEvent) => {
         event.preventDefault();
         const cardId = event.dataTransfer?.getData("text/plain") || state().draggedCardId;
-        const beforeCardId = dropBeforeCardId(event, cardId);
+        const beforeCardId = dropBeforeCardId(event, cardId, orderedRows());
         state().draggedCardId = null;
         state().dragOverStatus = null;
         state().dragBeforeCardId = null;
@@ -259,7 +265,7 @@ export function WorkboardColumn(input: {
                     type="button"
                     aria-expanded={collapsed() ? "false" : "true"}
                     aria-controls={`workboard-column-cards-${input.status}`}
-                    onClick={collapsed() ? expandColumn : collapseColumn}
+                    onClick={(event) => (collapsed() ? expandColumn(event) : collapseColumn(event))}
                   >
                     <span class="workboard-list-group__chevron" aria-hidden="true">
                       {collapsed() ? icons.chevronRight : icons.chevronDown}
@@ -369,6 +375,7 @@ export function WorkboardColumn(input: {
                       ]}
                       role={surface() === "list" ? "listitem" : undefined}
                       data-card-id={card().id}
+                      ref={rows.ref(() => card().id)}
                     >
                       <WorkboardCardView
                         workboard={input.workboard}

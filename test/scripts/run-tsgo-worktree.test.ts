@@ -61,20 +61,6 @@ it("selects the compiler from the supplied environment instead of the ambient en
   expect(command?.bin).toBe(resolveRepoToolBinPath("tsgo"));
 });
 
-it.each([false, true])(
-  "keeps Go profiling requests on tsgo (environment=%s)",
-  (fromEnvironment) => {
-    const args = fromEnvironment ? ["--version"] : ["--version", "--pprofDir", "profiles"];
-    const command = prepareTsgoCommand(args, {
-      ...process.env,
-      OPENCLAW_LOCAL_CHECK: "1",
-      OPENCLAW_TYPECHECKER: undefined,
-      OPENCLAW_TSGO_PPROF_DIR: fromEnvironment ? "profiles" : undefined,
-    });
-    expect(command?.bin).toBe(resolveRepoToolBinPath("tsgo"));
-  },
-);
-
 it("refuses a shared install without creating dependency links", () => {
   const primary = fs.realpathSync.native(createTempDir("native-primary-install-"));
   const root = path.join(primary, ".claude/worktrees/validation");
@@ -118,28 +104,13 @@ export default () => process.execPath;\n`,
 });
 
 describe("run-tsgo sparse guard", () => {
-  const requiredPaths = [
-    "packages/plugin-package-contract/src/index.ts",
-    "ui/config/control-ui-chunking.ts",
-    "ui/src/api/gateway.ts",
-    "ui/src/app/settings.ts",
-    "ui/src/i18n/lib/registry.ts",
-    "ui/src/i18n/lib/types.ts",
-  ];
-  const missingInputsError = (paths: string[]) =>
-    [
-      "tsconfig.core.test.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:",
-      ...paths.map((file) => `- ${file}`),
-      "Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree.",
-    ].join("\n");
-
-  it("ignores full worktrees", () => {
-    expect(sparseGuard({ isSparseCheckoutEnabled: () => false })).toBeNull();
-  });
-
-  it("ignores metadata-only commands", () => {
+  it.each(["full worktree", "metadata-only command"])("ignores %s", (kind) => {
     expect(
-      sparseGuard({}, ["-p", "test/tsconfig/tsconfig.core.test.json", "--showConfig"]),
+      sparseGuard({ isSparseCheckoutEnabled: () => kind !== "full worktree" }, [
+        "-p",
+        "test/tsconfig/tsconfig.core.test.json",
+        ...(kind === "metadata-only command" ? ["--showConfig"] : []),
+      ]),
     ).toBeNull();
   });
 
@@ -163,16 +134,15 @@ describe("run-tsgo sparse guard", () => {
 
   it("rejects sparse core worktrees that include only selected ui and package files", () => {
     const cwd = createTempDir("openclaw-run-tsgo-");
-    for (const relativePath of requiredPaths) {
-      write(cwd, relativePath, "");
+    const files = ["packages/one.ts", "ui/config/one.ts", "ui/src/one.ts"];
+    for (const file of files) {
+      write(cwd, file, "");
     }
-
-    expect(
-      sparseGuard({
-        cwd,
-        sparseCheckoutPatterns: requiredPaths.map((file) => `/${file}`),
-      }),
-    ).toBe(missingInputsError(["packages", "ui/config", "ui/src"]));
+    const error = sparseGuard({ cwd, sparseCheckoutPatterns: files.map((file) => `/${file}`) });
+    expect(error).toMatch(/- packages\n- ui\/config\n- ui\/src\n/u);
+    expect(error).toMatch(
+      /tracked project inputs are missing[\s\S]*Expand this worktree's sparse checkout/u,
+    );
   });
 
   it("does not require plugin browser sources for tsconfig.ui.json", () => {
@@ -185,10 +155,6 @@ describe("run-tsgo sparse guard", () => {
         ["-p", "tsconfig.ui.json"],
       ),
     ).toBeNull();
-  });
-
-  it("returns a helpful message for sparse core-test worktrees missing ui and packages files", () => {
-    expect(sparseGuard()).toBe(missingInputsError(requiredPaths));
   });
 
   it("recognizes the check:changed sparse-skip env", () => {

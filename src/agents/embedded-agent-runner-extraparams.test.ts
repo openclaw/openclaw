@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   testing as extraParamsTesting,
@@ -30,17 +31,7 @@ function firstTransportHookCall(mock: { mock: { calls: unknown[][] } }): Record<
 
 import { isAnthropicFamilyCacheTtlEligible } from "../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
-import {
-  createCodexNativeWebSearchWrapper,
-  createOpenAIAttributionHeadersWrapper,
-  createOpenAICompletionsStrictMessageKeysWrapper,
-  createOpenAIReasoningCompatibilityWrapper,
-  createOpenAIResponsesContextManagementWrapper,
-  createOpenAIStringContentWrapper,
-  createOpenAITextVerbosityWrapper,
-  createOpenAIThinkingLevelWrapper,
-  resolveOpenAITextVerbosity,
-} from "../llm/providers/stream-wrappers/openai.js";
+import { createOpenAIResponsesContextManagementWrapper } from "../llm/providers/stream-wrappers/openai.js";
 import { createGoogleThinkingPayloadWrapper } from "../plugin-sdk/provider-stream-shared.js";
 import {
   applyExtraParamsToAgent,
@@ -69,11 +60,14 @@ function installFullProviderRuntimeDepsForTest() {
     },
     resolveProviderExtraParamsForTransport: () => undefined,
     wrapProviderStreamFn: (params) => {
-      if (params.provider === "openai") {
-        return createTestOpenAIProviderWrapper(params);
-      }
-      if (params.provider === "azure-openai" || params.provider === "azure-openai-responses") {
-        return createTestOpenAIProviderWrapper(params);
+      if (
+        params.provider === "openai" ||
+        params.provider === "azure-openai" ||
+        params.provider === "azure-openai-responses"
+      ) {
+        return buildProviderStreamFamilyHooks("openai-responses-defaults").wrapStreamFn?.(
+          params.context,
+        );
       }
       if (params.provider === "amazon-bedrock") {
         return isAnthropicFamilyCacheTtlEligible({
@@ -123,31 +117,6 @@ function withMinimalProviderRuntimeDepsForTest<T>(run: () => T): T {
   } finally {
     installFullProviderRuntimeDepsForTest();
   }
-}
-
-function createTestOpenAIProviderWrapper(params: WrapProviderStreamFnParams): StreamFn {
-  let streamFn = params.context.streamFn;
-  streamFn = createOpenAIAttributionHeadersWrapper(streamFn);
-
-  const textVerbosity = resolveOpenAITextVerbosity(params.context.extraParams);
-  if (textVerbosity) {
-    streamFn = createOpenAITextVerbosityWrapper(streamFn, textVerbosity);
-  }
-
-  streamFn = createCodexNativeWebSearchWrapper(streamFn, {
-    config: params.context.config,
-    agentDir: params.context.agentDir,
-    agentId: params.context.agentId,
-    nativeWebSearchAllowedByToolPolicy: params.context.nativeWebSearchAllowedByToolPolicy,
-  });
-  streamFn = createOpenAIStringContentWrapper(streamFn);
-  streamFn = createOpenAICompletionsStrictMessageKeysWrapper(streamFn);
-  return createOpenAIResponsesContextManagementWrapper(
-    createOpenAIReasoningCompatibilityWrapper(
-      createOpenAIThinkingLevelWrapper(streamFn, params.context.thinkingLevel),
-    ),
-    params.context.extraParams,
-  );
 }
 
 beforeEach(() => {

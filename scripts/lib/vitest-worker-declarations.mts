@@ -8,6 +8,7 @@ export const vitestWorkerRuntimeAssets = [
   "cli-parent-lifetime.mjs",
   "gateway-shutdown-budget.mjs",
   "node-host-launcher.mjs",
+  "node-runtime-env.mjs",
 ];
 
 export const runtimeProcessDeclarationEntries = {

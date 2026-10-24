@@ -206,7 +206,7 @@ it("captures prefixed destination names and preserves them when rolling back bef
     const run = tasks.runDatabasePortTask;
     vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
       if (args[0].operation === "preflight") {
-        return { version: 170000, encoding: "UTF8", privilegesChecked: false };
+        return;
       }
       if (args[0].operation === "migrate") {
         throw new Error(injected);

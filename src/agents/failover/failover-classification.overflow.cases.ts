@@ -52,6 +52,13 @@ export const overflowCases = [
       },
     ],
     [
+      "billing-context-siliconflow-max-seq-len",
+      {
+        message:
+          '400 {"code":20015,"message":"length of prompt_tokens (51353) must be less than max_seq_len (32768).","data":null}',
+      },
+    ],
+    [
       "billing-context-vllm-decoder-prompt",
       {
         message:

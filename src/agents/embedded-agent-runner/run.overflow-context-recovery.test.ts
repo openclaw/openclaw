@@ -321,6 +321,21 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
   });
 
+  it("recovers a SiliconFlow max_seq_len overflow as context overflow", async () => {
+    const assistantOverflowCandidate = makeAssistantMessage({
+      stopReason: "error",
+      errorMessage:
+        '400 {"code":20015,"message":"length of prompt_tokens (51353) must be less than max_seq_len (32768).","data":null}',
+    });
+    const result = await recoverEmbeddedRunOverflow(
+      makeInput({ promptError: null, assistantOverflowCandidate }),
+    );
+
+    expect(result).toEqual({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledOnce();
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
+  });
+
   it("recovers a vLLM max_model_len overflow as context overflow", async () => {
     const assistantOverflowCandidate = makeAssistantMessage({
       stopReason: "error",

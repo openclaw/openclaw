@@ -4,7 +4,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as buildAll from "../../scripts/build-all.mts";
 import { acquireDistArtifactOwnership } from "../../scripts/lib/dist-artifact-lock.mts";
 import * as artifactOwnership from "../../scripts/lib/dist-artifact-ownership.mts";
-import { prepareVitestRuntime } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import {
+  prepareVitestRuntime,
+  runE2eGlobalSetup,
+} from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { prepareTestRuntime } from "../../scripts/prepare-vitest-runtime.mts";
 import * as sourceRunner from "../../scripts/run-node.mts";
 import * as postbuild from "../../scripts/runtime-postbuild.mts";
@@ -91,6 +94,100 @@ beforeEach(async () => {
   });
 });
 afterEach(() => vi.restoreAllMocks());
+
+it.each([undefined, "0", "1"])(
+  "admits E2E readers after one equivalent AI writer: caller DTS=%s",
+  async (dts) => {
+    env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = dts;
+    vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
+      build: true,
+      runtime: true,
+      immutable: false,
+    });
+    const writers: string[] = [];
+    // Keep the real qaRuntime planner, completion records, and dist ownership;
+    // only terminal workloads are fixtures, not evidence of actual compilation.
+    mockCompiler({
+      steps: undefined,
+      runStep: async ({ args, options }) => {
+        if (args.includes("scripts/tsdown-build.mts")) {
+          expect(options.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("0");
+          writers.push("typed runtime");
+          await fs.writeFile(entryPath(), "typed runtime\n");
+        }
+        return { status: 0 };
+      },
+    });
+    const standalone = async (commandEnv: NodeJS.ProcessEnv, signal?: AbortSignal) => {
+      expect(commandEnv).toBe(env);
+      const claim = await acquireDistArtifactOwnership(root, false, signal);
+      try {
+        writers.push("standalone");
+        await fs.writeFile(entryPath(), `standalone DTS=${dts}\n`);
+      } finally {
+        await claim.release();
+      }
+      return 0;
+    };
+    commands.prepare.mockImplementation(({ env: commandEnv, signal }) =>
+      standalone(commandEnv, signal),
+    );
+    await runE2eGlobalSetup(async (args, commandEnv) => {
+      if (args[0] === "scripts/prepare-vitest-runtime.mjs") {
+        return prepareTestRuntime(root, commandEnv, undefined, {
+          withAiPackage: args.includes("--with-ai-package"),
+        });
+      }
+      return standalone(commandEnv);
+    }, env);
+    expect(writers).toEqual(dts === "1" ? ["typed runtime", "standalone"] : ["typed runtime"]);
+    expect(await readEntry()).toBe(dts === "1" ? "standalone DTS=1\n" : "typed runtime\n");
+  },
+);
+
+it.each(["warm", "postbuild", "locked recheck"])(
+  "retains the original-environment AI writer after %s preparation",
+  async (preparation) => {
+    env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = "1";
+    const resolvePreparation = vi.spyOn(sourceRunner, "resolveRunNodePreparation");
+    resolvePreparation.mockReturnValue({
+      build: false,
+      runtime: preparation === "postbuild",
+      immutable: false,
+    });
+    if (preparation === "locked recheck") {
+      resolvePreparation.mockReturnValueOnce({ build: true, runtime: true, immutable: false });
+    }
+    vi.spyOn(postbuild, "runRuntimePostBuild").mockImplementation(() => {});
+    const build = vi.spyOn(buildAll, "runBuildAllSteps");
+    commands.prepare.mockImplementation(async ({ env: commandEnv, signal }) => {
+      expect(commandEnv).toBe(env);
+      const claim = await acquireDistArtifactOwnership(root, false, signal);
+      await claim.release();
+      return 0;
+    });
+    expect(await prepareTestRuntime(root, env, undefined, { withAiPackage: true })).toBe(0);
+    expect(commands.prepare).toHaveBeenCalledOnce();
+    expect(build).not.toHaveBeenCalled();
+  },
+);
+
+it("propagates the joined standalone AI writer's failure", async () => {
+  mockPreparation(false);
+  commands.prepare.mockResolvedValue(23);
+  expect(await prepareTestRuntime(root, env, undefined, { withAiPackage: true })).toBe(23);
+});
+
+it("does not start another writer after a failed compiler generation", async () => {
+  vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
+    build: true,
+    runtime: true,
+    immutable: false,
+  });
+  mockCompiler({ steps: undefined, runStep: async () => ({ status: 7 }) });
+  expect(await prepareTestRuntime(root, env, undefined, { withAiPackage: true })).toBe(7);
+  expect(commands.prepare).not.toHaveBeenCalled();
+});
 
 it.each([
   "unavailable service",
@@ -264,7 +361,7 @@ it("joins a canceled compiler before releasing checkout ownership", async () => 
       return { status: 0 };
     },
   });
-  const attempt = prepareTestRuntime(root, env, controller.signal);
+  const attempt = prepareTestRuntime(root, env, controller.signal, { withAiPackage: true });
   try {
     await Promise.race([started.promise, attempt]);
     controller.abort();
@@ -276,6 +373,7 @@ it("joins a canceled compiler before releasing checkout ownership", async () => 
     await expect(attempt).rejects.toMatchObject({ name: "AbortError" });
   }
   expect(finalize).not.toHaveBeenCalled();
+  expect(commands.prepare).not.toHaveBeenCalled();
   const next = await acquireDistArtifactOwnership(root);
   await next.release();
 });

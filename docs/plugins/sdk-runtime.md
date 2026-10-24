@@ -269,6 +269,12 @@ plugin mutations cannot alter caller arguments or an approved request. These
 snapshots reject shared memory in the cloned graph; properties omitted by
 structured cloning do not cross this boundary.
 
+`before_prompt_build` and `agent_turn_prepare` receive fresh message arrays and
+envelopes with shared, frozen transcript payload leaves. Treat nested history as
+read-only and return contribution fields instead of mutating message content.
+Non-owned values still receive detached snapshots with shared-memory checks.
+See the [prompt-hook migration](/plugins/sdk-migration#prompt-hook-history-is-read-only).
+
 Host-created request scopes borrow their plugin registry. A direct registry-scope
 callback keeps its registry until its returned operation settles; detached async
 resources do not extend that lifetime. Access to a released registry fails instead

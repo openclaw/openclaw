@@ -631,26 +631,29 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.attempt.assistantTexts).toEqual([]);
   });
 
-  it("does not replace terminal ownership when cancellation arrives during delivery observation", async () => {
-    const input = finalizationInput();
-    const controller = new AbortController();
-    input.finalization.abortSignal = AbortSignal.any([
-      input.finalization.abortSignal,
-      controller.signal,
-    ]);
-    let observations = 0;
-    input.terminalBase.runParams.resolveReplyDelivery = async () => {
-      if (++observations === 2) {
-        controller.abort(new Error("cancelled before acceptance"));
-      }
-      return "missing";
-    };
-    const text = "The completed tools produced a result.";
-    backendMocks.finalize.mockResolvedValueOnce(finalizationReply("answered", text));
-    await expect(finalize(input)).rejects.toThrow();
-    expect(observations).toBe(2);
-    expect(input.terminalBase.runParams.onAttemptTerminalReplaced).not.toHaveBeenCalled();
-  });
+  it.each(["failed", "stop", "length"] as const)(
+    "does not replace %s terminal ownership when cancellation arrives during delivery observation",
+    async (source) => {
+      const input = finalizationInput(source === "failed" ? undefined : cutOffAttempt(source));
+      const controller = new AbortController();
+      input.finalization.abortSignal = AbortSignal.any([
+        input.finalization.abortSignal,
+        controller.signal,
+      ]);
+      let observations = 0;
+      input.terminalBase.runParams.resolveReplyDelivery = async () => {
+        if (++observations === 2) {
+          controller.abort(new Error("cancelled before acceptance"));
+        }
+        return "missing";
+      };
+      const text = "The completed tools produced a result.";
+      backendMocks.finalize.mockResolvedValueOnce(finalizationReply("answered", text));
+      await expect(finalize(input)).rejects.toThrow();
+      expect(observations).toBe(2);
+      expect(input.terminalBase.runParams.onAttemptTerminalReplaced).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["outer", "Stop"])(
     "preserves %s cancellation during finalization without a fallback",

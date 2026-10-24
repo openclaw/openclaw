@@ -60,6 +60,9 @@ teardown wait expires.
 Completed attempt results stay outside the scope captured by retained harness
 callbacks, so those callbacks cannot keep completed message snapshots alive.
 Finalization and retry owners retain access to the results while processing them.
+Settled tool invocations release their pending-input observers from inherited
+async contexts. Those contexts keep assistant and tool-call attribution without
+keeping the completed agent and its transcript manager alive through the observer.
 
 ## Queueing and concurrency
 

@@ -101,8 +101,6 @@ type SecurityAuditOptions = {
   execDockerRawFn?: ExecDockerRawFn;
   /** Optional preloaded config snapshot to skip audit-time config file reads. */
   configSnapshot?: ConfigFileSnapshot | null;
-  /** Optional cache for code-safety summaries across repeated deep audits. */
-  codeSafetySummaryCache?: import("./audit.deep.runtime.js").CodeSafetySummaryCache;
   /** Optional explicit auth for deep gateway probe. */
   deepProbeAuth?: SecurityAuditExplicitGatewayAuth;
   /** Optional explicit Gateway auth mode/secret for config-only audit checks. */
@@ -125,7 +123,6 @@ type AuditExecutionContext = Omit<SecurityAuditOptions, "config"> & {
   configPath: string;
   loadPluginSecurityCollectors: boolean;
   configSnapshot: ConfigFileSnapshot | null;
-  codeSafetySummaryCache: import("./audit.deep.runtime.js").CodeSafetySummaryCache;
 };
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
@@ -1000,7 +997,6 @@ async function createAuditExecutionContext(
     loadPluginSecurityCollectors: opts.loadPluginSecurityCollectors ?? deep,
     workspaceDir,
     configSnapshot,
-    codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map(),
     deepProbeAuth: opts.deepProbeAuth,
     auditGatewayAuthOverride: opts.auditGatewayAuthOverride,
   };
@@ -1097,7 +1093,6 @@ export async function runSecurityAuditCore(
         stateDir,
         deep: context.deep,
         workspaceDir: context.workspaceDir,
-        summaryCache: context.codeSafetySummaryCache,
       })),
     );
   }
