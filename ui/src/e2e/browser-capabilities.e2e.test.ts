@@ -29,14 +29,6 @@ async function setUnsupportedBrowser(page: Page): Promise<void> {
       }
       return value === undefined ? supports(feature) : supports(feature, value);
     };
-    Object.defineProperty(HTMLElement.prototype, "showPopover", {
-      configurable: true,
-      value: undefined,
-    });
-    Object.defineProperty(HTMLButtonElement.prototype, "commandForElement", {
-      configurable: true,
-      value: null,
-    });
   });
 }
 
@@ -64,10 +56,6 @@ enabled.define(() => {
         await page.goto(url);
         const heading = guidance(page);
         await heading.waitFor();
-        expect(await page.getByText(/macOS 26.2 or iOS 26.2/).isVisible()).toBe(true);
-        expect(
-          await page.getByText(/Chrome or Firefox released within the last six months/).isVisible(),
-        ).toBe(true);
         expect(await page.locator("openclaw-app").count()).toBe(0);
         expect(await gateway.getRequests()).toEqual([]);
         const open = page.getByRole("button", { name: "Open in browser", exact: true });

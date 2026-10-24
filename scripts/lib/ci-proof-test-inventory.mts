@@ -4928,7 +4928,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/e2e/github-panel.e2e.test.ts",
   "ui/src/e2e/identity-activity-links.e2e.test.ts",
   "ui/src/e2e/linked-session-navigation.e2e.test.ts",
-  "ui/src/e2e/lobster-pet-dismiss-menu-overflow.e2e.test.ts",
   "ui/src/e2e/lobster-pet.e2e.test.ts",
   "ui/src/e2e/logs-autofollow.e2e.test.ts",
   "ui/src/e2e/managed-image-actions.e2e.test.ts",

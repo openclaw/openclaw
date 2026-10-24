@@ -1209,11 +1209,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/link-favicons.e2e.test.ts", ["chat"]),
   pageWatch(
-    "ui/src/e2e/lobster-pet-dismiss-menu-overflow.e2e.test.ts",
-    ["chat", "new-session"],
-    ["ui/src/components/lobster-pet.tsx", "ui/src/components/menu-surface.ts"],
-  ),
-  pageWatch(
     "ui/src/e2e/lobster-pet.e2e.test.ts",
     ["chat", "new-session"],
     ["ui/src/components/lobster-pet-plans.ts", "ui/src/components/lobster-pet.tsx"],

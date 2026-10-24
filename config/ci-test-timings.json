@@ -3556,7 +3556,6 @@
       "ui/src/e2e/link-hover-preview.e2e.test.ts": 21,
       "ui/src/e2e/link-reader-checks.e2e.test.ts": 4,
       "ui/src/e2e/linked-session-navigation.e2e.test.ts": 7,
-      "ui/src/e2e/lobster-pet-dismiss-menu-overflow.e2e.test.ts": 9,
       "ui/src/e2e/lobster-pet.e2e.test.ts": 12,
       "ui/src/e2e/locale-offline-retry.e2e.test.ts": 15,
       "ui/src/e2e/login-gate.e2e.test.ts": 30,

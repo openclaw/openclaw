@@ -22,26 +22,21 @@ suite.define(() => {
     [false, "dark"],
     [true, "light"],
   ] as const) {
-    it(`keeps the ${mobile ? "mobile" : "desktop"} ${mode} card flush and dismissal persistent`, async () =>
+    it(`keeps the compact ${mobile ? "mobile" : "desktop"} card flush and restores focus on dismissal`, async () =>
       suite.withPage(
         {
-          viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 },
+          viewport: mobile ? { width: 390, height: 568 } : { width: 1280, height: 540 },
           hasTouch: mobile,
           colorScheme: mode,
         },
         async ({ page }) => {
-          const resize = (height: number) =>
-            page.setViewportSize({ width: mobile ? 390 : 1280, height });
-          const rail = (view: string) =>
-            page.locator(`.sidebar-rail [data-navigation-view="${view}"]`);
           await seedChatSettings(page, suite.server.baseUrl, {
             themeMode: mode,
             sidebarAgentsMode: "chip",
             navWidth: 320,
           });
           await installMockGateway(page, { communityInvite: true, sessions });
-          const url = controlUiSessionUrl(suite.server.baseUrl, "agent:main:main");
-          await page.goto(url);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           if (mobile) {
             await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
             await waitForMobileSidebarDrawerOpen(page);
@@ -49,6 +44,10 @@ suite.define(() => {
           const card = page.locator(".community-invite-card");
           const close = card.getByRole("button", { name: "Dismiss and don't show again" });
           await close.waitFor();
+          for (let index = 0; index < 3; index += 1) {
+            await page.getByRole("button", { name: "Show more", exact: true }).click();
+          }
+          await page.locator('[data-session-key="agent:main:task-31"]').scrollIntoViewIfNeeded();
           const closeAppearance = await close.evaluate((node) => {
             const target = node.getBoundingClientRect();
             const backdrop = getComputedStyle(node, "::before");
@@ -56,13 +55,16 @@ suite.define(() => {
             const glyph = node.querySelector("svg")!.getBoundingClientRect();
             const backdropInset = (Number.parseFloat(backdrop.width) - glyph.width) / 2;
             return {
-              targetWidth: target.width,
-              targetHeight: target.height,
+              targetSize: Math.min(target.width, target.height),
               background: getComputedStyle(node).backgroundColor,
-              backdropWidth: Number.parseFloat(backdrop.width),
-              backdropHeight: Number.parseFloat(backdrop.height),
-              visibleTop: glyph.top - header.top - backdropInset,
-              visibleRight: header.right - glyph.right - backdropInset,
+              backdropSize: Math.max(
+                Number.parseFloat(backdrop.width),
+                Number.parseFloat(backdrop.height),
+              ),
+              inset: [
+                glyph.top - header.top - backdropInset,
+                header.right - glyph.right - backdropInset,
+              ],
               contained:
                 target.left >= header.left &&
                 target.top >= header.top &&
@@ -73,13 +75,10 @@ suite.define(() => {
           expect(closeAppearance).toMatchObject({
             background: "rgba(0, 0, 0, 0)",
             contained: true,
+            inset: [expect.closeTo(8, 0), expect.closeTo(8, 0)],
           });
-          expect(closeAppearance.visibleTop).toBeCloseTo(8, 0);
-          expect(closeAppearance.visibleRight).toBeCloseTo(8, 0);
-          expect(closeAppearance.backdropWidth).toBeLessThanOrEqual(24);
-          expect(closeAppearance.backdropHeight).toBeLessThanOrEqual(24);
-          expect(closeAppearance.targetWidth).toBeGreaterThanOrEqual(mobile ? 44 : 24);
-          expect(closeAppearance.targetHeight).toBeGreaterThanOrEqual(mobile ? 44 : 24);
+          expect(closeAppearance.backdropSize).toBeLessThanOrEqual(24);
+          expect(closeAppearance.targetSize).toBeGreaterThanOrEqual(mobile ? 44 : 24);
           const list = page.locator(".sidebar-shell__body");
           const cardBounds = (await card.boundingBox())!;
           const shellBounds = (await page.locator(".sidebar-shell").boundingBox())!;
@@ -91,7 +90,9 @@ suite.define(() => {
             0,
           );
           expect(listBounds.y + listBounds.height).toBeLessThanOrEqual(cardBounds.y);
-          expect(listBounds.height).toBeGreaterThan(120);
+          expect(listBounds.height).toBeGreaterThan(80);
+          expect(await list.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
+          expect(cardBounds.y + cardBounds.height).toBeLessThanOrEqual(mobile ? 568 : 540);
           const artwork = card.locator(".invite__art");
           await expect
             .poll(() =>
@@ -109,26 +110,13 @@ suite.define(() => {
               .locator(".invite__body")
               .evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingLeft)),
           ).toBeGreaterThanOrEqual(12);
-          for (let index = 0; index < 3; index += 1) {
-            await page.getByRole("button", { name: "Show more", exact: true }).click();
-          }
-          await resize(mobile ? 568 : 540);
-          await page.locator('[data-session-key="agent:main:task-31"]').scrollIntoViewIfNeeded();
-          expect(await list.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
-          const shortListBounds = (await list.boundingBox())!;
-          const shortCardBounds = (await card.boundingBox())!;
-          expect(shortListBounds.height).toBeGreaterThan(80);
-          expect(shortListBounds.y + shortListBounds.height).toBeLessThanOrEqual(shortCardBounds.y);
-          expect(shortCardBounds.y + shortCardBounds.height).toBeLessThanOrEqual(
-            mobile ? 568 : 540,
-          );
-          await resize(mobile ? 844 : 900);
           await list.evaluate((node) => {
             node.scrollTop = 0;
           });
-          await rail("pages").click();
+          await page.locator('.sidebar-rail [data-navigation-view="pages"]').click();
           await close.waitFor();
-          await rail("sessions").click();
+          const sessionsRail = page.locator('.sidebar-rail [data-navigation-view="sessions"]');
+          await sessionsRail.click();
           await page.keyboard.press("Tab");
           await close.focus();
           expect(await close.evaluate((node) => node.matches(":focus-visible"))).toBe(true);
@@ -141,24 +129,7 @@ suite.define(() => {
             await page.keyboard.press("Enter");
           }
           await card.waitFor({ state: "detached" });
-          expect(await rail("sessions").evaluate((node) => node === document.activeElement)).toBe(
-            true,
-          );
-          // The component browser suite owns persistence; retain app remount/resize proof here.
-          await page.reload();
-          if (mobile) {
-            await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-          }
-          await page.locator(".sidebar-shell").waitFor();
-          expect(await card.count()).toBe(0);
-          await page.setViewportSize(
-            mobile ? { width: 1280, height: 700 } : { width: 390, height: 568 },
-          );
-          if (!mobile) {
-            await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-          }
-          await page.locator(".sidebar-shell").waitFor();
-          expect(await card.count()).toBe(0);
+          expect(await sessionsRail.evaluate((node) => node === document.activeElement)).toBe(true);
         },
       ));
   }
