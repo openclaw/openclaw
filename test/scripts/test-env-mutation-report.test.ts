@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
@@ -7,6 +6,7 @@ import {
   renderTestEnvMutationReport,
 } from "../../scripts/test-env-mutation-report.js";
 import { createScriptTestHarness } from "./test-helpers.js";
+import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
 const { createTempDir } = createScriptTestHarness();
 
@@ -20,16 +20,12 @@ function runCli(args: string[]) {
 
 function makeRepo(files: Record<string, string>) {
   const repoRoot = createTempDir("openclaw-test-env-mutations-");
-  for (const [file, content] of Object.entries(files)) {
-    const target = path.join(repoRoot, file);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, content, "utf8");
-  }
+  writeFixtureFiles(repoRoot, files);
   return repoRoot;
 }
 
-function makeEnvMutationFixture(): string {
-  return makeRepo({
+it("scans static and dynamic mutations while ignoring non-code and ordinary source files", () => {
+  const repoRoot = makeRepo({
     "src/runtime.ts":
       '\nprocess.env.OPENCLAW_STATE_DIR = "ignored because this is not a test file";\n',
     "src/example.test.ts": `
@@ -50,10 +46,7 @@ process.env.NOT_OPENCLAW = "ignored";
     "src/test-utils/openclaw-test-state.ts":
       '\nprocess.env.HOME = "allowed";\ndelete process.env.OPENCLAW_STATE_DIR;\n',
   });
-}
-
-it("scans static and dynamic mutations while ignoring non-code and ordinary source files", () => {
-  const report = collectTestEnvMutationReport({ repoRoot: makeEnvMutationFixture() });
+  const report = collectTestEnvMutationReport({ repoRoot });
   expect(renderTestEnvMutationReport(report, { includeAllowed: true })).toContain(
     "Findings: 9 active in 3 file(s), 2 allowed in 1 file(s)",
   );
