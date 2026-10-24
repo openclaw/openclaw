@@ -18,6 +18,7 @@ import {
   projectCrabboxLegacyWarmLeases,
   WARM_IMAGE_MAX_ENTRIES,
   withoutCrabboxWarmImageOperation,
+  type WarmImageOperation,
 } from "./crabbox-worker-warm-image-records.js";
 
 export type CrabboxState = Pick<OpenClawPluginApi["runtime"]["state"], "openKeyedStoreV2">;
@@ -84,17 +85,7 @@ export type WarmProfileRecord = {
   /** Latest native-capture refusal; retained for display without suppressing later attempts. */
   captureUnsupported?: { atMs: number; provider: string; message: string };
   allocations: Record<string, WarmAllocationRecord>;
-  operation?:
-    | {
-        type: "capture";
-        id: string;
-        startedAtMs: number;
-        leaseId?: string;
-        provider?: string;
-        phase: "scrubbing" | "creating" | "uncertain";
-        checkpointIds?: string[];
-      }
-    | { type: "retire"; checkpointId: string };
+  operation?: WarmImageOperation;
 };
 
 export class CrabboxWarmImageRequestError extends Error {}

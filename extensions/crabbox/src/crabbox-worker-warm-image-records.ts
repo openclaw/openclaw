@@ -1,19 +1,32 @@
 // Doctor and runtime share record policy without loading a state-store implementation.
 import { createHash } from "node:crypto";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
+
+export type WarmImageOperation =
+  | {
+      type: "capture";
+      id: string;
+      startedAtMs: number;
+      leaseId?: string;
+      provider?: string;
+      phase: "scrubbing" | "creating" | "uncertain";
+      checkpointIds?: string[];
+    }
+  | { type: "retire"; checkpointId: string };
 
 export const WARM_IMAGE_MAX_ENTRIES = 128;
 export const LEGACY_WARM_LEASE_MAX_ENTRIES = 256;
 const CAPTURE_WARNING_AGE_MS = 1_200_000;
 
-export function withoutCrabboxWarmImageOperation(record: WarmProfileRecord): WarmProfileRecord {
+export function withoutCrabboxWarmImageOperation<T extends { operation?: WarmImageOperation }>(
+  record: T,
+): Omit<T, "operation"> {
   const profile = { ...record };
   delete profile.operation;
   return profile;
 }
 
-export function crabboxWarmImageCaptureStatus(record: WarmProfileRecord) {
+export function crabboxWarmImageCaptureStatus(record: { operation?: WarmImageOperation }) {
   const capture = record.operation?.type === "capture" ? record.operation : undefined;
   if (!capture) {
     return undefined;

@@ -232,7 +232,7 @@ export function createCrabboxWarmImageManager(dependencies: {
           }
         } else if (capture.phase === "uncertain") {
           warnOnce("capture paused", crabboxWarmImageRecoveryHint(capture.selector), false);
-        } else if (capture.phase !== "uncertain" && capture.stale) {
+        } else if (capture.stale) {
           warnOnce(
             `capture ${capture.selector} still pending`,
             CRABBOX_WARM_IMAGE_WAIT_HINT,
