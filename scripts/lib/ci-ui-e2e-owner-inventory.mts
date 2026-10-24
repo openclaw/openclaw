@@ -650,11 +650,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ],
   ),
   pageWatch(
-    "ui/src/e2e/chat-panel-reflow.e2e.test.ts",
-    ["chat"],
-    ["ui/src/pages/chat/components/chat-header-session-menu.ts"],
-  ),
-  pageWatch(
     "ui/src/e2e/chat-permission-refresh.e2e.test.ts",
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts"],

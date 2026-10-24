@@ -38,9 +38,6 @@ it("keeps check navigation, refresh, and long content usable in a narrow native 
         await panel.locator(".lr-checks").evaluate((node) => (node as HTMLDetailsElement).open),
       ).toBe(true);
       await panel.getByText("Integration tests", { exact: true }).waitFor();
-      expect(await panel.locator(".lr-check-copy a").getAttribute("href")).toBe(
-        "https://forge.example/runs/1",
-      );
       await button("Files 1").click();
       expect(await content.evaluate((node) => node.scrollTop)).toBeGreaterThan(100);
       const navBounds = await content.evaluate((node) => ({

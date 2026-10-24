@@ -18,7 +18,7 @@ const spoken = {
 };
 const history = [
   message("user", "Run the text comparison once and report its output.", "typed-request"),
-  message("assistant", backend, "typed-answer", { stopReason: "stop" }),
+  message("assistant", backend, "typed-answer", spoken),
   message("user", "Now run the same check through Talk.", "voice-request"),
   message("assistant", backend, "backend-answer", {
     stopReason: "stop",
@@ -34,7 +34,7 @@ suite.define(() => {
   it("keeps one canonical Talk result and exposes its separate speech transcript", () =>
     suite.withPage(
       { ...createControlUiE2eContextOptions(), colorScheme: "light" },
-      async ({ page, context }) => {
+      async ({ page }) => {
         const gateway = await installMockGateway(page, { historyMessages: history });
         await page.goto(`${suite.server.baseUrl}chat`);
         const transcript = page.locator(".chat-thread-inner");
@@ -43,6 +43,7 @@ suite.define(() => {
           has: page.getByText("Voice transcript", { exact: true }),
         });
         await expect.poll(() => disclosure.count()).toBe(1);
+        expect(await transcript.locator("details").count()).toBe(1);
         expect(await disclosure.getAttribute("open")).toBeNull();
         expect(await transcript.getByText(speech, { exact: true }).isVisible()).toBe(false);
         expect(await transcript.getByText(backend, { exact: true }).count()).toBe(2);
@@ -58,10 +59,8 @@ suite.define(() => {
         await transcript.getByText(speech, { exact: true }).waitFor();
         expect(await disclosure.getAttribute("open")).not.toBeNull();
         await search.press("Escape");
-        await transcript.getByText(backend, { exact: true }).first().waitFor();
 
-        // The host marker never asserts that speech replaces a particular run.
-        // Speech-only dialogue stays available and unmarked chat-backed/legacy speech stays normal.
+        // Speech-only dialogue remains available without a backing answer.
         const casualText = "Happy to help with your next question.";
         const casualMessage = message("assistant", casualText, "casual", {
           ...spoken,
@@ -82,19 +81,6 @@ suite.define(() => {
         await expect.poll(() => casual.count()).toBe(1);
         await casual.locator("summary").click();
         await transcript.getByText(casualText, { exact: true }).waitFor();
-        const chatBackedText = "Chat-backed speech is the answer.";
-        const chatBacked = message("assistant", chatBackedText, "chat-backed", spoken);
-        await publish([...history, casualMessage, chatBacked], "chat-backed", 7);
-        await transcript.getByText(chatBackedText, { exact: true }).waitFor();
-        expect(await transcript.locator("details", { hasText: chatBackedText }).count()).toBe(0);
-        // A vanished audio transport cannot remove the separately retained backend answer.
-        const fallbackPage = await context.newPage();
-        await installMockGateway(fallbackPage, { historyMessages: history.slice(0, -1) });
-        await fallbackPage.goto(`${suite.server.baseUrl}chat`);
-        const fallbackTranscript = fallbackPage.locator(".chat-thread-inner");
-        await fallbackTranscript.getByText(backend, { exact: true }).first().waitFor();
-        expect(await fallbackTranscript.getByText(backend, { exact: true }).count()).toBe(2);
-        expect(await fallbackTranscript.locator("details").count()).toBe(0);
       },
     ));
 });

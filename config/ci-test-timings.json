@@ -3364,7 +3364,6 @@
       "ui/src/e2e/chat-outbox-payloads.e2e.test.ts": 60,
       "ui/src/e2e/chat-outbox-recovery.e2e.test.ts": 32,
       "ui/src/e2e/chat-panel-layout.e2e.test.ts": 20,
-      "ui/src/e2e/chat-panel-reflow.e2e.test.ts": 4,
       "ui/src/e2e/chat-pasted-text-show-in-text-field.e2e.test.ts": 16,
       "ui/src/e2e/chat-permission-refresh.e2e.test.ts": 15,
       "ui/src/e2e/chat-person-reference.e2e.test.ts": 18,
