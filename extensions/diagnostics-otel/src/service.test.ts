@@ -657,6 +657,18 @@ function project<T, K extends keyof T>(records: readonly T[], keys: readonly K[]
   return records.map((record) => keys.map((key) => record[key]));
 }
 
+function expectNoOwnedExporters() {
+  for (const owner of [
+    exporters.traces.ctor,
+    exporters.metrics.ctor,
+    exporters.logs.ctor,
+    traceProviderCtor,
+    meterProviderCtor,
+  ]) {
+    expect(owner).not.toHaveBeenCalled();
+  }
+}
+
 function emitCompletedContent<T extends "model.call.completed" | "tool.execution.completed">(
   type: T,
   content: DiagnosticEventPrivateData,
@@ -1051,12 +1063,12 @@ describe("diagnostics-otel service", () => {
       ["traces", "failure", "start_failed"],
     ]);
     expect(
-      getReportedExporterHealth(ctx).map(({ signal, transport, endpointMode, status, reason }) => [
-        signal,
-        transport,
-        endpointMode,
-        status,
-        reason,
+      project(getReportedExporterHealth(ctx), [
+        "signal",
+        "transport",
+        "endpointMode",
+        "status",
+        "reason",
       ]),
     ).toEqual([["traces", "otlp-http-protobuf", "default_endpoint", "failure", "start_failed"]]);
     for (const privateText of [OTEL_TEST_ENDPOINT, "private startup details"]) {
@@ -1171,11 +1183,7 @@ describe("diagnostics-otel service", () => {
       ["traces", "external-sdk", "started"],
       ["metrics", "external-sdk", "started"],
     ]);
-    expect(exporters.traces.ctor).not.toHaveBeenCalled();
-    expect(exporters.metrics.ctor).not.toHaveBeenCalled();
-    expect(exporters.logs.ctor).not.toHaveBeenCalled();
-    expect(traceProviderCtor).not.toHaveBeenCalled();
-    expect(meterProviderCtor).not.toHaveBeenCalled();
+    expectNoOwnedExporters();
     expect(unhandledRejectionHandlerState.register).not.toHaveBeenCalled();
     expect(lastHistogramRecord("openclaw.run.duration_ms")?.[0]).toBe(100);
     expect(startedSpanOptions("openclaw.run")?.attributes?.["openclaw.outcome"]).toBe("completed");
@@ -1885,22 +1893,11 @@ describe("diagnostics-otel service", () => {
       const secret = "sk-1234567890abcdef";
       const message = "model run failed during resolve phase";
       emitTrustedDiagnosticEventWithPrivateData(
-        owner === "run"
-          ? {
-              type: "run.completed",
-              runId: "run-1",
-              outcome: "error",
-              errorCategory: "Error",
-              durationMs: 100,
-            }
-          : {
-              type: "harness.run.completed",
-              ...RUN_FIXTURE,
-              harnessId: "openclaw",
-              outcome: "error",
-              durationMs: 90,
-              itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-            },
+        buildEventFixture(
+          owner === "run" ? "run.completed" : "harness.run.completed",
+          { outcome: "error", ...(owner === "run" ? { errorCategory: "Error" } : {}) },
+          owner === "run" ? ["trace", "provider", "model"] : ["trace"],
+        ),
         {
           errorMessage:
             owner === "run" ? `OPENAI_API_KEY=${secret} ${"x".repeat(8 * 1024)}` : message,
@@ -2097,15 +2094,7 @@ describe("diagnostics-otel service", () => {
     await expect(startOtelService(options)).rejects.toThrow(
       "Configured OpenTelemetry TLS root certificate file is missing, empty, or unreadable; refusing insecure export",
     );
-    for (const owner of [
-      exporters.traces.ctor,
-      exporters.metrics.ctor,
-      exporters.logs.ctor,
-      traceProviderCtor,
-      meterProviderCtor,
-    ]) {
-      expect(owner).not.toHaveBeenCalled();
-    }
+    expectNoOwnedExporters();
   });
 
   test("redacts proxy credentials from telemetry startup failures", async () => {
