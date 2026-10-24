@@ -155,6 +155,8 @@ describe("production lint suppressions", () => {
         "scripts/lib/sqlite-reliability-process.ts|typescript/prefer-promise-reject-errors|1",
         // The load probe forwards native WebSocket.send with its original socket receiver.
         "scripts/perf/catalog-polling-measure.ts|typescript/unbound-method|1",
+        // The retention probe preserves the static Buffer factories for exact restoration.
+        "scripts/perf/command-capture-pool-retention.ts|typescript/unbound-method|2",
         // The diagnostics probe restores Session.post and invokes it with its live receiver.
         "scripts/perf/diagnostic-profile-measure.ts|typescript/unbound-method|1",
         // Node BroadcastChannel.postMessage has no target-origin parameter.

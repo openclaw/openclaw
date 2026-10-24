@@ -80,7 +80,6 @@ if (site === "voice") {
     child.stderr = new PassThrough();
     child.stdin = input ? null : new PassThrough();
     child.kill = () => {
-      child.exitCode = 0;
       queueMicrotask(() => {
         stdout.emit("end");
         stdout.emit("close");
