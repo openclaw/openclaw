@@ -24,8 +24,9 @@ import {
   type SessionHovercardContextInput,
 } from "./session-hovercard-context-solid.tsx";
 import { participantLabel, formatSessionAge, sessionAttribution } from "./session-hovercard.ts";
+import { ProgressRuntime } from "./session-progress-card-content.tsx";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
-import { progressCardHeadsUp } from "./session-progress-card.ts";
+import { progressCardHeadsUp, progressCardRunOutcome } from "./session-progress-card.ts";
 import { ChannelAvatar } from "./solid/channel-avatar.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { ViewerAvatar, ViewerFacepile } from "./solid/viewer-facepile.tsx";
@@ -72,6 +73,7 @@ export type SessionHovercardInput = SessionHovercardContextInput & {
   personActivity?: PersonActivityRouting;
   pullRequests?: ControlUiSessionPullRequestSnapshot;
   progressCard?: ProgressCard | null;
+  connected?: boolean;
 };
 function ParticipantLink(props: {
   participant: SessionParticipant;
@@ -463,7 +465,10 @@ export function SessionHovercard(props: SessionHovercardInput) {
       props.progressCard,
       props.row?.status,
       props.row?.startedAt,
-      props.row?.hasActiveRun ?? false,
+      props.connected !== false &&
+        (props.row?.gatewayHasActiveRun ?? props.row?.hasActiveRun) === true,
+      props.connected !== false && props.row?.hasActiveSubagentRun === true,
+      props.row?.endedAt,
     ),
   );
   const hasPullRequests = () =>
@@ -491,6 +496,26 @@ export function SessionHovercard(props: SessionHovercardInput) {
           <section class="session-hovercard__section session-hovercard__section--header">
             <Header {...props} />
           </section>
+        </Show>
+        <Show when={props.progressCard}>
+          {(card) => (
+            <ProgressRuntime
+              runtime={{
+                hasActiveSubagentRun: props.row?.hasActiveSubagentRun,
+                known: Boolean(props.row),
+                connected: props.connected,
+                lastRunError: props.row?.lastRunError,
+              }}
+              hasActiveRun={props.row?.gatewayHasActiveRun ?? props.row?.hasActiveRun ?? false}
+              sessionStatus={props.row?.status}
+              terminalOutcome={progressCardRunOutcome(
+                card(),
+                props.row?.status,
+                props.row?.startedAt,
+                props.row?.endedAt,
+              )}
+            />
+          )}
         </Show>
         <Show when={hasContext()}>
           <section class="session-hovercard__section session-hovercard__section--metadata">

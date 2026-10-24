@@ -11,8 +11,8 @@ import {
   sessionProgressCardsForGateway,
 } from "../../session-progress-cards.ts";
 import { isSessionRunStateActive } from "../../session-run-state.ts";
+import type { SessionRowObservation } from "../../sessions/session-capability.ts";
 import { parseAgentSessionKey } from "../../sessions/session-key.ts";
-import { sessionProgressTargetQuery } from "../../sessions/session-requests.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../solid-bridge.ts";
 import type { BoardWidget } from "../types.ts";
 
@@ -85,52 +85,83 @@ function SessionProgressWidgetContent(
     },
   );
   const progress = projectProgressCard(progressScope);
-  const rosterScope = createMemo(
-    () => {
-      return [
-        identity().agentId,
-        mounted() && props.active && Boolean(target().sessionKey),
-        host.isConnected,
-      ] as const;
-    },
+  const rowScope = createMemo(
+    () => ({
+      sessionKey: identity().sessionKey,
+      agentId: identity().agentId,
+      active: mounted() && props.active && Boolean(target().sessionKey),
+      client: gateway?.read().snapshot.client,
+      connectionRevision: gateway?.read().connectionRevision,
+      connected: gateway?.read().snapshot.phase === "connected",
+    }),
     {
-      equals: (previous, next) =>
-        previous[0] === next[0] && previous[1] === next[1] && previous[2] === next[2],
+      equals: (a, b) =>
+        a.sessionKey === b.sessionKey &&
+        a.agentId === b.agentId &&
+        a.active === b.active &&
+        a.client === b.client &&
+        a.connectionRevision === b.connectionRevision &&
+        a.connected === b.connected,
     },
   );
-  const roster = createMemo(() =>
-    projectSource(rosterScope(), {
-      read: ([agentId]) => context?.sessions.listSnapshot(sessionProgressTargetQuery(agentId)),
-      subscribe: ([agentId, active, connected], notify) => {
-        if (!connected || !context || !active) {
+  const runtime = createMemo(() => {
+    let observation: SessionRowObservation | undefined;
+    let reading = false;
+    let unavailable = false;
+    let retry = () => {};
+    return projectSource(rowScope(), {
+      read: () => ({ row: observation?.row, reading, unavailable, retry }),
+      subscribe: (scope, notify) => {
+        const agentId = scope.agentId;
+        if (!host.isConnected || !context || !scope.active || !scope.connected || !agentId) {
           return () => {};
         }
-        const query = sessionProgressTargetQuery(agentId);
-        const release = context.sessions.subscribeList(query, notify);
-        const snapshot = context.sessions.listSnapshot(query);
-        if (
-          !snapshot.result &&
-          !snapshot.loading &&
-          !snapshot.error &&
-          context.gateway.snapshot.phase === "connected"
-        ) {
-          void context.sessions.refreshList(query);
-        }
-        return release;
+        let alive = true;
+        const observedTarget = { key: scope.sessionKey, agentId };
+        const current = () =>
+          alive && host.isConnected && host.active && observation?.isCurrent() === true;
+        const refresh = async () => {
+          if (reading || !current()) {
+            return;
+          }
+          reading = true;
+          notify();
+          const reconcile = observation!.captureReconcile();
+          try {
+            const result = await context.sessions.describe(observedTarget);
+            if (current() && reconcile(result.session ?? undefined).status === "current") {
+              unavailable = false;
+            }
+          } catch {
+            if (current()) {
+              unavailable = true;
+            }
+          } finally {
+            reading = false;
+            if (current()) {
+              notify();
+            }
+          }
+        };
+        retry = () => void refresh();
+        observation = context.sessions.observeRow(
+          observedTarget,
+          () => {
+            unavailable = false;
+            notify();
+          },
+          { onInvalidate: retry },
+        );
+        void refresh();
+        return () => {
+          alive = false;
+          observation?.dispose();
+        };
       },
       equality: "revision",
-    }),
-  );
-  const row = createMemo(() => {
-    const current = identity();
-    return roster()
-      .read()
-      ?.result?.sessions.find(
-        (entry) =>
-          entry.key === current.sessionKey &&
-          (entry.agentId ?? parseAgentSessionKey(entry.key)?.agentId) === current.agentId,
-      );
+    });
   });
+  const row = () => runtime().read().row;
   const card = createMemo(() => progress.read().card);
   const error = createMemo(() => progress.read().error);
   const receipt = createMemo(() => ({ completion: progress.read().completion }), {
@@ -200,10 +231,29 @@ function SessionProgressWidgetContent(
                 startedAt={row()?.startedAt}
                 endedAt={row()?.endedAt}
                 hasActiveRun={isSessionRunStateActive(row() ?? {})}
+                runtime={{
+                  hasActiveSubagentRun: row()?.hasActiveSubagentRun,
+                  known:
+                    Boolean(row()) && !runtime().read().unavailable && !runtime().read().reading,
+                  connected: gateway?.read().snapshot.phase === "connected",
+                  lastRunError: row()?.lastRunError,
+                }}
               />
             )}
           </Show>
         </Show>
+      </Show>
+      <Show when={runtime().read().unavailable}>
+        <button
+          class="btn btn--sm"
+          type="button"
+          data-test-id="session-progress-runtime-retry"
+          title={t("sessionProgressCard.runtime.unknown")}
+          disabled={runtime().read().reading}
+          onClick={() => runtime().read().retry()}
+        >
+          {t("common.retry")}
+        </button>
       </Show>
     </>
   );

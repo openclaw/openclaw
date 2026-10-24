@@ -38,6 +38,26 @@
   gap: var(--space-2);
 }
 
+.session-progress-card__runtime {
+  display: flex;
+  flex-direction: column;
+  grid-column: 1 / -1;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 500;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.session-progress-card__runtime[data-error="true"] {
+  color: var(--danger);
+}
+
+.session-progress-card--board > .session-progress-card__runtime {
+  margin-bottom: var(--space-2);
+}
+
 .session-progress-card__summary {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto auto;

@@ -9,6 +9,7 @@ type EnglishCatalog = TranslationMap & {
   execApproval: TranslationMap & { labels: TranslationMap; scope: TranslationMap };
   sessionProgressCard: TranslationMap & {
     refresh: TranslationMap;
+    runtime: TranslationMap;
     activity: TranslationMap;
     outcome: TranslationMap;
     status: TranslationMap;
@@ -520,6 +521,7 @@ const startupEnglish = {
     checks: {},
   },
   sessionProgressCard: {
+    runtime: {},
     composerTitle: "Task progress",
 
     clearFailed: "Could not clear saved progress card.",

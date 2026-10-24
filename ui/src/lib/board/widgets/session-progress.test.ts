@@ -1,5 +1,6 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { t } from "../../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
@@ -9,28 +10,35 @@ import {
 } from "../../sessions/session-capability.test-support.ts";
 import "./session-progress.tsx";
 
-function createContext(progressRead: () => Promise<unknown> = async () => ({ card: null })) {
-  const { gateway, sessions, selection, connect, emitEvent } = createSubscriptionHydrationHarness(
-    async (method) => {
+function createContext(
+  progressRead: () => Promise<unknown> = async () => ({ card: null }),
+  describe: () => Promise<{ session: GatewaySessionRow | null }> = async () => ({ session: null }),
+) {
+  const { gateway, sessions, selection, connect, disconnect, emitEvent } =
+    createSubscriptionHydrationHarness(async (method) => {
       if (method === "sessions.list") {
         return sessionsResult([], 1);
+      }
+      if (method === "sessions.describe") {
+        return describe();
       }
       if (method === "progressCard.get") {
         return progressRead();
       }
       throw new Error(`Unexpected request: ${method}`);
-    },
-  );
+    });
   connect();
   let active = 0;
-  const subscribeList = sessions.subscribeList.bind(sessions);
-  const subscribe = vi.spyOn(sessions, "subscribeList").mockImplementation((scope, listener) => {
-    const release = subscribeList(scope, listener);
+  const observeRow = sessions.observeRow.bind(sessions);
+  const subscribe = vi.spyOn(sessions, "observeRow").mockImplementation((...args) => {
+    const observation = observeRow(...args);
+    const release = observation.dispose;
     active += 1;
-    return () => {
+    observation.dispose = () => {
       release();
       active -= 1;
     };
+    return observation;
   });
   onTestFinished(() => {
     sessions.dispose();
@@ -39,6 +47,8 @@ function createContext(progressRead: () => Promise<unknown> = async () => ({ car
   return {
     context: { gateway, sessions, agentSelection: selection } as unknown as ApplicationContext,
     selection,
+    connect,
+    disconnect,
     emitEvent,
     subscriptions: () => [active, subscribe.mock.calls.length],
   };
@@ -106,7 +116,7 @@ it("shows admitted loading, retries a failed read, and retains accepted progress
   expect(element.textContent).toContain("Accepted progress");
 });
 
-it("does not reacquire a roster listener when a queued property update runs after removal", async () => {
+it("does not reacquire a row observation when a queued property update runs after removal", async () => {
   const owner = createContext();
   const { provider, element } = mount(owner.context);
 
@@ -148,4 +158,74 @@ it("moves the listener with context and activity without duplicating it on selec
     await element.updateComplete;
     expect(subscriptions()).toEqual(expected);
   }
+});
+
+it("uses the exact target's live status even when it is outside the roster", async () => {
+  let row: GatewaySessionRow = {
+    key: "agent:main:progress-widget",
+    agentId: "main",
+    sessionId: "progress-widget",
+    kind: "direct",
+    status: "running",
+    startedAt: 100,
+    updatedAt: 101,
+    hasActiveRun: true,
+  };
+  let unavailable = false;
+  const owner = createContext(
+    async () => ({
+      card: {
+        sessionKey: row.key,
+        revision: 1,
+        updatedAt: 101,
+        steps: [{ step: "Collect findings", status: "in_progress" }],
+      },
+    }),
+    async () => {
+      if (unavailable) {
+        throw new Error("Status unavailable");
+      }
+      return { session: row };
+    },
+  );
+  const { element } = mount(owner.context);
+  await vi.waitFor(() =>
+    expect(element.querySelector(".session-progress-card__step")?.getAttribute("aria-label")).toBe(
+      "Collect findings, in progress",
+    ),
+  );
+  row = {
+    ...row,
+    status: "done",
+    hasActiveRun: false,
+    hasActiveSubagentRun: true,
+    endedAt: 110,
+    updatedAt: 110,
+  };
+  owner.emitEvent({
+    type: "event",
+    event: "sessions.changed",
+    payload: { reason: "update", agentId: "main", session: row, ts: 110 },
+  });
+  const runtime = () => element.querySelector(".session-progress-card__runtime")?.textContent;
+  await vi.waitFor(() => expect(runtime()).toContain(t("sessionProgressCard.runtime.delegated")));
+  expect(element.querySelector(".session-progress-card__step")?.getAttribute("aria-label")).toBe(
+    "Collect findings, in progress",
+  );
+
+  owner.disconnect();
+  await vi.waitFor(() => expect(runtime()).toContain(t("sessionProgressCard.runtime.offline")));
+  expect(owner.subscriptions()[0]).toBe(0);
+  unavailable = true;
+  owner.connect();
+  const retry = () =>
+    element.querySelector<HTMLButtonElement>('[data-test-id="session-progress-runtime-retry"]');
+  await vi.waitFor(() => expect(retry()).not.toBeNull());
+  expect(runtime()).toContain(t("sessionProgressCard.runtime.unknown"));
+  expect(element.querySelector(".session-run-spinner")).toBeNull();
+  unavailable = false;
+  row = { ...row, hasActiveSubagentRun: false };
+  retry()!.click();
+  await vi.waitFor(() => expect(runtime()).toContain(t("sessionProgressCard.runtime.idle")));
+  expect(retry()).toBeNull();
 });
