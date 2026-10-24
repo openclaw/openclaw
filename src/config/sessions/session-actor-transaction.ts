@@ -96,12 +96,10 @@ export function replaceSessionActorStoredEntry(
   sessionKey: string,
   postimage: Pick<SessionEntryWritePostimage, "entry" | "row" | "window">,
 ): void {
+  const entry = structuredClone(postimage.entry);
   state.entryRows = writableSessionActorMap(state.entryRows);
-  state.entryRows.set(sessionKey, {
-    entry: structuredClone(postimage.entry),
-    row: postimage.row,
-  });
-  state.hot.entry = structuredClone(postimage.entry);
+  state.entryRows.set(sessionKey, { entry, row: postimage.row });
+  state.hot.entry = entry;
   state.window = postimage.window;
 }
 

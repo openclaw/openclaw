@@ -261,8 +261,6 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
     const retained = structuredClone(projectionState);
     const detached = projectSessionActorHotState(projectionState);
     const original = structuredClone(detached);
-    detached.entry!.label = "caller edit";
-    detached.entry!.cliSessionIds!.synthetic = "caller edit";
     Object.assign(detached.target.database, { birthtime: "caller edit" });
     Object.assign(detached.version, { sequence: -1 });
     detached.participants[0]!.identity.id = "caller edit";

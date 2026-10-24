@@ -185,6 +185,7 @@ it("hydrates a cold command inside its transaction and returns a retryable preim
 
 it("installs native commits before reply, retains known commits after reply failure, and rolls back revoked authority", () =>
   withActor(async (f) => {
+    seedEntry(f, { cliSessionIds: { synthetic: "original-session" } });
     const initial = f.read();
     const command = patch(initial, 10);
     await f.prepare(command);
@@ -212,8 +213,11 @@ it("installs native commits before reply, retains known commits after reply fail
     delete f.hooks.afterTransaction;
     const current = f.read();
     expect(current.version).toEqual(committed.receipt.afterVersion);
+    current.entry!.cliSessionIds!.synthetic = "caller read edit";
     committed.receipt.postimage.entry!.updatedAt = 999;
+    committed.receipt.postimage.entry!.cliSessionIds!.synthetic = "caller receipt edit";
     expect(f.read().entry?.updatedAt).toBe(10);
+    expect(f.read().entry?.cliSessionIds).toEqual({ synthetic: "original-session" });
 
     revoke(f, "commit", "live run revoked before commit");
     expectRollback(f.mutate(patch(current, 20)), "live run revoked before commit");

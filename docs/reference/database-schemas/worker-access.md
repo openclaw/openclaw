@@ -496,6 +496,11 @@ remain with the history owner. See
 [`session-actor.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor.worker.ts)
 and [`session-actor-replica.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-replica.ts).
 
+Inside the durable worker, hot state and its stored entry row share one owned
+decoded entry. Mutations replace that entry instead of editing it in place;
+transaction forks retain the previous entry for rollback. Incoming postimages
+and outgoing public reads remain detached from the resident state.
+
 Replica lookups resolve configured path spellings through the existing admission
 registry: SQLite uses the admitted physical identity and birthtime; PostgreSQL
 uses the admitted namespace and store ID. Symlinked and canonical paths therefore
