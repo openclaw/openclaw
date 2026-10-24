@@ -46,17 +46,30 @@ function createReleaseNotesFixtureLines(): string[] {
     "",
     "### Highlights",
     "",
-    "- One.",
-    "- Two.",
-    "- Three.",
-    "- Four.",
-    "- Five.",
+    ...["One", "Two", "Three", "Four", "Five"].map((word) => `- ${word}.`),
     "",
     "### Changes",
     "",
     "### Fixes",
     "",
   ];
+}
+
+function commitAll(cwd: string, message: string, extraEnv: Record<string, string> = {}) {
+  git(cwd, ["add", "."]);
+  git(cwd, ["commit", "--allow-empty", "-qm", message], extraEnv);
+  return git(cwd, ["rev-parse", "HEAD"]);
+}
+
+function seedRepository(
+  prefix: string,
+  branch?: string,
+  changelog = createReleaseNotesFixtureLines().join("\n"),
+) {
+  const cwd = tempDirs.make(prefix);
+  git(cwd, ["init", "-q", ...(branch ? ["-b", branch] : [])]);
+  writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
+  return { cwd, base: commitAll(cwd, "chore: baseline"), changelog };
 }
 
 const verifier = resolve(
@@ -374,12 +387,7 @@ describe("release-note verification", () => {
   });
 
   it("reports deleted contextual references without rendering or crediting them", () => {
-    const cwd = tempDirs.make("openclaw-release-notes-deleted-ref-");
-    git(cwd, ["init", "-q", "-b", "main"]);
-    writeFileSync(join(cwd, "CHANGELOG.md"), createReleaseNotesFixtureLines().join("\n"));
-    git(cwd, ["add", "CHANGELOG.md"]);
-    git(cwd, ["commit", "-qm", "chore: baseline"]);
-    const base = git(cwd, ["rev-parse", "HEAD"]);
+    const { cwd, base } = seedRepository("openclaw-release-notes-deleted-ref-", "main");
     git(cwd, [
       "commit",
       "--allow-empty",
@@ -736,35 +744,24 @@ process.exitCode = errors.length ? 1 : 0;
       mergedAt: "2026-07-12T00:00:00Z",
     };
 
-    expect(() =>
+    const validate = (
+      node: Omit<typeof validNode, "mergedAt"> & { mergedAt: string | null },
+      ancestor = true,
+    ) =>
       validateReleaseProvenanceOverrides(
         overrides,
-        new Map([[104905, validNode]]),
+        new Map([[104905, node]]),
         mainCommit,
-        () => true,
-      ),
-    ).not.toThrow();
+        () => ancestor,
+      );
+    expect(() => validate(validNode)).not.toThrow();
     for (const node of [
       { ...validNode, baseRefName: "release/2026.7.1" },
       { ...validNode, mergedAt: null },
     ]) {
-      expect(() =>
-        validateReleaseProvenanceOverrides(
-          overrides,
-          new Map([[104905, node]]),
-          mainCommit,
-          () => true,
-        ),
-      ).toThrow("references non-main PR #104905");
+      expect(() => validate(node)).toThrow("references non-main PR #104905");
     }
-    expect(() =>
-      validateReleaseProvenanceOverrides(
-        overrides,
-        new Map([[104905, validNode]]),
-        mainCommit,
-        () => false,
-      ),
-    ).toThrow("references non-main PR #104905");
+    expect(() => validate(validNode, false)).toThrow("references non-main PR #104905");
   });
 
   it("validates release provenance PRs that shipped-ref subtraction left unresolved", () => {
@@ -783,26 +780,18 @@ process.exitCode = errors.length ? 1 : 0;
       return new Map(node ? [[104905, node]] : []);
     };
 
-    expect(() =>
+    const validate = (node?: unknown) =>
       validateReleaseProvenanceOverrides(
         overrides,
         new Map(),
         mainCommit,
         () => true,
-        resolveWith(mainNode),
-      ),
-    ).not.toThrow();
+        resolveWith(node),
+      );
+    expect(() => validate(mainNode)).not.toThrow();
     expect(requested).toEqual([[104905]]);
     for (const node of [{ ...mainNode, baseRefName: "release/2026.7.1" }, undefined]) {
-      expect(() =>
-        validateReleaseProvenanceOverrides(
-          overrides,
-          new Map(),
-          mainCommit,
-          () => true,
-          resolveWith(node),
-        ),
-      ).toThrow("references non-main PR #104905");
+      expect(() => validate(node)).toThrow("references non-main PR #104905");
     }
   });
 
@@ -813,36 +802,37 @@ process.exitCode = errors.length ? 1 : 0;
         expect(canonicalPullRequests([456], [], true)).toEqual([]);
         return;
       }
-      const mainCommit = {
+      const identity = {
         authorEmail: "maintainer@example.com",
         authorName: "Maintainer",
         changedPaths: new Set(["src/channel.ts"]),
-        hash: "a".repeat(40),
-        pullRequests: [123],
         subject: "fix(channel): preserve durable replies",
       };
+      const mainCommit = {
+        ...identity,
+        body: "",
+        hash: "a".repeat(40),
+        pullRequests: [123],
+      };
       const explicitBackport = {
+        ...identity,
         authorEmail: "other@example.com",
         authorName: "Other",
         body: `(cherry picked from commit ${mainCommit.hash})`,
-        changedPaths: new Set(["src/channel.ts"]),
         hash: "b".repeat(40),
-        subject: "fix(channel): preserve durable replies",
       };
       const integratedBackport = {
-        authorEmail: mainCommit.authorEmail,
-        authorName: mainCommit.authorName,
+        ...identity,
         body: "",
         changedPaths: new Set(["src/channel.ts", "src/release.ts"]),
         hash: "c".repeat(40),
-        subject: "fix(channel): preserve durable replies",
       };
       if (mode === "ambiguous") {
         const releaseCommit = { ...integratedBackport, changedPaths: new Set(["src/channel.ts"]) };
         const candidates = ["a", "b"].map((prefix) => ({
           authorEmail: releaseCommit.authorEmail,
           authorName: releaseCommit.authorName,
-          changedPaths: new Set(["src/channel.ts"]),
+          changedPaths: releaseCommit.changedPaths,
           hash: prefix.repeat(40),
           subject: "fix(channel): preserve durable replies (#123)",
         }));
@@ -851,80 +841,43 @@ process.exitCode = errors.length ? 1 : 0;
         return;
       }
       const pullRequestBackport = {
-        authorEmail: mainCommit.authorEmail,
-        authorName: mainCommit.authorName,
+        ...identity,
         body: "Backport of #123 to release/2026.7.1.",
-        changedPaths: new Set(["src/channel.ts"]),
         hash: "d".repeat(40),
         subject: "fix(channel): keep replies after renewal",
       };
 
-      expect(canonicalMainCommitMatches(explicitBackport, [mainCommit])).toEqual([mainCommit.hash]);
-      expect(canonicalMainCommitMatches(integratedBackport, [mainCommit])).toEqual([
-        mainCommit.hash,
-      ]);
-      expect(canonicalMainCommitMatches(pullRequestBackport, [mainCommit])).toEqual([
-        mainCommit.hash,
-      ]);
-      expect(
-        canonicalMainCommitMatches(pullRequestBackport, [
-          {
-            ...mainCommit,
-            pullRequests: [],
-            body: "Original main PR #123.",
-            subject: "fix(channel): preserve durable replies",
-          },
-        ]),
-      ).toEqual([]);
-      expect(
-        canonicalMainCommitMatches(pullRequestBackport, [
-          {
-            ...mainCommit,
-            pullRequests: [999],
-            subject: "fix(channel): keep replies after renewal",
-          },
-        ]),
-      ).toEqual([]);
-      expect(
-        canonicalMainCommitMatches(
-          { ...pullRequestBackport, authorEmail: "other@example.com", authorName: "Other" },
-          [mainCommit],
-        ),
-      ).toEqual([]);
-      expect(
-        canonicalMainCommitMatches(
-          { ...pullRequestBackport, changedPaths: new Set(["src/other.ts"]) },
-          [mainCommit],
-        ),
-      ).toEqual([]);
-      expect(
-        canonicalMainCommitMatches({ ...pullRequestBackport, body: "Related #123." }, [mainCommit]),
-      ).toEqual([]);
-      expect(
-        canonicalMainCommitMatches(pullRequestBackport, [
-          mainCommit,
-          { ...mainCommit, hash: "e".repeat(40), pullRequests: [123] },
-        ]),
-      ).toEqual([]);
-      expect(
-        canonicalMainCommitMatches(pullRequestBackport, [
-          mainCommit,
-          {
-            ...mainCommit,
-            body: "Original main PR #123.",
-            hash: "f".repeat(40),
-            pullRequests: [],
-          },
-        ]),
-      ).toEqual([mainCommit.hash]);
+      const matches = (release: typeof pullRequestBackport, candidates = [mainCommit]) =>
+        expect(canonicalMainCommitMatches(release, candidates));
+      matches(explicitBackport).toEqual([mainCommit.hash]);
+      matches(integratedBackport).toEqual([mainCommit.hash]);
+      matches(pullRequestBackport).toEqual([mainCommit.hash]);
+      matches(pullRequestBackport, [
+        { ...mainCommit, pullRequests: [], body: "Original main PR #123." },
+      ]).toEqual([]);
+      matches(pullRequestBackport, [
+        { ...mainCommit, pullRequests: [999], subject: "fix(channel): keep replies after renewal" },
+      ]).toEqual([]);
+      matches({
+        ...pullRequestBackport,
+        authorEmail: "other@example.com",
+        authorName: "Other",
+      }).toEqual([]);
+      matches({ ...pullRequestBackport, changedPaths: new Set(["src/other.ts"]) }).toEqual([]);
+      matches({ ...pullRequestBackport, body: "Related #123." }).toEqual([]);
+      matches(pullRequestBackport, [mainCommit, { ...mainCommit, hash: "e".repeat(40) }]).toEqual(
+        [],
+      );
+      matches(pullRequestBackport, [
+        mainCommit,
+        { ...mainCommit, body: "Original main PR #123.", hash: "f".repeat(40), pullRequests: [] },
+      ]).toEqual([mainCommit.hash]);
       const backportSubject = "fix(gateway): retain work admission across hosted wizard steps";
       mainCommit.subject = `${backportSubject} (#120582)`;
       integratedBackport.subject = `${mainCommit.subject} (#120584)`;
-      expect(canonicalMainCommitMatches(integratedBackport, [mainCommit])).toEqual([
-        mainCommit.hash,
-      ]);
+      matches(integratedBackport).toEqual([mainCommit.hash]);
       const malformed = { ...integratedBackport, subject: `${backportSubject}(#120582) (#120584)` };
-      expect(canonicalMainCommitMatches(malformed, [mainCommit])).toEqual([]);
+      matches(malformed).toEqual([]);
       expect(canonicalPullRequests([456], [123])).toEqual([123]);
     },
   );
@@ -1441,15 +1394,11 @@ console.log(JSON.stringify({ data }));
     { message: "CI #34244092230 passed.", identity: "wrong-repo", accepted: false },
   ])("classifies active workflow references without losing issue accounting: %j", (scenario) => {
     const referenceNumber = Number(scenario.message.match(/#(\d+)/)?.[1]);
-    const cwd = tempDirs.make("openclaw-release-notes-runs-");
-    git(cwd, ["init", "-q", "-b", "main"]);
-    writeFileSync(
-      join(cwd, "CHANGELOG.md"),
+    const { cwd, base } = seedRepository(
+      "openclaw-release-notes-runs-",
+      "main",
       [...createReleaseNotesFixtureLines(), scenario.note ?? "", ""].join("\n"),
     );
-    git(cwd, ["add", "CHANGELOG.md"]);
-    git(cwd, ["commit", "-qm", "chore: base"]);
-    const base = git(cwd, ["rev-parse", "HEAD"]);
     writeFileSync(join(cwd, "validation.txt"), scenario.message);
     git(cwd, ["add", "validation.txt"]);
     git(cwd, ["commit", "-qm", "chore: validation", "-m", scenario.message]);
@@ -1863,15 +1812,8 @@ console.log(JSON.stringify({ data }));
     { mode: "missing-data", attempts: 1, error: "did not include data", waits: [] },
     { mode: "schema", attempts: 1, error: "Field unknownField does not exist", waits: [] },
   ])("handles GraphQL transport failure at the CLI boundary: $mode", (scenario) => {
-    const cwd = tempDirs.make("openclaw-release-notes-transport-");
-    git(cwd, ["init", "-q", "-b", "main"]);
-    const changelog = createReleaseNotesFixtureLines().join("\n");
-    writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
-    git(cwd, ["add", "CHANGELOG.md"]);
-    git(cwd, ["commit", "-qm", "chore: baseline"]);
-    const base = git(cwd, ["rev-parse", "HEAD"]);
-    git(cwd, ["commit", "--allow-empty", "-qm", "chore: source contribution"]);
-    const target = git(cwd, ["rev-parse", "HEAD"]);
+    const { cwd, base, changelog } = seedRepository("openclaw-release-notes-transport-", "main");
+    const target = commitAll(cwd, "chore: source contribution");
     const gh = join(cwd, "gh");
     writeFileSync(
       gh,
@@ -1958,33 +1900,24 @@ Atomics.wait = function (...args) {
   it.each(["symbolic target", "release-only base", "nonancestor base"])(
     "validates the release range at the CLI boundary: %s",
     (mode) => {
-      const cwd = tempDirs.make("openclaw-release-notes-");
-      git(cwd, ["init", "-q"]);
-      writeFileSync(join(cwd, "CHANGELOG.md"), createReleaseNotesFixtureLines().join("\n"));
-      git(cwd, ["add", "CHANGELOG.md"]);
-      git(cwd, ["commit", "-qm", "initial"]);
-      const root = git(cwd, ["rev-parse", "HEAD"]);
+      const { cwd, base: root } = seedRepository("openclaw-release-notes-");
       if (mode === "release-only base") {
         writeFileSync(join(cwd, "main.txt"), "main\n");
-        git(cwd, ["add", "main.txt"]);
-        git(cwd, ["commit", "-qm", "main"]);
+        commitAll(cwd, "main");
         git(cwd, ["branch", "main-ref"]);
 
         git(cwd, ["checkout", "-qb", "release", root]);
         writeFileSync(join(cwd, "release.txt"), "release\n");
-        git(cwd, ["add", "release.txt"]);
-        git(cwd, ["commit", "-qm", "release"]);
+        commitAll(cwd, "release");
         git(cwd, ["tag", "beta-base"]);
       } else if (mode === "nonancestor base") {
         git(cwd, ["branch", "target"]);
         writeFileSync(join(cwd, "base.txt"), "base\n");
-        git(cwd, ["add", "base.txt"]);
-        git(cwd, ["commit", "-qm", "base"]);
+        commitAll(cwd, "base");
         git(cwd, ["tag", "base-ref"]);
         git(cwd, ["checkout", "-q", "target"]);
         writeFileSync(join(cwd, "target.txt"), "target\n");
-        git(cwd, ["add", "target.txt"]);
-        git(cwd, ["commit", "-qm", "target"]);
+        commitAll(cwd, "target");
       }
       if (mode !== "nonancestor base") {
         splitChangelog({ rootDir: cwd });
@@ -2019,25 +1952,13 @@ Atomics.wait = function (...args) {
   );
 
   it("leaves split artifacts untouched when the rendered ledger fails validation", () => {
-    const cwd = tempDirs.make("openclaw-release-notes-");
-    git(cwd, ["init", "-q"]);
-    const changelog = [
-      "# Changelog",
-      "",
-      "## 2026.7.1",
-      "",
-      "### Highlights",
-      "",
-      "- Only one highlight.",
-      "",
-      "### Changes",
-      "",
-      "### Fixes",
-      "",
-    ].join("\n");
-    writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
-    git(cwd, ["add", "CHANGELOG.md"]);
-    git(cwd, ["commit", "-qm", "initial"]);
+    const { cwd, changelog } = seedRepository(
+      "openclaw-release-notes-",
+      undefined,
+      createReleaseNotesFixtureLines()
+        .filter((line) => !["- Two.", "- Three.", "- Four.", "- Five."].includes(line))
+        .join("\n"),
+    );
     const manifestPath = join(cwd, "release-manifest.json");
 
     splitChangelog({ rootDir: cwd });
