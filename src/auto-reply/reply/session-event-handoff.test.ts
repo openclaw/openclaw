@@ -48,12 +48,12 @@ import {
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { buildSessionEventContext } from "./session-event-context.js";
 import {
-  assertSessionEventTargetCurrent,
+  assertSessionEventTargetCurrent as assertTargetCurrent,
   combineSessionEventTargetsForHost,
-  captureSessionEventTargetForHost,
-  enqueueSessionEventForHost,
+  captureSessionEventTargetForHost as captureTarget,
+  enqueueSessionEventForHost as enqueueEvent,
 } from "./session-event-handoff.js";
-import { prepareSessionEventTargetForHost } from "./session-event-target.js";
+import { prepareSessionEventTargetForHost as prepareTarget } from "./session-event-target.js";
 // These cases stop before turn admission. Unexpected dispatch is a failure,
 // never a synthetic adoption/settlement supplied by the fixture.
 const dispatch = vi.hoisted(() =>
@@ -108,7 +108,7 @@ function interceptReadOwner(
 }
 
 async function expectStopped(
-  receipt: ReturnType<typeof enqueueSessionEventForHost>,
+  receipt: ReturnType<typeof enqueueEvent>,
   status: "failed" | "cancelled",
   error?: string,
 ) {
@@ -121,13 +121,13 @@ async function expectStopped(
 }
 
 function enqueueCompletion(
-  expectedTarget: Parameters<typeof enqueueSessionEventForHost>[1]["expectedTarget"],
+  expectedTarget: Parameters<typeof enqueueEvent>[1]["expectedTarget"],
   options: Omit<
-    Parameters<typeof enqueueSessionEventForHost>[1],
+    Parameters<typeof enqueueEvent>[1],
     "agentId" | "sessionKey" | "source" | "expectedTarget"
   > = {},
 ) {
-  return enqueueSessionEventForHost("Process completed", {
+  return enqueueEvent("Process completed", {
     ...eventScope,
     source: "exec",
     expectedTarget,
@@ -283,11 +283,11 @@ describe("session event target custody", () => {
     }
     const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot({ ...cfg, session: { store: captured.storePath } });
-    const target = await captureSessionEventTargetForHost("main", runKey, {
+    const target = await captureTarget("main", runKey, {
       env: captured.env,
     });
     setRuntimeConfigSnapshot({ ...cfg, session: { store: replacement.storePath } });
-    const receipt = enqueueSessionEventForHost("Process completed", {
+    const receipt = enqueueEvent("Process completed", {
       agentId: "main",
       sessionKey: runKey,
       source: "exec",
@@ -307,7 +307,7 @@ describe("session event target custody", () => {
 
   it("rejects deleted-agent events", async ({ nativeState: state }) => {
     const { env } = state;
-    const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
+    const target = await captureTarget("main", sessionKey, { env });
     await withAgentDeletion(
       "main",
       async (begin) => {
@@ -318,9 +318,7 @@ describe("session event target custody", () => {
           sessionsDir: state.sessionsDir("main"),
           phase: "draining",
         });
-        expect(() => assertSessionEventTargetCurrent(target)).toThrow(
-          "Session event owner is being deleted",
-        );
+        expect(() => assertTargetCurrent(target)).toThrow("Session event owner is being deleted");
         for (const expectedTarget of [target, undefined]) {
           const receipt = enqueueCompletion(expectedTarget);
           await expectStopped(receipt, "failed", "Session event agent is being deleted");
@@ -330,7 +328,7 @@ describe("session event target custody", () => {
       },
       { env },
     );
-    expect(() => assertSessionEventTargetCurrent(target)).not.toThrow();
+    expect(() => assertTargetCurrent(target)).not.toThrow();
   });
 
   it("captures cold events across an empty usage refresh", async ({ coldState: { env } }) => {
@@ -345,16 +343,16 @@ describe("session event target custody", () => {
       );
       return owner;
     });
-    const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
+    const target = await captureTarget("main", sessionKey, { env });
     expect(target.sessionId).toBe("");
     reader.mockRestore();
     await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-    const prepared = await prepareSessionEventTargetForHost(target, { createIfMissing: true });
+    const prepared = await prepareTarget(target, { createIfMissing: true });
     using held = { [Symbol.dispose]: () => prepared.release() };
     void held;
     prepared.assertCurrent();
     expect((await fs.stat(databasePath)).isFile()).toBe(true);
-    const next = await prepareSessionEventTargetForHost(target, { createIfMissing: true });
+    const next = await prepareTarget(target, { createIfMissing: true });
     next.release();
     prepared.assertCurrent();
   });
@@ -386,9 +384,9 @@ describe("session event target custody", () => {
       // Transfer the historical spelling but preserve native facts and guards.
       selectedStore: owner.selectedStore && { ...owner.selectedStore, physicalPath: storePath },
     }));
-    const target = await captureSessionEventTargetForHost("main", sessionKey, { env: state.env });
+    const target = await captureTarget("main", sessionKey, { env: state.env });
     reader.mockRestore();
-    const prepared = await prepareSessionEventTargetForHost(target, { createIfMissing: true });
+    const prepared = await prepareTarget(target, { createIfMissing: true });
     using held = { [Symbol.dispose]: () => prepared.release() };
     void held;
     prepared.assertCurrent();
@@ -416,7 +414,7 @@ describe("session event target custody", () => {
   it.for([false, true])(
     "joins cold preparation before cancellation (retained: %s)",
     async (preserve, { signal, coldState: { env } }) => {
-      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
+      const target = await captureTarget("main", sessionKey, { env });
       const prepared = createDeferred();
       const release = createDeferred();
       const cancellation = new AbortController();
@@ -432,7 +430,7 @@ describe("session event target custody", () => {
       const occurrence = preserve
         ? enqueueRequiredSystemEventEntry("Cancelled fresh ingress", { sessionKey })
         : undefined;
-      const receipt = enqueueSessionEventForHost("Cancelled fresh ingress", {
+      const receipt = enqueueEvent("Cancelled fresh ingress", {
         ...eventScope,
         source: "plugin",
         expectedTarget: target,
@@ -482,12 +480,12 @@ describe("session event target custody", () => {
     "does not prepare cold storage for %s work",
     async (kind, { emptyState: { env } }) => {
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
-      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
+      const target = await captureTarget("main", sessionKey, { env });
       expect(target.sessionId).toBe("");
       await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
       let current = kind !== "already-revoked";
       const enqueue = () =>
-        enqueueSessionEventForHost("Fresh ingress", {
+        enqueueEvent("Fresh ingress", {
           ...eventScope,
           source: "plugin",
           expectedTarget: target,
@@ -532,7 +530,7 @@ describe("session event target custody", () => {
         receiptAuthority: () => invocationActive,
       },
       () =>
-        captureSessionEventTargetForHost("main", sessionKey, {
+        captureTarget("main", sessionKey, {
           env: suppliedEnv,
           assertCurrent: () => {
             if (!producerActive) {
@@ -558,9 +556,9 @@ describe("session event target custody", () => {
       toolsAllow: ["read", "exec"],
     });
     // The independently owned producer outlives its creating tool invocation.
-    expect(() => assertSessionEventTargetCurrent(target)).not.toThrow();
+    expect(() => assertTargetCurrent(target)).not.toThrow();
     producerActive = false;
-    expect(() => assertSessionEventTargetCurrent(target)).toThrow("Background producer retired");
+    expect(() => assertTargetCurrent(target)).toThrow("Background producer retired");
     expect(() => enqueueCompletion(target)).toThrow("Background producer retired");
     expect(peekSystemEventEntries(sessionKey)).toEqual([]);
   });
@@ -572,7 +570,7 @@ describe("session event target custody", () => {
       const capture = withGatewayToolCallerIdentity(
         { agentId: "main", sessionKey, receiptAuthority: () => owner !== "invocation" || active },
         () =>
-          captureSessionEventTargetForHost("main", sessionKey, {
+          captureTarget("main", sessionKey, {
             env,
             assertCurrent: () => {
               if (owner !== "invocation" && !active) {
@@ -600,7 +598,7 @@ describe("session event target custody", () => {
   it.for(["session reset", "lifecycle replacement"] as const)(
     "rejects %s before dispatch",
     async (change, { state: { env, storePath } }) => {
-      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
+      const target = await captureTarget("main", sessionKey, { env });
       replaceSessionEntrySync(
         { agentId: "main", storePath, sessionKey, env },
         {
@@ -620,7 +618,7 @@ describe("session event target custody", () => {
   );
 
   it("cancels pending occurrences when queues close", async ({ state: { env } }) => {
-    const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
+    const target = await captureTarget("main", sessionKey, { env });
     const suspension = gatewayWork.tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);
     try {
@@ -641,7 +639,7 @@ describe("session event target custody", () => {
   it.for(["reject", "cancel", "removed"] as const)(
     "preserves passive occurrences after %s settlement",
     async (boundary, { state: { env } }) => {
-      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
+      const target = await captureTarget("main", sessionKey, { env });
       const occurrence = enqueueRequiredSystemEventEntry("Deferred hook", { sessionKey });
       expect(occurrence).not.toBeNull();
       if (!occurrence) {
@@ -650,7 +648,7 @@ describe("session event target custody", () => {
       if (boundary === "reject") {
         gatewayWork.markGatewayRestartDraining();
       }
-      const receipt = enqueueSessionEventForHost(occurrence.text, {
+      const receipt = enqueueEvent(occurrence.text, {
         ...eventScope,
         source: "hook",
         expectedTarget: target,
@@ -689,18 +687,18 @@ it("retains one requester until pre-admission cancellation", async ({ signal, st
     scopes: ["operator.admin"],
     assertCurrent() {},
   });
-  const target = await captureSessionEventTargetForHost("main", sessionKey, {
+  const target = await captureTarget("main", sessionKey, {
     env,
     operatorAuthority: guest,
   });
-  const other = await captureSessionEventTargetForHost("main", sessionKey, {
+  const other = await captureTarget("main", sessionKey, {
     env,
     operatorAuthority: admin,
   });
   expect(() => combineSessionEventTargetsForHost([target, other])).toThrow(
     "different captured destinations",
   );
-  const receipt = enqueueSessionEventForHost("Command completed", {
+  const receipt = enqueueEvent("Command completed", {
     ...eventScope,
     source: "exec",
     expectedTarget: target,
