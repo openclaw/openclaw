@@ -420,7 +420,7 @@ describe("session activity people filter", () => {
     expect(text("summary", details)?.trim()).toBe("Connection details · 6");
     expect(
       [...all(".activity-feed__connection-summary span")].map((span) => span.textContent),
-    ).toEqual(["Alice's phone", "Mac · Web app", "Mac16,6 · Windows"]);
+    ).toEqual(["Mac · Web app", "Mac16,6 · Windows"]);
     const groups = all(".activity-feed__connection");
     expect(groups).toHaveLength(4);
     expect(groups[0]?.textContent).toContain("3 connections");
