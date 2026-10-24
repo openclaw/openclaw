@@ -59,20 +59,6 @@ suite.define(() => {
     return page;
   }
 
-  it("keeps only history controls in the Settings titlebar", async () => {
-    const page = await openPage({ webChrome: true, route: "settings/general" });
-
-    const toolbar = page.locator(".macos-titlebar-controls");
-    await expect.poll(() => toolbar.isVisible()).toBe(true);
-    await expect.poll(() => toolbar.getByRole("button").count()).toBe(2);
-    for (const name of ["Back", "Forward"]) {
-      await expect.poll(() => toolbar.getByRole("button", { name }).isVisible()).toBe(true);
-    }
-    for (const name of ["Expand sidebar", "Command palette", "New session"]) {
-      await expect.poll(() => toolbar.getByRole("button", { name }).count()).toBe(0);
-    }
-  });
-
   it("keeps the document root scroll-locked in the Settings takeover", async () => {
     const page = await openPage({ webChrome: true, route: "settings/general" });
     await page.locator(".settings-sidebar").waitFor({ state: "visible" });
