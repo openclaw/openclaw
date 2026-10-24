@@ -10,6 +10,7 @@ import type {
   NativeSubagentMonitorRuntime,
   ParentState,
 } from "./native-subagent-monitor-types.js";
+import { CodexNativeCompletionOwnerError } from "./native-subagent-pending-assignments.js";
 import { delayForAttempt } from "./native-subagent-retry.js";
 
 type CompletionDeliveryDependencies = {
@@ -29,6 +30,11 @@ type CompletionDeliveryDependencies = {
 
 const COMPLETION_DELIVERY_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
 const completionDeliveryOwners = new Map<string, ChildState>();
+
+type DeliveryClaim =
+  | { ok: true }
+  | { ok: false; reason: string; retryable: boolean; error?: string };
+const CLAIMED: DeliveryClaim = { ok: true };
 
 export class CodexNativeSubagentCompletionDelivery {
   private readonly attempts = new Map<ChildState, Promise<void>>();
@@ -110,7 +116,7 @@ export class CodexNativeSubagentCompletionDelivery {
             }
           : {}),
         isSourceSessionAdmissionAllowed: () =>
-          this.isCurrent(state, childState) && this.claim(state, childState),
+          this.isCurrent(state, childState) && this.claim(state, childState).ok,
         childSessionKey: childState.runId,
         childSessionId: completion.childThreadId,
         announceId: `codex-native:${childState.nativeParentThreadId}:${readCodexNativeSubagentRunId(childState.runId)?.turnId ? childState.runId : completion.childThreadId}:${completion.status}`,
@@ -134,8 +140,9 @@ export class CodexNativeSubagentCompletionDelivery {
         this.prepareDelivery(state, childState);
         return;
       }
-      if (!this.claim(state, childState)) {
-        this.dependencies.unregisterChild(childState);
+      const claim = this.claim(state, childState);
+      if (!claim.ok) {
+        this.holdOrDrop(childState, claim);
         return;
       }
       if (delivery.recoveryBlocked) {
@@ -153,8 +160,9 @@ export class CodexNativeSubagentCompletionDelivery {
       if (!this.isCurrent(state, childState)) {
         return;
       }
-      if (!this.claim(state, childState)) {
-        this.dependencies.unregisterChild(childState);
+      const claim = this.claim(state, childState);
+      if (!claim.ok) {
+        this.holdOrDrop(childState, claim);
         return;
       }
       const message = formatErrorMessage(error);
@@ -211,7 +219,7 @@ export class CodexNativeSubagentCompletionDelivery {
         } catch {
           continue;
         }
-        if (!this.claim(deliveryParent, child)) {
+        if (!this.claim(deliveryParent, child).ok) {
           continue;
         }
       }
@@ -252,12 +260,23 @@ export class CodexNativeSubagentCompletionDelivery {
     if (!child.pendingCompletion) {
       return false;
     }
-    if (!this.claim(state, child) || !state.requesterSessionKey || !state.completionScope) {
+    const claim = this.claim(state, child);
+    if (child.nativeCompletionDelivered) {
+      // Already delivered (announce or native receipt): settle regardless of
+      // the ownership read, which a rotation-creating announce may have moved.
+      child.pendingCompletion = undefined;
       this.dependencies.unregisterChild(child);
       return false;
     }
-    if (child.nativeCompletionDelivered) {
-      child.pendingCompletion = undefined;
+    if (!claim.ok) {
+      this.holdOrDrop(child, claim);
+      return false;
+    }
+    if (!state.requesterSessionKey || !state.completionScope) {
+      // Foreground-only parents receive native completion input instead.
+      embeddedAgentLog.debug("Native completion has no detached requester scope", {
+        childThreadId: child.childThreadId,
+      });
       this.dependencies.unregisterChild(child);
       return false;
     }
@@ -320,6 +339,10 @@ export class CodexNativeSubagentCompletionDelivery {
       COMPLETION_DELIVERY_RETRY_DELAYS_MS,
       chargeAttempt ? childState.completionDeliveryAttempt++ : childState.completionDeliveryAttempt,
     );
+    this.armRetry(childState, delayMs);
+  }
+
+  private armRetry(childState: ChildState, delayMs: number): void {
     childState.completionDeliveryTimer = setTimeout(() => {
       childState.completionDeliveryTimer = undefined;
       if (this.dependencies.children.get(childState.runId) !== childState) {
@@ -328,24 +351,105 @@ export class CodexNativeSubagentCompletionDelivery {
       const currentParent = this.dependencies.parents.get(childState.parentThreadId);
       if (currentParent) {
         void this.deliverPending(currentParent, childState);
+      } else if (childState.pendingCompletion) {
+        // Unchanged ownership semantics (restore may re-arm it); only make it visible.
+        embeddedAgentLog.warn("Native completion retry has no delivery parent", {
+          childThreadId: childState.childThreadId,
+          runId: childState.runId,
+        });
       }
     }, delayMs);
     childState.completionDeliveryTimer.unref();
   }
 
-  private claim(state: ParentState, childState: ChildState): boolean {
-    if (childState.completionCustody && !childState.completionCustody.isCurrent()) {
+  /** Never drop silently: wait (bounded, uncharged) for a resolvable owner, else log why. */
+  private holdOrDrop(childState: ChildState, claim: Extract<DeliveryClaim, { ok: false }>): void {
+    if (claim.retryable && this.scheduleOwnerHold(childState, claim)) {
+      return;
+    }
+    this.drop(childState, claim, claim.retryable);
+  }
+
+  private scheduleOwnerHold(
+    childState: ChildState,
+    claim: Extract<DeliveryClaim, { ok: false }>,
+  ): boolean {
+    if (
+      !childState.pendingCompletion ||
+      this.dependencies.children.get(childState.runId) !== childState
+    ) {
       return false;
+    }
+    if (childState.completionDeliveryTimer) {
+      return true;
+    }
+    const attempt = childState.completionOwnerHoldAttempt ?? 0;
+    if (attempt >= COMPLETION_DELIVERY_RETRY_DELAYS_MS.length) {
+      return false;
+    }
+    childState.completionOwnerHoldAttempt = attempt + 1;
+    const delayMs = delayForAttempt(COMPLETION_DELIVERY_RETRY_DELAYS_MS, attempt);
+    embeddedAgentLog.warn("Holding native completion with unresolved history owner", {
+      childThreadId: childState.childThreadId,
+      reason: claim.reason,
+      attempt: attempt + 1,
+      maxAttempts: COMPLETION_DELIVERY_RETRY_DELAYS_MS.length,
+      retryInMs: delayMs,
+      ...(claim.error ? { error: claim.error } : {}),
+    });
+    this.armRetry(childState, delayMs);
+    return true;
+  }
+
+  private drop(
+    childState: ChildState,
+    claim: Extract<DeliveryClaim, { ok: false }>,
+    ownerHoldsExhausted: boolean,
+  ): void {
+    if (childState.pendingCompletion && !childState.nativeCompletionDelivered) {
+      embeddedAgentLog.warn("Dropping native completion", {
+        childThreadId: childState.childThreadId,
+        runId: childState.runId,
+        reason: claim.reason,
+        ...(ownerHoldsExhausted
+          ? { ownerHoldAttempts: childState.completionOwnerHoldAttempt ?? 0 }
+          : {}),
+        ...(claim.error ? { error: claim.error } : {}),
+      });
+    }
+    this.dependencies.unregisterChild(childState);
+  }
+
+  private claim(state: ParentState, childState: ChildState): DeliveryClaim {
+    if (childState.completionCustody && !childState.completionCustody.isCurrent()) {
+      return { ok: false, reason: "completion-custody-expired", retryable: false };
     }
     const requesterSessionKey = state.requesterSessionKey?.trim();
     if (!requesterSessionKey) {
-      return true;
+      return CLAIMED;
     }
     const key =
       childState.deliveryOwnerKey ??
       `${requesterSessionKey}\0${childState.nativeTurnId ? codexNativeSubagentRunId(childState.childThreadId, childState.nativeTurnId) : childState.runId}`;
     try {
-      state.assignmentStore?.assertCurrent();
+      // Delivery-only ownership may follow native parent rotation within the
+      // same session and connection. Receipts stay strict.
+      const store = state.assignmentStore;
+      if (store?.assertDeliveryOwner) {
+        store.assertDeliveryOwner();
+      } else {
+        store?.assertCurrent();
+      }
+    } catch (error) {
+      const ownerError = error instanceof CodexNativeCompletionOwnerError ? error : undefined;
+      return {
+        ok: false,
+        reason: ownerError?.reason ?? "owner-unresolved",
+        retryable: ownerError?.retryable ?? true,
+        error: formatErrorMessage(error),
+      };
+    }
+    try {
       assertHistoryOwnerMatchesRegistration(
         childState.historyOwner,
         state.historyOwner,
@@ -353,20 +457,23 @@ export class CodexNativeSubagentCompletionDelivery {
         state.historyOwner !== undefined,
       );
     } catch (error) {
-      embeddedAgentLog.warn("Holding native completion with unresolved history owner", {
-        childThreadId: childState.childThreadId,
+      return {
+        ok: false,
+        reason: "history-owner-contradictory",
+        retryable: false,
         error: formatErrorMessage(error),
-      });
-      return false;
+      };
     }
     const owner = completionDeliveryOwners.get(key);
     if (owner) {
-      return owner === childState;
+      return owner === childState
+        ? CLAIMED
+        : { ok: false, reason: "superseded-delivery-owner", retryable: false };
     }
     // Delivery no longer needs the app-server client. Keep one process owner
     // across client replacement so fallback steering cannot inject twice.
     completionDeliveryOwners.set(key, childState);
     childState.deliveryOwnerKey = key;
-    return true;
+    return CLAIMED;
   }
 }

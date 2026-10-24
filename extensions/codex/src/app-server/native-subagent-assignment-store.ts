@@ -2,8 +2,14 @@ import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-
 import { createPreparedNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import { appendSessionTranscriptMessageByIdentityStrict } from "openclaw/plugin-sdk/session-transcript-runtime";
-import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
-import type { CodexNativeSubagentAssignmentStore } from "./native-subagent-pending-assignments.js";
+import {
+  codexNativeSubagentHistoryConnectionFingerprint,
+  type CodexNativeSubagentHistoryOwner,
+} from "./native-subagent-history-owner.js";
+import {
+  CodexNativeCompletionOwnerError,
+  type CodexNativeSubagentAssignmentStore,
+} from "./native-subagent-pending-assignments.js";
 import type { CodexNativeSubagentSubmissionStore } from "./native-subagent-submission.js";
 import { matchesCodexNativeSubagentSubmissionBinding } from "./session-binding-record.js";
 import type {
@@ -47,9 +53,43 @@ export function createNativeSubagentAssignmentStore(params: {
     await params.assertLifecycleCurrentAsync?.();
     assertCurrent();
   };
+  // Delivery-only: a completion may follow native parent rotation when the
+  // physical session and connection are unchanged. Completion admission still
+  // re-proves the requester's session and lifecycle (expectedRequester).
+  // Writes and receipts stay strict.
+  const assertDeliveryOwner = () => {
+    const binding = params.readBinding();
+    if (!binding) {
+      throw new CodexNativeCompletionOwnerError("binding-unavailable", true);
+    }
+    if (binding.pendingSupervisionBranch) {
+      throw new CodexNativeCompletionOwnerError("pending-supervision-branch", true);
+    }
+    if (codexNativeSubagentHistoryConnectionFingerprint(binding) !== owner.connectionFingerprint) {
+      throw new CodexNativeCompletionOwnerError("connection-changed", false);
+    }
+    if (binding.threadId === owner.parentThreadId) {
+      // Unrotated: exactly the strict submission-binding check.
+      assertCurrent();
+      return;
+    }
+    // Rotation is accepted only for the owner's own session-scoped binding.
+    if (identity.kind !== "session") {
+      throw new CodexNativeCompletionOwnerError("rotation-unverifiable", false);
+    }
+    if (identity.sessionId !== owner.sessionId) {
+      throw new CodexNativeCompletionOwnerError("session-changed", false);
+    }
+    try {
+      params.assertLifecycleCurrent?.();
+    } catch {
+      throw new CodexNativeCompletionOwnerError("lifecycle-changed", false);
+    }
+  };
   return {
     assertCurrent,
     assertCurrentAsync,
+    assertDeliveryOwner,
     read: async () => {
       const assignments =
         (await bindingStore.readNativeSubagentAssignments?.(identity, owner)) ?? [];
