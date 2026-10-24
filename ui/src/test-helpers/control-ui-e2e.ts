@@ -1,6 +1,7 @@
 // Control UI test helper supports control ui e2e setup.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -493,15 +494,30 @@ export async function startControlUiE2eServer(
 // document reloaded on a deep link like /chat/research requests
 // /chat/assets/*.js; without this contract Vite's SPA fallback answers with
 // index.html and the module never executes, bricking the page.
-function controlUiE2eGatewayAssetPathPlugin(): Plugin {
+function controlUiE2eGatewayAssetPathPlugin(outDir: string): Plugin {
+  const assetRoot = `${path.resolve(outDir, "assets")}${path.sep}`;
   return {
     name: "control-ui-e2e-gateway-asset-paths",
     configurePreviewServer(server) {
-      server.middlewares.use((req, _res, next) => {
+      server.middlewares.use((req, res, next) => {
         const url = req.url ?? "";
         const assetsIndex = url.indexOf("/assets/");
         if (assetsIndex > 0) {
           req.url = url.slice(assetsIndex);
+        }
+        const assetPath = path.resolve(outDir, `.${(req.url ?? "").split("?")[0]}`);
+        if (assetPath.startsWith(assetRoot)) {
+          // Match bundled Gateway assets without caching missing files or SPA fallbacks.
+          void stat(assetPath).then(
+            (file) => {
+              if (file.isFile()) {
+                res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+              }
+              next();
+            },
+            () => next(),
+          );
+          return;
         }
         next();
       });
@@ -674,7 +690,7 @@ export async function startBuiltControlUiE2eServer(
     plugins: [
       publication.plugin,
       ...(sharedConfig.plugins ?? []),
-      controlUiE2eGatewayAssetPathPlugin(),
+      controlUiE2eGatewayAssetPathPlugin(outDir),
       controlUiE2ePreviewConfigPlugin(bootstrapConfig),
     ],
     preview: {

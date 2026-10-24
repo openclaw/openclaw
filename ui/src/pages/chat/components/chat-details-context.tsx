@@ -1,26 +1,12 @@
-import {
-  For,
-  Show,
-  action,
-  createMemo,
-  createOptimistic,
-  createSignal,
-  lazy,
-  onSettled,
-} from "solid-js";
+import { For, Show, action, createMemo, createOptimistic, lazy } from "solid-js";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { createTimeout } from "../../../lib/reactive/timers.ts";
-import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
 import "../../../styles/chat/context-breakdown.css";
-import {
-  animateDetailsDesktopEntrance,
-  ChatDetailsDesktopSection,
-} from "./chat-details-desktop-section.tsx";
+import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
@@ -40,67 +26,9 @@ export type ChatDetailsContextContentProps = {
   >;
   /** True only while the host and this section/page are presented. */
   presented: boolean;
-  /** Opt in only from the desktop composition; mobile retains native disclosures. */
-  desktop?: boolean;
+  /** The native Context panel shows complete lists and management actions. */
+  expanded?: boolean;
 };
-
-/** Session-keyed arrival: cached context is immediate; the first live usage settles before entering. */
-export function ChatDetailsDesktopContext(
-  props: ChatDetailsContextContentProps & {
-    expanded: boolean;
-    onExpandedChange: (expanded: boolean) => void;
-  },
-) {
-  const available = createMemo(() =>
-    Boolean(getContextNoticeViewModel(props.details.selectedSession)),
-  );
-  // Preserve the initial availability, then latch the first admitted arrival for this session.
-  const [ready, setReady] = createSignal<boolean>((previous) => previous ?? available());
-  let entering = false;
-  createTimeout(
-    () => {
-      entering = true;
-      setReady(true);
-    },
-    () => (available() && props.presented && !ready() ? 2_000 : undefined),
-  );
-  return (
-    <Show when={available() && ready()}>
-      {(_ready) => {
-        let shell!: HTMLDivElement;
-        onSettled(() => {
-          if (!entering) {
-            return undefined;
-          }
-          entering = false;
-          return animateDetailsDesktopEntrance(shell);
-        });
-        return (
-          <div ref={(element) => (shell = element)} class="chat-details-desktop-context">
-            <ChatDetailsDesktopSection
-              section="context"
-              title={t("chat.sessionDetails.context")}
-              expanded={props.expanded}
-              presented={props.presented}
-              onExpandedChange={(expanded) => props.onExpandedChange(expanded)}
-              metadata={
-                <span class="chat-details-desktop-context-summary">
-                  <ChatDetailsContextSummary details={props.details} />
-                </span>
-              }
-            >
-              <ChatDetailsContextContent
-                desktop
-                details={props.details}
-                presented={props.presented && props.expanded}
-              />
-            </ChatDetailsDesktopSection>
-          </div>
-        );
-      }}
-    </Show>
-  );
-}
 
 /** Native usage metadata; the caller supplies its platform's heading/chrome. */
 export function ChatDetailsContextSummary(props: Pick<ChatDetailsContextContentProps, "details">) {
@@ -164,7 +92,9 @@ export function ChatDetailsContextContent(props: ChatDetailsContextContentProps)
           </div>
           <Show
             when={
-              props.presented && props.details.pullRequestsGateway && props.details.selectedSession
+              (props.presented || props.expanded) &&
+              props.details.pullRequestsGateway &&
+              props.details.selectedSession
             }
           >
             <ChatLazyBoundary
@@ -177,58 +107,60 @@ export function ChatDetailsContextContent(props: ChatDetailsContextContentProps)
               }
             >
               <ChatContextBreakdown
-                desktop={props.desktop}
+                expanded={props.expanded}
+                presented={props.presented}
                 gateway={props.details.pullRequestsGateway!}
                 session={props.details.selectedSession!}
                 agentId={props.details.currentAgentId ?? undefined}
                 used={usage().used}
                 limit={usage().limit}
                 approximate={usage().approximate}
-              />
+              >
+                <Show when={props.expanded && budget() && !usage().approximate}>
+                  <p class="chat-context__note">
+                    {t("chat.sessionDetails.contextReserve", {
+                      tokens: formatCompactTokenCount(budget()!.effectiveReserveTokens),
+                    })}
+                  </p>
+                </Show>
+                <Show when={props.expanded && props.details.onCompact}>
+                  <div class="chat-context__compaction">
+                    <p class="chat-context__note">
+                      {t("chat.sessionDetails.contextCompactDescription")}
+                    </p>
+                    <button
+                      class="chat-context__compact"
+                      type="button"
+                      disabled={!props.presented || compacting() || props.details.runActive}
+                      onClick={() => void compact()}
+                    >
+                      {t(
+                        compacting()
+                          ? "chat.sessionDetails.contextCompacting"
+                          : "chat.sessionDetails.contextCompact",
+                      )}
+                    </button>
+                  </div>
+                </Show>
+                <Show when={props.expanded && (usage().input !== null || usage().output !== null)}>
+                  <div class="chat-details__context-budget">
+                    <span>{t("chat.composer.contextUsage.latestRunTokens")}</span>
+                  </div>
+                  <dl class="chat-details__stats">
+                    <For each={["input", "output"] as const}>
+                      {(kind) => (
+                        <Show when={usage()[kind] !== null}>
+                          <div>
+                            <dt>{t(`usage.breakdown.${kind}`)}</dt>
+                            <dd>{formatCompactTokenCount(usage()[kind]!)}</dd>
+                          </div>
+                        </Show>
+                      )}
+                    </For>
+                  </dl>
+                </Show>
+              </ChatContextBreakdown>
             </ChatLazyBoundary>
-          </Show>
-          <Show when={budget() && !usage().approximate}>
-            <p class="chat-context__note">
-              {t("chat.sessionDetails.contextHeadroom", {
-                tokens: formatCompactTokenCount(Math.max(0, usage().limit - usage().used)),
-              })}
-            </p>
-            <p class="chat-context__note">
-              {t("chat.sessionDetails.contextReserve", {
-                tokens: formatCompactTokenCount(budget()!.effectiveReserveTokens),
-              })}
-            </p>
-          </Show>
-          <Show when={props.details.onCompact}>
-            <button
-              class="chat-context__compact"
-              type="button"
-              disabled={!props.presented || compacting() || props.details.runActive}
-              onClick={() => void compact()}
-            >
-              {t(
-                compacting()
-                  ? "chat.sessionDetails.contextCompacting"
-                  : "chat.sessionDetails.contextCompact",
-              )}
-            </button>
-          </Show>
-          <Show when={usage().input !== null || usage().output !== null}>
-            <div class="chat-details__context-budget">
-              <span>{t("chat.composer.contextUsage.latestRunTokens")}</span>
-            </div>
-            <dl class="chat-details__stats">
-              <For each={["input", "output"] as const}>
-                {(kind) => (
-                  <Show when={usage()[kind] !== null}>
-                    <div>
-                      <dt>{t(`usage.breakdown.${kind}`)}</dt>
-                      <dd>{formatCompactTokenCount(usage()[kind]!)}</dd>
-                    </div>
-                  </Show>
-                )}
-              </For>
-            </dl>
           </Show>
         </>
       )}

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { extractCliErrorMessage, formatCliOutputError, parseCliOutput } from "./cli-output.js";
+import {
+  createClaudeBackend,
+  createPluginParser,
+  joinJsonlFrames,
+} from "./cli-output.test-helpers.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
 
 type ParseCliOutputParams = Parameters<typeof parseCliOutput>[0];
@@ -67,12 +72,12 @@ describe("formatCliOutputError", () => {
 describe("parseCliJsonl errors", () => {
   it("keeps an explicit Claude execution error that also reports a terminal reason", () => {
     const result = parseCliJsonl(
-      [
-        JSON.stringify({
+      joinJsonlFrames(
+        {
           type: "stream_event",
           event: { type: "content_block_delta", delta: { type: "text_delta", text: "partial" } },
-        }),
-        JSON.stringify({
+        },
+        {
           type: "result",
           subtype: "error_during_execution",
           is_error: true,
@@ -81,14 +86,9 @@ describe("parseCliJsonl errors", () => {
           terminal_reason: "error_during_execution",
           result: "",
           errors: ["API Error: 529 Overloaded"],
-        }),
-      ].join("\n"),
-      {
-        command: "claude",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
+        },
+      ),
+      createClaudeBackend("claude"),
       "claude-cli",
     );
 
@@ -102,19 +102,19 @@ describe("parseCliJsonl errors", () => {
 
   it("keeps detailed Gemini stream-json result errors over generic error events", () => {
     const result = parseCliJsonl(
-      [
-        JSON.stringify({
+      joinJsonlFrames(
+        {
           type: "error",
           timestamp: "2026-06-16T19:36:48.000Z",
           severity: "error",
-        }),
-        JSON.stringify({
+        },
+        {
           type: "result",
           timestamp: "2026-06-16T19:36:49.000Z",
           status: "error",
           error: { message: "Final Gemini failure" },
-        }),
-      ].join("\n"),
+        },
+      ),
       {
         command: "gemini",
         output: "jsonl",
@@ -128,26 +128,26 @@ describe("parseCliJsonl errors", () => {
 
   it("does not treat Gemini stream-json warning events as provider errors", () => {
     const result = parseCliJsonl(
-      [
-        JSON.stringify({
+      joinJsonlFrames(
+        {
           type: "error",
           timestamp: "2026-06-16T19:36:46.000Z",
           severity: "warning",
           message: "Loop detected, stopping execution",
-        }),
-        JSON.stringify({
+        },
+        {
           type: "message",
           timestamp: "2026-06-16T19:36:47.000Z",
           role: "assistant",
           content: "final output",
           delta: true,
-        }),
-        JSON.stringify({
+        },
+        {
           type: "result",
           timestamp: "2026-06-16T19:36:49.000Z",
           status: "success",
-        }),
-      ].join("\n"),
+        },
+      ),
       {
         command: "gemini",
         output: "jsonl",
@@ -296,21 +296,21 @@ describe("createCliJsonlStreamingParser errors", () => {
     });
 
     parser.push(
-      [
-        JSON.stringify({
+      joinJsonlFrames(
+        {
           type: "message",
           timestamp: "2026-06-16T19:36:47.000Z",
           role: "assistant",
           content: "partial output",
           delta: true,
-        }),
-        JSON.stringify({
+        },
+        {
           type: "result",
           timestamp: "2026-06-16T19:36:49.000Z",
           status: "error",
           error: { message: "Gemini stream failed" },
-        }),
-      ].join("\n") + "\n",
+        },
+      ) + "\n",
     );
     parser.finish();
 
@@ -332,9 +332,7 @@ describe("createCliJsonlStreamingParser errors", () => {
 
   it("turns plugin-owned JSONL parser exceptions into bounded provider errors", () => {
     let calls = 0;
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "acme", output: "jsonl" },
-      providerId: "acme-cli",
+    const parser = createPluginParser({
       parseJsonlEvent: (line) => {
         calls += 1;
         if (line.includes("result")) {
@@ -342,7 +340,6 @@ describe("createCliJsonlStreamingParser errors", () => {
         }
         throw new Error("invalid custom event");
       },
-      onAssistantDelta: () => {},
     });
 
     parser.push('{"type":"broken"}\n{"type":"result"}\n');
@@ -361,9 +358,7 @@ describe("createCliJsonlStreamingParser errors", () => {
     "keeps plugin-owned terminal errors and text %j ahead of later result summaries",
     (text) => {
       const usageEvents: Array<{ usage: unknown; isTerminal: boolean }> = [];
-      const parser = createCliJsonlStreamingParser({
-        backend: { command: "acme", output: "jsonl" },
-        providerId: "acme-cli",
+      const parser = createPluginParser({
         parseJsonlEvent: (line) =>
           line === "failed"
             ? { kind: "result", text, errorText: "provider failed" }
@@ -373,7 +368,6 @@ describe("createCliJsonlStreamingParser errors", () => {
                 sessionId: "late-successor",
                 usage: { input: 2, output: 1, total: 3 },
               },
-        onAssistantDelta: () => {},
         onUsage: (usage, isTerminal) => usageEvents.push({ usage, isTerminal }),
       });
 
@@ -392,14 +386,11 @@ describe("createCliJsonlStreamingParser errors", () => {
 
   it("preserves plugin-owned session ids emitted after terminal errors", () => {
     const sessionIds: string[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "acme", output: "jsonl" },
-      providerId: "acme-cli",
+    const parser = createPluginParser({
       parseJsonlEvent: () => [
         { kind: "result", errorText: "provider failed" },
         { kind: "sessionId", sessionId: "late-successor" },
       ],
-      onAssistantDelta: () => {},
       onSessionId: (sessionId) => sessionIds.push(sessionId),
     });
 
@@ -416,14 +407,11 @@ describe("createCliJsonlStreamingParser errors", () => {
   });
 
   it("preserves streamed plugin text when the terminal result text is empty", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "acme", output: "jsonl" },
-      providerId: "acme-cli",
+    const parser = createPluginParser({
       parseJsonlEvent: (line) =>
         line === "delta"
           ? { kind: "text", text: "streamed answer" }
           : { kind: "result", text: "  " },
-      onAssistantDelta: () => {},
     });
 
     parser.push("delta\nresult\n");
@@ -437,9 +425,7 @@ describe("createCliJsonlStreamingParser errors", () => {
   });
 
   it("preserves earlier plugin result text when a later result only adds metadata", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "acme", output: "jsonl" },
-      providerId: "acme-cli",
+    const parser = createPluginParser({
       parseJsonlEvent: (line) =>
         line === "result"
           ? { kind: "result", text: "completed answer" }
@@ -448,7 +434,6 @@ describe("createCliJsonlStreamingParser errors", () => {
               sessionId: "summary-session",
               usage: { input: 5, output: 3, total: 8 },
             },
-      onAssistantDelta: () => {},
     });
 
     parser.push("result\nsummary\n");
@@ -466,9 +451,7 @@ describe("createCliJsonlStreamingParser errors", () => {
     ["with an empty result", "  ", "delegated answer"],
     ["with an authoritative result", "final answer", "final answer"],
   ] as const)("retains mixed plugin text precedence %s", (_label, resultText, expectedText) => {
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "acme", output: "jsonl" },
-      providerId: "acme-cli",
+    const parser = createPluginParser({
       parseJsonlEvent: (line) => {
         if (line === "session") {
           return { kind: "sessionId", sessionId: "custom-session" };
@@ -481,7 +464,6 @@ describe("createCliJsonlStreamingParser errors", () => {
         }
         return null;
       },
-      onAssistantDelta: () => {},
     });
 
     parser.push(

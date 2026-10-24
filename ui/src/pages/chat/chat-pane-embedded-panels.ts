@@ -56,9 +56,11 @@ export function sidebarPanelDefinitions(
               "portal.list",
               "operator.read",
             )
-          : slot === "subagents" || slot === "processes"
-            ? panelContext.subagentsAvailable
-            : SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
+          : slot === "context"
+            ? Boolean(params?.contextDetails?.selectedSession)
+            : slot === "subagents" || slot === "processes"
+              ? panelContext.subagentsAvailable
+              : SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
       ),
       content: null,
       view: hasContent ? data : undefined,
@@ -66,7 +68,7 @@ export function sidebarPanelDefinitions(
         variant:
           textKey === "conversation" || textKey === "companion"
             ? "chat"
-            : textKey === "subagents" || textKey === "processes"
+            : textKey === "subagents" || textKey === "processes" || textKey === "context"
               ? "file-list"
               : textKey === "portal"
                 ? "browser"
@@ -99,6 +101,7 @@ export function sidebarPanelDefinitions(
     definePanel("conversation", "messageSquare", false),
     definePanel("subagents", "bot"),
     definePanel("processes", "terminal"),
+    definePanel("context", "layers"),
     definePanel("detail", "diff", Boolean(data?.detailContent)),
     definePanel("terminal", "terminal", Boolean(state?.terminalAvailable)),
     {

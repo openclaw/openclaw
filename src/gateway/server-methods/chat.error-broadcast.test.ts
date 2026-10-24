@@ -133,10 +133,9 @@ describe("chat.send error broadcast", () => {
         const duplicateResponse = vi.fn();
         await handleChatSend({ ...options, respond: duplicateResponse });
         expect(duplicateResponse).toHaveBeenCalledWith(
-          true,
-          { runId: "activity-send", status: "in_flight" },
+          false,
           undefined,
-          expect.objectContaining({ cached: true }),
+          expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
         );
         expect(ctx.recordClientActivity).not.toHaveBeenCalled();
         if (closedDuringAdmission) {

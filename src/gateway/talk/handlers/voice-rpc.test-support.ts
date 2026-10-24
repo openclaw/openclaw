@@ -11,6 +11,7 @@ import type {
   GatewayRequestHandlerOptions,
   RespondFn,
 } from "../../server-methods/types.js";
+import { gatewayConnect } from "../../server/client-fixtures.test-support.js";
 import { talkVoiceHandlers } from "./voice.js";
 
 export function voiceRuntimes() {
@@ -45,13 +46,10 @@ export function voiceRuntimes() {
 export function voiceClient(connId: string): GatewayClient & { connId: string } {
   return {
     connId,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "gateway-client", version: "test", platform: "test", mode: "backend" },
-      role: "operator",
-      scopes: ["operator.admin"],
-    },
+    connect: gatewayConnect(["operator.admin"], {
+      id: "gateway-client",
+      mode: "backend",
+    }),
   };
 }
 

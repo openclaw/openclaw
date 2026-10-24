@@ -24,6 +24,18 @@ import {
 import { createDispatchVerboseSession } from "./dispatch-from-config.verbose-session.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
+function inspectPatchPlan(): Parameters<NonNullable<GetReplyOptions["onPlanUpdate"]>>[0] {
+  return {
+    phase: "update",
+    explanation: "Inspect code, patch it, run tests.",
+    steps: [
+      { step: "Inspect code", status: "completed" },
+      { step: "Patch code", status: "in_progress" },
+      { step: "Run tests", status: "pending" },
+    ],
+  };
+}
+
 beforeAll(globalBeforeAll0);
 
 describe("dispatchReplyFromConfig", () => {
@@ -538,15 +550,7 @@ describe("dispatchReplyFromConfig", () => {
     const ctx = createDirectCtx();
 
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onPlanUpdate?.({
-        phase: "update",
-        explanation: "Inspect code, patch it, run tests.",
-        steps: [
-          { step: "Inspect code", status: "completed" },
-          { step: "Patch code", status: "in_progress" },
-          { step: "Run tests", status: "pending" },
-        ],
-      });
+      await opts?.onPlanUpdate?.(inspectPatchPlan());
       await opts?.onApprovalEvent?.({
         phase: "requested",
         status: "pending",
@@ -643,15 +647,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onPlanUpdate?.({
-        phase: "update",
-        explanation: "Inspect code, patch it, run tests.",
-        steps: [
-          { step: "Inspect code", status: "completed" },
-          { step: "Patch code", status: "in_progress" },
-          { step: "Run tests", status: "pending" },
-        ],
-      });
+      await opts?.onPlanUpdate?.(inspectPatchPlan());
       await opts?.onPatchSummary?.({
         phase: "end",
         title: "apply patch",
@@ -680,15 +676,7 @@ describe("dispatchReplyFromConfig", () => {
     const ctx = createDirectCtx({ SessionKey: "agent:main:main" });
 
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onPlanUpdate?.({
-        phase: "update",
-        explanation: "Inspect code, patch it, run tests.",
-        steps: [
-          { step: "Inspect code", status: "completed" },
-          { step: "Patch code", status: "in_progress" },
-          { step: "Run tests", status: "pending" },
-        ],
-      });
+      await opts?.onPlanUpdate?.(inspectPatchPlan());
       await opts?.onApprovalEvent?.({
         phase: "requested",
         status: "pending",

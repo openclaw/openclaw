@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createAssistantMessageEventStream, type Context } from "openclaw/plugin-sdk/llm";
+import type { Context } from "openclaw/plugin-sdk/llm";
 import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -20,6 +20,7 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-run
 import type { StreamFn } from "../runtime/index.js";
 import { completionModelDefinition } from "../simple-completion.test-support.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { createQueuedAssistantStream } from "../test-helpers/assistant-event-stream.test-support.js";
 import { runEmbeddedAgent } from "./run.js";
 import { clearEmbeddedSessionPromptStates } from "./session-prompt-state.js";
 
@@ -48,12 +49,9 @@ it("admits a second workspace turn through real prepared runtime after registrat
         model: model.id,
         content: [{ type: "text", text: `SCRIPTED-${requests.length}` }],
       });
-      const events = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        events.push({ type: "done", reason: "stop", message });
-        events.end();
+      return createQueuedAssistantStream((push) => {
+        push({ type: "done", reason: "stop", message });
       });
-      return events;
     };
     const bridge = {
       stream,

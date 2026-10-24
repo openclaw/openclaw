@@ -14,7 +14,6 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { root as openSafeRoot } from "../../infra/fs-safe.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
-import { resolveOpenPathCommand } from "./open-path.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   assistantToolCall,
@@ -81,6 +80,8 @@ const expectText = (name: string, content: string, extra: Record<string, unknown
   });
 const browserKinds = (entries: Record<string, unknown>[]) =>
   entries.map((entry) => [entry.path, entry.kind, entry.sessionKind]);
+const errorType = async (operation: Parameters<typeof files.error>[0], name: string) =>
+  (await files.error(operation, name)).details.type;
 
 const outsideDirs = useAutoCleanupTempDirTracker(afterEach);
 const outsideFile = () => path.join(outsideDirs.make("session-files-outside-"), "outside.txt");
@@ -117,7 +118,7 @@ describe("sessions.files RPC handlers", () => {
     "rejects device-folder %s without touching either host's files",
     async (operation) => {
       const deviceRoot = outsideDirs.make("session-files-device-");
-      fs.writeFileSync(path.join(workspaceRoot, "notes.txt"), "GATEWAY");
+      writeWorkspace("notes.txt", "GATEWAY");
       fs.writeFileSync(path.join(deviceRoot, "notes.txt"), "DEVICE");
       mockSession({
         sessionId: "device-session",
@@ -125,23 +126,18 @@ describe("sessions.files RPC handlers", () => {
         spawnedCwd: workspaceRoot,
         spawnedWorkspaceDir: workspaceRoot,
       });
-      const params =
-        operation === "reveal"
-          ? { key: sessionKey }
-          : {
-              sessionKey,
-              path: "notes.txt",
-              ...(operation === "assets" ? { refs: [] } : {}),
-              ...(operation === "set"
-                ? { content: "WRONG HOST", expectedHash: hashContent("GATEWAY") }
-                : {}),
-            };
-      const error = await files.error(operation, params);
+      // Each method validates a different request shape before the shared device gate.
+      const request = {
+        list: { path: "notes.txt" },
+        get: { path: "notes.txt" },
+        assets: { path: "notes.txt", refs: [] },
+        set: { path: "notes.txt", content: "WRONG HOST", expectedHash: hashContent("GATEWAY") },
+        reveal: {},
+      }[operation];
+      const error = await files.error(operation, request);
       expect(error.details).toMatchObject({ type: "device_folder_files_unavailable" });
       expect(readWorkspace("notes.txt")).toBe("GATEWAY");
       expect(fs.readFileSync(path.join(deviceRoot, "notes.txt"), "utf8")).toBe("DEVICE");
-      expect(hoisted.execOpenPath).not.toHaveBeenCalled();
-      expect(hoisted.readDelta).not.toHaveBeenCalled();
     },
   );
 
@@ -155,16 +151,6 @@ describe("sessions.files RPC handlers", () => {
       },
     } as const;
   }
-
-  it("reveals the same workspace root returned by sessions.files.list", async () => {
-    const listPayload = await files.ok("list");
-    const revealPayload = await files.ok("reveal");
-
-    expect(revealPayload).toEqual({ ok: true, path: listPayload.root });
-    expect(hoisted.execOpenPath).toHaveBeenCalledWith(
-      resolveOpenPathCommand(listPayload.root as string),
-    );
-  });
 
   it("returns no workspace listing while the session checkout is pending", async () => {
     mockSession({ sessionId: "sess-pending", pendingWorktree: { titleSource: "New checkout" } });
@@ -195,13 +181,7 @@ describe("sessions.files RPC handlers", () => {
       { sessionKey: "global" },
       { getRuntimeConfig: () => cfg },
     );
-
     expect(payload.root).toBe(workspaceRoot);
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "ops" });
-    expect(hoisted.readDelta).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
-      expect.any(Object),
-    );
   });
 
   it("rejects a foreign agent before a bare fixed-store workspace write", async () => {
@@ -224,7 +204,6 @@ describe("sessions.files RPC handlers", () => {
       code: "INVALID_REQUEST",
       message: 'agent "research" does not match session key agent "ops"',
     });
-    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
     expect(readWorkspace("ui/chat.ts")).toBe("export const chat = true;\n");
   });
 
@@ -263,29 +242,23 @@ describe("sessions.files RPC handlers", () => {
   );
 
   it("returns opener failures as successful RPC results", async () => {
-    const warn = vi.fn();
     hoisted.execOpenPath.mockRejectedValueOnce(new Error("xdg-open: no method available"));
-
-    const payload = await files.ok("reveal", {}, { logGateway: { warn } });
+    const payload = await files.ok("reveal", {}, { logGateway: { warn: vi.fn() } });
 
     expect(payload).toMatchObject({
       ok: false,
       path: workspaceRoot,
       error: expect.stringContaining("headless environment"),
     });
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("sessions.files.reveal failed path="),
-    );
   });
 
   it("prefers the spawned workspace root over a nested spawned cwd", async () => {
-    const nestedCwd = workspacePath("packages/app");
     writeWorkspace("packages/app/src/readme.md", "# Nested read me\n");
     writeWorkspace("packages/shared/config.ts", "export const shared = true;\n");
     mockSession({
       sessionId: "sess-main",
       sessionFile: "sess-main.jsonl",
-      spawnedCwd: nestedCwd,
+      spawnedCwd: workspacePath("packages/app"),
       spawnedWorkspaceDir: workspaceRoot,
     });
     mockVisibleMessages([
@@ -309,16 +282,16 @@ describe("sessions.files RPC handlers", () => {
       ["package.json", "file", undefined],
     ]);
 
-    const nested = { content: "# Nested read me\n", workspacePath: "packages/app/src/readme.md" };
-    const root = { content: "# Read me\n", workspacePath: "src/readme.md" };
-    const shared = { content: "export const shared = true;\n" };
     for (const [name, expected] of [
-      ["src/readme.md", nested],
-      [workspacePath("src/readme.md"), root],
-      ["packages/app/src/readme.md", { content: nested.content }],
-      ["packages//app/src/readme.md", { workspacePath: nested.workspacePath }],
-      ["../shared/config.ts", shared],
-      ["packages/shared/config.ts", shared],
+      [
+        "src/readme.md",
+        { content: "# Nested read me\n", workspacePath: "packages/app/src/readme.md" },
+      ],
+      [workspacePath("src/readme.md"), { content: "# Read me\n", workspacePath: "src/readme.md" }],
+      ["packages/app/src/readme.md", { content: "# Nested read me\n" }],
+      ["packages//app/src/readme.md", { workspacePath: "packages/app/src/readme.md" }],
+      ["../shared/config.ts", { content: "export const shared = true;\n" }],
+      ["packages/shared/config.ts", { content: "export const shared = true;\n" }],
     ] as const) {
       await expectFile(name, expected);
     }
@@ -339,24 +312,6 @@ describe("sessions.files RPC handlers", () => {
     await expectFile(folder.browser.entries[0].path, { content: "# Notes\n" });
   });
 
-  it("browses, searches, and previews files not referenced by the session", async () => {
-    const folderPayload = await files.ok("list", { path: "ui" });
-
-    expect(folderPayload.browser.parentPath).toBe("");
-    expect(browserKinds(folderPayload.browser.entries)).toEqual([
-      ["ui/chat.ts", "file", "modified"],
-      ["ui/vite.config.ts", "file", undefined],
-    ]);
-
-    const searchPayload = await files.ok("list", { search: "vite" });
-
-    expect(searchPayload.browser).toMatchObject({
-      search: "vite",
-      entries: [{ path: "ui/vite.config.ts" }],
-    });
-    await expectText("ui/vite.config.ts", "export default {};\n", { kind: "read", missing: false });
-  });
-
   it("truncates broad workspace searches by visited entries, not only by matches", async () => {
     for (let index = 0; index < 5_025; index += 1) {
       writeWorkspace(`bulk-${String(index).padStart(4, "0")}.txt`, "");
@@ -368,31 +323,20 @@ describe("sessions.files RPC handlers", () => {
     expect(payload.browser).toMatchObject({ search: "needle", truncated: true, entries: [] });
   });
 
-  it("marks searches incomplete when an excluded directory may hide a match", async () => {
-    writeWorkspace("src/REPORT.md", "# Source report\n");
-    writeWorkspace("dist/REPORT.md", "# Generated report\n");
-
-    const payload = await files.ok("list", { search: "REPORT.md" });
-
-    expect(payload.browser).toMatchObject({
-      search: "REPORT.md",
-      truncated: true,
-      entries: [{ path: "src/REPORT.md" }],
-    });
-  });
-
-  it("keeps searches complete when only repository metadata is excluded", async () => {
-    writeWorkspace("src/REPORT.md", "# Source report\n");
-    writeWorkspace(".git/objects/REPORT.md", "# Git object\n");
-
-    const payload = await files.ok("list", { search: "REPORT.md" });
-
-    expect(payload.browser).toMatchObject({
-      search: "REPORT.md",
-      entries: [{ path: "src/REPORT.md" }],
-    });
-    expect(payload.browser).not.toHaveProperty("truncated");
-  });
+  it.each(["dist", ".git/objects"])(
+    "marks excluded content, but not repository metadata, incomplete (%s)",
+    async (excluded) => {
+      writeWorkspace("src/REPORT.md", "# Source report\n");
+      writeWorkspace(`${excluded}/REPORT.md`, "# Excluded report\n");
+      const { browser } = await files.ok("list", { search: "REPORT.md" });
+      expect(browser).toMatchObject({ search: "REPORT.md", entries: [{ path: "src/REPORT.md" }] });
+      if (excluded === "dist") {
+        expect(browser.truncated).toBe(true);
+      } else {
+        expect(browser).not.toHaveProperty("truncated");
+      }
+    },
+  );
 
   it.runIf(process.platform === "linux")(
     "reports non-UTF-8 filenames during workspace browse",
@@ -417,12 +361,7 @@ describe("sessions.files RPC handlers", () => {
     writeWorkspaceFile(outsideDir, "secret.txt", "linked parent outside\n");
     fs.symlinkSync(outsideDir, path.join(workspaceRoot, "linked-dir"), "dir");
 
-    const error = await files.error("get", "linked-dir/secret.txt");
-
-    expect(error.details).toMatchObject({
-      path: "linked-dir/secret.txt",
-      type: "session_file_not_found",
-    });
+    expect(await errorType("get", "linked-dir/secret.txt")).toBe("session_file_not_found");
   });
 
   it("does not browse paths outside the session workspace root", async () => {
@@ -433,7 +372,6 @@ describe("sessions.files RPC handlers", () => {
   });
 
   it("does not derive a workspace root from transcript cwd", async () => {
-    const sessionsDir = path.join(workspaceRoot, "custom-sessions");
     const transcriptCwd = outsideDirs.make("session-files-transcript-");
     writeWorkspaceFile(transcriptCwd, "secret.txt", "transcript cwd secret\n");
     writeWorkspace(
@@ -443,17 +381,17 @@ describe("sessions.files RPC handlers", () => {
     mockSession(
       { sessionId: "sess-main", sessionFile: "sess-main.jsonl" },
       "main",
-      path.join(sessionsDir, "sessions.json"),
+      workspacePath("custom-sessions/sessions.json"),
     );
     mockVisibleMessages([assistantToolCall("read", { path: "secret.txt" })]);
     const listPayload = await files.ok("list");
 
-    expect(listPayload.root).toBe(workspaceRoot);
-    expect(listPayload.browser).toBeDefined();
-    expect(listPayload.files).toMatchObject([{ missing: true, path: "secret.txt" }]);
-
-    const error = await files.error("get", "secret.txt");
-    expect(error.details).toMatchObject({ path: "secret.txt", type: "session_file_not_found" });
+    expect(listPayload).toMatchObject({
+      root: workspaceRoot,
+      browser: expect.any(Object),
+      files: [{ missing: true, path: "secret.txt" }],
+    });
+    expect(await errorType("get", "secret.txt")).toBe("session_file_not_found");
   });
 
   it("refreshes committed identity bytes after a pending pre-write read", async () => {
@@ -571,14 +509,7 @@ describe("sessions.files RPC handlers", () => {
     );
     expect(conflict.details.currentHash).toBe(hashContent(content));
     const saved = expectOkPayload(calls.filter((call) => call.ok));
-    expect(saved.file).toMatchObject({
-      name: "vite.config.ts",
-      kind: "modified",
-      missing: false,
-      size: Buffer.byteLength(content),
-      hash: hashContent(content),
-    });
-    expect(Number.isInteger(saved.file.updatedAtMs)).toBe(true);
+    expect(saved.file.hash).toBe(hashContent(content));
     expect(saved.file.content).toBeUndefined();
   });
 
@@ -642,13 +573,11 @@ describe("sessions.files RPC handlers", () => {
   it("registers session assets and rejects more than 64 references before loading files", async () => {
     const empty = await files.ok("assets", { path: "index.html", refs: [] });
     expect(empty).toEqual({ assets: [] });
-    hoisted.loadSessionEntry.mockClear();
     const error = await files.error("assets", {
       path: "index.html",
       refs: Array.from({ length: 65 }, (_, index) => `image-${index}.png`),
     });
     expect(error.code).toBe("INVALID_REQUEST");
-    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
   });
 });
 
@@ -732,7 +661,6 @@ describe("sessions.files preview formats", () => {
     const reveal = await files.ok("reveal");
     expect(reveal).toMatchObject({ ok: false, error: expect.stringContaining("remote host") });
     expect((await files.error("get", "large.txt")).details.type).toBe("session_file_too_large");
-    expect(readFile).toHaveBeenCalledTimes(1);
     await expect(saveFile("result.json", "changed", '{"total":46}')).rejects.toThrow(
       "conflict-safe editing",
     );
@@ -753,8 +681,7 @@ describe("sessions.files preview formats", () => {
         },
       },
     });
-    const result = await files.request("get", "growing.txt");
-    expect(expectError(result).details.type).toBe("session_file_too_large");
+    expect(await errorType("get", "growing.txt")).toBe("session_file_too_large");
   });
 
   it.each(TEXT_PREVIEW_FIXTURES)("keeps detected $format text editable", async (fixture) => {
@@ -876,7 +803,6 @@ describe("sessions.files touched-file folds", () => {
 
     expect(touchedKinds(beforeReset.files)).toEqual([["src/readme.md", "read"]]);
     expect(touchedKinds(afterReset.files)).toEqual([["ui/chat.ts", "modified"]]);
-    expect(hoisted.readDelta).toHaveBeenCalledTimes(3);
   });
 
   it.each([

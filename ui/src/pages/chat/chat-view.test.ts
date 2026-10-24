@@ -1568,15 +1568,16 @@ describe("chat loading skeleton", () => {
     // yield to the subscription windows.
     container.querySelector<HTMLElement>(".context-usage summary")!.click();
     flush();
-    expect(container.querySelector("[data-chat-usage-provider='true']")?.textContent).toContain(
-      "OpenAI",
-    );
+    expect(container.querySelector("[data-chat-usage-account='true']")?.textContent).toBe("OpenAI");
     const limitRow = container.querySelector(".context-usage__limit");
-    expect(limitRow?.textContent?.replace(/\s+/g, " ").trim()).toBe("Weekly 72%");
+    expect(limitRow?.getAttribute("role")).toBe("progressbar");
+    expect(limitRow?.getAttribute("aria-label")).toBe("Weekly");
+    expect(limitRow?.getAttribute("aria-valuenow")).toBe("72");
     const usageLink = container.querySelector<HTMLAnchorElement>(
       ".context-usage__popover [data-chat-provider-usage='true']",
     );
     expect(usageLink?.getAttribute("href")).toBe("/rosita/usage");
+    expect(usageLink?.getAttribute("aria-label")).toBe("Open usage dashboard");
   });
 
   it.each([
@@ -2652,7 +2653,7 @@ describe("chat attachment picker", () => {
     }
   });
 
-  it("keeps the default placeholder only for internally generated pasted text", () => {
+  it("keeps the agent-aware placeholder with pasted text, files, images, and comments", () => {
     let pastedTextAttachments: ChatAttachment[] = [];
     const pasteTarget = renderChatView({
       draft: "Review the attachment",
@@ -2689,13 +2690,34 @@ describe("chat attachment picker", () => {
 
     const ordinaryTextFile = renderChatView({ attachments: [namedLikePaste] });
     expect(ordinaryTextFile.querySelector("textarea")?.getAttribute("placeholder")).toBe(
-      t("chat.composer.placeholderWithAttachments"),
+      t("chat.composer.placeholder", { name: "Val" }),
     );
     expect(ordinaryTextFile.querySelector(".chat-attachment-text-action")).toBeNull();
 
     const withImage = renderChatView({ attachments: [imageAttachment] });
     expect(withImage.querySelector("textarea")?.getAttribute("placeholder")).toBe(
-      t("chat.composer.placeholderWithAttachments"),
+      t("chat.composer.placeholder", { name: "Val" }),
+    );
+
+    const withComment = renderChatView({
+      assistantName: "Roboclaw",
+      attachments: [
+        {
+          id: "comment",
+          mimeType: "text/plain",
+          fileName: "selection-comment.txt",
+          selectionAnnotation: {
+            text: "Review this line",
+            comment: "Keep this context",
+            sessionKey: "agent:main:main",
+            start: 0,
+            end: 16,
+          },
+        },
+      ],
+    });
+    expect(withComment.querySelector("textarea")?.getAttribute("placeholder")).toBe(
+      t("chat.composer.placeholder", { name: "Roboclaw" }),
     );
   });
 

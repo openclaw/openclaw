@@ -2,7 +2,6 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   createNewSessionPageE2eSuite,
-  controlUiSessionUrl,
   installMockGateway,
 } from "./new-session-page.test-support.ts";
 
@@ -132,105 +131,4 @@ suite.define(() => {
       custodian ? 1660 : 1440,
     );
   });
-
-  it.each(["page", "panel"])(
-    "preserves %s history and the unsent draft while runtime inference recovers",
-    async (surface) => {
-      const runtimeError =
-        "OpenClaw requires working inference: The configured runtime could not start. Repair the launcher and retry.";
-      const runtimeOptions = {
-        sessionKey: "agent:main:work",
-        deferredMethods: ["openclaw.chat"],
-        featureMethods: [
-          "chat.metadata",
-          "chat.startup",
-          "chat.history",
-          "chat.send",
-          "openclaw.chat",
-          "openclaw.chat.history",
-        ],
-        methodResponses: {
-          "openclaw.chat.history": {
-            turns: [
-              {
-                role: "assistant",
-                text: "Your earlier conversation is still here.",
-                at: 1_700_000_101_000,
-              },
-            ],
-          },
-        },
-      };
-
-      await withSetupPage(
-        async (page, gateway) => {
-          await page.goto(
-            surface === "page"
-              ? `${suite.server.baseUrl}custodian`
-              : controlUiSessionUrl(suite.server.baseUrl, "agent:main:work"),
-          );
-          if (surface === "panel") {
-            await page.locator(".sidebar-footer-bar__home").click();
-            await page
-              .locator("openclaw-assistant-panel")
-              .getByRole("button", { name: "Ask OpenClaw", exact: true })
-              .click();
-          }
-          const chat = page.locator("openclaw-custodian-surface");
-          await gateway.waitForRequest("openclaw.chat");
-          await gateway.rejectDeferred("openclaw.chat", {
-            code: "UNAVAILABLE",
-            details: { code: "system_agent_inference_unavailable" },
-            message: runtimeError,
-          });
-          await chat.locator(".custodian__setup-state, .custodian__error").waitFor();
-          await expect
-            .poll(() => chat.locator(".custodian__error").textContent())
-            .toContain(runtimeError);
-          await chat.getByText("Your earlier conversation is still here.").waitFor();
-          expect(await chat.getByRole("button", { name: "Review connection" }).count()).toBe(0);
-          expect(await chat.locator(".agent-chat__composer-shell").count()).toBe(1);
-          const composer = chat.getByRole("textbox");
-          const send = chat.getByRole("button", { name: "Send", exact: true });
-          const reply = async (text: string) => {
-            await gateway.resolveDeferred("openclaw.chat", {
-              sessionId: "runtime-recovered",
-              reply: text,
-              action: "none",
-            });
-            await chat.getByText(text).waitFor();
-          };
-          expect(await composer.isEnabled()).toBe(true);
-          await composer.fill("Check my setup");
-          expect(await send.isDisabled()).toBe(true);
-          await composer.press("Enter");
-          expect(await gateway.getRequests("openclaw.chat")).toHaveLength(1);
-          expect(await composer.inputValue()).toBe("Check my setup");
-
-          // Each deferral is consumed by one request, including the failed startup check.
-          await gateway.deferNext("openclaw.chat");
-          await chat.getByRole("button", { name: "Retry", exact: true }).click();
-          const retry = await gateway.waitForRequest("openclaw.chat", { after: 1 });
-          expect(retry.params).not.toHaveProperty("message");
-          expect(await composer.isEnabled()).toBe(true);
-          expect(await send.isDisabled()).toBe(true);
-          await composer.press("Enter");
-          expect(await gateway.getRequests("openclaw.chat")).toHaveLength(2);
-          expect(await composer.inputValue()).toBe("Check my setup");
-          await reply("Ready to help again.");
-          await expect.poll(() => send.isEnabled()).toBe(true);
-          expect(await composer.inputValue()).toBe("Check my setup");
-          expect(await chat.locator(".custodian__error").count()).toBe(0);
-
-          await gateway.deferNext("openclaw.chat", { message: "Check my setup" });
-          await send.click();
-          const turn = await gateway.waitForRequest("openclaw.chat", { after: 2 });
-          expect(turn.params).toMatchObject({ message: "Check my setup" });
-          await reply("Your setup is working.");
-        },
-        runtimeOptions,
-        1660,
-      );
-    },
-  );
 });

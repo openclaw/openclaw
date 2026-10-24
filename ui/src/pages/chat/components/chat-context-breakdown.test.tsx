@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
+
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createSignal } from "solid-js";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { SessionSystemPromptReport } from "../../../../../src/config/sessions/session-system-prompt-report.js";
 import { createDeferredCore } from "../../../../../src/shared/deferred.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
+import { sessionContextReportsForGateway } from "../../../lib/session-context-report.ts";
+import * as toast from "../../../lib/toast.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
 import {
   createGatewayRequestMock,
@@ -84,9 +88,18 @@ it("retires a pending report on session replacement and rejects a report from an
     sessionId: "first",
   });
   const view = mountSolid(() => (
-    <ChatContextBreakdown gateway={gateway} session={session()} used={50000} limit={100000} />
+    <ChatContextBreakdown
+      gateway={gateway}
+      session={session()}
+      used={session().totalTokens ?? 50000}
+      limit={100000}
+    />
   ));
   await expect.poll(() => request.mock.calls.length).toBe(1);
+  setSession((current) => ({ ...current, label: "Renamed session" }));
+  flush();
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(signal?.aborted).toBe(false);
   setSession({ key: "agent:main:second", kind: "direct", sessionId: "current" });
   flush();
   await expect.poll(() => view.container.textContent).toContain("No matching context report");
@@ -113,6 +126,7 @@ it("keeps refresh available after a rejected read and shows loading until its re
       session={{ key: "agent:main:current", kind: "direct", sessionId: "current" }}
       used={50000}
       limit={100000}
+      expanded
     />
   ));
   const refresh = view.getByRole("button", { name: "Refresh" });
@@ -172,4 +186,57 @@ it("groups duplicate filenames by producer origin and keeps deferred schemas out
     ["mcp", 10000],
     ["client", null],
   ]);
+});
+
+it("reports only the current manual refresh failure after reconnect", async () => {
+  const stale = createDeferredCore<ReturnType<typeof usage>>();
+  const denied = new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Access changed" });
+  const request = createGatewayRequestMock()
+    .mockResolvedValueOnce(usage("first"))
+    .mockReturnValueOnce(stale.promise)
+    .mockRejectedValue(denied);
+  const { gateway, publish } = createApplicationGateway();
+  const client = createTestGatewayClient(request);
+  publish({ ...gateway.snapshot, phase: "connected", client });
+  const notify = vi.spyOn(toast, "showToast").mockReturnValue(true);
+  const view = mountSolid(() => (
+    <ChatContextBreakdown
+      gateway={gateway}
+      session={{ key: "agent:main:first", kind: "direct", sessionId: "first" }}
+      used={50000}
+      limit={100000}
+      expanded
+    />
+  ));
+  try {
+    await expect.poll(() => view.container.querySelector(".chat-context__bar")).not.toBeNull();
+    view.container.querySelector<HTMLButtonElement>(".chat-context__refresh")!.click();
+    expect(request).toHaveBeenCalledTimes(2);
+    const pendingRefresh = sessionContextReportsForGateway(gateway).refresh({
+      sessionKey: "agent:main:first",
+      sessionId: "first",
+      used: 50000,
+    });
+    publish({ ...gateway.snapshot, phase: "reconnecting" });
+    publish({ ...gateway.snapshot, phase: "connected", client });
+    await expect.poll(() => view.container.textContent).toContain("Couldn");
+    expect(request).toHaveBeenCalledTimes(3);
+    stale.resolve(usage("first"));
+    await pendingRefresh;
+    flush();
+    expect(notify).not.toHaveBeenCalled();
+    view.container.querySelector<HTMLButtonElement>(".chat-context__refresh")!.click();
+    await expect.poll(() => notify.mock.calls.length).toBe(1);
+    publish({ ...gateway.snapshot, phase: "reconnecting" });
+    flush();
+    view.container.querySelector<HTMLButtonElement>(".chat-context__refresh")!.click();
+    await expect.poll(() => notify.mock.calls.length).toBe(2);
+    expect(notify.mock.calls[1]?.[0]).toMatchObject({
+      message: "Connect to the Gateway to load the context breakdown.",
+    });
+    expect(request).toHaveBeenCalledTimes(4);
+  } finally {
+    view.unmount();
+    notify.mockRestore();
+  }
 });

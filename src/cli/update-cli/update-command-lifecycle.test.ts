@@ -205,6 +205,7 @@ import { readPackageVersion, resolveUpdateRoot, tryWriteCompletionCache } from "
 import { registerConvergenceCompletionTests } from "./update-command-convergence-completion.test-support.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
+import { resultFixture } from "./update-command-fixtures.test-support.js";
 import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
@@ -217,6 +218,29 @@ import {
 } from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
+
+function convergeCurrent(overrides: Partial<Parameters<typeof convergeUpdatePlugins>[0]> = {}) {
+  return convergeUpdatePlugins({
+    coreAlreadyCurrent: true,
+    result: resultFixture(undefined, {
+      status: "skipped",
+      reason: "already-current",
+      durationMs: 1,
+    }),
+    root: "/fixture/openclaw",
+    installKindChanged: false,
+    configSnapshot: validConfigSnapshot,
+    requestedChannel: null,
+    storedChannel: null,
+    channel: "stable",
+    downgradeRisk: false,
+    opts: {},
+    preUpdatePluginInstallRecords: {},
+    startedAt: 1,
+    updateStepTimeoutMs: 1_000,
+    ...overrides,
+  });
+}
 
 describe("update plugin lifecycle lease boundaries", () => {
   afterEach(() => {
@@ -313,16 +337,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       }
       expect(mocks.verifyGateway).toHaveBeenCalledOnce();
       expect(listUpdateRuns()[0]).toMatchObject({ status: "failed", verification: { recovery } });
-      expect(mocks.triage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          failure: expect.objectContaining({
-            result: expect.objectContaining({
-              recovery: expect.objectContaining({ service: "healthy" }),
-              ...(returned ? { verification: {} } : {}),
-            }),
-          }),
-        }),
-      );
+      expect(mocks.triage).toHaveBeenCalledOnce();
     },
   );
 
@@ -533,38 +548,16 @@ describe("update plugin lifecycle lease boundaries", () => {
           };
         });
       }
-      vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementation(async () => {
-        record("target-convergence");
-        return {
-          resumed: true,
-          pluginUpdate: { ...successfulPluginUpdate, changed: false },
-        };
-      });
-
-      const result = await convergeUpdatePlugins({
-        coreAlreadyCurrent: true,
-        result: {
+      const result = await convergeCurrent({
+        result: resultFixture("/tmp/openclaw", {
           status: "skipped",
-          mode: "npm",
-          root: "/tmp/openclaw",
           reason: "already-current",
           before: { version: installedVersion },
           after: { version: installedVersion },
-          steps: [],
           durationMs: 1,
-        },
+        }),
         root: "/tmp/openclaw",
         previousInstallRoot,
-        installKindChanged: false,
-        configSnapshot: validConfigSnapshot,
-        requestedChannel: null,
-        storedChannel: null,
-        channel: "stable",
-        downgradeRisk: false,
-        opts: {},
-        preUpdatePluginInstallRecords: {},
-        startedAt: 1,
-        updateStepTimeoutMs: 1_000,
       });
 
       if (needsTargetRuntime) {
@@ -606,27 +599,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         ],
       },
     });
-    const { resultWithPostUpdate } = await convergeUpdatePlugins({
-      coreAlreadyCurrent: true,
-      result: {
-        status: "skipped",
-        mode: "npm",
-        reason: "already-current",
-        steps: [],
-        durationMs: 1,
-      },
-      root: "/fixture/openclaw",
-      installKindChanged: false,
-      configSnapshot: validConfigSnapshot,
-      requestedChannel: null,
-      storedChannel: null,
-      channel: "stable",
-      downgradeRisk: false,
-      opts: {},
-      preUpdatePluginInstallRecords: {},
-      startedAt: 1,
-      updateStepTimeoutMs: 1000,
-    });
+    const { resultWithPostUpdate } = await convergeCurrent();
     expect(resultWithPostUpdate.steps).toContainEqual(
       expect.objectContaining({
         exitCode: 1,

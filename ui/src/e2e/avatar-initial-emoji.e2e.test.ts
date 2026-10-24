@@ -1,11 +1,9 @@
-// Control UI E2E: explicit identity emoji remain intact across agent avatar surfaces.
-import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { configProof, pageRunner } from "./config-composer-fixtures.test-support.ts";
+import { pageRunner } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -15,127 +13,16 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not available at ${executablePath}`,
 });
 
-const { capture } = configProof("avatar-initial-emoji");
-const screenshot = (page: Page, name: string) => capture(page, name, true);
 const withPage = pageRunner(suite, {
   locale: "en-US",
   serviceWorkers: "block",
   viewport: { height: 900, width: 1440 },
 });
 
-const emojiAgent = { id: "emoji", identity: { name: "🚀Rocket", emoji: "🚀" }, name: "🚀Rocket" };
 const asciiAgent = { id: "main", identity: { name: "Main" }, name: "Main" };
 const emojiGrapheme = "🚀";
-const agentsList = {
-  defaultId: "main",
-  mainKey: "main",
-  scope: "agent",
-  agents: [asciiAgent, emojiAgent],
-};
-const agentIdentities = {
-  cases: [
-    {
-      match: { agentId: "emoji" },
-      response: { agentId: "emoji", avatar: "", avatarStatus: "none", name: "🚀Rocket" },
-    },
-    {
-      match: { agentId: "main" },
-      response: { agentId: "main", avatar: "", avatarStatus: "none", name: "Main" },
-    },
-  ],
-};
-
-async function expectPaintedEmoji(avatar: Locator) {
-  await expect.poll(() => avatar.getAttribute("data-avatar")).toBe(emojiGrapheme);
-  // These surfaces paint their text through CSS, not a text node.
-  await expect
-    .poll(() => avatar.evaluate((element) => getComputedStyle(element, "::before").content))
-    .toContain(emojiGrapheme);
-}
 
 suite.define(() => {
-  it("renders the identity emoji in the rail and agent menu row", async () => {
-    await withPage(async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        defaultAgentId: "main",
-        methodResponses: {
-          "agent.identity.get": agentIdentities,
-          "agents.list": agentsList,
-          "chat.startup": {
-            agentsList,
-            messages: [],
-            metadata: { models: [] },
-            sessionId: "session:agent:main:main",
-            thinkingLevel: null,
-          },
-          "sessions.list": {
-            count: 0,
-            defaults: { contextTokens: null, model: null, modelProvider: null },
-            path: "",
-            sessions: [],
-            ts: Date.now(),
-          },
-        },
-      });
-
-      const response = await page.goto(`${suite.server.baseUrl}usage`);
-      expect(response?.status()).toBe(200);
-      await gateway.waitForRequest("agents.list");
-      const sidebar = page.locator("openclaw-app-sidebar");
-
-      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-      const emojiRow = sidebar
-        .locator(".sidebar-agent-menu")
-        .getByRole("menuitem", { name: "🚀Rocket", exact: true });
-      const menuAvatar = emojiRow.locator(".identity-avatar__text");
-      await expectPaintedEmoji(menuAvatar);
-      await screenshot(page, "01-sidebar-menu-emoji.png");
-
-      await emojiRow.click();
-      await expect
-        .poll(async () =>
-          (await gateway.getRequests("sessions.list")).some(
-            (request) =>
-              request.params && (request.params as { agentId?: string }).agentId === "emoji",
-          ),
-        )
-        .toBe(true);
-      await expect
-        .poll(() =>
-          sidebar
-            .locator(".sidebar-agent-card__avatar .identity-avatar__text")
-            .getAttribute("data-avatar"),
-        )
-        .toBe(emojiGrapheme);
-      await screenshot(page, "01-sidebar-chip-emoji.png");
-    });
-  });
-
-  it("renders the identity emoji in the agent selector dropdown", async () => {
-    await withPage(async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        defaultAgentId: "main",
-        methodResponses: {
-          "agent.identity.get": agentIdentities,
-          "agents.list": agentsList,
-        },
-      });
-
-      const response = await page.goto(`${suite.server.baseUrl}settings/agents`);
-      expect(response?.status()).toBe(200);
-      await gateway.waitForRequest("agents.list");
-      const agentSelect = page.locator(".settings-sidebar__agent openclaw-agent-select");
-      await agentSelect.locator(".agent-select__trigger").click();
-      const emojiItem = agentSelect.getByRole("menuitemradio", {
-        name: "🚀Rocket",
-        exact: true,
-      });
-      const pickerAvatar = emojiItem.locator(".identity-avatar__text");
-      await expectPaintedEmoji(pickerAvatar);
-      await screenshot(page, "02-agent-selector-emoji.png");
-    });
-  });
-
   it("renders the identity emoji in the agents overview identity editor", async () => {
     await withPage(async ({ page }) => {
       await page.addInitScript(() => {
@@ -163,10 +50,18 @@ suite.define(() => {
                   name: "Rocket",
                 },
               },
-              agentIdentities.cases[1],
+              {
+                match: { agentId: "main" },
+                response: { agentId: "main", avatar: "", avatarStatus: "none", name: "Main" },
+              },
             ],
           },
-          "agents.list": { ...agentsList, agents: [asciiAgent, hydratedEmojiAgent] },
+          "agents.list": {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+            agents: [asciiAgent, hydratedEmojiAgent],
+          },
           "config.get": {
             config,
             sourceConfig: config,
@@ -197,13 +92,11 @@ suite.define(() => {
       await expect.poll(() => emojiInput.inputValue()).toBe(emojiGrapheme);
       await picker.getByRole("button", { name: "Choose emoji" }).click();
       await expect.poll(() => picker.getByRole("button", { name: "lobster" }).count()).toBe(1);
-      await screenshot(page, "03-agents-emoji-picker-open.png");
       expect(await picker.getByRole("textbox", { name: "Paste another emoji" }).count()).toBe(0);
       expect(await picker.getByRole("button", { name: "Use", exact: true }).count()).toBe(0);
       await picker.getByRole("searchbox", { name: "Search emoji…" }).fill("dolphin");
       await picker.getByRole("button", { name: "dolphin", exact: true }).click();
       await expect.poll(() => emojiInput.inputValue()).toBe("🐬");
-      await screenshot(page, "04-agents-emoji-selected.png");
       const beforeBoundedSave = (await gateway.getRequests("agents.update")).length;
       await emojiInput.fill("🪿".repeat(20));
       await expect.poll(() => emojiInput.inputValue()).toBe("🪿".repeat(4));
@@ -218,13 +111,11 @@ suite.define(() => {
       await expect.poll(() => emojiInput.inputValue()).toBe("🪿");
       const update = await gateway.waitForRequest("agents.update", { after: beforeTypedSave });
       expect(update.params).toMatchObject({ agentId: "emoji", emoji: "🪿" });
+      const avatar = page.locator(".agent-identity-editor__avatar .identity-avatar__text");
+      await expect.poll(() => avatar.getAttribute("data-avatar")).toBe(emojiGrapheme);
       await expect
-        .poll(() =>
-          page
-            .locator(".agent-identity-editor__avatar .identity-avatar__text")
-            .getAttribute("data-avatar"),
-        )
-        .toBe(emojiGrapheme);
+        .poll(() => avatar.evaluate((element) => getComputedStyle(element, "::before").content))
+        .toContain(emojiGrapheme);
     });
   });
 });

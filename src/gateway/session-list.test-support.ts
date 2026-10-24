@@ -10,6 +10,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { prepareUserProfileCatalog, readUserProfileAliases } from "../state/user-profile-list.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
@@ -89,21 +90,10 @@ export async function listSessionFixture(
   let client: GatewayClient | undefined;
   if (profileId || params.entryFilter) {
     client = {
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-        role: "operator",
-        scopes: ["operator.admin"],
-      },
+      connect: gatewayConnect(["operator.admin"]),
     };
     if (profileId) {
-      client.authenticatedUserProfile = {
-        profileId,
-        displayName: profileId,
-        hasAvatar: false,
-        updatedAt: 1,
-      };
+      client.authenticatedUserProfile = gatewayProfile(profileId, profileId);
       client.preparedSessionProfile = {
         profileId,
         aliases: readUserProfileAliases(profileId),

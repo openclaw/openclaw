@@ -12,7 +12,7 @@ import { createDiscordRestClient, createDiscordRuntimeAccountContext } from "../
 import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
 import { resolveDiscordChannelId } from "../target-parsing.js";
-import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 
 type ToolStartPayload = {
   name?: string;

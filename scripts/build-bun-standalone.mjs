@@ -6,7 +6,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createRuntimeProcessEntrypoints } from "../src/infra/runtime-process-manifest.ts";
+import { createStandaloneRuntimeProcessEntrypoints } from "../src/infra/runtime-process-manifest.ts";
 import {
   WORKSPACE_PACKAGE_ALIAS_ENTRIES,
   WORKSPACE_PACKAGE_EXPORT_DIRS,
@@ -210,8 +210,10 @@ moduleEntries = await selectStandalonePluginModules(runtimeRoot, moduleEntries, 
 const workerEntries = discoverStandaloneWorkers({
   runtimeRoot,
   moduleEntries,
-  runtimeEntrypoints: createRuntimeProcessEntrypoints(import.meta.url),
-  parse,
+  runtimeEntrypoints: createStandaloneRuntimeProcessEntrypoints(
+    import.meta.url,
+    plugins.embeddedDirs,
+  ),
 });
 const native = createStandaloneNativeAdapter({ runtimeRoot, parse });
 native.discover(moduleEntries);
@@ -404,7 +406,7 @@ if (process.env.OPENCLAW_STANDALONE_TRACE_PRELOAD) {
 const bootstrap = path.join(outputRoot, "standalone-entry.mjs");
 fs.writeFileSync(
   bootstrap,
-  createStandaloneEntrySource({ runtimeBootstrap, runtimeRoot, workerEntries, moduleEntries }),
+  createStandaloneEntrySource({ runtimeBootstrap, runtimeRoot, workerEntries }),
 );
 const audit = process.env.OPENCLAW_STANDALONE_AUDIT_MODULE
   ? await import(pathToFileURL(process.env.OPENCLAW_STANDALONE_AUDIT_MODULE).href)
@@ -455,7 +457,6 @@ const result = await Bun.build({
             return undefined;
           }
           let contents = await fs.promises.readFile(filename, "utf8");
-          contents = workers.rewriteInlineWorkers(filename, contents);
           const artifact = artifacts.transform({ filename, contents });
           contents = artifact.contents;
           const metadataResult = metadata.transform({ filename, contents });
@@ -544,10 +545,6 @@ fs.writeFileSync(
 fs.writeFileSync(
   path.join(outputRoot, "worker-entries.json"),
   JSON.stringify(workerEntries, null, 2),
-);
-fs.writeFileSync(
-  path.join(outputRoot, "inline-worker-entries.json"),
-  JSON.stringify(workers.inlineWorkers, null, 2),
 );
 fs.writeFileSync(
   path.join(outputRoot, "embedded-modules.json"),
@@ -741,7 +738,7 @@ await publishStandaloneArtifacts({
           .map((entry) => entry.split("/")[2]),
       ).size,
       modules: Object.keys(embeddedPaths).length,
-      inlineWorkers: workers.inlineWorkers.length,
+      inlineWorkers: 0,
     },
     pruning,
     sqlite: sqlite.manifest,

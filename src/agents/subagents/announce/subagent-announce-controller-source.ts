@@ -5,6 +5,7 @@ import {
   hasRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
 } from "../../../config/sessions/restart-recovery-state.js";
+import { isRestartRecoveryTombstone } from "../../../config/sessions/session-work-start.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import {
   getGatewayContextResolver,
@@ -106,6 +107,10 @@ export async function reserveSubagentControllerSource(
   const { resolvePrivateRequesterSettleRecoveryOwner } =
     await import("../registry/subagent-registry-restart-recovery.js");
   const privateOwner = resolvePrivateRequesterSettleRecoveryOwner(requester, privateSourceRunId);
+  // Unadmitted completions must not occupy the mailbox ahead of an operator's Resume.
+  if (privateOwner !== "owned" && isRestartRecoveryTombstone(requester.entry)) {
+    return undefined;
+  }
   // Recover the interrupted requester before another completion wave reserves its mailbox.
   // An exact recovered receipt may still reconcile without starting replacement work.
   if (

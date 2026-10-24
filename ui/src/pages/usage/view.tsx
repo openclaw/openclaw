@@ -12,7 +12,6 @@ import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import "../../components/tooltip.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../styles/usage.css";
-import { resolveUsageOverviewState } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { formatIsoDate } from "./helpers.ts";
 import { UsageMosaic } from "./metrics-view.tsx";
@@ -107,9 +106,27 @@ export function renderUsage(props: UsageProps) {
 
 function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
   const loading = () => props.loading;
-  const overview = createMemo(() =>
-    resolveUsageOverviewState({ ...props.data, loading: loading() }),
-  );
+  const overview = createMemo(() => {
+    const data = props.data;
+    const pending = loading();
+    // Cold caches can list sessions before any usage has been read. Zero-filled
+    // aggregate objects are not evidence of zero usage while that read is pending.
+    const awaitingUsage =
+      data.cacheRefresh !== "complete" &&
+      !data.totals?.totalTokens &&
+      !data.totals?.totalCost &&
+      !data.sessions.some(
+        (session) =>
+          session.usage?.computedAt !== undefined ||
+          session.usage?.totalTokens ||
+          session.usage?.totalCost,
+      ) &&
+      !data.costDaily.some((day) => day.totalTokens || day.totalCost);
+    const hasOverviewData =
+      !awaitingUsage && Boolean(data.totals || data.sessions.length || data.costDaily.length);
+    const loadingOverview = pending || (awaitingUsage && data.cacheRefresh === "retrying");
+    return { hasOverviewData, loadingOverview };
+  });
   const lowerBound = () =>
     displayTotals()?.usageReport?.state === "unavailable" ||
     props.data.overview?.usageReport?.state === "unavailable";

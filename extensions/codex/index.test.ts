@@ -31,6 +31,10 @@ import {
   type StoredCodexManagedThread,
 } from "./src/app-server/managed-thread-store.js";
 import {
+  codexPluginConfig,
+  curatedPlugin,
+} from "./src/app-server/plugin-inventory.test-helpers.js";
+import {
   createCodexAppServerBindingStore,
   sessionBindingIdentity,
   type CodexAppServerBindingStore,
@@ -660,17 +664,9 @@ describe("codex plugin", () => {
         entries: {
           codex: {
             enabled: true,
-            config: {
-              codexPlugins: {
-                enabled: true,
-                plugins: {
-                  "google-calendar": {
-                    marketplaceName: "openai-curated",
-                    pluginName: "google-calendar",
-                  },
-                },
-              },
-            },
+            config: codexPluginConfig({
+              plugins: { "google-calendar": curatedPlugin("google-calendar") },
+            }),
           },
         },
       },

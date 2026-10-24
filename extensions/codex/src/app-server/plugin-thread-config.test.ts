@@ -13,6 +13,9 @@ import { resolveRecoverableCodexPluginConfigKeys } from "./plugin-inventory.js";
 import {
   appInfo,
   appSummary,
+  codexPluginConfig,
+  curatedPlugin,
+  pluginDetail,
   pluginInstalled,
   pluginList,
   pluginSummary,
@@ -135,19 +138,12 @@ describe("Codex plugin thread config", () => {
       appCache: new CodexAppInventoryCache(),
       appCacheKey: "identity-test",
       request,
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          allow_all_plugins: testCase.allowAll,
-          plugins: {
-            sample: {
-              enabled: testCase.pluginEnabled,
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "sample",
-            },
-          },
+      pluginConfig: codexPluginConfig({
+        allow_all_plugins: testCase.allowAll,
+        plugins: {
+          sample: curatedPlugin("sample", { enabled: testCase.pluginEnabled }),
         },
-      },
+      }),
     });
     expect(Object.hasOwn(result.policyContext.apps, runtimeId)).toBe(testCase.expected);
     expect(Object.hasOwn(result.policyContext.apps, manifestId)).toBe(false);
@@ -189,23 +185,13 @@ describe("Codex plugin thread config", () => {
     });
 
     const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          allow_all_plugins: testCase.account,
-          allow_destructive_actions: "ask",
-          ...(testCase.plugin
-            ? {
-                plugins: {
-                  "google-calendar": {
-                    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-                    pluginName: "google-calendar",
-                  },
-                },
-              }
-            : {}),
-        },
-      },
+      pluginConfig: codexPluginConfig({
+        allow_all_plugins: testCase.account,
+        allow_destructive_actions: "ask",
+        ...(testCase.plugin
+          ? { plugins: { "google-calendar": curatedPlugin("google-calendar") } }
+          : {}),
+      }),
       appCache,
       appCacheKey: "runtime",
       nowMs: 1,
@@ -228,18 +214,15 @@ describe("Codex plugin thread config", () => {
     const methods: string[] = [];
 
     const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            workspaceData: {
-              marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
-              pluginName: "workspace-data@workspace-directory",
-              allow_destructive_actions: false,
-            },
+      pluginConfig: codexPluginConfig({
+        plugins: {
+          workspaceData: {
+            marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+            pluginName: "workspace-data@workspace-directory",
+            allow_destructive_actions: false,
           },
         },
-      },
+      }),
       appCache,
       appCacheKey: "runtime",
       nowMs: 1,
@@ -266,7 +249,7 @@ describe("Codex plugin thread config", () => {
             remoteMarketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
             pluginName: "plugin_workspace_data",
           });
-          return pluginDetail("workspace-data", [appSummary("workspace-data-app")], [], {
+          return pluginDetail("workspace-data", [appSummary("workspace-data-app")], {
             marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
             marketplacePath: null,
           });
@@ -298,17 +281,14 @@ describe("Codex plugin thread config", () => {
     const methods: string[] = [];
 
     const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            "security-review@company-tools": {
-              marketplaceName: "company-tools",
-              pluginName: "security-review",
-            },
+      pluginConfig: codexPluginConfig({
+        plugins: {
+          "security-review@company-tools": {
+            marketplaceName: "company-tools",
+            pluginName: "security-review",
           },
         },
-      },
+      }),
       appCache,
       appCacheKey: "runtime",
       configCwd: "/repo/company",
@@ -330,7 +310,8 @@ describe("Codex plugin thread config", () => {
             marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
             pluginName: "security-review",
           });
-          return pluginDetail("security-review", [appSummary("github-app")], ["github"], {
+          return pluginDetail("security-review", [appSummary("github-app")], {
+            mcpServers: ["github"],
             marketplaceName: "company-tools",
             marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
           });
@@ -358,17 +339,14 @@ describe("Codex plugin thread config", () => {
     const requests: string[] = [];
 
     const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            "security-review@company-tools": {
-              marketplaceName: "company-tools",
-              pluginName: "security-review",
-            },
+      pluginConfig: codexPluginConfig({
+        plugins: {
+          "security-review@company-tools": {
+            marketplaceName: "company-tools",
+            pluginName: "security-review",
           },
         },
-      },
+      }),
       appCache,
       appCacheKey: "runtime",
       configCwd: "/repo/company",
@@ -393,7 +371,7 @@ describe("Codex plugin thread config", () => {
           );
         }
         if (method === "plugin/read") {
-          return pluginDetail("security-review", [], [], {
+          return pluginDetail("security-review", [], {
             marketplaceName: "company-tools",
             marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
           });
@@ -422,17 +400,14 @@ describe("Codex plugin thread config", () => {
     const methods: string[] = [];
 
     const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            "security-review@company-tools": {
-              marketplaceName: "company-tools",
-              pluginName: "security-review",
-            },
+      pluginConfig: codexPluginConfig({
+        plugins: {
+          "security-review@company-tools": {
+            marketplaceName: "company-tools",
+            pluginName: "security-review",
           },
         },
-      },
+      }),
       appCache,
       appCacheKey: "runtime",
       configCwd: "/repo/company",
@@ -449,7 +424,7 @@ describe("Codex plugin thread config", () => {
           );
         }
         if (method === "plugin/read") {
-          return pluginDetail("security-review", [], [], {
+          return pluginDetail("security-review", [], {
             marketplaceName: "company-tools",
             marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
           });
@@ -478,19 +453,16 @@ describe("Codex plugin thread config", () => {
   });
 
   it("maps destructive app access from global and per-plugin policy", async () => {
-    const pluginOverrideDisabled = await buildReadyGoogleCalendarThreadConfig({
-      codexPlugins: {
-        enabled: true,
+    const pluginOverrideDisabled = await buildReadyGoogleCalendarThreadConfig(
+      codexPluginConfig({
         allow_destructive_actions: true,
         plugins: {
-          "google-calendar": {
-            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-            pluginName: "google-calendar",
+          "google-calendar": curatedPlugin("google-calendar", {
             allow_destructive_actions: false,
-          },
+          }),
         },
-      },
-    });
+      }),
+    );
 
     const disabledApps = pluginOverrideDisabled.configPatch?.apps as
       | Record<string, unknown>
@@ -510,19 +482,16 @@ describe("Codex plugin thread config", () => {
       pluginOverrideDisabled.policyContext.apps["google-calendar-app"]?.destructiveApprovalMode,
     ).toBe("deny");
 
-    const pluginOverrideEnabled = await buildReadyGoogleCalendarThreadConfig({
-      codexPlugins: {
-        enabled: true,
+    const pluginOverrideEnabled = await buildReadyGoogleCalendarThreadConfig(
+      codexPluginConfig({
         allow_destructive_actions: false,
         plugins: {
-          "google-calendar": {
-            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-            pluginName: "google-calendar",
+          "google-calendar": curatedPlugin("google-calendar", {
             allow_destructive_actions: true,
-          },
+          }),
         },
-      },
-    });
+      }),
+    );
 
     const enabledApps = pluginOverrideEnabled.configPatch?.apps as
       | Record<string, unknown>
@@ -601,11 +570,9 @@ describe("Codex plugin thread config", () => {
         return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
       }
       if (method === "plugin/read") {
-        return pluginDetail(
-          "google-calendar",
-          [appSummary("google-calendar-app")],
-          ["google-calendar"],
-        );
+        return pluginDetail("google-calendar", [appSummary("google-calendar-app")], {
+          mcpServers: ["google-calendar"],
+        });
       }
       if (method === "config/read") {
         expect(params).toEqual({ includeLayers: true, cwd: "/repo/project" });
@@ -681,19 +648,16 @@ describe("Codex plugin thread config", () => {
   });
 
   it("applies the resolved per-plugin auto reviewer policy over global ask", async () => {
-    const config = await buildReadyGoogleCalendarThreadConfig({
-      codexPlugins: {
-        enabled: true,
+    const config = await buildReadyGoogleCalendarThreadConfig(
+      codexPluginConfig({
         allow_destructive_actions: "ask",
         plugins: {
-          "google-calendar": {
-            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-            pluginName: "google-calendar",
+          "google-calendar": curatedPlugin("google-calendar", {
             allow_destructive_actions: "auto",
-          },
+          }),
         },
-      },
-    });
+      }),
+    );
 
     const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
     const app = apps?.["google-calendar-app"] as Record<string, unknown> | undefined;
@@ -805,7 +769,7 @@ describe("Codex plugin thread config", () => {
           return pluginList([pluginSummary("linear", { installed: true, enabled: true })]);
         }
         if (method === "plugin/read") {
-          return pluginDetail("linear", [appSummary("linear")], ["linear"]);
+          return pluginDetail("linear", [appSummary("linear")], { mcpServers: ["linear"] });
         }
         if (method === "config/read") {
           expect(params).toEqual({ includeLayers: true, cwd: "/repo/project" });
@@ -824,21 +788,11 @@ describe("Codex plugin thread config", () => {
       });
 
       const config = await buildCodexPluginThreadConfig({
-        pluginConfig: {
-          codexPlugins: {
-            enabled: true,
-            allow_all_plugins: allowAllPlugins,
-            allow_destructive_actions: "ask",
-            plugins: allowAllPlugins
-              ? {}
-              : {
-                  linear: {
-                    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-                    pluginName: "linear",
-                  },
-                },
-          },
-        },
+        pluginConfig: codexPluginConfig({
+          allow_all_plugins: allowAllPlugins,
+          allow_destructive_actions: "ask",
+          plugins: allowAllPlugins ? {} : { linear: curatedPlugin("linear") },
+        }),
         appCache,
         appCacheKey: "runtime",
         configCwd: "/repo/project",
@@ -897,13 +851,10 @@ describe("Codex plugin thread config", () => {
         throw new Error(`unexpected request ${method}`);
       });
       const build = buildCodexPluginThreadConfig({
-        pluginConfig: {
-          codexPlugins: {
-            enabled: true,
-            allow_all_plugins: true,
-            allow_destructive_actions: "ask",
-          },
-        },
+        pluginConfig: codexPluginConfig({
+          allow_all_plugins: true,
+          allow_destructive_actions: "ask",
+        }),
         appCacheKey: "runtime",
         request,
       });
@@ -923,13 +874,10 @@ describe("Codex plugin thread config", () => {
   );
 
   it("exposes ready and default-disabled authorized account apps from a complete inventory", async () => {
-    const pluginConfig = {
-      codexPlugins: {
-        enabled: true,
-        allow_all_plugins: true,
-        allow_destructive_actions: false,
-      },
-    };
+    const pluginConfig = codexPluginConfig({
+      allow_all_plugins: true,
+      allow_destructive_actions: false,
+    });
     expect(shouldBuildCodexPluginThreadConfig(pluginConfig)).toBe(true);
     const installedParams: CodexAppServerRequestParams<"app/installed">[] = [];
     const accountApps = [
@@ -1025,9 +973,7 @@ describe("Codex plugin thread config", () => {
     });
 
     const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: { enabled: true, allow_all_plugins: true },
-      },
+      pluginConfig: codexPluginConfig({ allow_all_plugins: true }),
       appCacheKey: "runtime",
       request,
     });
@@ -1126,13 +1072,10 @@ describe("Codex plugin thread config", () => {
       });
 
       const build = buildCodexPluginThreadConfig({
-        pluginConfig: {
-          codexPlugins: {
-            enabled: true,
-            allow_all_plugins: true,
-            ...(ask ? { allow_destructive_actions: "ask" } : {}),
-          },
-        },
+        pluginConfig: codexPluginConfig({
+          allow_all_plugins: true,
+          ...(ask ? { allow_destructive_actions: "ask" } : {}),
+        }),
         configCwd: "/repo/project",
         appCacheKey: "runtime",
         request,
@@ -1234,7 +1177,6 @@ describe("Codex plugin thread config", () => {
         return pluginDetail(
           testCase.pluginName,
           [appSummary("plugin-owned-app")],
-          [],
           testCase.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME
             ? { marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME, marketplacePath: null }
             : {},
@@ -1248,19 +1190,16 @@ describe("Codex plugin thread config", () => {
     });
 
     const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          allow_all_plugins: true,
-          plugins: {
-            [testCase.configKey]: {
-              enabled: testCase.enabled,
-              marketplaceName: testCase.marketplaceName,
-              pluginName: testCase.pluginName,
-            },
+      pluginConfig: codexPluginConfig({
+        allow_all_plugins: true,
+        plugins: {
+          [testCase.configKey]: {
+            enabled: testCase.enabled,
+            marketplaceName: testCase.marketplaceName,
+            pluginName: testCase.pluginName,
           },
         },
-      },
+      }),
       appCacheKey: "runtime",
       request,
     });
@@ -1297,19 +1236,16 @@ describe("Codex plugin thread config", () => {
     });
 
     const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          allow_all_plugins: true,
-          plugins: {
-            workspaceData: {
-              enabled: false,
-              marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
-              pluginName: "workspace-data@workspace-directory",
-            },
+      pluginConfig: codexPluginConfig({
+        allow_all_plugins: true,
+        plugins: {
+          workspaceData: {
+            enabled: false,
+            marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+            pluginName: "workspace-data@workspace-directory",
           },
         },
-      },
+      }),
       appCacheKey: "runtime",
       request,
     });
@@ -1373,7 +1309,7 @@ describe("Codex plugin thread config", () => {
           if (detailUnavailable) {
             throw new Error("administrator denied plugin ownership details");
           }
-          return pluginDetail("security-review", [appSummary("admin-denied-app")], [], {
+          return pluginDetail("security-review", [appSummary("admin-denied-app")], {
             marketplaceName,
             marketplacePath,
           });
@@ -1385,18 +1321,15 @@ describe("Codex plugin thread config", () => {
       });
 
       const config = await buildCodexPluginThreadConfig({
-        pluginConfig: {
-          codexPlugins: {
-            enabled: true,
-            allow_all_plugins: true,
-            plugins: {
-              security: {
-                marketplaceName,
-                pluginName: "security-review",
-              },
+        pluginConfig: codexPluginConfig({
+          allow_all_plugins: true,
+          plugins: {
+            security: {
+              marketplaceName,
+              pluginName: "security-review",
             },
           },
-        },
+        }),
         appCacheKey: "runtime",
         request,
       });
@@ -1465,18 +1398,15 @@ describe("Codex plugin thread config", () => {
     });
 
     const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          allow_all_plugins: true,
-          plugins: {
-            security: {
-              marketplaceName,
-              pluginName: "security-review",
-            },
+      pluginConfig: codexPluginConfig({
+        allow_all_plugins: true,
+        plugins: {
+          security: {
+            marketplaceName,
+            pluginName: "security-review",
           },
         },
-      },
+      }),
       appCacheKey: "runtime",
       request,
     });
@@ -1491,13 +1421,10 @@ describe("Codex plugin thread config", () => {
 
   it("disables configured native apps when inventory fails under ask policy", async () => {
     const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          allow_all_plugins: true,
-          allow_destructive_actions: "ask",
-        },
-      },
+      pluginConfig: codexPluginConfig({
+        allow_all_plugins: true,
+        allow_destructive_actions: "ask",
+      }),
       appCacheKey: "runtime",
       request: async (method) => {
         if (method === "config/read") {
@@ -1564,13 +1491,10 @@ describe("Codex plugin thread config", () => {
       });
 
       const config = await buildCodexPluginThreadConfig({
-        pluginConfig: {
-          codexPlugins: {
-            enabled: true,
-            allow_all_plugins: true,
-            allow_destructive_actions: "ask",
-          },
-        },
+        pluginConfig: codexPluginConfig({
+          allow_all_plugins: true,
+          allow_destructive_actions: "ask",
+        }),
         appCacheKey: "runtime",
         request,
       });
@@ -1612,11 +1536,7 @@ describe("Codex plugin thread config", () => {
         codexPlugins: {
           enabled: false,
           plugins: {
-            "google-calendar": {
-              enabled: true,
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "google-calendar",
-            },
+            "google-calendar": curatedPlugin("google-calendar", { enabled: true }),
           },
         },
       },
@@ -1856,18 +1776,9 @@ describe("Codex plugin thread config", () => {
     const appCache = await cacheApps([appInfo("google-calendar-app", true)]);
 
     const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            "google-calendar": {
-              enabled: false,
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "google-calendar",
-            },
-          },
-        },
-      },
+      pluginConfig: codexPluginConfig({
+        plugins: { "google-calendar": curatedPlugin("google-calendar", { enabled: false }) },
+      }),
       appCache,
       appCacheKey: "runtime",
       nowMs: 1,
@@ -1999,21 +1910,12 @@ describe("Codex plugin thread config", () => {
     });
 
     const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            calendar: {
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "calendar",
-            },
-            meetings: {
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "meetings",
-            },
-          },
+      pluginConfig: codexPluginConfig({
+        plugins: {
+          calendar: curatedPlugin("calendar"),
+          meetings: curatedPlugin("meetings"),
         },
-      },
+      }),
       appCache,
       appCacheKey: "runtime",
       metadataCache,
@@ -2150,11 +2052,12 @@ describe("Codex plugin thread config", () => {
       if (method === "plugin/read") {
         const pluginName = (params as v2.PluginReadParams).pluginName;
         return pluginName === "plugins~Plugin_calendar"
-          ? pluginDetail("calendar", [appSummary("calendar-app")], [], {
+          ? pluginDetail("calendar", [appSummary("calendar-app")], {
               marketplaceName: "openai-curated-remote",
               marketplacePath: null,
             })
-          : pluginDetail("github", [appSummary("github-app")], ["github"], {
+          : pluginDetail("github", [appSummary("github-app")], {
+              mcpServers: ["github"],
               marketplaceName: "openai-curated-remote",
               marketplacePath: null,
             });
@@ -2163,23 +2066,12 @@ describe("Codex plugin thread config", () => {
     });
 
     const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            calendar: {
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "calendar",
-              allow_destructive_actions: false,
-            },
-            github: {
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "github",
-              allow_destructive_actions: "ask",
-            },
-          },
+      pluginConfig: codexPluginConfig({
+        plugins: {
+          calendar: curatedPlugin("calendar", { allow_destructive_actions: false }),
+          github: curatedPlugin("github", { allow_destructive_actions: "ask" }),
         },
-      },
+      }),
       appCache,
       appCacheKey: "runtime",
       nowMs: 1,
@@ -2295,7 +2187,7 @@ describe("Codex plugin thread config", () => {
   it("uses durable policy and app cache key in the cheap input fingerprint", async () => {
     const appCache = new CodexAppInventoryCache();
     const first = buildCodexPluginThreadConfigInputFingerprint({
-      policy: resolveCodexPluginsPolicy({ codexPlugins: { enabled: true } }),
+      policy: resolveCodexPluginsPolicy(codexPluginConfig()),
       appCacheKey: "runtime-a",
     });
     await appCache.refreshNow({
@@ -2303,11 +2195,11 @@ describe("Codex plugin thread config", () => {
       request: async (method, params) => codexAppInventoryResponse(method, [], params),
     });
     const second = buildCodexPluginThreadConfigInputFingerprint({
-      policy: resolveCodexPluginsPolicy({ codexPlugins: { enabled: true } }),
+      policy: resolveCodexPluginsPolicy(codexPluginConfig()),
       appCacheKey: "runtime-a",
     });
     const third = buildCodexPluginThreadConfigInputFingerprint({
-      policy: resolveCodexPluginsPolicy({ codexPlugins: { enabled: true } }),
+      policy: resolveCodexPluginsPolicy(codexPluginConfig()),
       appCacheKey: "runtime-b",
     });
     expect(second).toBe(first);
@@ -2332,7 +2224,7 @@ describe("Codex plugin thread config", () => {
 
   it("builds a diagnostic deny-all fallback after plugin config timeout", () => {
     const fallback = buildCodexPluginThreadConfigTimeoutFallback({
-      policy: resolveCodexPluginsPolicy({ codexPlugins: { enabled: true } }),
+      policy: resolveCodexPluginsPolicy(codexPluginConfig()),
       appCacheKey: "runtime",
       message: "Plugin discovery timed out.",
     });
@@ -2361,17 +2253,7 @@ describe("Codex plugin thread config", () => {
     const request = vi.fn(async () => pluginList([]));
 
     const config = await preparePluginThreadConfigForTest(
-      {
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            calendar: {
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "calendar",
-            },
-          },
-        },
-      },
+      codexPluginConfig({ plugins: { calendar: curatedPlugin("calendar") } }),
       "runtime",
     )({
       requestTimeoutMs: 100,
@@ -2404,17 +2286,7 @@ describe("Codex plugin thread config", () => {
     );
 
     await preparePluginThreadConfigForTest(
-      {
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            calendar: {
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "calendar",
-            },
-          },
-        },
-      },
+      codexPluginConfig({ plugins: { calendar: curatedPlugin("calendar") } }),
       "runtime-long-startup",
     )({
       requestTimeoutMs: 240_000,
@@ -2541,14 +2413,9 @@ describe("Codex plugin thread config", () => {
     });
     const build = (threadId: string) =>
       buildCodexPluginThreadConfig({
-        pluginConfig: {
-          codexPlugins: {
-            enabled: true,
-            plugins: {
-              calendar: { marketplaceName: "company-tools", pluginName: "calendar" },
-            },
-          },
-        },
+        pluginConfig: codexPluginConfig({
+          plugins: { calendar: { marketplaceName: "company-tools", pluginName: "calendar" } },
+        }),
         request,
         configCwd: "/workspace/project",
         appCache,
@@ -2589,17 +2456,7 @@ describe("Codex plugin thread config", () => {
     await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     const controller = new AbortController();
     const build = preparePluginThreadConfigForTest(
-      {
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            calendar: {
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "calendar",
-            },
-          },
-        },
-      },
+      codexPluginConfig({ plugins: { calendar: curatedPlugin("calendar") } }),
       "runtime",
     )({
       requestTimeoutMs: 1_000,
@@ -2636,17 +2493,7 @@ describe("Codex plugin thread config", () => {
       nowMs: 0,
       request: async (method, params) => codexAppInventoryResponse(method, [], params),
     });
-    const pluginConfig = {
-      codexPlugins: {
-        enabled: true,
-        plugins: {
-          calendar: {
-            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-            pluginName: "calendar",
-          },
-        },
-      },
-    };
+    const pluginConfig = codexPluginConfig({ plugins: { calendar: curatedPlugin("calendar") } });
     const request = vi.fn(async (method: string, params: unknown) => {
       if (method === "config/read") {
         return { config: {}, layers: [] };
@@ -2739,40 +2586,10 @@ async function cacheApps(
 function calendarPluginConfig(
   policy: Omit<NonNullable<CodexPluginConfig["codexPlugins"]>, "plugins"> = {},
 ): CodexPluginConfig {
-  return {
-    codexPlugins: {
-      enabled: true,
-      ...policy,
-      plugins: {
-        "google-calendar": {
-          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-          pluginName: "google-calendar",
-        },
-      },
-    },
-  };
-}
-
-function pluginDetail(
-  pluginName: string,
-  apps: v2.AppSummary[],
-  mcpServers: string[] = [],
-  marketplace: { marketplaceName?: string; marketplacePath?: string | null } = {},
-): v2.PluginReadResponse {
-  return {
-    plugin: {
-      marketplaceName: marketplace.marketplaceName ?? CODEX_PLUGINS_MARKETPLACE_NAME,
-      marketplacePath:
-        marketplace.marketplacePath === undefined
-          ? "/marketplaces/openai-curated"
-          : marketplace.marketplacePath,
-      summary: pluginSummary(pluginName, { installed: true, enabled: true }),
-      description: null,
-      skills: [],
-      apps,
-      mcpServers,
-    },
-  };
+  return codexPluginConfig({
+    ...policy,
+    plugins: { "google-calendar": curatedPlugin("google-calendar") },
+  });
 }
 
 async function buildReadyGoogleCalendarThreadConfig(
@@ -2818,26 +2635,19 @@ describe("missing configured plugins", () => {
   ])(
     "keeps healthy runtime apps for $code with actions=$actions enabled=$enabled",
     async ({ marketplaceName, code, actions, enabled }) => {
-      const pluginConfig: CodexPluginConfig = {
-        codexPlugins: {
-          enabled: true,
-          allow_all_plugins: true,
-          allow_destructive_actions: "auto",
-          plugins: {
-            healthy: {
-              pluginName: "healthy",
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              allow_destructive_actions: "ask",
-            },
-            missing: {
-              pluginName: "missing",
-              marketplaceName,
-              enabled,
-              allow_destructive_actions: actions,
-            },
+      const pluginConfig: CodexPluginConfig = codexPluginConfig({
+        allow_all_plugins: true,
+        allow_destructive_actions: "auto",
+        plugins: {
+          healthy: curatedPlugin("healthy", { allow_destructive_actions: "ask" }),
+          missing: {
+            pluginName: "missing",
+            marketplaceName,
+            enabled,
+            allow_destructive_actions: actions,
           },
         },
-      };
+      });
       const savedSettings = structuredClone(pluginConfig);
       const result = await buildCodexPluginThreadConfig({
         pluginConfig,
@@ -2867,15 +2677,12 @@ describe("missing configured plugins", () => {
 
   it("discovers a previously missing plugin on a later inventory read", async () => {
     let available = false;
-    const pluginConfig = {
-      codexPlugins: {
-        enabled: true,
-        plugins: {
-          healthy: { pluginName: "healthy", marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME },
-          missing: { pluginName: "missing", marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME },
-        },
+    const pluginConfig = codexPluginConfig({
+      plugins: {
+        healthy: curatedPlugin("healthy"),
+        missing: curatedPlugin("missing"),
       },
-    };
+    });
     const savedSettings = structuredClone(pluginConfig);
     const params = {
       pluginConfig,
@@ -2943,13 +2750,10 @@ describe("Codex native app approval settings", () => {
       throw new Error(`unexpected request ${method}`);
     };
     const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          allow_all_plugins: true,
-          allow_destructive_actions: "auto",
-        },
-      },
+      pluginConfig: codexPluginConfig({
+        allow_all_plugins: true,
+        allow_destructive_actions: "auto",
+      }),
       appCache: new CodexAppInventoryCache(),
       appCacheKey: "native-approval",
       request,

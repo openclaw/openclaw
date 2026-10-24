@@ -100,6 +100,7 @@ function createBackendSandboxTool(
   });
   return {
     buildExecSpec,
+    tool,
     validateWorkdir,
     execute: (command = "echo ok", workdir = "/remote/workspace/generated") =>
       tool.execute("sandbox-workdir", { command, workdir }),
@@ -270,6 +271,27 @@ describe("exec foreground failures", () => {
       cwdSpy.mockRestore();
     }
   });
+
+  it.each([true, false])(
+    "explains sandbox PTY downgrades only when requested (pty=%s)",
+    async (pty) => {
+      const { tool } = createBackendSandboxTool();
+      mockSpawn();
+
+      const result = await tool.execute("sandbox-pty", { command: "echo ok", pty });
+
+      expect(result.details.status).toBe("completed");
+      expect(supervisorMock.spawn).toHaveBeenCalledOnce();
+      expect(supervisorMock.spawn.mock.calls[0]?.[0]?.mode).toBe("child");
+      const text = requireTextContent(result);
+      if (pty) {
+        expect(text).toContain("Warning: PTY is unavailable in sandbox mode");
+        expect(text).toContain("running without a PTY. Use a noninteractive command");
+      } else {
+        expect(text).not.toMatch(/PTY/i);
+      }
+    },
+  );
 
   it("finalizes backend sandbox exec tokens when process spawn fails", async () => {
     const finalizeToken = { session: "remote-session" };

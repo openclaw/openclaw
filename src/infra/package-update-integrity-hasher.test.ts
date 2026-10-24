@@ -58,6 +58,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     await Promise.all(runtime.exits);
     hashers.clear();
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
     cleanup();
   }),
 );
@@ -106,6 +107,18 @@ describe("package file hashing workers", () => {
     expect(fallback).not.toHaveBeenCalled();
   });
 
+  it("keeps sealed recovery hashing inside its self-contained helper", async () => {
+    vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
+    const { file, stat } = await fixture("sealed");
+    const fallback = vi.fn(async (pathname: string) => digest(await fs.readFile(pathname)));
+    const hasher = createHasher(fallback);
+    const result = hasher.hash(file, stat);
+    hasher.flush();
+    await expect(result).resolves.toBe(digest("package bytes"));
+    expect(fallback).toHaveBeenCalledOnce();
+    expect(runtime.construct).not.toHaveBeenCalled();
+  });
+
   it("rejects a file changed since its admitted stat", async () => {
     const { file, stat } = await fixture("changed");
     await fs.appendFile(file, " more bytes");
@@ -148,19 +161,25 @@ describe("package file hashing workers", () => {
       port1.once("message", () => reading.resolve());
       // Instrument the real worker's fs boundary: stop after open, then observe
       // its own finally and cancellation between jobs in the same batch.
+      // Module-loader I/O is separate from the package-file reads under test.
       runtime.construct.mockImplementation((source, options) => [
         `(() => {
           const fs = require("node:fs");
-          const { probeGate, probePort, probeFile } = require("node:worker_threads").workerData;
+          const { probeGate, probePort, probeFile, probeFiles } = require("node:worker_threads").workerData;
           const open = fs.openSync;
           const read = fs.readSync;
           const close = fs.closeSync;
           const fstat = fs.fstatSync;
           let stopped = false;
           let targetFd;
+          const packageFiles = new Set(probeFiles);
+          const packageFds = new Set();
           fs.openSync = (...args) => {
             const fd = open(...args);
-            Atomics.add(probeGate, 1, 1);
+            if (packageFiles.has(args[0])) {
+              packageFds.add(fd);
+              Atomics.add(probeGate, 1, 1);
+            }
             if (args[0] === probeFile) {
               targetFd = fd;
             }
@@ -183,17 +202,21 @@ describe("package file hashing workers", () => {
           };
           fs.closeSync = (...args) => {
             const result = close(...args);
-            Atomics.add(probeGate, 2, 1);
+            if (packageFds.delete(args[0])) {
+              Atomics.add(probeGate, 2, 1);
+            }
             return result;
           };
-        })();\n${String(source)}`,
+        })();\nimport(${JSON.stringify(String(source))});`,
         {
           ...options,
+          eval: true,
           workerData: {
             ...options.workerData,
             probeGate: gate,
             probePort: port2,
             probeFile: inputs[1]!.file,
+            probeFiles: inputs.map(({ file }) => file),
           },
           transferList: [port2],
         },
@@ -301,8 +324,8 @@ describe("package file hashing workers", () => {
       if (index === 3) {
         return [
           `Atomics.wait(require("node:worker_threads").workerData.probeGate, 1, 0);
-           throw new Error("fixture worker crashed");\n${String(source)}`,
-          { ...options, workerData: { ...options.workerData, probeGate: gate } },
+           throw new Error("fixture worker crashed");\nimport(${JSON.stringify(String(source))});`,
+          { ...options, eval: true, workerData: { ...options.workerData, probeGate: gate } },
         ];
       }
       const channel = new MessageChannel();
@@ -311,18 +334,22 @@ describe("package file hashing workers", () => {
       return [
         `(() => {
           const fs = require("node:fs");
-          const { probeGate, probePort } = require("node:worker_threads").workerData;
+          const { probeGate, probePort, probeFile } = require("node:worker_threads").workerData;
           const open = fs.openSync;
           const read = fs.readSync;
           const close = fs.closeSync;
           let stopped = false;
+          const packageFds = new Set();
           fs.openSync = (...args) => {
             const fd = open(...args);
-            Atomics.add(probeGate, 2, 1);
+            if (args[0] === probeFile) {
+              packageFds.add(fd);
+              Atomics.add(probeGate, 2, 1);
+            }
             return fd;
           };
           fs.readSync = (...args) => {
-            if (!stopped) {
+            if (packageFds.has(args[0]) && !stopped) {
               stopped = true;
               probePort.postMessage("reading");
               probePort.close();
@@ -332,13 +359,21 @@ describe("package file hashing workers", () => {
           };
           fs.closeSync = (...args) => {
             const result = close(...args);
-            Atomics.sub(probeGate, 2, 1);
+            if (packageFds.delete(args[0])) {
+              Atomics.sub(probeGate, 2, 1);
+            }
             return result;
           };
-        })();\n${String(source)}`,
+        })();\nimport(${JSON.stringify(String(source))});`,
         {
           ...options,
-          workerData: { ...options.workerData, probeGate: gate, probePort: channel.port2 },
+          eval: true,
+          workerData: {
+            ...options.workerData,
+            probeGate: gate,
+            probePort: channel.port2,
+            probeFile: file,
+          },
           transferList: [channel.port2],
         },
       ];

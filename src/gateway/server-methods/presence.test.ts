@@ -1,5 +1,6 @@
+import { Check } from "typebox/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
+import { createProtocolValidator } from "../../../packages/gateway-protocol/src/protocol-validator.js";
 import {
   PresenceQueryResultSchema,
   type PresenceQueryParams,
@@ -25,7 +26,9 @@ vi.mock("../server-plugin-in-process-dispatch.js", () => ({
   dispatchGatewayMethodInProcessRaw: mocks.lookup,
 }));
 
-const validateResult = lazyCompile(PresenceQueryResultSchema);
+const validateResult = createProtocolValidator(PresenceQueryResultSchema, (value) =>
+  Check(PresenceQueryResultSchema, value),
+);
 const now = 10_000;
 const profile = (profileId: string, displayName: string) => ({
   profileId,

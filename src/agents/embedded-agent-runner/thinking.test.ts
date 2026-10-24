@@ -9,6 +9,7 @@ import {
   castAgentMessages,
   makeAgentAssistantMessage,
 } from "../test-helpers/agent-message-fixtures.js";
+import { createQueuedAssistantStream } from "../test-helpers/assistant-event-stream.test-support.js";
 import { sparseAssistant, textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { stripStaleThinkingSignaturesForCompactionReplay } from "../thinking-signatures.js";
@@ -476,12 +477,9 @@ describe("wrapAnthropicStreamWithRecovery", () => {
         if (callCount === 1) {
           return Promise.reject(anthropicThinkingError);
         }
-        const stream = createAssistantMessageEventStream();
-        queueMicrotask(() => {
-          stream.push({ type: "done", reason: "stop", message: finalMessage });
-          stream.end();
+        return createQueuedAssistantStream((push) => {
+          push({ type: "done", reason: "stop", message: finalMessage });
         });
-        return stream;
       }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
       { id: "test-session", onRecoveredAnthropicThinking: recovered },
     );
@@ -537,16 +535,13 @@ describe("wrapAnthropicStreamWithRecovery", () => {
         if (callCount === 1) {
           return Promise.reject(anthropicThinkingError);
         }
-        const stream = createAssistantMessageEventStream();
-        queueMicrotask(() => {
-          stream.push({
+        return createQueuedAssistantStream((push) => {
+          push({
             type: "error",
             reason: "error",
             error: errorMessage,
           });
-          stream.end();
         });
-        return stream;
       }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
       { id: "test-session", onRecoveredAnthropicThinking: recovered },
     );
@@ -670,18 +665,16 @@ describe("wrapAnthropicStreamWithRecovery", () => {
         callCount += 1;
         const attempt = callCount;
         contexts.push(context as { messages?: AgentMessage[] });
-        const stream = createAssistantMessageEventStream();
-        queueMicrotask(() => {
+        const stream = createQueuedAssistantStream((push) => {
           if (attempt === 1) {
-            stream.push({
+            push({
               type: "error",
               reason: "error",
               error: createTestStreamErrorMessage(terminalThinkingSignatureError),
             });
           } else {
-            stream.push({ type: "done", reason: "stop", message: finalMessage });
+            push({ type: "done", reason: "stop", message: finalMessage });
           }
-          stream.end();
         });
         return promised ? Promise.resolve(stream) : stream;
       }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
@@ -722,12 +715,9 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     const wrapped = wrapAnthropicStreamWithRecovery(
       (() => {
         callCount += 1;
-        const stream = createAssistantMessageEventStream();
-        queueMicrotask(() => {
-          stream.push({ type: "error", reason: "error", error: errorMessage });
-          stream.end();
+        return createQueuedAssistantStream((push) => {
+          push({ type: "error", reason: "error", error: errorMessage });
         });
-        return stream;
       }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
       { id: "test-session" },
     );
@@ -755,11 +745,9 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     const wrapped = wrapAnthropicStreamWithRecovery(
       (() => {
         callCount += 1;
-        const stream = createAssistantMessageEventStream();
-        queueMicrotask(() => {
-          stream.push({ type: "start", partial: partialMessage });
-          stream.push({ type: "error", reason: "error", error: errorMessage });
-          stream.end();
+        const stream = createQueuedAssistantStream((push) => {
+          push({ type: "start", partial: partialMessage });
+          push({ type: "error", reason: "error", error: errorMessage });
         });
         return promised ? Promise.resolve(stream) : stream;
       }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
@@ -858,13 +846,10 @@ describe("wrapAnthropicStreamWithRecovery", () => {
 
     const wrapped = wrapAnthropicStreamWithRecovery(
       (() => {
-        const stream = createAssistantMessageEventStream();
-        queueMicrotask(() => {
-          stream.push({ type: "start", partial: finalMessage });
-          stream.push({ type: "done", reason: "stop", message: finalMessage });
-          stream.end();
+        return createQueuedAssistantStream((push) => {
+          push({ type: "start", partial: finalMessage });
+          push({ type: "done", reason: "stop", message: finalMessage });
         });
-        return stream;
       }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
       { id: "test-session" },
     );
@@ -896,12 +881,9 @@ describe("wrapAnthropicStreamWithRecovery", () => {
         if (attempt === 1) {
           return firstStreamPromise;
         }
-        const stream = createAssistantMessageEventStream();
-        queueMicrotask(() => {
-          stream.push({ type: "done", reason: "stop", message: finalMessage });
-          stream.end();
+        return createQueuedAssistantStream((push) => {
+          push({ type: "done", reason: "stop", message: finalMessage });
         });
-        return stream;
       }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
       { id: "test-session", onRecoveredAnthropicThinking: recovered },
     );

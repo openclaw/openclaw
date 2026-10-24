@@ -33,6 +33,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import {
@@ -318,18 +319,13 @@ export async function createWorkerSessionToolTestFixture(
         : undefined,
     );
   });
-  const identity: WorkerConnectionIdentity = {
+  const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(sourceClaim, {
     environmentId: source.environmentId,
-    credentialHash: "credential-hash",
-    bundleHash: "a".repeat(64),
     sessionId: source.sessionId,
-    runId: sourceClaim.runId,
-    turnClaim: sourceClaim,
     ownerEpoch: source.ownerEpoch,
-    rpcSetVersion: 1,
     protocolFeatures: ["worker-gateway-tools-v1"],
     credentialExpiresAtMs: Date.now() + 60_000,
-  };
+  });
   // Reset implementations and queued once overrides, not just call histories.
   for (const value of Object.values(mocks)) {
     if (typeof value === "function") {

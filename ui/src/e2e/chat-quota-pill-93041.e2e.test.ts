@@ -20,7 +20,7 @@ const suite = createControlUiE2eSuite({
   name: "Control UI #93041 desktop chat quota popover (mocked Gateway E2E)",
 });
 
-const baseTime = 1_700_000_000_000;
+const baseTime = Date.UTC(2026, 9, 21, 12);
 let artifactDir: string;
 const captureOwnershipProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const ownershipProofPhase = process.env.OPENCLAW_UI_PROOF_PHASE?.trim() || "candidate";
@@ -46,7 +46,7 @@ const authStatusWithUsage = {
   providers: [
     providerStatus("openai", "OpenAI", {
       providerId: "openai",
-      windows: [{ label: "Week", usedPercent: 71, resetAt: Date.now() + 4 * 86_400_000 }],
+      windows: [{ label: "Week", usedPercent: 71, resetAt: baseTime + 4 * 86_400_000 }],
     }),
     providerStatus(
       "github-copilot",
@@ -141,8 +141,8 @@ const claudeSubscriptionAuthStatus = {
       providerId: "anthropic",
       plan: "Max (20x)",
       windows: [
-        { label: "5h", usedPercent: 22, resetAt: Date.now() + 4 * 3_600_000 + 48 * 60_000 },
-        { label: "Week", usedPercent: 25, resetAt: Date.now() + 2 * 86_400_000 },
+        { label: "5h", usedPercent: 22, resetAt: baseTime + 4 * 3_600_000 + 48 * 60_000 },
+        { label: "Week", usedPercent: 25, resetAt: baseTime + 2 * 86_400_000 },
         { label: "Fable", usedPercent: 45 },
       ],
       billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
@@ -178,14 +178,18 @@ async function withChat(
   sessions: unknown,
   run: (page: Page) => Promise<void>,
 ) {
-  await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-    const gateway = await installMockGateway(page, {
-      methodResponses: { "models.authStatus": authStatus, "sessions.list": sessions },
-    });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await gateway.waitForRequest("models.authStatus");
-    await run(page);
-  });
+  await suite.withPage(
+    { ...createControlUiE2eContextOptions(), locale: "en-US", timezoneId: "UTC" },
+    async ({ page }) => {
+      await page.clock.setFixedTime(baseTime);
+      const gateway = await installMockGateway(page, {
+        methodResponses: { "models.authStatus": authStatus, "sessions.list": sessions },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("models.authStatus");
+      await run(page);
+    },
+  );
 }
 
 function expectTextExcludes(text: string, ...excluded: string[]) {
@@ -329,18 +333,19 @@ suite.define(() => {
 
       expect(await usageLinks.count()).toBe(1);
       expect(await usageLink.getAttribute("href")).toBe("/usage");
-      const rows = await page.locator(".context-usage__limit").allTextContents();
-      const normalized = rows.map((row) => row.replace(/\s+/g, " ").trim());
-      expect(normalized).toHaveLength(1);
-      expect(normalized[0]).toMatch(/^Weekly Resets .+ 71%$/);
-      expect((await page.locator(".context-usage__popover").textContent()) ?? "").not.toContain(
-        "Copilot",
+      const popover = page.locator(".context-usage__popover");
+      const quota = popover.getByRole("progressbar", { name: "Weekly", exact: true });
+      expect(await popover.getByRole("progressbar").count()).toBe(1);
+      expect(await quota.getAttribute("aria-valuenow")).toBe("71");
+      expect(await quota.getAttribute("aria-valuetext")).toBe("71%");
+      expect(await quota.locator(".context-usage__limit-reset").textContent()).toBe("Sun");
+      expect(await quota.locator(".context-usage__limit-reset").getAttribute("title")).toBe(
+        "Resets Sun",
       );
-      expect(
-        (await page.locator('[data-chat-usage-provider="true"]').textContent())
-          ?.replace(/\s+/g, " ")
-          .trim(),
-      ).toBe("Provider: OpenAI");
+      expect((await popover.textContent()) ?? "").not.toContain("Copilot");
+      expect(await popover.locator('[data-chat-usage-account="true"]').textContent()).toBe(
+        "OpenAI",
+      );
       const popoverText = (await page.locator(".context-usage__popover").textContent()) ?? "";
       expectTextExcludes(popoverText, "openclaw", "gateway-injected", "Model:");
     });
@@ -354,16 +359,33 @@ suite.define(() => {
       });
 
       expect(await page.locator(".context-usage__plan-badge").textContent()).toBe("Max (20x)");
-      const rows = await page.locator(".context-usage__limit").allTextContents();
-      const normalized = rows.map((row) => row.replace(/\s+/g, " ").trim());
-      expect(normalized[0]).toMatch(/^5-hour limit Resets .+ 22%$/);
-      expect(normalized[1]).toMatch(/^Weekly Resets .+ 25%$/);
-      expect(normalized[2]).toBe("Fable 45%");
-      expect(normalized[3]).toBe("Usage credits $157.85 of $400.00");
-
+      expect(await popover.getByRole("progressbar").count()).toBe(4);
+      for (const [label, percent, value, reset] of [
+        ["5-hour", "22", "22%", "4:48 PM"],
+        ["Weekly", "25", "25%", "Fri"],
+        ["Fable", "45", "45%", "—"],
+        ["Usage credits", "39", "$157.85 of $400.00", null],
+      ] as const) {
+        const quota = popover.getByRole("progressbar", { name: label, exact: true });
+        expect(await quota.getAttribute("aria-valuenow")).toBe(percent);
+        expect(await quota.getAttribute("aria-valuetext")).toBe(value);
+        expect(await quota.locator(".context-usage__limit-value").textContent()).toBe(value);
+        if (reset === null) {
+          expect(await quota.locator(".context-usage__limit-reset").count()).toBe(0);
+        } else {
+          expect(await quota.locator(".context-usage__limit-reset").textContent()).toBe(reset);
+          expect(await quota.locator(".context-usage__limit-reset").getAttribute("title")).toBe(
+            `Resets ${reset}`,
+          );
+        }
+      }
       const popoverText = (await page.locator(".context-usage__popover").textContent()) ?? "";
       expectTextExcludes(popoverText, "Est. cost", "Cost by Type");
-      expect(popoverText).toContain("Latest run tokens");
+      const latest = (await popover.locator(".context-usage__latest").textContent()) ?? "";
+      expect(latest).toContain("Latest run");
+      expect(latest).toMatch(/In\s*2.4k/);
+      expect(latest).toMatch(/Out\s*830/);
+      expectTextExcludes(latest, "Cost", "$0.02");
     });
   });
 

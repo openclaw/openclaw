@@ -12,11 +12,6 @@ import type {
 const DAY_MS = 86_400_000;
 const MAX_USAGE_PAGES = 100;
 
-type ProviderUsagePageRequest = {
-  url: URL;
-  headers: HeadersInit;
-};
-
 type ProviderUsageDailyAccumulator = ProviderUsageCostDaily & {
   categories: Map<string, number>;
   models: Map<string, ProviderUsageModelBreakdown>;
@@ -98,7 +93,10 @@ export async function fetchProviderUsagePages(params: {
   responseMaxBytes: number;
   timeoutMs: number;
   fetchFn: typeof fetch;
-  buildRequest: (page: string | undefined) => ProviderUsagePageRequest;
+  buildRequest: (page: string | undefined) => {
+    url: URL;
+    headers: HeadersInit;
+  };
 }): Promise<{ ok: true; data: unknown[] } | { ok: false; status?: number }> {
   const data: unknown[] = [];
   const seenPages = new Set<string>();

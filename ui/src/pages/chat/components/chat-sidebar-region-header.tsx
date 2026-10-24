@@ -116,6 +116,7 @@ export function SidebarPanelLauncher(props: {
   const quickSlots: SidebarSlotId[] = ["companion", "workspace", "browser"];
   const exploreSlots: SidebarSlotId[] = [
     "detail",
+    "context",
     "link-reader",
     "dashboard",
     "subagents",

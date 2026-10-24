@@ -27,12 +27,9 @@ import {
 import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
 import { CodexAppServerClient, isCodexAppServerRequestTimeoutError } from "./client.js";
 import { threadStartResult as createThreadStartResult } from "./codex-app-server.test-fixtures.js";
-import {
-  CODEX_PLUGINS_MARKETPLACE_NAME,
-  type CodexPluginConfig,
-  resolveCodexAppServerRuntimeOptions,
-} from "./config.js";
+import { type CodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { setManagedCodexPluginRoot } from "./managed-binary.js";
+import { codexPluginConfig, curatedPlugin } from "./plugin-inventory.test-helpers.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
@@ -815,15 +812,7 @@ describe("startCodexAttemptThread", () => {
     vi.useFakeTimers();
     const deadlinePluginConfig = {
       appServer: { command: "codex", requestTimeoutMs: 400 },
-      codexPlugins: {
-        enabled: true,
-        plugins: {
-          calendar: {
-            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-            pluginName: "calendar",
-          },
-        },
-      },
+      ...codexPluginConfig({ plugins: { calendar: curatedPlugin("calendar") } }),
     } satisfies CodexPluginConfig;
     const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
       pluginConfig: deadlinePluginConfig,

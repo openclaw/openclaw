@@ -6,7 +6,7 @@
   :root {
     /* Shell-owned toasts clear the mobile task header. Content regions below
        that in-flow header do not reserve its height a second time. */
-    --chat-mobile-pane-header-height: 48px;
+    --chat-mobile-pane-header-height: 52px;
   }
 
   .sidebar-region [data-region] {

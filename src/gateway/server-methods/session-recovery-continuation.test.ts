@@ -5,6 +5,10 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.native.js";
+import {
+  loadDeviceIdentityIfPresentAsync,
+  loadOrCreateProcessDeviceIdentityAsync,
+} from "../../infra/device-identity-async.js";
 import { captureSessionControllerSettlement } from "../../sessions/session-controller.lifecycle.js";
 import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -28,6 +32,7 @@ test.each(["membership", "identity"] as const)(
   "recovery continuation replays one active/completed turn but rejects changed destination %s",
   async (change) => {
     const { storePath } = await createSessionStoreDir();
+    expect(await loadDeviceIdentityIfPresentAsync()).toBeNull();
     await prepareProfiles();
     const { launchSessionRecoveryContinuation } =
       await import("./session-recovery-continuation.js");
@@ -81,6 +86,8 @@ test.each(["membership", "identity"] as const)(
       expect(await launch()).toEqual({ status: "started", runId: idempotencyKey });
       await entered.promise;
       expect(getRpcSource(idempotencyKey)).toBeDefined();
+      expect(await launch()).toEqual({ status: "started", runId: idempotencyKey });
+      await loadOrCreateProcessDeviceIdentityAsync();
       expect(await launch()).toEqual({ status: "started", runId: idempotencyKey });
       expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
 

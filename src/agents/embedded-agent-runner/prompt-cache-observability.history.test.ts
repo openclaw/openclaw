@@ -17,6 +17,7 @@ import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixture
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { transformTransportMessages } from "../transport-message-transform.js";
 import { log } from "./logger.js";
+import { fingerprintMessage } from "./prompt-cache-history.js";
 import {
   completePromptCacheObservation,
   declarePromptHistoryRewrite,
@@ -41,6 +42,54 @@ describe("prompt cache history fingerprints", () => {
     vi.mocked(crypto.hash).mockClear();
   });
   afterEach(() => vi.restoreAllMocks());
+
+  it.each(["string", "blocks"] as const)(
+    "preserves exact %s fingerprints across transcript ownership and in-place edits",
+    (kind) => {
+      const message: Message = {
+        role: "user",
+        timestamp: 7,
+        content:
+          kind === "string"
+            ? "hello\ud800"
+            : [
+                { type: "text", text: "hello\ud800" },
+                { type: "image", data: "abc", mimeType: "image/png" },
+              ],
+      };
+      const bytes = (value: ReturnType<typeof fingerprintMessage>) =>
+        JSON.stringify([value.role, value.identityLength, value.layout, value.packed]);
+      const first = fingerprintMessage(message);
+      const expected =
+        kind === "string"
+          ? "952b1fd8442799227af3738b7fc271a7125a43e7d10e741c5eb309e27cf7f739"
+          : "5fa03c23839ba6dc13453dad87798714e09144cabab7b39f199a210530b6a3a8";
+      expect(crypto.hash("sha256", bytes(first), "hex")).toBe(expected);
+      for (const ownership of ["append", "sealed"] as const) {
+        const copy = structuredClone(message);
+        normalizeTranscriptJsonValue(ownership === "sealed" ? { message: copy } : copy, "");
+        expect(bytes(fingerprintMessage(copy))).toBe(bytes(first));
+        expect(fingerprintMessage(copy, first)).toBe(first);
+      }
+
+      message.timestamp++;
+      if (typeof message.content === "string") {
+        message.content = "edited";
+      } else {
+        const block = message.content[0];
+        if (block?.type === "text") {
+          block.text = "edited";
+        }
+      }
+      const edited = fingerprintMessage(message, first);
+      expect(bytes(edited)).not.toBe(bytes(first));
+      expect(bytes(edited)).toBe(bytes(fingerprintMessage(structuredClone(message))));
+      // Sealing an already observed record must discard revision state without changing bytes.
+      normalizeTranscriptJsonValue(message, "");
+      expect(fingerprintMessage(message, edited)).toBe(edited);
+      expect(bytes(fingerprintMessage(message))).toBe(bytes(edited));
+    },
+  );
 
   it.each([
     ["model context", "openai-responses"],

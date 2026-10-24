@@ -2326,156 +2326,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.send returns in_flight when duplicate attachment send wins parsing race", async ({
-    signal,
-  }) => {
-    openDirectChatSession();
-    const [dispatchEntered, dispatchRelease] = [createDeferred(), createDeferred()];
-    try {
-      await writeStoredMainSession({
-        modelProvider: "test-provider",
-        model: "vision-model",
-      });
-
-      const firstCatalogSnapshot =
-        createDeferred<ReturnType<typeof createChatVisionModelCatalogSnapshot>>();
-      const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
-      const context = createDirectChatContext({
-        loadGatewayModelCatalogSnapshot: vi
-          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
-          .mockImplementationOnce(() => firstCatalogSnapshot.promise)
-          .mockResolvedValue(createChatVisionModelCatalogSnapshot()),
-      });
-      dispatchInboundMessageMock.mockImplementation(async () => {
-        dispatchEntered.resolve();
-        await dispatchRelease.promise;
-      });
-
-      const params = makeChatSendParams({
-        message: "see image",
-        idempotencyKey: "idem-attachment-race",
-        attachments: [
-          {
-            type: "image",
-            mimeType: "image/png",
-            fileName: "dot.png",
-            content:
-              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-          },
-        ],
-      });
-      const callSend = (id: string) =>
-        callDirectChat("chat.send", {
-          id,
-          params,
-          respond: ((ok, payload, error) => {
-            responses.push({ id, ok, payload, error });
-          }) as RespondFn,
-          context,
-        });
-
-      const duplicateResponse = {
-        id: "duplicate",
-        ok: true,
-        payload: { runId: "idem-attachment-race", status: "in_flight" },
-        error: undefined,
-      };
-      const first = Promise.resolve(callSend("first"));
-      await waitForFast(() => {
-        expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
-      }, FAST_WAIT_OPTS);
-
-      await callSend("duplicate");
-      expect(responses).toEqual([duplicateResponse]);
-
-      firstCatalogSnapshot.resolve(createChatVisionModelCatalogSnapshot());
-      await first;
-
-      expect(responses).toEqual([
-        duplicateResponse,
-        {
-          id: "first",
-          ok: true,
-          payload: { runId: "idem-attachment-race", status: "started" },
-          error: undefined,
-        },
-      ]);
-      await withinTest(dispatchEntered.promise, signal);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-      expect(context.addChatRun).toHaveBeenCalledTimes(1);
-      dispatchRelease.resolve();
-      await getDirectChatSessionWorkRelease();
-      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
-    } finally {
-      dispatchRelease.resolve();
-      await resetDirectChatSession();
-    }
-  });
-
-  test("chat.send discards prepared inbound media when a hook blocks the turn", async () => {
-    openDirectChatSession();
-    const attachments = await import("./chat-attachments.js");
-    const discard = attachments.discardPreparedInboundMedia;
-    const discarded = createDeferred();
-    const cleanup = vi
-      .spyOn(attachments, "discardPreparedInboundMedia")
-      .mockImplementation((...args) => {
-        const pending = discard(...args);
-        if (args[0].length > 0) {
-          discarded.resolve(pending);
-        }
-        return pending;
-      });
-    try {
-      await writeStoredMainSession({
-        modelProvider: "test-provider",
-        model: "vision-model",
-      });
-      const context = createDirectChatContext();
-      const inboundDir = path.join(getMediaDir(), "inbound");
-      const inboundBaseline = new Set(await fs.readdir(inboundDir).catch(() => []));
-      // A before_agent_run block persists only the redacted reason — no media
-      // markers — so dispatch must discard the prepared refs on settle.
-      dispatchInboundMessageMock.mockImplementationOnce(async (params: unknown) => {
-        const replyOptions = (params as { replyOptions?: GetReplyOptions }).replyOptions;
-        replyOptions?.userTurnTranscriptRecorder?.markBlocked();
-      });
-      const responses: CapturedChatResponse[] = [];
-      await callDirectChat("chat.send", {
-        id: "blocked-turn-media",
-        params: makeChatSendParams({
-          message: "blocked turn with media",
-          idempotencyKey: "idem-blocked-turn-media",
-          attachments: [
-            {
-              type: "file",
-              mimeType: "text/plain",
-              fileName: "notes.txt",
-              content: Buffer.from("offloaded inbound media").toString("base64"),
-            },
-          ],
-        }),
-        client: {
-          connId: "conn-owner",
-          connect: {
-            ...makeGatewayWebchatClient(),
-            device: { id: "dev-owner" },
-            scopes: ["operator.write"],
-          },
-        } as never,
-        respond: captureChatResponse(responses),
-        context,
-      });
-      expect(responses[0]?.ok, JSON.stringify(responses[0])).toBe(true);
-      await discarded.promise;
-      const remaining = await fs.readdir(inboundDir).catch(() => []);
-      expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([]);
-    } finally {
-      cleanup.mockRestore();
-      await resetDirectChatSession();
-    }
-  });
-
   test("chat.send retains durably admitted media when later setup throws before the ACK", async () => {
     await withDirectChatSession(async (_sessionDir, storePath) => {
       await writeStoredMainSession({
@@ -2617,9 +2467,13 @@ describe("gateway server chat", () => {
       });
       expect(retryResponses).toEqual([
         {
-          ok: true,
-          payload: { runId, status: "in_flight" },
-          error: undefined,
+          ok: false,
+          payload: undefined,
+          error: {
+            code: "UNAVAILABLE",
+            message: "Chat input is being admitted; retry the same request.",
+            retryable: true,
+          },
         },
       ]);
       expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
@@ -3368,11 +3222,10 @@ describe("gateway server chat", () => {
         await writeStoredMainSession(makeDoneSessionEntry());
         await run({ ...makeMainSessionScope(storePath), storePath });
       }),
-    waitForSessionWork: getDirectChatSessionWorkRelease,
     sendControlUiChat,
   });
 
-  test("chat.send keeps a durable Control UI retry pending when recovery remains abandoned", async () => {
+  test("chat.send acknowledges recorded input while durable recovery remains abandoned", async () => {
     const { storePath } = openDirectChatSession();
     const idempotencyKey = "idem-restart-safe-duplicate";
     try {
@@ -3415,21 +3268,12 @@ describe("gateway server chat", () => {
 
       expect(responses).toEqual([
         {
-          error: expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
-          ok: false,
+          error: undefined,
+          ok: true,
+          payload: { runId: idempotencyKey, status: "ok", messageSeq: 1 },
         },
       ]);
-      expect(restartRecoveryMocks.retryRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
-        canonicalSessionKey: "agent:main:main",
-        cfg: expect.any(Object),
-        expectedRecoveryRunId: "recovery-run",
-        expectedRecoverySourceRunId: idempotencyKey,
-        expectedSessionId: "sess-main",
-        lane: "main",
-        sessionKey: "agent:main:main",
-        storePath,
-        gatewayRuntime: expect.any(Object),
-      });
+      expect(restartRecoveryMocks.retryRestartAbortedMainSessionRecovery).not.toHaveBeenCalled();
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect(
         loadExactSessionEntry({ sessionKey: "agent:main:main", storePath })?.entry,
@@ -3690,7 +3534,7 @@ describe("gateway server chat", () => {
     }
   });
 
-  test("chat.send releases an unadopted durable claim after dispatch rejection", async () => {
+  test("chat.send preserves failed dispatch custody when recorded input is replayed", async () => {
     const { storePath } = openDirectChatSession();
     const runId = "idem-restart-safe-dispatch-error";
     try {
@@ -3743,7 +3587,6 @@ describe("gateway server chat", () => {
 
       const retryContext = createDirectChatContext();
       const retryResponses: Array<{ ok: boolean; payload?: unknown }> = [];
-      dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
       await sendControlUiChat({
         context: retryContext,
         idempotencyKey: runId,
@@ -3753,19 +3596,12 @@ describe("gateway server chat", () => {
       expect(retryResponses).toEqual([
         {
           ok: true,
-          payload: expect.objectContaining({ runId, status: "started" }),
+          payload: { runId, status: "ok", messageSeq: 1 },
         },
       ]);
-      await getDirectChatSessionWorkRelease();
-      expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-      expect(
-        (
-          dispatchInboundMessageMock.mock.calls[1]?.[0] as
-            | { replyOptions?: GetReplyOptions }
-            | undefined
-        )?.replyOptions?.suppressNextUserMessagePersistence,
-      ).toBe(true);
+      expect(retryContext.removeChatRun).not.toHaveBeenCalled();
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toEqual(failed);
     } finally {
       await resetDirectChatSession();
     }
@@ -3807,7 +3643,7 @@ describe("gateway server chat", () => {
     }
   });
 
-  test("chat.send leaves a post-admission routing rejection retryable", async () => {
+  test("chat.send preserves failed routing custody when recorded input is replayed", async () => {
     const { storePath } = openDirectChatSession();
     const runId = "idem-restart-safe-routing-change";
     try {
@@ -3846,7 +3682,6 @@ describe("gateway server chat", () => {
 
       const retryContext = createDirectChatContext();
       const retryResponses: Array<{ ok: boolean; payload?: unknown }> = [];
-      dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
       await sendControlUiChat({
         context: retryContext,
         idempotencyKey: runId,
@@ -3856,19 +3691,12 @@ describe("gateway server chat", () => {
       expect(retryResponses).toEqual([
         {
           ok: true,
-          payload: expect.objectContaining({ runId, status: "started" }),
+          payload: { runId, status: "ok", messageSeq: 1 },
         },
       ]);
-      await getDirectChatSessionWorkRelease();
-      expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-      expect(
-        (
-          dispatchInboundMessageMock.mock.calls[0]?.[0] as
-            | { replyOptions?: GetReplyOptions }
-            | undefined
-        )?.replyOptions?.suppressNextUserMessagePersistence,
-      ).toBe(true);
+      expect(retryContext.removeChatRun).not.toHaveBeenCalled();
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toEqual(failed);
     } finally {
       await resetDirectChatSession();
     }
@@ -4083,12 +3911,11 @@ describe("gateway server chat", () => {
             respond: replayRespond,
             context,
           });
-          expect(replayRespond).toHaveBeenCalledWith(
-            true,
-            { runId, status: "in_flight" },
-            undefined,
-            { cached: true, runId },
-          );
+          expect(replayRespond).toHaveBeenCalledWith(false, undefined, {
+            code: "UNAVAILABLE",
+            message: "Chat input is being admitted; retry the same request.",
+            retryable: true,
+          });
           expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
 
           if (settlement === "dropped") {

@@ -27,6 +27,7 @@ import {
   loadGatewayModelCatalogSnapshot,
   loadPreparedGatewayModelCatalogSnapshot,
 } from "./server-model-catalog.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
@@ -166,13 +167,7 @@ describe("gateway prepared model catalog", () => {
       },
     });
     const client: GatewayClient = {
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-        role: "operator",
-        scopes: ["operator.read"],
-      },
+      connect: gatewayConnect(["operator.read"]),
       internal: { operatorRoleActor: { kind: "operator", profileId: "reader" } },
       preparedSessionProfile: { profileId: "reader", aliases: new Set(["reader"]), role: null },
     };

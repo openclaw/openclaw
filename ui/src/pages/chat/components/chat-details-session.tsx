@@ -14,10 +14,9 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-b
 import { ProcessesPanelData } from "../processes-panel-data.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ChatDetailsBackground } from "./chat-details-background.tsx";
-import { ChatDetailsDesktopContext } from "./chat-details-context.tsx";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
-import { ChatDetailsContext, ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import { ChatDetailsPeople, ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import { ChatDetailsProcesses } from "./chat-details-processes.tsx";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
@@ -385,17 +384,6 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                       />
                     </>
                   )}
-                </Show>
-                <Show
-                  when={props.desktop}
-                  fallback={<ChatDetailsContext details={props.props!} presented={active()} />}
-                >
-                  <ChatDetailsDesktopContext
-                    details={props.props!}
-                    presented={active()}
-                    expanded={sectionExpanded("context")}
-                    onExpandedChange={(expanded) => changeSection("context", expanded)}
-                  />
                 </Show>
                 <Show when={!props.desktop}>
                   <Background details={props.props!} presented={active()} />

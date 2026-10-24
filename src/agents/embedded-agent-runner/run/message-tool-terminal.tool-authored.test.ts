@@ -1,11 +1,7 @@
 // A `canDeliverSourceReply` tool that authored a final reply ends the turn once the
 // whole tool batch settles; progress replies, errors and ordinary tools keep the
 // model turn going. These tests drive the real agent loop and count provider requests.
-import {
-  createAssistantMessageEventStream,
-  type AssistantMessage,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -15,6 +11,7 @@ import {
   getInternalToolTurnCompletion,
   setInternalToolTurnCompletion,
 } from "../../runtime/internal-hooks.js";
+import { createQueuedAssistantStream } from "../../test-helpers/assistant-event-stream.test-support.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { installToolAuthoredSourceReplyTerminalHook } from "./message-tool-terminal.js";
 
@@ -130,12 +127,9 @@ async function runBatch(params: {
         throw new Error(`unexpected provider request ${requests}`);
       }
       const message = { ...assistant(content), ...params.assistantIdentity };
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        stream.push({ type: "done", reason: message.stopReason, message });
-        stream.end();
+      return createQueuedAssistantStream((push) => {
+        push({ type: "done", reason: message.stopReason, message });
       });
-      return stream;
     },
   });
   params.configureAgent?.(agent);

@@ -372,6 +372,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
           mobile: this.mergedChrome && !this.onBackToSubagents,
           nativePresentation: this.sessionPresentation,
           mobileHost,
+          contentPending: this.deferredSessionHydration !== null,
           // Details reserves header-owned geometry during retained navigation previews.
           presentation:
             this.sessionPresentation === "desktop" ? headerPresentation : panePresentation,

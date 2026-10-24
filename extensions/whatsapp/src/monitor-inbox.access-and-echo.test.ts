@@ -1,6 +1,7 @@
 // WhatsApp monitor inbox access and echo behavior.
 import { cleanMessage } from "baileys";
 import { describe, expect, it, vi } from "vitest";
+import { whatsappInboundLog } from "./auto-reply/loggers.js";
 import { isRecentOutboundMessage } from "./inbound/dedupe.js";
 import {
   buildNotifyMessageUpsert,
@@ -100,6 +101,65 @@ async function expectOutboundDmSkipsPairing(params: {
 
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
+
+  it.each([
+    { policy: { dmPolicy: "disabled" }, group: false, reason: "dm_policy_disabled" },
+    {
+      policy: { dmPolicy: "allowlist", allowFrom: ["+111"] },
+      group: false,
+      reason: "dm_policy_not_allowlisted",
+    },
+    { policy: { groupPolicy: "disabled" }, group: true, reason: "group_policy_disabled" },
+    {
+      policy: { groupPolicy: "allowlist", groupAllowFrom: [] },
+      group: true,
+      reason: "group_policy_empty_allowlist",
+    },
+    {
+      policy: { groupPolicy: "allowlist", groupAllowFrom: ["+111"] },
+      group: true,
+      reason: "group_policy_not_allowlisted",
+    },
+  ] as const)(
+    "records bounded default-level $reason diagnostics without message data",
+    async (testCase) => {
+      mockLoadConfig.mockReturnValue({ channels: { whatsapp: testCase.policy } });
+      const log = vi.spyOn(whatsappInboundLog, "info");
+      const { onMessage, listener, sock } = await openInboxMonitor();
+      const now = vi.spyOn(Date, "now");
+      const startedAt = Date.now();
+      const text = "private message body";
+      try {
+        for (const [index, elapsed] of [0, 1_000, 60_000].entries()) {
+          now.mockReturnValue(startedAt + elapsed);
+          sock.ev.emit(
+            "messages.upsert",
+            buildNotifyMessageUpsert({
+              id: `denied-${index}`,
+              remoteJid: testCase.group ? "12345@g.us" : "999@s.whatsapp.net",
+              participant: testCase.group ? "999@s.whatsapp.net" : undefined,
+              text,
+              pushName: "Private sender",
+              timestamp: nowSeconds(),
+            }),
+          );
+          await waitForInboundWorkDrained();
+          expect(log).toHaveBeenCalledTimes(index === 2 ? 2 : 1);
+        }
+        expect(log.mock.calls).toEqual([
+          [`Inbound message blocked (reason=${testCase.reason})`],
+          [`Inbound message blocked (reason=${testCase.reason})`],
+        ]);
+        expect(onMessage).not.toHaveBeenCalled();
+        expect(sock.sendMessage).not.toHaveBeenCalled();
+        expect(sock.readMessages).not.toHaveBeenCalled();
+      } finally {
+        now.mockRestore();
+        log.mockRestore();
+        await listener.close();
+      }
+    },
+  );
 
   it("allows messages from senders in allowFrom list", async () => {
     mockLoadConfig.mockReturnValue(createAllowListConfig(["+111", "+999"]));

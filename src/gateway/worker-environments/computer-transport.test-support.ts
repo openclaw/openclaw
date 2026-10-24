@@ -27,6 +27,7 @@ import type { NodeRegistry, NodeSession } from "../node-registry.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createWorkerComputerTransportOwner } from "./computer-transport.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import {
   isCurrentPlacementTurnClaim,
   type WorkerSessionPlacementRecord,
@@ -292,16 +293,10 @@ export function createHarness(sharedHost = false, withPolicy = true) {
 export type Harness = ReturnType<typeof createHarness>;
 
 export function connectionIdentity(h: Harness): WorkerConnectionIdentity {
-  return {
+  return createWorkerConnectionIdentity(h.claim, {
     environmentId: h.state.environment.environmentId,
-    credentialHash: "credential-hash",
     bundleHash: "bundle-hash",
-    sessionId: h.claim.sessionId,
-    runId: h.claim.runId,
-    turnClaim: h.claim,
     ownerEpoch: h.state.environment.ownerEpoch,
-    rpcSetVersion: 1,
-    protocolFeatures: [],
     credentialExpiresAtMs: Number.MAX_SAFE_INTEGER,
-  };
+  });
 }

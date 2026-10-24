@@ -11,7 +11,10 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { runRealtimeSttLiveTest } from "openclaw/plugin-sdk/provider-test-contracts";
+import {
+  normalizeTranscriptForMatch,
+  runRealtimeSttLiveTest,
+} from "openclaw/plugin-sdk/provider-test-contracts";
 import {
   isOverloadedErrorMessage,
   isServerErrorMessage,
@@ -134,10 +137,6 @@ async function createTempAgentDir(): Promise<string> {
 
 async function removeTempAgentDir(agentDir: string): Promise<void> {
   await fs.rm(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-}
-
-function normalizeTranscriptForMatch(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
 function linearToMulaw(sample: number): number {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { executeMcpAppOperation } from "../gateway/mcp-app-operations.js";
+import { catalogTool } from "./agent-bundle-mcp-fixture.test-support.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
@@ -125,21 +126,6 @@ function makeStaticRuntime(sessionId: string) {
     releaseLease: runtime.acquireLease?.() ?? (() => {}),
   });
   return runtime;
-}
-
-function catalogTool(
-  serverName: string,
-  toolName: string,
-  overrides: Partial<McpToolCatalog["tools"][number]> = {},
-): McpToolCatalog["tools"][number] {
-  return {
-    serverName,
-    safeServerName: serverName,
-    toolName,
-    inputSchema: { type: "object", properties: {} },
-    fallbackDescription: toolName,
-    ...overrides,
-  };
 }
 
 function resolveRequesterRuntime() {
