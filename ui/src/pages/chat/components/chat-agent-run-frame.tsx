@@ -6,6 +6,7 @@ import {
   createSignal,
   For,
   getOwner,
+  lazy,
   Match,
   onSettled,
   runWithOwner,
@@ -23,6 +24,7 @@ import {
 } from "../chat-agent-run-grouping.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   ActivityGroup,
   MessageGroup,
@@ -32,14 +34,20 @@ import {
 import {
   StreamGroup,
   StreamPartView,
-  WorkGroupSummary,
   type StreamGroupOptions,
   type StreamGroupPart,
 } from "./chat-message-stream-view.tsx";
 import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
-import { ChatSourcePreviews } from "./chat-source-previews.tsx";
 import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { selectWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
+import "../../../styles/chat/source-previews.css";
+
+const WorkGroupSummary = lazy(() => import("./chat-work-group-summary.tsx"), {
+  export: "WorkGroupSummary",
+});
+const ChatSourcePreviews = lazy(() => import("./chat-source-previews.tsx"), {
+  export: "ChatSourcePreviews",
+});
 
 type AgentRunFrameOptions = {
   basePath?: string;
@@ -307,17 +315,19 @@ function RunFrame(props: FrameProps) {
             <Match when={workPart()}>
               {(work) => (
                 <>
-                  <WorkGroupSummary
-                    item={timedWork()?.key === work().key ? timedWork()! : work()}
-                    options={{
-                      expanded: options().isWorkExpanded(work().key),
-                      bubbleMode: options().streamOptions.bubbleMode,
-                      onToggle: () =>
-                        options().onToggleWork(work().key, options().isWorkExpanded(work().key)),
-                      presentation: "continuation",
-                      browserTabPreviews: state().workPreviews.get(work().key),
-                    }}
-                  />
+                  <ChatLazyBoundary>
+                    <WorkGroupSummary
+                      item={timedWork()?.key === work().key ? timedWork()! : work()}
+                      options={{
+                        expanded: options().isWorkExpanded(work().key),
+                        bubbleMode: options().streamOptions.bubbleMode,
+                        onToggle: () =>
+                          options().onToggleWork(work().key, options().isWorkExpanded(work().key)),
+                        presentation: "continuation",
+                        browserTabPreviews: state().workPreviews.get(work().key),
+                      }}
+                    />
+                  </ChatLazyBoundary>
                   <Show when={options().isWorkExpanded(work().key)}>
                     <For each={work().groups} keyed={(group) => group.key}>
                       {(group) => (
@@ -356,10 +366,14 @@ function RunFrame(props: FrameProps) {
         );
       }}
     </FrameBody>,
-    <ChatSourcePreviews
-      sources={state().sourcePreviews}
-      fetchFavicon={props.options.streamOptions.fetchLinkFavicon}
-    />,
+    <Show when={state().sourcePreviews.length > 0}>
+      <ChatLazyBoundary>
+        <ChatSourcePreviews
+          sources={state().sourcePreviews}
+          fetchFavicon={props.options.streamOptions.fetchLinkFavicon}
+        />
+      </ChatLazyBoundary>
+    </Show>,
     <Show when={props.frame.outcome.kind === "interrupted"}>
       <div class="chat-tasks-status chat-turn-recap chat-turn-recap--continuation" role="status">
         {t("chat.composer.runInterrupted")}
