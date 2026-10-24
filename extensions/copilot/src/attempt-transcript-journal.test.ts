@@ -68,6 +68,15 @@ async function createInitializedFixture() {
 }
 
 describe("Copilot attempt transcript journal", () => {
+  it("keeps scheduled assistant prose audit-only for final cron publication", async () => {
+    const { attempt, journal, session, target } = await createInitializedFixture();
+    attempt.inputProvenance = { kind: "internal_system", sourceTool: "cron_execution" };
+    emitAssistant(session, "scheduled-prose", { content: "Still waiting." });
+    await journal.barrier("test");
+    const rows = transcriptMessages(await readSessionTranscriptEvents(target));
+    expect(rows.at(-1)?.message).toMatchObject({ role: "assistant", display: false });
+  });
+
   it("prepares standalone media after hooks without claiming user or tool-group media", async () => {
     const sourceText = "Artifacts ready\nMEDIA:./artifact.json";
     const rewrittenText = `${sourceText}\nMEDIA:./hook-only.json`;

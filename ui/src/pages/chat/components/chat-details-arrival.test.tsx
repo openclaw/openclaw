@@ -88,6 +88,9 @@ it("keeps unknown and empty desktop Outputs and Progress quiet during slow reads
   view.update({ outputs: { ...view.initial.outputs!, artifacts: [], dashboard: null } });
   expect(view.group("outputs")).toBeNull();
   view.update({ outputs: { ...view.initial.outputs!, artifactsError: "Cannot load files" } });
+  const outputs = view.group("outputs")!;
+  expect(outputs.querySelector("summary")?.getAttribute("aria-expanded")).toBe("false");
+  outputs.querySelector("summary")!.click();
   await vi.advanceTimersByTimeAsync(0);
   expect(view.group("outputs")?.textContent).toContain("Cannot load files");
   view.update({
@@ -109,10 +112,14 @@ it("keeps an empty Environment absent while its owner reads, and admits each rea
   const release = vi.fn();
   const request = vi.fn(() => release);
   const environment = { onRequestUncommitted: request };
-  view.update({
-    environment,
-    desktopDisclosures: { expanded: { environment: false }, onExpandedChange() {} },
-  });
+  const disclosures: NonNullable<ChatDetailsProps["desktopDisclosures"]> = {
+    expanded: { environment: false },
+    onExpandedChange(section, expanded) {
+      disclosures.expanded[section] = expanded;
+      view.update({ desktopDisclosures: { ...disclosures } });
+    },
+  };
+  view.update({ environment, desktopDisclosures: disclosures });
   expect(request).toHaveBeenCalledTimes(1);
   expect(view.group("environment")).toBeNull();
 
@@ -129,11 +136,12 @@ it("keeps an empty Environment absent while its owner reads, and admits each rea
       },
     },
   });
-  expect(view.group("environment")?.textContent).toContain("Changes");
-  expect(view.group("environment")?.querySelector("summary")?.getAttribute("aria-expanded")).toBe(
-    "false",
-  );
+  const environmentGroup = view.group("environment")!;
+  expect(environmentGroup.querySelector("summary")?.getAttribute("aria-expanded")).toBe("false");
   expect(release).toHaveBeenCalledTimes(1);
+  environmentGroup.querySelector("summary")!.click();
+  flush();
+  expect(view.group("environment")?.textContent).toContain("Changes");
 
   view.update({ environment });
   expect(view.group("environment")).toBeNull();

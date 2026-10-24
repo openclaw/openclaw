@@ -13,6 +13,15 @@ afterEach(() => {
 
 function mount(initiallyExpanded: boolean) {
   container = document.body.appendChild(document.createElement("div"));
+  const mountContent = vi.fn();
+  function Content(props: { height: number }) {
+    mountContent();
+    return (
+      <div style={{ height: `${props.height}px` }}>
+        <button type="button">Open artifact</button>
+      </div>
+    );
+  }
   function Section(props: { height: number; presented: boolean }) {
     const [expanded, setExpanded] = createSignal(initiallyExpanded);
     return (
@@ -23,9 +32,7 @@ function mount(initiallyExpanded: boolean) {
         presented={props.presented}
         onExpandedChange={setExpanded}
       >
-        <div style={{ height: `${props.height}px` }}>
-          <button type="button">Open artifact</button>
-        </div>
+        <Content height={props.height} />
       </ChatDetailsDesktopSection>
     );
   }
@@ -33,8 +40,15 @@ function mount(initiallyExpanded: boolean) {
   dispose = view.dispose;
   const disclosure = container.querySelector("details")!;
   const summary = container.querySelector("summary")!;
-  const artifact = container.querySelector("button")!;
-  return { view, disclosure, summary, artifact };
+  return {
+    view,
+    disclosure,
+    summary,
+    mountContent,
+    get artifact() {
+      return container.querySelector("button")!;
+    },
+  };
 }
 
 async function settleAnimations(element: HTMLElement) {
@@ -65,13 +79,17 @@ async function settleAnimations(element: HTMLElement) {
   }
 }
 
-it("restores a closed choice before paint and gives keyboard activation immediate access", async () => {
-  const { disclosure, summary, artifact } = mount(false);
+it("constructs closed content on first keyboard reveal and retains it across later reveals", async () => {
+  const fixture = mount(false);
+  const { disclosure, summary, mountContent } = fixture;
   expect(disclosure.open).toBe(false);
-  expect(artifact.checkVisibility()).toBe(false);
+  expect(mountContent).not.toHaveBeenCalled();
+  expect(fixture.artifact).toBeNull();
   summary.focus();
   await userEvent.keyboard("{Enter}");
   flush();
+  const artifact = fixture.artifact;
+  expect(mountContent).toHaveBeenCalledOnce();
   expect(disclosure.open).toBe(true);
   expect(artifact.checkVisibility()).toBe(true);
   expect(disclosure.getAnimations({ subtree: true })).toHaveLength(0);
@@ -82,10 +100,19 @@ it("restores a closed choice before paint and gives keyboard activation immediat
   flush();
   expect(disclosure.open).toBe(false);
   expect(document.activeElement).toBe(summary);
+  expect(fixture.artifact).toBe(artifact);
+  await userEvent.keyboard("{Enter}");
+  flush();
+  expect(mountContent).toHaveBeenCalledOnce();
+  expect(fixture.artifact).toBe(artifact);
+  expect(artifact.checkVisibility()).toBe(true);
 });
 
 it("reverses a pointer collapse, accommodates new content, and settles when parked", async () => {
-  const { view, disclosure, summary, artifact } = mount(true);
+  const { view, disclosure, summary, artifact, mountContent } = mount(true);
+  expect(mountContent).toHaveBeenCalledOnce();
+  expect(disclosure.open).toBe(true);
+  expect(artifact.checkVisibility()).toBe(true);
   await userEvent.click(summary);
   flush();
   expect(summary.getAttribute("aria-expanded")).toBe("false");

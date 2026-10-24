@@ -15,6 +15,7 @@ import { withSessionTurn } from "../../sessions/session-controller.admission.js"
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
 import {
@@ -354,14 +355,7 @@ describe("worker pre-launch claim recovery", () => {
         entered.resolve();
         await resume.promise;
         if (stage === "dispatch") {
-          return {
-            stdout: "",
-            stderr: "",
-            code: 1,
-            signal: null,
-            killed: true,
-            termination: "exit",
-          };
+          return createCommandResult({ code: 1, killed: true });
         }
         throw new AggregateError(
           [new Error("cancel receipt unavailable")],

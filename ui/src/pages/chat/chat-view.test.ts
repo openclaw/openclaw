@@ -88,6 +88,7 @@ import {
   toggleTranscriptSearch,
 } from "./components/chat-thread-interactions.ts";
 import {
+  flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
@@ -1451,7 +1452,7 @@ describe("chat loading skeleton", () => {
     ]);
   });
 
-  it("releases the embedded status when later work steals ownership from an unchanged reply", () => {
+  it("releases the embedded status when later work steals ownership from an unchanged reply", async () => {
     // Rows memoize on their own item identity, so an unchanged reply that
     // stops owning the status must still re-render without it.
     const replyGroup = {
@@ -1495,6 +1496,7 @@ describe("chat loading skeleton", () => {
       readingIndicator,
     ] as ReturnType<typeof chatThread.buildCachedChatItems>);
     renderChatInto(container, props);
+    await flushDeferredRowPrune();
     const bubble = requireElement(
       container,
       '[data-message-id="message:assistant:reply"]',

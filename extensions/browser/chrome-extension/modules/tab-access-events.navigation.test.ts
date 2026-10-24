@@ -1,24 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { chromeEvent } from "./browser.test-support.js";
 import { OPENCLAW_TAB_GROUP_TITLE } from "./relay-core.js";
 import { registerTabAccessEvents } from "./tab-access-events.js";
 import { createTabAccessPolicy, type TabAccessEpoch, type TabAccessMode } from "./tab-access.js";
 import type { BrowserTabSnapshot } from "./tab-eligibility.js";
 
 afterEach(() => vi.unstubAllGlobals());
-
-function chromeEvent<Args extends unknown[]>() {
-  let listener: (...args: Args) => void = () => {
-    throw new Error("Chrome event listener was not registered");
-  };
-  return {
-    addListener(next: (...args: Args) => void) {
-      listener = next;
-    },
-    emit(...args: Args) {
-      listener(...args);
-    },
-  };
-}
 
 const navigationEvents = [
   { method: "Network.responseReceived", params: { requestId: "navigation-1" } },

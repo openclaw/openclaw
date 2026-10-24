@@ -6,6 +6,7 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { convertPcmToMulaw8k } from "../talk/audio-codec.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { createMeetingRealtimeEngineBindings } from "./agent-consult.js";
 import type { MeetingChromeTransportConfig } from "./chrome-transport-types.js";
 import { createMeetingPluginConfigSchema } from "./plugin-config.js";
@@ -464,14 +465,9 @@ describe("Chrome configured audio input contract", () => {
       browserMocks.resolveLocal.mockResolvedValue(callBrowser);
       browserMocks.callNode.mockImplementation(callBrowser);
       const runtime = createPluginRuntime();
-      vi.spyOn(runtime.system, "runCommandWithTimeout").mockResolvedValue({
-        stdout: "BlackHole 2ch",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      });
+      vi.spyOn(runtime.system, "runCommandWithTimeout").mockResolvedValue(
+        createCommandResult({ stdout: "BlackHole 2ch" }),
+      );
       const invoke = vi.spyOn(runtime.nodes, "invoke").mockImplementation(async ({ params }) => {
         const request = params as { action: string };
         if (request.action === "start") {

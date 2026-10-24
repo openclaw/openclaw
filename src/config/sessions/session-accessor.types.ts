@@ -875,7 +875,6 @@ export type {
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
   DeletedAgentSessionEntryPurgeParams,
-  SessionArchivedTranscriptCleanupRule,
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,

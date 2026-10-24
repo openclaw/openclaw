@@ -11,6 +11,7 @@ import type { MarkdownRenderOptions } from "../../../components/markdown-render-
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { renderSolidRef } from "../../../test-helpers/render-solid-ref.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { prepareMarkdownMedia, type MarkdownMedia } from "./chat-message-media-markdown.ts";
@@ -353,11 +354,7 @@ describe("streaming Markdown DOM", () => {
       } finally {
         vi.useRealTimers();
         fallback.mockRestore();
-        if (clipboard) {
-          Object.defineProperty(navigator, "clipboard", clipboard);
-        } else {
-          Reflect.deleteProperty(navigator, "clipboard");
-        }
+        restorePropertyDescriptor(navigator, "clipboard", clipboard);
       }
     },
   );

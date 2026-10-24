@@ -12,7 +12,7 @@ import {
 } from "./client-manager-registry.js";
 import { twitchOutbound } from "./outbound.js";
 import { twitchPlugin } from "./plugin.js";
-import { makeTwitchTestConfig } from "./test-fixtures.js";
+import { makeTwitchChannelTestConfig, makeTwitchTestConfig } from "./test-fixtures.js";
 import { resolveTwitchToken } from "./token.js";
 import { TwitchClientManager } from "./twitch-client.js";
 import type { ChannelAccountSnapshot, ChannelLogSink, TwitchAccountConfig } from "./types.js";
@@ -359,11 +359,9 @@ describe("TwitchClientManager", () => {
     ["stream-team", "channels.twitch.accounts.stream-team.accessToken"],
   ] as const)("reports missing-token config path for %s", async (accountId, path) => {
     const emptyAccount = { ...testAccount, accessToken: "" };
-    const cfg: OpenClawConfig = {
-      channels: {
-        twitch: accountId ? { accounts: { [accountId]: emptyAccount } } : emptyAccount,
-      },
-    };
+    const cfg: OpenClawConfig = makeTwitchChannelTestConfig(
+      accountId ? { accounts: { [accountId]: emptyAccount } } : emptyAccount,
+    );
     resolveTwitchTokenMock.mockReturnValue({ token: "" });
     await expect(manager.getClient(testAccount, cfg, accountId)).rejects.toThrow(
       `Missing Twitch token for account ${accountId ?? "default"} (set ${path} or OPENCLAW_TWITCH_ACCESS_TOKEN for default)`,

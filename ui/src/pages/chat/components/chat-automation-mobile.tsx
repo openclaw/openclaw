@@ -13,6 +13,7 @@ import {
 } from "./chat-summary-automations.tsx";
 import "../../../styles/chat/automation-mobile.css";
 import "../../../styles/chat/summary-automations.css";
+import { SessionAutomationResult } from "./session-automation-result.tsx";
 import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -133,6 +134,7 @@ export function SessionAutomationMobileList(props: SessionAutomationMobileListPr
                             ? t("common.running")
                             : schedule()}
                     </small>
+                    <SessionAutomationResult job={job()} />
                   </span>
                   <Icon name="chevronRight" />
                 </a>

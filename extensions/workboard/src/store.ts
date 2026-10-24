@@ -628,8 +628,8 @@ export class WorkboardStore extends WorkboardNotificationStore {
     return { card, workerContext: buildWorkerContext(card, relatedCards) };
   }
 
-  static openSqlite(workerModuleUrl: URL) {
-    const stores = createWorkboardSqliteStores({ workerModuleUrl });
+  static openSqlite(workerModuleUrl: URL, options?: { lazy?: boolean }) {
+    const stores = createWorkboardSqliteStores({ workerModuleUrl, ...options });
     return new WorkboardStore(stores.cards, stores);
   }
 }

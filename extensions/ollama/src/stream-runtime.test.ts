@@ -1,3 +1,4 @@
+/// <reference lib="esnext.array" />
 import { expectDefined } from "@openclaw/normalization-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
@@ -153,7 +154,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         } as never),
         "wrapped Ollama stream function",
       );
-      await collectStreamEvents(
+      await Array.fromAsync(
         await wrapped(
           model as never,
           { messages: [{ role: "user", content: "hello" }] } as never,
@@ -428,14 +429,6 @@ async function createManagedOllamaTestStream(params: {
   });
 }
 
-async function collectStreamEvents<T>(stream: AsyncIterable<T>): Promise<T[]> {
-  const events: T[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
-}
-
 async function expectNext(
   iterator: AsyncIterator<OllamaStreamEvent>,
   value: Record<string, unknown>,
@@ -474,7 +467,7 @@ async function collectMockedOllamaEvents(
   params: Parameters<typeof createOllamaTestStream>[0] = {},
 ): Promise<OllamaStreamEvent[]> {
   mockResponse(lines.join("\n") + "\n", { headers: { "Content-Type": "application/x-ndjson" } });
-  return collectStreamEvents(await createOllamaTestStream(params));
+  return Array.fromAsync(await createOllamaTestStream(params));
 }
 
 function collectKimiEvents(messages: Partial<AssistantResponseMessage>[]) {
@@ -489,7 +482,7 @@ function collectKimiEvents(messages: Partial<AssistantResponseMessage>[]) {
 
 async function successfulOllamaRequest(params: Parameters<typeof createOllamaTestStream>[0]) {
   const fetchMock = mockSuccessfulOllamaFetch();
-  const events = await collectStreamEvents(await createOllamaTestStream(params));
+  const events = await Array.fromAsync(await createOllamaTestStream(params));
   expect(events.at(-1)?.type).toBe("done");
   return {
     body: getGuardedFetchJsonBody(fetchMock),
@@ -502,7 +495,7 @@ describe("createOllamaStreamFn streaming events", () => {
     mockSuccessfulOllamaFetch();
     const signal = AbortSignal.abort();
     expect(
-      await collectStreamEvents(await createOllamaTestStream({ options: { signal } })),
+      await Array.fromAsync(await createOllamaTestStream({ options: { signal } })),
     ).toMatchObject([{ type: "error", reason: "aborted" }]);
   });
 
@@ -573,7 +566,7 @@ describe("createOllamaStreamFn streaming events", () => {
       const cancel = vi.spyOn(body, "cancel");
       const release = mockResponse(body);
       const caller = new AbortController();
-      const eventsPromise = collectStreamEvents(
+      const eventsPromise = Array.fromAsync(
         await createOllamaTestStream({
           options: {
             onResponse: () => {
@@ -670,7 +663,7 @@ describe("createOllamaStreamFn streaming events", () => {
     });
     source.pushLine(ndjson({}, { done: true }));
     source.close();
-    const remaining = await collectStreamEvents(stream);
+    const remaining = await Array.fromAsync(stream);
     expect(remaining.map((event) => event.type)).toEqual([
       "toolcall_start",
       "toolcall_delta",
@@ -736,7 +729,7 @@ describe("createOllamaStreamFn streaming events", () => {
       expect(JSON.stringify(delta)).not.toContain(hiddenReasoning);
       source.pushLine(ndjson({}, { done: true }));
       source.close();
-      const remaining = await collectStreamEvents(stream);
+      const remaining = await Array.fromAsync(stream);
       expect(remaining.map((event) => event.type)).toEqual(["text_end", "done"]);
       expect(remaining[0]).toMatchObject({ content: "OK." });
       expect(remaining[1]).toMatchObject({ message: { content: [{ type: "text", text: "OK." }] } });
@@ -1104,7 +1097,7 @@ describe("createConfiguredOllamaStreamFn", () => {
       },
       acquire,
     });
-    const eventsPromise = collectStreamEvents(stream);
+    const eventsPromise = Array.fromAsync(stream);
     try {
       await payloadStarted.promise;
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
@@ -1148,7 +1141,7 @@ describe("createConfiguredOllamaStreamFn", () => {
         acquisitionSignal = timeoutSignal;
         return rejectWhenAborted(timeoutSignal);
       });
-      const eventsPromise = collectStreamEvents(
+      const eventsPromise = Array.fromAsync(
         await createManagedOllamaTestStream({
           model: { requestTimeoutMs: 25 },
           acquire,
@@ -1181,7 +1174,7 @@ describe("createConfiguredOllamaStreamFn", () => {
       acquisitionSignal = combinedSignal;
       return rejectWhenAborted(combinedSignal);
     });
-    const eventsPromise = collectStreamEvents(
+    const eventsPromise = Array.fromAsync(
       await createManagedOllamaTestStream({
         model: { requestTimeoutMs: 5_000 },
         options: { signal: caller.signal },
@@ -1209,7 +1202,7 @@ describe("createConfiguredOllamaStreamFn", () => {
         acquisitionSignal = expectDefined(signal, "acquisition timeout signal");
         return { release: vi.fn() };
       });
-      const eventsPromise = collectStreamEvents(
+      const eventsPromise = Array.fromAsync(
         await createManagedOllamaTestStream({
           model: { requestTimeoutMs: 25 },
           acquire,
@@ -1245,7 +1238,7 @@ describe("createConfiguredOllamaStreamFn", () => {
     await expect(iterator.next()).resolves.toMatchObject({ value: { type: "start" } });
     expect(leaseRelease).not.toHaveBeenCalled();
     source.close();
-    const events = await collectStreamEvents(stream);
+    const events = await Array.fromAsync(stream);
     expect(events.at(-1)).toMatchObject({
       type: "error",
       reason: "error",
@@ -1265,7 +1258,7 @@ describe("createConfiguredOllamaStreamFn", () => {
           Object.assign(new Error("connect failed"), { code: "ECONNREFUSED" }),
         );
       }
-      const events = await collectStreamEvents(await createManagedOllamaTestStream({ acquire }));
+      const events = await Array.fromAsync(await createManagedOllamaTestStream({ acquire }));
       expect(acquire).toHaveBeenCalledOnce();
       expect(leaseRelease).toHaveBeenCalledOnce();
       expect(events).toMatchObject([{ type: "error" }]);
@@ -1284,7 +1277,7 @@ describe("createConfiguredOllamaStreamFn", () => {
 
   it("does not acquire or fetch after payload serialization failure", async () => {
     const acquire = vi.fn(async () => ({ release: vi.fn() }));
-    const events = await collectStreamEvents(
+    const events = await Array.fromAsync(
       await createManagedOllamaTestStream({
         options: {
           onPayload: () => {

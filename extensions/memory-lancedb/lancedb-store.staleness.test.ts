@@ -34,12 +34,13 @@ describe("MemoryDB observes externally committed rows", () => {
             break;
           case "delete":
             await expect(reader.delete("alpha", external.id)).resolves.toBe(true);
-            writer.close();
+            await writer.close();
+            writer.start();
             await expect(writer.list("alpha")).resolves.toEqual([]);
         }
       } finally {
-        reader.close();
-        writer.close();
+        await reader.close();
+        await writer.close();
       }
     },
   );
@@ -73,8 +74,8 @@ describe("MemoryDB observes externally committed rows", () => {
       });
       await expect(reader.list("alpha")).resolves.toHaveLength(2);
     } finally {
-      reader.close();
-      writer.close();
+      await reader.close();
+      await writer.close();
     }
   });
 });

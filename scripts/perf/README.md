@@ -1267,7 +1267,9 @@ After both print `PHASE warmed`, atomically publish a future epoch in millisecon
 to that file. It replaces `--start-at`; missed deadlines fail the run. Keep the
 wait short and record the resulting process ages. This aligns workload start,
 not maintenance phase: repeating maintenance can be scheduled from the preceding
-pass's completion. Keep maintenance enabled and preserve its logs.
+pass's completion. Initial main-thread and worker heap collections finish before
+`PHASE warmed`; retained-resource baselines therefore precede the barrier.
+Keep maintenance enabled and preserve its logs.
 
 For `memory-soak`, use `--diagnostics --retained-profile-ms 0` without allocation,
 CPU, or GC-trace flags for natural-GC cost. Its continuous `wholeSoakDiagnostics`
@@ -1313,6 +1315,71 @@ cycles: each can remove a real frequency-dependent cost. Keep untrimmed GC/work
 as the primary cost and report pooled absolute cost/work alongside paired deltas.
 Retain the campaign's tail sample requirements and maximum-pause safeguard.
 A noisy control does not establish that a candidate is regression-free.
+
+## Chat startup reads
+
+`transcript-broadcast-measure.ts --scenario chat.startup` opens retained synthetic
+sessions through the real WebSocket handler. Generate the team-shape fixture
+first; `--chat-startup-sessions 30 --long-transcript-entries 1000
+--long-transcript-sessions 30` gives the first 30 retained sessions deep histories,
+deterministic UUID keys, and two interrupted pending inputs each. Half use short
+references; half use canonical keys with an explicit `openai/gpt-4.1` selection.
+The driver selects these targets from the fixture summary. Pending inputs have
+no replay metadata, so recovery retains them for display without calling a model.
+This exercises retained pending-input reads, not competing live input custody.
+Keep total logical fixture size under
+the generator's bound and prepare each side sequentially.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/fresh-team-shape --entry src/entry.ts \
+  --scenario chat.startup --startup-temperature warm --runs 30 --clients 1 \
+  --operations 1000 --warmup-operations 40 --rounds 1 --limit 80 \
+  --port 41659 --mock-port 41660 --diagnostics --start-file /path/to/pair-start
+```
+
+Warm mode first opens every selected target, then repeats the fixed warmup and
+measured workload. `--runs` chooses the number of retained targets (default 20).
+Cold mode uses `--startup-temperature cold --operations 30 --rounds 1`: each
+measured operation selects a different retained session; warmup uses the separate
+synthetic parent. Cold means the first `chat.startup` for that session in this
+Gateway, not an empty OS page cache or an uninitialized agent database. Every
+response must contain the requested session identity, session metadata, messages,
+and pending-input page. Overridden targets also require startup command metadata;
+a swallowed projection error is not a successful observation. Custom manifests
+can require the same check with `"requireMetadata": true`.
+Latencies are in `samples[].rpc["chat.startup"]`, with
+counts and raw observations; diagnostics include phase spans and natural GC.
+
+For prepared short-link, pending-input, or overridden-model fixtures, pass
+`--startup-targets /path/to/targets.json`, an array such as:
+
+```json
+[
+  {
+    "sessionKey": "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001",
+    "shortId": "12345678",
+    "minimumMessages": 1,
+    "minimumPendingInputs": 1
+  }
+]
+```
+
+Omit `shortId` to exercise canonical keys. Manifest targets must already exist in
+the synthetic fixture. The driver does not inject catalog failures; those require
+separate preparation and evidence. Cold targets must be unique
+and cover every measured operation across all rounds. Use matching manifests and
+fixture preparation on both sides. Retain the paired controls, shared guard, CPU
+swaps, synchronized start, and separate traced-promotion pass described above.
+Thirty cold or 200 warm observations provide descriptive p99 values, not qualified
+p99 gates; those require at least 1,000 observations per side.
+
+For one source installation, `--startup-source-preload /path/to/owner-preload.mjs`
+loads an explicit task-owned source hook before Gateway profiling. It requires
+`--entry src/entry.ts`; the report records the preload's path and SHA-256. Preserve
+module identities and worker imports in that hook, verify the selected owners,
+and give both sides the same loader topology. The driver does not infer source
+equivalence from the supplied revision label.
 
 ## Measure idle Gateway allocation and timer work
 
@@ -1916,6 +1983,46 @@ at seed time with `--mutate --scenario diff-uncommitted-full` during measurement
 to exercise repeated baseline filtering. Keep fixture generation sequential and
 run simultaneous pairs under the host guard with swapped interleaved CPU sets.
 
+## Actor transcript context cloning
+
+`transcript-context-clone-measure.ts` measures the real actor context seed/read
+functions with 64 synthetic 16 KiB messages. Fixture creation flattens message
+strings before warmup to match worker-decoded payloads. Each operation seeds one
+replica and reads it once. It checks byte-equivalent output and isolation from nested payload,
+array, and navigation-map mutations before capture.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-context-clone-measure.ts \
+  --owner-file /path/to/session-actor-transcript-replica.ts --mode exact \
+  --operations 10000 --interval-ms 1 --start-file /path/to/pair-start \
+  --output /path/to/result.json
+```
+
+Use the same replacement hook on both sides, prepared fixtures, a synchronized
+warm start, and swapped interleaved CPU sets under the shared measurement lock and
+guard. `--mode window` and `--mode complete` cover the other residency shapes.
+`--allocations` enables a separate collected-object sampling pass; its timing is
+ineligible for natural-GC gates. Measure promotion in another separate pass:
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/transcript-context-clone-measure.ts \
+  --owner-file /path/to/session-actor-transcript-replica.ts --mode exact \
+  --operations 10000 --interval-ms 1 --start-file /path/to/pair-start \
+  --trace-log /path/to/trace.log --output /path/to/promotion.json \
+  > /path/to/trace.log 2>&1
+```
+
+The trace flags require each other, and tracing requires `--expose-gc` for one
+main-isolate identification collection before fixture preparation and warmup.
+Capture markers exclude that collection from promotion per seed/read pair.
+Use fresh matched A/A controls for this mode; its timing is also ineligible for
+natural-GC gates. Untraced timing runs never force a collection. Report bytes per
+seed/read pair, per-kind GC, latency and loop sample counts, and both pause maxima. Apply the campaign's A/A
+calibration and paired-delta rules. This owner workload does not measure Gateway
+turn latency or establish a deployed allocation reduction; use the real
+`memory-soak` turn workload for that evidence.
+
 ## Measure transcript broadcast fanout
 
 With runtime artifacts built on the authorized benchmark host, seed a fixture
@@ -2290,7 +2397,8 @@ For paired unprofiled memory soaks without mixed RPCs or fingerprint retention, 
 `--worker-heap-done-file` and `--worker-heap-peer-done-file` paths to each side,
 reversing the paths on its peer. Each side publishes completion after its worker
 and whole-workload timing windows, then waits for its peer before collecting or
-snapshotting. Never reuse marker files from an earlier pair.
+snapshotting. The wait allows at least two minutes or one full elapsed capture,
+whichever is longer. Never reuse marker files from an earlier pair.
 For source-runtime comparisons in one checkout, `--worker-baseline-dir` selects
 mirrored TypeScript files while retaining their original module URLs; the worker
 replies record which replacements were loaded. Pass this flag on both sides with

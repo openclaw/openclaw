@@ -1,13 +1,13 @@
 import { WebAPIRateLimitedError } from "@slack/web-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createTestPluginServiceScheduler,
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPresenceStore } from "../../../test-support/presence-store.js";
 import type { PreparedSlackMessage } from "./message-handler/types.js";
 import {
   createSlackPresenceMonitor,
@@ -94,27 +94,10 @@ function presenceSequence(...samples: string[]) {
 }
 
 function createCooldownStore() {
-  const values = new Map<string, number>();
   return {
-    register: async (key, value) => void values.set(key, value),
-    registerIfAbsent: async (key, value) => {
-      if (values.has(key)) {
-        return false;
-      }
-      values.set(key, value);
-      return true;
-    },
-    lookup: async (key) => values.get(key),
-    consume: async (key) => {
-      const value = values.get(key);
-      values.delete(key);
-      return value;
-    },
-    delete: async (key) => values.delete(key),
-    deleteIfEqual: async (key, expected) => values.get(key) === expected && values.delete(key),
+    ...createPresenceStore(),
     entries: async () => [],
-    clear: async () => values.clear(),
-  } satisfies PluginStateKeyedStore<number>;
+  };
 }
 
 function createPrepared({
