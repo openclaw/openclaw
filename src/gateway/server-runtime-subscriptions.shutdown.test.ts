@@ -10,6 +10,7 @@ import {
 } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
+import * as utilityCompletion from "../agents/utility-completion.js";
 import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
@@ -107,6 +108,8 @@ it.for([
     const started = createDeferred();
     const finish = createDeferred();
     const released = vi.fn();
+    using auth = vi.spyOn(utilityCompletion, "hasAvailableUtilityCompletionAuth");
+    auth.mockResolvedValue(true);
     const prepared = vi.spyOn(sessionObserverModel, "defaultPrepareModel").mockResolvedValue({
       config: {},
       authProfileId: undefined,
