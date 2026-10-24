@@ -358,9 +358,7 @@ function makeFixture(options: FixtureOptions = {}) {
     origin,
     seed,
     options: runOptions,
-    run(dependencies: Record<string, unknown> = {}) {
-      return maintainFixture(runOptions, dependencies);
-    },
+    run: (dependencies: Record<string, unknown> = {}) => maintainFixture(runOptions, dependencies),
   };
   return fixture;
 }

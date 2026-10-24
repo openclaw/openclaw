@@ -423,21 +423,85 @@ function startOwnedScheduler(
 }
 
 function observeCleanupClock() {
+  const advances = [10_000, 1_000];
+  async function waitForReceipt(
+    owner: ReturnType<typeof startOwnedScheduler>,
+    event: "ready" | "advanced",
+    step: number,
+  ) {
+    const file = path.join(path.dirname(owner.events), `cleanup-clock-${event}-${step}.json`);
+    await owner.fileReady(file);
+    const receipt = readJson(file);
+    expect(receipt).toEqual({ event, pid: receipt.pid, step, advances: advances.slice(0, step) });
+    expect(owner.children()).toContainEqual({ owner: owner.shim.pid, pid: receipt.pid });
+    return receipt;
+  }
   return {
-    // Advance only an injected EPERM observation, leaving native timers/signals intact.
+    // Keep native polling timers and signals; advance only after the denied
+    // inspection reaches each production grace window in the owned scheduler.
     probe: `
-      const clockNow = Date.now.bind(Date);
-      const clockKill = process.kill.bind(process);
-      let clockOffset = 0;
-      Date.now = () => clockNow() + clockOffset;
+      const cleanupClockAdvances = ${JSON.stringify(advances)};
+      const cleanupClockNow = Date.now.bind(Date);
+      let cleanupClockOffset = 0;
+      let cleanupClockStep = 0;
+      let cleanupClockWaiting = false;
+      let cleanupClockDenied = false;
+      let cleanupClockGroup;
+      let cleanupClockForced = false;
+      const cleanupClockReceipt = event => {
+        const file = fixtureRoot + 'cleanup-clock-' + event + '-' + cleanupClockStep + '.json';
+        fs.writeFileSync(file + '.pending', JSON.stringify({
+          event, pid: process.pid, step: cleanupClockStep,
+          advances: cleanupClockAdvances.slice(0, cleanupClockStep),
+        }));
+        fs.renameSync(file + '.pending', file);
+      };
+      Date.now = () => cleanupClockNow() + cleanupClockOffset;
+      const cleanupClockKill = process.kill.bind(process);
       process.kill = (pid, signal) => {
-        try { return clockKill(pid, signal); }
+        if (signal === 0) cleanupClockDenied = false;
+        try { return cleanupClockKill(pid, signal); }
         catch (error) {
-          if (signal === 0 && error.code === 'EPERM') clockOffset += 11_000;
+          if (signal === 0 && error.code === 'EPERM') {
+            cleanupClockDenied = true;
+            cleanupClockGroup ??= pid;
+          }
           throw error;
+        } finally {
+          if (pid === cleanupClockGroup && signal === 'SIGKILL') cleanupClockForced = true;
         }
       };
+      const cleanupClockTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = (...args) => {
+        const timer = cleanupClockTimeout(...args);
+        const denied = cleanupClockDenied;
+        cleanupClockDenied = false;
+        if (denied && !cleanupClockWaiting && cleanupClockStep < cleanupClockAdvances.length) {
+          if (cleanupClockStep === 1 && !cleanupClockForced) {
+            throw new Error('cleanup clock reached its force-kill wait before forwarding SIGKILL');
+          }
+          cleanupClockWaiting = true;
+          cleanupClockReceipt('ready');
+        }
+        return timer;
+      };
+      process.on('SIGUSR1', () => {
+        if (!cleanupClockWaiting) throw new Error('cleanup clock advanced before its owner waited');
+        cleanupClockOffset += cleanupClockAdvances[cleanupClockStep++];
+        cleanupClockWaiting = false;
+        cleanupClockReceipt('advanced');
+      });
     `,
+    async advance(owner: ReturnType<typeof startOwnedScheduler>) {
+      for (let step = 0; step < advances.length; step += 1) {
+        const ready = await waitForReceipt(owner, "ready", step);
+        process.kill(ready.pid, "SIGUSR1");
+        const advanced = await waitForReceipt(owner, "advanced", step + 1);
+        if (step === advances.length - 1) {
+          expect(advanced.advances).toEqual([10_000, 1_000]);
+        }
+      }
+    },
   };
 }
 
@@ -524,14 +588,11 @@ async function cleanupStaggerFixture(owner: ReturnType<typeof startOwnedSchedule
 }
 
 describe("Docker scheduler trusted harness execution", () => {
-  posixIt.for([
-    { phase: "foreground", order: "exit-first" },
-    { phase: "foreground", order: "signal-first" },
-    { phase: "version", order: "exit-first" },
-    { phase: "version", order: "signal-first" },
-    { phase: "remove", order: "exit-first" },
-    { phase: "smoke", order: "exit-first" },
-  ] as const)(
+  posixIt.for(
+    (["foreground", "version", "remove", "smoke"] as const).flatMap((phase) =>
+      (["exit-first", "signal-first"] as const).map((order) => ({ phase, order })),
+    ),
+  )(
     "preserves $phase terminal ordering when $order in actual main",
     { timeout: 30_000 },
     async ({ phase, order }, { signal: abortSignal }) => {
@@ -742,18 +803,23 @@ describe("Docker scheduler trusted harness execution", () => {
     },
   );
 
+  // Outcome, fatal cleanup, fail-fast, parent signal.
   posixIt.for([
-    ["ordinary failure with fail-fast", true, undefined],
-    ["ordinary failure without fail-fast", false, undefined],
-    ["SIGINT", false, "SIGINT"],
-    ["SIGTERM", false, "SIGTERM"],
+    ["fatal rejection", true, false, undefined],
+    ["ordinary failure with fail-fast", false, true, undefined],
+    ["ordinary failure without fail-fast", false, false, undefined],
+    ["SIGINT", false, false, "SIGINT"],
+    ["SIGTERM", false, false, "SIGTERM"],
   ] as const)(
     "settles staggered lane admission after %s in actual main",
     { timeout: 30_000 },
-    async ([, failFast, signal], { signal: abortSignal }) => {
+    async ([, fatal, failFast, signal], { signal: abortSignal }) => {
       const fixture = ownedFixture();
       const leaderPath = path.join(fixture.root, "stagger-leader.pid");
+      const groupPath = path.join(fixture.root, "stagger-group.pid");
+      const faultPath = path.join(fixture.root, "stagger-probe-rejected");
       const timer = observeStaggerTimer(fixture);
+      const cleanupClock = fatal ? observeCleanupClock() : undefined;
       const laneOrder = ["gateway-concurrency", "live-models"];
       if (signal) {
         configureSignalFixtureLanes(fixture, laneOrder);
@@ -766,20 +832,36 @@ describe("Docker scheduler trusted harness execution", () => {
           : []),
         `if (process.env.OPENCLAW_DOCKER_ALL_LANE_NAME === ${JSON.stringify(laneOrder[0])}) {`,
         `  fs.writeFileSync(${JSON.stringify(leaderPath)}, String(process.pid));`,
-        "  process.once('SIGUSR1', () => process.exit(3));",
+        `  process.once('SIGUSR1', () => process.exit(${fatal ? 0 : 3}));`,
         "  setInterval(() => {}, 1000);",
         "}",
       ]);
+      const probe = fatal
+        ? [
+            "  const kill = process.kill.bind(process);",
+            "  process.kill = (pid, signal) => {",
+            `    if (signal === 0 && fs.existsSync(${JSON.stringify(groupPath)}) && pid === -Number(fs.readFileSync(${JSON.stringify(groupPath)}, 'utf8'))) {`,
+            "      const stack = new Error().stack ?? '';",
+            "      if (!stack.includes('shellProcessGroupAlive') && !stack.includes('waitForManagedProcessGroupExit')) {",
+            `        fs.writeFileSync(${JSON.stringify(faultPath)}, 'final-verification');`,
+            "        checkpointStagger();",
+            "      }",
+            "      throw Object.assign(new Error('stagger cleanup probe denied'), { code: 'EPERM' });",
+            "    }",
+            "    return kill(pid, signal);",
+            "  };",
+          ].join("\n")
+        : "";
       const owner = startOwnedScheduler(
         fixture,
         abortSignal,
         {
           OPENCLAW_DOCKER_ALL_LANES: laneOrder.join(","),
           ...parallelEnv,
-          OPENCLAW_DOCKER_ALL_START_STAGGER_MS: signal || failFast ? "600000" : "3000",
+          OPENCLAW_DOCKER_ALL_START_STAGGER_MS: signal || fatal || failFast ? "600000" : "3000",
           ...(!signal ? { OPENCLAW_DOCKER_ALL_FAIL_FAST: failFast ? "1" : "0" } : {}),
         },
-        timer.probe,
+        `${timer.probe}\n${probe}\n${cleanupClock?.probe ?? ""}`,
         [leaderPath],
       );
       await withScheduler(
@@ -793,13 +875,20 @@ describe("Docker scheduler trusted harness execution", () => {
             owner.shim.kill(signal);
             await owner.ready(path.join(owner.events, signal));
           } else {
+            if (fatal) {
+              writeFileSync(groupPath, String(group));
+            }
             process.kill(leaderPid, "SIGUSR1");
             await owner.fileReady(path.join(owner.events, `${group}.close`));
+            if (fatal) {
+              await cleanupClock!.advance(owner);
+              await owner.fileReady(faultPath, "final-verification");
+            }
           }
           await owner.fileReady(timer.checkpoint);
           const checkpoint = readJson(timer.checkpoint);
           expect(checkpoint.fixtureReleased).toBe(false);
-          if (signal || failFast) {
+          if (signal || fatal || failFast) {
             expect(checkpoint).toMatchObject({
               cleared: true,
               fired: false,
@@ -819,37 +908,49 @@ describe("Docker scheduler trusted harness execution", () => {
             expect(isProcessAlive(leaderPid)).toBe(false);
             return;
           }
-          await expectExit(owner, 1);
+          await expectExit(owner, fatal ? 2 : 1);
           expect(readJson(timer.settled)).toMatchObject({
-            fired: !failFast,
+            fired: !fatal && !failFast,
             fixtureReleased: false,
           });
           // Later shutdown can block the command after runLane already wrote its log.
           // An unstarted lane must not perform that preparation either.
           expect(existsSync(path.join(fixture.root, "logs", `${laneOrder[1]}.log`))).toBe(
-            !failFast,
+            !fatal && !failFast,
           );
           const started = readCalls(fixture.marker).map((call) => call.lane);
           expect(started.toSorted((a: string, b: string) => a.localeCompare(b))).toEqual(
-            failFast ? [laneOrder[0]] : laneOrder,
+            fatal || failFast ? [laneOrder[0]] : laneOrder,
           );
           const summary = readJson(path.join(fixture.root, "logs/summary.json"));
           expect(summary).toMatchObject({ status: "failed", selectedLanes: laneOrder });
           expect(laneResults(summary.lanes, true)).toEqual(
-            failFast
-              ? [{ name: laneOrder[0], status: 3 }]
-              : [
-                  { name: laneOrder[0], status: 3 },
-                  { name: laneOrder[1], status: 0 },
-                ],
+            fatal
+              ? []
+              : failFast
+                ? [{ name: laneOrder[0], status: 3 }]
+                : [
+                    { name: laneOrder[0], status: 3 },
+                    { name: laneOrder[1], status: 0 },
+                  ],
           );
-          expect(laneResults(summary.failures)).toEqual([{ name: laneOrder[0], status: 3 }]);
+          expect(laneResults(summary.failures)).toEqual(
+            fatal ? [] : [{ name: laneOrder[0], status: 3 }],
+          );
+          if (fatal) {
+            expect(owner.stderr()).toContain("Docker lane process group did not stop");
+          }
         },
         () => cleanupStaggerFixture(owner),
       );
     },
   );
-  posixIt.for(["signal-first", "log open failure"] as const)(
+  posixIt.for([
+    "ordinary",
+    "signal-first",
+    "write error held close",
+    "write and close errors",
+  ] as const)(
     "preserves %s cleanup-smoke command provenance",
     { timeout: 30_000 },
     async (order, { signal: abortSignal }) => {
@@ -861,6 +962,9 @@ describe("Docker scheduler trusted harness execution", () => {
         `require('node:fs').writeFileSync(${JSON.stringify(nextPath)}, 'unexpected admission');`,
       )}`;
       const resultPath = path.join(fixture.root, "cleanup-smoke-result.json");
+      const statePath = path.join(fixture.root, "cleanup-smoke-log-state.json");
+      const closeHeldPath = path.join(fixture.root, "cleanup-smoke-close-held.pid");
+      const logFailure = order === "write error held close" || order === "write and close errors";
       const driver = path.join(fixture.harness, "cleanup-smoke-driver.mjs");
       writeFileSync(
         path.join(fixture.selectedHarness, "marker.cjs"),
@@ -883,14 +987,9 @@ describe("Docker scheduler trusted harness execution", () => {
         driver,
         [
           "import fs from 'node:fs';",
-          "import { runCleanupSmokePhase, runShellCommand } from './scripts/test-docker-all.mts';",
+          "import { runCleanupSmokePhase, runShellCommand, writeRunSummary } from './scripts/test-docker-all.mts';",
+          callbackGateSource,
           "const phases = [];",
-          ...(order === "log open failure"
-            ? [
-                "const create = fs.createWriteStream.bind(fs);",
-                `fs.createWriteStream = (file, options) => create(String(file).endsWith('/cleanup-smoke.log') ? ${JSON.stringify(fixture.root)} : file, options);`,
-              ]
-            : []),
           ...(order === "signal-first"
             ? [
                 "const realNow = Date.now.bind(Date);",
@@ -898,10 +997,61 @@ describe("Docker scheduler trusted harness execution", () => {
                 "Date.now = () => startedAt + (realNow() - startedAt) * 100;",
               ]
             : []),
+          `const paths = ${JSON.stringify({ statePath, closeHeldPath, order, logFailure })};`,
+          `
+          const writeError = new Error('cleanup smoke late write failed');
+          const closeError = new Error('cleanup smoke native close failed');
+          const state = { returned: false, rejected: false, closed: false };
+          const snapshot = () => {
+            fs.writeFileSync(paths.statePath + '.pending', JSON.stringify({ ...state, phases }));
+            fs.renameSync(paths.statePath + '.pending', paths.statePath);
+          };
+          if (paths.logFailure) {
+            const nativeCreate = fs.createWriteStream.bind(fs);
+            const nativeFs = { open: fs.open.bind(fs), write: fs.write.bind(fs), close: fs.close.bind(fs) };
+            const gate = callbackGate(paths.closeHeldPath, snapshot);
+            fs.createWriteStream = (file, options) => {
+              if (!String(file).endsWith('/cleanup-smoke.log')) return nativeCreate(file, options);
+              const stream = nativeCreate(file, {
+                ...options,
+                fs: {
+                  open: nativeFs.open,
+                  write(fd, buffer, offset, length, position, callback) {
+                    const late = buffer.toString('utf8', offset, offset + length).includes('finished:');
+                    nativeFs.write(fd, buffer, offset, length, position, (error, bytes) => {
+                      callback(error || (late ? writeError : null), bytes);
+                    });
+                  },
+                  close(fd, callback) {
+                    gate.hold(() => nativeFs.close(fd, error =>
+                      callback(error || (paths.order === 'write and close errors' ? closeError : null))));
+                  },
+                },
+              });
+              stream.once('close', () => { state.closed = true; snapshot(); });
+              return stream;
+            };
+          }
+          `,
           "fs.mkdirSync(process.env.OPENCLAW_DOCKER_ALL_LOG_DIR, { recursive: true });",
+          "try {",
           "const failure = await runCleanupSmokePhase(process.env, process.env.OPENCLAW_DOCKER_ALL_LOG_DIR, phases);",
-          `const next = await runShellCommand({ command: ${JSON.stringify(nextCommand)}, env: process.env, label: 'post-signal-admission' });`,
+          "state.returned = true; snapshot();",
+          ...(order === "ordinary"
+            ? [
+                "await writeRunSummary(process.env.OPENCLAW_DOCKER_ALL_LOG_DIR, { failures: [failure], lanes: [], phases, status: 'failed' });",
+              ]
+            : []),
+          `const next = ${order === "signal-first" ? `await runShellCommand({ command: ${JSON.stringify(nextCommand)}, env: process.env, label: 'post-signal-admission' })` : "undefined"};`,
           `fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({ failure, phases, next }));`,
+          `} catch (error) {
+            state.rejected = true;
+            state.writeIdentity = error === writeError;
+            state.aggregateIdentity = error instanceof AggregateError && error.errors.length === 2
+              && error.errors[0] === writeError && error.errors[1] === closeError && error.cause === writeError;
+            snapshot();
+            throw error;
+          }`,
         ].join("\n"),
       );
       const owner = startOwnedScheduler(
@@ -912,44 +1062,108 @@ describe("Docker scheduler trusted harness execution", () => {
         [leaderPath, leafPath],
         driver,
       );
-      await withScheduler(owner, async () => {
-        if (order === "log open failure") {
-          await expectExit(owner, 1);
-          expect(owner.stderr()).toContain("EISDIR");
-          expect(existsSync(resultPath)).toBe(false);
-          return;
-        }
-        const leaderPid = await owner.ready(leaderPath);
-        const group = owner.captureGroup(leaderPid);
-        const leafPid = await owner.ready(leafPath);
-        expect(owner.captureGroup(leafPid)).toBe(group);
-        owner.shim.kill("SIGTERM");
-        expect(await owner.ready(path.join(owner.events, "SIGTERM"))).toBe(owner.shim.pid);
-        await expectExit(owner, 143);
-        expect(readJson(path.join(owner.events, `${group}.close`))).toEqual({
-          code: null,
-          signal: "SIGTERM",
-        });
-        const { failure, phases, next } = readJson(resultPath);
-        await waitForReapedPid(leafPid, abortSignal);
-        expect(existsSync(nextPath)).toBe(false);
-        expect(owner.children().filter((child) => child.owner === owner.shim.pid)).toHaveLength(1);
-        expect(next).toMatchObject({ cancelled: true, status: 143, signal: null });
-        expect(failure).toMatchObject({
-          name: "cleanup-smoke",
-          status: 128,
-          cancelled: true,
-          targetable: false,
-          rerunCommand: `(cd ${quote(fixture.selectedHarness)} && ${quote(fixture.pinnedPnpm)} test:docker:cleanup)`,
-        });
-        expect(phases).toEqual([
-          expect.objectContaining({ name: "cleanup-smoke", status: "failed" }),
-        ]);
-        expect(readFileSync(path.join(fixture.root, "logs/cleanup-smoke.log"), "utf8")).toContain(
-          "cleanup smoke failed intentionally",
-        );
-        expect(isProcessAlive(leaderPid)).toBe(false);
-      });
+      await withScheduler(
+        owner,
+        async () => {
+          const leaderPid = await owner.ready(leaderPath);
+          const group = owner.captureGroup(leaderPid);
+          if (order === "signal-first") {
+            const leafPid = await owner.ready(leafPath);
+            expect(owner.captureGroup(leafPid)).toBe(group);
+            owner.shim.kill("SIGTERM");
+            expect(await owner.ready(path.join(owner.events, "SIGTERM"))).toBe(owner.shim.pid);
+          } else {
+            process.kill(leaderPid, "SIGUSR1");
+          }
+          if (logFailure) {
+            const controller = await owner.ready(closeHeldPath);
+            expect(controller).toBe(owner.shim.pid);
+            expect(isProcessAlive(controller)).toBe(true);
+            expect(readJson(statePath)).toMatchObject({
+              returned: false,
+              rejected: false,
+              closed: false,
+            });
+            expect(existsSync(resultPath)).toBe(false);
+            process.kill(controller, "SIGUSR2");
+            await expectExit(owner, 1);
+            expect(readJson(statePath)).toMatchObject({
+              returned: false,
+              rejected: true,
+              closed: true,
+              writeIdentity: order === "write error held close",
+              aggregateIdentity: order === "write and close errors",
+              phases: [expect.objectContaining({ name: "cleanup-smoke", status: "failed" })],
+            });
+            expect(existsSync(resultPath)).toBe(false);
+            const log = readFileSync(path.join(fixture.root, "logs/cleanup-smoke.log"), "utf8");
+            expect(log).toContain("cleanup smoke retained stdout");
+            expect(log).toContain("cleanup smoke failed intentionally");
+            expect(log).toContain("finished:");
+            expect(owner.stderr()).toContain("cleanup smoke late write failed");
+            if (order === "write and close errors") {
+              expect(owner.stderr()).toContain("cleanup smoke native close failed");
+            }
+            expect(isProcessAlive(leaderPid)).toBe(false);
+            return;
+          }
+          await expectExit(owner, order === "signal-first" ? 143 : 0);
+          expect(readJson(path.join(owner.events, `${group}.close`))).toEqual(
+            order === "signal-first"
+              ? { code: null, signal: "SIGTERM" }
+              : { code: 3, signal: null },
+          );
+          const { failure, phases, next } = readJson(resultPath);
+          if (order === "signal-first") {
+            await waitForReapedPid(Number(readFileSync(leafPath, "utf8")), abortSignal);
+            expect(existsSync(nextPath)).toBe(false);
+            expect(owner.children().filter((child) => child.owner === owner.shim.pid)).toHaveLength(
+              1,
+            );
+            expect(next).toMatchObject({ cancelled: true, status: 143, signal: null });
+          }
+          expect(failure).toMatchObject({
+            name: "cleanup-smoke",
+            status: order === "signal-first" ? 128 : 3,
+            targetable: false,
+          });
+          expect(failure.cancelled).toBe(order === "signal-first" ? true : undefined);
+          expect(phases).toEqual([
+            expect.objectContaining({ name: "cleanup-smoke", status: "failed" }),
+          ]);
+          if (order === "ordinary") {
+            const expected = {
+              rerunCommand: `(cd ${quote(fixture.selectedHarness)} && ${quote(fixture.pinnedPnpm)} test:docker:cleanup)`,
+              status: 3,
+              targetable: false,
+            };
+            const summary = readJson(path.join(fixture.root, "logs/summary.json"));
+            expect(summary).toMatchObject({
+              status: "failed",
+              failures: [{ name: "cleanup-smoke", ...expected }],
+              phases: [expect.objectContaining({ name: "cleanup-smoke", status: "failed" })],
+              lanes: [],
+            });
+            const index = readJson(path.join(fixture.root, "logs/failures.json"));
+            expect(index).not.toHaveProperty("status");
+            expect(index.combinedGhWorkflowCommand).toBeUndefined();
+            expect(index.lanes[0]?.ghWorkflowCommand).toBeUndefined();
+            expect(index.lanes).toEqual([
+              expect.objectContaining({ lane: "cleanup-smoke", ...expected }),
+            ]);
+          }
+          expect(readFileSync(path.join(fixture.root, "logs/cleanup-smoke.log"), "utf8")).toContain(
+            "cleanup smoke failed intentionally",
+          );
+          expect(isProcessAlive(leaderPid)).toBe(false);
+        },
+        async () => {
+          if (existsSync(closeHeldPath)) {
+            signalIfAlive(Number(readFileSync(closeHeldPath, "utf8")), "SIGUSR2");
+          }
+          await owner.cleanup();
+        },
+      );
     },
   );
 
@@ -1029,6 +1243,7 @@ describe("Docker scheduler trusted harness execution", () => {
           writeFileSync(groupPath, String(owner.captureGroup(leafPid)));
           const leader = await owner.ready(leaderPath);
           process.kill(leader, "SIGUSR1");
+          await cleanupClock!.advance(owner);
         }
         await expectExit(owner, unjoined ? 2 : 1);
         if (leafPid) {
@@ -1378,8 +1593,12 @@ fs.copyFileSync(${JSON.stringify(fixture.tarball)}, path.join(value('--output-di
 
 describe("Docker scheduler publication settlement", () => {
   posixIt.for([
+    "delayed close",
     "repeated signals after group join",
+    "write error held close",
+    "open failure",
     "premature destroy",
+    "write and close errors",
     "tree and log errors",
     "cancel pending open",
     "tree error fences admission",
@@ -1418,11 +1637,15 @@ describe("Docker scheduler publication settlement", () => {
       const nativeCreate = fs.createWriteStream.bind(fs);
       const nativePublication = fs.promises.writeFile.bind(fs.promises);
       const writeError = new Error('owned late log write failed');
+      const closeError = new Error('owned log close failed');
+      const openError = new Error('owned log open failed');
       const siblingWriteError = new Error('sibling log write failed');
       const siblingCloseError = new Error('sibling log close failed');
-      const state = { closed: false, siblingClosed: false, summaryStarted: false, groupSignals: [], termTurns: 0 };
+      const state = { finished: false, closed: false, siblingClosed: false, summaryStarted: false, writeIdentity: false, closeIdentity: false, siblingIdentity: false, poolIdentity: false, poolClosed: false, treePrimary: false, destroyedIdentity: false, prematureIdentity: false, groupSignals: [], termTurns: 0 };
+      const destroyedErrors = [];
       let siblingPid;
       let primaryWrite;
+      let siblingError;
       const snapshot = () => {
         fs.writeFileSync(paths.statePath + '.pending', JSON.stringify(state));
         fs.renameSync(paths.statePath + '.pending', paths.statePath);
@@ -1440,6 +1663,31 @@ describe("Docker scheduler publication settlement", () => {
           snapshot();
         }
         return nativePublication(...args);
+      };
+      const NativeAggregateError = globalThis.AggregateError;
+      globalThis.AggregateError = class extends NativeAggregateError {
+        constructor(errors, ...args) {
+          const values = Array.from(errors);
+          super(values, ...args);
+          state.writeIdentity ||= values.includes(writeError);
+          state.closeIdentity ||= values.includes(closeError);
+          state.treePrimary ||= values[0]?.code === 'EPROCESSGROUP_CLEANUP_FAILED' && values.includes(writeError);
+          if (paths.siblingLogs) {
+            if (values.length === 2 && values[0] === siblingWriteError && values[1] === siblingCloseError) {
+              siblingError = this;
+              state.siblingIdentity = this.cause === siblingWriteError;
+            }
+            if (values[0] === writeError) {
+              state.poolIdentity = values.length === 2 && values[1] === siblingError && this.cause === writeError;
+              state.poolClosed = state.closed && state.siblingClosed;
+            }
+          }
+          if (paths.mode === 'premature destroy') {
+            state.destroyedIdentity = destroyedErrors.length >= 2 && new Set(destroyedErrors).size === destroyedErrors.length && destroyedErrors.every((error, index) => error.code === 'ERR_STREAM_DESTROYED' && values[index] === error) && this.cause === destroyedErrors[0];
+            state.prematureIdentity = values.length === destroyedErrors.length + 1 && values.at(-1)?.code === 'ERR_STREAM_PREMATURE_CLOSE' && !destroyedErrors.includes(values.at(-1));
+          }
+          snapshot();
+        }
       };
       const nativeSpawn = cp.spawn;
       const commandPids = new Set();
@@ -1492,6 +1740,10 @@ describe("Docker scheduler publication settlement", () => {
           ...options,
           fs: {
             open(file, flags, mode, callback) {
+              if (paths.mode === 'open failure') {
+                queueMicrotask(() => callback(openError));
+                return;
+              }
               nativeFs.open(file, flags, mode, (error, fd) => {
                 if (paths.mode === 'cancel pending open' && !error) hold(() => callback(error, fd));
                 else callback(error, fd);
@@ -1500,7 +1752,7 @@ describe("Docker scheduler publication settlement", () => {
             write(fd, buffer, offset, length, position, callback) {
               const late = buffer.toString('utf8', offset, offset + length).includes('finished:');
               nativeFs.write(fd, buffer, offset, length, position, (error, bytes) => {
-                const complete = () => callback(error || (late && (paths.siblingLogs || ['tree and log errors', 'log error fences admission', 'shutdown-only sibling cleanup error'].includes(paths.mode)) ? (sibling ? siblingWriteError : writeError) : null), bytes);
+                const complete = () => callback(error || (late && (paths.siblingLogs || ['write error held close', 'write and close errors', 'tree and log errors', 'log error fences admission', 'shutdown-only sibling cleanup error'].includes(paths.mode)) ? (sibling ? siblingWriteError : writeError) : null), bytes);
                 if (paths.siblingLogs && late) {
                   // Both commands and their real footer writes precede the first failure.
                   if (sibling) {
@@ -1519,12 +1771,13 @@ describe("Docker scheduler publication settlement", () => {
             },
             close(fd, callback) {
               const close = () => nativeFs.close(fd, error =>
-                callback(error || (sibling ? siblingCloseError : null)));
-              if (['repeated signals after group join', 'tree error fences admission', 'log error fences admission'].includes(paths.mode)) hold(close);
+                callback(error || (sibling ? siblingCloseError : paths.mode === 'write and close errors' ? closeError : null)));
+              if (['delayed close', 'repeated signals after group join', 'write error held close', 'tree error fences admission', 'log error fences admission'].includes(paths.mode)) hold(close);
               else close();
             },
           },
         });
+        stream.on('finish', () => { state.finished = true; snapshot(); });
         stream.on('error', () => snapshot());
         stream.on('close', () => {
           if (sibling) state.siblingClosed = true;
@@ -1533,6 +1786,11 @@ describe("Docker scheduler publication settlement", () => {
           if (paths.siblingLogs && !sibling) fs.writeFileSync(paths.checkpoint, 'primary-log-closed');
         });
         if (paths.mode === 'premature destroy') {
+          const nativeWrite = stream.write.bind(stream);
+          stream.write = (chunk, callback) => nativeWrite(chunk, error => {
+            if (error) destroyedErrors.push(error);
+            callback(error);
+          });
           stream.once('open', () => stream.destroy());
         }
         return stream;
@@ -1557,8 +1815,11 @@ describe("Docker scheduler publication settlement", () => {
       await withScheduler(
         owner,
         async () => {
+          await cleanupClock?.advance(owner);
           const held = [
+            "delayed close",
             "repeated signals after group join",
+            "write error held close",
             "cancel pending open",
             "tree error fences admission",
             "log error fences admission",
@@ -1627,13 +1888,15 @@ describe("Docker scheduler publication settlement", () => {
             process.kill(schedulerPid, "SIGUSR2");
           }
           const expected =
-            mode === "cancel pending open" || mode === "repeated signals after group join"
-              ? 143
-              : mode === "tree and log errors" ||
-                  mode === "tree error fences admission" ||
-                  shutdownOnly
-                ? 2
-                : 1;
+            mode === "delayed close"
+              ? 0
+              : mode === "cancel pending open" || mode === "repeated signals after group join"
+                ? 143
+                : mode === "tree and log errors" ||
+                    mode === "tree error fences admission" ||
+                    shutdownOnly
+                  ? 2
+                  : 1;
           await expectExit(owner, expected);
           const state = readJson(statePath);
           expect(state.closed).toBe(true);
@@ -1641,24 +1904,31 @@ describe("Docker scheduler publication settlement", () => {
           expect(summary).toMatchObject({
             runId: "owned-log-invocation",
             lanes: expect.any(Array),
-            status: "failed",
+            status: expected === 0 ? "passed" : "failed",
           });
-          if (expected === 143) {
+          if (expected === 0 || expected === 143) {
             expect(summary.cleanup).toEqual({ joined: true });
           } else {
             expect(summary).not.toHaveProperty("cleanup");
             expect(owner.stderr()).toContain(
-              mode === "premature destroy"
-                ? "Premature close"
-                : mode === "tree and log errors" || mode === "tree error fences admission"
-                  ? "Docker lane process group did not stop"
-                  : "owned late log write failed",
+              mode === "open failure"
+                ? "owned log open failed"
+                : mode === "premature destroy"
+                  ? "Premature close"
+                  : mode === "tree and log errors" || mode === "tree error fences admission"
+                    ? "Docker lane process group did not stop"
+                    : mode === "write and close errors"
+                      ? "log publication failed"
+                      : "owned late log write failed",
             );
           }
-          if (mode === "tree and log errors") {
-            expect(owner.stderr().indexOf("Docker lane process group did not stop")).toBeLessThan(
-              owner.stderr().indexOf("owned late log write failed"),
-            );
+          if (mode === "write and close errors") {
+            expect(state).toMatchObject({ writeIdentity: true, closeIdentity: true });
+          } else if (mode === "tree and log errors") {
+            expect(state.treePrimary).toBe(true);
+          }
+          if (mode === "premature destroy") {
+            expect(state).toMatchObject({ destroyedIdentity: true, prematureIdentity: true });
           }
           if (shutdownOnly) {
             const primary = "owned late log write failed";
@@ -1667,7 +1937,12 @@ describe("Docker scheduler publication settlement", () => {
             expect(owner.stderr().indexOf(primary)).toBeLessThan(owner.stderr().indexOf(cleanup));
           }
           if (siblingLogs) {
-            expect(state.siblingClosed).toBe(true);
+            expect(state).toMatchObject({
+              siblingClosed: true,
+              siblingIdentity: true,
+              poolIdentity: true,
+              poolClosed: true,
+            });
             expect(summary.lanes).toEqual([]);
             const diagnostics = [
               "owned late log write failed",
@@ -1794,6 +2069,8 @@ describe("Docker scheduler publication settlement", () => {
 
   posixIt.for([
     { signal: "SIGINT", code: 130, phase: "raw summary" },
+    { signal: "SIGTERM", code: 143, phase: "raw summary" },
+    { signal: "SIGINT", code: 130, phase: "committed" },
     { signal: "SIGTERM", code: 143, phase: "committed" },
   ] as const)(
     "orders $signal at $phase against terminal publication",

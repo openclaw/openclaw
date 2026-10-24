@@ -72,7 +72,7 @@ function childFixture(onTestFinished: TestContext["onTestFinished"]) {
     });
   });
   return {
-    make: dirs.make,
+    make: (prefix: string, root?: string) => dirs.make(prefix, root),
     own(child: ReturnType<typeof spawn>, pidFiles: string[], group = false) {
       const output = { stdout: "", stderr: "" };
       for (const key of ["stdout", "stderr"] as const) {

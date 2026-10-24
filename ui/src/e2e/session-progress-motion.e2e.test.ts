@@ -1,7 +1,11 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import {
+  captureUiProofEnabled,
   createChatFlowE2eSuite,
   expectDefined,
   installMockGateway,
@@ -44,66 +48,141 @@ async function still(card: Locator, expected: number) {
 }
 
 suite.define(() => {
-  it.each([false, true])("keeps Details manual with touch=%s", async (touch) => {
-    await suite.withPage(
-      { viewport: { width: 1280, height: 900 }, hasTouch: touch },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-          inFlightRun: { runId: "details-motion-run", text: "Reviewing the workspace." },
-          sessionInfo: {
-            key: "agent:main:main",
-            activeRunIds: ["details-motion-run"],
-            hasActiveRun: true,
-          },
-          methodResponses: {
-            "progressCard.get": {
-              card: {
-                sessionKey: "agent:main:main",
-                revision: 1,
-                updatedAt: 1,
-                markdown: "- A detailed finding.\n".repeat(48),
-                steps: [{ step: "Verify manual disclosure", status: "in_progress" }],
-              },
-            },
-          },
-        });
-        await page.goto(suite.server.baseUrl + "chat");
-        await openChatDetails(page);
-        const card = page.locator('[data-progress-card-placement="details"]');
-        await expect.poll(() => card.getAttribute("open")).toBe("");
-        await card.locator("summary").click();
-        await expect.poll(() => card.getAttribute("open")).toBeNull();
-        const closed = await height(card);
-        await wheel(page, card, -48);
-        await expect.poll(() => card.getAttribute("data-reveal")).toBe("closed");
-        expect(await height(card)).toBe(closed);
-        const point = await headerPoint(card);
-        if (touch) {
-          const input = await page.context().newCDPSession(page);
-          try {
-            await input.send("Input.dispatchTouchEvent", {
-              type: "touchStart",
-              touchPoints: [point],
-            });
-            await input.send("Input.dispatchTouchEvent", {
-              type: "touchMove",
-              touchPoints: [{ x: point.x, y: point.y - 36 }],
-            });
-            await input.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-          } finally {
-            await input.detach();
+  it.each([
+    { reducedMotion: "no-preference", touch: false },
+    { reducedMotion: "reduce", touch: false },
+    { reducedMotion: "reduce", touch: true },
+  ] as const)(
+    "keeps Details disclosure manual through scrolling and streaming ($reducedMotion, touch=$touch)",
+    async ({ reducedMotion, touch }) => {
+      await suite.withPage(
+        {
+          ...createControlUiE2eContextOptions(),
+          reducedMotion,
+          viewport: { width: 1280, height: 900 },
+          isMobile: false,
+          hasTouch: touch,
+        },
+        async ({ page }) => {
+          const sessionKey = "agent:main:main";
+          const runId = "details-motion-run";
+          const initialCard = {
+            sessionKey,
+            revision: 1,
+            updatedAt: Date.now(),
+            markdown: "- A detailed finding to verify.\n".repeat(48),
+            steps: [{ step: "Verify manual disclosure", status: "in_progress" }],
+          };
+          const gateway = await installMockGateway(page, {
+            sessionKey,
+            featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+            historyMessages: Array.from({ length: 40 }, (_, i) => ({
+              role: i % 2 ? "assistant" : "user",
+              content: [{ type: "text", text: "Earlier context " + i + "." }],
+            })),
+            inFlightRun: { runId, text: "Reviewing the workspace." },
+            sessionInfo: { key: sessionKey, activeRunIds: [runId], hasActiveRun: true },
+            methodResponses: { "progressCard.get": { card: initialCard } },
+          });
+          await page.goto(suite.server.baseUrl + "chat");
+          const card = page.locator('[data-progress-card-placement="details"]');
+          const panel = page.locator('.chat-details[role="dialog"]');
+          const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+          await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+          expect(await panel.isVisible()).toBe(false);
+          expect(await page.locator('[data-progress-card-placement="composer"]').count()).toBe(0);
+          await openChatDetails(page);
+          await expect.poll(() => card.getAttribute("open")).toBe("");
+          const body = panel.locator(".chat-details-desktop-body");
+          await waitForControlUiProofSurface(body, [card]);
+          await waitForProgressThreadIdle(thread);
+          // Transcript input cannot collapse the adjacent desktop disclosure.
+          const bounds = expectDefined(await thread.boundingBox(), "transcript bounds");
+          await page.mouse.move(bounds.x + 8, bounds.y + bounds.height / 2);
+          await page.mouse.wheel(0, -640);
+          await expect
+            .poll(() => thread.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop))
+            .toBeGreaterThan(200);
+          await waitForProgressThreadIdle(thread);
+          expect(await card.getAttribute("open")).toBe("");
+          await card.locator("summary").click();
+          await expect.poll(() => card.getAttribute("open")).toBeNull();
+          await waitForControlUiProofSurface(card, [card.locator("summary")]);
+          const closed = await height(card);
+          await wheel(page, card, -48);
+          await expect.poll(() => card.getAttribute("data-reveal")).toBe("closed");
+          expect(await height(card)).toBe(closed);
+          const point = await headerPoint(card);
+          if (touch) {
+            const touchSession = await page.context().newCDPSession(page);
+            try {
+              await touchSession.send("Input.dispatchTouchEvent", {
+                type: "touchStart",
+                touchPoints: [point],
+              });
+              await touchSession.send("Input.dispatchTouchEvent", {
+                type: "touchMove",
+                touchPoints: [{ x: point.x, y: point.y - 36 }],
+              });
+              await touchSession.send("Input.dispatchTouchEvent", {
+                type: "touchEnd",
+                touchPoints: [],
+              });
+            } finally {
+              await touchSession.detach();
+            }
+          } else {
+            await page.mouse.move(point.x, point.y);
+            await page.mouse.down();
+            await page.mouse.move(point.x, point.y - 36, { steps: 6 });
+            await page.mouse.up();
           }
-        } else {
-          await page.mouse.move(point.x, point.y);
-          await page.mouse.down();
-          await page.mouse.move(point.x, point.y - 36, { steps: 6 });
-          await page.mouse.up();
-        }
-        expect(await card.getAttribute("data-reveal")).not.toBe("partial");
-      },
-    );
-  });
+          expect(await card.getAttribute("data-reveal")).not.toBe("partial");
+          // Normalize via the public summary if a native release produced a click.
+          if ((await card.getAttribute("open")) !== null) {
+            await card.locator("summary").click();
+          }
+          const readerTop = await thread.evaluate((el) => el.scrollTop);
+          await gateway.emitGatewayEvent("chat", {
+            sessionKey,
+            runId,
+            state: "delta",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "A streaming finding arrived." }],
+            },
+          });
+          await gateway.setMethodResponse("progressCard.get", {
+            card: {
+              ...initialCard,
+              revision: 2,
+              markdown: initialCard.markdown + "\nUpdated findings.",
+            },
+          });
+          await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
+          await expect.poll(() => card.textContent()).toContain("Updated findings.");
+          await waitForProgressThreadIdle(thread);
+          expect(await card.getAttribute("open")).toBeNull();
+          expect(await thread.evaluate((el) => el.scrollTop)).toBe(readerTop);
+          await gateway.emitChatFinal({ sessionKey, runId, text: "Complete." });
+          await expect.poll(() => thread.textContent()).toContain("Complete.");
+          expect(await card.getAttribute("open")).toBeNull();
+          for (const key of ["Enter", "Space"]) {
+            await card.locator("summary").press(key);
+            await expect.poll(() => card.getAttribute("open")).toBe("");
+            expect(await body.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(
+              0,
+            );
+            await card.locator(".session-progress-card__step").last().scrollIntoViewIfNeeded();
+            expect(await body.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+            expect(await thread.evaluate((el) => el.scrollTop)).toBe(readerTop);
+            await card.locator("summary").press(key);
+            await expect.poll(() => card.getAttribute("open")).toBeNull();
+          }
+        },
+      );
+    },
+  );
   it.each([
     { reducedMotion: "no-preference", mobile: false },
     { reducedMotion: "reduce", mobile: false },
@@ -112,14 +191,22 @@ suite.define(() => {
     "scrubs embedded Home progress with wheel and drag, holds through streaming, and reverses ($reducedMotion, touch=$mobile)",
     async ({ reducedMotion, mobile }) => {
       const viewport = mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 };
+      const proofDir = captureUiProofEnabled
+        ? path.join(suite.artifactDir, "elastic", reducedMotion + (mobile ? "-mobile" : "-desktop"))
+        : null;
+      if (proofDir) {
+        await mkdir(proofDir, { recursive: true });
+      }
       const context = await suite.newBrowserContext({
         ...createControlUiE2eContextOptions(),
         reducedMotion,
         viewport,
         isMobile: mobile,
         hasTouch: mobile,
+        ...(proofDir ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
       });
       const page = await context.newPage();
+      const video = page.video();
       const sessionKey = "agent:main:main";
       const runId = "elastic-progress-run";
       let text = Array.from({ length: 48 }, (_, i) => "Current findings " + i + ".").join("\n\n");
@@ -156,6 +243,17 @@ suite.define(() => {
       const home = page.locator("openclaw-home-session");
       const card = home.locator('[data-progress-card-placement="composer"]');
       const thread = home.locator(".chat-thread");
+      let captureClip: { x: number; y: number; width: number; height: number } | undefined;
+      const shot = async (name: string) => {
+        if (!proofDir) {
+          return;
+        }
+        // Capture a normal viewport during recording; crop only after the video closes.
+        await writeFile(
+          path.join(proofDir, name + ".viewport.png"),
+          await page.screenshot({ fullPage: false }),
+        );
+      };
       try {
         // The dock requires advertised history/send capabilities and is suppressed
         // when its own Home conversation already owns the primary chat page.
@@ -168,6 +266,21 @@ suite.define(() => {
         await card.locator(".session-progress-card__body").waitFor();
         await waitForProgressThreadIdle(thread);
         const full = await height(card);
+        const bounds = expectDefined(await card.boundingBox(), "full progress card");
+        const cropY = Math.max(0, bounds.y - 150);
+        captureClip = {
+          x: bounds.x,
+          y: cropY,
+          width: bounds.width,
+          height: bounds.y + bounds.height - cropY,
+        };
+        if (proofDir) {
+          await writeFile(
+            path.join(proofDir, "capture.json"),
+            JSON.stringify({ viewport, clip: captureClip }),
+          );
+        }
+        await shot("01-expanded");
         await thread.hover();
         await page.mouse.wheel(0, -320);
         await waitForProgressThreadIdle(thread);
@@ -180,6 +293,7 @@ suite.define(() => {
         await expect.poll(() => card.getAttribute("open")).toBeNull();
         await waitForProgressThreadIdle(thread);
         const closed = await height(card);
+        await shot("02-collapsed");
         const readerTop = await thread.evaluate((el) => el.scrollTop);
         await wheel(page, card, -48);
         await page.evaluate(
@@ -188,8 +302,10 @@ suite.define(() => {
               requestAnimationFrame(() => resolve());
             }),
         );
+        await shot("03-input-attempt");
         await expect.poll(() => height(card)).toBeCloseTo(closed + 48, 0);
         await still(card, closed + 48);
+        await shot("03-paused-partial");
         await wheel(page, card, -24);
         await expect.poll(() => height(card)).toBeCloseTo(closed + 72, 0);
         await wheel(page, card, 24);
@@ -217,6 +333,7 @@ suite.define(() => {
         expect(
           Math.abs((await thread.evaluate((el) => el.scrollTop)) - readerTop),
         ).toBeLessThanOrEqual(2);
+        await shot("04-stream-preserves-partial");
         const point = await headerPoint(card);
         if (mobile) {
           const touch = await context.newCDPSession(page);
@@ -267,6 +384,7 @@ suite.define(() => {
           await page.mouse.up();
           await still(card, closed + 64);
         }
+        await shot("05-drag-release-holds");
         await wheel(page, card, -200);
         await expect.poll(() => height(card)).toBeCloseTo(closed + 264, 0);
         await wheel(page, card, 200);
@@ -302,6 +420,9 @@ suite.define(() => {
         }
       } finally {
         await page.close();
+        if (proofDir && video) {
+          await video.saveAs(path.join(proofDir, "gesture-cycle.webm"));
+        }
         await suite.closeBrowserContext(context);
       }
     },

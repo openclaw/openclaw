@@ -184,18 +184,32 @@ it.skipIf(process.platform === "win32").each([
   ["auto-auth", "2026.10.11-first-hop.0"],
   ["manual", "2026.10.10-beta.3"],
 ])("asserts the plugin cohort selected by %s restart recovery", (mode, version) => {
-  const { result } = runFixture(
-    mode,
-    `
+  const root = dirs.make("survivor-plugin-recovery-");
+  const assertion = source.slice(
+    source.indexOf("assert_prepublish_plugin_install() {"),
+    source.indexOf("configure_plugin_registry() {"),
+  );
+  const repair = source.slice(
+    source.indexOf("repair_fixture_plugin_consent() {"),
+    source.indexOf("assert_volume_idempotence() {"),
+  );
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `set -euo pipefail
+ARTIFACT_ROOT="$2"
 candidate_version=2026.10.10-beta.3
 baseline_plugin_tarball=""
 baseline_plugin_version=""
 published_plugin_registry_args=()
-UPDATE_RESTART_MODE="$FAULT"
+SCENARIO=base
+UPDATE_RESTART_MODE="$1"
 OPENCLAW_CLAWHUB_URL=fixture
 restart_fixture_version=2026.10.11-first-hop.0
-restart_plugin_fixture_dir="$1/restart-plugins"
+restart_plugin_fixture_dir="$2/restart-plugins"
 prepublish_capability_consent_supported=1
+update_repair_required=0
 mkdir -p "$restart_plugin_fixture_dir"
 touch "$restart_plugin_fixture_dir/whatsapp.tgz"
 repair_update_restart_auth() { :; }
@@ -217,12 +231,17 @@ node() {
   fi
   printf 'npm-assert:%s:%s\\n' "$3" "$5"
 }
-${section("assert_prepublish_plugin_install", "configure_plugin_registry")}
-${section("repair_fixture_plugin_consent", "assert_volume_idempotence")}
+${assertion}
+${repair}
 repair_fixture_plugin_consent
 `,
+      "fixture",
+      mode,
+      root,
+    ],
+    { encoding: "utf8", timeout: 5_000 },
   );
-  expectStatus(result, 0);
+  expect(result.status, result.stderr).toBe(0);
   expect(result.stdout.trim().split("\n")).toEqual([
     "phase:assert-prepublish-recovery-requests",
     `npm-assert:whatsapp:${version}`,
