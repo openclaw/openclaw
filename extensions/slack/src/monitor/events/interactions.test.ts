@@ -1680,7 +1680,7 @@ describe("registerSlackInteractionEvents", () => {
               richtext_block: {
                 richtext_input: {
                   type: "rich_text_input",
-                  rich_text_value: richText("Ship this now", "with canary metrics"),
+                  rich_text_value: richText("  Ship this now\t", " \n ", "with canary metrics  "),
                 },
               },
             },
@@ -1709,7 +1709,7 @@ describe("registerSlackInteractionEvents", () => {
     expectRecordFields(inputByActionId(inputs, "richtext_input"), {
       inputKind: "rich_text",
       richTextPreview: "Ship this now with canary metrics",
-      richTextValue: richText("Ship this now", "with canary metrics"),
+      richTextValue: richText("  Ship this now\t", " \n ", "with canary metrics  "),
     });
   });
 
