@@ -231,7 +231,7 @@ export function focusChatComposerFromKeydown(
   const nativePaste =
     options.allowPaste === true &&
     matchesKeyboardShortcut(
-      { modifiers: ["mod"], key: "v", platformSpecific: true },
+      { modifiers: event.shiftKey ? ["mod", "shift"] : ["mod"], key: "v", platformSpecific: true },
       event,
       isApplePlatform(),
       resolveAsciiShortcutKey(event),

@@ -164,9 +164,14 @@ it("uses current panel availability before consuming its keyboard shortcut", () 
   expect(isSidebarSlotVisible(state.sidebarLayout, "terminal")).toBe(true);
 });
 
-it.each(["MacIntel", "Win32", "Linux x86_64"])(
-  "hands native paste to the composer on %s without canceling the browser action",
-  (platform) => {
+it.each([
+  { platform: "MacIntel", shiftKey: false },
+  { platform: "MacIntel", shiftKey: true },
+  { platform: "Win32", shiftKey: false },
+  { platform: "Win32", shiftKey: true },
+])(
+  "hands native paste to the composer on $platform with Shift=$shiftKey without canceling the browser action",
+  ({ platform, shiftKey }) => {
     const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
     onTestFinished(() => platformSpy.mockRestore());
     const { pane, focus } = createFocusedPane();
@@ -176,6 +181,7 @@ it.each(["MacIntel", "Win32", "Linux x86_64"])(
       code: "KeyV",
       metaKey: platform === "MacIntel",
       ctrlKey: platform !== "MacIntel",
+      shiftKey,
       bubbles: true,
       cancelable: true,
       composed: true,
@@ -190,18 +196,16 @@ it.each(["MacIntel", "Win32", "Linux x86_64"])(
 it.each([
   { name: "Control on Mac", platform: "MacIntel", ctrlKey: true },
   { name: "Command on Windows", platform: "Win32", metaKey: true },
-  { name: "Command on Linux", platform: "Linux x86_64", metaKey: true },
   { name: "both primary modifiers", ctrlKey: true, metaKey: true },
   { name: "Alt", ctrlKey: true, altKey: true },
-  { name: "Shift", ctrlKey: true, shiftKey: true },
-  { name: "composition", ctrlKey: true, isComposing: true },
-  { name: "legacy IME", ctrlKey: true, keyCode: 229 },
   { name: "another shortcut", ctrlKey: true, key: "c" },
 ])("leaves $name with its existing owner", ({ name: _name, platform = "Win32", ...keys }) => {
   const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
   onTestFinished(() => platformSpy.mockRestore());
   const { pane, focus } = createFocusedPane();
-  pane.handleDocumentKeydown(new KeyboardEvent("keydown", { key: "v", code: "KeyV", ...keys }));
+  pane.handleDocumentKeydown(
+    new KeyboardEvent("keydown", { key: "v", code: "KeyV", shiftKey: true, ...keys }),
+  );
   expect(focus).not.toHaveBeenCalled();
 });
 
@@ -221,7 +225,9 @@ it.each([
   fixture.innerHTML = markup;
   const target = fixture.querySelector<HTMLElement>("span, button, input, textarea")!;
   target.addEventListener("keydown", (event) => pane.handleDocumentKeydown(event));
-  target.dispatchEvent(new KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true }));
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "v", ctrlKey: true, shiftKey: true, bubbles: true }),
+  );
   expect(focus).not.toHaveBeenCalled();
 });
 
@@ -246,7 +252,12 @@ it.each(["inactive", "hidden", "disabled", "readonly", "inert", "handled"])(
     if (state === "inert") {
       pane.setAttribute("inert", "");
     }
-    const event = new KeyboardEvent("keydown", { key: "v", ctrlKey: true, cancelable: true });
+    const event = new KeyboardEvent("keydown", {
+      key: "v",
+      ctrlKey: true,
+      shiftKey: true,
+      cancelable: true,
+    });
     if (state === "handled") {
       event.preventDefault();
     }

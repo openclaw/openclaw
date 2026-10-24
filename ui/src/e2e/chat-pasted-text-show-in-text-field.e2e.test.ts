@@ -154,6 +154,37 @@ suite.define(() => {
         await page.keyboard.press(nativePasteShortcut);
         if (kind === "text") {
           await expect.poll(() => composer.inputValue()).toBe("A copied note for this session.");
+          await composer.fill("");
+          await transcript.focus();
+          expect(await composer.evaluate((input) => document.activeElement === input)).toBe(false);
+          await composer.evaluate((input) => {
+            input.addEventListener(
+              "paste",
+              (event) => {
+                input.setAttribute("data-shift-paste-trusted", String(event.isTrusted));
+              },
+              { once: true },
+            );
+          });
+          if (process.platform === "darwin") {
+            // Playwright's macOS bindings omit Shift+Meta+V; dispatch its native editing command.
+            const cdp = await page.context().newCDPSession(page);
+            const key = { key: "V", code: "KeyV", windowsVirtualKeyCode: 86, modifiers: 4 | 8 };
+            try {
+              await cdp.send("Input.dispatchKeyEvent", {
+                type: "rawKeyDown",
+                ...key,
+                commands: ["PasteAndMatchStyle"],
+              });
+              await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...key });
+            } finally {
+              await cdp.detach();
+            }
+          } else {
+            await page.keyboard.press(`Shift+${nativePasteShortcut}`);
+          }
+          await expect.poll(() => composer.inputValue()).toBe("A copied note for this session.");
+          expect(await composer.getAttribute("data-shift-paste-trusted")).toBe("true");
         } else {
           await page.locator(".chat-attachments-preview .chat-attachment-thumb img").waitFor();
           expect(await composer.inputValue()).toBe("");
