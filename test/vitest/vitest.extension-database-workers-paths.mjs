@@ -58,6 +58,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/compact.cancellation.test.ts",
   "extensions/codex/src/app-server/compact.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.adoption.test.ts",
+  "extensions/codex/src/app-server/mcp-app-first-reply.test.ts",
   "extensions/codex/harness.test.ts",
   "extensions/voice-call/index.call-scope.test.ts",
   "extensions/agentsapi/agentsapi-attempt.test.ts",
