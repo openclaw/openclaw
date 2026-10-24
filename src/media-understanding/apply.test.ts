@@ -75,6 +75,18 @@ function configuredMedia(
 
 type TranscribeAudio = NonNullable<MediaUnderstandingProvider["transcribeAudio"]>;
 type ApplyOptions = Parameters<typeof applyMediaUnderstanding>[0];
+const smallAudio =
+  "[Voice note could not be transcribed because the audio attachment was too small]";
+function apply(
+  ctx: MsgContext,
+  cfg: OpenClawConfig,
+  options: Omit<ApplyOptions, "ctx" | "cfg"> = {},
+) {
+  return applyMediaUnderstanding({ ctx, cfg, ...options });
+}
+function findDecision(ctx: MsgContext, capability: "audio" | "image") {
+  return ctx.MediaUnderstandingDecisions?.find((entry) => entry.capability === capability);
+}
 function applyAudio(
   ctx: MsgContext,
   transcript: string | TranscribeAudio = "transcribed text",
@@ -90,18 +102,13 @@ function applyAudio(
   });
 }
 
-function expectTranscriptApplied(
-  ctx: MsgContext,
-  transcript: string,
-  body: string,
-  commandBody: string,
-) {
+function expectTranscriptApplied(ctx: MsgContext, transcript: string) {
   expect(ctx).toMatchObject({
     Transcript: transcript,
-    Body: body,
-    CommandBody: commandBody,
-    RawBody: commandBody,
-    BodyForCommands: commandBody,
+    Body: `[Audio]\nTranscript:\n${transcript}`,
+    CommandBody: transcript,
+    RawBody: transcript,
+    BodyForCommands: transcript,
   });
 }
 
@@ -172,11 +179,7 @@ async function applyFile(
     [{ path: await createTempMediaFile(fileName, content), contentType: mediaType }],
     body,
   );
-  await applyMediaUnderstanding({
-    ctx,
-    cfg,
-    selfServeLocalPaths: true,
-  });
+  await apply(ctx, cfg, { selfServeLocalPaths: true });
   return ctx;
 }
 
@@ -292,9 +295,7 @@ describe("applyMediaUnderstanding", () => {
     await applyAudio(ctx, transcribeAudio);
 
     expect(transcribeAudio).not.toHaveBeenCalled();
-    expect(ctx.Transcript).toBe(
-      "[Voice note could not be transcribed because the audio attachment was too small]",
-    );
+    expect(ctx.Transcript).toBe(smallAudio);
     expect(ctx.Body).toContain('<file name="note.txt" mime="text/plain">');
     expect(ctx.Body).toContain("recoverable file text");
   });
@@ -324,19 +325,11 @@ describe("applyMediaUnderstanding", () => {
         model: "fallback",
       },
     ]);
-    const audioDecision = ctx.MediaUnderstandingDecisions?.find(
-      (decision) => decision.capability === "audio",
-    );
-    expect(audioDecision?.attachments[0]).toMatchObject({
+    expect(findDecision(ctx, "audio")?.attachments[0]).toMatchObject({
       attempts: [{ outcome: "skipped" }, { outcome: "success" }],
       chosen: { outcome: "success", model: "fallback" },
     });
-    expectTranscriptApplied(
-      ctx,
-      "recovered transcript",
-      "[Audio]\nTranscript:\nrecovered transcript",
-      "recovered transcript",
-    );
+    expectTranscriptApplied(ctx, "recovered transcript");
   });
 
   it("handles URL-only attachments for audio transcription", async () => {
@@ -355,8 +348,7 @@ describe("applyMediaUnderstanding", () => {
 
     await applyAudio(ctx, "remote transcript", { cfg });
 
-    expect(ctx.Transcript).toBe("remote transcript");
-    expect(ctx.Body).toBe("[Audio]\nTranscript:\nremote transcript");
+    expectTranscriptApplied(ctx, "remote transcript");
   });
 
   it("marks audio exceeding maxBytes in audio-only mode", async () => {
@@ -389,8 +381,7 @@ describe("applyMediaUnderstanding", () => {
         { type: "cli", command: "whisper", args: ["{{MediaPath}}"], capabilities: ["audio"] },
       ]),
     });
-    expect(ctx.Transcript).toBe("cli transcript");
-    expect(ctx.Body).toBe("[Audio]\nTranscript:\ncli transcript");
+    expectTranscriptApplied(ctx, "cli transcript");
   });
 
   it("does not probe Gemini CLI during media auto-detect", async () => {
@@ -433,7 +424,7 @@ describe("applyMediaUnderstanding", () => {
 
     runExecMock.mockResolvedValue({ stdout: "image description\n", stderr: "" });
 
-    await applyMediaUnderstanding({ ctx, cfg, deliveredImageIndexes: new Set([0]) });
+    await apply(ctx, cfg, { deliveredImageIndexes: new Set([0]) });
 
     expect(ctx.Body).toBe("[Image]\nUser text:\nshow Dom\nDescription:\nimage description");
     expect(ctx).toMatchObject({
@@ -466,9 +457,7 @@ describe("applyMediaUnderstanding", () => {
       const ctx = mediaCtx([
         { path: mediaPath, contentType: heic ? "image/heic-sequence" : "image/jpeg" },
       ]);
-      await applyMediaUnderstanding({
-        ctx,
-        cfg: createImageConfig(),
+      await apply(ctx, createImageConfig(), {
         agentDir: "/tmp/openclaw-agent",
         workspaceDir,
         providers: imageProviders(describeImage),
@@ -502,15 +491,9 @@ describe("applyMediaUnderstanding", () => {
       })),
     };
 
-    await applyMediaUnderstanding({
-      ctx,
-      cfg: mediaConfig({ image: { enabled: true } }),
-    });
+    await apply(ctx, mediaConfig({ image: { enabled: true } }));
 
-    const imageDecision = ctx.MediaUnderstandingDecisions?.find(
-      (decision) => decision.capability === "image",
-    );
-    expect(imageDecision).toMatchObject({
+    expect(findDecision(ctx, "image")).toMatchObject({
       attachmentDispositions: {
         0: { kind: "no-model" },
         1: { kind: "not-selected" },
@@ -546,10 +529,7 @@ describe("applyMediaUnderstanding", () => {
 
     expect(transcribeAudio).not.toHaveBeenCalled();
     expect(ctx.Transcript).toBe("preflight transcript");
-    const audioDecision = ctx.MediaUnderstandingDecisions?.find(
-      (decision) => decision.capability === "audio",
-    );
-    expect(audioDecision).toEqual({
+    expect(findDecision(ctx, "audio")).toEqual({
       capability: "audio",
       outcome: "no-attachment",
       attachments: [],
@@ -573,10 +553,7 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expect(ctx.MediaUnderstanding?.map((output) => output.attachmentIndex)).toEqual([1, 0]);
-    const expectedTexts = [
-      "[Voice note could not be transcribed because the audio attachment was too small]",
-      "transcribed valid.ogg",
-    ];
+    const expectedTexts = [smallAudio, "transcribed valid.ogg"];
     expect(ctx.Transcript).toBe(`Audio 1:\n${expectedTexts[0]}\n\nAudio 2:\n${expectedTexts[1]}`);
     expect(ctx.Body).toBe(
       `[Audio 1/2]\nTranscript:\n${expectedTexts[0]}\n\n[Audio 2/2]\nTranscript:\n${expectedTexts[1]}`,
@@ -625,9 +602,7 @@ describe("applyMediaUnderstanding", () => {
       { provider: "google", model: "gemini-3", capabilities: ["video"] },
     ]);
 
-    await applyMediaUnderstanding({
-      ctx,
-      cfg,
+    await apply(ctx, cfg, {
       agentDir: dir,
       providers: {
         openai: { id: "openai", describeImage: async () => ({ text: "image ok" }) },
@@ -636,20 +611,17 @@ describe("applyMediaUnderstanding", () => {
       },
     });
 
-    const placeholder =
-      "[Voice note could not be transcribed because the audio attachment was too small]";
-
     expect(ctx.Body).toBe(
       [
         "[Image]\nDescription:\nimage ok",
-        `[Audio]\nTranscript:\n${placeholder}`,
+        `[Audio]\nTranscript:\n${smallAudio}`,
         "[Video]\nDescription:\nvideo ok",
       ].join("\n\n"),
     );
     expect(ctx).toMatchObject({
-      Transcript: placeholder,
-      CommandBody: placeholder,
-      BodyForCommands: placeholder,
+      Transcript: smallAudio,
+      CommandBody: smallAudio,
+      BodyForCommands: smallAudio,
     });
   });
 
@@ -811,9 +783,7 @@ describe("applyMediaUnderstanding", () => {
       ],
       "Is this related?",
     );
-    await applyMediaUnderstanding({
-      ctx,
-      cfg: createImageConfig(),
+    await apply(ctx, createImageConfig(), {
       providers: imageProviders(describeImage),
       processingMode: "files-only",
     });
@@ -841,9 +811,7 @@ describe("applyMediaUnderstanding", () => {
       CommandBody: "typed caption",
       media: [{ path: filePath, contentType: "application/msword" }],
     };
-    const result = await applyMediaUnderstanding({
-      ctx,
-      cfg: createMediaDisabledConfig(),
+    const result = await apply(ctx, createMediaDisabledConfig(), {
       // Preprocessing does not yet own the final reply tool surface.
       selfServeLocalPaths: false,
     });
@@ -897,7 +865,7 @@ describe("applyMediaUnderstanding", () => {
     }
 
     const ctx: MsgContext = { Body: "<media:file>", media };
-    await applyMediaUnderstanding({ ctx, cfg: createMediaDisabledConfig() });
+    await apply(ctx, createMediaDisabledConfig());
 
     expect(ctx.Body?.split("[Unsupported document format")).toHaveLength(5);
     expect(
