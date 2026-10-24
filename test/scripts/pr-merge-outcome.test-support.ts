@@ -15,6 +15,15 @@ import {
 import { landingSnapshotQuery } from "./pr-merge-snapshot.test-support.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
 
+type MergeObservation = {
+  main?: string;
+  pr?: Record<string, unknown>;
+  advanceMain?: boolean;
+  priorCi?: Partial<ReturnType<typeof createPriorCiFixtureState>>;
+  restUnseenSuite?: string;
+  advanceSeconds?: number;
+};
+
 export function createMergeOutcomeFixtureHarness() {
   const temps = useAutoCleanupTempDirTracker(afterEach);
   const templateDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -208,28 +217,17 @@ export function createMergeOutcomeFixtureHarness() {
         observed: boolean;
         main: string;
       },
-      restObservation: null as null | {
-        main?: string;
-        pr?: Record<string, unknown>;
-        advanceMain?: boolean;
-        gates?: string;
-        restPolicy?: string;
-        priorCi?: Partial<ReturnType<typeof createPriorCiFixtureState>>;
-        restUnseenSuite?: string;
-        advanceSeconds?: number;
-        afterRestMainReads?: number;
-        afterPolicyRead?: boolean;
-        afterHistoricalRead?: boolean;
-      },
+      restObservation: null as
+        | null
+        | (MergeObservation & {
+            gates?: string;
+            restPolicy?: string;
+            afterRestMainReads?: number;
+            afterPolicyRead?: boolean;
+            afterHistoricalRead?: boolean;
+          }),
       restObservationAppliedAt: 0,
-      restObservations: [] as Array<{
-        main?: string;
-        advanceMain?: boolean;
-        pr?: Record<string, unknown>;
-        priorCi?: Partial<ReturnType<typeof createPriorCiFixtureState>>;
-        restUnseenSuite?: string;
-        advanceSeconds?: number;
-      }>,
+      restObservations: [] as MergeObservation[],
       restMergePayload: null as null | {
         sha: string;
         merge_method: string;
@@ -264,19 +262,15 @@ export function createMergeOutcomeFixtureHarness() {
       mainProofDelayMain: "",
       mainProofDelayAfterObservations: 2,
       mainProofDelayedAt: null as number | null,
-      observations: [] as Array<{
-        pr?: Record<string, unknown>;
-        priorCi?: Partial<ReturnType<typeof createPriorCiFixtureState>>;
-        restUnseenSuite?: string;
-        advanceSeconds?: number;
-        main?: string;
-        invalid?: boolean;
-        unavailable?: boolean;
-        advanceMain?: boolean;
-        advanceAfterRead?: boolean;
-        reportedMain?: string;
-        tamperProviderCapture?: boolean | string;
-      }>,
+      observations: [] as Array<
+        MergeObservation & {
+          invalid?: boolean;
+          unavailable?: boolean;
+          advanceAfterRead?: boolean;
+          reportedMain?: string;
+          tamperProviderCapture?: boolean | string;
+        }
+      >,
       mainAdvances: [] as string[],
       calls: [] as string[][],
       nodeArgs: [] as string[],
@@ -327,17 +321,15 @@ export function createMergeOutcomeFixtureHarness() {
     writeFileSync(clockPath, "0\n");
     const save = (state: typeof initial) => {
       writeFileSync(statePath, JSON.stringify(state));
-      if (!state.review) {
-        const file = join(worktree, ".local/review.json");
-        writeFileSync(
-          file,
-          JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), docs: "invalid" }),
-        );
-      }
-      if (!state.ready) {
+      if (!state.review || !state.ready) {
         const file = join(worktree, ".local/review.json");
         const review = JSON.parse(readFileSync(file, "utf8"));
-        review.recommendation = "NEEDS WORK";
+        if (!state.review) {
+          review.docs = "invalid";
+        }
+        if (!state.ready) {
+          review.recommendation = "NEEDS WORK";
+        }
         writeFileSync(file, JSON.stringify(review));
       }
     };

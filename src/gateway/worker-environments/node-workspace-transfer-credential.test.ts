@@ -1,3 +1,4 @@
+import "./store-publication.test-support.js";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -20,34 +21,7 @@ import {
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import * as support from "./service.test-support.js";
 
-const delivery = vi.hoisted(() => ({
-  command: undefined as string | undefined,
-  afterCommit: undefined as (() => Promise<void>) | undefined,
-}));
-vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../state/openclaw-state-worker-store.js")>();
-  return {
-    ...actual,
-    runOpenClawStateWorkerOperation: (
-      ...[context, operation, options]: Parameters<typeof actual.runOpenClawStateWorkerOperation>
-    ) =>
-      actual.runOpenClawStateWorkerOperation(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const result = await scope.execute(command, executeOptions);
-              if (command.type === delivery.command) {
-                await delivery.afterCommit?.();
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-  };
-});
+const { delivery } = await import("./store-publication.test-support.js");
 
 async function transferFixture(name: string, filename: string, payload: string | Buffer) {
   const { store, root } = support.testState;

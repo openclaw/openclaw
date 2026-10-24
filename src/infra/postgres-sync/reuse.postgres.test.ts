@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
@@ -177,6 +178,34 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     const afterQuoted = token(db, "first");
     scoped(db, "second", () => db.exec("SELECT 1. INTO cte_number"));
     expect(token(db, "first")).not.toBe(afterQuoted);
+  });
+
+  it("releases evicted idle backends and their session locks", async () => {
+    const dsn = new URL(connection!);
+    const independent = () => {
+      dsn.searchParams.set("application_name", randomUUID());
+      return open(dsn.href);
+    };
+    const first = independent();
+    const firstPid = pid(first);
+    const lockKey = Number.parseInt(randomUUID().replaceAll("-", "").slice(0, 12), 16);
+    run(() => first.prepare("SELECT pg_advisory_lock(?)").get(lockKey));
+    close(first);
+    for (let index = 0; index < 4; index++) {
+      const next = independent();
+      close(next);
+    }
+
+    await admin.query("BEGIN");
+    try {
+      await admin.query("SET LOCAL lock_timeout = '5s'");
+      await admin.query("SELECT pg_advisory_xact_lock($1)", [lockKey]);
+      expect(
+        (await admin.query("SELECT pid FROM pg_stat_activity WHERE pid = $1", [firstPid])).rows,
+      ).toEqual([]);
+    } finally {
+      await admin.query("ROLLBACK");
+    }
   });
 
   it("reconnects after an idle backend is terminated, without reusing the broken backend", async () => {

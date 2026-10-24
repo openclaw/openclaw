@@ -402,6 +402,11 @@ process.exitCode = 0;\n`,
       "src/shared/non-packaged-plugin-dirs.ts",
     ]);
     fs.mkdirSync(path.join(root, "extensions"));
+    const posterFonts = [
+      "src/gateway/assets/session-card/Lato-Regular.ttf",
+      "src/gateway/assets/session-card/InstrumentSerif-Regular.ttf",
+    ];
+    writeFiles(root, Object.fromEntries(posterFonts.map((font) => [font, "initial font bytes"])));
     // This fixture owns UI cache behavior; the native presenter builder is
     // exercised with real source and distribution bytes in its delivery suite.
     fs.writeFileSync(path.join(root, "scripts/build-plugin-control-ui.mts"), "export {};\n");
@@ -447,6 +452,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       "refreshed identity",
     );
     expect(fs.readFileSync(cachedHtml, "utf8")).toBe(cachedSource);
+    for (const font of posterFonts) {
+      fs.appendFileSync(path.join(root, font), "changed font bytes");
+      expect(run()).toContain("fixture-bundler-ran");
+      expect(run()).toContain("reused content cache");
+    }
     const plugin = path.join(root, "extensions/new-board");
     writeFiles(plugin, {
       "package.json": JSON.stringify({

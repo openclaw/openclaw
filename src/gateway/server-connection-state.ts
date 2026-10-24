@@ -50,18 +50,21 @@ export function createGatewayConnectionState(params: {
     }
   };
   const clearConnectionRows = () => {
+    const histories = new Map<object, object>();
     for (const client of clients) {
-      connectionRows.get(client)?.clear("projection");
+      connectionRows.get(client)?.clear("projection", histories);
     }
   };
   const clearAncestors = () => {
+    const histories = new Map<object, object>();
     for (const client of clients) {
-      connectionRows.get(client)?.clearAncestors();
+      connectionRows.get(client)?.clearAncestors(histories);
     }
   };
   const forgetAncestor = (key: string) => {
+    const histories = new Map<object, object>();
     for (const client of clients) {
-      connectionRows.get(client)?.forget(key);
+      connectionRows.get(client)?.forget(key, histories);
     }
   };
   // RPCs survive ordinary disconnects, so connection-owned projections still
@@ -157,7 +160,6 @@ export function createGatewayConnectionState(params: {
             }
             return references;
           },
-          forgetConnectionAncestors: (client) => connectionRows.get(client)?.clearAncestors(),
           createRunProjector: () =>
             createVisibleActiveSessionRunProjector(
               projection.state.rowContext.projectedAgentRuns,

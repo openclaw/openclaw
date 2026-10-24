@@ -269,7 +269,9 @@ describe("session binding service", () => {
         const rejected = await expectSessionBindingError(pending, error);
         expect(isSessionBindingError(rejected)).toBe(true);
         if (placement) {
-          expect(rejected).toMatchObject({ details: { placement } });
+          expect(rejected).toMatchObject({
+            message: 'Session binding placement "child" is not supported for demo-binding:default',
+          });
         }
       } else {
         const result = await pending;
@@ -409,7 +411,7 @@ describe("session binding service", () => {
       "BINDING_CAPABILITY_UNSUPPORTED",
     );
     expect(rejected).toMatchObject({
-      details: { channel: "workspace", accountId: "default", placement: "child" },
+      message: 'Session binding placement "child" is not supported for workspace:default',
     });
 
     const bound = await service.bind({

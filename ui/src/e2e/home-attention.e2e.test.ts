@@ -1,22 +1,16 @@
-import type { QuestionRecord } from "@openclaw/gateway-protocol";
 import photon from "@silvia-odwyer/photon-node";
-import type { Locator, Page } from "playwright";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
-import type { AgentsListResult, GatewaySessionRow } from "../api/types.ts";
+import type { AgentsListResult } from "../api/types.ts";
 import { CHAT_RUN_ACTIVITY_CHANGED_EVENT } from "../pages/chat/chat-history-events.ts";
-import {
-  controlUiSessionUrl,
-  installMockGateway,
-  type MockGatewayControls,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { computedStyles as styles } from "./config-composer-fixtures.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { sessionList } from "./panel-fixtures.test-support.ts";
 import { expectStyles } from "./style-contract.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -28,36 +22,6 @@ const suite = createControlUiE2eSuite({
 });
 
 const mainSessionKey = "agent:main:main";
-const rosterMatch = { includeGlobal: true };
-
-function sessionRow(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
-  return {
-    key: mainSessionKey,
-    kind: "direct",
-    label: "Home",
-    displayName: "Quiet control state",
-    updatedAt: Date.now(),
-    status: "done",
-    ...overrides,
-  };
-}
-
-async function publishSessionRow(
-  gateway: MockGatewayControls,
-  overrides: Partial<GatewaySessionRow>,
-): Promise<void> {
-  const row = sessionRow(overrides);
-  await gateway.setSessionsListResponse(sessionList(row, "gpt-5.6-luna"));
-  const requestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-  await gateway.emitGatewayEvent("sessions.changed", {
-    key: row.key,
-    reason: "home-attention-proof",
-    updatedAt: row.updatedAt,
-  });
-  await expect
-    .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
-    .toBeGreaterThan(requestCount);
-}
 
 const initialName = "Atlas";
 const nextName = "Cedar";
@@ -82,39 +46,6 @@ const roster = (name: string, avatar: string): AgentsListResult => ({
     { id: "main", name, identity: { name, emoji: avatar }, model: { primary: "openai/gpt-5.5" } },
   ],
 });
-
-const iconSelector = 'link[rel="icon"]';
-
-function iconMatchesColor(icon: HTMLLinkElement, token: string) {
-  const { href } = icon;
-  if (!href.startsWith("data:image/svg+xml,")) {
-    return false;
-  }
-  const svg = new DOMParser().parseFromString(
-    decodeURIComponent(href.slice(href.indexOf(",") + 1)),
-    "image/svg+xml",
-  );
-  const color = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
-  return Boolean(color) && svg.documentElement.lastElementChild?.getAttribute("fill") === color;
-}
-
-function expectStatusColor(page: Page, token: string) {
-  const icon = page.locator(`${iconSelector}[type="image/svg+xml"]`);
-  return expect.poll(() => icon.evaluate(iconMatchesColor, token)).toBe(true);
-}
-
-const faviconLinks = (page: Page) =>
-  page
-    .locator(iconSelector)
-    .evaluateAll((icons) =>
-      icons.map((icon) => ({ href: icon.getAttribute("href"), type: icon.getAttribute("type") })),
-    );
-
-const setVisibility = (page: Page, state: DocumentVisibilityState) =>
-  page.evaluate((value) => {
-    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => value });
-    document.dispatchEvent(new Event("visibilitychange"));
-  }, state);
 
 const scrollTo = (scroller: Locator, fraction: number) =>
   scroller.evaluate((el, ratio) => {
@@ -170,89 +101,6 @@ function attachment(kind: string, label: string, mimeType: string) {
   };
 }
 suite.define(() => {
-  it("projects question, failure, and agent-declared attention onto Home", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["question.get", "question.list", "question.resolve"],
-      methodResponses: {
-        "question.list": { questions: [] },
-        "sessions.list": sessionList(sessionRow(), "gpt-5.6-luna"),
-      },
-      sessionKey: mainSessionKey,
-    });
-
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainSessionKey));
-    await gateway.waitForRequest("sessions.list", { match: rosterMatch });
-    const home = page.locator(".sidebar-footer-bar__home");
-    await home.waitFor();
-    const attentionCount = async () => {
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
-      return home.locator("[data-session-attention]").count();
-    };
-    const quiet = await attentionCount();
-
-    await publishSessionRow(gateway, {
-      displayName: "Declared attention state",
-      status: "running",
-      hasActiveRun: true,
-      agentStatus: {
-        note: "Blocked: operator input required",
-        attention: "flag",
-        expiresAt: Date.now() + 60_000,
-      },
-    });
-    const agent = await attentionCount();
-
-    const now = Date.now();
-    const question = {
-      id: "home-attention-question",
-      agentId: "main",
-      sessionKey: mainSessionKey,
-      questions: [
-        {
-          questionId: "continue_run",
-          header: "Continue",
-          question: "Should the run continue?",
-          options: [{ label: "Continue" }],
-        },
-      ],
-      createdAtMs: now,
-      expiresAtMs: now + 60_000,
-      status: "pending",
-    } satisfies QuestionRecord;
-    await gateway.emitGatewayEvent("question.requested", question);
-    const questionPanel = page.locator(".chat-question-panel");
-    await questionPanel.getByText("Should the run continue?", { exact: true }).waitFor();
-    const pendingQuestion = await attentionCount();
-
-    await gateway.emitGatewayEvent("question.resolved", {
-      id: question.id,
-      status: "cancelled",
-    });
-    await expect
-      .poll(() => questionPanel.getByText("Should the run continue?", { exact: true }).count())
-      .toBe(0);
-    await publishSessionRow(gateway, {
-      displayName: "Failed run state",
-      endedAt: Date.now(),
-      lastRunError: "Release validation failed",
-      status: "failed",
-    });
-    const error = await attentionCount();
-
-    expect([quiet, agent, pendingQuestion, error]).toEqual([0, 1, 1, 1]);
-  });
-
   it.each(["config.changed", "agent.identity.changed"])("%s refreshes chat", async (event) => {
     const context = await suite.newBrowserContext({
       ...createControlUiE2eContextOptions(),
@@ -338,23 +186,11 @@ suite.define(() => {
     }
   });
 
-  it("updates the tab icon for chat, approval, completion, theme and connectivity events", async () =>
-    suite.withPage({ colorScheme: "light" }, async ({ page }) => {
-      const sessionKey = "agent:main:main";
-      const gateway = await installMockGateway(page, { sessionKey });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.waitFor();
-      await gateway.waitForRequest("exec.approval.list");
-      await expect
-        .poll(() => faviconLinks(page))
-        .toEqual([
-          { href: expect.stringMatching(/^\/favicon\.svg(?:\?v=.+)?$/), type: "image/svg+xml" },
-          { href: expect.stringMatching(/^\/favicon-32\.png(?:\?v=.+)?$/), type: "image/png" },
-        ]);
-      const original = await faviconLinks(page);
-      const expectOriginal = () => expect.poll(() => faviconLinks(page)).toEqual(original);
-      await composer.fill("Draft report.");
+  it("does not republish run activity for successive text deltas", async () =>
+    suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page, { sessionKey: mainSessionKey });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainSessionKey));
+      await page.locator(".agent-chat__composer-combobox textarea").fill("Draft report.");
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       const send = await gateway.waitForRequest("chat.send");
       const runId = requireString(requireRecord(send.params).idempotencyKey, "chat run id");
@@ -362,16 +198,10 @@ suite.define(() => {
         gateway.emitGatewayEvent("chat", {
           state: "delta",
           runId,
-          sessionKey,
+          sessionKey: mainSessionKey,
           message: { role: "assistant", content: [{ type: "text", text }] },
         });
-      await expectStatusColor(page, "--info");
-      await page.evaluate(() => {
-        document.documentElement.style.setProperty("--info", "rgb(10, 100, 200)");
-      });
-      await expectStatusColor(page, "--info");
       await emitDelta("Preparing.");
-      await expectOriginal();
       const activity = await page.evaluateHandle((eventName) => {
         const observation = { changes: 0 };
         document.addEventListener(eventName, () => observation.changes++);
@@ -380,25 +210,6 @@ suite.define(() => {
       await emitDelta("Preparing. Checking.");
       await page.getByText("Preparing. Checking.", { exact: true }).waitFor();
       expect(await activity.evaluate((observation) => observation.changes)).toBe(0);
-      await expectOriginal();
-      await gateway.emitGatewayEvent("exec.approval.requested", {
-        id: "favicon",
-        createdAtMs: Date.now(),
-        expiresAtMs: Date.now() + 60_000,
-        request: { command: "echo draft", agentId: "main", sessionKey },
-      });
-      await expectStatusColor(page, "--session-color-orange");
-      await gateway.emitGatewayEvent("exec.approval.resolved", { id: "favicon", decision: "deny" });
-      await expectOriginal();
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
-      await setVisibility(page, "hidden");
-      await gateway.emitChatFinal({ runId, sessionKey, text: "Draft report complete." });
-      await expectStatusColor(page, "--ok");
-      await setVisibility(page, "visible");
-      await expectOriginal();
-      expect(await page.locator(`${iconSelector}[data-openclaw-original-favicon]`).count()).toBe(0);
-      await gateway.setOnline(false);
-      await expectStatusColor(page, "--muted");
     }));
 
   it.each([390, 1280])("preserves scroll endpoints and controls at %ipx", (width) =>

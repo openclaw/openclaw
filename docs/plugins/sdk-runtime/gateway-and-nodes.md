@@ -61,6 +61,14 @@ by that work. Pass the lifetime signal to operations that support cancellation,
 and finish admitted writes before returning. Scheduling creates no durable jobs
 and changes no stored config or state; an update requires no state migration.
 
+Config-only service restarts share plugin replacement's five-second startup
+observation budget. If startup exceeds it, the host reports a service health
+failure and closes scheduling and managed capability admission. Raw startup
+remains owned until it settles, then the service's final stop runs exactly once.
+This does not forcibly terminate native plugin work: shutdown still waits for
+physical cleanup. After cleanup, reload the plugin to retry a timed-out service.
+This changes no stored config or state and requires no migration on update.
+
 Channel Gateway adapters opt in with `apiVersion: 2`. Their `startAccount` and
 `stopAccount` callbacks receive `ChannelGatewayContextV2`, including the required
 account scheduler. Import that context and `ChannelGatewayAdapterV2` from

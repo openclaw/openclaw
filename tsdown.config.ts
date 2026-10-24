@@ -54,6 +54,7 @@ import {
 } from "./scripts/lib/worker-deploy-build-plugin.mts";
 import { buildPackageDistEntriesFromExports } from "./scripts/lib/workspace-package-entries.mts";
 
+type OutputOptions = Exclude<NonNullable<UserConfig["outputOptions"]>, Function>;
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
 type InputOptionsArg = InputOptionsFactory extends (
   options: infer Options,
@@ -264,7 +265,10 @@ function nodeBuildConfig(
   };
 }
 
-function workerDeployBuildConfig(entry: Record<string, string>, split = false): UserConfig {
+function workerDeployBuildConfig(
+  entry: Record<string, string>,
+  split: OutputOptions["codeSplitting"] = false,
+): UserConfig {
   return {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry,
@@ -1032,7 +1036,31 @@ const configs: UserConfig[] = [
   }),
   workerDeployBuildConfig(
     { "worker/openclaw-state-read.worker": "src/worker/worker-deploy-state-read.ts" },
-    true,
+    {
+      // Keep lazy owners separate without capturing their shared dependencies.
+      groups: [
+        {
+          name: "state-read-handlers",
+          test: /(?:^|[\\/])src[\\/]state[\\/]openclaw-state-read-handlers\.ts$/u,
+          includeDependenciesRecursively: false,
+        },
+        {
+          name: "state-read-subagent-store",
+          test: /(?:^|[\\/])src[\\/]agents[\\/]subagents[\\/]registry[\\/]subagent-registry\.store\.worker\.ts$/u,
+          includeDependenciesRecursively: false,
+        },
+        {
+          name: "state-read-subagent-restore",
+          test: /(?:^|[\\/])src[\\/]agents[\\/]subagents[\\/]registry[\\/]subagent-registry\.store\.restore\.worker\.ts$/u,
+          includeDependenciesRecursively: false,
+        },
+        {
+          name: "state-read-transcript-export",
+          test: /(?:^|[\\/])src[\\/]transcripts[\\/]store-export\.worker\.ts$/u,
+          includeDependenciesRecursively: false,
+        },
+      ],
+    },
   ),
   workerDeployBuildConfig({
     "worker/worker-native-lifecycle.worker": "src/infra/worker-native-lifecycle.worker.ts",

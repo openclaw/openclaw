@@ -219,6 +219,74 @@ describe("OpenAI Responses continuation", () => {
     ).not.toBe(prefixHash);
   });
 
+  it.each([
+    {
+      name: "omitted fields, sparse arrays, nonfinite numbers and signed zero",
+      // oxlint-disable-next-line no-sparse-arrays -- A genuine array hole must compare as JSON null.
+      value: { omit: undefined, values: [, undefined, Number.NaN, Infinity, -0], text: "🦞\ud800" },
+      expected: { values: [null, null, null, null, 0], text: "🦞\ud800" },
+    },
+    {
+      name: "built-in serializers",
+      value: {
+        at: new Date("2026-01-01Z"),
+        url: new URL("https://example.test/"),
+        data: Buffer.from([1, 2]),
+      },
+      expected: {
+        at: "2026-01-01T00:00:00.000Z",
+        url: "https://example.test/",
+        data: { type: "Buffer", data: [1, 2] },
+      },
+    },
+    {
+      name: "key-sensitive serializers on objects and functions",
+      value: {
+        nested: { toJSON: (key: string) => ({ key }) },
+        array: [Object.assign(() => {}, { toJSON: (key: string) => key })],
+      },
+      expected: { nested: { key: "nested" }, array: ["0"] },
+    },
+    {
+      name: "own __proto__ fields and null-prototype objects",
+      value: Object.assign(
+        Object.create(null),
+        JSON.parse('{"__proto__":{"own":true},"omit":null}'),
+      ),
+      expected: JSON.parse('{"omit":null,"__proto__":{"own":true}}'),
+    },
+    {
+      name: "proxy serializers",
+      value: new Proxy(
+        { text: "plain" },
+        {
+          get: (target, key) =>
+            key === "toJSON" ? () => ({ text: "wire" }) : Reflect.get(target, key),
+        },
+      ),
+      expected: { text: "wire" },
+    },
+  ])("compares continuation envelopes using JSON semantics: $name", ({ value, expected }) => {
+    const state = continuationState();
+    state.lastRequest.provider_options = expected;
+    const request = { ...nextRequest(), provider_options: value };
+    expect(resolve(state, request).continuationStatus).toBe("continued");
+    state.lastRequest.provider_options = { changed: true };
+    expect(resolve(state, request).continuationStatus).toBe("request_changed");
+  });
+
+  it("rejects unserializable history without retaining a failed comparison", () => {
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    const state = continuationState();
+    for (const value of [cycle, 1n]) {
+      expect(() => resolve(state, { ...nextRequest(), provider_options: value })).toThrow(
+        TypeError,
+      );
+    }
+    expect(resolve(state, nextRequest()).continuationStatus).toBe("continued");
+  });
+
   it("matches JSON wire semantics and provider-only assistant replay metadata", () => {
     const continued = resolve(continuationState(), nextRequest());
     expect(continued).toMatchObject({

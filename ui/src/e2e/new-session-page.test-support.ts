@@ -270,7 +270,6 @@ function proofCapture(directory: string) {
 
 export const captureUiProof = proofCapture("cloud-worker-session");
 export const captureProjectUiProof = proofCapture("project-registry");
-export const captureNewSessionComposerUiProof = proofCapture("new-session-slash-menu");
 export const captureDeviceRuntimeUiProof = proofCapture("device-runtime-gating");
 
 export async function captureEnvironmentMetadataUiProof(
