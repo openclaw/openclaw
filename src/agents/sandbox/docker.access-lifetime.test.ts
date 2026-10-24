@@ -64,7 +64,8 @@ vi.mock("./registry.js", () => ({
     },
   ),
 }));
-vi.mock("./mount-plan.js", () => ({
+vi.mock("./mount-plan.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./mount-plan.js")>()),
   prepareSandboxMountPlan: vi.fn(async () => ({ binds: [], skippedBinds: [] })),
   compareSandboxMountPlan: vi.fn(async () => "match"),
   resolveSandboxContainerOnlyMounts: vi.fn(async () => []),
