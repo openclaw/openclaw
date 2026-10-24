@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
-import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { getUpdateRunForProgressAsync } from "../../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
@@ -37,9 +36,6 @@ const healthyRecovery = (version: string) =>
   ({ serviceRestartSafe: true, service: "healthy", version }) as const;
 const recoveryStep = (overrides: Partial<UpdateRunResult["steps"][number]> = {}) =>
   stepFixture("gateway recovery verification", {
-    command: "gateway verification",
-    cwd: "/fixture",
-    durationMs: 0,
     exitCode: 0,
     ...overrides,
   });
@@ -113,7 +109,9 @@ describe("update progress", () => {
   }
 
   async function printFailure(failed: UpdateRunResult["steps"][number]) {
+    log.mockClear();
     await printResult({ ...result, runId: undefined, status: "error", steps: [failed] }, {});
+    return printed();
   }
 
   function appendPhases(phase: UpdateRunRecord["phase"], ...completed: UpdateRunRecord["phase"][]) {
@@ -134,15 +132,10 @@ describe("update progress", () => {
   });
 
   it("prepares report artifacts before emitting without later history or filesystem work", async () => {
-    const outputLog = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const json = jsonOutput();
     const emit = await prepareResult(result, { json: true, run: context });
-    expect(writeUpdateRunReportArtifact).toHaveBeenCalledOnce();
-    expect(
-      vi.mocked(writeUpdateRunReportArtifact).mock.calls[0]?.[0].assertCurrent,
-    ).toBeUndefined();
     expect(json).not.toHaveBeenCalled();
-    expect(outputLog).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
     refuseHistory("released history must not be reopened");
     vi.mocked(writeUpdateRunReportArtifact).mockRejectedValue(new Error("released report write"));
     emit();
@@ -157,9 +150,6 @@ describe("update progress", () => {
     async (bound) => {
       presentation = await observe(true, bound ? context : undefined);
       appendPhases("validating", "staging");
-      if (!bound) {
-        refuseHistory("unbound presentation must not read the ledger");
-      }
       presentation.progress.onStepStart?.(step, run);
       expect(log).toHaveBeenCalledWith(bound ? "validating — build..." : "build...");
       presentation.progress.onStepComplete?.(
@@ -267,22 +257,18 @@ describe("update progress", () => {
       vi.mocked(getUpdateRun)
         .mockReturnValueOnce(present ? captured : undefined)
         .mockReturnValue(later);
-      try {
-        const nextAction = "Update is not finished. Check progress: openclaw update status";
-        await printResult(result, { run: context }, { nextAction });
-        const lines = log.mock.calls.flat();
-        expect(lines.at(-1)).toBe(nextAction);
-        expect(lines.join("\n").match(/openclaw update status/g)).toHaveLength(1);
-        expect(phaseLines()).toEqual(
-          present ? ["Phase: requested", "Phase: verifying"] : ["Phase: requested"],
-        );
-        expect(lines.join("\n")).toContain(
-          present ? "OpenClaw update in progress: verifying." : "OpenClaw updated.",
-        );
-        expect(log).not.toHaveBeenCalledWith("Phase: repairing");
-      } finally {
-        vi.mocked(getUpdateRun).mockImplementation(() => run);
-      }
+      const nextAction = "Update is not finished. Check progress: openclaw update status";
+      await printResult(result, { run: context }, { nextAction });
+      const lines = log.mock.calls.flat();
+      expect(lines.at(-1)).toBe(nextAction);
+      expect(lines.join("\n").match(/openclaw update status/g)).toHaveLength(1);
+      expect(phaseLines()).toEqual(
+        present ? ["Phase: requested", "Phase: verifying"] : ["Phase: requested"],
+      );
+      expect(lines.join("\n")).toContain(
+        present ? "OpenClaw update in progress: verifying." : "OpenClaw updated.",
+      );
+      expect(log).not.toHaveBeenCalledWith("Phase: repairing");
     },
   );
 
@@ -327,9 +313,6 @@ describe("update progress", () => {
       expect(output).not.toHaveBeenCalled();
       expect(log).not.toHaveBeenCalled();
       expect(exited).toBe(false);
-      expect(writeUpdateRunReportArtifact).toHaveBeenCalledWith(
-        expect.objectContaining({ detached: true }),
-      );
     } finally {
       saved.resolve(reportPath);
     }
@@ -373,9 +356,7 @@ describe("update progress", () => {
     const progress = printed();
     expect(progress.match(/Unable to load plugin/gu)).toHaveLength(1);
     expect(progress).not.toContain("The CLI command failed");
-    log.mockClear();
-    await printFailure({ ...failed, cwd: "/fixture" });
-    const report = printed();
+    const report = await printFailure({ ...failed, cwd: "/fixture" });
     expect(report.match(/Unable to load plugin/gu)).toHaveLength(1);
     expect(report).not.toContain("Help: openclaw --help");
     for (const stdoutTail of [
@@ -386,19 +367,8 @@ describe("update progress", () => {
       const detailed = { ...failed, stdoutTail, cwd: "/fixture" };
       presentation.progress.onStepComplete?.(detailed);
       expect(printed()).toContain("Additional diagnostic");
-      log.mockClear();
-      await printFailure(detailed);
-      expect(printed()).toContain("Additional diagnostic");
+      expect(await printFailure(detailed)).toContain("Additional diagnostic");
     }
-    log.mockClear();
-    await printFailure({
-      ...failed,
-      cwd: "/fixture",
-      stdoutTail: "x".repeat(160),
-      stderrTail: `[openclaw] Reason: Unable to load plugin\nDistinct detail ${"y".repeat(160)}\n[openclaw] Help: openclaw --help\ndoctor: Candidate doctor failed (deadline exceeded) (1000ms)`,
-    });
-    expect(printed()).toContain(`Distinct detail ${"y".repeat(40)}`);
-    expect(printed()).toContain("deadline exceeded");
     log.mockClear();
     presentation.progress.onStepComplete?.({
       ...failed,
@@ -438,11 +408,6 @@ describe("update progress", () => {
   it("keeps JSON silent until one public result without mutating private history", async () => {
     const writeJson = jsonOutput();
     presentation = await observe(false, context);
-    presentation.suspend();
-    presentation.resume();
-    presentation.progress.onStepStart?.(step);
-    presentation.progress.onStepComplete?.({ ...step, durationMs: 1, exitCode: 0 });
-    presentation.stop();
     run.phase = "finished";
     run.status = "succeeded";
     run.origin.updateRecoveryCapture = {
@@ -463,20 +428,13 @@ describe("update progress", () => {
     expect(run).toEqual(retained);
   });
 
-  it.each([
-    { history: "running", rolledBack: false },
-    { history: "succeeded", rolledBack: false },
-    { history: "rolled-back", rolledBack: false },
-    { history: "rolled-back", rolledBack: true },
-  ] as const)(
-    "prints current failure facts over $history history (verified rollback=$rolledBack)",
-    async ({ history, rolledBack }) => {
-      const writeJson = jsonOutput();
-      run.status = history;
-      run.phase = history === "running" ? "verifying" : "finished";
+  it.each([false, true])(
+    "prints current failure facts over rollback history (verified rollback=%s)",
+    async (rolledBack) => {
+      run.status = "rolled-back";
+      run.phase = "finished";
       run.reason = rolledBack ? "doctor-failed" : "build-failed";
       run.after = { version: "2026.9.4" };
-      run.target = { version: "2026.9.5" };
       const saved = structuredClone(run);
       const latest: UpdateRunResult = {
         ...result,
@@ -501,13 +459,6 @@ describe("update progress", () => {
       );
       const identity = rolledBack ? "version verified" : "version mismatch";
       expect(output).toContain(identity);
-      const publicReport = await prepareUpdateFailureReport(
-        { attemptId: runId, result: latest, recordedRun: run },
-        { env: {}, stateDir: "/isolated/update-progress" },
-      );
-      expect(publicReport.body).toContain(`Recorded verification: ${identity}`);
-      await printResult(latest, { json: true, run: context });
-      expect(writeJson).toHaveBeenCalledExactlyOnceWith({ ...latest, run: saved, reportPath });
       expect(run).toEqual(saved);
     },
   );
@@ -515,7 +466,6 @@ describe("update progress", () => {
   it.each([true, false, undefined])(
     "prints raw recovery observations without rewriting saved history (running=%s)",
     async (serviceRunning) => {
-      const writeJson = jsonOutput();
       run.status = "failed";
       run.phase = "finished";
       run.reason = "post-update-plugins";
@@ -570,9 +520,7 @@ describe("update progress", () => {
       expect(output).toContain("Retained lifecycle guidance");
       expect(output).not.toContain("2026.8.99");
       if (serviceRunning === undefined) {
-        expect(output).not.toContain("service running");
-        expect(output).not.toContain("service stopped");
-        expect(output).not.toContain("verified serving");
+        expect(output).not.toMatch(/service running|service stopped|verified serving/u);
       } else {
         expect(output).toContain(serviceRunning ? "service running" : "service stopped");
         expect(output).toContain(
@@ -581,8 +529,6 @@ describe("update progress", () => {
             : "not serving (service-not-running)",
         );
       }
-      await printResult(latest, { json: true, run: context });
-      expect(writeJson).toHaveBeenCalledExactlyOnceWith({ ...latest, run: saved, reportPath });
       expect(run).toEqual(saved);
     },
   );

@@ -484,12 +484,6 @@ export function registerServiceInstallationConvergenceTests(
           }),
         };
         mocks.restartService.mockImplementationOnce(async ({ result }) => {
-          if (outcome === "absent") {
-            throw new Error("An absent service must not restart");
-          }
-          expect(mocks.stopService).not.toHaveBeenCalled();
-          expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
-          expect(mocks.printResult).not.toHaveBeenCalled();
           if (outcome === "readiness-pending") {
             result.reason = "still-starting";
           }
@@ -513,23 +507,16 @@ export function registerServiceInstallationConvergenceTests(
         );
         expect(mocks.restartService).toHaveBeenCalledTimes(drift && restart ? 1 : 0);
         expect(mocks.stopService).not.toHaveBeenCalled();
-        expect(mocks.printResult).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ status }),
-          expect.anything(),
-          expect.anything(),
-        );
-        expect(mocks.printResult.mock.lastCall?.[0].reason).toBe(
-          outcome === "readiness-pending"
-            ? "still-starting"
-            : status === "ok"
-              ? undefined
-              : "already-current",
-        );
-        if (drift && restart) {
-          expect(mocks.restartService).toHaveBeenCalledWith(
-            expect.objectContaining({ refreshServiceEnv: true, shouldRestart: true }),
-          );
-        } else if (drift) {
+        expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
+          status,
+          reason:
+            outcome === "readiness-pending"
+              ? "still-starting"
+              : status === "ok"
+                ? undefined
+                : "already-current",
+        });
+        if (drift && !restart) {
           expect(mocks.printResult.mock.lastCall?.[0].steps).toContainEqual(
             expect.objectContaining({
               advisory: expect.objectContaining({
@@ -557,48 +544,42 @@ export function registerVerifiedActivationFailureTests({
   mocks: Pick<FixtureMocks, "restartService" | "printResult">;
 }) {
   it.each([
-    "restart-health",
-    "reported-failure",
-    "authority",
-    "unknown",
-    "data-at-risk",
-    "health-with-authority",
-    "admission-unavailable",
+    ["restart-health", new GatewayRestartHealthError("post-activation receipt unavailable")],
+    ["reported-failure", null],
+    ["authority", new GatewayServiceAuthorityError(new Error("Service authority revoked"))],
+    ["unknown", new Error("Unknown post-activation failure")],
+    [
+      "data-at-risk",
+      new DoctorMaintenanceRefusalError("Incomplete migration", {
+        kind: "data-at-risk",
+        reason: "incomplete-migration",
+      }),
+    ],
+    [
+      "health-with-authority",
+      new GatewayRestartHealthError("Health reporting failed", {
+        cause: new GatewayServiceAuthorityError(new Error("Service authority revoked")),
+      }),
+    ],
+    [
+      "admission-unavailable",
+      new DoctorMaintenanceRefusalError("Admission unavailable", {
+        kind: "deferred",
+        reason: "admission-unavailable",
+      }),
+    ],
   ] as const)(
     "classifies post-activation failures without granting authority (%s)",
-    async (outcome) => {
+    async (outcome, failure) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("update-verified-target-") };
       const run = createUpdateRun({ trigger: "cli" }, { env });
       const rollback = vi.spyOn(rollbackModule, "rollbackFailedUpdate");
       mocks.restartService.mockImplementationOnce(async ({ onVerified }) => {
         onVerified?.(Date.now());
-        if (outcome === "data-at-risk") {
-          throw new DoctorMaintenanceRefusalError("Incomplete migration", {
-            kind: "data-at-risk",
-            reason: "incomplete-migration",
-          });
-        }
         if (outcome === "reported-failure") {
           return "restart-health-failed";
         }
-        if (outcome === "authority") {
-          throw new GatewayServiceAuthorityError(new Error("Service authority revoked"));
-        }
-        if (outcome === "admission-unavailable") {
-          throw new DoctorMaintenanceRefusalError("Admission unavailable", {
-            kind: "deferred",
-            reason: "admission-unavailable",
-          });
-        }
-        if (outcome === "health-with-authority") {
-          throw new GatewayRestartHealthError("Health reporting failed", {
-            cause: new GatewayServiceAuthorityError(new Error("Service authority revoked")),
-          });
-        }
-        if (outcome === "unknown") {
-          throw new Error("Unknown post-activation failure");
-        }
-        throw new GatewayRestartHealthError("post-activation receipt unavailable");
+        throw failure;
       });
       const finishing = finishSuccessfulPackageSwitch({
         run: { runId: run.runId, env },

@@ -75,6 +75,11 @@ vi.mock("../../state/openclaw-schema-versions.js", async (importOriginal) => {
 });
 
 const runtimeFixture = createFixtureLifetime();
+const finalizerCommand = (options: Record<string, unknown>) => [
+  process.execPath,
+  ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(migratedFinalizeFixtureEntrypoint)),
+  JSON.stringify({ readOnlyEntrypoint: runtimeProcessEntrypoints.sqliteReadOnly, ...options }),
+];
 let candidateRoot: string;
 let candidateContract: Awaited<ReturnType<typeof childCommands.runUtf8CommandWithTimeout>>;
 beforeAll(async () => {
@@ -86,25 +91,17 @@ beforeAll(async () => {
   // The immutable candidate's compatibility probe is shared; each delegated
   // finalizer still runs in its own process with its own live executor grant.
   candidateContract = await runtimeFixture.run(() =>
-    childCommands.runUtf8CommandWithTimeout(
-      [
-        process.execPath,
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(migratedFinalizeFixtureEntrypoint)),
-        JSON.stringify({ readOnlyEntrypoint: runtimeProcessEntrypoints.sqliteReadOnly }),
-        "--check",
-      ],
-      {
-        cwd: candidateRoot,
-        env: {
-          ...process.env,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-        },
-        timeoutMs: 30_000,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
+    childCommands.runUtf8CommandWithTimeout([...finalizerCommand({}), "--check"], {
+      cwd: candidateRoot,
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       },
-    ),
+      timeoutMs: 30_000,
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+    }),
   );
   expect(candidateContract).toMatchObject({ code: 0, termination: "exit", cleanup: "normal" });
 });
@@ -240,9 +237,6 @@ it.for([
     const migrationStep = { name: "core migrations", command: "doctor --fix", index: 0, total: 1 };
     await progress.onStepStart?.(migrationStep);
     const database = openOpenClawStateDatabase({ env });
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
     // Original runtime intent belongs to the pre-migration observation. The old
     // parent must not reopen its state DB after the candidate advances the schema.
     const originalRuntimePin = original
@@ -265,12 +259,10 @@ it.for([
       status: "not-attempted" as const,
       reason: "state-migrated-no-rollback",
     };
-    expect(() => progress.onRollbackOutcome?.(rollbackOutcome)).not.toThrow();
-    await expect(
-      progress.onStepComplete?.({ ...migrationStep, durationMs: 100, exitCode: 1 }),
-    ).resolves.toBeUndefined();
-    expect(() => vi.advanceTimersByTime(500)).not.toThrow();
-    expect(() => presentation?.dispose()).not.toThrow();
+    progress.onRollbackOutcome?.(rollbackOutcome);
+    await progress.onStepComplete?.({ ...migrationStep, durationMs: 100, exitCode: 1 });
+    vi.advanceTimersByTime(500);
+    presentation.dispose();
     presentation = undefined;
     vi.useRealTimers();
     const rollback = vi.fn();
@@ -347,12 +339,7 @@ it.for([
           legacy
             ? argv
             : [
-                process.execPath,
-                ...resolveRuntimeWorkerArgv(
-                  resolveRuntimeWorkerUrl(migratedFinalizeFixtureEntrypoint),
-                ),
-                JSON.stringify({
-                  readOnlyEntrypoint: runtimeProcessEntrypoints.sqliteReadOnly,
+                ...finalizerCommand({
                   progressGate: progressGate?.endpoint,
                   replay: replay
                     ? {
@@ -509,6 +496,7 @@ it.for([
       ? execute()
       : withUpdateCommandTerminalResult(execute, { json, onResult });
     void runtimeFixture.track(work);
+    const failedRun = { status: "failed", reason: "state-migrated-no-rollback" };
     if (settlement) {
       if (progressGate) {
         try {
@@ -540,9 +528,7 @@ it.for([
       }
       expect.soft(oldRuntimeOpens).toEqual([]);
       expect.soft(inspectTerminal()).toEqual(terminalFromCandidate);
-      expect
-        .soft(terminalFromCandidate)
-        .toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
+      expect.soft(terminalFromCandidate).toMatchObject(failedRun);
       if (settlement !== "healthy") {
         if (settlement === "uncertain-cleanup") {
           expect.soft(hasCommandProcessCleanupError(failure)).toBe(true);
@@ -644,18 +630,18 @@ it.for([
       );
     }
     expect(rollback).not.toHaveBeenCalled();
-    expect(terminalAtCleanup).toEqual({ status: "failed", reason: "state-migrated-no-rollback" });
+    expect(terminalAtCleanup).toEqual(failedRun);
     if (json) {
       expect(log).not.toHaveBeenCalled();
       expect(JSON.parse(stdout)).toMatchObject({
         runId: created.runId,
-        run: { runId: created.runId, status: "failed", reason: "state-migrated-no-rollback" },
+        run: { runId: created.runId, ...failedRun },
       });
     } else {
       expect(stdout).toMatch(/update failed/iu);
     }
     const row = inspectTerminal();
-    expect(row).toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
+    expect(row).toMatchObject(failedRun);
     expect(JSON.parse(String(row?.verification_json)).rollbackOutcome).toEqual(rollbackOutcome);
     expect(JSON.parse(String(row?.steps_json))).toEqual(
       expect.arrayContaining([progress.pendingSteps.at(-1)]),

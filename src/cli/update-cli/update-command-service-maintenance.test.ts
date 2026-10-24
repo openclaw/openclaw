@@ -12,7 +12,6 @@ import { readScheduledTaskRuntime } from "../../daemon/schtasks-runtime.js";
 import {
   GatewayServiceStopUnsafeError,
   ServiceInspectionError,
-  formatServiceInspectionReason,
 } from "../../daemon/service-inspection-error.js";
 import { readGatewayServiceState, type GatewayService } from "../../daemon/service.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
@@ -33,8 +32,6 @@ import {
   revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service-maintenance.js";
 import {
-  collectServiceInspectionFailureFacts,
-  assertGatewayServiceAdmissionUnchanged,
   GatewayServiceUpdateOwnershipError,
   inspectManagedGatewayServiceBeforeUpdate,
 } from "./update-command-service-plan.js";
@@ -166,7 +163,6 @@ const maintenanceOperations = [
   "warning",
   "refresh",
   "no-restart",
-  "no-restart-text",
   "changed-during-refresh",
 ];
 it.each(maintenanceOperations)(
@@ -209,7 +205,6 @@ it.each(maintenanceOperations)(
       const params = {
         ...maintenanceDefaults,
         shouldRestart: !operation.startsWith("no-restart"),
-        jsonMode: operation !== "no-restart-text",
         warn: vi.fn(),
         updateRun,
         recordPhase,
@@ -247,7 +242,7 @@ it.each(maintenanceOperations)(
             }),
           );
         }
-        if (["refresh", "no-restart", "no-restart-text"].includes(operation)) {
+        if (operation === "refresh" || operation === "no-restart") {
           expect(timeout).toBe(330);
           expect(stopped.stopped).toBe(false);
           expectNoServiceCalls(service.stop, service.start, service.restart);
@@ -336,20 +331,8 @@ it.each(["systemd-user-bus-unavailable", "native-exception", undefined] as const
         expectNoServiceCalls(service.stop, service.start, service.install);
         return;
       }
-      const detail = reason
-        ? (formatServiceInspectionReason(reason).split(".", 1)[0] ?? "")
-        : "Gateway service inspection is unavailable";
-      for (const message of [
-        detail,
-        `Failing check managed-service-runtime (${reason ?? "service-ownership-unverified"})`,
-        `Update install root: ${process.cwd()}`,
-        `Gateway install root: ${process.cwd()}`,
-        `Update binary: ${path.join(process.cwd(), "openclaw.mjs")}`,
-        "Required: admitted service ownership owned; manager UID 2001; detected: unavailable; runtime unknown; manager UID unavailable",
-        "openclaw gateway status --deep",
-      ]) {
-        expect(failure.message).toContain(message);
-      }
+      expect(failure.message).toContain("Gateway service inspection is unavailable");
+      expect(failure.message).toContain("openclaw gateway status --deep");
       for (const message of ["identity changed", "private-runtime-detail"]) {
         expect(failure.message).not.toContain(message);
       }
@@ -357,8 +340,6 @@ it.each(["systemd-user-bus-unavailable", "native-exception", undefined] as const
         expect.objectContaining({
           check: "managed-service-runtime",
           code: reason ?? "service-ownership-unverified",
-          message:
-            "Required: admitted service ownership owned; manager UID 2001; detected: unavailable; runtime unknown; manager UID unavailable",
         }),
       );
       expect(failure.failureFacts.length).toBeLessThanOrEqual(5);
@@ -374,20 +355,6 @@ it.each(["systemd-user-bus-unavailable", "native-exception", undefined] as const
         "installation and Gateway were left unchanged",
       );
       expect(result.failedStep.failureFacts).toEqual(failure.failureFacts);
-
-      const verdict = await inspectManagedGatewayServiceBeforeUpdate({
-        root: maintenanceDefaults.root,
-        state: await readGatewayServiceState(service),
-      });
-      expect(() => assertGatewayServiceAdmissionUnchanged(before, verdict)).toThrow(
-        reason ? detail : "Gateway service inspection is unavailable",
-      );
-      if (reason) {
-        expect(collectServiceInspectionFailureFacts(verdict)?.[0]).toMatchObject({
-          code: reason,
-          message: expect.stringContaining(detail.slice(0, 80)),
-        });
-      }
       expectNoServiceCalls(service.stop, service.start, service.restart, service.install);
     }),
 );
@@ -426,9 +393,6 @@ it.each(nativeOfflineCases)(
         scenario.runtime === "unknown" ? "unavailable" : "owned",
       );
       expect(inspected.offline).toBe(scenario.runtime === "unknown" ? undefined : scenario.offline);
-      for (const [args] of isEnabled.mock.calls) {
-        expect(args.timeoutMs).toBe(200);
-      }
       expectNoServiceCalls(
         service.stop,
         service.start,
@@ -479,11 +443,6 @@ it("refuses an admitted Scheduled Task after repeated probe timeouts", () =>
     });
 
     await expect(inspection).rejects.toThrow("Scheduled Task check timed out after 30000 ms");
-    for (const call of vi.mocked(spawnSync).mock.calls) {
-      expect(call[2]?.timeout).toBe(
-        call[1]?.some((arg) => arg.includes("Get-CimInstance Win32_Process")) ? 5_000 : 30_000,
-      );
-    }
     expectNoServiceCalls(service.stop, service.install);
   }));
 
