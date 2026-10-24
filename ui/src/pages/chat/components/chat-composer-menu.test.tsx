@@ -16,7 +16,41 @@ import {
 import { renderComposerMenuOption as ComposerMenuOption } from "./chat-composer-menu.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import type { ChatComposerPlusMenuProps as Menu } from "./chat-composer-plus-menu.types.ts";
-import { createSlashMenu, SlashMenu, type SlashMenuHost } from "./chat-composer-slash-menu.tsx";
+import { createSlashMenu, type SlashMenuHost } from "./chat-composer-slash-menu-state.ts";
+import { SlashMenu } from "./chat-composer-slash-menu.tsx";
+
+it("keeps current editing state when suggestion rows load after dismissal", async () => {
+  let menu!: ReturnType<typeof createSlashMenu>;
+  const host: SlashMenuHost = {
+    paneId: "lazy-menu-dismissal",
+    getDraft: () => "/",
+    commitDraft: vi.fn(),
+    getTextarea: () => null,
+    resolveArgOptions: () => [],
+    runCommand: vi.fn(),
+    canRun: () => true,
+  };
+  const view = mountSolid(() => {
+    menu = createSlashMenu();
+    return <SlashMenu menu={menu} host={host} draft="/" />;
+  });
+  menu.update("/", host);
+  flush();
+  expect(view.getByRole("listbox")).toBeTruthy();
+  expect(view.container.querySelectorAll(".slash-menu-item")).toHaveLength(
+    menu.state.slashMenuItems.length,
+  );
+  menu.reset();
+  await import("./chat-composer-slash-menu-options.tsx");
+  flush();
+  expect(view.queryByRole("listbox")).toBeNull();
+
+  menu.update("/", host);
+  flush();
+  menu.hover(menu.state.slashMenuItems.findIndex((entry) => entry.key === "status"));
+  await waitForSolid(() => expect(view.getByRole("option", { selected: true })).toBeTruthy());
+  expect(view.getByRole("option", { selected: true }).textContent).toContain("/status");
+});
 
 it("uses the current focus policy on a retained suggestion option", () => {
   let setPreserveFocus!: (value: boolean) => void;
@@ -47,7 +81,7 @@ it("uses the current focus policy on a retained suggestion option", () => {
   }
 });
 
-it("retains the slash viewport during selection changes and resets it when switching mode", () => {
+it("retains the slash viewport through row loading and selection changes, and resets it for a new mode", async () => {
   const command = { key: "status", name: "status", description: "Show status" };
   const host: SlashMenuHost = {
     paneId: "menu-retention",
@@ -67,6 +101,8 @@ it("retains the slash viewport during selection changes and resets it when switc
   flush();
   const viewport = view.container.querySelector<HTMLElement>(".slash-menu__scroll")!;
   viewport.scrollTop = 120;
+  await waitForSolid(() => expect(view.getByRole("option", { selected: true })).toBeTruthy());
+  expect(view.container.querySelector(".slash-menu__scroll")).toBe(viewport);
   menu.hover(menu.state.slashMenuItems.findIndex((entry) => entry.key === "status"));
   flush();
   expect(view.container.querySelector(".slash-menu__scroll")).toBe(viewport);
@@ -76,6 +112,7 @@ it("retains the slash viewport during selection changes and resets it when switc
   host.resolveArgOptions = () => ["on", "off"];
   menu.selectCommand(command, host);
   flush();
+  await waitForSolid(() => expect(view.getByRole("option", { selected: true })).toBeTruthy());
   const argumentsViewport = view.container.querySelector<HTMLElement>(".slash-menu__scroll")!;
   expect(argumentsViewport).not.toBe(viewport);
   expect(argumentsViewport.scrollTop).toBe(0);

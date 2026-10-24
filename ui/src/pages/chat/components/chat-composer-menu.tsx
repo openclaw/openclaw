@@ -1,9 +1,38 @@
 import type { JSX } from "@solidjs/web";
-import { onSettled } from "solid-js";
+import { For, onSettled } from "solid-js";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatComposerInvocationMenu } from "./chat-picker-overlay.ts";
 
 export { handleComposerMenuKeydown } from "../../../components/composer-menu.ts";
+
+/** Keep pending rows at the same height and intrinsic text width as their options. */
+export function ComposerMenuLoadingRows(props: { rows: readonly { id: string; name: string }[] }) {
+  return (
+    <div aria-busy="true">
+      <For each={props.rows} keyed={false}>
+        {(row) => (
+          <div
+            id={row().id}
+            class="slash-menu-item"
+            aria-hidden="true"
+            onMouseDown={(event: MouseEvent) => event.preventDefault()}
+          >
+            <span class="slash-menu-icon">
+              <span class="skeleton" style={{ display: "block", width: "100%", height: "100%" }} />
+            </span>
+            <span class="slash-menu-copy">
+              <span class="slash-menu-name">
+                <span class="skeleton" style={{ display: "block" }}>
+                  <span style={{ visibility: "hidden" }}>{row().name}</span>
+                </span>
+              </span>
+            </span>
+          </div>
+        )}
+      </For>
+    </div>
+  );
+}
 
 export function ComposerMenu(options: {
   id: string;

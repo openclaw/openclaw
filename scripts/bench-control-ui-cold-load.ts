@@ -215,6 +215,7 @@ function summarizeSidebarWindows(
 const { values } = parseArgs({
   options: {
     "cpu-profile": { type: "boolean", default: false },
+    "thread-cpu": { type: "boolean", default: false },
     "cpu-profile-compare": { type: "string" },
     allocations: { type: "boolean", default: false },
     "warm-reload": { type: "boolean", default: false },
@@ -1245,9 +1246,10 @@ try {
     const rawTrace: unknown[] = [];
     let collectedTrace = rawTrace;
     cdp.on("Tracing.dataCollected", (data) => collectedTrace.push(...data.value));
-    if (cpuProfile) {
-      await cdp.send("Performance.enable");
-    }
+    await cdp.send("Performance.enable", {
+      timeDomain: values["thread-cpu"] ? "threadTicks" : "timeTicks",
+    });
+    const browserCpuBefore = (await cdp.send("Performance.getMetrics")).metrics;
     if (traced || cpuProfile) {
       await cdp.send("Profiler.enable");
       await cdp.send("Profiler.setSamplingInterval", { interval: 1000 });
@@ -1274,6 +1276,7 @@ try {
     if (captureMs) {
       await page.waitForFunction((duration) => performance.now() >= duration, captureMs);
     }
+    const browserCpu = (await cdp.send("Performance.getMetrics")).metrics;
     const metrics = await page.evaluate(() => {
       const pane = document.querySelector(".chat-pane-cache__pane--active");
       const rows = pane ? [...pane.querySelectorAll(".chat-virtual-row")] : null;
@@ -1995,6 +1998,15 @@ try {
       head,
       sidebarRowTransfer: values["sidebar-list-churn"] ? runTransfer : undefined,
       ...metrics,
+      browserCpuMs: Object.fromEntries(
+        ["TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration"].map((name) => [
+          name,
+          1000 *
+            (browserCpu.find((metric) => metric.name === name)!.value -
+              browserCpuBefore.find((metric) => metric.name === name)!.value),
+        ]),
+      ),
+      browserCpuTimeDomain: values["thread-cpu"] ? "threadTicks" : "timeTicks",
       trace: traced ? summarizeColdLoadTrace(trace, metrics.at) : undefined,
       cpu: mapped ? summarizeCpuProfile(mapped.profile) : undefined,
       mappedFrames: mapped?.mappedFrames,

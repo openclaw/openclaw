@@ -13,7 +13,7 @@ import { projectChatMobilePeople } from "./chat-mobile-people.ts";
 import type {
   HumanMentionAccess,
   HumanMentionRead,
-} from "./components/chat-composer-mention-menu.tsx";
+} from "./components/chat-composer-mention-menu-state.ts";
 import {
   ChatMobilePeopleBody,
   type ChatMobilePeopleBodyProps,
