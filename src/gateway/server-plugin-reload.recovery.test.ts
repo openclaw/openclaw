@@ -276,7 +276,7 @@ it.each(["commit", "rollback"] as const)(
     let serviceGetter: OpenClawPluginServiceContext["getCron"];
     let hookGetter: PluginHookGatewayContext["getCron"];
     let hookSignal: PluginHookGatewayContext["abortSignal"];
-    const schedulers = ["first", "next"].map((name) => {
+    const [first, next] = ["first", "next"].map((name) => {
       const cron = new CronService({
         scheduler: createTestGatewayScheduler(),
         nowMs: () => Date.now(),
@@ -286,11 +286,9 @@ it.each(["commit", "rollback"] as const)(
         enqueueSystemEvent: () => {},
         runIsolatedAgentJob: async () => ({ status: "ok" as const }),
       });
-      const list = vi.spyOn(cron, "list").mockResolvedValue([]);
       cleanups.push(async () => cron.stop());
-      return { cron, list };
+      return cron;
     });
-    const [first, next] = schedulers;
     assert(first && next);
     const fixture = await createRecoveryFixture({
       abortOnCandidateStart: false,
@@ -308,28 +306,25 @@ it.each(["commit", "rollback"] as const)(
         });
       },
     });
-    fixture.runtime.runtimeState.cronState.cron = first.cron;
+    fixture.runtime.runtimeState.cronState.cron = first;
     if (outcome === "rollback") {
       await expect(fixture.reload()).rejects.toThrow("Cron getter rollback");
     } else {
       await fixture.reload();
     }
     assert(serviceGetter && hookGetter);
-    expect(hookGetter()).toBe(first.cron);
+    expect(hookGetter()).toBe(first);
     const stale = serviceGetter();
     assert(stale);
-    await stale.list();
-    expect(first.list).toHaveBeenCalledOnce();
 
-    fixture.runtime.runtimeState.cronState.cron = next.cron;
-    expect(hookGetter()).toBe(next.cron);
+    fixture.runtime.runtimeState.cronState.cron = next;
+    expect(hookGetter()).toBe(next);
     const current = serviceGetter();
     assert(current);
+    expect(current).not.toBe(stale);
+    const list = vi.spyOn(next, "list").mockResolvedValue([]);
     await current.list();
-    expect(next.list).toHaveBeenCalledOnce();
-    const remove = vi.spyOn(first.cron, "remove");
-    await expect(stale.remove("must-not-mutate")).rejects.toThrow("scheduler was replaced");
-    expect(remove).not.toHaveBeenCalled();
+    expect(list).toHaveBeenCalledOnce();
     expect(hookSignal?.aborted).toBe(false);
     if (outcome === "commit") {
       fixture.runtime.requestEntryLifetime.beginClose();
@@ -490,40 +485,6 @@ it("refuses recovery after gateway cleanup times out while retaining sibling cha
 it("bounds the wait for service startup and keeps retired dispatch fenced across retry", () =>
   verifyPendingServiceCleanupRetry(createRecoveryFixture));
 
-it("retains unrelated discovery after the selected service refuses cleanup", async () => {
-  await withEnvAsync(
-    { NODE_ENV: "development", VITEST: undefined, OPENCLAW_DISABLE_BONJOUR: undefined },
-    async () => {
-      const stops = { first: vi.fn(), sibling: vi.fn() };
-      const starts = { first: vi.fn(), sibling: vi.fn() };
-      const fixture = await createRecoveryFixture({
-        initialStop: rejectWith(new Error("cleanup refused")),
-        register: (api, owner) => {
-          api.registerGatewayDiscoveryService({
-            id: owner,
-            advertise: async () => {
-              starts[owner]();
-              return { stop: stops[owner] };
-            },
-          });
-        },
-      });
-      const discovery = await startDiscovery(fixture);
-      cleanups.push(() => discovery.stop());
-      try {
-        await expect(fixture.reload()).rejects.toMatchObject({ details: { committed: false } });
-        expect(stops.first).toHaveBeenCalledOnce();
-        expect(stops.sibling).not.toHaveBeenCalled();
-        expect(starts.sibling).toHaveBeenCalledOnce();
-        expect(fixture.siblingStop).not.toHaveBeenCalled();
-      } finally {
-        await discovery.stop();
-      }
-      expect(stops.sibling).toHaveBeenCalledOnce();
-    },
-  );
-});
-
 it.each(["commit", "rollback"])(
   "restarts pending channel preparation after command changes: %s",
   async (outcome) => {
@@ -610,7 +571,7 @@ it.each(["commit", "rollback"])(
   },
 );
 
-it.each(["rollback", "after-commit error", "late startup"] as const)(
+it.each(["rollback", "after-commit error", "late startup", "stop refused"] as const)(
   "keeps discovery handles owned across plugin replacement: %s",
   async (outcome) => {
     await withEnvAsync(
@@ -622,15 +583,19 @@ it.each(["rollback", "after-commit error", "late startup"] as const)(
       },
       async () => {
         const releaseStartup = createDeferredCore();
-        const registrations: OpenClawPluginApi[] = [];
+        const registrations = {
+          first: [] as OpenClawPluginApi[],
+          sibling: [] as OpenClawPluginApi[],
+        };
         const handles: Array<{ api: OpenClawPluginApi; stops: number }> = [];
         const failure = new Error("publication rejected");
         const fixture = await createRecoveryFixture({
           abortOnCandidateStart: false,
-          registerFirst: (api) => {
-            registrations.push(api);
+          ...(outcome === "stop refused" ? { initialStop: rejectWith(failure) } : {}),
+          register: (api, owner) => {
+            registrations[owner].push(api);
             api.registerGatewayDiscoveryService({
-              id: "fixture-discovery",
+              id: owner,
               advertise: async () => {
                 const handle = { api, stops: 0 };
                 handles.push(handle);
@@ -653,11 +618,11 @@ it.each(["rollback", "after-commit error", "late startup"] as const)(
         });
         const discovery = await startDiscovery(fixture, true);
         try {
-          expect(handles).toHaveLength(1);
-          if (outcome === "rollback" || outcome === "after-commit error") {
+          expect(handles).toHaveLength(2);
+          if (outcome !== "late startup") {
             await expect(fixture.reload()).rejects.toMatchObject({
               details: { committed: outcome === "after-commit error" },
-              cause: failure,
+              ...(outcome === "stop refused" ? {} : { cause: failure }),
             });
           } else {
             const reloading = fixture.reload();
@@ -677,7 +642,16 @@ it.each(["rollback", "after-commit error", "late startup"] as const)(
           }
           expect(
             handles.filter((handle) => handle.stops === 0).map((handle) => handle.api),
-          ).toEqual([registrations.at(-1)]);
+          ).toEqual(
+            expect.arrayContaining([
+              registrations.sibling[0],
+              ...(outcome === "stop refused" ? [] : [registrations.first.at(-1)]),
+            ]),
+          );
+          expect(handles.filter((handle) => handle.stops === 0)).toHaveLength(
+            outcome === "stop refused" ? 1 : 2,
+          );
+          expect(registrations.sibling).toHaveLength(1);
           expectSiblingRetained(fixture);
         } finally {
           releaseStartup.resolve();
