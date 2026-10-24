@@ -720,7 +720,9 @@ it("uses quoted ps argv when Linux procfs is unavailable", () => {
   const root = path.join(tempDirs.make("gateway-native-argv-"), "application with spaces");
   const pid = process.pid + 701;
   mockNativeListeners([{ pid, argv: ["node", gatewayPackage(root), "gateway"] }], false);
-  withMockedPlatform("linux", () => expect(findGatewayPidsOnPortSync(18789)).toEqual([pid]));
+  withMockedPlatform("linux", () => {
+    expect(findGatewayPidsOnPortSync(18789)).toEqual([pid]);
+  });
 });
 
 describe("stale Gateway process-group escalation", () => {

@@ -1,4 +1,5 @@
 import { assert, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
@@ -124,6 +125,13 @@ function revoke(f: Fixture, boundary: "commit" | "transaction", message: string)
       throw new Error(message);
     }
   };
+}
+
+function countStatements<Key extends string>(
+  ...args: Parameters<typeof trackSqliteStatementExecutions<Key>>
+) {
+  const counter = trackSqliteStatementExecutions(...args);
+  return { ...counter, [Symbol.dispose]: counter.restore };
 }
 
 function patch(snapshot: SessionActorHotState, updatedAt: number): Mutation {
@@ -558,7 +566,11 @@ it.each(["assistant append", "empty append"] as const)(
       expect(f.nativeEntry()).toEqual(initial.entry);
       expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toEqual(originalEvents);
 
-      const committed = expectCommitted(f.mutate(complete()));
+      const committed = (() => {
+        using clock = vi.spyOn(Date, "now");
+        clock.mockReturnValue(55);
+        return expectCommitted(f.mutate(complete()));
+      })();
       const appended = committed.receipt.transcript.appendedMessages;
       if (mode === "assistant append") {
         expect(appended).toMatchObject([
