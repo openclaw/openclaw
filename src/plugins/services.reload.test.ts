@@ -248,6 +248,77 @@ describe("plugin service reload", () => {
     }
   });
 
+  it("bounds config-only restart startup and retains physical cleanup", async () => {
+    vi.useFakeTimers();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const contexts: OpenClawPluginServiceContext[] = [];
+    const event = "plugin-config-reload-late-start";
+    const listener = () => {};
+    const before = process.listenerCount(event);
+    const stop = vi.fn(() => {
+      process.off(event, listener);
+    });
+    const held = {
+      id: "held",
+      async start(context: OpenClawPluginServiceContext) {
+        contexts.push(context);
+        if (contexts.length === 2) {
+          entered.resolve();
+          await release.promise;
+          process.on(event, listener);
+        }
+      },
+      stop,
+    };
+    const sibling = { id: "sibling", start: vi.fn() };
+    const registry = createRegistry([held, sibling], "reload-owner");
+    const handle = await startPluginServices({
+      registry,
+      config: {},
+      broadcastPluginEvent: vi.fn(),
+    });
+    handles.add(handle);
+    let reloaded = false;
+    const reloading = handle.reload({}, new Set([held.id])).then(() => {
+      reloaded = true;
+    });
+    let stopping: Promise<unknown> | undefined;
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
+      expect(reloaded).toBe(true);
+      await reloading;
+      expect(contexts[1]!.scheduler!.signal.aborted).toBe(true);
+      expect(() =>
+        contexts[1]!.gatewayEvents!.emit("late", {}, { scope: "operator.read" }),
+      ).toThrow("no longer active");
+      expect(listPluginServiceHealthFailures(registry)).toMatchObject([
+        { serviceId: held.id, error: expect.stringContaining("plugin service startup timed out") },
+      ]);
+      expect(stop).toHaveBeenCalledOnce();
+      await handle.reload({}, new Set([sibling.id]));
+      expect(sibling.start).toHaveBeenCalledTimes(2);
+      let stopped = false;
+      stopping = handle.stop().then(() => {
+        stopped = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopped).toBe(false);
+      release.resolve();
+      await stopping;
+      expect(stop).toHaveBeenCalledTimes(2);
+      expect(process.listenerCount(event)).toBe(before);
+    } finally {
+      release.resolve();
+      await reloading;
+      await stopping;
+      await handle.stop();
+      process.off(event, listener);
+      vi.useRealTimers();
+    }
+  });
+
   it("bounds candidate startup and retains raw cleanup across retry", async () => {
     vi.useFakeTimers();
     const entered = createDeferredCore();

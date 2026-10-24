@@ -416,7 +416,7 @@ async function startPreparedPluginServices({
             if (!entry.cleaned || !canStart(entry.registration)) {
               continue;
             }
-            await startService(entry.registration, config);
+            await startService(entry.registration, config, undefined, true);
           }
         } finally {
           for (const entry of selected) {
