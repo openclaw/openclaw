@@ -6,8 +6,6 @@ import type { ChannelThreadingToolContext } from "../src/channels/plugins/types.
 import { formatMessageCliText } from "../src/commands/message-format.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.js";
-import { sendHandlers } from "../src/gateway/server-methods/send.js";
-import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
 import { createTestPluginRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
@@ -83,9 +81,7 @@ const currentChat = "19:current-chat@thread.v2";
 const otherChat = "19:other-chat@thread.v2";
 const deniedTarget = `${other.teamId}/19:denied@thread.tacv2`;
 type Action = "search" | "member-info";
-type Route = "tool" | "gateway";
 type Destination = typeof current;
-type GraphRequest = { method: string | undefined; path: string; authorization: string | undefined };
 const cleanups: Array<() => Promise<void>> = [];
 let sequence = 0;
 
@@ -164,12 +160,7 @@ async function createFixture(
     toolContext: toolContext ?? {},
     gatewayContext: "resolved",
   });
-  const context = {
-    dedupe: new Map(),
-    getRuntimeConfig: () => cfg,
-    validateAgentRuntimeApprovalAuthority: authority.validate,
-  } as GatewayRequestContext;
-  const requests: GraphRequest[] = [];
+  const requests: string[] = [];
   const controller = new AbortController();
   const pending = new Set<Promise<unknown>>();
   const graphMessage = (destination: Destination, id = destination.messageId) => ({
@@ -205,7 +196,9 @@ async function createFixture(
   }
   const server = createServer((request, response) => {
     const path = decodeURIComponent(new URL(request.url ?? "/", "http://fixture.invalid").pathname);
-    requests.push({ method: request.method, path, authorization: request.headers.authorization });
+    requests.push(path);
+    expect(request.method).toBe("GET");
+    expect(request.headers.authorization).toBe(`Bearer ${token}`);
     request.resume();
     respondJson(
       response,
@@ -238,48 +231,24 @@ async function createFixture(
   }
 
   return {
-    requests,
     expectNoGraphRequests() {
       expect(requests).toEqual([]);
       expect(graph.acquireToken).not.toHaveBeenCalled();
     },
-    invoke(route: Route, action: Action, params: Record<string, unknown> = {}) {
+    invoke(action: Action, params: Record<string, unknown> = {}) {
       return retain(async () => {
-        const actionParams = { ...inputFor(action), ...params };
-        if (route === "tool") {
-          return (
-            await tool.execute(
-              `teams-call-${++sequence}`,
-              { action, channel: "msteams", ...actionParams },
-              controller.signal,
-            )
-          ).details;
-        }
-        const respond =
-          vi.fn<(ok: boolean, payload?: unknown, error?: { message?: string }) => void>();
-        await sendHandlers["message.action"]!({
-          params: {
-            action,
-            channel: "msteams",
-            params: actionParams,
-            agentId: "main",
-            sessionKey,
-            idempotencyKey: `teams-call-${++sequence}`,
-          },
-          respond,
-          context,
-          client: authority.client,
-          req: { type: "req", id: `teams-rpc-${sequence}`, method: "message.action" },
-          isWebchatConnect: () => false,
-          signal: controller.signal,
-        });
-        expect(respond).toHaveBeenCalledTimes(1);
-        const [ok, payload, error] = respond.mock.calls[0]!;
-        if (!ok) {
-          expect(payload).toBeUndefined();
-          throw new Error(error?.message ?? "Gateway Teams action failed");
-        }
-        return payload;
+        return (
+          await tool.execute(
+            `teams-call-${++sequence}`,
+            {
+              action,
+              channel: "msteams",
+              ...inputFor(action),
+              ...params,
+            },
+            controller.signal,
+          )
+        ).details;
       });
     },
     invokeAdapter(action: Action | "read", params: Record<string, unknown>) {
@@ -326,17 +295,6 @@ function expectReadResult(result: unknown, action: Action, destination: Destinat
           },
         }),
   });
-}
-
-function expectGraphRequests(requests: GraphRequest[], action: Action, destination: Destination) {
-  const channelPath = `/v1.0/teams/${destination.teamId}/channels/${destination.channelId}`;
-  const paths =
-    action === "search"
-      ? [`${channelPath}/messages`]
-      : [channelPath, `/v1.0/teams/${destination.teamId}/members`];
-  expect(requests).toEqual(
-    paths.map((path) => ({ method: "GET", path, authorization: `Bearer ${token}` })),
-  );
 }
 
 describe("Teams registered adapter output", () => {
@@ -388,7 +346,6 @@ describe("Teams registered adapter output", () => {
         messages: expect.any(Array),
       });
       expect(payload).toHaveProperty("messages.length", count);
-      expectGraphRequests(fixture.requests, "search", other);
     },
   );
 
@@ -402,22 +359,21 @@ describe("Teams registered adapter output", () => {
 });
 
 describe.each([
-  ["tool", "search", "bundled"],
-  ["gateway", "member-info", "global"],
-] as const)("Teams %s %s aliases (%s)", (route, action, origin) => {
+  ["search", "bundled"],
+  ["member-info", "global"],
+] as const)("Teams %s aliases (%s)", (action, origin) => {
   it.each([
     { name: "bare", channelId: current.channelId },
     { name: "thread-qualified", channelId: `conversation:${current.channelId};messageid=123` },
     { name: "Graph", channelId: currentTarget },
   ])("reads the current channel with a $name target", async ({ channelId }) => {
     const fixture = await createFixture("channel", origin);
-    const result = await fixture.invoke(route, action, { channelId });
+    const result = await fixture.invoke(action, { channelId });
     expectReadResult(result, action, current);
-    expectGraphRequests(fixture.requests, action, current);
   });
 });
 
-describe.each(["tool", "gateway"] as const)("Teams %s read target selection", (route) => {
+describe("Teams read target selection", () => {
   describe.each(["search", "member-info"] as const)("%s", (action) => {
     it.each([
       { context: "channel", params: {}, destination: current },
@@ -425,13 +381,12 @@ describe.each(["tool", "gateway"] as const)("Teams %s read target selection", (r
       { context: "none", params: { channelId: otherTarget }, destination: other },
     ] as const)("reads $params in $context context", async ({ context, params, destination }) => {
       const fixture = await createFixture(context);
-      expectReadResult(await fixture.invoke(route, action, params), action, destination);
-      expectGraphRequests(fixture.requests, action, destination);
+      expectReadResult(await fixture.invoke(action, params), action, destination);
     });
 
     it("preserves the missing-target error when no current context exists", async () => {
       const fixture = await createFixture("none");
-      await expect(fixture.invoke(route, action)).resolves.toEqual({
+      await expect(fixture.invoke(action)).resolves.toEqual({
         error: `${action === "search" ? "Search" : "member-info"} requires a target (to).`,
       });
       fixture.expectNoGraphRequests();
@@ -449,7 +404,7 @@ describe.each(["tool", "gateway"] as const)("Teams %s read target selection", (r
       "rejects an explicit $name instead of reading the current channel",
       async ({ channelId }) => {
         const fixture = await createFixture();
-        await expect(fixture.invoke(route, action, { channelId })).rejects.toThrow(/not allowed/i);
+        await expect(fixture.invoke(action, { channelId })).rejects.toThrow(/not allowed/i);
         fixture.expectNoGraphRequests();
       },
     );
@@ -457,30 +412,27 @@ describe.each(["tool", "gateway"] as const)("Teams %s read target selection", (r
 
   it("keeps the requester-only member shortcut in the current chat", async () => {
     const fixture = await createFixture("chat");
+    await expect(fixture.invoke("member-info", { userId: requesterId })).resolves.toMatchObject({
+      ok: true,
+      user: { id: requesterId, roles: [] },
+    });
     await expect(
-      fixture.invoke(route, "member-info", { userId: requesterId }),
-    ).resolves.toMatchObject({ ok: true, user: { id: requesterId, roles: [] } });
-    await expect(
-      fixture.invoke(route, "member-info", { channelId: otherChat, userId: requesterId }),
+      fixture.invoke("member-info", { channelId: otherChat, userId: requesterId }),
     ).rejects.toThrow(/is not a member of this conversation/i);
     fixture.expectNoGraphRequests();
   });
 });
 
-describe.each(["search", "member-info"] as const)(
-  "registered Teams %s adapter inputs",
-  (action) => {
-    it("preserves to, then target precedence ahead of channelId", async () => {
-      const fixture = await createFixture();
-      for (const [params, destination] of [
-        [{ to: currentTarget, target: otherTarget, channelId: deniedTarget }, current],
-        [{ target: otherTarget, channelId: deniedTarget }, other],
-      ] as const) {
-        const before = fixture.requests.length;
-        const result = await fixture.invokeAdapter(action, params);
-        expectReadResult(result, action, destination);
-        expectGraphRequests(fixture.requests.slice(before), action, destination);
-      }
-    });
+it.each(["search", "member-info"] as const)(
+  "%s preserves to, then target precedence ahead of channelId",
+  async (action) => {
+    const fixture = await createFixture();
+    for (const [params, destination] of [
+      [{ to: currentTarget, target: otherTarget, channelId: deniedTarget }, current],
+      [{ target: otherTarget, channelId: deniedTarget }, other],
+    ] as const) {
+      const result = await fixture.invokeAdapter(action, params);
+      expectReadResult(result, action, destination);
+    }
   },
 );

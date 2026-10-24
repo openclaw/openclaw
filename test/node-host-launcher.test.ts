@@ -310,24 +310,7 @@ process.exit(0);
     expect(result.stderr).toContain("requires a supervisor connection");
   });
 
-  it("revokes the managed state path when supervisor IPC disconnects", async () => {
-    const f = await fixture();
-    const managed = await f.release(`
-await ready();
-const before = getManagedNodeHostStatePath();
-process.disconnect();
-report({before, after: getManagedNodeHostStatePath() ?? null});
-process.exit(0);
-`);
-    await f.select(managed.prefix);
-    const result = await completed(f.run());
-    expect(JSON.parse(result.stdout.trim())).toEqual({
-      before: f.state,
-      after: null,
-    });
-  });
-
-  it("restarts into a healthy candidate, preserving root flags and replacing one-use pairing arguments", async () => {
+  it("restarts with paired arguments and revokes managed state when the healthy candidate disconnects", async () => {
     const f = await fixture(`
 await setNodeHostLauncherRestartArguments(['node', 'run', '--display-name', 'paired']);
 ${requestUpdate}
@@ -342,7 +325,9 @@ setTimeout(async () => {
   const first = fs.lstatSync(process.env.TEST_CURRENT).mtimeMs;
   await ready();
   setTimeout(() => {
-    report({ argv: process.argv.slice(2), first, second: fs.lstatSync(process.env.TEST_CURRENT).mtimeMs, cwd: process.cwd(), state: getManagedNodeHostStatePath() ?? null, execArgv: process.execArgv });
+    const state = getManagedNodeHostStatePath() ?? null;
+    process.disconnect();
+    report({ argv: process.argv.slice(2), first, second: fs.lstatSync(process.env.TEST_CURRENT).mtimeMs, cwd: process.cwd(), state, disconnectedState: getManagedNodeHostStatePath() ?? null, execArgv: process.execArgv });
     process.exit(0);
   }, 30);
 }, 30);
@@ -356,6 +341,7 @@ setTimeout(async () => {
       argv: ["--profile", "work", "--no-color", "node", "run", "--display-name", "paired"],
       cwd: f.base,
       state: f.state,
+      disconnectedState: null,
       execArgv: ["--disable-warning=ExperimentalWarning"],
     });
     expect(lines[1].first).toBe(lines[1].second);

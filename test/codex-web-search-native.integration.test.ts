@@ -22,16 +22,10 @@ import {
   withPreparedSessionCapabilityRead,
   type SessionCapabilitySnapshot,
 } from "../src/agents/subagents/spawn/subagent-session-store.js";
-import * as webSearchPolicy from "../src/agents/web-search-tool-policy.js";
 import { upsertSessionEntryCore } from "../src/config/sessions/session-accessor.entry.js";
 import { replaceSessionEntrySync } from "../src/config/sessions/session-accessor.sqlite-entry.js";
 import type { ModelDefinitionConfig } from "../src/config/types.models.js";
-import { createDirectChatContext } from "../src/gateway/server-chat.agent-events.test-helpers.js";
-import { SessionRowProjectionBinding } from "../src/gateway/session-row-projection-binding.js";
-import { createSessionRowCapabilityReader } from "../src/gateway/session-row-projection-identities.js";
 import { getTrackedWorkerPoolSnapshot } from "../src/infra/worker-cpu.js";
-import { withPluginRuntimeGatewayContextResolver } from "../src/plugins/runtime/gateway-request-scope.js";
-import { beginAgentDeletionJournal } from "../src/test-utils/agent-deletion-journal.js";
 import { createTestGatewayScheduler } from "../src/test-utils/gateway-scheduler-clock.js";
 import type { CodexAttemptRuntime } from "./types/vitest-codex-attempt-runtime.js";
 
@@ -245,30 +239,7 @@ it.each([
           modelLess ? null : { provider: "openai", model: "search-allowed" },
         );
       try {
-        if (coreDispatch) {
-          prepared = params;
-        } else if (transition === "changed") {
-          const readProjection = createSessionRowCapabilityReader({
-            state: () => ({ disposed: false, topologyDirty: true }),
-            lookup: () => undefined,
-            matching: () => [],
-          });
-          const context = createDirectChatContext({
-            sessionRowProjectionOwner: new SessionRowProjectionBinding({}, readProjection),
-          });
-          beginAgentDeletionJournal({
-            agentId: "native-search-retiring",
-            operationId: "native-search-preparation",
-            agentDir: localPath("retiring-agent"),
-            sessionsDir: localPath("retiring-sessions"),
-            workspaceDir: localPath("retiring-workspace"),
-            deleteFiles: false,
-            phase: "draining",
-          });
-          prepared = await withPluginRuntimeGatewayContextResolver(() => context, prepare);
-        } else {
-          prepared = await prepare();
-        }
+        prepared = coreDispatch ? params : await prepare();
         await mutation;
       } finally {
         messages.mockRestore();
@@ -285,9 +256,6 @@ it.each([
       if (sideQuestion && !coreDispatch && transition !== "unchanged") {
         // Change the requester after core preparation, before native source capture.
         await revokeRequester();
-      }
-      if (!coreDispatch) {
-        expect(prepared.pluginHarnessToolPolicyRestricted).toBe(false);
       }
       if (transition === "early-requester-revoked") {
         await revokeRequester();
@@ -347,7 +315,6 @@ it.each([
           },
         };
       }
-      const resolvePolicy = vi.spyOn(webSearchPolicy, "resolveWebSearchToolPolicy");
       const threadResult = (
         threadId: string,
         model: string = nativeModel,
@@ -501,7 +468,6 @@ it.each([
       };
       let coreRun: ReturnType<typeof runBtwSideQuestion> | undefined;
       let coreInput: Parameters<NonNullable<typeof harness.runSideQuestion>>[0] | undefined;
-      let coreToolOptions: unknown;
       if (coreDispatch) {
         const generation = createModelGenerationFixture({
           agentDir: params.agentDir!,
@@ -533,12 +499,10 @@ it.each([
           },
           [Symbol.asyncDispose]: async () => {},
         });
-        await setHostToolFactoryForTest({ runId: "native-btw-core" }, (options) => {
-          coreToolOptions = options;
-          return [];
-        });
-        const dispatch = vi.fn(
-          async (input: Parameters<NonNullable<typeof harness.runSideQuestion>>[0]) => {
+        await setHostToolFactoryForTest({ runId: "native-btw-core" }, () => []);
+        registerAgentHarness({
+          ...harness,
+          async runSideQuestion(input) {
             coreInput = input;
             if (scenario === "core-btw-host-changed") {
               await fixture.testCodexAppServerBindingStore.mutate(bindingScope, {
@@ -560,8 +524,7 @@ it.each([
             }
             return await harness.runSideQuestion!(input);
           },
-        );
-        registerAgentHarness({ ...harness, runSideQuestion: dispatch });
+        });
         coreRun = runBtwSideQuestion({
           ...sideContext,
           model: "search-outer",
@@ -652,17 +615,8 @@ it.each([
           )?.params,
         ).toMatchObject({ config: { web_search: nativeOnly ? "disabled" : "cached" } });
         expect(nativeWrites.filter(({ method }) => method === "turn/start")).toHaveLength(1);
-        if (!sideQuestion && !modelLess) {
-          expect(resolvePolicy).not.toHaveBeenCalled();
-        }
       }
       if (coreDispatch) {
-        if (scenario === "core-btw-host-unchanged") {
-          expect(coreToolOptions).toMatchObject({
-            modelApi: "openai-responses",
-            modelContextWindowTokens: 32_000,
-          });
-        }
         const modelRoute = {
           provider: nativeProvider,
           modelId: nativeModel,

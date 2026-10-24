@@ -263,15 +263,18 @@ describe("installTestEnv", () => {
       ".gemini/commands/Cache/review.toml": "prompt\n",
       ".minimax/Cache/credentials.json": "minimax\n",
     };
+    const excludedDirectories = [
+      ".claude/projects",
+      ".codex/sessions",
+      ".gemini/antigravity-browser-profile",
+      ".gemini/antigravity/browser_recordings",
+      ".gemini/cli-browser-profile",
+      ".gemini/GPUCache",
+      ".gemini/Service Worker/CacheStorage",
+    ];
     writeHomeFiles(realHome, {
       ...copiedFiles,
-      ".claude/projects/old-session.jsonl": "session\n",
-      ".codex/sessions/2026/02/26/rollout.jsonl": "session\n",
-      ".gemini/antigravity-browser-profile/Default/Cache/Cache_Data/blob": "cached-browser-bytes\n",
-      ".gemini/antigravity/browser_recordings/session.webm": "recording\n",
-      ".gemini/cli-browser-profile/Default/History": "browser-history\n",
-      ".gemini/GPUCache/data.bin": "gpu-cache\n",
-      ".gemini/Service Worker/CacheStorage/cache.bin": "worker-cache\n",
+      ...Object.fromEntries(excludedDirectories.map((dir) => [`${dir}/fixture`, "ignored\n"])),
     });
     fs.mkdirSync(path.join(realHome, ".claude", "settings.local.json"), { recursive: true });
 
@@ -323,14 +326,8 @@ describe("installTestEnv", () => {
       ],
       [
         ".openclaw/agents/main/agent/auth-profiles.json",
-        ".claude/projects",
         ".claude/settings.local.json",
-        ".codex/sessions",
-        ".gemini/antigravity-browser-profile",
-        ".gemini/antigravity/browser_recordings",
-        ".gemini/cli-browser-profile",
-        ".gemini/GPUCache",
-        ".gemini/Service Worker/CacheStorage",
+        ...excludedDirectories,
       ],
     );
   });

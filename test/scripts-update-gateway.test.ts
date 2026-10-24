@@ -18,18 +18,9 @@ let invocationLog: string;
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
-function commitFixture(cwd: string, message: string) {
-  git(
-    cwd,
-    "-c",
-    "user.name=Test",
-    "-c",
-    "user.email=test@example.invalid",
-    "commit",
-    "-qm",
-    message,
-  );
-}
+const fixtureIdentity = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"];
+const commitFixture = (cwd: string, message: string) =>
+  git(cwd, ...fixtureIdentity, "commit", "-qm", message);
 
 const write = (root: string, name: string, content: string | Buffer) =>
   fs.writeFileSync(path.join(root, name), content);
@@ -40,7 +31,6 @@ const backups = () => fs.readdirSync(workdir).filter((name) => name.includes(".o
 
 function publishSeed(message: string, pull = true) {
   commitFixture(seedRoot(), message);
-  git(seedRoot(), "push", "-q", path.join(scratch, "origin.git"), "main");
   if (pull) {
     git(workdir, "pull", "--ff-only", "-q");
   }
@@ -97,7 +87,6 @@ afterEach(() => fs.rmSync(scratch, { recursive: true, force: true }));
 describe("source updater lifecycle preflight", () => {
   beforeEach(() => {
     const seed = seedRoot();
-    const origin = path.join(scratch, "origin.git");
     fs.mkdirSync(path.join(seed, "scripts"), { recursive: true });
     fs.copyFileSync(
       path.join(repoRoot, "scripts/update-gateway.sh"),
@@ -137,8 +126,7 @@ process.exitCode = await runUpdateGatewayBuild(...process.argv.slice(2));
     git(seed, "init", "-q", "-b", "main");
     git(seed, "add", ".");
     commitFixture(seed, "fixture");
-    git(scratch, "clone", "-q", "--bare", seed, origin);
-    git(scratch, "clone", "-q", origin, workdir);
+    git(scratch, "clone", "-q", seed, workdir);
     writeShim("git", 'echo "git $*" >> "$UPDATE_TEST_LOG"\nPATH="${PATH#*:}" exec git "$@"');
     writeShim(
       "corepack",

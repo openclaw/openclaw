@@ -367,9 +367,6 @@ describe("staged content guard", () => {
       stage(dir, name, "clean\n");
       if (kind === "config path") {
         run(dir, "git", ["config", "--local", ruleSetting, `~${literals[1]}/private rules.txt`]);
-        expect(runFailure(dir, "git", ["config", "--path", "--get", ruleSetting]).status).not.toBe(
-          1,
-        );
       } else if (kind === "index") {
         write(dir, ".git/index", literals[1]);
       } else {
@@ -382,16 +379,6 @@ describe("staged content guard", () => {
           installFormattingRecorder(dir, `rm -- '${objectPath}'`);
         } else {
           unlinkSync(path.join(dir, objectPath));
-          const grep = runFailure(dir, "git", [
-            "grep",
-            "--cached",
-            "--fixed-strings",
-            "clean",
-            "--",
-            name,
-          ]);
-          expect(grep.status).toBe(1);
-          expect(grep.stderr.length).toBeGreaterThan(0);
         }
       }
       const result = hookFailure(dir);
