@@ -474,7 +474,7 @@ try {
           "At least 10 interleaved base/head pairs. Median regression <=5% and p95 no worse (sub-1% p95 movement is noise); repeat noisy cells and use A/A plus CPU. Remote chunk-cached navigation target <=100ms.",
         limitations: [
           "Synthetic in-page Gateway RPC has no network latency; page and service-worker CDP 100ms / 10Mbps affect actual HTTP assets only.",
-          "Vite production preview cache headers are recorded, not evidence of Gateway production cache headers.",
+          "The built-server fixture mirrors Gateway immutable asset caching; it does not model authenticated Gateway RPC latency.",
           "Page response fromServiceWorker flags include cache hits and upstream fetches; page encoded bytes omit worker upstream bytes. Neither proves a cache hit.",
           "Worker upstream Network events and requests are recorded separately per context. Observed worker bytes use completed encoded totals (including headers), or incremental encoded body bytes for incomplete/aborted requests; action deltas include work already pending at action start. Failed requests without completion totals are counted separately: CDP can buffer partial bytes until completion, so observed bytes are a lower bound, never evidence that an aborted request used no network.",
           "Worker network events do not measure worker script CPU. A cache hit is only established by a separate CacheStorage probe, not by a page response flag or zero page bytes.",
