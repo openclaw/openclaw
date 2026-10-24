@@ -7,23 +7,13 @@ import {
 import { normalizeBoundedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import { isRecoverableOAuthRefreshFailure } from "../../shared/oauth-refresh-outcome.js";
 import { formatProviderLoginCommand } from "../../shared/provider-login-command.js";
 import type { AuthProfileFailureReason, AuthProfileStore, OAuthCredential } from "./types.js";
-
-/** Detect provider errors caused by single-use OAuth refresh token races. */
-export function isRefreshTokenReusedError(error: unknown): boolean {
-  const message = formatErrorMessage(error).trim().toLowerCase();
-  return (
-    message.includes("refresh_token_reused") ||
-    message.includes("refresh token has already been used") ||
-    message.includes("already been used to generate a new access token")
-  );
-}
 
 export type OAuthRefreshFailureReason =
   | "refresh_token_reused"

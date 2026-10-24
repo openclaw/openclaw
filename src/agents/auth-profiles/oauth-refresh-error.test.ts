@@ -1,11 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { isRefreshTokenReusedError } from "./oauth-refresh-failure.js";
 import {
   makeSeededRandom,
   randomAsciiString as randomJunk,
   randomlyCased,
 } from "./oauth-test-utils.js";
+import { isRefreshTokenReusedError } from "./oauth.test-support.js";
 
 describe("isRefreshTokenReusedError", () => {
   describe("fuzz: random noisy messages", () => {

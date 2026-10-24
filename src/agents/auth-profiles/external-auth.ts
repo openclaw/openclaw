@@ -32,6 +32,22 @@ export type ExternalCliOverlayOptions = {
   externalCliProfileIds?: Iterable<string>;
 };
 
+let resolveExternalAuthProfilesForRuntime: ProviderExternalAuthProfileResolver | undefined;
+
+/** Test-only resolver injection for provider external auth profiles. */
+const testing = {
+  resetResolveExternalAuthProfilesForTest(): void {
+    resolveExternalAuthProfilesForRuntime = undefined;
+  },
+  setResolveExternalAuthProfilesForTest(resolver: ProviderExternalAuthProfileResolver): void {
+    resolveExternalAuthProfilesForRuntime = resolver;
+  },
+};
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.externalAuthTestApi")] =
+    testing;
+}
+
 function resolveExplicitProfileIds(values: Iterable<string> | undefined): Set<string> | undefined {
   if (values === undefined) {
     return undefined;
@@ -124,7 +140,7 @@ export function syncPersistedExternalCliAuthProfiles(
   return next ?? store;
 }
 
-// Bind provider resolution without importing the native loader graph.
+// Only external-profile-dependent operations are bound; module state stays above.
 export function createExternalAuthRuntime(
   resolveExternalAuthProfilesWithPlugins: ProviderExternalAuthProfileResolver,
   withPreparedExternalAuthProfiles: WithPreparedExternalAuthProfiles,
@@ -136,7 +152,9 @@ export function createExternalAuthRuntime(
     externalCli?: ExternalCliOverlayOptions;
   }): ExternalAuthProfileMap {
     const env = params.env ?? process.env;
-    const profiles = resolveExternalAuthProfilesWithPlugins({
+    const resolveProfiles =
+      resolveExternalAuthProfilesForRuntime ?? resolveExternalAuthProfilesWithPlugins;
+    const profiles = resolveProfiles({
       env,
       config: params.externalCli?.config,
       context: {
