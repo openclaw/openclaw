@@ -246,7 +246,7 @@ describe("first chat startup snapshot ordering", () => {
     const header = () =>
       h.pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(h.state),
-        { key: sessionKey },
+        { key: sessionKey, kind: "direct" },
         false,
         "/workspace/project",
         false,

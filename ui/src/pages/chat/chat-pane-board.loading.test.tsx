@@ -120,7 +120,9 @@ describe("chat pane board loading states", () => {
         pane.hydrateStoredChatSnapshot(pane.state, sessionKey);
         const hydration = chatHistoryRequests(pane.state).initialSnapshotHydration!;
         await expectDefined(reading.mock.results[0], "snapshot read").value;
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
         expect(pane.state.chatMessages).toEqual(messages);
         expect(provider.hasLoadedSnapshot).toBe(false);
         vi.useFakeTimers();

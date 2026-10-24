@@ -477,8 +477,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       navDrawerOpen: this.navDrawerOpen,
       gatewayStatus: this.gatewayStatus,
       savedConversation: Boolean(
-        this.state?.chatMessages.length &&
-        (!this.state.connected || isInitialChatHistoryUnavailable(this.state)),
+        this.state &&
+        (!this.state.connected || isInitialChatHistoryUnavailable(this.state)) &&
+        this.state.chatMessages.length,
       ),
       title,
       titlePending: !catalog && !title ? true : undefined,

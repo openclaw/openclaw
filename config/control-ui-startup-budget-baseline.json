@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281359,
-  "reason": "Earlier saved transcript display: final production artifact is 281359 B gzip; measured remote visible content improves 509.3 to 304.7 ms, with unchanged startup requests.",
+  "startupJsGzipBytes": 281281,
+  "reason": "Earlier saved transcript display: repaired final artifact 281281 B gzip, same startup requests; 20-pair remote visible median 509.3 to 304.7 ms.",
   "updatedAt": "2026-10-24"
 }

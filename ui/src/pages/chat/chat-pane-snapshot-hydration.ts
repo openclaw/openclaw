@@ -56,8 +56,10 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
       promise: reading
         .then(async (storedSnapshot) => {
           // Let the initial composer commit before the saved rows do their layout work.
-          if (!hydration.connected && storedSnapshot) {
-            await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+          if (!hydration.connected && storedSnapshot && !storedSnapshot.board) {
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, 0);
+            });
           }
           // Scoped snapshots can paint while the route awaits live revalidation.
           // The pending route still gates commands and authenticated resources.

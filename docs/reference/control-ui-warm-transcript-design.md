@@ -133,8 +133,12 @@ duplicate row keys, and recorded zero CLS during live adoption. Whole-page CLS
 remained about 0.112 because earlier virtualizer, sidebar, and details updates
 still move content. Zero whole-page CLS is not established by this change.
 
-The final production artifact, including workspace-icon admission, is 281,359 B
+The final production artifact, including workspace-icon admission, is 281,281 B
 gzip with seven JavaScript requests and one CSS request (base: 281,184 B).
-Chat boot is 1,274,875 B (+78 B); New Session is 770,837 B (-51 B). The
-175 B startup increase carries the route-aware prewarm selection; startup raw
+Chat boot is 1,274,943 B (+146 B); New Session is 771,014 B (+126 B). The
+97 B startup increase carries the route-aware prewarm selection; startup raw
 bytes are unchanged by the workspace-icon follow-up.
+
+Cached widgets keep their normal shell and learned height before admission;
+their active content and controls wait. Dashboard board-and-transcript restoration
+keeps its existing simultaneous timing, while ordinary chat yields for the composer.

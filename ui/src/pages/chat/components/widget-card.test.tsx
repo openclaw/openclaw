@@ -158,6 +158,23 @@ afterEach(async () => {
 });
 
 describe("widget-card", () => {
+  it("retains saved geometry while active widget content waits for admission", () => {
+    const preview = documentPreview("saved-widget", { sandbox: "strict" });
+    const widgetLayout = { read: vi.fn(() => 700), write: vi.fn() };
+    const host = mountWidget(preview, { mediaReadAllowed: false, widgetLayout });
+    const shell = host.querySelector('[data-content-kind="canvas-html"]');
+    expect(shell).not.toBeNull();
+    expect(
+      shell?.querySelector<HTMLElement>(".chat-tool-card__preview-panel > div")?.style.minHeight,
+    ).toBe("700px");
+    expect(host.querySelector("iframe")).toBeNull();
+    expect(actionButton(host)).toBeNull();
+
+    mountWidget(preview, { mediaReadAllowed: true, widgetLayout }, host);
+    expect(host.querySelector('[data-content-kind="canvas-html"]')).toBe(shell);
+    expect(host.querySelector("iframe")?.style.height).toBe("700px");
+  });
+
   it.each(["transcript", "strict transcript", "sidebar"] as const)(
     "retains the %s document through a blip and retires it on identity or access change",
     async (surface) => {
