@@ -176,12 +176,77 @@ describe("openclaw-tools progress_card gating", () => {
     },
   );
 
+  it.each([
+    { name: "default", config: {}, enabled: false },
+    { name: "full profile", config: { tools: { profile: "full" } }, enabled: false },
+    { name: "wildcard", config: { tools: { allow: ["*"] } }, enabled: false },
+    { name: "runtime group", config: { tools: { allow: ["group:runtime"] } }, enabled: false },
+    {
+      name: "explicit additive opt-in",
+      config: { tools: { alsoAllow: ["secrets"] } },
+      enabled: true,
+    },
+    { name: "explicit allow", config: { tools: { allow: ["secrets"] } }, enabled: true },
+    {
+      name: "explicit deny",
+      config: { tools: { alsoAllow: ["secrets"], deny: ["secrets"] } },
+      enabled: false,
+    },
+    {
+      name: "restrictive profile",
+      config: { tools: { profile: "minimal", allow: ["secrets"] } },
+      enabled: false,
+    },
+    {
+      name: "profile additive opt-in",
+      config: { tools: { profile: "minimal", alsoAllow: ["secrets"] } },
+      enabled: true,
+    },
+    {
+      name: "per-agent opt-in",
+      config: { agents: { entries: { main: { tools: { alsoAllow: ["secrets"] } } } } },
+      enabled: true,
+    },
+  ] satisfies Array<{ name: string; config: OpenClawConfig; enabled: boolean }>)(
+    "requires deliberate secrets opt-in through the coding tool entrypoint: $name",
+    ({ config, enabled }) => {
+      const tools = createOpenClawCodingTools({
+        config: withDefaultRoster(config),
+        sessionKey: "agent:main:main",
+        disableMessageTool: true,
+        wrapBeforeToolCallHook: false,
+      });
+      expect(toolNames(tools).includes("secrets")).toBe(enabled);
+    },
+  );
+
+  it.each(["ops", "research"])(
+    "uses the admitted %s owner for secrets opt-in in a global session",
+    (agentId) => {
+      const names = createFastToolNames({
+        runSessionKey: "global",
+        requesterAgentIdOverride: agentId,
+        config: {
+          agents: {
+            ownership: "explicit",
+            entries: {
+              ops: {},
+              research: { tools: { alsoAllow: ["secrets"] } },
+            },
+          },
+        },
+      });
+      expect(names.includes("secrets")).toBe(agentId === "research");
+    },
+  );
+
   it("keeps human-question tools on permitted primary sessions", async () => {
     for (const toolName of ["ask_user", "secrets"] as const) {
       const includeTool = (agentSessionKey?: string) =>
         shouldIncludePrimarySessionToolForOpenClawTools(toolName, {
           agentSessionKey,
           questionInputMode: "native",
+          config: { tools: { alsoAllow: ["secrets"] } },
         });
       expect(includeTool()).toBe(false);
       expect(includeTool("agent:main:main")).toBe(true);
@@ -200,6 +265,7 @@ describe("openclaw-tools progress_card gating", () => {
       createFastToolNames({
         runSessionKey: "agent:main:non-embedded",
         questionInputMode: "native",
+        config: { tools: { alsoAllow: ["secrets"] } },
       }),
     ).toEqual(expect.arrayContaining(["ask_user", "secrets"]));
     setEmbeddedMode(true);

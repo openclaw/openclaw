@@ -82,6 +82,7 @@ async function fixture(state: OpenClawTestState) {
   const owner = roleClient("view", "question-owner");
   const viewer = roleClient("write", "question-viewer");
   const cfg = rolePolicyConfig(["guest"]);
+  cfg.tools = { ...cfg.tools, alsoAllow: ["secrets"] };
   cfg.gateway!.roles!.definitions.view!.scopes.push("operator.questions");
   cfg.gateway!.roles!.definitions.write!.sessions.others = "view";
   cfg.gateway!.roles!.definitions.write!.scopes.push("operator.questions");

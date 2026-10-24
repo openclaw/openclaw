@@ -12,6 +12,7 @@ import {
   validateQuestionWaitAnswerParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { isSecretsToolAllowed } from "../../agents/agent-tools.policy.js";
 import { registerActiveEmbeddedRunHumanInputWait } from "../../agents/embedded-agent-runner/run-state.js";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import {
@@ -301,6 +302,21 @@ export function createQuestionHandlers(
           };
           // Preparation yielded; every caller must still own this initial mutation.
           authority.assertCurrent();
+          if (
+            storeBound &&
+            !isSecretsToolAllowed({
+              config: context.getRuntimeConfig(),
+              sessionKey: request.sessionKey,
+              agentId: requestedSession?.ok ? requestedSession.agentId : request.agentId,
+            })
+          ) {
+            respondError(
+              respond,
+              ErrorCodes.INVALID_REQUEST,
+              "Credential requests are disabled by default. An operator must explicitly allow the secrets tool.",
+            );
+            return;
+          }
           // The manager awaits returned promises while its public callback type stays void.
           const managerRequest = {
             ...(request.id ? { id: request.id } : {}),

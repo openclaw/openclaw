@@ -94,7 +94,8 @@ export async function callQuestionRpc(
 ) {
   const calls: Parameters<RespondFn>[] = [];
   const respond: RespondFn = (...args) => calls.push(args);
-  const cfg = options?.cfg ?? {};
+  // Existing protected-question scenarios explicitly enable the optional agent tool.
+  const cfg = options?.cfg ?? { tools: { alsoAllow: ["secrets"] } };
   const request = {
     req: { type: "req" as const, id: "request-1", method, params },
     params,

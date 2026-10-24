@@ -214,6 +214,13 @@ function createQuestionPage(
   }
 
   function questionStatusLabel(value: QuestionPrompt): string {
+    if (
+      value.status === "answered" &&
+      value.questions.length === 1 &&
+      value.questions[0]?.secretStore?.kind === "secret"
+    ) {
+      return t("chat.questions.storeSaved");
+    }
     return t(
       {
         answered: "chat.questions.answered",
@@ -243,7 +250,11 @@ function createQuestionPage(
     }
     return value && value.status !== "pending"
       ? questionStatusLabel(value)
-      : t("chat.questions.eyebrow");
+      : t(
+          value?.questions.length === 1 && value.questions[0]?.secretStore?.kind === "secret"
+            ? "chat.questions.storeTitle"
+            : "chat.questions.eyebrow",
+        );
   }
 
   return {
@@ -364,6 +375,11 @@ function QuestionPageContent(
                         >
                           {page.questionStatusLabel(prompt())}
                         </h1>
+                        {prompt().status === "answered" &&
+                          prompt().questions.length === 1 &&
+                          prompt().questions[0]?.secretStore?.kind === "secret" && (
+                            <p>{t("chat.questions.storeDone")}</p>
+                          )}
                         <QuestionSummary prompt={prompt()} />
                       </div>
                     }

@@ -47,7 +47,7 @@ import {
   resolveStoredSubagentCapabilities,
   type SessionCapabilityStore,
 } from "./subagents/spawn/subagent-capabilities.js";
-import { createToolPolicyMatcher } from "./tool-policy-match.js";
+import { createToolPolicyMatcher, isToolAllowedByPolicies } from "./tool-policy-match.js";
 import type { ConfiguredToolPolicySources } from "./tool-policy-pipeline.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
@@ -420,11 +420,19 @@ export function resolveEffectiveToolPolicy(params: {
     markFrozenClawToolAllowPolicy(agentPolicy);
   }
 
+  // Keep credential opt-in separate from native-runtime restrictions and additive
+  // grant provenance. Broad profiles/groups/wildcards do not opt in.
+  const secretsOptIn = [
+    ...(globalTools?.allow ?? []),
+    ...(agentTools?.allow ?? []),
+    ...(explicitProfileAlsoAllow ?? []),
+  ].some((name) => normalizeLowercaseStringOrEmpty(name) === "secrets");
   const effectivePolicy = {
     agentId,
     sources,
     profiles,
     globalPolicy: pickSandboxToolPolicy(globalTools),
+    secretsOptIn,
     globalProviderPolicy: pickSandboxToolPolicy(providerPolicy),
     agentPolicy,
     agentProviderPolicy: pickSandboxToolPolicy(agentProviderPolicy),
@@ -491,6 +499,27 @@ export function resolveEffectiveToolPolicy(params: {
   }
 
   return { ...effectivePolicy, gatewayConfigReadAllowed };
+}
+
+/** Shared admission check for protected questions outside tool construction. */
+export function isSecretsToolAllowed(
+  params: Parameters<typeof resolveEffectiveToolPolicy>[0],
+): boolean {
+  const effective = resolveEffectiveToolPolicy(params);
+  return (
+    effective.secretsOptIn &&
+    isToolAllowedByPolicies("secrets", [
+      mergeAlsoAllowPolicy(resolveToolProfilePolicy(effective.profile), effective.profileAlsoAllow),
+      mergeAlsoAllowPolicy(
+        resolveToolProfilePolicy(effective.providerProfile),
+        effective.providerProfileAlsoAllow,
+      ),
+      effective.globalPolicy,
+      effective.globalProviderPolicy,
+      effective.agentPolicy,
+      effective.agentProviderPolicy,
+    ])
+  );
 }
 
 function throwUnavailableScheduledAccount(accountId: string): never {

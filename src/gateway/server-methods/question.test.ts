@@ -420,6 +420,46 @@ it.each([
   expect(manager.list()).toEqual([]);
 });
 
+it.each([
+  { name: "default", cfg: {}, allowed: false },
+  {
+    name: "HTTP origin",
+    cfg: { gateway: { publicOrigin: "http://gateway.example.test" } },
+    allowed: false,
+  },
+  {
+    name: "HTTPS origin",
+    cfg: { gateway: { publicOrigin: "https://gateway.example.test" } },
+    allowed: false,
+  },
+  { name: "Tailscale", cfg: { gateway: { tailscale: { mode: "serve" } } }, allowed: false },
+  { name: "explicit opt-in", cfg: { tools: { alsoAllow: ["secrets"] } }, allowed: true },
+  {
+    name: "explicit deny",
+    cfg: { tools: { alsoAllow: ["secrets"], deny: ["secrets"] } },
+    allowed: false,
+  },
+] satisfies Array<{ name: string; cfg: OpenClawConfig; allowed: boolean }>)(
+  "admits protected questions only after operator opt-in: $name",
+  async ({ cfg, allowed }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const response = await call("question.request", secretRequestParams, {
+        client: adminRequestClient,
+        cfg,
+      });
+      expect(response[0]).toBe(allowed);
+      if (!allowed) {
+        expect(response[2]).toMatchObject({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("disabled by default"),
+        });
+        expect(manager.list()).toEqual([]);
+        expect(broadcast).not.toHaveBeenCalled();
+      }
+    });
+  },
+);
+
 it("requires admin scope to mint store-bound questions", async () => {
   const client = { connect: { scopes: ["operator.questions"] } } as GatewayClient;
   expect(await call("question.request", secretRequestParams, { client })).toMatchObject([

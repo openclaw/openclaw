@@ -155,7 +155,23 @@ it.for([false, true])(
         );
         expect(deliver).toHaveBeenCalledOnce();
         expect(payload.channelData).toEqual({ askUser: { questionId } });
-        expect(payload).not.toHaveProperty("presentation");
+        expect(payload).toMatchObject({
+          presentation: {
+            blocks: [
+              { type: "text" },
+              {
+                type: "buttons",
+                buttons: [
+                  {
+                    label: "Open secure form",
+                    action: { type: "url", url: `https://console.example.test/ask/${questionId}` },
+                  },
+                ],
+              },
+            ],
+          },
+          presentationTextMode: "fallback",
+        });
         expect(payload).not.toHaveProperty("interactive");
         expect(payload.text).toContain(`https://console.example.test/ask/${questionId}`);
         expect(gateway.mock.calls.some(([method]) => method === "question.resolve")).toBe(false);
