@@ -68,6 +68,7 @@ import {
   storeAt,
   storeDirectory,
 } from "./doctor-database-port-context.js";
+import { rebuildPortedAgentMemory } from "./doctor-database-port-memory.js";
 import {
   assertDatabasePortPluginMigrationsComplete,
   inspectDatabasePortSources,
@@ -612,8 +613,7 @@ async function loadRecovery(ctx: Context) {
     ctx.inputs.stores.length !== saved.targets.length ||
     saved.targets.some((target, index) => {
       const file = ctx.inputs?.stores[index]?.original.path;
-      // Configured and retained agents can live outside the state root. The
-      // verified private input must still name its manifest-bound target.
+      // Agents can live outside the state root; require the manifest-bound private input.
       return !file || file !== livePath(target);
     })
   ) {
@@ -623,13 +623,12 @@ async function loadRecovery(ctx: Context) {
 }
 
 export async function doctorDatabasePort(options: DatabasePortOptions) {
-  const stateDir = path.resolve(resolveStateDir()),
-    configPath = path.resolve(resolveConfigPath());
+  const stateDir = path.resolve(resolveStateDir());
   const ctx: Context = {
     family:
       options.family === undefined ? undefined : databasePortFamilySchema.parse(options.family),
     stateDir,
-    configPath,
+    configPath: path.resolve(resolveConfigPath()),
     env: process.env,
     engineSelection: { effectiveEngines: resolveDatabaseFamilyEngines({}) },
     assertCurrent: () => {},
@@ -639,7 +638,7 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
     prepared: [],
   };
   try {
-    privatePaths(ctx, [stateDir, configPath]);
+    privatePaths(ctx, [stateDir, ctx.configPath]);
     if (!options.resume && !options.rollback) {
       assertPortSelection(
         (await readDatabasePortConfigSnapshot(ctx)).snapshot.config,
@@ -660,7 +659,7 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
           action: options.rollback ? ("rollback" as const) : ("resume" as const),
         }
       : undefined;
-    return await withDatabasePortStateOwner(ctx, recovery, async () => {
+    const result = await withDatabasePortStateOwner(ctx, recovery, async () => {
       if (recovery) {
         ctx.manifest = assertDatabasePortRecoveryAllowed(ctx.stateDir, recovery);
         await loadRecovery(ctx);
@@ -693,6 +692,11 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
       await captureOriginals(ctx, facts);
       return await resume(ctx);
     });
+    const memoryRebuilds =
+      ctx.manifest?.outcome === "ported" && (!ctx.family || ctx.family === "agent")
+        ? await rebuildPortedAgentMemory({ stateDir, stores: result.stores })
+        : undefined;
+    return memoryRebuilds ? { ...result, memoryRebuilds } : result;
   } catch (error) {
     if (error instanceof DatabasePortError) {
       throw error;

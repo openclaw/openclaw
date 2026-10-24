@@ -37,6 +37,7 @@ export type TeamShapeExtrasOptions = {
   settledRuns?: boolean;
   approvals: number;
   cronJobs: number;
+  cronAnnounceLast?: boolean;
   projects: number;
   worktreeFiles?: number;
   nestedRepository?: boolean;
@@ -370,9 +371,19 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
       index % 2 === 0
         ? { kind: "every", everyMs: 3_600_000, anchorMs: options.now }
         : { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-    sessionTarget: "main",
     wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: `Synthetic inspection ${index}` },
+    ...(options.cronAnnounceLast
+      ? {
+          sessionTarget: "isolated" as const,
+          sessionKey: options.sessions[1]!.sessionKey,
+          payload: { kind: "agentTurn" as const, message: `Synthetic inspection ${index}` },
+          delivery: { mode: "announce" as const, channel: "last" },
+          failureAlert: false as const,
+        }
+      : {
+          sessionTarget: "main" as const,
+          payload: { kind: "systemEvent" as const, text: `Synthetic inspection ${index}` },
+        }),
     state: { lastRunAtMs: options.now - DAY_MS, lastRunStatus: index % 5 === 0 ? "error" : "ok" },
   }));
   if (jobs.length > 0) {
@@ -389,6 +400,7 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
     retainedRunStates,
     approvals: options.approvals,
     cronJobs: jobs.length,
+    cronAnnounceLast: options.cronAnnounceLast ?? false,
     projects: projectWorktrees.length,
     githubOptionsConnected: options.githubOptionsConnected ?? false,
     worktreeFiles: options.worktreeFiles ?? 0,

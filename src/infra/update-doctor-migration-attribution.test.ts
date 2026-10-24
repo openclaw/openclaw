@@ -15,16 +15,120 @@ import {
 } from "../state/openclaw-state-db.js";
 import { addPreCutoverClientCredentialTablesForTest } from "../state/openclaw-state-schema.test-support.js";
 import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
+import * as updateGenerations from "./update-database-generations.js";
 import {
   getDoctorMigrationBackup,
   getUpdateDoctorMigrationSource,
   hasUpdateDoctorMigrationCapture,
+  runUpdateSqliteMigration,
   runWithDoctorMigrationBackup,
   runWithUpdateDoctorMigrationCapture,
 } from "./update-doctor-migration-attribution.js";
 import { createUpdateDoctorDatabaseWriteCapture } from "./update-doctor-result.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
+
+it.each(["read-only reader opens", "last writable reader closes"])(
+  "migrates a captured WAL database when its %s without writing",
+  async (transition) => {
+    const root = fs.realpathSync(directories.make("captured-wal-reader-"));
+    const pathname = path.join(root, "source.sqlite");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    {
+      using database = new DatabaseSync(pathname);
+      database.exec(
+        "PRAGMA journal_mode=WAL; CREATE TABLE retained(value); INSERT INTO retained VALUES (7);",
+      );
+    }
+    // SQLite only removes the zero-write WAL index when a writable handle closes.
+    const reader =
+      transition === "last writable reader closes" ? new DatabaseSync(pathname) : undefined;
+    reader?.prepare("SELECT * FROM retained").all();
+    const generations = readUpdateDatabaseGenerations([pathname]);
+    const { receipt, warnings } = await withCapture(env, generations, async () => {
+      reader?.close();
+      if (transition === "read-only reader opens") {
+        using readOnly = new DatabaseSync(pathname, { readOnly: true });
+        readOnly.prepare("SELECT * FROM retained").all();
+      }
+      expect(readUpdateDatabaseGenerations([pathname])[pathname]).not.toBe(generations[pathname]);
+      const database = new DatabaseSync(pathname);
+      try {
+        runUpdateSqliteMigration(database, pathname, () => {
+          database.exec("ALTER TABLE retained ADD COLUMN migrated;");
+        });
+        expect(database.prepare("SELECT value FROM retained").all()).toEqual([{ value: 7 }]);
+      } finally {
+        database.close();
+      }
+    });
+    expect(warnings).toEqual([]);
+    expect(receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
+  },
+);
+
+it.each(["already exclusive", "retain exclusive"])(
+  "keeps native custody when a migration is %s",
+  async (mode) => {
+    const root = fs.realpathSync(directories.make("captured-exclusive-"));
+    const pathname = path.join(root, "source.sqlite");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    using database = new DatabaseSync(pathname);
+    database.exec("PRAGMA journal_mode=WAL; CREATE TABLE retained(value);");
+    const generations = readUpdateDatabaseGenerations([pathname]);
+    if (mode === "already exclusive") {
+      database.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;");
+    }
+    const { receipt, warnings } = await withCapture(env, generations, async () => {
+      const inProcess = vi.spyOn(updateGenerations, "readMatchingUpdateDatabaseGeneration");
+      runUpdateSqliteMigration(
+        database,
+        pathname,
+        () => {
+          database.exec("INSERT INTO retained VALUES (7);");
+        },
+        { retainExclusive: true },
+      );
+      expect(inProcess).toHaveBeenCalledTimes(mode === "already exclusive" ? 0 : 1);
+      expect(database.prepare("PRAGMA locking_mode").get()?.locking_mode).toBe("exclusive");
+      database.close();
+    });
+    expect(warnings).toEqual([]);
+    expect(receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
+  },
+);
+
+it.each(["different content", "same content"])(
+  "rejects a captured WAL database after an outside commit with %s",
+  async (change) => {
+    const root = fs.realpathSync(directories.make("captured-wal-writer-"));
+    const pathname = path.join(root, "source.sqlite");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    {
+      using database = new DatabaseSync(pathname);
+      database.exec(
+        "PRAGMA journal_mode=WAL; CREATE TABLE retained(value); INSERT INTO retained VALUES (7);",
+      );
+    }
+    const generations = readUpdateDatabaseGenerations([pathname]);
+    const { receipt } = await withCapture(env, generations, async () => {
+      using writer = new DatabaseSync(pathname);
+      writer.exec("UPDATE retained SET value = 8;");
+      if (change === "same content") {
+        writer.exec("UPDATE retained SET value = 7;");
+      }
+      writer.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+      using database = new DatabaseSync(pathname);
+      expect(() =>
+        runUpdateSqliteMigration(database, pathname, () => {
+          database.exec("ALTER TABLE retained ADD COLUMN migrated;");
+        }),
+      ).toThrow("SQLite migration source changed after update capture.");
+    });
+    expect(receipt).toMatchObject({ unchanged: false });
+  },
+);
 
 async function withCapture(
   env: NodeJS.ProcessEnv,

@@ -59,10 +59,10 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Narrow sidebar imports and regroup Chat: matched 061f226 1,273,518 to 1,269,796 B.
-  // New Session 768,995 to 763,699 B; preserve each surface's relative headroom.
-  chatBootJsGzipBytes: 1_359_682,
-  newBootJsGzipBytes: 799_114,
+  // Defer optional root English: matched bf93c438 1,269,817 to 1,268,099 B Chat.
+  // New Session 763,598 to 761,956 B; preserve each surface's relative headroom.
+  chatBootJsGzipBytes: 1_357_842,
+  newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).

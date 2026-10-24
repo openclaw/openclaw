@@ -137,7 +137,9 @@ PostgreSQL connections. Each caller has exclusive use until close; an open
 transaction is never returned to the cache. Connection settings and the store
 namespace separate cache entries. Session setup runs when a backend connects,
 and an idle connection lost by the server is replaced at the next open. Workers
-close their cached connections on shutdown.
+close their cached connections after three minutes idle or on shutdown. Taking a
+connection from the cache cancels its idle timeout; checked-out connections are
+not expired by this cache.
 
 Usage reports retain their reader in the existing history worker between requests.
 Each report still uses a fresh read snapshot; database maintenance and worker
@@ -481,13 +483,18 @@ stores are privately migrated and verified; config switches last and preserves
 SecretRefs. Retain the captures until recovery is confirmed.
 
 Cold transcript references and file-artifact paths remain in place. Rebuildable
-memory indexes are omitted from the agent port; canonical memory origins and
-tombstones are retained. Their automatic rebuild hook is still pending. While
-the Gateway is still stopped, rebuild and check Memory Core before relying on
-recall:
+memory indexes are omitted from the agent port; canonical memory origins,
+tombstones, and the embedding cache are retained. After publication releases
+port ownership, the command acquires fresh offline ownership and rebuilds each
+ported agent through the selected memory plugin. Unchanged cached chunks reuse
+their embeddings. Per-agent results appear in the command output and `--json`.
+
+A rebuild failure warns without failing the completed port and includes
+`openclaw memory index --agent <id>` to retry while the Gateway remains stopped.
+Retained stores outside the active agent configuration require that original
+configuration before rebuilding. Check Memory Core before relying on recall:
 
 ```bash
-openclaw memory index
 openclaw memory status
 ```
 

@@ -15,6 +15,16 @@ import type {
   MSTeamsInboundMedia,
 } from "./types.js";
 
+function collectHtmlAttachmentIds(html: string, ids: Set<string>): void {
+  ATTACHMENT_TAG_RE.lastIndex = 0;
+  for (const match of html.matchAll(ATTACHMENT_TAG_RE)) {
+    const id = match[1]?.trim();
+    if (id) {
+      ids.add(id);
+    }
+  }
+}
+
 /**
  * Extract every `<attachment id="...">` reference from the HTML attachments in
  * the inbound activity. Returns the complete (non-sliced) list; callers that
@@ -33,13 +43,7 @@ export function extractMSTeamsHtmlAttachmentIds(
     if (!html) {
       continue;
     }
-    ATTACHMENT_TAG_RE.lastIndex = 0;
-    for (const match of html.matchAll(ATTACHMENT_TAG_RE)) {
-      const id = match[1]?.trim();
-      if (id) {
-        ids.add(id);
-      }
-    }
+    collectHtmlAttachmentIds(html, ids);
   }
   return Array.from(ids);
 }
@@ -79,13 +83,7 @@ export function summarizeMSTeamsHtmlAttachments(
       }
     }
 
-    ATTACHMENT_TAG_RE.lastIndex = 0;
-    for (const attachmentMatch of html.matchAll(ATTACHMENT_TAG_RE)) {
-      const id = attachmentMatch[1]?.trim();
-      if (id) {
-        attachmentIds.add(id);
-      }
-    }
+    collectHtmlAttachmentIds(html, attachmentIds);
   }
 
   if (htmlAttachments === 0) {

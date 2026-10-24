@@ -22,6 +22,12 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+Optional surfaces follow the permissions granted to the current connection.
+Session-only roles do not load the plugin UI catalog, Side Chat history, observer
+visibility, or remote session-link titles. Side Chat is hidden, and session links
+keep their locally available labels. MCP Apps discovery requires general write
+access. The Gateway continues to authorize every request.
+
 ## Command palette file attachments
 
 Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
@@ -343,6 +349,10 @@ Chat filename links first try the named path. If a bare filename is missing ther
 the preview opens a nested file only when a complete workspace search finds exactly
 one matching filename. Ambiguous or incomplete searches keep the missing-file error;
 use an explicit path to select the intended file.
+
+Opening a file collapses the file tree to make room for its preview. Use **Toggle
+file tree** to browse another file, or **Show in Files** to reveal the current file
+in its folder with the **All** filter.
 
 If the **Files** panel shows a listing error, select **Retry** to load the current
 folder or search again. This keeps the session and query in place; access checks

@@ -77,7 +77,12 @@ suite.define(() => {
             ],
             timestamp: 1700000000000 + index,
           })),
-          featureMethods: ["board.get", "chat.metadata", "chat.startup"],
+          featureMethods: [
+            "board.get",
+            "chat.metadata",
+            "chat.startup",
+            "sessions.companion.state",
+          ],
           methodResponses: {
             "board.get": {
               ...boardSnapshot,
@@ -237,7 +242,12 @@ suite.define(() => {
               boardPresentation: "split",
             },
           ],
-          featureMethods: ["board.get", "chat.metadata", "chat.startup"],
+          featureMethods: [
+            "board.get",
+            "chat.metadata",
+            "chat.startup",
+            "sessions.companion.state",
+          ],
           methodResponses: {
             "board.get": boardSnapshot,
             "sessions.companion.state": {

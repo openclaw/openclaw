@@ -2031,7 +2031,7 @@ src/media/audio-transcode.ts	1
 src/media/bounded-read-file.ts	2
 src/media/input-files.ts	1
 src/media/local-media-access.ts	1
-src/media/media-facts.ts	14
+src/media/media-facts.ts	10
 src/media/runtime-prompt-image-provenance.ts	1
 src/media/store.remote.runtime.ts	1
 src/media/store.ts	1

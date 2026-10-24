@@ -31,7 +31,7 @@ const attempt = {
   agentId: "main",
   sessionKey: CHILD_KEY,
   sessionId: "child-session",
-  senderIsOwner: false,
+  run: { senderIsOwner: false },
   admission: { entry: { sessionId: "child-session", updatedAt: 1 }, storePath: STORE_PATH },
 };
 

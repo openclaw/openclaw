@@ -765,6 +765,12 @@
           - "extensions/radius/**"
           - "docs/providers/radius.md"
           - "docs/plugins/reference/radius.md"
+"extensions: requesty":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/requesty/**"
+          - "docs/providers/requesty.md"
+          - "docs/plugins/reference/requesty.md"
 "extensions: runway":
   - changed-files:
       - any-glob-to-any-file:

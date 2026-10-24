@@ -2876,7 +2876,6 @@
 ["src/cli/capability-cli.test.ts","../plugins/embedding-provider-runtime.js","481e319825054a9b76a3f5214ed8ecc8198e30959bddd3a4f03cb10ef84e968b",1]
 ["src/cli/capability-cli.test.ts","../plugins/memory-embedding-provider-runtime.js","a22d91bbaf941e516781fce0a06375ec22f6d000b5277d23ee5f412e4b028bfa",1]
 ["src/cli/capability-cli.test.ts","../secrets/provider-env-vars.js","ea9bda96ac16c5b2c3c5b8c73cbcd4a242ffc03cb22c56bebdd46bdea2847bad",1]
-["src/cli/capability-cli.test.ts","../tts/provider-registry.js","6c04ffa5c61c7f340137daecdc7d743bb0f0ae1f60b2a1e797e157569f47db67",1]
 ["src/cli/capability-cli.test.ts","../video-generation/runtime.js","95a8b1d2173d4f3b3891eabbb1944e31b0880bfcd703e28070d10dea2625c0d5",1]
 ["src/cli/capability-cli.test.ts","../web-fetch/runtime.js","e38aa814ede007a2a8b107aa42f093c6b39d4a2034d68355cf35db5d7818bf08",1]
 ["src/cli/capability-cli.test.ts","./capability-cli/local-account-secrets.js","241bf8722c093bb5245f5a2b9928a0ebce6754226f5eac1e5662a11e74c9b592",1]
