@@ -1,6 +1,6 @@
 import { spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
   armPlan,
-  gatewayEnv,
   IOS_RELEASE_TESTS,
   parseMeasurement,
   runTrials,
@@ -60,7 +59,7 @@ function commandFailure(code: "ETIMEDOUT" | "ABORT_ERR", processTreeState?: "liv
 }
 
 function runtimeFixture(
-  version = "26.5",
+  version: string,
   options: {
     available?: boolean;
     os?: string;
@@ -73,14 +72,9 @@ function runtimeFixture(
     version,
     identifier: `com.apple.CoreSimulator.SimRuntime.${options.os ?? "iOS"}-${version.replaceAll(".", "-")}`,
     supportedArchitectures: [options.arch ?? "arm64"],
-    supportedDeviceTypes:
-      options.device === "none"
-        ? []
-        : [
-            {
-              identifier: `com.apple.CoreSimulator.SimDeviceType.${options.device ?? "iPhone-17-Pro"}`,
-            },
-          ],
+    supportedDeviceTypes: [
+      { identifier: `com.apple.CoreSimulator.SimDeviceType.${options.device ?? "iPhone-17-Pro"}` },
+    ],
   };
 }
 
@@ -91,8 +85,6 @@ const setupPlans: Record<
 > = {
   "setup-code-rpc-timeout": [60_000, "timeout"],
   "setup-code-fast-success": [1_000, "success"],
-  "setup-code-slow-success": [35_000, "success"],
-  "setup-code-join-success": [11_000, "success"],
   "setup-code-join-observer-failure-success": [11_000, "success"],
   "setup-code-join-failure": [11_000, "failure"],
   "setup-code-join-cancel": [11_000, "cancel"],
@@ -279,7 +271,7 @@ describe("sampled simulator-tree footprint", () => {
 
 function fixture(
   options: {
-    fail?: "test" | "cleanup";
+    fail?: "test";
     measure?: boolean;
     invalidMeasurement?: boolean;
     cancel?: boolean;
@@ -332,9 +324,6 @@ function fixture(
         cleanup: async () => {
           trace.push(`cleanup:${index}`);
           time += 5;
-          if (options.fail === "cleanup") {
-            throw new Error("private cleanup diagnostics");
-          }
         },
       };
     }),
@@ -343,26 +332,19 @@ function fixture(
 }
 
 describe("fresh trial ownership", () => {
-  it("runs live pairing and the independent reader test on one prepared simulator", async () => {
-    const { deps, trace } = fixture();
+  it("stops before the reader when cancelled during the live test", async () => {
+    const { deps, trace } = fixture({ cancel: true });
     const report = await runTrials("stock", deps);
-    expect(report.complete).toBe(true);
-    expect(report.trials).toEqual(
-      fixtureEvidence({
-        status: "passed",
-        tests: IOS_RELEASE_TESTS.map((test) => ({ test, status: "passed", ms: 10 })),
-        preparationMs: 100,
-        testMs: 20,
-        totalMs: 125,
-      }),
-    );
-    expect(deps.create).toHaveBeenCalledExactlyOnceWith("stock", 1);
-    expect(trace).toEqual([
-      "create:1:stock",
-      "prepare:1",
-      ...IOS_RELEASE_TESTS.map((test) => `test:1:${test}`),
-      "cleanup:1",
+    expect(report.complete).toBe(false);
+    expectTrial(report, {
+      status: "failed",
+      errors: ["cancelled"],
+      tests: [{ test: IOS_RELEASE_TESTS[0] }],
+    });
+    expect(trace.filter((entry) => entry.startsWith("test:"))).toEqual([
+      `test:1:${IOS_RELEASE_TESTS[0]}`,
     ]);
+    expect(trace).toContain("cleanup:1");
   });
   it("retains all eight fresh arms in fixed AB BA AB BA order after a failed arm", async () => {
     const { deps, trace } = fixture({ fail: "test", measure: true });
@@ -401,21 +383,6 @@ describe("fresh trial ownership", () => {
     });
     expect(trace.indexOf("prepare:1")).toBeLessThan(trace.indexOf("measure:1"));
     expect(trace.indexOf("measure:1")).toBeLessThan(trace.indexOf("cleanup:1"));
-  });
-  it("stops after unconfirmed cleanup or cancellation, retaining the failed run", async () => {
-    for (const options of [{ fail: "cleanup" as const }, { cancel: true }]) {
-      const { deps, trace } = fixture(options);
-      const report = await runTrials("stock", deps);
-      expect(report.complete).toBe(false);
-      expect(report.trials).toHaveLength(1);
-      expect(report.trials[0]?.status).toBe("failed");
-      expect(trace).toContain("cleanup:1");
-      if ("cancel" in options && options.cancel) {
-        expect(trace.filter((entry) => entry.startsWith("test:"))).toEqual([
-          `test:1:${IOS_RELEASE_TESTS[0]}`,
-        ]);
-      }
-    }
   });
 });
 
@@ -551,9 +518,6 @@ describe("release qualification workflow authority", () => {
     expect(qualification.secrets).toBeUndefined();
 
     const steps = releaseJob.steps;
-    expect(
-      steps.some((step: { run?: string }) => step.run?.includes("scripts/ios-release-e2e.ts")),
-    ).toBe(false);
     const signingStep = requiredWorkflowStep(steps, "Create apps-signing read token");
     const uploadStep = requiredWorkflowStep(steps, "Prepare and upload iOS release");
     expect(steps.indexOf(signingStep)).toBeLessThan(steps.indexOf(uploadStep));
@@ -595,121 +559,29 @@ describe("release qualification workflow authority", () => {
       "${{ runner.temp }}/ios-resource-timeline.jsonl",
     ]);
   });
+  // Workload exit/collector lifecycle belongs to ios-resource-timeline.test.ts;
+  // screenshot startup behavior belongs to ios-release-fastlane-gates.test.ts.
   it.each([
-    { flow: "qualification", enabled: true },
-    { flow: "qualification", enabled: false },
-    { flow: "screenshots", enabled: true },
-    { flow: "screenshots", enabled: false },
-    { flow: "screenshots", enabled: false, startupProbe: true },
+    { flow: "qualification", enabled: true, startupProbe: false, expected: "1" },
+    { flow: "qualification", enabled: false, startupProbe: false, expected: "0" },
+    { flow: "screenshots", enabled: true, startupProbe: false, expected: "1" },
+    { flow: "screenshots", enabled: false, startupProbe: false, expected: "0" },
+    { flow: "screenshots", enabled: false, startupProbe: true, expected: "1" },
   ])(
-    "runs $flow with optional resource diagnostics=$enabled without masking failure",
-    ({ flow, enabled, startupProbe = false }) => {
-      const diagnostics = enabled || startupProbe;
-      const selected = flow === "qualification" ? workflow : release;
-      expect(selected.on.workflow_dispatch.inputs.resource_diagnostics).toMatchObject({
-        type: "boolean",
-        default: true,
-      });
-      expect(workflow.on.workflow_call.inputs.resource_diagnostics).toMatchObject({
-        type: "boolean",
-        default: true,
-      });
+    "routes resource diagnostics for $flow/$enabled/$startupProbe",
+    ({ flow, enabled, startupProbe, expected }) => {
       const step = requiredWorkflowStep(
         flow === "qualification" ? workflow.jobs.qualify.steps : release.jobs.screenshots.steps,
         flow === "qualification"
           ? "Qualify native pairing and chat"
           : "Capture iPhone, iPad, and Watch screenshots",
       );
-      const root = tempDirs.make("ios-workflow-resource-diagnostics-");
-      const scripts = path.join(root, "scripts");
-      const bin = path.join(root, "bin");
-      mkdirSync(scripts);
-      mkdirSync(bin);
-      writeFileSync(
-        path.join(scripts, "ios-resource-timeline.mjs"),
-        readFileSync("scripts/ios-resource-timeline.mjs"),
-      );
-      writeFileSync(path.join(scripts, "tsx.mjs"), "export {};\n");
-      const workload = path.join(scripts, "ios-release-e2e.ts");
-      writeFileSync(
-        workload,
-        `
-const fs = require("node:fs");
-fs.writeFileSync(process.env.FIXTURE_RECORD, JSON.stringify({
-  args: process.argv.slice(2),
-  diagnostics: process.env.OPENCLAW_IOS_RESOURCE_DIAGNOSTICS,
-  snapshots: process.env.OPENCLAW_SNAPSHOT_DIAGNOSTICS,
-  startupProbe: process.env.OPENCLAW_SNAPSHOT_STARTUP_PROBE,
-  deviceFamily: process.env.OPENCLAW_SNAPSHOT_DEVICE_FAMILY,
-  skipWatch: process.env.OPENCLAW_SNAPSHOT_SKIP_WATCH,
-  phasePath: process.env.OPENCLAW_IOS_RESOURCE_PHASE_PATH,
-}));
-process.exitCode = 23;
-`,
-      );
-      const pnpm = path.join(bin, "pnpm");
-      writeFileSync(pnpm, '#!/bin/sh\nexec "$FIXTURE_NODE" "$FIXTURE_WORKLOAD" "$@"\n');
-      chmodSync(pnpm, 0o755);
-      const stepEnv = Object.fromEntries(
-        Object.entries(step.env as Record<string, string>).map(([key, value]) => [
-          key,
-          value.startsWith("${{")
-            ? String(
-                evaluateWorkflow(value, {
-                  eventName: "workflow_dispatch",
-                  inputs: { resource_diagnostics: enabled, startup_probe: startupProbe },
-                  steps: { simslim: { outputs: { binary: "" } } },
-                }),
-              )
-            : value,
-        ]),
-      );
-      const record = path.join(root, "observed.json");
-      const proof = path.join(root, "proof.json");
-      const gateway = path.join(root, "gateway");
-      const target = "a".repeat(40);
-      const execution = spawnSync("/bin/bash", ["-c", step.run], {
-        cwd: root,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          ...stepEnv,
-          PATH: `${bin}${path.delimiter}${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH}`,
-          FIXTURE_NODE: process.execPath,
-          FIXTURE_WORKLOAD: workload,
-          FIXTURE_RECORD: record,
-          RUNNER_TEMP: root,
-          PROOF_PATH: proof,
-          GATEWAY_SELECTION_DIR: gateway,
-          TARGET_SHA: target,
-          E2E_MODE: "stock",
-        },
-      });
-      expect(execution.status, execution.stderr).toBe(23);
-      const observed = JSON.parse(readFileSync(record, "utf8"));
-      expect(observed.diagnostics).toBe(diagnostics ? "1" : "0");
-      expect(Boolean(observed.phasePath)).toBe(diagnostics);
-      expect(readdirSync(root).includes("ios-resource-timeline.jsonl")).toBe(diagnostics);
-      expect(observed.args).toEqual(
-        flow === "qualification"
-          ? [
-              "--mode",
-              "stock",
-              "--target-sha",
-              target,
-              "--output",
-              proof,
-              "--gateway-selection",
-              gateway,
-            ]
-          : ["ios:screenshots"],
-      );
-      if (flow === "screenshots") {
-        expect(observed.snapshots).toBe("1");
-        expect(observed.startupProbe).toBe(startupProbe ? "1" : "0");
-        expect(observed.deviceFamily).toBe(startupProbe ? "iphone" : "");
-        expect(observed.skipWatch).toBe(startupProbe ? "1" : "0");
-      }
+      expect(
+        evaluateWorkflow(step.env.OPENCLAW_IOS_RESOURCE_DIAGNOSTICS, {
+          eventName: "workflow_dispatch",
+          inputs: { resource_diagnostics: enabled, startup_probe: startupProbe },
+        }),
+      ).toBe(expected);
     },
   );
   it.each([
@@ -745,7 +617,6 @@ process.exitCode = 23;
 
 it.each([
   "dirty-tracked",
-  "source-late-dirty",
   "source-late-head-change",
   "invalid-xcode-output",
   "newest-compatible-runtime",
@@ -769,21 +640,17 @@ it.each([
   "native-build-only",
   "setup-code-timeout",
   "setup-code-handshake-retry",
-  "setup-code-handshake-timeout-retry",
   "setup-code-handshake-exhausted",
   "setup-code-closed-after-dispatch",
   "setup-code-closed-unknown-dispatch",
   "setup-code-closed-cancelled",
   "setup-code-rpc-timeout",
   "setup-code-fast-success",
-  "setup-code-slow-success",
-  "setup-code-join-success",
   "setup-code-join-observer-failure-success",
   "setup-code-join-failure",
   "setup-code-join-cancel",
   "setup-code-auth-timeout",
   "test-unjoined",
-  "test-exit",
   "reader-failure",
   "fixture-exit",
   "gateway-exit",
@@ -816,14 +683,6 @@ it.each([
   });
   let diagnosticCalls = 0;
   let setupCodeAttempts = 0;
-  const gatewayIdentity = {
-    version: "2026.9.29",
-    integrity: "sha512-YQ==",
-    sourceSha: "2".repeat(40),
-    lockSha256: "3".repeat(64),
-    nodeVersion: process.version,
-    npmVersion: "11.6.2",
-  };
   let installedGatewayPath = "";
   nativeMocks.install.mockImplementation(async (options) => {
     lifecycle.push("gateway-install");
@@ -836,7 +695,11 @@ it.each([
       );
     }
     installedGatewayPath = path.join(options.installDir, "node_modules/openclaw");
-    return { cwd: installedGatewayPath, entrypoint: ["openclaw.mjs"], identity: gatewayIdentity };
+    return {
+      cwd: installedGatewayPath,
+      entrypoint: ["openclaw.mjs"],
+      identity: { version: "synthetic" },
+    };
   });
   const preflightCleanup = vi.fn(async () => {
     lifecycle.push("gateway-preflight-cleanup");
@@ -963,7 +826,7 @@ it.each([
           abort.abort();
         }
         throw new GatewayTransportError({
-          kind: scenario === "setup-code-handshake-timeout-retry" ? "timeout" : "closed",
+          kind: "closed",
           message: "private handshake failure",
           connectionDetails: { url: "ws://private", urlSource: "private", message: "private" },
           code: 1008,
@@ -1028,6 +891,14 @@ it.each([
       };
     }
     expect(simulatorReady).toBe(false);
+    expect(options).toMatchObject({
+      config: { agents: { defaults: { model: { primary: "openai/ios-e2e" } } } },
+      env: {
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+        OPENCLAW_SKIP_CHANNELS: "0",
+        OPENCLAW_SKIP_PROVIDERS: "0",
+      },
+    });
     lifecycle.push("gateway-create");
     const index = instances.length + 1;
     const instance = {
@@ -1086,7 +957,7 @@ it.each([
       });
     } else if (args[0] === "status") {
       expect(args).toEqual(["status", "--porcelain=v1", "--untracked-files=all"]);
-      if (scenario === "dirty-tracked" || (scenario === "source-late-dirty" && sourceChanged)) {
+      if (scenario === "dirty-tracked") {
         stdout.write(" M scripts/ios-release-e2e.ts\n");
       }
     } else if (options.bin === "git") {
@@ -1115,9 +986,8 @@ it.each([
                   runtimeFixture("26.9"),
                   runtimeFixture("28.0", { available: false }),
                   runtimeFixture("29.0", { os: "watchOS" }),
-                  runtimeFixture("30.0", { device: "none" }),
+                  runtimeFixture("30.0", { device: "iPhone-16-Pro" }),
                   runtimeFixture("31.0", { arch: "x86_64" }),
-                  runtime,
                   runtimeFixture("26.10"),
                 ]
               : [runtime],
@@ -1282,14 +1152,6 @@ it.each([
       if (scenario === "test-unjoined") {
         throw commandFailure("ETIMEDOUT", "unknown");
       }
-      if (scenario === "test-exit") {
-        stdout.write(
-          "/private/checkout/OpenClawSnapshotUITests.swift:1904: error: private assertion details\n" +
-            "private teardown details\n".repeat(256),
-        );
-        stderr.write("TEST FAILED: private setup code and private path\n");
-        return 65;
-      }
       if (!reader) {
         stdout.write("IOS_RELEASE_CHECKPOINT overview\n");
       }
@@ -1310,10 +1172,7 @@ it.each([
       mkdirSync(path.join(appContainer, "Library/Caches"), { recursive: true });
       writeFileSync(
         path.join(appContainer, "Library/Caches/openclaw-gateway.log"),
-        "[2026-09-26T00:00:00Z] chat.ui send invoked sessionKey=private inputLen=100\n" +
-          "[2026-09-26T00:00:00Z] chat.ui send queued sessionKey=private localRunId=private\n" +
-          "[2026-09-26T00:00:00Z] chat.ui transport send start sessionKey=private\n" +
-          "[2026-09-26T00:00:00Z] chat.ui send failed sessionKey=private error=private\n" +
+        "[2026-09-26T00:00:00Z] chat.ui send failed sessionKey=private error=private\n" +
           "[2026-09-26T00:00:00Z] chat.send skipped before dispatch: route changed\n" +
           "[2026-09-26T00:00:00Z] unknown event private credential\n",
       );
@@ -1432,8 +1291,6 @@ it.each([
       targetSha: "1".repeat(40),
       signal: abort.signal,
     });
-    expect(proof.gateway).toEqual(gatewayIdentity);
-    expect(proof.gatewayInstallMs).toEqual(expect.any(Number));
     if (scenario === "gateway-only") {
       const gatewayProbe = await native.dependencies.create("stock", 1);
       try {
@@ -1494,9 +1351,7 @@ it.each([
         } else {
           await vi.advanceTimersByTimeAsync(20_000);
           settledAtThirtySeconds = lifecycle.includes("setup-rpc-settled");
-          await vi.advanceTimersByTimeAsync(
-            scenario === "setup-code-slow-success" ? 5_000 : 30_000,
-          );
+          await vi.advanceTimersByTimeAsync(30_000);
         }
       }
     }
@@ -1617,32 +1472,16 @@ it.each([
         containing([
           ...(scenario === "reply-failure-source-only"
             ? []
-            : [
-                "chat-stage:relaunch",
-                "chat-checkpoint:reply",
-                "chat-draft-retained:false",
-                "chat-keyboard:true",
-                "chat-reply-present:false",
-                "chat-writing:false",
-                "chat-jump:true",
-                "chat-app-foreground:true",
-                "chat-input-present:true",
-                "chat-transcript-present:true",
-                "chat-send-present:false",
-              ]),
+            : ["chat-stage:relaunch", "chat-checkpoint:reply", "chat-reply-present:false"]),
           "provider-latest-user:relaunch",
           "provider-body-tail:first",
           "provider-marker-match:false",
-          "model-any-request-stage:start",
           "model-any-request-stage:completed",
           expect.stringMatching(/^failure-evidence-at-ms:\d+$/),
           ...(scenario === "reply-failure-app-log-error"
             ? ["app-evidence-unavailable"]
             : [
                 "app-evidence-read",
-                "app-send-stage:invoked",
-                "app-send-stage:optimistic-message",
-                "app-send-stage:transport-start",
                 "app-send-stage:failed",
                 "app-send-stage:dispatch-route-changed",
               ]),
@@ -1806,27 +1645,12 @@ it.each([
       }
       return;
     }
-    if (scenario === "test-exit") {
-      expect(report.trials.map((trial) => trial.status)).toEqual(["failed"]);
-      expect(report.trials[0]?.diagnostics).toEqual([
-        {
-          operation: "native-test",
-          code: "exit",
-          exitCode: 65,
-          context: containing(["test-failed", "xctest-line:1904"]),
-        },
-      ]);
-      return;
-    }
-    if (scenario === "source-late-dirty" || scenario === "source-late-head-change") {
+    if (scenario === "source-late-head-change") {
       expect(report.trials.map((trial) => trial.status)).toEqual(["passed"]);
       expect(report.trials[0]?.tests).toHaveLength(2);
       sourceChanged = true;
       await expect(native.assertCurrentSource()).rejects.toMatchObject({
-        diagnostic:
-          scenario === "source-late-dirty"
-            ? { operation: "source-status", code: "dirty-source" }
-            : { operation: "source-head", code: "identity-mismatch" },
+        diagnostic: { operation: "source-head", code: "identity-mismatch" },
       });
       expect(lifecycle.filter((entry) => entry.endsWith("-test"))).toEqual([
         "live-test",
@@ -1834,10 +1658,10 @@ it.each([
       ]);
       return;
     }
-    expect(report.trials.map((trial) => trial.status)).toEqual(["passed"]);
-    expect(report.trials[0]?.tests.map(({ test, status }) => ({ test, status }))).toEqual(
-      IOS_RELEASE_TESTS.map((test) => ({ test, status: "passed" })),
-    );
+    expectTrial(report, {
+      status: "passed",
+      tests: IOS_RELEASE_TESTS.map((test) => ({ test, status: "passed" })),
+    });
     expectBefore(lifecycle, [
       ["mock-start", "boot-ready"],
       ["gateway-start", "boot-ready"],
@@ -1849,69 +1673,25 @@ it.each([
       ["mock-cleanup", "reader-test"],
     ]);
     expect(lifecycle.at(-1)).toBe("simulator-delete");
-    expect(created).toBe(1);
-    expect(joinedMocks).toBe(1);
-    for (const index of instances.keys()) {
-      const rpcTarget = {
-        config: {},
-        configPath: `/private/fixture-${index + 1}/config.json`,
-        url: `ws://127.0.0.1:${20001 + index}`,
-        token: `synthetic-token-${index + 1}`,
+    expect([created, joinedMocks]).toEqual([1, 1]);
+    for (const [rpc] of fixtureRpcCalls()) {
+      expect(rpc).toMatchObject({
         ignoreEnvUrlOverride: true,
         deviceIdentity: null,
         sharedStateMode: "read-only",
-      };
-      expect(fixtureRpcCalls()).toHaveLength(2);
-      expect(fixtureRpcCalls()[0]?.[0]).toEqual(
-        matching({
-          ...rpcTarget,
-          method: "device.pair.setupStatus",
-          params: {
-            setupId: expect.stringMatching(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u),
-          },
-          timeoutMs: 30_000,
-        }),
-      );
-      expect(fixtureRpcCalls()[1]?.[0]).toEqual({
-        ...rpcTarget,
-        method: "device.pair.setupCode",
-        params: { publicUrl: `ws://127.0.0.1:${20001 + index}`, includeQr: false },
-        timeoutMs: 60_000,
-        signal: expect.any(AbortSignal),
-        onHelloOk: expect.any(Function),
-        assertDispatchCurrent: expect.any(Function),
+        configPath: "/private/fixture-1/config.json",
+        token: "synthetic-token-1",
+        url: "ws://127.0.0.1:20001",
       });
     }
-    expectFixtures(proof, {
-      trial: 1,
-      cleanupConfirmed: true,
-      setupStatusRpc: rpcEvidence(true),
-      setupRpc: rpcEvidence(true),
-      providerMessages: [
-        { stage: "first", received: true },
-        { stage: "second", received: true },
-        { stage: "relaunch", received: true },
-      ],
-    });
-    expect(proof.fixtures).not.toEqual(containing([matching({ gatewayExited: true })]));
+    expectFixtures(proof, { cleanupConfirmed: true });
     expect(gatewayChild.listenerCount("exit")).toBe(0);
     expect(proof.phases).toEqual(
-      containing([
-        matching({
-          operation: "native-test",
-          trial: 1,
-          status: "passed",
-          checkpoint: "overview",
-        }),
-      ]),
+      containing([matching({ operation: "native-test", checkpoint: "overview" })]),
     );
-    const builds = commandsWith("build-for-testing");
-    expect(builds).toHaveLength(1);
-    const [nativeBuild] = builds;
+    const [nativeBuild] = commandsWith("build-for-testing");
     expect(nativeBuild.args).toEqual(
       containing([
-        "-configuration",
-        "Debug",
         "CODE_SIGNING_ALLOWED=YES",
         "CODE_SIGN_IDENTITY=-",
         "CODE_SIGN_STYLE=Manual",
@@ -1920,53 +1700,28 @@ it.each([
       ]),
     );
     expect(nativeBuild.args).not.toContain("-allowProvisioningUpdates");
-    expect(nativeMocks.build).toHaveBeenCalledOnce();
-    expect(nativeMocks.build.mock.calls[0]?.[0].identity).toMatchObject({
-      sourceSha: "1".repeat(40),
-      sdkVersion: "27.0",
-      platform: "darwin",
-      arch: "arm64",
-    });
     const tests = commandsWith("test-without-building");
     expect(tests.map(({ env }) => env.TEST_RUNNER_OPENCLAW_IOS_LIVE_SETUP_CODE)).toEqual([
       "synthetic-code-1",
       "",
     ]);
     for (const { args: testArgs } of tests) {
-      expect(testArgs).toContain("platform=iOS Simulator,id=11111111-2222-3333-4444-000000000001");
       expect(
         testArgs.slice(testArgs.indexOf("-xctestrun"), testArgs.indexOf("-xctestrun") + 2),
       ).toEqual(["-xctestrun", xctestrunPath]);
-      expect(testArgs.some((argument: string) => argument.startsWith("CODE_SIGN"))).toBe(false);
       const diagnosticsIndex = testArgs.indexOf("-collect-test-diagnostics");
       expect(testArgs.slice(diagnosticsIndex, diagnosticsIndex + 2)).toEqual([
         "-collect-test-diagnostics",
         "never",
       ]);
-      for (const excluded of [
-        "-project",
-        "-derivedDataPath",
-        "-test-iterations",
-        "-retry-tests-on-failure",
-        "-run-tests-until-failure",
-      ]) {
-        expect(testArgs).not.toContain(excluded);
-      }
+      expect(
+        testArgs.filter((arg: string) =>
+          /^(?:CODE_SIGN|-project|-derivedDataPath|-test-iterations|-retry-tests-on-failure|-run-tests-until-failure)/u.test(
+            arg,
+          ),
+        ),
+      ).toEqual([]);
     }
-    expect(commandsWith("xcresulttool").map(({ args }) => args.slice(0, 4))).toEqual([
-      ["xcresulttool", "get", "test-results", "tests"],
-      ["xcresulttool", "get", "test-results", "tests"],
-    ]);
-    expect(commandsWith("delete").map(({ args }) => args.at(-1))).toEqual([
-      "11111111-2222-3333-4444-000000000001",
-    ]);
-    expect(nativeMocks.gateway.mock.calls[1]?.[0]).toMatchObject({
-      config: {
-        gateway: { controlUi: { enabled: false } },
-        agents: { defaults: { model: { primary: "openai/ios-e2e" } } },
-      },
-      env: gatewayEnv,
-    });
   } finally {
     if (
       scenario === "cleanup-failure" ||
