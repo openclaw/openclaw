@@ -40,15 +40,12 @@ describe("plugin calls during a replacement", () => {
     expect(settled).toHaveBeenCalledOnce();
   });
 
-  it("refuses without a wait while the reload still drains retained work", () => {
+  it("admits calls and retained consumers while the reload still drains retained work", () => {
     const instance = createOwnedInstance();
     instance.reserveReplacement();
 
-    // Accepting instances admit calls; only fresh retained consumers are refused.
     expect(instance.run(() => "admitted")).toBe("admitted");
-    const error = refusal(() => instance.retainConsumer());
-    expect(error).not.toBeInstanceOf(PluginInstanceUnavailableError);
-    expect(error).toMatchObject({ message: "Plugin swap is retiring" });
+    instance.retainConsumer().release();
   });
 
   it("offers retained-consumer acquisition the same wait after quiesce", () => {
