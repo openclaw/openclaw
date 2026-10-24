@@ -72,15 +72,15 @@ it.each(["completed", "error", "blocked", "retired-during-execution", "retired-b
     if (outcome === "retired-before-delivery") {
       replaceOwner();
     }
-    createModelObserver({ streamContext: {}, capturePromptStats: false }).observeFinalResult(
-      modelCall,
-      Date.now(),
-      {
-        role: "assistant",
-        stopReason: "length",
-        content: [{ type: "toolCall", id: "read-call", name: "read", arguments: {}, async: true }],
-      },
-    );
+    createModelObserver({
+      streamContext: {},
+      capturePromptStats: false,
+      captureByteStats: false,
+    }).observeFinalResult(modelCall, Date.now(), {
+      role: "assistant",
+      stopReason: "length",
+      content: [{ type: "toolCall", id: "read-call", name: "read", arguments: {}, async: true }],
+    });
     await vi.advanceTimersByTimeAsync(0);
     await waitForDiagnosticEventsDrained();
     vi.setSystemTime(startedAt + 659_000);

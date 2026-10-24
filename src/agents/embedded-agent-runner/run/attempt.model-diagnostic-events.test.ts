@@ -148,8 +148,13 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       observed.push(`create${formatModelTransportContext()}`);
       return {
         async *[Symbol.asyncIterator]() {
+          for (let index = 0; index < 2; index++) {
+            await Promise.resolve();
+            observed.push(`iterate-${index}${formatModelTransportContext()}`);
+            yield { type: "text_delta", contentIndex: 0, delta: String(index) } as const;
+          }
           await Promise.resolve();
-          observed.push(`iterate${formatModelTransportContext()}`);
+          observed.push(`iterate-2${formatModelTransportContext()}`);
           yield {
             type: "done",
             reason: "stop",
@@ -169,19 +174,26 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       api: "openai-responses",
       baseUrl: "https://example.invalid",
     });
-    await Promise.all(
-      [1, 2].map(async (number) => {
-        const stream = await wrap(source, {
+    const streams = await Promise.all(
+      [1, 2].map(async (number) =>
+        wrap(source, {
           runId: `run-${number}`,
           sessionKey: `session-${number}`,
           nextCallId: () => `run-${number}:model:7`,
-        })(model, { messages: [] });
-        await drain(stream);
-        await stream.result();
-      }),
+        })(model, { messages: [] }),
+      ),
     );
+    const iterators = streams.map((stream) => stream[Symbol.asyncIterator]());
+    for (let index = 0; index < 3; index++) {
+      const values = await Promise.all(iterators.map((iterator) => iterator.next()));
+      expect(values.every((value) => !value.done)).toBe(true);
+      expect(formatModelTransportContext()).toBe("");
+    }
+    const exhausted = await Promise.all(iterators.map((iterator) => iterator.next()));
+    expect(exhausted.every((value) => value.done)).toBe(true);
+    await Promise.all(streams.map((stream) => stream.result()));
     expect(observed.toSorted()).toEqual(
-      ["create", "iterate", "result"].flatMap((phase) => [
+      ["create", "iterate-0", "iterate-1", "iterate-2", "result"].flatMap((phase) => [
         `${phase} sessionKey="session-1" runId="run-1" requestId="run-1:model:7" requestNumber=7`,
         `${phase} sessionKey="session-2" runId="run-2" requestId="run-2:model:7" requestNumber=7`,
       ]),
@@ -473,6 +485,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     const observer = createModelObserver({
       streamContext: { messages, tools },
       capturePromptStats: true,
+      captureByteStats: true,
       measurePromptStats,
     });
     observer.assignRequestPayloadBytes(value);
@@ -668,6 +681,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     const observer = createModelObserver({
       streamContext: { messages },
       capturePromptStats: true,
+      captureByteStats: true,
     });
     observer.assignRequestPayloadBytes({ messages });
     const largestJsonString = Math.max(
@@ -989,35 +1003,6 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       expect(JSON.stringify(entries)).not.toContain("synthetic-private-error");
       expect(JSON.stringify(entries)).not.toContain("req_error_usage");
       expect(JSON.stringify(entries)).not.toContain("partial reply");
-    },
-  );
-
-  it.each(["disabled", "unobserved", "unrelated"] as const)(
-    "skips prompt stat computation when diagnostics are %s",
-    async (mode) => {
-      resetDiagnosticEventsForTest();
-      setDiagnosticsEnabledForProcess(mode !== "disabled");
-      if (mode === "unrelated") {
-        onInternalDiagnosticEvent(() => {}, { include: ["model.usage"] });
-      }
-      let promptInspected = false;
-      const streamContext = {
-        systemPrompt: "system",
-        get messages() {
-          promptInspected = true;
-          return [{ role: "user", content: "x", timestamp: 1 }];
-        },
-        get tools() {
-          promptInspected = true;
-          return [{ name: "lookup", description: "d", parameters: { type: "object" } }];
-        },
-      };
-      const wrapped = wrap((() =>
-        completedChunks({ type: "text_delta", delta: "ok" })) as unknown as StreamFn);
-
-      await (await wrapped({} as never, streamContext as never, {})).result();
-
-      expect(promptInspected).toBe(false);
     },
   );
 

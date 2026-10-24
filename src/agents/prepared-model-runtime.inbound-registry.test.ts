@@ -6,7 +6,7 @@ import {
 } from "./prepared-model-runtime.test-harness.js";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { applyAgentConfig, pruneAgentConfig } from "../commands/agents.config.js";
 import {
   createPluginMetadataSnapshot,
@@ -177,12 +177,11 @@ describe("prepared reply dispatch runtime", () => {
     );
     const outcome = preparation.catch((error: unknown) => error);
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         gate.started,
-        preparation.then(() => {
-          throw new Error("Preparation completed before its static catalog dependency");
-        }),
-      ]);
+        preparation,
+        "Preparation completed before its static catalog dependency",
+      );
       await resources.release();
       expect(database.isOpen).toBe(true);
       expect(dispose).not.toHaveBeenCalled();

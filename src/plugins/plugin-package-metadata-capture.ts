@@ -91,14 +91,15 @@ export function createPluginDependencyLookup(
     if (specifier.startsWith("#") || (manifest?.exports != null && manifest.name === name)) {
       return "package-map";
     }
-    if (!prepared.has(name)) {
-      const dependency = resolve(name, importer);
-      if (dependency) {
-        capture(name, dependency);
-      }
-      prepared.set(name, dependency !== undefined);
+    if (prepared.has(name)) {
+      return prepared.get(name);
     }
-    return prepared.get(name);
+    const dependency = resolve(name, importer);
+    if (dependency) {
+      capture(name, dependency);
+    }
+    prepared.set(name, dependency !== undefined);
+    return dependency !== undefined;
   };
 }
 

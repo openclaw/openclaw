@@ -27,6 +27,7 @@ import { resolveAgentWorkspaceDir } from "../../agent-scope.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
+  createSpawnTranscriptTarget,
   createSpawnOperatorSource,
   holdSpawnCapacity,
   type NativePluginSpawnTestOptions,
@@ -158,14 +159,7 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
       const adopt = vi.fn(async () => {});
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "/pstack-review" },
-        target: {
-          agentId: "main",
-          sessionKey: parentSessionKey,
-          sessionId: entry.sessionId,
-          sessionEntry: entry,
-          storePath: bound.storePath,
-          config: bound.cfg,
-        },
+        target: createSpawnTranscriptTarget(bound, entry),
         assertOriginalInputCommit: () => {
           expect(adopt).toHaveBeenCalled();
         },
