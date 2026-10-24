@@ -46,6 +46,11 @@ export function createMatrixIngressMonitor(params: {
     lifecycle: ChannelIngressMonitorLifecycle,
   ) => Promise<ChannelIngressMonitorDeliveryResult | void>;
   onError?: (error: unknown) => void;
+  /**
+   * Sees each sync batch before its events are admitted one by one; the returned
+   * function runs once the whole batch is durable (or admission failed).
+   */
+  onSyncBatch?: (events: readonly { roomId: string; event: MatrixRawEvent }[]) => () => void;
   queue?: ChannelIngressQueue<MatrixIngressPayload>;
 }) {
   let queue = params.queue;
@@ -162,22 +167,29 @@ export function createMatrixIngressMonitor(params: {
         lastReceivedAt = Math.max(lastReceivedAt, row.receivedAt);
       }
     })());
-    // Sync-store callbacks are serialized. Matrix IDs do not encode order, so
-    // continue the queued receipt order instead of tying a whole batch on time.
-    for (const event of events) {
-      const result = await monitor.admit(event, {
-        receivedAt: Math.max(Date.now(), lastReceivedAt + 1),
-      });
-      if (result.kind === "durable") {
-        const admitted = result.queueResult;
-        if (
-          admitted.kind === "accepted" ||
-          admitted.kind === "pending" ||
-          admitted.kind === "claimed"
-        ) {
-          lastReceivedAt = Math.max(lastReceivedAt, admitted.record.receivedAt);
+    // The drain may deliver this batch's first events before the rest is durable;
+    // let the delivery path see the whole batch until it is.
+    const releaseBatch = params.onSyncBatch?.(events.filter((entry) => !entry.historical));
+    try {
+      // Sync-store callbacks are serialized. Matrix IDs do not encode order, so
+      // continue the queued receipt order instead of tying a whole batch on time.
+      for (const event of events) {
+        const result = await monitor.admit(event, {
+          receivedAt: Math.max(Date.now(), lastReceivedAt + 1),
+        });
+        if (result.kind === "durable") {
+          const admitted = result.queueResult;
+          if (
+            admitted.kind === "accepted" ||
+            admitted.kind === "pending" ||
+            admitted.kind === "claimed"
+          ) {
+            lastReceivedAt = Math.max(lastReceivedAt, admitted.record.receivedAt);
+          }
         }
       }
+    } finally {
+      releaseBatch?.();
     }
   };
 

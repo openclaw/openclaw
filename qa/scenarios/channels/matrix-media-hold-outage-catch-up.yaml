@@ -1,0 +1,33 @@
+title: Matrix media hold joins an attachment and its text sent while the gateway was down for longer than the hold
+scenario:
+  id: matrix-media-hold-outage-catch-up
+  surface: channels
+  coverage:
+    primary:
+      - matrix.legacy-state
+  execution:
+    kind: flow
+    channel: matrix
+    providerMode: mock-openai
+    timeoutMs: 180000
+    retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Keeps the gateway down while the attachment and its text are sent.
+    config:
+      matrixConfigOverrides:
+        mediaHoldMs: 8000
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - key: driver-dm
+            kind: dm
+            members:
+              - driver
+              - sut
+            name: Matrix QA Driver/SUT DM
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-media-hold.js
+  call: runMediaHoldOutageCatchUpScenario
+  args:
+    - expr: "scenarioContext"

@@ -52,6 +52,12 @@ import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
 import { createMatrixIngressMonitor } from "./ingress.js";
+import {
+  createMatrixHoldControlCommandCheck,
+  createMatrixMediaHold,
+  type MatrixRoomMessageDispatch,
+} from "./media-hold.js";
+import { resolveMatrixReactionMayStartWork } from "./reaction-events.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
@@ -225,6 +231,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let disposeMonitorEvents = () => {};
   let disposeSyncIngress = () => {};
   let ingress: ReturnType<typeof createMatrixIngressMonitor> | undefined;
+  let mediaHold: ReturnType<typeof createMatrixMediaHold> | null = null;
   let fatalError: Error | null = null;
   let resolveFatalWait: (() => void) | null = null;
   let rejectFatalWait: ((error: Error) => void) | null = null;
@@ -351,6 +358,9 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const monitorRetirement = {
     closeTaskAdmission: () => {
       monitorSetupClosed = true;
+      // Held attachments reopen their ingress claims for the next start; no turn
+      // begins while the monitor is closing.
+      mediaHold?.close();
       monitorTaskRunner.close();
     },
     detachListeners: () => {
@@ -525,12 +535,51 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       runDetachedTask: monitorTaskRunner.runDetachedTask,
     });
 
+    const dispatchRoomMessage: MatrixRoomMessageDispatch = (roomId, event, lifecycle) =>
+      monitorTaskRunner.runTask(() => handleRoomMessage(roomId, event, lifecycle));
+    const mediaHoldMs = accountConfig.mediaHoldMs ?? 0;
+    const holdClient = client;
+    mediaHold =
+      mediaHoldMs > 0
+        ? createMatrixMediaHold({
+            holdMs: mediaHoldMs,
+            selfUserId: auth.userId,
+            dispatch: dispatchRoomMessage,
+            // Queued ciphertext is judged decrypted, through the same local SDK
+            // state ingress decrypts each delivery from.
+            hydrateEvents: (roomId, events) => holdClient.hydrateEvents(roomId, events),
+            isControlCommand: createMatrixHoldControlCommandCheck({
+              core,
+              accountId: effectiveAccountId,
+              accountConfig,
+              dmSessionScope,
+              threadReplies,
+              dmThreadReplies,
+              selfUserId: auth.userId,
+              directTracker,
+              getMemberDisplayName,
+            }),
+            // The reaction handler's own preflight (approval targets, notification
+            // mode, target ownership), with the live config snapshot it reads.
+            reactionMayStartWork: (roomId, event) =>
+              resolveMatrixReactionMayStartWork({
+                client: holdClient,
+                // SAFETY: the runtime's current config is the OpenClaw config this plugin reads as CoreConfig.
+                cfg: core.config.current() as CoreConfig,
+                accountId: effectiveAccountId,
+                roomId,
+                event,
+                selfUserId: auth.userId,
+              }),
+            logVerboseMessage,
+          })
+        : null;
     ingress = createMatrixIngressMonitor({
       accountId: effectiveAccountId,
       client,
       startupMs,
-      dispatch: (roomId, event, lifecycle) =>
-        monitorTaskRunner.runTask(() => handleRoomMessage(roomId, event, lifecycle)),
+      dispatch: mediaHold?.onRoomMessage ?? dispatchRoomMessage,
+      ...(mediaHold ? { onSyncBatch: mediaHold.noteSyncBatch } : {}),
       onError: (error) => logger.warn("matrix ingress failed", { error: String(error) }),
     });
     disposeSyncIngress = await client.bindSyncIngress(ingress.admitSync);

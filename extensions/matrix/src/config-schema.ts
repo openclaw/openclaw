@@ -30,6 +30,10 @@ const matrixChannelConfigUiHints = {
     label: "Mention in Bot Threads",
     help: "Override the account's bot-created thread mention policy for this Matrix room. Exact room entries replace wildcard room settings.",
   },
+  mediaHoldMs: {
+    label: "Matrix Attachment Text Wait (ms)",
+    help: "Hold an attachment sent without a caption for up to this many milliseconds so the sender's next text in the same room or thread joins it as one turn. Helps clients such as Element Web that send the file and the typed text as separate messages. Default: 0 (off); maximum 60000. A standalone attachment is answered after the wait.",
+  },
   joinIntro: {
     label: "Matrix Group Join Introduction",
     help: "Post one brief introduction when the bot joins an allowed group room (default: true). Account settings override the channel-wide setting.",
@@ -156,6 +160,9 @@ function hasCanonicalMatrixAccountStreaming(account: unknown): boolean {
   return typeof streaming === "object" && streaming !== null && !Array.isArray(streaming);
 }
 
+// Bounded at both levels so a captionless attachment is never delayed by more than a minute.
+const MatrixMediaHoldMsSchema = z.number().int().min(0).max(60_000).optional();
+
 export const MatrixConfigSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
@@ -171,6 +178,7 @@ export const MatrixConfigSchema = z.object({
         .object({
           joinIntro: z.boolean().optional(),
           requireMentionInBotThreads: z.boolean().optional(),
+          mediaHoldMs: MatrixMediaHoldMsSchema,
           accessToken: buildSecretInputSchema().optional(),
           password: buildSecretInputSchema().optional(),
         })
@@ -216,6 +224,7 @@ export const MatrixConfigSchema = z.object({
   startupVerificationCooldownHours: z.number().optional(),
   mediaMaxMb: z.number().optional(),
   historyLimit: z.number().int().min(0).optional(),
+  mediaHoldMs: MatrixMediaHoldMsSchema,
   autoJoin: z.enum(["always", "allowlist", "off"]).optional(),
   autoJoinAllowlist: AllowFromListSchema,
   groupAllowFrom: AllowFromListSchema,
