@@ -111,10 +111,10 @@ async function assertNoProvisioning(gateway: MockGatewayControls) {
 }
 
 suite.define(() => {
-  it.each(["mobile", "reclaim", "swap", "explicit-target", "stale-roster"] as const)(
+  it.each(["mobile", "reclaim", "swap", "explicit-target", "stale-roster", "unavailable"] as const)(
     "reveals a running desktop on direct entry and respects reload (%s)",
     async (scenario) => {
-      const width = scenario === "mobile" ? 390 : 1280;
+      const width = scenario === "mobile" || scenario === "unavailable" ? 390 : 1280;
       const staleRoster = scenario === "stale-roster";
       const explicitTargetOnReload = scenario === "explicit-target";
       await withPage(async ({ page }) => {
@@ -218,6 +218,34 @@ suite.define(() => {
           await gateway.resolveDeferred("desktop.observe");
           await pane(page).locator(".desktop-surface canvas").waitFor();
           expect(await desktopTab(page).count()).toBe(1);
+        } else if (scenario === "unavailable") {
+          const statusReads = (await gateway.getRequests("environments.status")).length;
+          await gateway.setMethodResponse("environments.status", {
+            ...environment,
+            status: "unavailable",
+          });
+          await gateway.emitGatewayEvent("node.runnerInventory.changed", {
+            nodeId: "worker-desktop",
+          });
+          await gateway.waitForRequest("environments.status", { after: statusReads });
+          await page.waitForLoadState("networkidle");
+          const frame = await takeControlUiScreenshotFrame(page, pane(page), [], {
+            animations: "disabled",
+          });
+          await writeFile(path.join(suite.artifactDir, "desktop-unavailable.png"), frame.png);
+          expect(await desktopTab(page).count()).toBe(0);
+          expect(await pane(page).locator("openclaw-desktop-panel").count()).toBe(0);
+          expect(
+            await pane(page).locator(".agent-chat__composer-combobox textarea").isVisible(),
+          ).toBe(true);
+          // Retirement is not a user dismissal: a confirmed recovered resource may reappear.
+          await gateway.setMethodResponse("environments.status", environment);
+          await gateway.emitGatewayEvent("node.runnerInventory.changed", {
+            nodeId: "worker-desktop",
+          });
+          await desktopTab(page).waitFor();
+          await assertNoProvisioning(gateway);
+          return;
         } else if (scenario === "reclaim") {
           await dockChatSidePanel(page, "bottom");
           await gateway.setSessionsListResponse(list(false));
@@ -511,4 +539,57 @@ suite.define(() => {
       );
     },
   );
+
+  it("shows durable move failure and retries without admitting a message", async () => {
+    const sessionKey = "agent:main:main";
+    const session = {
+      key: sessionKey,
+      sessionId: "move-recovery",
+      kind: "direct",
+      label: "Headless workspace checks",
+      updatedAt: 1000,
+      worktree: { path: "/workspace/synthetic" },
+      placement: { state: "draining", generation: 2, environmentId: "worker:synthetic" },
+      placementMove: {
+        target: { kind: "gateway" },
+        updatedAtMs: 1000,
+        error: "Workspace reconciliation failed. Retry the saved move.",
+        retry: {
+          expected: { generation: 1, environmentId: "worker:synthetic", ownerEpoch: 1 },
+          target: { kind: "gateway" },
+        },
+      },
+    };
+    await suite.withPage(
+      { viewport: { width: 390, height: 900 }, serviceWorkers: "block" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "sessions.move"],
+          sessions: [session],
+          sessionInfo: session,
+          historyMessages: [{ role: "user", content: "Run the workspace checks headlessly." }],
+          deferredMethods: ["sessions.move"],
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        await page.getByText("Run the workspace checks headlessly.", { exact: true }).waitFor();
+        await page.waitForLoadState("networkidle");
+        const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(suite.artifactDir, "failed-move.png"), frame.png);
+        await page.getByText(session.placementMove.error, { exact: true }).waitFor();
+        expect(await page.getByText("Finishing session move…", { exact: true }).count()).toBe(0);
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        expect(await composer.isDisabled()).toBe(true);
+        await page.getByRole("button", { name: "Retry move", exact: true }).click();
+        const retry = await gateway.waitForRequest("sessions.move");
+        expect(retry.params).toMatchObject({ key: sessionKey, ...session.placementMove.retry });
+        await page.getByText("Finishing session move…", { exact: true }).waitFor();
+        expect(await composer.isDisabled()).toBe(true);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        await gateway.resolveDeferred("sessions.move", { ok: true });
+      },
+    );
+  });
 });
