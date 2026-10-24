@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import fs, { mkdirSync, writeFileSync } from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
@@ -7,6 +7,7 @@ import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-t
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
+import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -16,11 +17,7 @@ const channelConfig = configPath("channels");
 
 function fixture(files: Record<string, string>) {
   const cwd = tempDirs.make("ci-build-selection-");
-  for (const [file, source] of Object.entries(files)) {
-    const absolute = path.join(cwd, file);
-    mkdirSync(path.dirname(absolute), { recursive: true });
-    writeFileSync(absolute, source);
-  }
+  writeFixtureFiles(cwd, files);
   return cwd;
 }
 
@@ -47,9 +44,7 @@ it("keeps source boundary proof when a narrow PR has no dist consumer", () => {
 
 it("keeps exclusive aggregates out of cold canonical metadata discovery", async () => {
   vi.resetModules();
-  onTestFinished(() => {
-    vi.resetModules();
-  });
+  onTestFinished(() => vi.resetModules());
   const { nodeTestConfigRequiresCanonicalMetadata } =
     await import("../../scripts/lib/ci-node-test-plan.mts");
   const { isExclusiveCiTestConfig } = await import("../../scripts/lib/local-check-runtime.mts");
@@ -125,13 +120,7 @@ it("runs selected channel files in one config child while retaining separate con
     OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(channelShard?.env),
   });
   expect(children).toMatchObject([
-    {
-      kind: "group",
-      plan: {
-        configs: [channelConfig],
-        includePatterns: channelTargets,
-      },
-    },
+    { kind: "group", plan: { configs: [channelConfig], includePatterns: channelTargets } },
   ]);
   expect(shards?.flatMap((shard) => shard.targets ?? [])).toEqual([contract]);
   expect(shards?.filter((shard) => shard.configs.includes(boundaryConfig))).toHaveLength(1);
