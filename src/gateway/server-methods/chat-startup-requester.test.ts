@@ -1,6 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import * as diagnostics from "../../infra/diagnostics-timeline.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readResidentUserProfileIdentity } from "../../state/user-profile-list.js";
@@ -77,7 +82,36 @@ it("prepares the startup requester without SQLite and observes a merge after his
         return withoutSqlite(() => measure(name, run, options));
       },
     );
-    await request(context, client);
+    const phases: Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>[] = [];
+    const stop = onTrustedInternalDiagnosticEvent(
+      (event) => {
+        if (event.type === "diagnostic.phase.completed") {
+          phases.push(event);
+        }
+      },
+      { include: ["diagnostic.phase.completed"] },
+    );
+    try {
+      await request(context, client);
+      await waitForDiagnosticEventsDrained();
+    } finally {
+      stop();
+    }
+    expect(phases.map(({ name }) => name)).toEqual(
+      expect.arrayContaining([
+        "chat.startup.session_entry",
+        "chat.startup.pending_inputs",
+        "chat.startup.history_page",
+        "chat.startup.startup_projection",
+        "chat.startup.projection_final",
+        "chat.startup.session_info",
+      ]),
+    );
+    expect(phases.every(({ durationMs }) => durationMs !== undefined && durationMs >= 0)).toBe(
+      true,
+    );
+    expect(phases.every(({ details }) => details === undefined)).toBe(true);
+    expect(JSON.stringify(phases)).not.toContain("requester-history");
     expect(merged).toBe(true);
     expect(readStartup).toHaveBeenCalledOnce();
     const readParams = readStartup.mock.calls[0]![0];

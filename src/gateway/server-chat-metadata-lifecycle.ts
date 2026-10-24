@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import { sessionCostUsageNotifications } from "../infra/session-cost-usage-events.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -254,7 +255,9 @@ export async function createGatewayChatMetadataLifecycle(params: {
       if (readParams.readPolicy !== "ready") {
         const { ensureGatewayPreparedModelRuntimeReady } =
           await import("../agents/prepared-model-runtime.js");
-        await ensureGatewayPreparedModelRuntimeReady({ agentId: readParams.agentId });
+        await measureDiagnosticsTimelineSpan("gateway.chat.startup.model_runtime", () =>
+          ensureGatewayPreparedModelRuntimeReady({ agentId: readParams.agentId }),
+        );
       }
       return await runtime.readStartup(readParams);
     },
