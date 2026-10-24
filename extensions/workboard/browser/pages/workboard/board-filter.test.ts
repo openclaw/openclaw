@@ -68,6 +68,24 @@ describe("Workboard board filter", () => {
     });
   });
 
+  it("preserves authoritative summaries while the loaded card window is incomplete", () => {
+    const options = buildBoardFilterOptions(
+      [
+        board({ id: "default", total: 150, active: 149, archived: 1 }),
+        board({ id: "ops", name: "Operations", total: 25, active: 25 }),
+      ],
+      [card(), card("unsummarized"), { ...card("unsummarized"), id: "unsummarized-2" }],
+      false,
+    );
+    expect(options.find(({ value }) => value === "default")?.description).toBe(
+      "149 active · 150 total",
+    );
+    expect(options.find(({ value }) => value === "ops")?.description).toBe("25 active · 25 total");
+    expect(options.find(({ value }) => value === "unsummarized")?.description).toBe(
+      "2 active · 2 total",
+    );
+  });
+
   it("disambiguates a custom name for the default board", () => {
     const options = buildBoardFilterOptions(
       [board({ id: "default", name: "Operations" }), board({ id: "operations" })],
