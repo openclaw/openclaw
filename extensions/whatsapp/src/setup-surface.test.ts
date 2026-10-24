@@ -24,7 +24,6 @@ import {
 } from "./setup-test-helpers.js";
 
 const hoisted = vi.hoisted(() => ({
-  hasWebCredsSync: vi.fn(() => false),
   loginModuleState: { loaded: false },
   loginWeb: vi.fn(async () => {}),
   readWebAuthState: vi.fn<(authDir: string) => Promise<"linked" | "not-linked" | "unstable">>(
@@ -40,14 +39,6 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("./login.js", () => {
   hoisted.loginModuleState.loaded = true;
   return { loginWeb: hoisted.loginWeb };
-});
-
-vi.mock("./creds-files.js", async () => {
-  const actual = await vi.importActual<typeof import("./creds-files.js")>("./creds-files.js");
-  return {
-    ...actual,
-    hasWebCredsSync: hoisted.hasWebCredsSync,
-  };
 });
 
 vi.mock("./accounts.js", async () => {
@@ -101,7 +92,6 @@ function workConfig(
 
 describe("whatsapp setup wizard", () => {
   beforeEach(() => {
-    hoisted.hasWebCredsSync.mockReset().mockReturnValue(false);
     hoisted.loginWeb.mockReset().mockImplementation(async (...args: unknown[]) => {
       const loginOptions = args[4] as
         | { beforeCredentialPersistence?: () => Promise<void> }
@@ -267,7 +257,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it.each([true, false])("shows login followup only when unlinked (linked: %s)", async (linked) => {
-    hoisted.hasWebCredsSync.mockReturnValue(linked);
+    hoisted.readWebAuthState.mockResolvedValue(linked ? "linked" : "not-linked");
     const harness = createSeparatePhoneHarness(["separate", "disabled"]);
 
     await runFinalizeWithHarness({ harness });
@@ -278,5 +268,13 @@ describe("whatsapp setup wizard", () => {
     } else {
       expectWhatsAppLoginFollowup(harness);
     }
+  });
+
+  it("does not report unstable auth as linked during setup finalization", async () => {
+    hoisted.readWebAuthState.mockResolvedValue("unstable");
+    const harness = createSeparatePhoneHarness(["separate", "disabled"]);
+    await runFinalizeWithHarness({ harness });
+    expectWhatsAppLoginFollowup(harness);
+    expect(harness.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: true }));
   });
 });

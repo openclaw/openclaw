@@ -18,6 +18,7 @@ export {
   webAuthExists,
 } from "./auth-store.js";
 export { monitorWebChannel } from "./auto-reply/monitor.js";
+export { runWhatsAppLogin } from "./login-flow.js";
 export { loginWeb } from "./login.js";
 
 type WhatsAppSetupWizard = typeof import("./setup-surface.js").whatsappSetupWizard;

@@ -10,9 +10,13 @@ import { renderQrTerminal } from "./qr-terminal.js";
 import { createWaSocket, formatError, waitForWaConnection } from "./session.js";
 
 const rmMock = vi.spyOn(fs, "rm");
-const testState = vi.hoisted(() => ({
-  authDir: `${(process.env.TMPDIR ?? "/tmp").replace(/\/+$/, "")}/openclaw-wa-creds-${process.pid}-${Math.random().toString(16).slice(2)}`,
-}));
+const testState = vi.hoisted(() => {
+  const oauthDir = `${(process.env.TMPDIR ?? "/tmp").replace(/\/+$/, "")}/openclaw-wa-login-${process.pid}-${Math.random().toString(16).slice(2)}`;
+  return {
+    oauthDir,
+    authDir: `${oauthDir}/whatsapp/default`,
+  };
+});
 
 function resolveTestAuthDir() {
   return testState.authDir;
@@ -38,7 +42,6 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
 
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
-  const authDir = resolveTestAuthDir();
   const sockA = { ws: { close: vi.fn() } };
   const sockB = { ws: { close: vi.fn() } };
   const createWaSocketLocal = vi.fn(async () =>
@@ -62,13 +65,6 @@ vi.mock("./session.js", async () => {
       outcome: "stable" as const,
       exists: true,
     })),
-    logoutWeb: vi.fn(async (params: { authDir?: string }) => {
-      await fs.rm(params.authDir ?? authDir, {
-        recursive: true,
-        force: true,
-      });
-      return true;
-    }),
   };
 });
 
@@ -105,7 +101,9 @@ function createWaSocketOptions(index: number): { onQr?: (qr: string) => void } |
 
 describe("loginWeb coverage", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
+    rmSync(testState.oauthDir, { recursive: true, force: true });
+    vi.stubEnv("OPENCLAW_OAUTH_DIR", testState.oauthDir);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     vi.clearAllMocks();
     createWaSocketMock.mockClear();
     waitForWaConnectionMock.mockReset().mockResolvedValue(undefined);
@@ -115,9 +113,10 @@ describe("loginWeb coverage", () => {
   afterEach(() => {
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
   afterAll(() => {
-    rmSync(testState.authDir, { recursive: true, force: true });
+    rmSync(testState.oauthDir, { recursive: true, force: true });
   });
 
   it("routes QR output through runtime for initial and restart sockets", async () => {
@@ -165,6 +164,12 @@ describe("loginWeb coverage", () => {
   });
 
   it("clears stale creds and continues login when logged out", async () => {
+    await fs.mkdir(testState.authDir, { recursive: true });
+    await fs.writeFile(
+      path.join(testState.authDir, "creds.json"),
+      JSON.stringify({ me: { id: "15551234567@s.whatsapp.net" } }),
+      "utf8",
+    );
     waitForWaConnectionMock
       .mockRejectedValueOnce({
         output: { statusCode: 401 },
@@ -183,6 +188,7 @@ describe("loginWeb coverage", () => {
       recursive: true,
       force: true,
     });
+    await expect(fs.stat(testState.authDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("formats and rethrows generic errors", async () => {

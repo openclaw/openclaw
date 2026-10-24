@@ -11,6 +11,7 @@
     "@solidjs/web": "2.0.0-rc.16",
     "audio-decode": "3.12.0",
     "baileys": "7.0.0-rc14",
+    "libphonenumber-js": "1.13.13",
     "solid-js": "2.0.0-rc.16",
     "typebox": "1.4.1"
   },
@@ -43,7 +44,7 @@
         "native"
       ],
       "label": "WhatsApp",
-      "selectionLabel": "WhatsApp (QR link)",
+      "selectionLabel": "WhatsApp Web",
       "detailLabel": "WhatsApp Web",
       "docsPath": "/channels/whatsapp",
       "docsLabel": "whatsapp",

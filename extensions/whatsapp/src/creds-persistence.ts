@@ -44,21 +44,25 @@ export async function writeCredsJsonAtomically(authDir: string, creds: unknown):
   });
 }
 
+export function runInCredsSaveQueue<T>(authDir: string, task: () => Promise<T>): Promise<T> {
+  return enqueueKeyedTask({
+    tails: credsSaveQueues,
+    key: authDir,
+    task,
+  });
+}
+
 export function enqueueCredsSave(
   authDir: string,
   saveCreds: () => Promise<void> | void,
   onError: (error: unknown) => void,
 ): void {
-  void enqueueKeyedTask({
-    tails: credsSaveQueues,
-    key: authDir,
-    task: async () => {
-      try {
-        await saveCreds();
-      } catch (error) {
-        onError(error);
-      }
-    },
+  void runInCredsSaveQueue(authDir, async () => {
+    try {
+      await saveCreds();
+    } catch (error) {
+      onError(error);
+    }
   });
 }
 
