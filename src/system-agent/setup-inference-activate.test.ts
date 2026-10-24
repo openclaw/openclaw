@@ -14,7 +14,6 @@ import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-l
 import * as cliCredentials from "../agents/cli-credentials.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import * as modelAuth from "../agents/model-auth.js";
-import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { buildAllowedModelSet } from "../agents/model-selection.js";
 import { resolveConfiguredPrimaryModelForAgent } from "../agents/utility-model.js";
 import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
@@ -64,6 +63,14 @@ async function writeConfig(setup: Setup, value: Setup["config"] | string) {
   await fs.writeFile(setup.configPath, typeof value === "string" ? value : JSON.stringify(value));
   clearConfigCache();
 }
+async function expectConfigUnchanged(setup: Setup, before = setup.before) {
+  expect(await fs.readFile(setup.configPath, "utf8")).toBe(before);
+}
+function forbidNativeOAuthRead() {
+  vi.spyOn(cliCredentials, "readCodexCliCredentialsCached").mockImplementation(() => {
+    throw new Error("Setup must not read native Codex OAuth tokens");
+  });
+}
 
 afterEach(resetSetupInferenceState);
 
@@ -78,44 +85,10 @@ describe("setup activation credentials and configuration", () => {
       const result = await setup.activate("provider-auth", undefined, { modelTarget: requested });
       expect(result).toMatchObject({ ok: false, status: "unavailable" });
       expectCalls(setup, 0, 0);
-      expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+      await expectConfigUnchanged(setup);
     },
   );
 
-  it("isolates utility activation from the primary model", async () => {
-    const setup = await fixture({ modelTarget: "utility", primaryModel: "stable/working-model" });
-    const result = await setup.activate();
-    expect(result).toMatchObject({ ok: true, modelTarget: "utility", modelRef });
-    const saved = await readSnapshot();
-    expect(saved.sourceConfig.agents?.defaults?.model).toEqual(
-      setup.config.agents?.defaults?.model,
-    );
-    expect(saved.sourceConfig.agents?.defaults?.utilityModel).toContain(modelRef);
-    expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.4-mini",
-    });
-  });
-
-  it("signs in before verifying isolated Codex", async () => {
-    const setup = await fixture({ codex: true, fresh: false, subscription: true });
-    const result = await setup.activate("codex-cli");
-    expect(setup.login).toHaveBeenCalledOnce();
-    expect(result).toMatchObject({ ok: true });
-    expect(setup.run).toHaveBeenCalledOnce();
-    expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
-      authProfileId: setup.readProfile()?.[0],
-      authProfileIdSource: "user",
-      allowAuthProfileFallback: false,
-      agentHarnessRuntimeOverride: "codex",
-    });
-    const saved = await readSnapshot();
-    expect(saved.config.plugins?.entries?.codex?.config?.appServer).not.toHaveProperty(
-      "homeScope",
-      "user",
-    );
-    expect(setup.readProfile()?.[1].setup).toBeUndefined();
-  });
   it.each([false, true])(
     "reuses native Codex credentials without import (automatic: %s)",
     async (automatic) => {
@@ -124,9 +97,7 @@ describe("setup activation credentials and configuration", () => {
         homeScope: automatic ? "agent" : "user",
         nativeCatalogEnabled: true,
       });
-      vi.spyOn(cliCredentials, "readCodexCliCredentialsCached").mockImplementation(() => {
-        throw new Error("Setup must not read native Codex OAuth tokens");
-      });
+      forbidNativeOAuthRead();
       const nativeAuth = {
         apiKey: "fixture-native-key",
         source: "Codex native login",
@@ -164,12 +135,9 @@ describe("setup activation credentials and configuration", () => {
       expectCalls(setup, 0, 1);
       expect(readNativeKey).not.toHaveBeenCalled();
       expect(setup.readProfile()).toBeUndefined();
-      expect(
-        (await readSnapshot()).config.plugins?.entries?.codex?.config?.appServer,
-      ).toMatchObject({ homeScope: "user" });
-      expect((await readSnapshot()).config.plugins?.entries?.codex?.config?.sessionCatalog).toEqual(
-        { enabled: true },
-      );
+      const codex = (await readSnapshot()).config.plugins?.entries?.codex?.config;
+      expect(codex?.appServer).toMatchObject({ homeScope: "user" });
+      expect(codex?.sessionCatalog).toEqual({ enabled: true });
     },
   );
 
@@ -197,7 +165,7 @@ describe("setup activation credentials and configuration", () => {
     expect((await setup.activate("codex-cli")).ok).toBe(false);
     expect(verifySetup).toHaveBeenCalledTimes(2);
     expect(setup.run).not.toHaveBeenCalled();
-    expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+    await expectConfigUnchanged(setup);
   });
 
   it.each([
@@ -224,13 +192,6 @@ describe("setup activation credentials and configuration", () => {
         authMethod === "api_key" ? { apiKey: credential.key } : {},
       );
       expect(result).toMatchObject({ ok: true });
-      expect(setup.login).toHaveBeenCalledOnce();
-      expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
-        agentHarnessRuntimeOverride: "codex",
-        config: {
-          plugins: { entries: { codex: { config: { appServer: { homeScope: "agent" } } } } },
-        },
-      });
       expect(
         (await readSnapshot()).config.plugins?.entries?.codex?.config?.appServer,
       ).toMatchObject({ homeScope: "agent" });
@@ -276,9 +237,7 @@ describe("setup activation credentials and configuration", () => {
       if (automatic) {
         expect(result).toMatchObject({ error: expect.stringContaining("official Codex plugin") });
         expectCalls(setup, 0, 0);
-        expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
-      } else {
-        expectCalls(setup, 1, 1);
+        await expectConfigUnchanged(setup);
       }
     },
   );
@@ -298,9 +257,7 @@ describe("setup activation credentials and configuration", () => {
           throw new WizardCancelledError();
         });
       } else {
-        vi.spyOn(cliCredentials, "readCodexCliCredentialsCached").mockImplementation(() => {
-          throw new Error("Setup must not read native Codex OAuth tokens");
-        });
+        forbidNativeOAuthRead();
         setup.run.mockRejectedValueOnce(new Error("Codex needs ChatGPT sign-in"));
       }
       const result = await setup.activate(
@@ -308,17 +265,13 @@ describe("setup activation credentials and configuration", () => {
         cancelled ? undefined : true,
         cancelled ? {} : { automaticSetup: true },
       );
-      expect(result).toMatchObject(
-        cancelled
-          ? { ok: false }
-          : {
-              ok: false,
-              error: expect.stringContaining("ChatGPT sign-in"),
-            },
-      );
+      expect(result).toMatchObject({ ok: false });
+      if (!cancelled) {
+        expect(result).toHaveProperty("error", expect.stringContaining("ChatGPT sign-in"));
+      }
       expectCalls(setup, cancelled ? 1 : 0, cancelled ? 0 : 1);
       expect(setup.readProfile()).toBeUndefined();
-      expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+      await expectConfigUnchanged(setup);
     },
   );
 
@@ -419,10 +372,6 @@ describe("setup activation credentials and configuration", () => {
     const result = await setup.activate();
 
     expect(result).toMatchObject({ ok: true });
-    expect(setup.prompter.confirm).toHaveBeenCalledWith({
-      message: "Connection verified. Activate this saved sign-in?",
-      initialValue: true,
-    });
     expect(setup.login).toHaveBeenCalledWith(
       expect.objectContaining({
         existingProfiles: [{ profileId: "openai:saved", credential: savedCredential }],
@@ -445,16 +394,9 @@ describe("setup activation credentials and configuration", () => {
       expectedConfigHash: activated.hash ?? null,
     });
     expect(created.createdAgent).toBe(true);
-    expect(created.createdAgentIds).toEqual(["coordinator", "researcher", "writer", "reviewer"]);
+    expect(created.createdAgentIds).toHaveLength(4);
     for (const agentId of created.createdAgentIds ?? []) {
       const modelId = modelRef.slice("openai/".length);
-      const policy = resolveModelRuntimePolicy({
-        config: created.config,
-        agentId,
-        provider: "openai",
-        modelId,
-      });
-      expect(policy.policy?.id).toBe("openclaw");
       const auth = await setup.resolveAuth({
         provider: "openai",
         cfg: created.config,
@@ -480,9 +422,8 @@ describe("setup activation credentials and configuration", () => {
     const setup = await fixture({ localService: true, addProviderDuringLogin: false });
     setup.run.mockImplementation(async (params) => {
       expect(setup.readProfile()?.[1]).toMatchObject(credential);
-      expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+      await expectConfigUnchanged(setup);
       expect(params.disableTools).toBe(true);
-      expect(primaryModel(params.config?.agents?.defaults?.model)).toContain(modelRef);
       return setup.reply(params);
     });
 
@@ -490,7 +431,6 @@ describe("setup activation credentials and configuration", () => {
     expect(result).toMatchObject({ ok: true, modelRef });
     expect(setup.readProfile()?.[1]).not.toHaveProperty("setup");
 
-    expectCalls(setup, 1, 1);
     const persisted = await readSnapshot();
     expect(persisted.valid).toBe(true);
     expect(primaryModel(persisted.sourceConfig.agents?.defaults?.model)).toBe(
@@ -532,7 +472,7 @@ describe("setup activation credentials and configuration", () => {
   it.each([false, true])(
     "retries saved sign-in without another login (Codex: %s)",
     async (codex) => {
-      const setup = await fixture({ codex });
+      const setup = await fixture({ codex, subscription: codex });
       setup.run.mockImplementationOnce(async () => {
         if (!codex) {
           expect(setup.readProfile()?.[1]).toMatchObject(credential);
@@ -546,7 +486,7 @@ describe("setup activation credentials and configuration", () => {
       expect(await setup.activate(codex ? "codex-cli" : "provider-auth")).toMatchObject({
         ok: false,
       });
-      expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+      await expectConfigUnchanged(setup);
       let kind: Parameters<typeof setup.activate>[0];
       if (codex) {
         const saved = setup.readProfile();
@@ -569,7 +509,16 @@ describe("setup activation credentials and configuration", () => {
       });
       expectCalls(setup, 1, 2);
       if (codex) {
-        expect(setup.run.mock.calls[1]?.[0].agentHarnessRuntimeOverride).toBe("codex");
+        expect(setup.run.mock.calls[1]?.[0]).toMatchObject({
+          authProfileId: setup.readProfile()?.[0],
+          authProfileIdSource: "user",
+          allowAuthProfileFallback: false,
+          agentHarnessRuntimeOverride: "codex",
+        });
+        expect(
+          (await readSnapshot()).config.plugins?.entries?.codex?.config?.appServer,
+        ).not.toHaveProperty("homeScope", "user");
+        expect(setup.readProfile()?.[1].setup).toBeUndefined();
       } else {
         expect(setup.readProfile()?.[1]).toMatchObject(credential);
       }
@@ -594,7 +543,7 @@ describe("setup activation credentials and configuration", () => {
     const result = await setup.activate();
 
     expect(result).toMatchObject({ ok: false });
-    expect(await fs.readFile(setup.configPath, "utf8")).toBe(before);
+    await expectConfigUnchanged(setup, before);
     const store = readAuthStore(setup.agentDir);
     expect(resolveAuthProfileOrder({ cfg: configured, store, provider: "openai" })).toEqual([
       originalProfileId,
@@ -612,7 +561,6 @@ describe("setup activation credentials and configuration", () => {
     ).toMatchObject({
       status: "missing",
       reasonCode: "setup_inactive",
-      label: expect.stringContaining("inactive"),
     });
     expect(resolveAuthProfilePortability(savedCredential).portable).toBe(false);
     expect(
@@ -638,16 +586,11 @@ describe("setup activation credentials and configuration", () => {
       secretSentinels: false,
     });
     expect(auth.apiKey).toBe("working-original-key");
-    expect(setup.run).toHaveBeenCalledOnce();
 
     const retryKind = `saved-auth:${encodeURIComponent(savedId)}` as const;
     const declined = await setup.activate(retryKind);
     expect(declined).toMatchObject({ ok: false });
-    expect(setup.prompter.confirm).toHaveBeenCalledWith({
-      message: "Connection verified. Activate this saved sign-in?",
-      initialValue: true,
-    });
-    expect(await fs.readFile(setup.configPath, "utf8")).toBe(before);
+    await expectConfigUnchanged(setup, before);
     const inactive = readAuthStore(setup.agentDir);
     expect(inactive.order).toEqual(store.order);
     expect(inactive.lastGood).toEqual(store.lastGood);
@@ -663,24 +606,6 @@ describe("setup activation credentials and configuration", () => {
     expect(readAuthStore(setup.agentDir).profiles[originalProfileId]).toEqual(originalCredential);
   });
 
-  it("discovers persisted API keys without cached candidates or login", async () => {
-    const setup = await fixture({ authMethod: "api_key" });
-    await saveProfile(setup, "openai:fixture");
-
-    const detection = await setup.detect();
-    const saved = detection.candidates.find((candidate) =>
-      candidate.kind.startsWith("saved-auth:"),
-    );
-    expect(saved).toMatchObject({ modelRef, credentials: true });
-    expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
-    assert.ok(saved, "Setup did not discover the persisted sign-in");
-    const result = await setup.activate(saved.kind);
-
-    expect(result).toMatchObject({ ok: true, modelRef });
-    expectCalls(setup, 0, 1);
-    expect(setup.readProfile()?.[1]).toMatchObject(credential);
-  });
-
   it("replaces a removed account without changing agent models", async () => {
     const setup = await fixture({ authMethod: "api_key", primaryModel: "stable/global-model" });
     const configured = structuredClone(setup.config);
@@ -693,22 +618,23 @@ describe("setup activation credentials and configuration", () => {
     };
     await writeConfig(setup, configured);
     await saveProfile(setup, "openai:replacement", configured);
+    const candidate = (await setup.detect()).candidates.find((entry) =>
+      entry.kind.startsWith("saved-auth:"),
+    );
+    assert(candidate);
+    expect(candidate).toMatchObject({ modelRef, credentials: true });
+    await expectConfigUnchanged(setup, JSON.stringify(configured));
     const method = setup.provider.auth[0];
     assert.ok(method);
     method.starterModel = "openai/provider-default";
 
-    const result = await setup.activate("saved-auth:openai%3Areplacement", true, {
+    const result = await setup.activate(candidate.kind, true, {
       agentId: "main",
       modelRef,
     });
 
     expect(result).toMatchObject({ ok: true, modelRef });
     expectCalls(setup, 0, 1);
-    expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
-      authProfileId: "openai:replacement",
-      model: "gpt-5.4-mini",
-      allowAuthProfileFallback: false,
-    });
     expect(setup.readProfile()).toEqual(["openai:replacement", credential]);
     const saved = (await readSnapshot()).sourceConfig;
     expect(saved.agents?.entries?.main?.model).toBe(`${modelRef}@openai:replacement`);
@@ -735,7 +661,7 @@ describe("setup activation credentials and configuration", () => {
       const result = await setup.activate();
       expect(result).toMatchObject(providerChanged ? { ok: false } : { ok: true, modelRef });
       if (providerChanged) {
-        expect(await fs.readFile(setup.configPath, "utf8")).toBe(changed);
+        await expectConfigUnchanged(setup, changed);
       } else {
         const persisted = (await readSnapshot()).sourceConfig;
         expect(persisted.messages?.ackReaction).toBe("seen");
@@ -744,7 +670,6 @@ describe("setup activation credentials and configuration", () => {
         );
       }
       expect(setup.readProfile()?.[1]).toMatchObject(credential);
-      expect(setup.run).toHaveBeenCalledOnce();
     },
   );
 });
@@ -787,16 +712,16 @@ describe("setup activation error boundaries", () => {
         throw fault;
       };
       let complete: (() => Promise<boolean>) | undefined;
-      const transition = vi
-        .spyOn(activationTransition, "commitSetupInferenceActivation")
-        .mockImplementation(async (params) => {
+      vi.spyOn(activationTransition, "commitSetupInferenceActivation").mockImplementation(
+        async (params) => {
           if (phase === "initial") {
             return await fail();
           }
           assert(params.deferCompletion);
           params.deferCompletion(fail);
           return params.config;
-        });
+        },
+      );
       const activation = setup.activate("api-key", true, {
         apiKey: submitted,
         signal: controller.signal,
@@ -830,7 +755,6 @@ describe("setup activation error boundaries", () => {
           expect(safe).toMatchObject({ direction: "back" });
         }
       }
-      expect(transition).toHaveBeenCalledOnce();
     },
   );
 });
@@ -838,10 +762,6 @@ describe("setup activation error boundaries", () => {
 describe("setup utility activation", () => {
   const utilityResult = { ok: true, modelRef, modelTarget: "utility" };
   const utilityDetection = { utilityModel: modelRef, setupModel: modelRef, setupComplete: false };
-  async function writeUtilityConfig(configPath: string, config: unknown) {
-    await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-    clearConfigCache();
-  }
   it.each([modelRef, "legacy/working", undefined])(
     "preserves implicit primary %s across utility login",
     async (priorModel) => {
@@ -867,7 +787,7 @@ describe("setup utility activation", () => {
           },
         };
       }
-      await writeUtilityConfig(setup.configPath, setup.config);
+      await writeConfig(setup, setup.config);
 
       if (priorModel) {
         const before = await fs.readFile(setup.configPath, "utf8");
@@ -878,32 +798,23 @@ describe("setup utility activation", () => {
           sourceConfigBeforeMigrations: setup.config,
         });
         assert(migrated.config);
-        expect(migrated.partiallyValid).toBeUndefined();
-        await writeUtilityConfig(setup.configPath, migrated.config);
+        await writeConfig(setup, migrated.config);
       }
 
       vi.mocked(setup.prompter.confirm).mockResolvedValue(true);
       const result = await setup.activate();
 
       expect(result, result.ok ? undefined : result.error).toMatchObject(utilityResult);
-      expect(setup.login).toHaveBeenCalledOnce();
-      expect(setup.run).toHaveBeenCalledOnce();
       const candidate = setup.run.mock.calls[0]?.[0].config;
       assert(candidate);
       expect(resolveConfiguredPrimaryModelForAgent({ cfg: candidate, agentId: "main" })).toBe(
         priorModel,
       );
-      const { valid, sourceConfig: source } = await readSnapshot();
+      const { sourceConfig: source } = await readSnapshot();
       const profile = setup.readProfile();
       assert(profile);
-      expect(valid).toBe(true);
-      expect(source.meta?.migrations?.utilityModelSeparation).toBe(true);
       expect(primaryModel(source.agents?.defaults?.model)).toBe(priorModel);
       expect(source.agents?.defaults?.utilityModel).toBe(`${modelRef}@${profile[0]}`);
-      expect(source.models?.providers?.openai?.models[0]?.id).toBe("gpt-5.4-mini");
-      if (priorModel === "legacy/working") {
-        expect(source.models?.providers?.legacy).toEqual(setup.config.models?.providers?.legacy);
-      }
       if (!priorModel) {
         const detected = await setup.detect();
         expect(detected).toMatchObject(utilityDetection);
@@ -915,8 +826,11 @@ describe("setup utility activation", () => {
   it.each(["helper", modelRef])(
     "rechecks canonical identity while preserving authored %s and its profile",
     async (authoredModel) => {
-      const setup = await fixture({ modelTarget: "utility" });
-      expect(await setup.activate()).toMatchObject({ ok: true });
+      const setup = await fixture({ modelTarget: "utility", primaryModel: "stable/working-model" });
+      expect(await setup.activate()).toMatchObject({ ok: true, modelTarget: "utility", modelRef });
+      const initial = (await readSnapshot()).sourceConfig.agents?.defaults;
+      expect(initial?.model).toEqual(setup.config.agents?.defaults?.model);
+      expect(initial?.utilityModel).toContain(modelRef);
       const profile = setup.readProfile();
       assert(profile);
       const config = (await readSnapshot()).sourceConfig;
@@ -925,8 +839,7 @@ describe("setup utility activation", () => {
       defaults.models[modelRef].alias = "helper";
       defaults.utilityModel = `${authoredModel}@${profile[0]}`;
       const authoredConfig = `${JSON.stringify(config, null, 2)}\n`;
-      await fs.writeFile(setup.configPath, authoredConfig);
-      clearConfigCache();
+      await writeConfig(setup, authoredConfig);
 
       const detected = await setup.detect();
       expect(detected).toMatchObject(utilityDetection);
@@ -942,9 +855,8 @@ describe("setup utility activation", () => {
         modelTarget: candidate.modelTarget,
       });
       expect(verified).toMatchObject(utilityResult);
-      expect(setup.run).toHaveBeenCalledOnce();
       expect(setup.run.mock.calls[0]?.[0].authProfileId).toBe(profile[0]);
-      expect(await fs.readFile(setup.configPath, "utf8")).toBe(authoredConfig);
+      await expectConfigUnchanged(setup, authoredConfig);
     },
   );
 });

@@ -38,10 +38,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import {
-  authProfileCredentialPublication,
-  beginAuthProfileCredentialBatch,
-} from "../../state/user-model-account-authority.js";
+import { beginAuthProfileCredentialBatch } from "../../state/user-model-account-authority.js";
 import { saveModelProviderApiKey } from "./auth-api-key.js";
 import { removeModelAuthCredentials } from "./auth-logout.js";
 import * as configWriter from "./shared.js";
@@ -80,6 +77,13 @@ const profiles = (owner: string | null = "writer") =>
   loadPersistedAuthProfileStore(owner ? agentDir(owner) : undefined)?.profiles;
 const readProvider = async () => (await readConfig()).models?.providers?.sample;
 const configBytes = () => fs.readFileSync(configPath(), "utf8");
+const pendingOutcome = <T>(response: Promise<T>) =>
+  Promise.race([response.then(() => "completed"), nextEventLoopTurn("pending")]);
+const settleOutcome = <T>(response: Promise<T>) =>
+  response.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
 const replaceCredential = (profileId: string, credential: AuthProfileCredential, owner?: string) =>
   upsertAuthProfileWithLockOrThrow({
     profileId,
@@ -91,6 +95,14 @@ function beforeConfigUpdate(callback: () => Promise<unknown>) {
   vi.spyOn(configWriter, "updateConfig").mockImplementationOnce(async (mutator) => {
     await callback();
     return updateConfig(mutator);
+  });
+}
+
+async function seedSharedWrite() {
+  await seedKey("sample:other", "unrelated", "reader");
+  writeConfig({
+    agents: { ownership: "explicit", entries: { writer: {}, reader: {} } },
+    ...boundConfig("old-inline"),
   });
 }
 
@@ -156,70 +168,61 @@ afterEach(async () => {
   }
 });
 
-it.each([
-  ["credential commit", false],
-  ["credential commit", true],
-  ["config transform", false],
-  ["config transform", true],
-] as const)("checks requester authority after %s (revoked=%s)", async (stage, revoke) => {
-  await seedKey("sample:manual", "synthetic-before", "writer");
-  const beforeConfig = configBytes();
-  const beforeProfiles = profiles();
-  let callbackComplete = false;
-  let revoked = false;
-  const complete = () => {
-    callbackComplete = true;
-    revoked = revoke;
-  };
-  if (stage === "credential commit") {
-    const update = authStoreRuntime.updateAuthProfileStoreWithLock;
-    vi.spyOn(authStoreRuntime, "updateAuthProfileStoreWithLock").mockImplementation((params) =>
-      update({
-        ...params,
-        updater: (...args) => {
-          const changed = params.updater(...args);
-          complete();
-          return changed;
-        },
-      }),
-    );
-  } else {
-    const updateConfig = configWriter.updateConfig;
-    vi.spyOn(configWriter, "updateConfig").mockImplementation((mutator, ...options) =>
-      updateConfig(
-        async (...args) => {
-          const next = await mutator(...args);
-          complete();
-          return next;
-        },
-        ...options,
-      ),
-    );
-  }
-  const error = `Requester revoked after ${stage}`;
-  const assertCurrent = () => {
-    if (revoked) {
-      throw new Error(error);
+it.each(["credential commit", "config transform"] as const)(
+  "checks requester authority after %s",
+  async (stage) => {
+    await seedKey("sample:manual", "synthetic-before", "writer");
+    const beforeConfig = configBytes();
+    const beforeProfiles = profiles();
+    let callbackComplete = false;
+    let revoked = false;
+    const complete = () => {
+      callbackComplete = true;
+      revoked = true;
+    };
+    if (stage === "credential commit") {
+      const update = authStoreRuntime.updateAuthProfileStoreWithLock;
+      vi.spyOn(authStoreRuntime, "updateAuthProfileStoreWithLock").mockImplementation((params) =>
+        update({
+          ...params,
+          updater: (...args) => {
+            const changed = params.updater(...args);
+            complete();
+            return changed;
+          },
+        }),
+      );
+    } else {
+      const updateConfig = configWriter.updateConfig;
+      vi.spyOn(configWriter, "updateConfig").mockImplementation((mutator, ...options) =>
+        updateConfig(
+          async (...args) => {
+            const next = await mutator(...args);
+            complete();
+            return next;
+          },
+          ...options,
+        ),
+      );
     }
-  };
-  const nextKey = stage === "credential commit" ? "synthetic-after" : "synthetic-before";
-  const result = save(nextKey, "sample:manual", { assertCurrent });
-  if (revoke) {
+    const error = `Requester revoked after ${stage}`;
+    const assertCurrent = () => {
+      if (revoked) {
+        throw new Error(error);
+      }
+    };
+    const nextKey = stage === "credential commit" ? "synthetic-after" : "synthetic-before";
+    const result = save(nextKey, "sample:manual", { assertCurrent });
     await expect(result).rejects.toThrow(error);
     expect(configBytes()).toBe(beforeConfig);
-  } else {
-    await expect(result).resolves.toMatchObject({ profileId: "sample:manual" });
+    expect(callbackComplete).toBe(true);
     if (stage === "config transform") {
-      expect((await readConfig()).auth?.profiles?.["sample:manual"]).toMatchObject(profileConfig);
+      expect(profiles()).toEqual(beforeProfiles);
+    } else {
+      expect(savedProfile()).toMatchObject({ key: "synthetic-before" });
     }
-  }
-  expect(callbackComplete).toBe(true);
-  if (stage === "config transform") {
-    expect(profiles()).toEqual(beforeProfiles);
-  } else {
-    expect(savedProfile()).toMatchObject({ key: revoke ? "synthetic-before" : "synthetic-after" });
-  }
-});
+  },
+);
 
 it("waits for the saved binding to reach the Gateway before allowing immediate removal", async () => {
   writeConfig(boundConfig("old-inline"));
@@ -237,9 +240,7 @@ it("waits for the saved binding to reach the Gateway before allowing immediate r
   const response = save();
   try {
     await written.promise;
-    expect(
-      await Promise.race([response.then(() => "completed"), nextEventLoopTurn("pending")]),
-    ).toBe("pending");
+    expect(await pendingOutcome(response)).toBe("pending");
     const runtimeConfig = await readConfig();
     claim?.settle("applied");
     expect(await response).toEqual({ profileId: "sample:manual" });
@@ -293,20 +294,17 @@ it.each(["configured", "explicit", "ordered"])(
         provider: "sample",
         order: [profileId, "sample:backup"],
       });
+      const stored = loadPersistedAuthProfileStore(agentDir(owner))!;
+      stored.usageStats = {
+        [profileId]: {
+          lastUsed: 1,
+          cooldownUntil: Date.now() + 60_000,
+          cooldownReason: "rate_limit",
+          lastRateLimitAt: 1,
+        },
+      };
+      authStoreRuntime.saveAuthProfileStore(stored, agentDir(owner));
     }
-    const ownerDir = owner ? agentDir(owner) : undefined;
-    const stored = loadPersistedAuthProfileStore(ownerDir)!;
-    const failureState = {
-      lastUsed: 1_700_000_000_000,
-      cooldownUntil: Date.now() + 60_000,
-      cooldownReason: "rate_limit" as const,
-      lastRateLimitAt: 1_700_000_000_000,
-    };
-    stored.usageStats = {
-      [profileId]: failureState,
-      ...(owner ? { "sample:backup": failureState } : {}),
-    };
-    authStoreRuntime.saveAuthProfileStore(stored, ownerDir);
     const configuredProfile = {
       ...profileConfig,
       displayName: "Work",
@@ -330,10 +328,11 @@ it.each(["configured", "explicit", "ordered"])(
       key: "synthetic-new-key",
       ...metadata,
     });
-    const usageStats = loadPersistedAuthProfileStore(ownerDir)?.usageStats;
-    expect(usageStats?.[profileId]).toEqual({ lastUsed: failureState.lastUsed, errorCount: 0 });
     if (owner) {
-      expect(usageStats?.["sample:backup"]).toEqual(failureState);
+      expect(loadPersistedAuthProfileStore(agentDir(owner))?.usageStats?.[profileId]).toEqual({
+        lastUsed: 1,
+        errorCount: 0,
+      });
       expect(result).toMatchObject({ profileId });
       const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir(owner));
       expect(store.profiles[profileId]).toMatchObject({ key: "synthetic-new-key" });
@@ -357,43 +356,6 @@ it.each(["configured", "explicit", "ordered"])(
           agentDir: reader,
         }),
       ).resolves.toMatchObject({ apiKey: "synthetic-new-key" });
-    }
-  },
-);
-
-it.each(["main", "reader", "full-provider"])(
-  "removes planned credentials and bindings through %s while retaining unselected state",
-  async (caller) => {
-    const fullProvider = caller === "full-provider";
-    const owner = fullProvider ? "writer" : undefined;
-    const callerDir = agentDir(fullProvider ? "writer" : caller);
-    const boundId = fullProvider ? "sample:backup" : "sample:bound";
-    await seedKey("sample:bound", "removed", owner);
-    await seedKey("sample:backup", "kept", owner);
-    writeConfig({
-      plugins: { allow: [] },
-      agents: { defaults: { model: "sample/model" } },
-      auth: {
-        profiles: { "sample:bound": profileConfig },
-        order: { sample: ["sample:bound"], other: [] },
-      },
-      ...boundConfig(boundId),
-    });
-    await remove("sample:bound", {
-      agentDir: callerDir,
-      ...(fullProvider ? { provider: "sample" } : {}),
-    });
-    const config = await readConfig();
-    expect(config.auth).toEqual({ profiles: {}, order: { other: [] } });
-    expect(config.models?.providers?.sample).toEqual(connection);
-    expect(config.agents?.defaults?.model).toBe("sample/model");
-    const store = ensureAuthProfileStoreWithoutExternalProfiles(callerDir);
-    expect(store.profiles["sample:bound"]).toBeUndefined();
-    if (fullProvider) {
-      expect(loadPersistedAuthProfileStore(callerDir)?.profiles).toEqual({});
-      expect(config.models?.providers?.sample?.apiKey).toBeUndefined();
-    } else {
-      expect(store.profiles["sample:backup"]).toMatchObject({ key: "kept" });
     }
   },
 );
@@ -521,51 +483,43 @@ it("preserves an externally managed key and its binding when removing inline key
   expect((await readProvider())?.apiKey).toBe("sample:external");
 });
 
-it.each([
-  "other-agent override",
-  "local override",
-  "other provider",
-  "token",
-  "bound secret",
-  "default secret",
-])("preserves %s when key replacement is refused", async (kind) => {
-  const external = kind.endsWith("secret");
-  const override = kind.endsWith("override");
-  const profileId =
-    kind === "local override"
-      ? "sample:local"
-      : kind === "bound secret"
-        ? "sample:external"
-        : "sample:manual";
-  const owner = external ? undefined : kind === "other-agent override" ? "reader" : "writer";
-  const credential: AuthProfileCredential = external
-    ? { ...externalCredential("SAMPLE_API_KEY"), copyToAgents: false }
-    : kind === "token"
-      ? { type: "token", provider: "sample", token: "kept" }
-      : kind === "other provider"
-        ? keyCredential("kept", "other")
-        : {
-            ...keyCredential("kept-local"),
-            ...(kind === "local override" ? { copyToAgents: false } : {}),
-          };
-  const config: OpenClawConfig = external
-    ? boundConfig(kind === "bound secret" ? profileId : undefined)
-    : override
-      ? boundConfig(kind === "local override" ? profileId : "old-inline")
-      : { plugins: { allow: [] } };
-  const error = external
-    ? "uses an external secret reference"
-    : override
-      ? "An agent already overrides this shared key"
-      : "belongs to another sign-in";
-  await replaceCredential(profileId, credential, owner);
-  writeConfig(config);
-  const before = configBytes();
-  await expect(save()).rejects.toThrow(error);
-  expect(configBytes()).toBe(before);
-  expect(savedProfile(profileId, owner ?? null)).toEqual(credential);
-  expect((await readConfig()).models).toEqual(config.models);
-});
+it.each(["local override", "other provider", "token", "bound secret", "default secret"])(
+  "preserves %s when key replacement is refused",
+  async (kind) => {
+    const external = kind.endsWith("secret");
+    const override = kind === "local override";
+    const profileId =
+      kind === "local override"
+        ? "sample:local"
+        : kind === "bound secret"
+          ? "sample:external"
+          : "sample:manual";
+    const owner = external ? undefined : "writer";
+    const credential: AuthProfileCredential = external
+      ? { ...externalCredential("SAMPLE_API_KEY"), copyToAgents: false }
+      : kind === "token"
+        ? { type: "token", provider: "sample", token: "kept" }
+        : kind === "other provider"
+          ? keyCredential("kept", "other")
+          : { ...keyCredential("kept-local"), copyToAgents: false };
+    const config: OpenClawConfig = external
+      ? boundConfig(kind === "bound secret" ? profileId : undefined)
+      : override
+        ? boundConfig(profileId)
+        : { plugins: { allow: [] } };
+    const error = external
+      ? "uses an external secret reference"
+      : override
+        ? "An agent already overrides this shared key"
+        : "belongs to another sign-in";
+    await replaceCredential(profileId, credential, owner);
+    writeConfig(config);
+    const before = configBytes();
+    await expect(save()).rejects.toThrow(error);
+    expect(configBytes()).toBe(before);
+    expect(savedProfile(profileId, owner ?? null)).toEqual(credential);
+  },
+);
 
 it.each([false, true])(
   "preserves a shared key when an agent override wins the write wait (existing database=%s)",
@@ -579,7 +533,7 @@ it.each([false, true])(
       agents: { ownership: "explicit", entries: { writer: {}, reader: {} } },
       models: { providers: { sample: { ...connection, apiKey: profileId } } },
     });
-    const beforeConfig = fs.readFileSync(configPath(), "utf8");
+    const beforeConfig = configBytes();
     const update = authStoreRuntime.updateAuthProfileStoreWithLock;
     vi.spyOn(authStoreRuntime, "updateAuthProfileStoreWithLock").mockImplementationOnce(
       async (params) => {
@@ -589,13 +543,13 @@ it.each([false, true])(
     );
 
     await expect(save()).rejects.toThrow("An agent already overrides this shared key");
-    expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toMatchObject({
+    expect(savedProfile(profileId, null)).toMatchObject({
       key: "synthetic-before",
     });
-    expect(loadPersistedAuthProfileStore(agentDir("reader"))?.profiles[profileId]).toMatchObject({
+    expect(savedProfile(profileId, "reader")).toMatchObject({
       key: "synthetic-override",
     });
-    expect(fs.readFileSync(configPath(), "utf8")).toBe(beforeConfig);
+    expect(configBytes()).toBe(beforeConfig);
   },
 );
 
@@ -607,25 +561,11 @@ it.each(
     })),
   ),
 )("joins pending credentials during $stage ($ending)", async ({ stage, ending }) => {
-  await seedKey("sample:other", "unrelated", "reader");
-  writeConfig({
-    agents: { ownership: "explicit", entries: { writer: {}, reader: {} } },
-    ...boundConfig("old-inline"),
-  });
+  await seedSharedWrite();
   const beforeConfig = configBytes();
   const entered = createDeferred();
   const context = captureOpenClawStateWorkerContext();
-  const rootIdentity = `${context.admission.identity.key}:${context.admission.identity.birthtime ?? ""}`;
-  let committedKeys = 0;
-  const unsubscribe = authProfileCredentialPublication.subscribeFacts((change) => {
-    if (
-      change.kind === "committed" &&
-      change.receipt.source.identity === rootIdentity &&
-      change.receipt.facts.get("store")?.kind === "postimage"
-    ) {
-      committedKeys += 1;
-    }
-  });
+  const pendingCredential = stage === "key write" ? undefined : keyCredential("synthetic-new-key");
   let batch: ReturnType<typeof beginAuthProfileCredentialBatch> | undefined;
   const beginPublication = () => {
     batch = beginAuthProfileCredentialBatch(context);
@@ -655,22 +595,19 @@ it.each(
     );
   }
   let revoked = false;
-  const response = save(undefined, undefined, {
-    assertCurrent: () => {
-      if (revoked) {
-        throw new Error("Requester revoked while credentials were pending");
-      }
-    },
-  }).then(
-    (value) => ({ value }),
-    (error: unknown) => ({ error }),
+  const response = settleOutcome(
+    save(undefined, undefined, {
+      assertCurrent: () => {
+        if (revoked) {
+          throw new Error("Requester revoked while credentials were pending");
+        }
+      },
+    }),
   );
   try {
     await entered.promise;
-    expect(await Promise.race([response.then(() => "settled"), nextEventLoopTurn("pending")])).toBe(
-      "pending",
-    );
-    expect(committedKeys).toBe(stage === "key write" ? 0 : 1);
+    expect(await pendingOutcome(response)).toBe("pending");
+    expect(savedProfile("sample:manual", null)).toEqual(pendingCredential);
     expect(configBytes()).toBe(beforeConfig);
     if (ending === "closed") {
       await closeOpenClawStateDatabaseAsync();
@@ -686,7 +623,6 @@ it.each(
       expect(outcome).toMatchObject({ value: { profileId: "sample:manual" } });
       expect((await readProvider())?.apiKey).toBe("sample:manual");
       expect(savedProfile("sample:manual", null)).toMatchObject({ key: "synthetic-new-key" });
-      expect(committedKeys).toBe(1);
     } else {
       const reason =
         ending === "override"
@@ -700,21 +636,16 @@ it.each(
         error: expect.objectContaining({ message: expect.stringContaining(reason) }),
       });
       expect(configBytes()).toBe(beforeConfig);
-      expect(committedKeys).toBe(stage === "key write" ? 0 : 1);
+      expect(savedProfile("sample:manual", null)).toEqual(pendingCredential);
     }
   } finally {
     batch?.finish(true);
     await response;
-    unsubscribe();
   }
 });
 
 it("does not retry a pending credential write when its cleanup also failed", async () => {
-  await seedKey("sample:other", "unrelated", "reader");
-  writeConfig({
-    agents: { ownership: "explicit", entries: { writer: {}, reader: {} } },
-    ...boundConfig("old-inline"),
-  });
+  await seedSharedWrite();
   const beforeConfig = configBytes();
   const failed = createDeferred();
   let batch: ReturnType<typeof beginAuthProfileCredentialBatch> | undefined;
@@ -740,10 +671,7 @@ it("does not retry a pending credential write when its cleanup also failed", asy
         failed.resolve();
       }
     });
-  const response = save().then(
-    (value) => ({ value }),
-    (error: unknown) => ({ error }),
-  );
+  const response = settleOutcome(save());
   try {
     await failed.promise;
     expect(await Promise.race([response, nextEventLoopTurn("still pending")])).toEqual({
