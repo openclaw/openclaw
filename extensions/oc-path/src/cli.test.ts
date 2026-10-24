@@ -593,7 +593,7 @@ describe("openclaw path CLI", () => {
 
     describe.each(["\n", "\r\n"])("Markdown source preservation with %j", (ending) => {
       const frontmatter =
-        '\uFEFF---\n# Keep the authored metadata.\nname: &shared "example"\ncopy: *shared\nempty: &empty\nempty_copy: *empty\n\ndescription: |\n  First line.\n  Second line.\nmetadata:\n  openclaw:\n    requires:\n      bins: [gh]\n---\n';
+        '\uFEFF---\n# Keep the authored metadata.\nname: &shared "example"\ncopy: *shared\nempty: &empty # Keep empty anchor.\nempty_copy: *empty\nvacant: # Keep empty value.\n\ndescription: |\n  First line.\n  Second line.\n# Keep the next-line comment.\nmetadata:\n  openclaw:\n    requires:\n      bins: [gh]\n---\n';
       const body = '\n# Title\n\n## Tools ##\n- command: old\n\n## Other\n* untouched: "quoted"';
       const before = frontmatter + body;
       it.each([
@@ -626,7 +626,13 @@ describe("openclaw path CLI", () => {
           "empty anchored value",
           "[frontmatter]/empty",
           "filled",
-          before.replace("empty: &empty\n", "empty: &empty filled\n"),
+          before.replace("empty: &empty #", "empty: &empty filled #"),
+        ],
+        [
+          "empty value with inline comment",
+          "[frontmatter]/vacant",
+          "has: colon",
+          before.replace("vacant: #", 'vacant: "has: colon" #'),
         ],
         [
           "block scalar replacement",
@@ -661,6 +667,11 @@ describe("openclaw path CLI", () => {
           expect(readFileSync(filePath, "utf8")).toBe(
             expected.replace(/\n/g, ending) + finalNewline,
           );
+          if (target === "[frontmatter]/empty" || target === "[frontmatter]/vacant") {
+            const fields = parseYaml(readFileSync(filePath, "utf8").split("---")[1] ?? "");
+            const key = target === "[frontmatter]/empty" ? "empty" : "vacant";
+            expect(fields[key]).toBe(value);
+          }
           if (target === "[frontmatter]/metadata") {
             const readback = createTestRuntime();
             await pathResolveCommand(
