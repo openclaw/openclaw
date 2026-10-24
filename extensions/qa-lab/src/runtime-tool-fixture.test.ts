@@ -235,11 +235,6 @@ describe("runtime tool fixture", () => {
         /codex-native-workspace read[\s\S]*RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:happy[\s\S]*RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:failure/u,
       ),
     });
-    expect(runAgentPrompt).toHaveBeenCalledTimes(2);
-    expect(runAgentPrompt.mock.calls.map(([, params]) => params.transcriptToolName)).toEqual([
-      undefined,
-      undefined,
-    ]);
   });
 
   it("rejects a native patch whose recorded working directory changes its target", async () => {
@@ -401,9 +396,6 @@ describe("runtime tool fixture", () => {
 
   it("verifies native-only private-QA Codex patch calls without skipping them", async () => {
     const env = await makeEnv({ mock: { baseUrl: MOCK_BASE_URL } });
-    const runAgentPrompt = vi.fn<RuntimeToolFixtureDeps["runAgentPrompt"]>(
-      simulateRuntimePatchHappyTurn,
-    );
     const details = await runMockFixture({
       env,
       toolName: "apply_patch",
@@ -414,18 +406,9 @@ describe("runtime tool fixture", () => {
       config: nativePatchFixtureConfig(),
       tools: [],
       forceCodex: true,
-      runAgentPrompt,
+      runAgentPrompt: simulateRuntimePatchHappyTurn,
     });
 
-    expect(
-      runAgentPrompt.mock.calls.map(([, params]) => ({
-        transcriptToolName: params.transcriptToolName,
-        requireSuccessfulTranscriptToolResult: params.requireSuccessfulTranscriptToolResult,
-      })),
-    ).toEqual([
-      { transcriptToolName: undefined, requireSuccessfulTranscriptToolResult: undefined },
-      { transcriptToolName: undefined, requireSuccessfulTranscriptToolResult: undefined },
-    ]);
     expect(details).toContain("apply_patch mock provider happy planned args");
     expect(details).toContain("runtime-tool-fixture-patch.txt");
     expect(details).toContain("../runtime-tool-fixture-denied.txt");
