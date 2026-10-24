@@ -318,7 +318,9 @@ earlier one remains the guest's.
 
 A welcome session deleted by the guest or an administrator stays deleted. The
 record keeps its key, so setup never recreates it, and later calls answer
-`not_applicable`, so the Control UI does not open it.
+`not_applicable`, so the Control UI does not open it. Until setup completes, a
+retry resumes against the reserved key, so a partial session removed after a
+failed setup is created again with its welcome message.
 
 Welcome sessions belong to an invitation. A person invited by both email and
 GitHub account has two grants; the Gateway admits them with the first active

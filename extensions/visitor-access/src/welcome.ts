@@ -74,6 +74,7 @@ export class VisitorWelcome {
   /**
    * A welcome session deleted after setup stays deleted: the record keeps its key so setup
    * never recreates it, and the guest is not sent to a session that no longer exists.
+   * Before ready, retries deliberately resume the reserved key, even for a removed partial session.
    */
   private async readyWelcome(sessionKey: string): Promise<WelcomeEnsureResult> {
     const agentId = agentFromKey(sessionKey);
