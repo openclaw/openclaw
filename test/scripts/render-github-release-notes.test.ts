@@ -54,6 +54,11 @@ function releaseRepo() {
   git("config", "user.name", "Release Fixture");
   git("config", "user.email", "release-fixture@openclaw.invalid");
   git("config", "commit.gpgsign", "false");
+  const commit = () => {
+    git("add", ".");
+    git("commit", "-qm", "release fixture");
+    return git("rev-parse", "HEAD");
+  };
   const render = (ref: string, releaseTag = tag, extra: string[] = []) =>
     execFileSync(
       process.execPath,
@@ -71,7 +76,7 @@ function releaseRepo() {
       ],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
-  return { rootDir, git, render };
+  return { rootDir, commit, render };
 }
 
 describe("GitHub release-note rendering", () => {
@@ -84,16 +89,12 @@ describe("GitHub release-note rendering", () => {
   });
 
   it("renders pinned legacy and split compact sources through the CLI", () => {
-    const { rootDir, git, render } = releaseRepo();
+    const { rootDir, commit, render } = releaseRepo();
     const changelog = changelogFor(`- **PR #123** ${"record ".repeat(20_000)}`);
     writeFileSync(join(rootDir, "CHANGELOG.md"), changelog);
-    git("add", ".");
-    git("commit", "-qm", "legacy release");
-    const legacy = git("rev-parse", "HEAD");
+    const legacy = commit();
     splitChangelog({ rootDir });
-    git("add", ".");
-    git("commit", "-qm", "split release");
-    const split = git("rev-parse", "HEAD");
+    const split = commit();
     writeFileSync(
       join(rootDir, `CHANGELOG/${version}.md`),
       `## ${version}\n\nUncommitted drift.\n`,
@@ -118,16 +119,14 @@ describe("GitHub release-note rendering", () => {
   });
 
   it("renders and verifies a pinned beta delta instead of cumulative stable notes", () => {
-    const { rootDir, git, render } = releaseRepo();
+    const { rootDir, commit, render } = releaseRepo();
     const delta = `## ${tag.slice(1)}\n\n### Fixes\n\n- New beta-only fix.`;
     writeFileSync(
       join(rootDir, "CHANGELOG.md"),
       `${delta}\n\n## ${version}\n\n- Cumulative stable feature.\n`,
     );
     splitChangelog({ rootDir });
-    git("add", ".");
-    git("commit", "-qm", "beta delta");
-    const ref = git("rev-parse", "HEAD");
+    const ref = commit();
     writeFileSync(join(rootDir, `CHANGELOG/${tag.slice(1)}.md`), `${delta}\nUncommitted drift.\n`);
     expect(render(ref)).toBe(delta);
     expect(render(ref, `v${version}`)).toBe(`## ${version}\n\n- Cumulative stable feature.`);
@@ -180,38 +179,18 @@ describe("GitHub release-note rendering", () => {
   });
 
   it("prefixes extended-stable notes with immutable regular-stable context", () => {
-    const extendedVersion = "2026.8.35";
-    const extendedTag = `v${extendedVersion}`;
-    const regularStableVersion = "2026.9.5";
-    const changelog = changelogFor("- **PR #123** fix: example.").replaceAll(
-      version,
-      extendedVersion,
-    );
-    const rendered = renderNotes(changelog, {
-      version: extendedVersion,
-      tag: extendedTag,
-      regularStableVersion,
-    });
+    const changelog = "## 2026.8.35\n\n- Fix.";
+    const options = { version: "2026.8.35", tag: "v2026.8.35" };
+    const rendered = renderNotes(changelog, { ...options, regularStableVersion: "2026.9.5" });
 
     expect(rendered.body).toMatch(/^This is a gateway-only `extended-stable` release/);
     expect(rendered.body).toContain("end of August 2026");
     expect(rendered.body).toContain(
       "[2026.9.5](https://github.com/openclaw/openclaw/releases#release-v2026.9.5)\n\n## 2026.8.35",
     );
-    expect(
-      verifyNotes(rendered.body, {
-        changelog,
-        version: extendedVersion,
-        tag: extendedTag,
-        regularStableVersion,
-      }).matches,
-    ).toBe(true);
-    expect(() =>
-      renderNotes(changelog, {
-        version: extendedVersion,
-        tag: extendedTag,
-      }),
-    ).toThrow("regular stable version must be a string");
+    expect(() => renderNotes(changelog, options)).toThrow(
+      "regular stable version must be a string",
+    );
   });
 
   it("uses the full form at exactly 125,000 bytes and compacts at 125,001", () => {

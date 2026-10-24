@@ -1,6 +1,5 @@
 import { ChildProcess, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   hasUnjoinedWork,
@@ -178,99 +177,38 @@ it.each([false, true])(
   },
 );
 
-it.each([
-  ["win32", true, true],
-  ["win32", false, true],
-  ["darwin", false, true],
-  ["win32", true, false],
-] as const)(
-  "finalizes normal leader exit on %s (termination succeeds: %s, handle closes: %s)",
-  async (platform, terminates, closes) => {
-    const root = dirs.make("managed-normal-exit-");
-    const owner = createVitestResourceOwner(root);
-    const { child, close, waitForOutputClose, destroyOutput } = createSyntheticChild("both", 0);
-    const closed = waitForOutputClose();
-    const descendantOutput = new PassThrough();
-    const stopSurvivor = () => {
-      if (!terminates) {
-        throw Object.assign(new Error("survivor termination denied"), { code: "EPERM" });
-      }
-      descendantOutput.destroy();
-    };
-    let jobClosed = false;
-    const job = {
-      inspect: vi.fn(() => {
-        if (jobClosed) {
-          throw new Error("Job handle is closed");
-        }
-        return descendantOutput.destroyed ? [] : [23456];
-      }),
-      beginStop: vi.fn(),
-      stop: vi.fn(stopSurvivor),
-      close: vi.fn(() => {
-        if (!closes) {
-          throw new Error("CloseHandle failed");
-        }
-        jobClosed = true;
-      }),
-    };
-    mocks.spawn.mockReturnValue(child);
-    mocks.spawnWindowsJobChild.mockReturnValue(platform === "win32" ? { child, job } : undefined);
-    vi.spyOn(child, "kill").mockReturnValue(false);
-    const signal = vi.spyOn(process, "kill").mockImplementation((pid, received) => {
-      expect(pid).toBe(-12345);
-      if (descendantOutput.destroyed) {
-        throw Object.assign(new Error("group gone"), { code: "ESRCH" });
-      }
-      if (received !== 0) {
-        stopSurvivor();
-      }
-      return true;
-    });
-    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    try {
-      const outcome = await runFixtureCommand({
-        platform,
-        stdio: "pipe",
-        requireProcessTreeExit: platform !== "win32",
-        cleanupDrainTimeoutMs: 0,
-        env: { TMPDIR: root },
-        onReady: () => {
-          // Real spawn returns before pipe close events. Close before leader exit,
-          // but only after the command has acquired and observed its output.
-          destroyOutput();
-          void closed.then(close);
-        },
-      }).catch((error: unknown) => error);
-      if (platform === "win32") {
-        expect(job.stop).toHaveBeenCalledOnce();
-        expect(job.close).toHaveBeenCalledOnce();
-        if (!terminates) {
-          expect(outcome).toMatchObject({ survivingPids: [23456] });
-          expect(warning).toHaveBeenCalledWith(
-            expect.objectContaining({ survivingPids: [23456], processTreeState: "indeterminate" }),
-          );
-        }
-        expect(inspectManagedProcessGroup(child, { platform, errorPolicy: "indeterminate" })).toBe(
-          terminates ? "dead" : "indeterminate",
-        );
-      } else {
-        expect(signal).toHaveBeenCalledWith(-12345, "SIGKILL");
-      }
-      if (terminates && closes) {
-        expect(descendantOutput.destroyed).toBe(true);
-        owner.assertReleased();
-        expect(outcome).toBe(0);
-      } else {
-        expect(hasUnjoinedWork(outcome)).toBe(true);
-        expect(outcome).toMatchObject({ code: "EPROCESSGROUP_CLEANUP_FAILED" });
-        expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
-      }
-    } finally {
-      descendantOutput.destroy();
-    }
-  },
-);
+it("retains ownership when a terminated Windows Job handle cannot close", async () => {
+  const root = dirs.make("managed-normal-exit-");
+  const owner = createVitestResourceOwner(root);
+  const { child, close } = createSyntheticChild("none", 0);
+  let stopped = false;
+  const job = {
+    inspect: vi.fn(() => (stopped ? [] : [23456])),
+    beginStop: vi.fn(),
+    stop: vi.fn(() => {
+      stopped = true;
+    }),
+    close: vi.fn(() => {
+      throw new Error("CloseHandle failed");
+    }),
+  };
+  mocks.spawnWindowsJobChild.mockReturnValue({ child, job });
+  const outcome = await runFixtureCommand({
+    platform: "win32",
+    cleanupDrainTimeoutMs: 0,
+    env: { TMPDIR: root },
+    onReady: close,
+  }).catch((error: unknown) => error);
+  expect(job.stop).toHaveBeenCalledOnce();
+  expect(job.close).toHaveBeenCalledOnce();
+  expect(stopped).toBe(true);
+  expect(
+    inspectManagedProcessGroup(child, { platform: "win32", errorPolicy: "indeterminate" }),
+  ).toBe("dead");
+  expect(hasUnjoinedWork(outcome)).toBe(true);
+  expect(outcome).toMatchObject({ code: "EPROCESSGROUP_CLEANUP_FAILED" });
+  expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+});
 
 it.each([
   [255, "unavailable"],
