@@ -4,6 +4,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { logWarn } from "../../logger.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/capability-provider.types.js";
 import type {
@@ -91,6 +92,27 @@ function bootstrapReceiptFrom(row: Row): WorkerEnvironmentBootstrapReceipt | nul
     ...(installKind === null ? {} : { installKind }),
   });
 }
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Snapshots are stored before a project exists (`{ install, settings }`). `settings` is what
+ * placement passes to requireWorkerProfile; null and `{}` used to decode and crash later. */
+export function profileSnapshotFrom(environmentId: string, encoded: string): WorkerProfile {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(encoded);
+  } catch {
+    throw new Error(`Worker environment ${environmentId} profile snapshot is not valid JSON`);
+  }
+  if (!isJsonObject(parsed) || !isJsonObject(parsed.settings)) {
+    throw new Error(
+      `Worker environment ${environmentId} profile snapshot must be an object with settings`,
+    );
+  }
+  return parsed as WorkerProfile;
+}
+
 export function decodeWorkerEnvironmentRow(
   row: Row,
   fallbackPorts: readonly number[],
@@ -99,8 +121,7 @@ export function decodeWorkerEnvironmentRow(
     environmentId: row.environment_id,
     providerId: row.provider_id,
     profileId: row.profile_id,
-    // SAFETY: this store writes profile_snapshot_json from its typed profile snapshot.
-    profileSnapshot: JSON.parse(row.profile_snapshot_json) as WorkerProfile,
+    profileSnapshot: profileSnapshotFrom(row.environment_id, row.profile_snapshot_json),
     preparation: readWorkerEnvironmentPreparation(row),
     provisionOperationId: row.provision_operation_id,
     nodeSetupId: row.node_setup_id,
@@ -169,7 +190,10 @@ function environmentRows(db: EngineConnection) {
     .orderBy("worker_environments.environment_id")
     .orderBy("ports.position");
 }
-function recordsFromRows(rows: readonly RowWithFallbackPort[]): WorkerEnvironmentRecord[] {
+export function recordsFromRows(
+  rows: readonly RowWithFallbackPort[],
+  options?: { isolateCorruptRows?: boolean },
+): WorkerEnvironmentRecord[] {
   const groups = new Map<string, { row: Row; ports: number[] }>();
   for (const row of rows) {
     const group = groups.get(row.environment_id) ?? { row, ports: new Array<number>() };
@@ -178,7 +202,22 @@ function recordsFromRows(rows: readonly RowWithFallbackPort[]): WorkerEnvironmen
     }
     groups.set(row.environment_id, group);
   }
-  return Array.from(groups.values(), ({ row, ports }) => decodeWorkerEnvironmentRow(row, ports));
+  const records: WorkerEnvironmentRecord[] = [];
+  for (const { row, ports } of groups.values()) {
+    try {
+      records.push(decodeWorkerEnvironmentRow(row, ports));
+    } catch (error) {
+      if (!options?.isolateCorruptRows) {
+        throw error;
+      }
+      logWarn(
+        `worker-environments: skipping ${row.environment_id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+  return records;
 }
 export function findWorkerEnvironment(db: EngineConnection, environmentId: string) {
   const rows = executeSqliteQuerySync(
@@ -205,7 +244,9 @@ export function getRequiredWorkerEnvironment(db: EngineConnection, environmentId
   return record;
 }
 export function listRows(db: EngineConnection): WorkerEnvironmentRecord[] {
-  return recordsFromRows(executeSqliteQuerySync(db, environmentRows(db)).rows);
+  return recordsFromRows(executeSqliteQuerySync(db, environmentRows(db)).rows, {
+    isolateCorruptRows: true,
+  });
 }
 
 /** Prepared inside the owning transaction; absent rows are explicit deletion facts. */
