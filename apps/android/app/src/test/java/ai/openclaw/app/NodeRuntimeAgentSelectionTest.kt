@@ -39,6 +39,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
+import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -593,6 +594,73 @@ class NodeRuntimeAgentSelectionTest {
         awaitAgentRefresh(withScout)
         assertEquals("main", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
       } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun coldStartUsesAnAllowedAgentBeforePatchingTheGatewayDefault() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val rosterStarted = CompletableDeferred<Unit>()
+      val releaseRoster = CompletableDeferred<Unit>()
+      val requests = Collections.synchronizedList(mutableListOf<Pair<String, String?>>())
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
+          when (method) {
+            "agents.list" -> {
+              rosterStarted.complete(Unit)
+              releaseRoster.await()
+              """{"defaultId":"agent-a","mainKey":"agent:agent-a:main","agents":[{"id":"agent-b"}]}"""
+            }
+
+            "models.list" -> {
+              """{"models":[]}"""
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[]}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        }
+        installChatGateway(
+          runtime,
+          requestGateway = { method, params ->
+            requests += method to params
+            when (method) {
+              "sessions.describe" -> """{"session":null}"""
+              "chat.history" -> """{"sessionId":"allowed-session","messages":[]}"""
+              else -> "{}"
+            }
+          },
+        )
+
+        reconnectOperator(runtime)
+        withTimeout(2_000) { rosterStarted.await() }
+        assertFalse(
+          "Chat must wait for the accessible roster before adopting a session",
+          requests.any { (method, params) ->
+            method.startsWith("sessions.") && params.orEmpty().contains("agent-a")
+          },
+        )
+
+        releaseRoster.complete(Unit)
+        withTimeout(2_000) {
+          runtime.mainSessionKey.first { resolveAgentIdFromMainSessionKey(it) == "agent-b" }
+        }
+        assertEquals("agent-b", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+        assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
+        assertFalse(
+          requests.any { (method, params) ->
+            method.startsWith("sessions.") && params.orEmpty().contains("agent-a")
+          },
+        )
+      } finally {
+        releaseRoster.complete(Unit)
         closeNodeRuntimeTestFixture(runtime)
       }
     }

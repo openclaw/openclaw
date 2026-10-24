@@ -1362,6 +1362,7 @@ class NodeRuntime internal constructor(
   }
 
   private var tlsProbeJob: Job? = null
+  private var operatorAgentBootstrapJob: Job? = null
 
   internal class GatewayConnectionOperation(
     private val isCurrent: () -> Boolean,
@@ -1400,45 +1401,40 @@ class NodeRuntime internal constructor(
           selectGatewayDevicePairingCapabilities(hello.methods.orEmpty(), operatorScopes)
         _gatewayAccentArgb.value = null
         _gatewaySourcePreviewConfig.value = null
-        synchronized(gatewayDataScopeLock) {
-          val mainSessionKey =
-            prepareMainSessionKey(selectedChatAgentId ?: resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
-          // Create/adopt before history refresh; this keeps the first connected read on the
-          // device-owned session without changing the shipped key or its existing transcript.
-          chat.onGatewayConnected(mainSessionBinding(mainSessionKey))
-        }
         refreshGatewayControlPage(
           operatorReady = true,
           browserFocusAvailable = hello.capabilities?.contains("control-ui-browser-focus") == true,
         )
-        updateStatus {
-          operatorConnectionProblem = null
-          operatorConnected = true
-          operatorStatusText = "Connected"
-        }
-        // Revalidate removals even when no screen refreshes metadata after reconnect.
-        if (selectedChatAgentId != null) refreshAgents()
-        // Bootstrap can connect the node before operator access is ready.
-        refreshNodesDevices()
-        // Method and scope snapshots are synchronous above; refresh only after both so
-        // this route cannot inherit readiness from the connection it replaced.
-        publishOperatorConnection(connected = true, status = "Connected")
-        scope.launch {
-          val gatewayScope = captureGatewayDataScope() ?: return@launch
-          val lease = operatorSession.captureRequestLease(gatewayScope.stableId) ?: return@launch
-          refreshCurrentProfileId(gatewayScope, lease)
-        }
-        scope.launch {
-          subscribeOperatorSessionEvents()
-          refreshBrandingFromGateway()
-          refreshWakeWordsFromGateway()
-          refreshExecApprovalsFromGateway()
-          if (voiceReplySpeakerLazy.isInitialized()) {
-            voiceReplySpeaker.refreshConfig()
+        operatorAgentBootstrapJob?.cancel()
+        if (selectedChatAgentId == null) {
+          // The hello default can be outside this caller's operator role. Discover the
+          // accessible roster before Chat creates or patches its first gateway session.
+          operatorAgentBootstrapJob =
+            scope.launch {
+              val gatewayScope = captureGatewayDataScope() ?: return@launch
+              val bound = refreshAgentsFromGateway(gatewayScope, requireConnected = false, bindMainSession = false)
+              if (!isGatewayDataScopeCurrent(gatewayScope)) return@launch
+              if (bound) {
+                synchronized(gatewayDataScopeLock) {
+                  chat.onGatewayConnected(mainSessionBinding(mainSessionKey.value))
+                }
+              }
+              completeOperatorConnection()
+            }
+        } else {
+          synchronized(gatewayDataScopeLock) {
+            val mainSessionKey =
+              prepareMainSessionKey(selectedChatAgentId ?: resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
+            // Create/adopt before history refresh; this keeps the first connected read on the
+            // device-owned session without changing the shipped key or its existing transcript.
+            chat.onGatewayConnected(mainSessionBinding(mainSessionKey))
           }
+          completeOperatorConnection()
         }
       },
       onDisconnected = { message ->
+        operatorAgentBootstrapJob?.cancel()
+        operatorAgentBootstrapJob = null
         if (wearRealtimeTalkControllerLazy.isInitialized()) wearRealtimeTalkController.abort()
         clearOperatorGatewayState(retirePendingCronRuns = false)
         chat.applyMainSessionKey(resolveMainSessionKey())
@@ -1473,6 +1469,35 @@ class NodeRuntime internal constructor(
     systemAgentChatController.refresh(startIfNeeded = false)
     micCapture.onGatewayConnectionChanged(connected)
     wearProxyBridge()?.publishConnection(connected = connected, status = status, failure = failure())
+  }
+
+  private fun completeOperatorConnection() {
+    updateStatus {
+      operatorConnectionProblem = null
+      operatorConnected = true
+      operatorStatusText = "Connected"
+    }
+    // Revalidate removals even when no screen refreshes metadata after reconnect.
+    if (selectedChatAgentId != null) refreshAgents()
+    // Bootstrap can connect the node before operator access is ready.
+    refreshNodesDevices()
+    // Method and scope snapshots are synchronous above; refresh only after both so
+    // this route cannot inherit readiness from the connection it replaced.
+    publishOperatorConnection(connected = true, status = "Connected")
+    scope.launch {
+      val gatewayScope = captureGatewayDataScope() ?: return@launch
+      val lease = operatorSession.captureRequestLease(gatewayScope.stableId) ?: return@launch
+      refreshCurrentProfileId(gatewayScope, lease)
+    }
+    scope.launch {
+      subscribeOperatorSessionEvents()
+      refreshBrandingFromGateway()
+      refreshWakeWordsFromGateway()
+      refreshExecApprovalsFromGateway()
+      if (voiceReplySpeakerLazy.isInitialized()) {
+        voiceReplySpeaker.refreshConfig()
+      }
+    }
   }
 
   private val sessionObserverVisibility =
@@ -6398,27 +6423,46 @@ class NodeRuntime internal constructor(
 
   private fun workspaceAgentId(): String = resolveActiveAgentId().ifEmpty { "main" }
 
-  private suspend fun refreshAgentsFromGateway() {
-    val gatewayScope = captureGatewayDataScope() ?: return
-    if (!operatorConnected) return
+  private suspend fun refreshAgentsFromGateway(
+    gatewayScope: GatewayDataScope? = captureGatewayDataScope(),
+    requireConnected: Boolean = true,
+    bindMainSession: Boolean = true,
+  ): Boolean {
+    if (gatewayScope == null || (requireConnected && !operatorConnected)) return false
     val selectionSequence = chatSelectionSeq.get()
     try {
-      val root = requestGatewayObject(gatewayScope, "agents.list", "{}") ?: return
+      val root = requestGatewayObject(gatewayScope, "agents.list", "{}") ?: return false
       val defaultAgentId = root["defaultId"].asStringOrNull()?.trim().orEmpty()
       val mainKey = normalizeMainKey(root["mainKey"].asStringOrNull())
       val agents = parseGatewayAgentSummaries(root)
-      if (agents.isEmpty()) return
+      if (agents.isEmpty()) return false
 
-      publishGatewayData(gatewayScope) {
-        if (chatSelectionSeq.get() != selectionSequence) return@publishGatewayData
-        updateGatewayDefaultAgentId(defaultAgentId)
-        _gatewayAgents.value = agents
-        val selectedAgentId = selectedChatAgentId?.takeIf { id -> agents.any { it.id == id } }
-        selectedChatAgentId = selectedAgentId
-        prepareMainSessionKey(selectedAgentId ?: resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value, MainSessionUpdate.Sync)
-      }
+      var bound = false
+      val published =
+        publishGatewayData(
+          gatewayScope,
+        ) {
+          if (chatSelectionSeq.get() != selectionSequence) return@publishGatewayData
+          updateGatewayDefaultAgentId(defaultAgentId)
+          _gatewayAgents.value = agents
+          val selectedAgentId = selectedChatAgentId?.takeIf { id -> agents.any { it.id == id } }
+          selectedChatAgentId = selectedAgentId
+          val fallbackAgentId =
+            resolveAgentIdFromMainSessionKey(mainKey)?.takeIf { id -> agents.any { it.id == id } }
+              ?: defaultAgentId.takeIf { id -> id.isNotEmpty() && agents.any { it.id == id } }
+              ?: agents.selectableAgents().firstOrNull()?.id
+          val targetAgentId = selectedAgentId ?: fallbackAgentId
+          if (targetAgentId != null) {
+            prepareMainSessionKey(
+              targetAgentId,
+              if (bindMainSession) MainSessionUpdate.Sync else MainSessionUpdate.Prepare,
+            )
+            bound = true
+          }
+        }
+      return published && bound
     } catch (_: Throwable) {
-      // ignore
+      return false
     }
   }
 
