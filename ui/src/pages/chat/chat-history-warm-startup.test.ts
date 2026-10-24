@@ -32,6 +32,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { refreshChatCommands, refreshPageChat } from "./chat-state-refresh.ts";
+import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import { PaneHeaderView } from "./components/chat-pane-header.tsx";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
 import {
@@ -57,12 +58,12 @@ const stored: ChatSessionSnapshot = {
 const liveMessages = [nativeHistoryMessage(2, "Live conversation")];
 const panes: TestChatPane[] = [];
 const emptyPendingInputs = () => ({ items: [], total: 0, queuedCount: 0 });
-const queuedPendingInputs = () => ({
+const queuedPendingInputs = (content = "Check the attachment before continuing.") => ({
   items: [
     {
       id: "followup-1",
       runId: "run-followup-1",
-      message: { role: "user", content: "Check the attachment before continuing." },
+      message: { role: "user", content },
       acceptedAt: 1,
       state: "queued" as const,
       queued: true as const,
@@ -71,9 +72,9 @@ const queuedPendingInputs = () => ({
   total: 1,
   queuedCount: 1,
 });
-const startupCommands = () => [
+const startupCommands = (name = "fixture_skill") => [
   {
-    name: "fixture_skill",
+    name,
     description: "Run the fixture skill",
     source: "skill" as const,
     scope: "text" as const,
@@ -136,6 +137,28 @@ function mountPane(
     read,
     request,
     liveResult,
+    pendingResponse() {
+      const response = createDeferred<unknown>();
+      request.mockReturnValueOnce(response.promise);
+      return response;
+    },
+    async cold(history: ChatHistoryState) {
+      read.resolve(null);
+      this.connect();
+      const { commands, ...fields } = history;
+      request.mockResolvedValueOnce({
+        ...liveResult,
+        ...fields,
+        ...(commands ? { metadata: { commands } } : {}),
+      });
+      await this.start();
+      const snapshot = this.snapshot();
+      expect(snapshot?.historyState).toEqual(history);
+      if (!snapshot) {
+        throw new Error("Expected startup snapshot");
+      }
+      return snapshot;
+    },
     async hydrate(snapshot: ChatSessionSnapshot | null = stored) {
       read.resolve(snapshot);
       await vi.advanceTimersByTimeAsync(0);
@@ -158,6 +181,25 @@ function mountPane(
     start() {
       return loadChatHistory(state, { startup: true, deferBranches: true });
     },
+  };
+}
+
+function shareConnection(
+  first: ReturnType<typeof mountPane>,
+  second: ReturnType<typeof mountPane>,
+) {
+  second.connect();
+  second.state.client = first.client;
+  second.state.sessions = first.state.sessions;
+}
+
+function snapshotRecord(h: ReturnType<typeof mountPane>, snapshot: ChatSessionSnapshot) {
+  return {
+    projectionVersion: 3,
+    savedAt: Date.now(),
+    sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
+    sessionId: snapshot.sessionId,
+    snapshot,
   };
 }
 
@@ -222,8 +264,7 @@ describe("first chat startup snapshot ordering", () => {
         view.container.querySelector(".chat-pane__session-title-text")?.textContent?.trim();
       flush();
       expect(title()).toBe("");
-      const network = createDeferred<typeof h.liveResult>();
-      h.request.mockReturnValueOnce(network.promise);
+      const network = h.pendingResponse();
       h.connect();
       const loading = h.start();
       expect(h.request).not.toHaveBeenCalled();
@@ -284,7 +325,7 @@ describe("first chat startup snapshot ordering", () => {
     const record = createDeferred<unknown>();
     vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockReturnValueOnce(record.promise);
     const h = mountPane(sessionKey, false, store, memory);
-    const network = createDeferred<ChatHistoryResult>();
+    const network = h.pendingResponse();
     const snapshot = { ...stored, widgetHeights: { "inline-widget": 420 } };
     const paints: unknown[][] = [];
     const dispose = createRoot((stop) => {
@@ -301,18 +342,11 @@ describe("first chat startup snapshot ordering", () => {
     });
     onTestFinished(dispose);
     flush();
-    h.request.mockReturnValueOnce(network.promise);
     h.connect();
     const loading = h.start();
     expect(h.request).not.toHaveBeenCalled();
     const fresh = { ...h.liveResult, messages: structuredClone(stored.messages) };
-    record.resolve({
-      projectionVersion: 3,
-      savedAt: Date.now(),
-      sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
-      sessionId: snapshot.sessionId,
-      snapshot,
-    });
+    record.resolve(snapshotRecord(h, snapshot));
     await vi.advanceTimersByTimeAsync(0);
     network.resolve(fresh);
     await loading;
@@ -338,8 +372,7 @@ describe("first chat startup snapshot ordering", () => {
 
   it("publishes history after the cache grace period and ignores a late snapshot", async () => {
     const h = mountPane();
-    const network = createDeferred<typeof h.liveResult>();
-    h.request.mockReturnValueOnce(network.promise);
+    const network = h.pendingResponse();
     h.connect();
     const loading = h.start();
     await vi.advanceTimersByTimeAsync(1_999);
@@ -363,31 +396,16 @@ describe("first chat startup snapshot ordering", () => {
     "restores only receipt-matched warm metadata when server state is %s",
     async (change) => {
       const initial = mountPane();
-      const pendingInputs = queuedPendingInputs();
-      const commands = startupCommands();
-      const stateRevision = startupRevision();
-      const initialInfo = { ...initial.liveResult.sessionInfo, snapshotAt: 100 };
-      initial.read.resolve(null);
-      initial.request.mockResolvedValueOnce({
-        ...initial.liveResult,
-        pendingInputs,
-        stateRevision,
-        sessionInfo: initialInfo,
-        metadata: { commands },
-      });
-      initial.connect();
-      await initial.start();
-      const snapshot = initial.snapshot();
-      expect(snapshot?.historyState).toEqual({
-        stateRevision,
-        pendingInputs,
-        sessionInfo: initialInfo,
-        commands,
-      });
-
+      const original = {
+        pendingInputs: queuedPendingInputs(),
+        commands: startupCommands(),
+        stateRevision: startupRevision(),
+        sessionInfo: { ...initial.liveResult.sessionInfo, snapshotAt: 100 },
+      };
+      const snapshot = await initial.cold(original);
       const warm = mountPane();
       await warm.hydrate(snapshot);
-      const response = createDeferred<unknown>();
+      const response = warm.pendingResponse();
       warm.request.mockImplementation(async (method) =>
         method === "chat.startup" ? response.promise : { models: [] },
       );
@@ -399,97 +417,87 @@ describe("first chat startup snapshot ordering", () => {
       });
       expect(warm.request).toHaveBeenCalledWith(
         "chat.startup",
-        expect.objectContaining({ cursor: "live-cursor", knownState: stateRevision }),
+        expect.objectContaining({ cursor: "live-cursor", knownState: original.stateRevision }),
         expect.anything(),
       );
 
       const emptyInputs = emptyPendingInputs();
-      const nextInputs =
-        change === "unchanged"
-          ? pendingInputs
-          : change === "changed"
-            ? {
-                ...pendingInputs,
-                items: [
-                  {
-                    ...pendingInputs.items[0]!,
-                    message: { role: "user", content: "Updated followup." },
-                  },
-                ],
-              }
-            : emptyInputs;
-      const nextInfo =
-        change === "replacement"
-          ? { ...warm.liveResult.sessionInfo, sessionId: "replacement-session", snapshotAt: 200 }
-          : { ...warm.liveResult.sessionInfo, snapshotAt: 200 };
-      const nextRevision =
-        change === "unchanged"
-          ? stateRevision
-          : {
-              pendingInputs: "pending-2",
-              sessionInfo: change === "replacement" ? "session-2" : "session-1",
-              commands: change === "changed" || change === "empty" ? "commands-2" : "commands-1",
-            };
-      const nextCommands =
-        change === "empty"
-          ? []
-          : change === "changed"
-            ? [{ ...commands[0]!, name: "replacement_skill" }]
-            : commands;
+      const next = {
+        pendingInputs:
+          change === "unchanged"
+            ? original.pendingInputs
+            : change === "changed"
+              ? queuedPendingInputs("Updated followup.")
+              : emptyInputs,
+        sessionInfo: {
+          ...warm.liveResult.sessionInfo,
+          snapshotAt: 200,
+          ...(change === "replacement" ? { sessionId: "replacement-session" } : {}),
+        },
+        stateRevision:
+          change === "unchanged"
+            ? original.stateRevision
+            : {
+                pendingInputs: "pending-2",
+                sessionInfo: change === "replacement" ? "session-2" : "session-1",
+                commands: change === "changed" || change === "empty" ? "commands-2" : "commands-1",
+              },
+        commands:
+          change === "empty"
+            ? []
+            : change === "changed"
+              ? startupCommands("replacement_skill")
+              : original.commands,
+      };
       const metadata =
-        nextRevision.commands === stateRevision.commands ? {} : { commands: nextCommands };
+        next.stateRevision.commands === original.stateRevision.commands
+          ? {}
+          : { commands: next.commands };
       // A sibling may publish a newer cache while this request still owns its earlier receipts.
-      if (snapshot) {
-        cacheChatSessionSnapshot(
-          warm.state.chatMessagesBySession!,
-          warm.state,
-          { sessionKey },
-          {
-            ...snapshot,
-            historyState: {
-              stateRevision: nextRevision,
-              pendingInputs: emptyInputs,
-              sessionInfo: nextInfo,
-            },
+      cacheChatSessionSnapshot(
+        warm.state.chatMessagesBySession!,
+        warm.state,
+        { sessionKey },
+        {
+          ...snapshot,
+          historyState: {
+            stateRevision: next.stateRevision,
+            pendingInputs: emptyInputs,
+            sessionInfo: next.sessionInfo,
           },
-        );
-      }
+        },
+      );
       response.resolve({
         metadata,
         ...(change === "replacement"
           ? {
               ...warm.liveResult,
-              sessionInfo: nextInfo,
-              pendingInputs: nextInputs,
-              stateRevision: nextRevision,
+              sessionInfo: next.sessionInfo,
+              pendingInputs: next.pendingInputs,
+              stateRevision: next.stateRevision,
             }
           : {
               kind: "delta",
               messages: [],
               deltaCursor: "next-cursor",
-              stateRevision: nextRevision,
-              sessionInfoSnapshotAt: nextInfo.snapshotAt,
-              ...(change === "unchanged" ? {} : { pendingInputs: nextInputs }),
+              stateRevision: next.stateRevision,
+              sessionInfoSnapshotAt: next.sessionInfo.snapshotAt,
+              ...(change === "unchanged" ? {} : { pendingInputs: next.pendingInputs }),
             }),
       });
       await loading;
       await refreshChatCommands(warm.state);
       expect(warm.request.mock.calls.some(([method]) => method === "commands.list")).toBe(false);
       expect(SLASH_COMMANDS.some((command) => command.name === "fixture_skill")).toBe(
-        nextCommands === commands,
+        next.commands === original.commands,
       );
       expect(SLASH_COMMANDS.some((command) => command.name === "replacement_skill")).toBe(
         change === "changed",
       );
-      expect(warm.state.chatPendingInputs?.page).toEqual(nextInputs);
-      expect(warm.state.chatPendingInputs?.queuedInputs).toEqual(nextInputs.items);
-      expect(warm.state.currentSessionId).toBe(nextInfo.sessionId);
-      expect(warm.snapshot()?.historyState).toEqual({
-        stateRevision: nextRevision,
-        pendingInputs: nextInputs,
-        sessionInfo: nextInfo,
-        commands: nextCommands,
-      });
+      expect(warm.state.chatPendingInputs?.page).toEqual(next.pendingInputs);
+      expect(warm.state.chatPendingInputs?.queuedInputs).toEqual(next.pendingInputs.items);
+      expect(warm.state.currentSessionId).toBe(next.sessionInfo.sessionId);
+      expect(warm.snapshot()?.historyState).toEqual(next);
     },
   );
 
@@ -515,8 +523,7 @@ describe("first chat startup snapshot ordering", () => {
       sessionInfo: h.liveResult.sessionInfo,
       deltaCursor: "live-cursor",
     };
-    const response = createDeferred<typeof delta>();
-    h.request.mockReturnValueOnce(response.promise);
+    const response = h.pendingResponse();
     h.connect();
     const loading = h.start();
     const pendingCacheJoin = h.start();
@@ -533,90 +540,59 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.state.chatMessages).toEqual(stored.messages);
   });
 
-  it("keeps simultaneous startup requests with different metadata receipts separate", async () => {
-    const first = mountPane();
-    const second = mountPane();
-    const emptyInputs = emptyPendingInputs();
-    for (const [index, pane] of [first, second].entries()) {
-      pane.read.resolve(null);
-      pane.connect();
-      pane.request.mockResolvedValueOnce({
-        ...pane.liveResult,
-        pendingInputs: emptyInputs,
-        stateRevision: { pendingInputs: "empty", sessionInfo: `info-${index}` },
-        sessionInfo: { ...pane.liveResult.sessionInfo, label: `Label ${index}` },
-      });
-      await pane.start();
-    }
-    second.state.client = first.client;
-    second.state.sessions = first.state.sessions;
-    const response = createDeferred<unknown>();
-    first.request.mockClear();
-    first.request.mockReturnValue(response.promise);
-    const loads = [first.start(), second.start()];
-    expect(first.request).toHaveBeenCalledTimes(2);
-    expect(first.request.mock.calls.map(([, params]) => params)).toEqual([
-      expect.objectContaining({ knownState: { pendingInputs: "empty", sessionInfo: "info-0" } }),
-      expect.objectContaining({ knownState: { pendingInputs: "empty", sessionInfo: "info-1" } }),
-    ]);
-    response.resolve({
-      kind: "delta",
-      messages: [],
-      deltaCursor: "next-cursor",
-      sessionInfo: { ...first.liveResult.sessionInfo, label: "Latest label" },
-      stateRevision: { pendingInputs: "empty", sessionInfo: "latest-info" },
-    });
-    await Promise.all(loads);
-    expect(first.state.chatPendingInputs?.page).toEqual(emptyInputs);
-    expect(second.state.chatPendingInputs?.page).toEqual(emptyInputs);
-  });
-
-  it("requests missing pending inputs separately even when cached receipts match", async () => {
-    const initial = mountPane();
-    const pendingInputs = queuedPendingInputs();
-    const stateRevision = { pendingInputs: "pending-1", sessionInfo: "info-1" };
-    initial.read.resolve(null);
-    initial.connect();
-    initial.request.mockResolvedValueOnce({ ...initial.liveResult, pendingInputs, stateRevision });
-    await initial.start();
-    const snapshot = initial.snapshot();
-    if (!snapshot?.historyState) {
-      throw new Error("expected cached startup metadata");
-    }
-    const first = mountPane();
-    const second = mountPane();
-    first.read.resolve(snapshot);
-    second.read.resolve({
-      ...snapshot,
-      historyState: { stateRevision, sessionInfo: snapshot.historyState.sessionInfo },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    first.connect();
-    second.connect();
-    second.state.client = first.client;
-    second.state.sessions = first.state.sessions;
-    const omitted = createDeferred<unknown>();
-    const full = createDeferred<unknown>();
-    first.request.mockReturnValueOnce(omitted.promise).mockReturnValueOnce(full.promise);
-    const loads = [first.start(), second.start()];
-    expect(first.request).toHaveBeenCalledTimes(2);
-    expect(first.request.mock.calls.map(([, params]) => params)).toEqual([
-      expect.objectContaining({ knownState: stateRevision }),
-      expect.objectContaining({ knownState: { sessionInfo: "info-1" } }),
-    ]);
-    const delta = {
-      kind: "delta",
-      messages: [],
-      deltaCursor: "next-cursor",
-      stateRevision,
-      sessionInfoSnapshotAt: 2,
-    };
-    omitted.resolve(delta);
-    full.resolve({ ...delta, pendingInputs });
-    await Promise.all(loads);
-    expect(first.state.chatPendingInputs?.queuedInputs).toEqual(pendingInputs.items);
-    expect(second.state.chatPendingInputs?.queuedInputs).toEqual(pendingInputs.items);
-  });
+  it.each(["different receipts", "missing inputs"] as const)(
+    "separates startup requests with %s",
+    async (difference) => {
+      const initial = mountPane();
+      const pendingInputs =
+        difference === "missing inputs" ? queuedPendingInputs() : emptyPendingInputs();
+      const stateRevision = { pendingInputs: "pending-1", sessionInfo: "info-1" };
+      const history = { pendingInputs, stateRevision, sessionInfo: initial.liveResult.sessionInfo };
+      const snapshot = await initial.cold(history);
+      const secondHistory =
+        difference === "missing inputs"
+          ? { stateRevision, sessionInfo: history.sessionInfo }
+          : { ...history, stateRevision: { ...stateRevision, sessionInfo: "info-2" } };
+      const first = mountPane();
+      const second = mountPane();
+      first.read.resolve(snapshot);
+      second.read.resolve({ ...snapshot, historyState: secondHistory });
+      await vi.advanceTimersByTimeAsync(0);
+      first.connect();
+      shareConnection(first, second);
+      const omitted = createDeferred<unknown>();
+      const full = createDeferred<unknown>();
+      first.request.mockReturnValueOnce(omitted.promise).mockReturnValueOnce(full.promise);
+      const loads = [first.start(), second.start()];
+      expect(first.request).toHaveBeenCalledTimes(2);
+      expect(first.request.mock.calls.map(([, params]) => params)).toEqual([
+        expect.objectContaining({ knownState: stateRevision }),
+        expect.objectContaining({
+          knownState:
+            difference === "missing inputs"
+              ? { sessionInfo: "info-1" }
+              : secondHistory.stateRevision,
+        }),
+      ]);
+      const delta = {
+        kind: "delta",
+        messages: [],
+        deltaCursor: "next-cursor",
+        stateRevision,
+        sessionInfoSnapshotAt: 2,
+        ...(difference === "different receipts"
+          ? { sessionInfo: { ...history.sessionInfo, label: "Latest label" } }
+          : {}),
+      };
+      omitted.resolve(delta);
+      full.resolve({ ...delta, pendingInputs });
+      await Promise.all(loads);
+      expect(first.state.chatPendingInputs?.queuedInputs).toEqual(pendingInputs.items);
+      expect(second.state.chatPendingInputs?.queuedInputs).toEqual(pendingInputs.items);
+      expect(first.state.chatPendingInputs?.page).toEqual(pendingInputs);
+      expect(second.state.chatPendingInputs?.page).toEqual(pendingInputs);
+    },
+  );
 
   it.each(["unchanged", "refreshed"] as const)(
     "hydrates both splits when shared history is %s",
@@ -630,10 +606,8 @@ describe("first chat startup snapshot ordering", () => {
         .mockReturnValueOnce(secondRead.promise);
       const first = mountPane(sessionKey, false, store, memory);
       const second = mountPane(sessionKey, false, store, memory);
-      const { sessions } = connectSessionOwner(first);
-      second.connect();
-      second.state.client = first.client;
-      second.state.sessions = sessions;
+      connectSessionOwner(first);
+      shareConnection(first, second);
       const messages = ordering === "unchanged" ? structuredClone(stored.messages) : liveMessages;
       first.request.mockImplementation(async () => ({ ...first.liveResult, messages }));
       const loading = [first.start(), second.start()];
@@ -698,13 +672,7 @@ describe("first chat startup snapshot ordering", () => {
     h.connect();
     const loading = h.start();
     expect(h.request).not.toHaveBeenCalled();
-    record.resolve({
-      projectionVersion: 3,
-      savedAt: Date.now(),
-      sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
-      sessionId: stored.sessionId,
-      snapshot: { ...stored, historyState },
-    });
+    record.resolve(snapshotRecord(h, { ...stored, historyState }));
     await loading;
     h.expectStartup({ cursor: "stored-cursor", knownState: stateRevision });
     expect(h.state.chatMessages).toEqual(stored.messages);
