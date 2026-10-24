@@ -48,12 +48,10 @@ export function renderSidebarOutboxItem(
       ? `${clampText(normalizeAgentLabel(agent), 60)} · ${conversation}`
       : conversation;
     const label = t(
-      entry.command
-        ? entry.unconfirmed
-          ? "attention.outbox.commandUnconfirmed"
-          : "attention.outbox.commandFailed"
-        : entry.unconfirmed
-          ? "attention.outbox.unconfirmed"
+      entry.held
+        ? "attention.outbox.held"
+        : entry.command
+          ? "attention.outbox.commandFailed"
           : "attention.outbox.failed",
     );
     const target = sessionNavigationTarget({
@@ -66,13 +64,7 @@ export function renderSidebarOutboxItem(
     });
     const offline = context.gateway.snapshot.phase !== "connected";
     const guidance = [
-      t(
-        entry.unconfirmed
-          ? entry.command
-            ? "attention.outbox.checkCommandBeforeRetry"
-            : "attention.outbox.checkBeforeRetry"
-          : "attention.outbox.reviewHint",
-      ),
+      t("attention.outbox.reviewHint"),
       ...(offline ? [t("attention.outbox.offlineHint")] : []),
     ].join(" ");
     return { label, scope, target, offline, guidance, entry };

@@ -99,7 +99,6 @@ export async function prepareOpenClawTools(
       agentDir: captured.agentDir,
       workspaceDir,
       authStore: captured.authProfileStore,
-      authProfileStoreSource: captured.authProfileStoreSource,
       modelConfig: availabilityConfig?.agents?.defaults?.mediaModels?.[kind],
       providerKey,
       providers: captured.preparedModelRuntime?.mediaCapabilityProviders?.[providerKey],

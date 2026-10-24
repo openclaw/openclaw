@@ -83,6 +83,7 @@ it.each([
     } = custodyHost(
       {
         chatMessage: "Only unsaved copy",
+        currentSessionId: "volatile-original-session",
         requestHandlers: {
           "chat.send": (params: unknown) => {
             const payload = requireRecord(params, "memory send");
@@ -103,7 +104,7 @@ it.each([
     const original = host.chatQueue[0]!;
     expect(host).toMatchObject({
       chatMessage: "",
-      chatQueue: [{ text: "Only unsaved copy", sendState: "unconfirmed", sendAttempts: 1 }],
+      chatQueue: [{ text: "Only unsaved copy", sendState: "waiting-reconnect", sendAttempts: 1 }],
     });
     expect(originalOwner.hasVolatile(host, original.id)).toBe(true);
     select("owner-b");
@@ -117,7 +118,7 @@ it.each([
         id: original.id,
         text: original.text,
         sendRunId: original.sendRunId,
-        sendState: "unconfirmed",
+        sendState: "held",
       },
     ]);
     await resumeStoredChatOutboxes(host);

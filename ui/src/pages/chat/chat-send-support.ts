@@ -41,9 +41,6 @@ import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-m
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
-export const UNCONFIRMED_CHAT_SEND_ERROR =
-  "Delivery has not been confirmed. Check the conversation — retry only if your message didn't arrive.";
-
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
 
@@ -284,11 +281,10 @@ export function retireDeliveredQueuedUserTurn(
       return "stale";
     }
     const reason = result.status === "failed" ? result.reason : "missing";
-    // Delivery proof must never become a fresh-send retry because local bytes
-    // were unavailable. Keep the same run identity and its no-replay barrier.
+    // Keep the same key if local projection fails after delivery.
     updateQueuedMessage(host, stored.id, (item) =>
       failOutboxPayload(
-        { ...item, sendState: item.sendState === "held" ? "held" : "unconfirmed" },
+        { ...item, sendState: item.sendState === "held" ? "held" : "failed" },
         reason,
       ),
     );

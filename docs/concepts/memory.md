@@ -310,23 +310,9 @@ success alone does not complete the flush. Skipping or failing this optional ste
 does not prevent compaction. Plugin authors can find the contract and retry
 identity in [Pre-compaction memory flush](/plugins/sdk-overview/memory-and-context#pre-compaction-memory-flush).
 
-To keep that housekeeping turn on a local model, set an exact override that
-applies only to the memory-flush turn (it does not inherit the active
-session's model fallback chain):
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "compaction": {
-        "memoryFlush": {
-          "model": "ollama/qwen3:8b"
-        }
-      }
-    }
-  }
-}
-```
+The flush uses the active session model and its normal fallback chain. To keep
+memory extraction local, use a local model for the session and configure local
+fallbacks.
 
 <Tip>
 The memory flush gives the agent a chance to save important facts before

@@ -11,7 +11,8 @@
 // Pair built bundles with --fixture-now-ms and --live-start-at-ms (one run per process).
 // OPENCLAW_CONTROL_UI_BUILD_ID supplies the matching identity outside a Git checkout.
 // --gateway-url uses real Gateway HTTP serving with synthetic bootstrap/RPC fixtures.
-// --first-load skips warm-up and clears client state; Gateway HTTP runs stay single-sample.
+// --gateway-http serves paired bundles through the Gateway HTTP owner on loopback.
+// --first-load skips warm-up and clears client state; external Gateway URL runs stay single-sample.
 // --sidebar-persistent-children keeps expanded rows outside root windows for staggered handoff proof.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
@@ -48,6 +49,7 @@ import {
   createStreamingReplyProbeInitScript,
 } from "../ui/src/test-helpers/control-ui-streaming-reply.ts";
 import { createControlUiTeamScaleFixture } from "../ui/src/test-helpers/control-ui-team-scale-fixture.ts";
+import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { resolveColdLoadLatency } from "./lib/control-ui-bench-latency.ts";
 import {
   persistColdLoadWarmState,
@@ -279,6 +281,7 @@ const { values } = parseArgs({
     "sidebar-row-transfer": { type: "string", default: "full" },
     "bundle-dir": { type: "string" },
     "gateway-url": { type: "string" },
+    "gateway-http": { type: "boolean", default: false },
     "first-load": { type: "boolean", default: false },
     "boot-route": { type: "string", default: "chat" },
     "cold-http-cache": { type: "boolean", default: false },
@@ -418,6 +421,7 @@ if (
       runs !== 1 ||
       values["compare-bundle-dir"].length)) ||
   (firstLoad && values["warm-reload"]) ||
+  (values["gateway-http"] && (gatewayUrl || !values["bundle-dir"])) ||
   (firstLoad && values["sidebar-view"] !== "sessions") ||
   !Number.isFinite(networkLatencyMs) ||
   networkLatencyMs < 0 ||
@@ -427,7 +431,7 @@ if (
   cpuThrottle < 1
 ) {
   throw new Error(
-    "gateway-url requires an HTTP origin, bundle-dir and one first-load run without comparison; first-load requires sidebar-view=sessions without warm-reload; network limits must be nonnegative and cpu-throttle at least 1",
+    "gateway-url requires an HTTP origin, bundle-dir and one first-load run without comparison; gateway-http requires bundle-dir without gateway-url; first-load requires sidebar-view=sessions without warm-reload; network limits must be nonnegative and cpu-throttle at least 1",
   );
 }
 const {
@@ -563,25 +567,36 @@ async function readBundleBuildId(directory: string): Promise<string> {
 if (values["bundle-dir"] && !explicitBuildId) {
   buildId = await readBundleBuildId(bundleDir);
 }
-const server = gatewayUrl
-  ? undefined
-  : values["bundle-dir"]
-    ? await startBuiltControlUiE2eServer(bundleDir, undefined, port)
-    : await startProductionControlUiE2eServer(bundleDir, buildId);
-const baseUrl = gatewayUrl?.origin ?? server!.baseUrl;
+const gatewayHttpServer = values["gateway-http"]
+  ? await startControlUiBenchGatewayServer(bundleDir, port)
+  : undefined;
+const server =
+  gatewayUrl || gatewayHttpServer
+    ? undefined
+    : values["bundle-dir"]
+      ? await startBuiltControlUiE2eServer(bundleDir, undefined, port)
+      : await startProductionControlUiE2eServer(bundleDir, buildId);
+const baseUrl = gatewayUrl?.origin ?? gatewayHttpServer?.baseUrl ?? server!.baseUrl;
+const usesGatewayHttp = Boolean(gatewayUrl || gatewayHttpServer);
 const comparisonBundleDirs = values["compare-bundle-dir"].map((directory) =>
   path.resolve(directory),
 );
 const parkedBaselineDir = path.join(artifactDir, "baseline-bundle");
-const bundleSlots = [parkedBaselineDir, ...comparisonBundleDirs];
+const bundleSlots = [gatewayHttpServer ? bundleDir : parkedBaselineDir, ...comparisonBundleDirs];
 let activeBundle = 0;
 async function selectComparisonBundle(index: number, page?: Page) {
   if (!comparisonBundleDirs.length || activeBundle === index) {
     return;
   }
-  await server!.replaceBuild(bundleSlots[index]!, bundleSlots[activeBundle]!);
+  if (gatewayHttpServer) {
+    await gatewayHttpServer.selectBuild(bundleSlots[index]!);
+  } else {
+    await server!.replaceBuild(bundleSlots[index]!, bundleSlots[activeBundle]!);
+  }
   activeBundle = index;
-  buildId = explicitBuildId ?? (await readBundleBuildId(bundleDir));
+  buildId =
+    explicitBuildId ??
+    (await readBundleBuildId(gatewayHttpServer ? bundleSlots[index]! : bundleDir));
   await page?.evaluate((id) => {
     const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
     if (!gateway) {
@@ -821,10 +836,12 @@ try {
   await page.route("**/control-ui-config.json", (route) =>
     route.fulfill({ json: createControlUiMockBootstrapConfig(prepared.scenario) }),
   );
-  await installControlUiMockBootstrapDocument(
-    page,
-    createControlUiMockBootstrapConfig(prepared.scenario),
-  );
+  if (!usesGatewayHttp) {
+    await installControlUiMockBootstrapDocument(
+      page,
+      createControlUiMockBootstrapConfig(prepared.scenario),
+    );
+  }
   const assets = new Map<string, { body: string | Buffer; contentType: string }>([
     ...fixture.assets,
     ...prepared.assets,
@@ -904,12 +921,12 @@ try {
     },
     {
       key: controlUiBundledSettingsStorageKey(baseUrl),
-      fixtureUrl: gatewayUrl
+      fixtureUrl: usesGatewayHttp
         ? bootRoute === "new"
           ? new URL("/new", baseUrl).href
           : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face)
         : null,
-      bootstrap: gatewayUrl
+      bootstrap: usesGatewayHttp
         ? JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario))
         : null,
       bootstrapAttribute: CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
@@ -937,7 +954,7 @@ try {
   }
   // Fetch the real public document; the init script selects the synthetic session.
   // Session-entry authorization is outside this static-delivery benchmark.
-  const url = gatewayUrl
+  const url = usesGatewayHttp
     ? new URL(bootRoute === "new" ? "/new" : "/chat", baseUrl).href
     : bootRoute === "new"
       ? new URL("/new", baseUrl).href
@@ -1059,10 +1076,12 @@ try {
         { timeout: 30_000 },
       );
     } catch (error) {
-      const diagnostics = await page.evaluate(() => ({
-        ...Reflect.get(window, "__coldLoad")?.read(),
-        widgetReadiness: Reflect.get(window, "__readWidgetReadiness")?.(),
-      }));
+      const diagnostics = await page
+        .evaluate(() => ({
+          ...Reflect.get(window, "__coldLoad")?.read(),
+          widgetReadiness: Reflect.get(window, "__readWidgetReadiness")?.(),
+        }))
+        .catch(() => ({ unavailable: "Page navigated while capturing diagnostics" }));
       await writeFile(
         path.join(artifactDir, "failure.json"),
         JSON.stringify({ diagnostics, errors, consoleErrors, documentNavigations }, null, 2),
@@ -2320,6 +2339,7 @@ try {
   await browser?.close();
   await selectComparisonBundle(0);
   await server?.close();
+  await gatewayHttpServer?.close();
   sandbox.closeAllConnections();
   await new Promise<void>((resolve, reject) => {
     sandbox.close((error) => (error ? reject(error) : resolve()));
@@ -2335,8 +2355,11 @@ try {
         gatewayUrl: gatewayUrl?.origin,
         httpBoundary: gatewayUrl
           ? "Real Gateway HTTP documents/assets; synthetic bootstrap, WebSocket RPC and fixture media. Server cache lifecycle is controlled externally."
-          : "Vite production preview HTTP; synthetic bootstrap, WebSocket RPC and fixture media.",
+          : gatewayHttpServer
+            ? "Production Gateway HTTP handler; synthetic bootstrap, WebSocket RPC and fixture media. Immutable server asset caches stay warm per bundle."
+            : "Vite production preview HTTP; synthetic bootstrap, WebSocket RPC and fixture media.",
         firstLoad,
+        gatewayHttp: values["gateway-http"],
         bootRoute,
         coldHttpCache: values["cold-http-cache"],
         networkLatencyMs,

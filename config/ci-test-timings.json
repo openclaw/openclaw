@@ -3301,7 +3301,6 @@
       "ui/src/e2e/chat-header-axis.e2e.test.ts": 14,
       "ui/src/e2e/chat-header-owner-presence.capture.e2e.test.ts": 4,
       "ui/src/e2e/chat-header-session-lineage.e2e.test.ts": 7,
-      "ui/src/e2e/chat-header-session-outcomes.e2e.test.ts": 14,
       "ui/src/e2e/chat-heartbeat-activity-rollup.e2e.test.ts": 2,
       "ui/src/e2e/chat-history-loading.e2e.test.ts": 3,
       "ui/src/e2e/chat-history-prepend-anchor.e2e.test.ts": 42,

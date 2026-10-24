@@ -75,17 +75,22 @@ async function finishSendMotion(page: Page, reducedMotion: string) {
     true,
   );
   if (reducedMotion !== "reduce") {
-    expect({
-      noInstantJump: scrolls.every((scroll) => Math.abs(scroll.jump) <= 1),
-      monotonic: visible.every((frame, index) => {
-        const previous = visible[index - 1];
-        return !previous || (frame.y !== null && previous.y !== null && frame.y <= previous.y + 1);
-      }),
-      // Check commands rather than frame counts: a loaded browser may skip intermediate frames.
-      smoothFromDistance: scrolls.some(
-        (scroll) => scroll.behavior === "smooth" && scroll.remaining > 8,
-      ),
-    }).toEqual({ noInstantJump: true, monotonic: true, smoothFromDistance: true });
+    expect(
+      {
+        noInstantJump: scrolls.every((scroll) => Math.abs(scroll.jump) <= 1),
+        monotonic: visible.every((frame, index) => {
+          const previous = visible[index - 1];
+          return (
+            !previous || (frame.y !== null && previous.y !== null && frame.y <= previous.y + 1)
+          );
+        }),
+        // Check commands rather than frame counts: a loaded browser may skip intermediate frames.
+        smoothFromDistance: scrolls.some(
+          (scroll) => scroll.behavior === "smooth" && scroll.remaining > 8,
+        ),
+      },
+      JSON.stringify({ scrolls, endDistance }),
+    ).toEqual({ noInstantJump: true, monotonic: true, smoothFromDistance: true });
     expect(endDistance).toBeLessThanOrEqual(8);
   }
 }

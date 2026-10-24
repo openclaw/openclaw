@@ -11,7 +11,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import type {
   ImageDescriptionRequest,
   ImagesDescriptionRequest,
@@ -42,11 +41,13 @@ import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandb
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { createImageTool } from "./image-tool.js";
 import {
+  createLargeColorBlockPng,
   createMinimaxImageConfig,
   createRequiredImageTool,
   executeImplicitImageTool,
   expectToolText,
   ONE_PIXEL_PNG_B64,
+  readJpegDimensions,
   resolveConfiguredImageModelForTest,
   testing,
   type ToolTextResult,
@@ -307,45 +308,6 @@ async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promi
 }
 
 const ONE_PIXEL_GIF_B64 = "R0lGODlhAQABAIABAP///wAAACwAAAAAAQABAAACAkQBADs=";
-
-function createLargeColorBlockPng(size: number): Buffer {
-  const buf = Buffer.alloc(size * size * 4, 255);
-  const centerStart = Math.floor(size * 0.25);
-  const centerEnd = Math.floor(size * 0.75);
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const inCenter = x >= centerStart && x < centerEnd && y >= centerStart && y < centerEnd;
-      fillPixel(buf, x, y, size, inCenter ? 230 : 30, inCenter ? 40 : 110, inCenter ? 35 : 220);
-    }
-  }
-  return encodePngRgba(buf, size, size);
-}
-
-function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
-  // The tests inspect JPEG SOF markers directly so resize assertions do not
-  // depend on an external decoder.
-  let offset = 2;
-  while (offset + 9 < buffer.length) {
-    if (buffer[offset] !== 0xff) {
-      offset += 1;
-      continue;
-    }
-    const marker = expectDefined(buffer[offset + 1], "buffer[offset + 1] test invariant");
-    offset += 2;
-    if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
-      continue;
-    }
-    const segmentLength = buffer.readUInt16BE(offset);
-    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
-      return {
-        height: buffer.readUInt16BE(offset + 3),
-        width: buffer.readUInt16BE(offset + 5),
-      };
-    }
-    offset += segmentLength;
-  }
-  throw new Error("JPEG dimensions not found");
-}
 
 function readPngDimensions(buffer: Buffer): { width: number; height: number } {
   if (buffer.length < 24 || buffer.toString("ascii", 12, 16) !== "IHDR") {
