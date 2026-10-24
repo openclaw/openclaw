@@ -1,13 +1,11 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { AsyncContext } from "../../shared/async-context.js";
 
 type RequestAuthority = { assertCurrent: () => void; beforeRequest: () => void };
 
 // Host runtime and plugin SDK chunks must retain the same request-owned fence.
-const requestAuthority = resolveGlobalSingleton(
+const requestAuthority = new AsyncContext<RequestAuthority>(
   Symbol.for("openclaw.guardedFetchRequestAuthority"),
-  () => new AsyncLocalStorage<RequestAuthority>(),
 );
 
 /** Capture before transport preparation so redirects retain the original caller. */

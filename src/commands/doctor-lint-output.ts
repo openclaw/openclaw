@@ -10,6 +10,7 @@ import { formatUpdateDoctorLintFinding } from "../infra/update-doctor-lint.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
 import { isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
+import type { RecoveryDiskUsage } from "./recovery-disk-usage.js";
 
 const DOCTOR_LINT_JSON_SCHEMA_VERSION = 1;
 
@@ -20,6 +21,7 @@ function formatJsonResult(result: {
   findings: readonly HealthFinding[];
   warnings?: readonly HealthFinding[];
   databaseStores?: readonly Record<string, unknown>[];
+  recoveryCopies?: RecoveryDiskUsage;
 }) {
   return {
     schemaVersion: DOCTOR_LINT_JSON_SCHEMA_VERSION,
@@ -28,6 +30,7 @@ function formatJsonResult(result: {
     checksSkipped: result.checksSkipped,
     findings: result.findings.map(toJsonFinding),
     ...(result.databaseStores ? { databaseStores: result.databaseStores } : {}),
+    ...(result.recoveryCopies ? { recoveryCopies: result.recoveryCopies } : {}),
     // Shipped updater gates require findings to be empty on success.
     ...(result.warnings?.length ? { warnings: result.warnings.map(toJsonFinding) } : {}),
   };
@@ -90,6 +93,7 @@ export type DoctorLintExecution = {
   checksSkipped: number;
   cleanupWarnings?: readonly HealthFinding[];
   databaseStores?: readonly Record<string, unknown>[];
+  recoveryCopies?: RecoveryDiskUsage;
   exitCode: number;
   findings: readonly HealthFinding[];
   warnings?: readonly HealthFinding[];
@@ -161,6 +165,7 @@ export async function createStateSnapshotFailureExecution(
     findings: visible,
     cleanupWarnings: completed?.cleanupWarnings,
     databaseStores: completed?.databaseStores,
+    recoveryCopies: completed?.recoveryCopies,
     warnings: completed?.warnings,
     writeOutput() {
       if (detectDoctorLintOutputMode(opts) === "json") {
@@ -170,6 +175,7 @@ export async function createStateSnapshotFailureExecution(
           checksSkipped,
           findings: visible,
           databaseStores: completed?.databaseStores,
+          recoveryCopies: completed?.recoveryCopies,
           warnings: [...(completed?.warnings ?? []), ...(completed?.cleanupWarnings ?? [])],
         });
         return;

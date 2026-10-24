@@ -1,5 +1,6 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { hasCompletionMessageSessionSpawn } from "../../agents/accepted-session-spawn.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
@@ -17,6 +18,7 @@ import {
   shouldDeliverMissingReplyNotice,
 } from "../../agents/reply-completion.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { logVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
@@ -45,6 +47,7 @@ import {
 } from "./automation-reply-payloads.js";
 import { deliverBlockReply } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
+import { createFollowupSpeechPreparer } from "./followup-delivery-tts.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
@@ -568,7 +571,25 @@ export async function deliverFollowupDecision(params: {
   const origin = resolveOriginMessageProvider({ originatingChannel });
   const sameChannelOrigin = Boolean(origin && origin === provider);
   const crossChannelOrigin = Boolean(origin && provider && origin !== provider);
-  for (const payload of payloads) {
+  const prepareSpeech = createFollowupSpeechPreparer({ turn, defaults, kind });
+  // The operation holds lifecycle admission until queue handoff. Retain its
+  // current generation so recovery cannot adopt a later reset's session.
+  const entry = turn.session.current();
+  const sessionGeneration: SessionDeliveryGeneration | undefined =
+    turn.session.kind === "session" && turn.session.storePath && entry
+      ? {
+          agentId: resolveSessionAgentId({
+            sessionKey: turn.session.key,
+            config: turn.config,
+            fallbackAgentId: turn.queued.run.agentId,
+          }),
+          storePath: turn.session.storePath,
+          sessionKey: turn.session.key,
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision ?? null,
+        }
+      : undefined;
+  for (let payload of payloads) {
     const providerRoute = deliveryPlan.resolveFollowupRoute({
       payload,
       originatingChannel,
@@ -599,6 +620,13 @@ export async function deliverFollowupDecision(params: {
       }
     }
     await typing.signalTextDelta(payload.text);
+    // The stalled recovery owner delivers its terminal notice after the operation aborts.
+    if (
+      turn.queued.stalledTurnRecovery !== true ||
+      !isReplyOperationStalledBeforeOutput(turn.operation)
+    ) {
+      payload = await prepareSpeech(payload, route);
+    }
     if (route !== "origin") {
       await dispatchPayload(payload);
     } else if (isRoutableChannel(originatingChannel) && originatingTo) {
@@ -609,6 +637,7 @@ export async function deliverFollowupDecision(params: {
         to: originatingTo,
         agentId: turn.queued.run.agentId,
         sessionKey: turn.queued.run.sessionKey,
+        sessionGeneration,
         accountId: turn.queued.originatingAccountId,
         requesterSenderId: turn.queued.run.senderId,
         requesterSenderName: turn.queued.run.senderName,

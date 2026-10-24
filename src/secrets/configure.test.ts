@@ -105,7 +105,7 @@ describe("runSecretsConfigureInteractive", () => {
       source: "exec",
       pluginIntegration: { pluginId: "vault", integrationId: "vault" },
     };
-    const result = await runSecretsConfigureInteractive({ providersOnly: true, env: {} });
+    const result = await runSecretsConfigureInteractive({ providersOnly: true });
     expect([result.plan.targets, result.plan.providerUpserts?.vault]).toEqual([[], vault]);
     expect(runSecretsApplyMock).toHaveBeenCalledWith(
       expect.objectContaining({

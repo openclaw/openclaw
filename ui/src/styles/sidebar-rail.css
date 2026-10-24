@@ -265,8 +265,9 @@
 }
 
 .sidebar-rail .sidebar-issues-button__count {
-  background: var(--accent);
-  color: var(--accent-foreground);
+  /* Bound lightness and chroma for white counts, preserving the accent hue. */
+  background: oklch(from var(--accent) min(l, 0.5) min(c, 0.22) h / 1);
+  color: var(--inbox-attention-foreground);
 }
 
 .sidebar-rail .session-glyph__badge--unread {

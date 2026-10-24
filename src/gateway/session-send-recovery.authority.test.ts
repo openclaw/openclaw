@@ -134,7 +134,7 @@ it.each(["operator.sessions.write", "operator.read"])(
         accepted = true;
       });
 
-      await recoverSessionSendDeliveries(recoveryContext, new AbortController().signal);
+      await recoverSessionSendDeliveries(recoveryContext, new AbortController().signal).settled;
 
       expect(dispatch).toHaveBeenCalledOnce();
       expect(io.withdraw).not.toHaveBeenCalled();

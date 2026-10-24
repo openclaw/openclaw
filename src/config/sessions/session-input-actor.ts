@@ -239,5 +239,5 @@ export function throwSessionInputActorFailure(
   if (authorityFailure !== undefined) {
     throw toErrorObject(authorityFailure, "Input actor authority rejected the operation");
   }
-  throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
+  throw toErrorObject(outcome.error, outcome.error.message);
 }

@@ -38,6 +38,10 @@ caller label. A reservation includes worker queueing, preparation, and result
 delivery; its duration alone does not establish a slow SQL transaction.
 Schemas, stored data, live commit authority, and update behavior are unchanged.
 
+Refused ordered session reads include the conflicting admission's shortened,
+bounded database path, operation, thread, age, and any recorded caller or worker
+operation labels in the error itself. They never include request payloads.
+
 SQLite admission delivery follows each worker's ordered cursor. The first snapshot
 includes its shared revision cells; later publications send only new or replaced
 facts, session scopes, and reference cells. Existing cells carry invalidation
@@ -48,6 +52,12 @@ Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
 the writer's ordered operation when a read must follow its accepted writes.
 Do not open a second main-thread connection or add a synchronous fallback.
+
+Agent creation and workspace mutations keep their recovery-hold recheck inside
+the existing synchronous engine admission; filesystem effects remain outside it.
+PostgreSQL cron-owner and schema inspection use the existing cron read worker,
+including when agent creation or Doctor requests those facts.
+
 Agent provenance presentation and managed outgoing media inventory/lookups use
 that read-only scope, so reconnect reads do not reserve the shared writer queue.
 Missing provenance storage stays absent until an agent is created. Media inserts,
@@ -63,6 +73,11 @@ and the agent's
 [`openclaw-agent-execution.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-agent-execution.worker.ts).
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
+
+If PostgreSQL schema publication invalidates a shared-state reader's admission
+before its callback starts, the reader rolls back and retries admission once
+using the owner's current facts. It never retries caller work or refreshes an
+imported snapshot. Schema validation and live ownership checks remain in force.
 
 Startup client credential preparation uses the existing credential worker and
 its native custody admission. The admission's receipt postimage also decides

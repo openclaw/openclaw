@@ -25,8 +25,8 @@ import {
   type AgentInternalEvent,
 } from "../../internal-events.js";
 import {
+  buildSubagentPrivateCompletionInstruction,
   SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
-  SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION,
 } from "../completion/subagent-completion-instructions.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
@@ -66,6 +66,7 @@ import {
 import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
+  type DeliveryContext,
 } from "./subagent-announce-origin.js";
 import {
   readChildCompletionFindings,
@@ -93,6 +94,7 @@ export type SubagentAnnounceFlowOutcome = NonNullable<
 
 function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
+  requesterOrigin: DeliveryContext | undefined;
   completionTarget?: "parent";
   modelRouteChange?: string;
   preserveModelRouteNotice: boolean;
@@ -103,7 +105,7 @@ function buildAnnounceReplyInstruction(params: {
       ? " Preserve any runtime-authored model-route change notice in your update."
       : " Keep runtime-authored model-route change notices internal on this shared surface.";
   if (params.completionTarget === "parent") {
-    return SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION;
+    return buildSubagentPrivateCompletionInstruction(params.requesterOrigin);
   }
   if (params.requesterIsSubagent) {
     return `${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} Convert the reviewed outcome into a concise internal orchestration update for your parent agent in your own words.${modelRouteInstruction} Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
@@ -532,6 +534,7 @@ async function runSubagentAnnounceFlowBound(
             : undefined;
         const replyInstruction = buildAnnounceReplyInstruction({
           requesterIsSubagent,
+          requesterOrigin: directOrigin,
           completionTarget: params.completionTarget,
           modelRouteChange,
           // Nested and local operator parents may report the route fact. External

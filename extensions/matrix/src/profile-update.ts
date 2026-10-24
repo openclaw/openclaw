@@ -9,7 +9,7 @@ export type MatrixProfileUpdateResult = {
   accountId: string;
   displayName: string | null;
   avatarUrl: string | null;
-  profile: Omit<MatrixProfileSyncResult, "skipped">;
+  profile: MatrixProfileSyncResult;
   configPath: string;
 };
 
@@ -49,13 +49,12 @@ export async function applyMatrixProfileUpdate(params: {
     nextConfig: updated as never,
     afterWrite: { mode: "auto" },
   });
-  const { skipped: _skipped, ...profile } = synced;
 
   return {
     accountId,
     displayName,
     avatarUrl: persistedAvatarUrl ?? null,
-    profile,
+    profile: synced,
     configPath: resolveMatrixConfigPath(updated, accountId),
   };
 }

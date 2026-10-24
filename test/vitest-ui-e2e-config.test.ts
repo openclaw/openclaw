@@ -34,7 +34,7 @@ const qaLabFiles = [
 ] as const;
 const serialGatewayFiles =
   `approval-lookup chat-steer-deferred-custody deepseek-search desktop-resize
-  peer-followup-restart`
+  peer-followup-restart plugin-inline-view`
     .split(/\s+/u)
     .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
     .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");

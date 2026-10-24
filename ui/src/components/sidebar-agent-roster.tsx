@@ -444,17 +444,20 @@ declare module "@solidjs/web" {
   }
 }
 
-export function renderSidebarPinnedSession(host: RosterHost, session: () => SidebarRecentSession) {
-  const agentId = createMemo(() => host.sessionNavigationAgentId(session()));
+export function SidebarPinnedSession(props: { host: RosterHost; session: SidebarRecentSession }) {
+  const session = () => props.session;
+  const agentId = createMemo(() => props.host.sessionNavigationAgentId(session()));
   const card = createMemo(() => {
     const cards =
-      cachedRosterCards(host) ??
-      (host.sessionDataContext ? rosterActivityStore(host.sessionDataContext).snapshot.cards : []);
+      cachedRosterCards(props.host) ??
+      (props.host.sessionDataContext
+        ? rosterActivityStore(props.host.sessionDataContext).snapshot.cards
+        : []);
     return cards.find((agent) => agent.id === agentId());
   });
   return (
     <SessionTree
-      host={host}
+      host={props.host}
       session={session()}
       listItem={false}
       icon={<AgentIdentityAvatar agent={card() ?? { id: agentId() }} />}

@@ -29,7 +29,6 @@ import type {
 
 export type { SessionTranscriptReadScope } from "./session-transcript-read.types.js";
 export { capArrayByJsonBytes } from "./session-utils.fs.js";
-export { attachOpenClawTranscriptMeta } from "./session-transcript-entry-message.js";
 
 function captureHistoryReadScope(scope: SessionTranscriptReadScope): SessionTranscriptReadScope {
   const target = bindSessionTranscriptStoreScope(scope);

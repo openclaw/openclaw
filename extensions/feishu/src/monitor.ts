@@ -4,7 +4,11 @@ import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.j
 import { listEnabledFeishuAccounts, resolveFeishuRuntimeAccount } from "./accounts.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 
-type MonitorFeishuOpts = {
+export type FeishuStatusSink = ReturnType<typeof createAccountStatusSink>;
+
+const loadMonitorAccountRuntime = createLazyRuntimeModule(() => import("./monitor.account.js"));
+
+export async function monitorFeishuProvider(opts: {
   config: ClawdbotConfig;
   runtime?: RuntimeEnv;
   channelRuntime?: PluginRuntime["channel"];
@@ -16,13 +20,7 @@ type MonitorFeishuOpts = {
    * when Feishu provides a real activity signal.
    */
   statusSink?: FeishuStatusSink;
-};
-
-export type FeishuStatusSink = ReturnType<typeof createAccountStatusSink>;
-
-const loadMonitorAccountRuntime = createLazyRuntimeModule(() => import("./monitor.account.js"));
-
-export async function monitorFeishuProvider(opts: MonitorFeishuOpts): Promise<void> {
+}): Promise<void> {
   const cfg = opts.config;
 
   const log = opts.runtime?.log ?? console.log;

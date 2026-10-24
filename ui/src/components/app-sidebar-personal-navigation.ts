@@ -272,7 +272,7 @@ export function personalSidebarOwnerProjection(
   });
 }
 
-/** Rendering and selection share archive visibility; saved pins survive restoration. */
+/** Rendering and selection share archive visibility for personal references. */
 export function sidebarPinnedSessionRows(
   zone: SidebarPinZone,
   archiveVisibility?: ApplicationContext["sessions"]["archiveVisibility"],

@@ -34,7 +34,6 @@ import {
   projectChatOutboxItem,
   isActiveLocal,
   hasActiveChatOutboxProjection,
-  projectChatOutboxAttention,
   reconcileChatOutboxProjection,
   type ChatOutboxHostProjection as HostProjection,
 } from "./chat-outbox-owner.projection.ts";
@@ -713,11 +712,4 @@ export function chatOutboxOwner(host: Composer): ChatOutboxGatewayOwner {
   chatOutboxAttentionOwners.set(key, owner);
   owner.adoptSubscriptions(host);
   return owner;
-}
-
-/** Read-only view of the existing tab/Gateway outbox; it does not claim a personal owner. */
-export function listChatOutboxAttention(host: Composer) {
-  return readOfflineStorageScope(host)
-    ? projectChatOutboxAttention(listOutboxes(host), owners.get(outboxOwnerKey(host)))
-    : [];
 }

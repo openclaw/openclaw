@@ -4,11 +4,6 @@ import { type NostrProfile, NostrProfileSchema } from "./config-schema.js";
 import { contentToProfile, type ProfileContent } from "./nostr-profile-core.js";
 import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
-interface ProfileImportOptions {
-  pubkey: string;
-  relays: string[];
-}
-
 function sanitizeProfileUrls(profile: NostrProfile): NostrProfile {
   const result = { ...profile };
   const urlFields = ["picture", "banner", "website"] as const;
@@ -27,7 +22,7 @@ function sanitizeProfileUrls(profile: NostrProfile): NostrProfile {
 }
 
 /** Import the latest verified kind:0 profile across the configured relays. */
-export async function importProfileFromRelays(opts: ProfileImportOptions) {
+export async function importProfileFromRelays(opts: { pubkey: string; relays: string[] }) {
   const { pubkey, relays } = opts;
 
   if (!pubkey || !/^[0-9a-fA-F]{64}$/.test(pubkey)) {

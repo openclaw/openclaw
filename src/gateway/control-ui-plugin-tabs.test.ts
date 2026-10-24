@@ -15,7 +15,10 @@ import {
   listControlUiPluginWidgetKinds,
 } from "./control-ui-plugin-tabs.js";
 
-function tab(pluginId: string, overrides: Partial<PluginControlUiDescriptor> = {}) {
+function tab(
+  pluginId: string,
+  overrides: Partial<PluginControlUiDescriptor & { surface: "tab" | "run" | "widget" }> = {},
+) {
   const descriptor: PluginControlUiDescriptor = {
     id: "logbook",
     surface: "tab",
@@ -55,7 +58,7 @@ function activateDescriptors(
 }
 
 function activateRoutes(
-  entries: Array<[string, string, Partial<PluginControlUiDescriptor>?]>,
+  entries: Array<[string, string, Parameters<typeof tab>[1]?]>,
   routes: Parameters<typeof activateDescriptors>[1],
 ) {
   return activateDescriptors(

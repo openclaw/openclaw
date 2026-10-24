@@ -50,7 +50,11 @@ export function resolvePluginActivationStateShared(params: {
     explicitReason = "channel enabled in config";
   } else if (activationSource.plugins.slots.memory === params.id) {
     explicitReason = "selected memory slot";
-  } else if (activationSource.plugins.slots.contextEngine === params.id) {
+  } else if (
+    activationSource.plugins.contextEngineOwnerId !== undefined
+      ? activationSource.plugins.contextEngineOwnerId === explicitPolicyId
+      : activationSource.plugins.slots.contextEngine === params.id
+  ) {
     explicitReason = "selected context engine slot";
   } else if (
     params.origin !== "bundled" &&
@@ -106,7 +110,11 @@ export function resolvePluginActivationStateShared(params: {
   if (params.config.slots.memory === params.id) {
     return decision("explicit", { explicitlyEnabled: true, reason: "selected memory slot" });
   }
-  if (params.config.slots.contextEngine === params.id) {
+  if (
+    params.config.contextEngineOwnerId !== undefined
+      ? params.config.contextEngineOwnerId === policyId
+      : params.config.slots.contextEngine === params.id
+  ) {
     return decision("explicit", {
       explicitlyEnabled: true,
       reason: "selected context engine slot",

@@ -3,6 +3,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -33,10 +34,10 @@ import {
   getAcpBlockTranscriptText,
   joinAcpBlockText,
   maybeApplyAcpTts,
-  prepareAcpDeliveryPayload,
   recoverAcpBlockText,
   shouldTreatDeliveredTextAsVisible,
 } from "./dispatch-acp-payload.js";
+import { normalizeReplyPayloadOutcome } from "./normalize-reply.js";
 import {
   resolveRoutedReplyDeliveryOutcome,
   shouldRetryReplyDispatch,
@@ -44,6 +45,7 @@ import {
 import {
   attachReplyDispatchUndeliveredFallback,
   captureReplyDispatchDeliveryOutcome,
+  prepareReplyPayloadForDispatcher,
   waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
@@ -246,15 +248,15 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
       const messaging = routed
         ? (await channelPluginRuntimeLoader.load()).getChannelPlugin(routedChannel)?.messaging
         : undefined;
-      const prepared = prepareAcpDeliveryPayload({
-        cfg: params.cfg,
-        dispatcher: params.dispatcher,
-        kind,
-        payload,
-        routed,
-        ...(messaging ? { messaging } : {}),
-        accountId: resolvedAccountId,
-      });
+      const prepared = routed
+        ? normalizeReplyPayloadOutcome(payload, {
+            transformReplyPayload: createChannelReplyTransform({
+              messaging,
+              cfg: params.cfg,
+              accountId: resolvedAccountId,
+            }),
+          })
+        : prepareReplyPayloadForDispatcher(params.dispatcher, kind, payload);
       if (prepared.kind === "suppress") {
         if (prepared.reason === "channel_transform") {
           state.suppressionReason = prepared.reason;

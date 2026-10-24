@@ -42,7 +42,6 @@ export function resolveLegacyHeartbeatSessionKey(
           ? toAgentStoreSessionKey({ agentId: resolvedAgentId, requestKey: "global" })
           : "global",
       storePath,
-      suppressOriginatingContext: false,
     };
   }
 
@@ -51,10 +50,9 @@ export function resolveLegacyHeartbeatSessionKey(
     cfg.session?.scope === "global"
       ? "global"
       : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
-  const selectSession = (sessionKey = mainSessionKey, suppressOriginatingContext = false) => ({
+  const selectSession = (sessionKey = mainSessionKey) => ({
     sessionKey,
     storePath,
-    suppressOriginatingContext,
   });
   if (cfg.session?.scope === "global") {
     return selectSession();
@@ -84,7 +82,7 @@ export function resolveLegacyHeartbeatSessionKey(
   // Never route heartbeats to subagent sessions, regardless of entry path.
   const forced = forcedSessionKey?.trim();
   if (forced && isSubagentSessionKey(forced)) {
-    return selectSession(mainSessionKey, true);
+    return selectSession(mainSessionKey);
   }
   const forcedCanonical = forced ? resolveCandidate(forced) : undefined;
   if (forcedCanonical) {

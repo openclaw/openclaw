@@ -380,6 +380,17 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   const nodeWorkerBundleRetention: NodeWorkerBundleRetention = {
     isEnvironmentOwnedNode,
     currentBuild: currentWorkerBundleArtifact,
+    prefetch: async (node, signal, assertCurrent) => {
+      const artifact = await currentWorkerBundleArtifact();
+      assertCurrent();
+      await nodeWorkerBundleInstaller({
+        deviceId: node.nodeId,
+        artifact,
+        reason: "prefetch",
+        signal,
+        assertCurrent,
+      });
+    },
   };
   const nodeEnrollment = createWorkerNodeEnrollmentManager({
     store: params.startup.store,

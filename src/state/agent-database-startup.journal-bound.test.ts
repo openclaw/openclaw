@@ -64,6 +64,8 @@ async function prepareAgents(
   count: number,
   options: {
     isCurrent?: () => boolean;
+    openAgent?: () => Promise<AsyncDisposable | void>;
+    migrateAgent?: () => Promise<void>;
     publishAgent?: () => Promise<void>;
     afterActivation?: () => Promise<void>;
   } = {},
@@ -86,8 +88,8 @@ async function prepareAgents(
       admission.activate({
         isCurrent: options.isCurrent ?? (() => true),
         preparationReady: Promise.resolve(),
-        openAgent: async () => {},
-        migrateAgent: async () => {},
+        openAgent: options.openAgent ?? (async () => {}),
+        migrateAgent: options.migrateAgent ?? (async () => {}),
         publishAgent: options.publishAgent ?? (async () => {}),
       });
       await options.afterActivation?.();
@@ -100,6 +102,37 @@ async function prepareAgents(
   });
   return agentIds;
 }
+
+it.each([undefined, "migration", "publication"] as const)(
+  "retains the prepared resource until startup settles (%s)",
+  async (failure) => {
+    const events: string[] = [];
+    let released = false;
+    const step = async (phase: string) => {
+      expect(released).toBe(false);
+      events.push(phase);
+      if (phase === failure) {
+        throw new Error("startup fixture refusal");
+      }
+    };
+    await prepareAgents(1, {
+      openAgent: async () => ({
+        async [Symbol.asyncDispose]() {
+          released = true;
+          events.push("released");
+        },
+      }),
+      migrateAgent: () => step("migration"),
+      publishAgent: () => step("publication"),
+    });
+    expect(events).toEqual(
+      failure === "migration"
+        ? ["migration", "released"]
+        : ["migration", "publication", "released"],
+    );
+    expect(admissionState.failed).toEqual(failure ? ["agent-0"] : []);
+  },
+);
 
 it("prepares more than 128 agents without overflowing state-read admission", async () => {
   let active = 0;

@@ -28,7 +28,10 @@ import {
   runSessionMutation,
 } from "../sessions/session-controller.lifecycle.js";
 import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
-import { recoverAfterAgentDatabasePreparation } from "../state/agent-database-preparation-recovery.js";
+import {
+  recoverAfterAgentDatabasePreparation,
+  type AgentRecoveryProgress,
+} from "../state/agent-database-preparation-recovery.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { CHAT_INPUT_RECOVERY_MAX_AGE_MS } from "./chat-input-recovery-source.js";
 import { bindInProcessSessionRun } from "./in-process-session-run.js";
@@ -48,17 +51,18 @@ import { SessionStoreUnavailableError } from "./session-utils-store-error.js";
 class SessionSendRequesterUnavailableError extends Error {}
 
 /** Discover saved inputs; existing turn owners retain execution and sender custody. */
-export async function recoverSessionSendDeliveries(
+export function recoverSessionSendDeliveries(
   context: GatewayRequestContext,
   signal: AbortSignal,
   startupTrace?: GatewayStartupTrace,
-): Promise<void> {
+): AgentRecoveryProgress {
   if (!context.recoveryRuntime) {
-    return;
+    const settled = Promise.resolve();
+    return { initial: settled, pending: new Map(), settled };
   }
   const config = context.getRuntimeConfig();
   const replaySession = pLimit(4);
-  await recoverAfterAgentDatabasePreparation(signal, (agentIds) =>
+  return recoverAfterAgentDatabasePreparation(signal, (agentIds) =>
     recoverSessionSendDeliveriesForAgents(
       context,
       agentIds ? context.getRuntimeConfig() : config,

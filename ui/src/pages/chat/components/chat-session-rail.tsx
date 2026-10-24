@@ -184,7 +184,8 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       if (nextScrollKey !== scrollKey) {
         scrollKey = nextScrollKey;
         scheduleLayout(thread, () => {
-          const bottom = thread.scrollHeight;
+          const bottom =
+            host.companion.loading && !host.companion.turns.length ? 0 : thread.scrollHeight;
           return () => {
             thread.scrollTop = bottom;
           };
@@ -246,6 +247,9 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       )}
       <div
         class="chat-session-rail__thread"
+        style={{
+          padding: props.companion.loading && !props.companion.turns.length ? "0" : undefined,
+        }}
         aria-live="polite"
         onClick={handleMarkdownCodeBlockClick}
         ref={(element) => {
@@ -258,8 +262,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
         )}
         {!props.companion.loading && !props.companion.turns.length && (
           <PanelEmptyState
-            // Side chat keeps its native desktop empty; only mobile adopts the shared variant.
-            presentation={props.presentation === "mobile" ? "mobile" : undefined}
+            presentation={props.presentation}
             icon={<Icon name="bot" />}
             heading={t("chat.sidePanel.companion")}
             description={t("chat.rail.empty")}

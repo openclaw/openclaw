@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withTestTimeout } from "../../test/helpers/promise.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { createMainThreadStallMonitor, runWithMainThreadTask } from "../infra/main-thread-stall.js";
@@ -7,6 +7,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { create as createSessionRow, type Lookup } from "./session-row-projection-record.js";
+import * as sessionStoreKeys from "./session-store-key.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
 
@@ -124,6 +125,8 @@ it.each([false, true])(
     const preparedState = projection.state;
     let topologyChanged = false;
     let consumed = 0;
+    let preparedKeyReads = 0;
+    const keyReads = vi.spyOn(sessionStoreKeys, "resolveStoredSessionKeyForAgentStore");
     Object.defineProperty(projection, "state", {
       get() {
         if (topologyChanged) {
@@ -137,16 +140,27 @@ it.each([false, true])(
       () => undefined,
     );
     try {
-      const reading = read(owner, "completed-native-read", () => {
-        consumed++;
-        queueMicrotask(() => {
-          topologyChanged = true;
-        });
-        return "prepared";
-      });
+      const reading = read(
+        owner,
+        "completed-native-read",
+        () => {
+          // Durable selection already classified these keys before entering the read view.
+          expect(keyReads).toHaveBeenCalledTimes(preparedKeyReads);
+          consumed++;
+          queueMicrotask(() => {
+            topologyChanged = true;
+          });
+          return "prepared";
+        },
+        () => {
+          preparedKeyReads = keyReads.mock.calls.length;
+          return undefined;
+        },
+      );
       await expect(reading).resolves.toEqual("prepared");
       expect(consumed).toBe(1);
     } finally {
+      keyReads.mockRestore();
       owner.dispose();
     }
   },

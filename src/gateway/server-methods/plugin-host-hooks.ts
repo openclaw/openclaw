@@ -16,6 +16,7 @@ import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { validateJsonSchemaValue, type JsonSchemaValue } from "../../plugins/schema-validator.js";
+import { hasMultipleResidentSessionSharingIdentities } from "../../state/user-profile-list.js";
 import {
   listControlUiPluginDescriptors,
   listControlUiLinkReaders,
@@ -23,9 +24,11 @@ import {
   listControlUiPluginWidgetKinds,
 } from "../control-ui-plugin-tabs.js";
 import { authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
+import { resolveOperatorRoleAgents } from "../operator-role-policy.js";
 import { WRITE_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -38,13 +41,10 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     ({ respond, client, context }) => {
       const methods = context.getGatewayMethodRegistry?.();
       if (!methods) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "Gateway plugin capabilities are unavailable in this runtime.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          "Gateway plugin capabilities are unavailable in this runtime.",
         );
         return;
       }
@@ -104,13 +104,10 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
       );
       if (!registration || !pluginLoaded) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `unknown plugin session action: ${pluginId}/${actionId}`,
-          ),
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          `unknown plugin session action: ${pluginId}/${actionId}`,
         );
         return;
       }
@@ -155,6 +152,16 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           client: {
             ...(client?.connId ? { connId: client.connId } : {}),
             scopes: [...scopes],
+            // Live policy, not snapshots: role config and the profile roster can
+            // change while an awaited action runs, and handlers check right before effects.
+            allowsAgent: (agentId: string) => {
+              const roleAgents = resolveOperatorRoleAgents(
+                client ?? null,
+                context.getRuntimeConfig(),
+              );
+              return !roleAgents || roleAgents.includes(agentId);
+            },
+            isSharedGateway: () => hasMultipleResidentSessionSharingIdentities(),
           },
         });
         if (result !== undefined && !isRecord(result)) {

@@ -11,6 +11,7 @@ import {
   normalizeDiagnosticStabilityQuery,
 } from "../../logging/diagnostic-stability.js";
 import { getCommandLaneDiagnostics } from "../../process/command-lane-diagnostics.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 
 function profileHandler<P>(
@@ -104,13 +105,10 @@ export const diagnosticsHandlers: GatewayRequestHandlers = {
       const query = normalizeDiagnosticStabilityQuery(params);
       respond(true, getDiagnosticStabilitySnapshot(query), undefined);
     } catch (err) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          err instanceof Error ? err.message : "invalid diagnostics.stability params",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        err instanceof Error ? err.message : "invalid diagnostics.stability params",
       );
     }
   },

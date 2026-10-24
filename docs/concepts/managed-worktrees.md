@@ -280,7 +280,18 @@ Git worktree registration, ordinary checkout removal, and source materialization
 
 Background Git maintenance, pack-index repair, and removal snapshots use only locally available objects. They never fetch missing objects from a partial clone's promisor remote; explicit fetching remains responsible for downloading those objects. If a required snapshot object is missing, ordinary removal preserves the checkout and reports the failure. Fetch or repair the missing objects in the source repository, then retry removal.
 
-Local agent shells, including worker-local execution and Codex shells in app-server processes started by OpenClaw on the Gateway host, disable Git's automatic maintenance and legacy auto-GC. Execution adapters append these settings to the effective Git parameters, preserving unrelated author and transport settings. This also covers Git child processes such as promisor fetches and applies to the next run in existing worktrees after an update. Repository configuration and interactive operator shells are unchanged. The Gateway cleanup owner remains responsible for managed-repository maintenance; explicit maintenance commands remain available. Sandboxes, node transports, and externally started app-server peers keep their own policy.
+Local agent shells, including worker-local execution and Codex shells in app-server processes started by OpenClaw on the Gateway host, disable Git's automatic maintenance and legacy auto-GC. Execution adapters append these settings to the effective Git parameters, preserving unrelated author and transport settings. This also covers Git child processes such as promisor fetches and applies to the next run in existing worktrees after an update. The Gateway cleanup owner remains responsible for managed-repository maintenance; explicit maintenance commands remain available. Sandboxes, node transports, and externally started app-server peers keep their own policy.
+
+Gateway-cloned projects also persist `maintenance.auto=false` and `gc.auto=0` in
+the repository's shared local Git configuration. Linked worktrees inherit this
+policy even when a command clears the agent environment. The clone owner applies
+it at creation and reapplies it under the checkout lifecycle lease when reusing
+or refreshing an existing managed project. This lazy adoption needs no Doctor
+migration or immediate repack. Operator-registered repositories keep their own
+configuration. Managed clones additionally set `pack.threads=1` and
+`pack.windowMemory=64m`; the latter limits delta-search memory per thread, not
+total process RSS. The existing hourly cleanup performs bounded pack maintenance
+outside agent commands, as described below.
 
 ## Capacity and disk space
 

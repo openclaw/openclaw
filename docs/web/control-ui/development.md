@@ -85,8 +85,15 @@ After a Gateway update, already-open tabs reload the current build when they enc
 
 Bundled public assets (themes, fonts, icons, and artwork) use `?v=<build-id>` URLs with a one-year immutable HTTP cache. The ID includes a digest of the public files, so rebuilding changed files at the same commit also changes their URLs. The Gateway snapshots this identity at startup; restart it after rebuilding an in-place installation. Unversioned requests, stale IDs, documents, `sw.js`, and custom `gateway.controlUi.root` installs keep `Cache-Control: no-cache`. The service worker caches matching current-build public URLs for offline reuse.
 
-The build precompresses bundled assets into Brotli and gzip sidecars. The Gateway
-reads and shares only the negotiated representation across browsers; a Brotli
+The build precompresses bundled assets into Brotli and gzip sidecars. Gzip uses
+the pinned, build-only libdeflate WebAssembly encoder at level 11 rather than a
+host-native library. Brotli remains at quality 10. Both encode the final emitted
+asset bytes; no decompressor is added to the browser bundle. Compare gzip size
+and encoder CPU/wall time on an existing build with
+`node ui/scripts/bench-gzip.mjs dist/control-ui 5`. This serial, interleaved
+comparison excludes file I/O and Brotli; it is not a full-build timing benchmark.
+
+The Gateway reads and shares only the negotiated representation across browsers; a Brotli
 request does not read the original and gzip bodies. Cold file admission and reads
 run in a worker so simultaneous page loads do not block chat delivery. Custom
 roots continue to read current files on each request. Rewritten index documents

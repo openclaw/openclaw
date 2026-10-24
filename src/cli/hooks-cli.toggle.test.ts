@@ -7,7 +7,6 @@ import { GatewayTransportError } from "../gateway/transport-error.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
 import { makeHookStatusEntry } from "./cli-fixtures.test-support.js";
 import { ExpectedCliError } from "./failure-output.js";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const mocks = vi.hoisted(() => ({
   foreignOwner: false,
@@ -45,7 +44,10 @@ vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) 
   }),
 }));
 
-const capture = createCliRuntimeCapture();
+const capture = await vi.hoisted(async () => {
+  const { createCliRuntimeCapture } = await import("./test-runtime-capture.js");
+  return createCliRuntimeCapture();
+});
 const readConfigMachineStateMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../state/config-machine-state.js", () => ({

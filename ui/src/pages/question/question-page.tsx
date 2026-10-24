@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createMemo, createSignal, Errored, For, Loading, onSettled, Show } from "solid-js";
 import "../../styles/approval.css";
 import "../../styles/chat/question-card.css";
-import { createMemo, createSignal, Errored, For, Loading, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { canUseQuestionPrompts, requestQuestionGateway } from "../../app/question-prompt-client.ts";

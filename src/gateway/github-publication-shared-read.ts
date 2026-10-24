@@ -19,7 +19,7 @@ import { GitHubPublicationSessionChangedError } from "./github-publication-failu
 
 type SharedGitHubPublicationSelector = SharedGitHubPublicationReadInput["selector"];
 type SharedObservation = {
-  type: "githubPublication.sharedObservation";
+  type: "githubPublications.sharedObservation";
   input: SharedGitHubPublicationReadInput;
 };
 const pendingObservations = new Map<
@@ -77,7 +77,7 @@ export async function readSharedGitHubPublication(
       pending = withArtifactPreservingStateReads(() =>
         executeExistingOpenClawStateRead(
           { path: context.admission.databasePath, env: context.environment },
-          { type: "githubPublication.sharedObservation", input },
+          { type: "githubPublications.sharedObservation", input },
           { current: true, preferIndependentWarmRead: true, context },
         ),
       );

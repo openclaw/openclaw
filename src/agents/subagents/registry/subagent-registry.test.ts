@@ -979,7 +979,7 @@ describe("subagent registry seam flow", () => {
           recoveryRuntime,
           resolveGatewayContext: () => activeGatewayContext,
         }) as never,
-    );
+    ).settled;
     let disposed = false;
     const pendingWait = createDeferred<Record<string, unknown>>();
     const waitStarted = createDeferred();

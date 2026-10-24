@@ -85,7 +85,7 @@ export function useSubagentRestartRecoveryFixture(
       resolveGatewayContext: () => gatewayContext as never,
     };
     bindGatewayContextResolver(gatewayRuntime, gatewayContext.resolveGatewayContext);
-    await activateSubagentRegistry(gatewayContext.resolveGatewayContext);
+    await activateSubagentRegistry(gatewayContext.resolveGatewayContext).settled;
   };
 
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);

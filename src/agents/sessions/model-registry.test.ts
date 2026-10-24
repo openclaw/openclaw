@@ -248,6 +248,7 @@ describe("ModelRegistry", () => {
       input: ["text"] as const,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       parameterCount: 4_000_000_000,
+      family: "meta",
       maxTokens: 128_000,
     };
     const windows = [
@@ -279,6 +280,24 @@ describe("ModelRegistry", () => {
         expect(candidate.find(provider, "shared-model")).toMatchObject(config.models![0]!);
       }
     }
+  });
+
+  it("drops a malformed persisted family without rejecting the catalog", () => {
+    const registry = createRegistry(
+      writeRoot({
+        "family-fixture": {
+          api: "openai-responses",
+          baseUrl: "https://models.example/v1",
+          models: [
+            { id: "spaced", family: "Open AI" },
+            { id: "cased", family: " Meta " },
+          ],
+        },
+      }),
+    );
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("family-fixture", "spaced")).not.toHaveProperty("family");
+    expect(registry.find("family-fixture", "cased")?.family).toBe("meta");
   });
 
   it("keeps estimates out of SQLite catalog metadata and reconstructs them on reload", async () => {

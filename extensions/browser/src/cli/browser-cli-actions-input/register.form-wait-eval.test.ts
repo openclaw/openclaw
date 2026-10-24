@@ -43,6 +43,30 @@ beforeEach(() => {
   capture.resetRuntimeCapture();
 });
 
+it.each([
+  [["click", "   "], "ref is required"],
+  [["type", "   ", "synthetic"], "ref is required"],
+  [["scrollintoview", "   "], "ref is required"],
+  [["click-coords", "0x10", "20"], "Invalid x: must be a finite number"],
+  [["click-coords", "10", "NaN"], "Invalid y: must be a finite number"],
+  [["dialog", "--accept", "--dismiss"], "Specify only one of --accept or --dismiss"],
+  [["dialog"], "Specify --accept or --dismiss"],
+  [["evaluate"], "Missing --fn"],
+  [
+    ["batch", "--actions", "[]", "--actions-file", "never-read.json"],
+    "Specify only one of --actions or --actions-file",
+  ],
+  [["batch"], "Provide --actions, --actions-file, or --actions-file -"],
+] satisfies [string[], string][])(
+  "returns the %j input refusal to the root JSON renderer before dispatch",
+  async (args, message) => {
+    await expect(run("--json", ...args)).rejects.toThrow(message);
+    expect(capture.runtimeErrors).toEqual([]);
+    expect(capture.defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  },
+);
+
 async function expectRejected(args: string[], message: string) {
   await expect(run(...args)).rejects.toThrow("__exit__:1");
   expect(capture.runtimeErrors.join("\n")).toContain(message);

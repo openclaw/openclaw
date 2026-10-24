@@ -311,6 +311,15 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
                 rendered();
                 return preview();
               };
+              const FilePath = () => (
+                <span
+                  ref={createTextOverflow(() => entry().label)}
+                  class="sidebar-file-view__path"
+                  title={entry().label}
+                >
+                  {entry().label}
+                </span>
+              );
               const readResult = createMemo(() => ({ pending: entry().readResult }), {
                 equals: (previous, next) => previous.pending === next.pending,
               });
@@ -342,13 +351,7 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
                       class="chat-files-panel__fallback-rail sidebar-file-view__path-bar session-panel-rail"
                       data-presentation="desktop"
                     >
-                      <span
-                        ref={createTextOverflow(() => entry().label)}
-                        class="sidebar-file-view__path"
-                        title={entry().label}
-                      >
-                        {entry().label}
-                      </span>
+                      <FilePath />
                     </div>
                   </Show>
                   <Show when={rendered().presentation === "mobile"}>
@@ -376,13 +379,7 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
                               class="sidebar-file-view__path-bar session-panel-rail"
                               data-presentation="desktop"
                             >
-                              <span
-                                ref={createTextOverflow(() => entry().label)}
-                                class="sidebar-file-view__path"
-                                title={entry().label}
-                              >
-                                {entry().label}
-                              </span>
+                              <FilePath />
                             </div>
                             <div class="sidebar-file-view__workspace-body">
                               <PanelEmptyState

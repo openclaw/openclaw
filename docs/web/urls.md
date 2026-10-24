@@ -351,6 +351,8 @@ OpenClaw does not change Cloudflare Access or other proxy policies automatically
 Public pages share bounded rendered representations and in-flight work.
 Committed session and transcript changes invalidate affected pages; every
 response, including `304 Not Modified`, still checks live publication authority.
+If a change overtakes an in-flight read, the public reader prepares the current
+representation before responding, without requiring a browser retry.
 Representations are retained only on the server, not in a shared browser/CDN
 cache. Eight distinct builds may run at once, two for one publication, with
 32 additional builds queued. Overload returns `503` and `Retry-After`.

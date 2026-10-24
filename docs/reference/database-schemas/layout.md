@@ -95,7 +95,9 @@ reads use batches of eight and skip stored JSON or compressed values above 64 Ki
 compressed messages are not decoded. Cold snapshot values and older transcript
 payloads are not scanned.
 Each bounded query finishes before yielding, so pacing holds no SQLite read transaction.
-Warming yields between chunks, targets 16 MiB/s, and stops at a 2 GiB pass budget
+Warming reports progress in roughly 1 MiB chunks instead of once per session or
+message batch, keeping small reads and their allocation in the worker. It still
+checks the byte budget after every bounded read. Warming targets 16 MiB/s and stops at a 2 GiB pass budget
 or three minutes per database. A final chunk can exceed the byte budget slightly.
 Shutdown cancels and joins the worker; no page map or read snapshot survives a pass.
 

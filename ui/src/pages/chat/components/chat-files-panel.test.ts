@@ -522,6 +522,42 @@ describe("workspace file tabs", () => {
     expect(getSessionWorkspace(state).previews).toHaveLength(1);
   });
 
+  it.each(["preview", undefined] as const)(
+    "opens the first file with its tree collapsed and preserves an explicit toggle (%s)",
+    async (disposition) => {
+      const state = host();
+      state.sessions.getFile = vi
+        .fn()
+        .mockImplementation(async (_sessionKey, path) =>
+          textResponse(state, path, "File contents"),
+        );
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(true);
+      await openSessionWorkspaceFile(state, { path: "first.txt" }, disposition);
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(false);
+      expect(getSessionWorkspace(state).previews[0]?.content).toMatchObject({
+        kind: "file",
+        content: "File contents",
+      });
+      selectSessionWorkspacePreview(state, null);
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(true);
+      selectSessionWorkspacePreview(state, "file:first.txt");
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(false);
+      createSessionWorkspaceProps(state).onTreeVisibleChange(true);
+      await openSessionWorkspaceFile(state, { path: "second.txt" }, disposition);
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(true);
+      selectSessionWorkspacePreview(state, null);
+      selectSessionWorkspacePreview(state, "file:second.txt");
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(true);
+      createSessionWorkspaceProps(state).onTreeVisibleChange(false);
+      await openSessionWorkspaceFile(state, { path: "third.txt" }, disposition);
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(false);
+      selectSessionWorkspacePreview(state, null);
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(true);
+      await openSessionWorkspaceFile(state, { path: "fourth.txt" }, disposition);
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(false);
+    },
+  );
+
   it("deduplicates stable identities, closes only the selected preview, and scopes tabs to reconnect", async () => {
     const state = host();
     const first = openSessionWorkspacePreview(state, "file:a", "a.txt", {

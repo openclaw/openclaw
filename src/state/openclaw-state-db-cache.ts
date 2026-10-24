@@ -548,6 +548,25 @@ export function closeOpenClawStateDatabase(options?: OpenClawStateDatabaseCloseO
 /** Register a resource owner before it can admit any shared-state worker opens. */
 export const registerOpenClawStateDatabaseAsyncResource = asyncResources.register;
 
+/** Close the admitted file or its canonical path, retaining first-creation identity getters. */
+export function registerOpenClawStatePathAsyncResource(
+  admission: Pick<OpenClawStateDatabaseReadAdmission, "identity">,
+  close: () => Promise<void>,
+): () => void {
+  return registerOpenClawStateDatabaseAsyncResource({
+    close(identity) {
+      if (
+        !identity ||
+        identity.key === admission.identity.key ||
+        identity.canonicalPath === admission.identity.canonicalPath
+      ) {
+        return close();
+      }
+      return Promise.resolve();
+    },
+  });
+}
+
 /** Capture the canonical read generation before any asynchronous worker admission. */
 export const captureOpenClawStateDatabaseReadAdmission = asyncResources.capture;
 

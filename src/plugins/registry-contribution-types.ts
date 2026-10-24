@@ -121,6 +121,9 @@ export type MemoryPromptSectionParams = {
 
 export type MemoryPromptSectionBuilder = (params: MemoryPromptSectionParams) => string[];
 
+/** Provider-owned /learn guidance for the tools tool policy leaves this turn; [] when it cannot learn. */
+export type MemoryLearnGuidanceBuilder = (params: { availableTools: Set<string> }) => string[];
+
 export type MemoryPromptSectionPreparer = (
   params: MemoryPromptSectionParams,
 ) => Promise<readonly string[]>;
@@ -366,6 +369,10 @@ export type MemoryPluginCapability = {
   deterministicRecallToolName?: string;
   /** Whether recall may read protected same-agent private session transcripts. */
   supportsPrivateTranscriptRecall?: boolean;
+  /** Tools a /learn turn may use to persist lessons; the host checks them against tool policy. */
+  learnToolNames?: readonly string[];
+  /** Guidance appended to /learn when some learnToolNames are available. */
+  learnGuidanceBuilder?: MemoryLearnGuidanceBuilder;
 };
 
 export type MemoryPluginCapabilityRegistration = {

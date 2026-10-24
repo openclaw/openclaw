@@ -4,45 +4,6 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { extractGeminiResponse } from "../../packages/media-understanding-common/src/output-extract.js";
 import { ignoreMissingPath } from "../infra/errno.js";
 
-function extractSherpaOnnxText(raw: string): string | undefined {
-  const tryParse = (value: string): string | undefined => {
-    const trimmed = value.trim();
-    const head = trimmed[0];
-    if (head !== "{" && head !== '"') {
-      return undefined;
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      if (typeof parsed === "string") {
-        return tryParse(parsed);
-      }
-      if (parsed && typeof parsed === "object" && "text" in parsed) {
-        const text = parsed.text;
-        if (typeof text === "string") {
-          return text.trim();
-        }
-      }
-    } catch {
-      // Structured text is optional; CLI stdout can also contain non-JSON progress.
-    }
-    return undefined;
-  };
-
-  const direct = tryParse(raw);
-  if (direct !== undefined) {
-    return direct;
-  }
-
-  const lines = normalizeStringEntries(raw.split("\n"));
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const parsed = tryParse(lines[i] ?? "");
-    if (parsed !== undefined) {
-      return parsed;
-    }
-  }
-  return undefined;
-}
-
 function findArgValue(args: string[], keys: string[]): string | undefined {
   for (const [index, arg] of args.entries()) {
     if (keys.includes(arg)) {
@@ -133,9 +94,41 @@ export async function resolveCliOutput(params: {
   }
 
   if (commandId === "sherpa-onnx-offline") {
-    const response = extractSherpaOnnxText(params.stdout);
-    if (response !== undefined) {
-      return response;
+    const raw = params.stdout;
+    const tryParse = (value: string): string | undefined => {
+      const trimmed = value.trim();
+      const head = trimmed[0];
+      if (head !== "{" && head !== '"') {
+        return undefined;
+      }
+      try {
+        const parsed = JSON.parse(trimmed) as unknown;
+        if (typeof parsed === "string") {
+          return tryParse(parsed);
+        }
+        if (parsed && typeof parsed === "object" && "text" in parsed) {
+          const text = parsed.text;
+          if (typeof text === "string") {
+            return text.trim();
+          }
+        }
+      } catch {
+        // Structured text is optional; CLI stdout can also contain non-JSON progress.
+      }
+      return undefined;
+    };
+
+    const direct = tryParse(raw);
+    if (direct !== undefined) {
+      return direct;
+    }
+
+    const lines = normalizeStringEntries(raw.split("\n"));
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const parsed = tryParse(lines[i] ?? "");
+      if (parsed !== undefined) {
+        return parsed;
+      }
     }
   }
 
