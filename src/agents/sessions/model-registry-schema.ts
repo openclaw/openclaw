@@ -1,14 +1,14 @@
 /** Validation for authored and generated model registry catalogs. */
 import type { TLocalizedValidationError } from "typebox/error";
 import { Errors, Pointer } from "typebox/schema";
-import { ModelsConfigSchema } from "./model-registry-schema-definition.js";
+import { ModelRegistryConfigSchema } from "./model-registry-schema-definition.js";
 import { isModelsConfig } from "./model-registry-validator.generated.js";
 
 export type { ModelsConfig, ProviderAuthMode } from "./model-registry-schema-definition.js";
 
 export const validateModelsConfig = {
   Check: isModelsConfig,
-  Errors: (value: unknown) => Errors(ModelsConfigSchema, value)[1],
+  Errors: (value: unknown) => Errors(ModelRegistryConfigSchema, value)[1],
 };
 
 /** Omit malformed pricing, retaining the rows for semantic validation before exclusion. */

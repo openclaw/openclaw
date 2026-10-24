@@ -8,7 +8,7 @@ import {
   VendorResult,
 } from "../extensions/typesafe/src/schema-definition.js";
 import { ThemeJsonSchema } from "../src/agents/modes/interactive/theme/theme-schema.js";
-import { ModelsConfigSchema } from "../src/agents/sessions/model-registry-schema-definition.js";
+import { ModelRegistryConfigSchema } from "../src/agents/sessions/model-registry-schema-definition.js";
 import { PresenceLocationResultSchema } from "../src/gateway/server-methods/presence-location-schema.js";
 import {
   ComputerActParamsSchema,
@@ -36,7 +36,7 @@ const targets: Array<{
     entries: [
       {
         name: "isModelsConfig",
-        schema: ModelsConfigSchema,
+        schema: ModelRegistryConfigSchema,
         type: 'import("./model-registry-schema-definition.js").ModelsConfig',
       },
     ],

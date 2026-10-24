@@ -162,9 +162,9 @@ const ProviderConfigSchema = Type.Object({
   models: Type.Optional(Type.Array(ModelDefinitionSchema)),
 });
 
-export const ModelsConfigSchema = Type.Object({
+export const ModelRegistryConfigSchema = Type.Object({
   generatedBy: Type.Optional(Type.String()),
   providers: Type.Record(Type.String(), ProviderConfigSchema),
 });
 
-export type ModelsConfig = Static<typeof ModelsConfigSchema>;
+export type ModelsConfig = Static<typeof ModelRegistryConfigSchema>;
