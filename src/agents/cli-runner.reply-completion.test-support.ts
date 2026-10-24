@@ -72,7 +72,12 @@ export function registerCliReplyCompletionTests({
     const mediaUrl = path.join(dir, "report.pdf");
     fs.writeFileSync(mediaUrl, "%PDF-1.4\nsynthetic report\n%%EOF");
     const cfg: OpenClawConfig = {
-      channels: { whatsapp: { authDir: path.join(dir, "auth"), allowFrom: [to] } },
+      channels: {
+        whatsapp: {
+          accounts: { default: { authDir: path.join(dir, "auth") } },
+          allowFrom: [to],
+        },
+      },
     };
     const controller = {
       getActiveListener: () => ({
