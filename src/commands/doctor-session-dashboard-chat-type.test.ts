@@ -16,7 +16,10 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 
 const note = vi.hoisted(() => vi.fn());
-vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
+vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/terminal-core/src/note.js")>()),
+  note,
+}));
 
 import { isUnstampedDashboardRoot } from "./doctor-session-dashboard-chat-type.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
