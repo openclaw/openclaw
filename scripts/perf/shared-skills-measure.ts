@@ -1,4 +1,4 @@
-/** Owner proof: node --expose-gc --import ./scripts/tsx.mjs scripts/perf/shared-skills-measure.ts <fixture-dir> [--sample-allocations] */
+/** Prepare once with --prepare, then measure: node --expose-gc --import ./scripts/tsx.mjs scripts/perf/shared-skills-measure.ts <fixture-dir> [--sample-allocations] */
 import fs from "node:fs/promises";
 import inspector from "node:inspector/promises";
 import path from "node:path";
@@ -35,13 +35,16 @@ for (const [key, value] of Object.entries({
 })) {
   process.env[key] = value;
 }
-for (const name of names) {
-  const dir = path.join(workspace, "skills", name);
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    path.join(dir, "SKILL.md"),
-    `---\nname: ${name}\ndescription: Synthetic ${name} workflow with catalog matching guidance and tool instructions.\n---\n# ${name}\n${"Use this synthetic workflow for the named task.\n".repeat(100)}`,
-  );
+if (process.argv.includes("--prepare")) {
+  for (const name of names) {
+    const dir = path.join(workspace, "skills", name);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "SKILL.md"),
+      `---\nname: ${name}\ndescription: Synthetic ${name} workflow with catalog matching guidance and tool instructions.\n---\n# ${name}\n${"Use this synthetic workflow for the named task.\n".repeat(100)}`,
+    );
+  }
+  process.exit(0);
 }
 const request = {
   sourcePlan: {
