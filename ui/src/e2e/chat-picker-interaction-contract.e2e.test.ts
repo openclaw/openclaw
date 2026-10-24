@@ -1,6 +1,7 @@
 import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
 import {
+  chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   expectDefined,
@@ -17,9 +18,15 @@ const reducedMotionOptions = {
 suite.define(() => {
   it("distinguishes the selected permission and honors reduced motion", () =>
     suite.withPage(reducedMotionOptions, async ({ page }) => {
-      const session = { key: "agent:main:session-a", permissionMode: "guarded" };
+      const session = {
+        key: "agent:main:session-a",
+        kind: "direct",
+        label: "Session A",
+        permissionMode: "guarded",
+        updatedAt: 2,
+      };
       await installMockGateway(page, {
-        methodResponses: { "sessions.list": { sessions: [session] } },
+        methodResponses: { "sessions.list": chatSessionListResponse([session]) },
         sessionKey: session.key,
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
