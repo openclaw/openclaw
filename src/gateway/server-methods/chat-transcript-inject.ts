@@ -86,6 +86,8 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   humanMentions?: readonly HumanMention[];
   /** Host-authored text kept as written; model-output delivery directives are not parsed. */
   literal?: true;
+  /** Caller authority rechecked at the durable transcript commit. */
+  assertCurrent?: () => void;
   config?: OpenClawConfig;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
 }): Promise<GatewayInjectedTranscriptAppendResult> {
@@ -187,6 +189,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       };
     }
     const turn = await persistSessionTranscriptTurn(scope, {
+      ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
       expectedSessionId: params.expectedSessionId,
       expectedLifecycleRevision: params.expectedLifecycleRevision,
       updateMode: "inline",

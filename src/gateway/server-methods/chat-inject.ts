@@ -135,6 +135,8 @@ export async function injectGatewayAssistantMessage(
           idempotencyKey: params.idempotencyKey,
           humanMentions: params.humanMentions,
           ...(params.literal ? { literal: true as const } : {}),
+          // Authority can end while the write waits for its target or queue.
+          ...(sessionMutationCommitGuard ? { assertCurrent: sessionMutationCommitGuard } : {}),
           onMessageCommitted: params.onMessageCommitted,
           sessionId,
           storePath,
