@@ -10,6 +10,7 @@ import type { ChannelDoctorEmptyAllowlistPolicyHooks } from "./channel-doctor.js
 
 type ScanEmptyAllowlistPolicyWarningsParams = Partial<ChannelDoctorEmptyAllowlistPolicyHooks> & {
   doctorFixCommand: string;
+  env?: NodeJS.ProcessEnv;
 };
 
 function resolveDoctorAccountDmAccess(account: DoctorAccountRecord, parent?: DoctorAccountRecord) {
@@ -99,6 +100,7 @@ export async function scanEmptyAllowlistPolicyWarnings(
       channelName,
       cfg,
       Object.keys(accounts ?? {}),
+      { env: params.env },
     );
     const configuredAccountIds = new Set(accountIds?.configured);
     const hasImplicitActiveAccount =

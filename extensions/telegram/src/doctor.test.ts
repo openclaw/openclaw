@@ -1,3 +1,4 @@
+import type { ChannelDoctorEmptyAllowlistAccountContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mergeTelegramAccountConfig } from "./account-config.js";
@@ -645,6 +646,119 @@ describe("telegram doctor", () => {
     });
     expect(await collectPreviewWarnings(cfg, { TELEGRAM_BOT_TOKEN: "123:tok" })).not.toContain(
       missingEnvWarning,
+    );
+  });
+});
+
+describe("telegram doctor empty allowlist extra warnings", () => {
+  function collectExtraWarnings(
+    context: Partial<ChannelDoctorEmptyAllowlistAccountContext>,
+  ): string[] {
+    const collect = telegramDoctor.collectEmptyAllowlistExtraWarnings;
+    if (!collect) {
+      throw new Error("expected Telegram empty allowlist extra warning collector");
+    }
+    return collect({
+      account: { groupPolicy: "allowlist" },
+      channelName: "telegram",
+      dmPolicy: "pairing",
+      prefix: "channels.telegram",
+      ...context,
+    });
+  }
+
+  it("skips parent first-time guidance when every explicit account configures groups", () => {
+    const warnings = collectExtraWarnings({
+      account: {
+        groupPolicy: "allowlist",
+        accounts: {
+          default: { groups: { "-1001": { requireMention: true } } },
+          second: { groups: { "-1002": { requireMention: true } } },
+        },
+      },
+    });
+
+    expect(warnings).toEqual([]);
+  });
+
+  it("keeps parent first-time guidance when an explicit account lacks groups", () => {
+    const warnings = collectExtraWarnings({
+      account: {
+        groupPolicy: "allowlist",
+        accounts: {
+          default: { groups: { "-1001": { requireMention: true } } },
+          second: {},
+        },
+      },
+    });
+
+    expect(warnings.join("\n")).toContain(
+      "channels.telegram: Telegram is in first-time setup mode.",
+    );
+  });
+
+  it("keeps parent first-time guidance when the default account is implicit", () => {
+    const warnings = collectExtraWarnings({
+      account: {
+        groupPolicy: "allowlist",
+        accounts: {
+          second: { groups: { "-1002": { requireMention: true } } },
+        },
+      },
+    });
+
+    expect(warnings.join("\n")).toContain(
+      "channels.telegram: Telegram is in first-time setup mode.",
+    );
+  });
+
+  it("keeps single-account guidance when the accounts block is absent", () => {
+    const warnings = collectExtraWarnings({
+      account: { groupPolicy: "allowlist" },
+    });
+
+    expect(warnings.join("\n")).toContain(
+      "channels.telegram: Telegram is in first-time setup mode.",
+    );
+  });
+
+  it("keeps guidance for an environment-backed implicit default", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "123:env-token");
+    try {
+      const warnings = collectExtraWarnings({
+        account: {
+          defaultAccount: "work",
+          groupPolicy: "allowlist",
+          accounts: {
+            work: { groups: { "-1001": { requireMention: true } } },
+            second: { groups: { "-1002": { requireMention: true } } },
+          },
+        },
+      });
+
+      expect(warnings.join("\n")).toContain(
+        "channels.telegram: Telegram is in first-time setup mode.",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps parent first-time guidance for an implicit default beside a named default", () => {
+    const warnings = collectExtraWarnings({
+      account: {
+        botToken: "123:top-level",
+        defaultAccount: "work",
+        groupPolicy: "allowlist",
+        accounts: {
+          work: { groups: { "-1001": { requireMention: true } } },
+          second: { groups: { "-1002": { requireMention: true } } },
+        },
+      },
+    });
+
+    expect(warnings.join("\n")).toContain(
+      "channels.telegram: Telegram is in first-time setup mode.",
     );
   });
 });
