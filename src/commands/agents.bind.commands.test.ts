@@ -93,6 +93,55 @@ describe("agents bind/unbind commands", () => {
     );
   });
 
+  it("escapes stored binding controls in text while preserving JSON values", async () => {
+    const value = "café\x1b[2J\x07\nFORGED";
+    const match = {
+      channel: "telegram",
+      accountId: value,
+      peer: { kind: "direct" as const, id: value },
+      guildId: value,
+      teamId: value,
+      roles: [value],
+    };
+    setConfig({ bindings: [{ type: "route", agentId: "main", match }] });
+
+    await update("list", {});
+    expect(runtime.log).toHaveBeenLastCalledWith(
+      "Routing bindings:\n- main <- telegram accountId=café\\nFORGED peer=direct:café\\nFORGED guild=café\\nFORGED team=café\\nFORGED roles=café\\nFORGED",
+    );
+
+    const output = jsonRuntime();
+    await update("list", { json: true }, output);
+    expect(output.writeJson).toHaveBeenCalledExactlyOnceWith(
+      [
+        {
+          agentId: "main",
+          match,
+          description: `telegram accountId=${value} peer=direct:${value} guild=${value} team=${value} roles=${value}`,
+        },
+      ],
+      2,
+    );
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("escapes removed stored bindings in text and keeps their JSON descriptions", async () => {
+    const account = "café\x1b[2J\x07\nFORGED";
+    const config = { agents: explicitAgents, bindings: [route("telegram", account)] };
+    setConfig(config);
+
+    await update("unbind", { agent: "main", bind: ["telegram:caf-2j-forged"] });
+    expect(runtime.log).toHaveBeenCalledWith("- telegram accountId=café\\nFORGED");
+    expect(writeConfigFileMock).toHaveBeenLastCalledWith({ ...config, bindings: undefined });
+
+    const output = jsonRuntime();
+    await update("unbind", { agent: "main", bind: ["telegram:caf-2j-forged"], json: true }, output);
+    expect(output.writeJson).toHaveBeenCalledWith(
+      { agentId: "main", removed: [`telegram accountId=${account}`], missing: [], conflicts: [] },
+      2,
+    );
+  });
+
   it("uses the persisted default ops for bind and unbind", async () => {
     const config: OpenClawConfig = {
       agents: { ...explicitAgents, defaults: { systemAgent: { agentId: "ops" } } },
