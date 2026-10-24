@@ -1,14 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {
+  openEngineStore,
+  withEngineStoreAdmission,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { readSqliteDatabaseWriteTokenForPath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { Client, type QueryResultRow } from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { unwrapWorkboardSqliteResult } from "./sqlite-store-errors.js";
-import { createWorkboardDatabase } from "./sqlite-store-schema.js";
+import { createWorkboardDatabase, workboardEngineSchema } from "./sqlite-store-schema.js";
 import { workboardTestDatabaseInput } from "./test/database-config.js";
 import { openPostgresFixture } from "./test/postgres-fixture.js";
+import { SCHEMA_VERSION } from "./workboard-schema.js";
 
 const postgresInput = workboardTestDatabaseInput();
 const postgresUrl = postgresInput?.connection;
@@ -269,21 +274,74 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     fs.renameSync(`${dbPath}.replacement`, dbPath);
   }
 
+  it("upgrades version 3 index ordering once while retaining board rows and nullable indexes", async () => {
+    const dbPath = databasePath();
+    const schema = withEngineStoreAdmission(() => {
+      using anchor = new DatabaseSync(dbPath);
+      const db = openEngineStore({
+        anchor,
+        input: postgresInput,
+        schema: {
+          ...workboardEngineSchema,
+          ...workboardEngineSchema.postgresMigrations![0]!.fromSchema,
+          version: 3,
+        },
+        prepareAnchor: () => {},
+        inspectSqlite: () => ({ hasEngineAnchor: false, hasExistingData: false }),
+        openSqlite: () => {},
+      });
+      try {
+        db.prepare(
+          "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+        ).run("retained", "Retained board", 1, 2);
+        return String(anchor.prepare("SELECT schema FROM openclaw_engine_anchor").get()?.schema);
+      } finally {
+        db.close();
+      }
+    });
+    schemas.add(schema);
+    const indexRows = () =>
+      rows<{ name: string; oid: string; definition: string }>(
+        `SELECT relname AS name, oid::text, pg_get_indexdef(oid) AS definition
+       FROM pg_class WHERE relnamespace = $1::regnamespace
+       AND relname IN ('workboard_cards_board_status_idx', 'workboard_cards_session_idx')
+       ORDER BY relname`,
+        [schema],
+      );
+    const before = await indexRows();
+    const upgraded = await openDatabase(dbPath);
+    await upgraded.close();
+    const after = await indexRows();
+    expect(after[0]!.definition).not.toContain("NULLS FIRST");
+    expect(after[0]!.oid).not.toBe(before[0]!.oid);
+    expect(after[1]).toEqual(before[1]);
+    expect(await rows(`SELECT name FROM ${quoteIdentifier(schema)}.workboard_boards`)).toEqual([
+      { name: "Retained board" },
+    ]);
+    expect(
+      await rows(`SELECT version::integer FROM ${quoteIdentifier(schema)}.openclaw_schema_meta`),
+    ).toEqual([{ version: SCHEMA_VERSION }]);
+    await (await openDatabase(dbPath)).close();
+    expect(await indexRows()).toEqual(after);
+  });
+
   it("refuses a PostgreSQL schema version mismatch without migrating it", async () => {
     const dbPath = databasePath();
     const opened = await openDatabase(dbPath);
     const schema = opened.schema;
     await opened.close();
     await observer.query(
-      `UPDATE ${quoteIdentifier(schema)}.openclaw_schema_meta SET version = 4 WHERE store = 'workboard'`,
+      `UPDATE ${quoteIdentifier(schema)}.openclaw_schema_meta SET version = ${SCHEMA_VERSION + 1} WHERE store = 'workboard'`,
     );
     replaceAnchorForFreshAdmission(dbPath);
-    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(/expected.*3/i);
+    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
+      new RegExp(`expected.*${SCHEMA_VERSION}`, "i"),
+    );
     expect(
       await rows<{ version: number }>(
         `SELECT version::integer FROM ${quoteIdentifier(schema)}.openclaw_schema_meta WHERE store = 'workboard'`,
       ),
-    ).toEqual([{ version: 4 }]);
+    ).toEqual([{ version: SCHEMA_VERSION + 1 }]);
   });
 
   it("refuses PostgreSQL metadata belonging to a different anchor", async () => {
