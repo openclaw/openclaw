@@ -499,7 +499,7 @@ export async function finalizeCodexAttempt(
     await runCodexAgentEndHook(params, {
       skillExperienceReviewSource: providerRefusal ? undefined : terminalAnchor,
       event: {
-        messages: buildCodexAgentEndMessages(params, result.messagesSnapshot),
+        messages: buildCodexAgentEndMessages(params, result.messagesSnapshot, activeTurnId),
         success: !finalAborted && !finalPromptError,
         ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
         durationMs: Date.now() - attemptStartedAt,

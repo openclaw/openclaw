@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import {
   attachCodexMirrorIdentity,
   attachUpstreamUserText,
+  readMirrorIdentity,
   readUpstreamUserText,
 } from "./upstream-prompt-provenance.js";
 
@@ -103,16 +104,28 @@ export async function resolveFinalCodexMirrorMessages(params: {
 export function buildCodexAgentEndMessages(
   params: EmbeddedRunAttemptParams,
   messagesSnapshot: AgentMessage[],
+  turnId?: string,
 ): AgentMessage[] {
-  if (
-    !params.suppressNextUserMessagePersistence ||
-    !params.userTurnTranscriptRecorder ||
-    messagesSnapshot.some((message) => message.role === "user")
-  ) {
+  if (!params.suppressNextUserMessagePersistence || !params.userTurnTranscriptRecorder) {
     return messagesSnapshot;
   }
   const persisted = params.userTurnTranscriptRecorder.getPersistedMessage?.();
   if (!persisted) {
+    return messagesSnapshot;
+  }
+  const promptMirrorIdentity = turnId ? `${turnId}:prompt` : undefined;
+  const persistedAlreadyObserved = messagesSnapshot.some((message) => {
+    if (message.role !== "user") {
+      return false;
+    }
+    const messageIdempotencyKey = Reflect.get(message, "idempotencyKey");
+    return (
+      (persisted.idempotencyKey !== undefined &&
+        messageIdempotencyKey === persisted.idempotencyKey) ||
+      (promptMirrorIdentity !== undefined && readMirrorIdentity(message) === promptMirrorIdentity)
+    );
+  });
+  if (persistedAlreadyObserved) {
     return messagesSnapshot;
   }
   return [
