@@ -68,6 +68,21 @@ function accepted(entry: SubagentRunRecord) {
   };
 }
 
+function runMap(...entries: SubagentRunRecord[]) {
+  return new Map(entries.map((entry) => [entry.runId, entry]));
+}
+
+function runningRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
+  return {
+    ...makeRun(runId, false),
+    requesterTurnRunId: undefined,
+    requesterAgentId: "main",
+    execution: { status: "running", startedAt: 1_000 },
+    delivery: { status: "pending" },
+    ...overrides,
+  };
+}
+
 function settleRuns(
   entries: SubagentRunRecord[],
   overrides: Partial<Parameters<typeof settleRequesterTurnAfterSessionSpawns>[0]> & {
@@ -75,7 +90,7 @@ function settleRuns(
   } = {},
 ) {
   const { beforeWrite = vi.fn(), ...options } = overrides;
-  const runs = options.runs ?? new Map(entries.map((entry) => [entry.runId, entry]));
+  const runs = options.runs ?? runMap(...entries);
   return settleRequesterTurnAfterSessionSpawns({
     requesterSessionKey: REQUESTER,
     requesterTurnRunId: REQUESTER_TURN,
@@ -182,14 +197,8 @@ describe("selectRequesterTurnChildren", () => {
 
 describe("adoptSubagentRunForRequesterTurnInRuns", () => {
   function pendingChild(runId = "steered-child"): SubagentRunRecord {
-    return {
-      ...makeRun(runId, false),
+    return runningRun(runId, {
       taskRunId: "original-task",
-      requesterAgentId: "main",
-      requesterTurnRunId: undefined,
-      execution: { status: "running", startedAt: 1_000 },
-      completion: { required: true },
-      delivery: { status: "pending" },
       requesterSettleWake: {
         status: "pending",
         attemptCount: 0,
@@ -197,11 +206,11 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
         requesterYieldBatch: true,
         rearmGeneration: 1,
       },
-    };
+    });
   }
 
   function adoption(entry: SubagentRunRecord) {
-    const runs = new Map([[entry.runId, entry]]);
+    const runs = runMap(entry);
     saveSubagentRegistryChangesToSqlite(runs, [...runs.keys()]);
     return {
       expected: entry,
@@ -218,13 +227,7 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
     async (order) => {
       const child = pendingChild(`adopted-${order}`);
       child.taskRunId = `original-task-${order}`;
-      const sibling: SubagentRunRecord = {
-        ...makeRun(`sibling-${order}`, false),
-        requesterAgentId: "main",
-        execution: { status: "running", startedAt: 1_000 },
-        completion: { required: true },
-        delivery: { status: "pending" },
-      };
+      const sibling = runningRun(`sibling-${order}`, { requesterTurnRunId: REQUESTER_TURN });
       const before = structuredClone(child);
       const params = adoption(child);
       if (order === "before") {
@@ -269,11 +272,13 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
         }),
       ).resolves.toBe(true);
       for (const entry of batch) {
-        expect(params.runs.get(entry.runId)?.requesterTurnRunId).toBeUndefined();
-        expect(params.runs.get(entry.runId)?.requesterSettleWake).toMatchObject({
-          requesterYieldBatch: true,
-          batchRunIds: batch.map((member) => member.runId),
-          rearmGeneration: 2,
+        expect(params.runs.get(entry.runId)).toMatchObject({
+          requesterTurnRunId: undefined,
+          requesterSettleWake: {
+            requesterYieldBatch: true,
+            batchRunIds: batch.map((member) => member.runId),
+            rearmGeneration: 2,
+          },
         });
       }
     },
@@ -354,7 +359,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     "keeps a selected child's current requester turn at %s",
     async (kind) => {
       const child = makeRun("run-child");
-      const runs = new Map([[child.runId, child]]);
+      const runs = runMap(child);
       const commit = createRequesterInitialTransferFixture(runs);
       const transfer: Parameters<
         typeof settleRequesterTurnAfterSessionSpawns
@@ -399,10 +404,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       const child = makeRun("run-child");
       const originalRequester = structuredClone(requester);
       const originalChild = structuredClone(child);
-      const runs = new Map([
-        [requester.runId, requester],
-        [child.runId, child],
-      ]);
+      const runs = runMap(requester, child);
       const schedule = vi.fn(() => {
         expect(runs.get(requester.runId)!.pauseReason).toBe("sessions_yield");
         expect(runs.get(requester.runId)!.execution.status).toBe("terminal");
@@ -446,10 +448,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         requester.execution = { status: "terminal", endedAt: 2_000, outcome: { status: "ok" } };
       }
       const child = makeRun("run-child");
-      const runs = new Map([
-        [requester.runId, requester],
-        [child.runId, child],
-      ]);
+      const runs = runMap(requester, child);
       if (kind === "superseded") {
         runs.set("new-requester", { ...requester, runId: "new-requester", generation: 2 });
       }
@@ -471,7 +470,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           : { windowStartedAt, deadlineAt: windowStartedAt + 30 * 60_000 }),
       };
       const releasedAt = Date.now();
-      const runs = new Map([[entry.runId, entry]]);
+      const runs = runMap(entry);
       expect(await settleRuns([entry], { requesterYielded: false, runs })).toBe(true);
       expect(runs.get(entry.runId)!.delivery?.windowStartedAt).toBeGreaterThanOrEqual(
         windowStartedAt ?? releasedAt,
@@ -491,7 +490,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     async (reject) => {
       const entry = makeRun("run-child");
       entry.requesterAgentId = "main";
-      const runs = new Map([[entry.runId, entry]]);
+      const runs = runMap(entry);
       const append = vi.fn(() => true);
       registerRequesterFinalAttachment({
         requesterAgentId: "main",
@@ -532,7 +531,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     async (requesterYielded) => {
       const first = makeRun("run-a");
       const missing = makeRun("run-b");
-      const runs = new Map([[first.runId, first]]);
+      const runs = runMap(first);
       const before = structuredClone(runs);
       const beforeWrite = vi.fn();
       const schedule = vi.fn();
@@ -578,16 +577,18 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     } else if (kind === "a replayed running child") {
       entry.execution.status = "running";
     }
-    const runs = new Map([[entry.runId, entry]]);
+    const runs = runMap(entry);
 
     const schedule = vi.fn();
     expect(await settleRuns([entry], { runs, schedule })).toBe(true);
     if (kind === "valid delete receipt") {
       expect(runs.has(entry.runId)).toBe(false);
     } else if (kind === "valid receipt") {
-      expect(runs.get(entry.runId)!.requesterSettleWake).toBeUndefined();
-      expect(runs.get(entry.runId)!.requesterTurnRunId).toBeUndefined();
-      expect(runs.get(entry.runId)!.delivery?.requesterVisibleFinal).toBeUndefined();
+      expect(runs.get(entry.runId)).toMatchObject({
+        requesterSettleWake: undefined,
+        requesterTurnRunId: undefined,
+        delivery: { requesterVisibleFinal: undefined },
+      });
       expect(schedule).not.toHaveBeenCalled();
     } else {
       expect(runs.get(entry.runId)!.requesterSettleWake?.requesterYieldBatch).toBe(true);
@@ -604,7 +605,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       const entry = makeRun("run-steered", false);
       entry.taskRunId = originalRunId;
       entry.childSessionKey = "agent:main:subagent:worker";
-      const runs = new Map([[entry.runId, entry]]);
+      const runs = runMap(entry);
       const schedule = vi.fn();
 
       expect(await markYielded(runs)).toBe(1);
@@ -653,7 +654,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       } else if (kind === "in_progress") {
         second.delivery = { status: "in_progress" };
       }
-      const runs = new Map(entries.map((entry) => [entry.runId, entry]));
+      const runs = runMap(...entries);
       const calls: string[] = [];
       const beforeWrite = () => {
         calls.push("persist");
@@ -706,10 +707,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       const inline = makeRun("run-inline", false);
       inline.expectsCompletionMessage = false;
       inline.delivery = { status: "not_required" };
-      const runs = new Map([
-        [inline.runId, inline],
-        [completion.runId, completion],
-      ]);
+      const runs = runMap(inline, completion);
       const schedule = vi.fn();
       const beforeWrite = vi.fn();
       const originalInline = structuredClone(inline);
@@ -752,7 +750,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     async (reject) => {
       const entry = makeRun("run-delete", false);
       entry.retireAfterRequesterTurn = true;
-      const runs = new Map([[entry.runId, entry]]);
+      const runs = runMap(entry);
       const original = structuredClone(entry);
       const failure = new Error("sqlite unavailable");
       if (reject) {
@@ -776,19 +774,8 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
 describe("listUnsettledRequesterChildrenInRuns", () => {
   const NOW = 10_000;
 
-  function runningRun(
-    runId: string,
-    overrides: Partial<SubagentRunRecord> = {},
-  ): SubagentRunRecord {
-    return {
-      ...makeRun(runId, false),
-      requesterTurnRunId: undefined,
-      requesterAgentId: "main",
-      execution: { status: "running", startedAt: NOW - 1_000 },
-      delivery: { status: "pending" },
-      ...overrides,
-    };
-  }
+  const rosterRun = (runId: string, overrides: Partial<SubagentRunRecord> = {}) =>
+    runningRun(runId, { execution: { status: "running", startedAt: NOW - 1_000 }, ...overrides });
 
   function expectedChild(
     runId: string,
@@ -808,16 +795,16 @@ describe("listUnsettledRequesterChildrenInRuns", () => {
   }
 
   it("lists the ordered current roster while excluding unowned, settled, and superseded children", () => {
-    const yielded = runningRun("run-yielded", {
+    const yielded = rosterRun("run-yielded", {
       label: "Work session",
       requesterSettleWake: { status: "pending", attemptCount: 0, requesterYieldBatch: true },
     });
-    const earlierTurn = runningRun("run-earlier", { requesterTurnRunId: "run-turn-0" });
-    const completing = runningRun("run-completing", {
+    const earlierTurn = rosterRun("run-earlier", { requesterTurnRunId: "run-turn-0" });
+    const completing = rosterRun("run-completing", {
       execution: { status: "terminal", startedAt: NOW - 3_000, endedAt: NOW - 100 },
       delivery: { status: "in_progress" },
     });
-    const paused = runningRun("run-paused", {
+    const paused = rosterRun("run-paused", {
       execution: { status: "terminal", startedAt: NOW - 2_000, endedAt: NOW - 500 },
       pauseReason: "sessions_yield",
       delivery: { status: "pending" },
@@ -832,29 +819,27 @@ describe("listUnsettledRequesterChildrenInRuns", () => {
       { requesterSessionKey: "agent:main:other" },
       { requesterAgentId: "other" },
     ];
-    const old = runningRun("old", {
+    const old = rosterRun("old", {
       generation: 1,
       execution: { status: "terminal", startedAt: NOW - 2_000, endedAt: NOW - 1_500 },
     });
-    const current = runningRun("current", { generation: 2, childSessionKey: old.childSessionKey });
-    const superseded = runningRun("superseded", { generation: 1 });
-    const killed = runningRun("killed", {
+    const current = rosterRun("current", { generation: 2, childSessionKey: old.childSessionKey });
+    const superseded = rosterRun("superseded", { generation: 1 });
+    const killed = rosterRun("killed", {
       generation: 2,
       childSessionKey: superseded.childSessionKey,
       killIntent: { requestedAt: NOW, reason: "stop" },
     });
-    const runs = new Map(
-      [
-        yielded,
-        earlierTurn,
-        completing,
-        paused,
-        old,
-        current,
-        superseded,
-        killed,
-        ...excluded.map((overrides, index) => runningRun(`excluded-${index}`, overrides)),
-      ].map((entry) => [entry.runId, entry] as const),
+    const runs = runMap(
+      yielded,
+      earlierTurn,
+      completing,
+      paused,
+      old,
+      current,
+      superseded,
+      killed,
+      ...excluded.map((overrides, index) => rosterRun(`excluded-${index}`, overrides)),
     );
 
     expect(

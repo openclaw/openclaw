@@ -84,6 +84,27 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     },
   ) => writeSubagentSessionEntry({ stateDir: fixture.stateDir, agentId: "main", ...params });
 
+  function settleChildren(
+    children: SubagentRunRecord[],
+    requesterSessionKey: string,
+    requesterTurnRunId: string,
+    requesterAgentId?: string,
+  ) {
+    return settleRequesterTurnAfterSessionSpawns({
+      requesterSessionKey,
+      requesterAgentId,
+      requesterTurnRunId,
+      requesterYielded: true,
+      acceptedSessionSpawns: children.map(({ runId, childSessionKey }) => ({
+        runId,
+        childSessionKey,
+      })),
+      runs: subagentRuns,
+      transfer: createRequesterInitialTransferFixture(subagentRuns),
+      schedule: vi.fn(),
+    });
+  }
+
   function recoveryFixture() {
     const settlement = createDeferred();
     const dispatch = vi
@@ -125,16 +146,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
         expectsCompletionMessage: true,
       });
       await addSubagentRunForTests(child);
-      await settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: sessionKey,
-        requesterAgentId: "main",
-        requesterTurnRunId: parentRunId,
-        requesterYielded: true,
-        acceptedSessionSpawns: [{ runId: child.runId, childSessionKey: child.childSessionKey }],
-        runs: subagentRuns,
-        transfer: createRequesterInitialTransferFixture(subagentRuns),
-        schedule: vi.fn(),
-      });
+      await settleChildren([child], sessionKey, parentRunId, "main");
       await lifecycle(parentRunId, 2, {
         phase: "end",
         yielded: true,
@@ -275,18 +287,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       });
     }
     await addSubagentRunForTests(child);
-    expect(
-      await settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: parentKey,
-        requesterAgentId,
-        requesterTurnRunId: parentRunId,
-        requesterYielded: true,
-        acceptedSessionSpawns: [{ runId: child.runId, childSessionKey: childKey }],
-        runs: subagentRuns,
-        transfer: createRequesterInitialTransferFixture(subagentRuns),
-        schedule: vi.fn(),
-      }),
-    ).toBe(true);
+    expect(await settleChildren([child], parentKey, parentRunId, requesterAgentId)).toBe(true);
     await lifecycle(parentRunId, now - 1_000, {
       phase: "end",
       yielded: true,
@@ -380,29 +381,18 @@ describe("subagent parent recovery — durable yielded continuation", () => {
         if (!current) {
           throw new Error("Expected the yielded child to remain registered");
         }
-        return {
-          value: undefined,
-          postimages: new Map([
-            [
-              child.runId,
-              {
-                ...current,
-                execution: {
-                  ...current.execution,
-                  status: "terminal" as const,
-                  endedAt: now,
-                  outcome: { status: "ok" as const },
-                },
-                delivery: {
-                  status: "delivered" as const,
-                  disposition: "delivered" as const,
-                  deliveredAt: now,
-                },
-                cleanupCompletedAt: now,
-              },
-            ],
-          ]),
+        const completed: SubagentRunRecord = {
+          ...current,
+          execution: {
+            ...current.execution,
+            status: "terminal",
+            endedAt: now,
+            outcome: { status: "ok" },
+          },
+          delivery: { status: "delivered", disposition: "delivered", deliveredAt: now },
+          cleanupCompletedAt: now,
         };
+        return { value: undefined, postimages: new Map([[child.runId, completed]]) };
       });
       if (scenario === "settled batch") {
         // Settle through the lifecycle's exact batch callback, not by deleting a flag.
@@ -578,20 +568,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
         await addSubagentRunForTests(child);
         children.push(child);
       }
-      expect(
-        await settleRequesterTurnAfterSessionSpawns({
-          requesterSessionKey,
-          requesterTurnRunId,
-          requesterYielded: true,
-          acceptedSessionSpawns: children.map((child) => ({
-            runId: child.runId,
-            childSessionKey: child.childSessionKey,
-          })),
-          runs: subagentRuns,
-          transfer: createRequesterInitialTransferFixture(subagentRuns),
-          schedule: vi.fn(),
-        }),
-      ).toBe(true);
+      expect(await settleChildren(children, requesterSessionKey, requesterTurnRunId)).toBe(true);
       await resetSubagentRegistryForTests({ persist: false });
       rotateAgentEventLifecycleGeneration();
       const wakeRequester = vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>(
@@ -635,10 +612,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
           await loadTranscriptEvents({
             agentId: "main",
             sessionKey: child.childSessionKey,
-            sessionId: loadSessionEntryReadOnly({
-              agentId: "main",
-              sessionKey: child.childSessionKey,
-            })!.sessionId,
+            sessionId: recoveredSession!.sessionId,
           }),
         ).toContainEqual(
           expect.objectContaining({
@@ -661,16 +635,27 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       const requesterSessionKey = "agent:main:dashboard:restart-parent";
       const requesterTurnRunId = "restart-parent-run";
       const staleRequesterTurnRunId = allSuperseded ? "retired-parent-run" : requesterTurnRunId;
-      const stale = makeRunRecord({
-        runId: "stale-child-run",
+      const recoveryChild = (runId: string, overrides: Parameters<typeof makeRunRecord>[0] = {}) =>
+        makeRunRecord({
+          runId,
+          childSessionKey: `agent:main:subagent:${runId.replace(/-run$/, "")}`,
+          childSessionIdentity: {
+            sessionId: `${runId}-session`,
+            lifecycleRevision: "original-child-revision",
+          },
+          requesterSessionKey,
+          requesterTurnRunId,
+          expectsCompletionMessage: true,
+          execution: { status: "running", startedAt: now - 1_000, lifecycleGeneration },
+          ...overrides,
+        });
+      const stale = recoveryChild("stale-child-run", {
         childSessionKey: "agent:main:subagent:restart-child",
         childSessionIdentity: {
           sessionId: "restart-child-run-session",
           lifecycleRevision: "original-child-revision",
         },
-        requesterSessionKey,
         requesterTurnRunId: staleRequesterTurnRunId,
-        expectsCompletionMessage: true,
         createdAt: now - 3_000,
         generation: 1,
         execution: { status: "running", startedAt: now - 3_000, lifecycleGeneration },
@@ -678,46 +663,20 @@ describe("subagent parent recovery — durable yielded continuation", () => {
           ? { killReconciliation: { killedAt: now - 2_000, supersededAt: now - 1_000 } }
           : {}),
       });
-      const child = makeRunRecord({
-        runId: "restart-child-run",
+      const child = recoveryChild("restart-child-run", {
         taskRunId: supersededBy !== "superseded cancellation" ? stale.runId : undefined,
         childSessionKey: stale.childSessionKey,
-        childSessionIdentity: {
-          sessionId: "restart-child-run-session",
-          lifecycleRevision: "original-child-revision",
-        },
-        requesterSessionKey,
-        requesterTurnRunId,
         requesterTurnYielded: requesterYielded || undefined,
-        expectsCompletionMessage: true,
         generation: 2,
         createdAt: now - 2_000,
         execution: { status: "running", startedAt: now - 2_000, lifecycleGeneration },
       });
-      const sibling = makeRunRecord({
-        runId: "restart-sibling-run",
-        childSessionKey: "agent:main:subagent:restart-sibling",
-        childSessionIdentity: {
-          sessionId: "restart-sibling-run-session",
-          lifecycleRevision: "original-child-revision",
-        },
-        requesterSessionKey,
-        requesterTurnRunId,
+      const sibling = recoveryChild("restart-sibling-run", {
         requesterTurnYielded: requesterYielded || undefined,
-        expectsCompletionMessage: true,
-        execution: { status: "running", startedAt: now - 1_000, lifecycleGeneration },
       });
-      const nested = makeRunRecord({
-        runId: "restart-nested-run",
-        childSessionKey: "agent:main:subagent:restart-nested",
-        childSessionIdentity: {
-          sessionId: "restart-nested-run-session",
-          lifecycleRevision: "original-child-revision",
-        },
+      const nested = recoveryChild("restart-nested-run", {
         requesterSessionKey: child.childSessionKey,
         requesterTurnRunId: child.runId,
-        expectsCompletionMessage: true,
-        execution: { status: "running", startedAt: now - 1_000, lifecycleGeneration },
       });
       const interrupted = [child, sibling, nested];
       // Original order: children abort, the main requester is marked, then a new Gateway activates.
