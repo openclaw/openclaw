@@ -50,6 +50,8 @@ export type ScheduledOccurrence = Readonly<{
     sandbox?: "required";
     /** Fails once the parent is reset or removed, or the occurrence settles. */
     assertCurrent: () => void;
+    /** Set with `binding`; aborts once the parent is reset or removed. */
+    signal?: AbortSignal;
   }>;
   mint: (run: ScheduledOccurrenceRun) => MintedScheduledExecution;
   /** Releases the parent generation; the occurrence owner calls it once the occurrence settles. */

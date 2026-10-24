@@ -23,6 +23,7 @@ const { prepareCronRunAdmission } = await import("./run-admission.js");
 const { readScheduledMemoryParent, readScheduledToolTargets } =
   await import("./execution-context-registry.js");
 const { buildScheduledParentPauseNotice } = await import("./scheduled-occurrence.js");
+const { sessionChanges } = await import("../sessions/session-row-changes.js");
 
 const PARENT_KEY = "agent:main:dashboard:parent";
 
@@ -433,6 +434,7 @@ describe("occurrence pause", () => {
       binding: { sessionKey: PARENT_KEY, entry: parentEntry },
       sandbox: "required",
       assertCurrent: expect.any(Function),
+      signal: expect.any(AbortSignal),
     });
     expect(() => occurrence.childParent?.assertCurrent()).not.toThrow();
     generationAssert.mockImplementationOnce(() => {
@@ -441,6 +443,44 @@ describe("occurrence pause", () => {
     expect(() => occurrence.childParent?.assertCurrent()).toThrow("parent reset");
     occurrence.release();
     expect(() => occurrence.childParent?.assertCurrent()).toThrow("settled");
+  });
+
+  it("aborts a bound child's signal once a parent row change ends the parent", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+      spawnedCwd: "/work/project",
+    });
+    const occurrence = await admit(linked);
+    const signal = occurrence.childParent?.signal;
+    const reset = new Error("parent reset");
+    generationAssert.mockImplementation(() => {
+      throw reset;
+    });
+    sessionChanges.invalidate({ sessionKey: "agent:main:dashboard:other", storePath: "/s" });
+    expect(signal?.aborted).toBe(false);
+    sessionChanges.invalidate({ sessionKey: PARENT_KEY, storePath: "/s" });
+    expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).toBe(reset);
+    occurrence.release();
+  });
+
+  it("keeps a bound child's signal live while the parent stays current and after settlement", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+      spawnedCwd: "/work/project",
+    });
+    const occurrence = await admit(linked);
+    const signal = occurrence.childParent?.signal;
+    sessionChanges.invalidate({ sessionKey: PARENT_KEY, storePath: "/s" });
+    expect(signal?.aborted).toBe(false);
+    occurrence.release();
+    generationAssert.mockImplementation(() => {
+      throw new Error("parent reset");
+    });
+    sessionChanges.invalidate({ sessionKey: PARENT_KEY, storePath: "/s" });
+    expect(signal?.aborted).toBe(false);
   });
 
   it("hands an unbound parent's child only its sandbox requirement", async () => {

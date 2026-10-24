@@ -28,6 +28,7 @@ import {
   type ScheduledExecutionContextResult,
   type ScheduledRequesterRef,
 } from "./execution-context.js";
+import { type ParentResetWatch, watchParentReset } from "./parent-reset-watch.js";
 import {
   failedScheduledExecution,
   type ScheduledExecutionContext,
@@ -212,6 +213,7 @@ export async function admitScheduledOccurrence(
   let generation: Awaited<ReturnType<typeof prepareSessionGenerationFacts>> | undefined;
   let pause: CronParentUnavailable | undefined;
   let childParent: ScheduledOccurrence["childParent"];
+  let parentWatch: ParentResetWatch | undefined;
   try {
     if (!("error" in principal) && principal.kind === "parent") {
       const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
@@ -271,8 +273,18 @@ export async function admitScheduledOccurrence(
           lifecycleRevision: principal.parent.lifecycleRevision ?? observedRevision ?? null,
         });
       }
+      // A child working in its parent's workspace must also stop work that never
+      // reaches a tool check, such as a CLI process's native file tools.
+      if (childParent?.binding && generation) {
+        parentWatch = watchParentReset({
+          parentSessionKey: principal.parent.sessionKey,
+          assertCurrent: childParent.assertCurrent,
+        });
+        childParent = { ...childParent, signal: parentWatch.signal };
+      }
     }
   } catch (error) {
+    parentWatch?.stop();
     generation?.release();
     return unadmittedScheduledOccurrence(error instanceof Error ? error.message : String(error));
   }
@@ -344,6 +356,8 @@ export async function admitScheduledOccurrence(
       };
     },
     release() {
+      parentWatch?.stop();
+      parentWatch = undefined;
       generation?.release();
       generation = undefined;
     },

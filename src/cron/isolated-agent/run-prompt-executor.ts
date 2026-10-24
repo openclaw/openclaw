@@ -77,6 +77,18 @@ const cronEmbeddedRuntimeLoader = createLazyImportLoader<CronEmbeddedRuntime>(
   () => import("./run-embedded.runtime.js"),
 );
 
+// A CLI child in its parent's workspace runs native tools no tool check sees, so
+// its process also ends when the parent resets.
+function resolveCliChildAbortSignal(
+  runSignal: AbortSignal | undefined,
+  parentSignal: AbortSignal | undefined,
+): AbortSignal | undefined {
+  if (!parentSignal) {
+    return runSignal;
+  }
+  return runSignal ? AbortSignal.any([runSignal, parentSignal]) : parentSignal;
+}
+
 function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
   return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
 }
@@ -491,7 +503,10 @@ export function createCronPromptExecutor(
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
             sessionFile: params.runSessionKey,
-            abortSignal: params.abortSignal,
+            abortSignal: resolveCliChildAbortSignal(
+              params.abortSignal,
+              params.occurrence.childParent?.signal,
+            ),
           });
           try {
             const cliAbortSignal = deferredLifecycle.signal;
