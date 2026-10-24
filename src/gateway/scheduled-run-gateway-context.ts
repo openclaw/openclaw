@@ -1,3 +1,4 @@
+import { runWithoutAgentPluginRuntimeRefresh } from "../agents/plugin-runtime-refresh.js";
 /**
  * Supplies a Gateway request context to scheduler-owned agent runs.
  *
@@ -57,22 +58,24 @@ export function createScheduledGatewayRunner(
   const spawnBroker = getSpawnBroker();
   const runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
   return async <T>(run: () => Promise<T>): Promise<T> =>
-    await withoutGatewayToolCallerIdentity(() =>
-      runWithSpawnBroker(spawnBroker, async () => {
-        const runWithRegistry = () =>
-          withPluginRuntimeRegistryScope(resolvePluginRegistry?.(), () =>
-            runWithReadOnlyWorkers(run),
+    await runWithoutAgentPluginRuntimeRefresh(() =>
+      withoutGatewayToolCallerIdentity(() =>
+        runWithSpawnBroker(spawnBroker, async () => {
+          const runWithRegistry = () =>
+            withPluginRuntimeRegistryScope(resolvePluginRegistry?.(), () =>
+              runWithReadOnlyWorkers(run),
+            );
+          if (!resolveGatewayContext) {
+            return await runWithRegistry();
+          }
+          return await withPluginRuntimeGatewayContextResolver(
+            resolveGatewayContext,
+            runWithRegistry,
+            {
+              inheritRequestScope: false,
+            },
           );
-        if (!resolveGatewayContext) {
-          return await runWithRegistry();
-        }
-        return await withPluginRuntimeGatewayContextResolver(
-          resolveGatewayContext,
-          runWithRegistry,
-          {
-            inheritRequestScope: false,
-          },
-        );
-      }),
+        }),
+      ),
     );
 }

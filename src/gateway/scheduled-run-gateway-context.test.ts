@@ -2,6 +2,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  captureAgentPluginRuntimeRefresh,
+  createAgentPluginRuntimeRefresh,
+} from "../agents/plugin-runtime-refresh.js";
+import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
@@ -9,6 +13,28 @@ import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/cont
 import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
 import { spawnAndWait } from "../process/spawn-utils.js";
 import { createScheduledGatewayRunner } from "./scheduled-run-gateway-context.js";
+
+describe("scheduled Gateway refresh ownership", () => {
+  it("does not inherit a worker refresh owner after it closes", async () => {
+    const refresh = createAgentPluginRuntimeRefresh();
+    const runner = createScheduledGatewayRunner();
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const scheduled = refresh.run(() =>
+      runner(async () => {
+        await waiting;
+        expect(() => captureAgentPluginRuntimeRefresh().assertCurrent()).not.toThrow();
+      }),
+    );
+
+    refresh.close();
+    release();
+    await scheduled;
+  });
+});
 
 describe.skipIf(process.platform === "win32")("scheduled Gateway broker ownership", () => {
   const createBroker = useSpawnBrokerTestFixture(afterEach);

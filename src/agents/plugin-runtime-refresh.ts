@@ -55,6 +55,11 @@ export function captureAgentPluginRuntimeRefresh() {
   };
 }
 
+/** Detached work must not inherit the refresh lifetime of the callback that scheduled it. */
+export function runWithoutAgentPluginRuntimeRefresh<T>(run: () => T): T {
+  return refreshScope.exit(run);
+}
+
 /** One visible run owns refresh requests across all of its prepared runtime generations. */
 export function createAgentPluginRuntimeRefresh() {
   let owner: Refresh | undefined;
