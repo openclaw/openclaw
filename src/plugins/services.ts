@@ -390,7 +390,8 @@ async function startPreparedPluginServices({
         `plugin service cleanup completed; restarting deferred reload (plugin=${entry.pluginId}, service=${entry.id})`,
       );
     }
-    await startService(entry.registration, config);
+    // Config-only restarts need the same startup budget and cleanup custody as replacement candidates.
+    await startService(entry.registration, config, undefined, true);
   };
   owner.resumeReload = (entry) => {
     // Follow current ownership and serialize with newer reloads; stop clears the pending intent.
