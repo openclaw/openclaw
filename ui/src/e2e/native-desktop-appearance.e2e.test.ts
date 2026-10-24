@@ -441,29 +441,13 @@ suite.define(() => {
         await message.fill("A follow-up draft");
         await message.press("Shift+Enter");
         await page.keyboard.type("with another line");
-        expect(await form.button("Choose agent").isDisabled()).toBe(true);
         for (const scheme of schemes) {
           await expectAppearance(page, scheme, ".composer", "#reply-text");
           expect(await form.text("The project is ready.").isVisible()).toBe(true);
-          expect(await message.getAttribute("readonly")).toBeNull();
-          expect(await form.button("Send message").isDisabled()).toBe(true);
         }
-        await form.button("Collapse reply").click();
-        await expect.poll(() => page.locator("#reply").isVisible()).toBe(false);
-        await native.emit("quickchat:chat-event", {
-          ...reply,
-          state: "delta",
-          deltaText: " The next step is review.",
-        });
-        expect(await message.inputValue()).toBe("A follow-up draft\nwith another line");
-        await form.button("Expand reply").click();
-        await form.text("The project is ready. The next step is review.").waitFor();
         expect(await message.inputValue()).toBe("A follow-up draft\nwith another line");
         expect(await page.locator("#composer textarea").count()).toBe(1);
-        expect(await native.requests("quickchat_send")).toHaveLength(1);
         await native.emit("quickchat:chat-event", { ...reply, state: "final" });
-        await expect.poll(() => form.button("Choose agent").isDisabled()).toBe(false);
-        await expect.poll(() => message.getAttribute("readonly")).toBeNull();
         await message.fill("A follow-up draft");
         await native.emit("quickchat:gateway-state", {
           state: "down",

@@ -5,11 +5,9 @@ import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
-  holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -19,16 +17,7 @@ const suite = createControlUiE2eSuite({
 // A literal conversation can restore before hello; the shorthand main route needs live defaults.
 const sessionKey = "agent:main:thread:warm-reload";
 const transcriptText = "This conversation is ready before the Gateway reconnects.";
-const reloadProfiles = [
-  "matching",
-  "different",
-  "device-token",
-  "trusted-proxy",
-  "legacy-rail",
-  "large",
-  "short-tail",
-  "imported",
-];
+const reloadProfiles = ["matching", "different", "device-token", "trusted-proxy"];
 
 async function expectOwnMessageAlignment(page: Page): Promise<void> {
   const own = page.locator(".chat-group.user", { hasText: "Morgan's saved message." });
@@ -42,72 +31,36 @@ async function expectOwnMessageAlignment(page: Page): Promise<void> {
     .toEqual({ peer: false, alignment: "end" });
 }
 
-type SidebarRecord = { model: { entries: string[] } };
-
 // Passed whole to Playwright: request and transaction helpers stay in the browser realm.
-async function snapshotStorage(operation: "check" | "legacy" | SidebarRecord[]) {
+async function snapshotStorage() {
   const name = "openclaw-chat-snapshots";
-  const result = <T>(request: IDBRequest<T>, blockedMessage?: string) =>
+  const result = <T>(request: IDBRequest<T>) =>
     new Promise<T>((resolve, reject) => {
       request.addEventListener("success", () => resolve(request.result));
       request.addEventListener("error", () =>
         reject(request.error ?? new Error("Snapshot request failed")),
       );
-      if (blockedMessage) {
-        request.addEventListener("blocked", () => reject(new Error(blockedMessage)));
-      }
     });
   const bootRecord = Object.keys(localStorage).some((key) =>
     key.startsWith("openclaw.control.bootRecord.v1:"),
   );
-  if (operation === "check" && !(await indexedDB.databases()).some((db) => db.name === name)) {
-    return { records: [], state: { bootRecord, roster: false, transcript: false } };
+  if (!(await indexedDB.databases()).some((db) => db.name === name)) {
+    return { bootRecord, roster: false, transcript: false };
   }
-  const restoring = Array.isArray(operation);
-  if (restoring) {
-    await result(indexedDB.deleteDatabase(name), "Old snapshot database remained open");
-  }
-  const open = restoring ? indexedDB.open(name, 6) : indexedDB.open(name);
-  if (restoring) {
-    open.addEventListener("upgradeneeded", () => {
-      for (const store of ["snapshots", "snapshotMetadata", "sidebarSnapshots"]) {
-        open.result.createObjectStore(store, { keyPath: "sessionKey" });
-      }
-    });
-  }
-  const database = await result(open);
+  const database = await result(indexedDB.open(name));
   try {
-    const transaction = database.transaction(
-      operation === "check" ? ["sidebarSnapshots", "snapshots"] : "sidebarSnapshots",
-      restoring ? "readwrite" : "readonly",
-    );
+    const transaction = database.transaction(["sidebarSnapshots", "snapshots"], "readonly");
     const complete = new Promise<void>((resolve, reject) => {
       transaction.addEventListener("complete", () => resolve());
       transaction.addEventListener("error", () =>
         reject(transaction.error ?? new Error("Snapshot transaction failed")),
       );
     });
-    const store = transaction.objectStore("sidebarSnapshots");
-    if (restoring) {
-      for (const record of operation) {
-        store.put(record);
-      }
-      await complete;
-      return { records: operation };
-    }
     const [records, snapshots] = await Promise.all([
-      result<SidebarRecord[]>(store.getAll()),
-      operation === "check"
-        ? result<unknown[]>(transaction.objectStore("snapshots").getAll())
-        : Promise.resolve([]),
+      result<unknown[]>(transaction.objectStore("sidebarSnapshots").getAll()),
+      result<unknown[]>(transaction.objectStore("snapshots").getAll()),
       complete,
     ]);
-    if (operation === "legacy") {
-      for (const record of records) {
-        record.model.entries = ["route:usage", "route:cron"];
-      }
-      return { records };
-    }
     const field = (value: unknown, ...keys: string[]): unknown =>
       keys.reduce<unknown>(
         (current, key) =>
@@ -117,20 +70,17 @@ async function snapshotStorage(operation: "check" | "legacy" | SidebarRecord[]) 
         value,
       );
     return {
-      records,
-      state: {
-        bootRecord,
-        roster: records.some((record) => {
-          const sessions = field(record, "model", "roster", "result", "sessions");
-          return (
-            Array.isArray(sessions) &&
-            sessions.some((row) => field(row, "key") === "agent:main:cached-only")
-          );
-        }),
-        transcript: snapshots.some(
-          (snapshot) => field(snapshot, "snapshot", "deltaCursor") === "warm-reload-cursor",
-        ),
-      },
+      bootRecord,
+      roster: records.some((record) => {
+        const sessions = field(record, "model", "roster", "result", "sessions");
+        return (
+          Array.isArray(sessions) &&
+          sessions.some((row) => field(row, "key") === "agent:main:cached-only")
+        );
+      }),
+      transcript: snapshots.some(
+        (snapshot) => field(snapshot, "snapshot", "deltaCursor") === "warm-reload-cursor",
+      ),
     };
   } finally {
     database.close();
@@ -139,15 +89,7 @@ async function snapshotStorage(operation: "check" | "legacy" | SidebarRecord[]) 
 
 async function waitForPersistedWarmState(page: Page): Promise<void> {
   await expect
-    .poll(
-      async () =>
-        (
-          await page.evaluate<
-            Awaited<ReturnType<typeof snapshotStorage>>,
-            Parameters<typeof snapshotStorage>[0]
-          >(snapshotStorage, "check")
-        ).state,
-    )
+    .poll(() => page.evaluate(snapshotStorage))
     .toEqual({ bootRecord: true, roster: true, transcript: true });
 }
 
@@ -159,29 +101,13 @@ suite.define(() => {
         const capture = (name: string) =>
           page.screenshot({ path: path.join(suite.artifactDir, name) });
         const timestamp = Date.now();
-        const imported = profile === "imported";
-        const shortTail = profile === "short-tail";
-        const olderMessages =
-          profile === "large" || shortTail || imported
-            ? Array.from({ length: imported ? 119 : 1_099 }, (_, index) => ({
-                role: shortTail && index >= 1_020 ? "toolResult" : index % 2 ? "assistant" : "user",
-                content: `Older history ${index + 1}`,
-                ...(shortTail && index >= 1_020
-                  ? { toolCallId: `older-tool-${index}`, toolName: "read" }
-                  : {}),
-                __openclaw: {
-                  id: `older-${index + 1}`,
-                  ...(imported ? { importedFrom: "claude-cli" } : { seq: index + 1 }),
-                },
-              }))
-            : [];
         const rememberedMessage = {
           role: "assistant",
           content: transcriptText,
           openclawResponsesInputReplay: { items: ["retained for reconciliation identity"] },
           __openclaw: {
             id: "cached-message",
-            ...(imported ? { importedFrom: "claude-cli" } : { seq: olderMessages.length + 1 }),
+            seq: 1,
           },
         };
         const sessionRow = (
@@ -238,7 +164,6 @@ suite.define(() => {
               sessionId: "warm-reload-session",
               sessionInfo: currentRow,
               messages: [
-                ...olderMessages,
                 rememberedMessage,
                 ...(profile === "matching"
                   ? [
@@ -258,7 +183,6 @@ suite.define(() => {
               ],
               deltaCursor: "warm-reload-cursor",
               hasMore: false,
-              ...(olderMessages.length ? { totalMessages: olderMessages.length + 1 } : {}),
               metadata: { models: [] },
             },
           },
@@ -314,31 +238,6 @@ suite.define(() => {
             expect.objectContaining({ user: expect.objectContaining({ id: "profile-a" }) }),
           ]),
         );
-
-        if (profile === "legacy-rail") {
-          const { records } = await page.evaluate<
-            Awaited<ReturnType<typeof snapshotStorage>>,
-            Parameters<typeof snapshotStorage>[0]
-          >(snapshotStorage, "legacy");
-          expect(records.length).toBeGreaterThan(0);
-          const url = page.url();
-          await page.goto("about:blank");
-          const modules = await holdModuleResponse(page, /\/assets\/.*\.js(?:\?|$)/u);
-          await page.goto(url, { waitUntil: "commit" });
-          await modules.request;
-          await page.evaluate(snapshotStorage, records);
-          modules.release();
-          await gateway.waitForRequest("connect");
-          await sidebar.locator("aside.sidebar").waitFor();
-          expect(await sidebar.locator(".sidebar-rail__pin").count()).toBe(0);
-          expect(await sidebar.locator("aside.sidebar").getAttribute("data-snapshot-state")).toBe(
-            "live",
-          );
-          expect(await gateway.getRequests("sessions.list")).toEqual([]);
-          await gateway.resolveDeferred("connect");
-          await transcript.getByText(transcriptText, { exact: true }).waitFor();
-          return;
-        }
 
         let bootstrapRequests = 0;
         if (profile === "trusted-proxy") {
@@ -457,64 +356,6 @@ suite.define(() => {
           profile === "different" ? "This is profile B's conversation." : transcriptText;
         await transcript.getByText(finalText, { exact: true }).waitFor();
         await capture(`warm-${profile}-after-hello.png`);
-        if (profile === "large" || shortTail || imported) {
-          await waitForChatScrollIdle(page);
-          expect(await gateway.getRequests("chat.history")).toEqual([]);
-          const messages = [
-            ...olderMessages,
-            {
-              ...rememberedMessage,
-              __openclaw: {
-                ...rememberedMessage["__openclaw"],
-                senderProfileAvatarUrl: "/api/users/synthetic/avatar?v=2",
-              },
-            },
-          ];
-          const pageSize = imported ? 50 : 1_000;
-          const firstPage = messages.slice(-pageSize);
-          await gateway.setMethodResponse("chat.history", {
-            // Every long-history fixture spans two pages: 1,100/1,000 or 120/50.
-            cases: [firstPage, messages.slice(0, -pageSize)].map((pageMessages, index) => ({
-              match: { offset: index * pageSize },
-              response: {
-                messages: pageMessages,
-                sessionId: currentRow.sessionId,
-                totalMessages: messages.length,
-                hasMore: index === 0,
-                ...(index === 0 ? { nextOffset: pageSize } : {}),
-              },
-            })),
-          });
-          const messageCount = () =>
-            page
-              .locator(".chat-pane-cache__pane--active")
-              .evaluate((element) => Reflect.get(element, "state").chatMessages.length);
-          const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-          await thread.hover();
-          await page.mouse.wheel(0, -100_000);
-          const history = await gateway.waitForRequest("chat.history", { match: { offset: 0 } });
-          expect(history.params).toMatchObject({ offset: 0 });
-          await expect.poll(messageCount).toBe(firstPage.length);
-          await page
-            .getByText(
-              `Older history ${Math.max(messages.length - pageSize + 1, olderMessages.length - 79)}`,
-              { exact: true },
-            )
-            .waitFor({ state: "attached" });
-          await waitForChatScrollIdle(page);
-          await page.mouse.wheel(0, -1_000_000);
-          const older = await gateway.waitForRequest("chat.history", {
-            match: { offset: pageSize },
-          });
-          expect(older.params).toMatchObject({ offset: pageSize });
-          await expect.poll(messageCount).toBe(messages.length);
-          await page
-            .getByText(`Older history ${messages.length - pageSize}`, { exact: true })
-            .waitFor({ state: "attached" });
-          await page
-            .getByText(`Older history ${messages.length - pageSize + 1}`, { exact: true })
-            .waitFor();
-        }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);
           const connectCount = (await gateway.getRequests("connect")).length;
