@@ -1116,7 +1116,6 @@
 ["extensions/whatsapp/src/auto-reply/monitor/process-message.audio-preflight.test.ts","./audio-preflight.runtime.js","fcc83db6f785ff8efc96e87d089e1f7a2af749d9e5a4db86ffe4cc267e5a60a1",1]
 ["extensions/whatsapp/src/auto-reply/monitor/process-message.audio-preflight.test.ts","./inbound-context.js","bf0a7d6a85b90432d13125b13437550c322cd896aab33bce0cc3061d0deae12b",1]
 ["extensions/whatsapp/src/auto-reply/monitor/process-message.audio-preflight.test.ts","./last-route.js","d13ebf54e8a995b6d00ecf92eb28d45eea2d6ef0397dfa6f3a4cff8828072cdb",1]
-["extensions/whatsapp/src/auto-reply/monitor/process-message.audio-preflight.test.ts","./message-line.js","f93d9c97110d2a8d1b06061c7b13e80c8e6ad6e15e2d277bd944a2f0b193d846",1]
 ["extensions/whatsapp/src/auto-reply/monitor/process-message.test.ts","openclaw/plugin-sdk/plugin-runtime","8d5b3fefeb960e25799ed47dd38715aca039bc2877b7b47e9eb9f21a14aa179e",1]
 ["extensions/whatsapp/src/auto-reply/monitor/reactions.test.ts","../../send.js","cce0b79659f32ae04bc4007abd9f6bedf5361d129f2c84ba244cafe0ed022a00",1]
 ["extensions/whatsapp/src/auto-reply/monitor/reactions.test.ts","./group-activation.js","a774dea5eaba0138316e55d7b2ece8fe1f25d21852581a98dc89884711a3cd8e",1]
