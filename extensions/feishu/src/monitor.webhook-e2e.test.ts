@@ -61,7 +61,8 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => ({
   getWebhookLegacyListener: () => legacyListener.value,
 }));
 
-vi.mock("./probe.js", () => ({
+vi.mock("./probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./probe.js")>()),
   probeFeishu: vi.fn(async () => ({ ok: true, botOpenId: "bot_open_id" })),
   registerFeishuAiAgent: vi.fn(async () => ({ ok: true })),
 }));

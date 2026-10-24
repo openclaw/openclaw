@@ -489,8 +489,10 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
       await host.updateComplete;
     },
     busy: async (value: boolean) => {
-      await vi.waitFor(() => expect(footer().getAttribute("aria-busy")).toBe(String(value)));
-      expect(remember().disabled).toBe(false);
+      await vi.waitFor(() => {
+        expect(footer().getAttribute("aria-busy")).toBe(String(value));
+        expect(remember().disabled).toBe(false);
+      });
     },
     error: () => host.querySelector('.palette-session-settings__error[role="alert"]'),
     retry: () => expectDefined(setting(host, "error button"), "retry").click(),

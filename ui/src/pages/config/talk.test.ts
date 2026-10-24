@@ -694,9 +694,11 @@ describe("Talk device and voice wake settings", () => {
     await waitForSolid(() => expectWakeDisabled(false));
     snapshot.voice.wakeEnabled = false;
     publishSnapshot();
+    flush();
     expectWakeDisabled(true);
     snapshot.voice.supported = true;
     publishSnapshot();
+    flush();
     expectWakeDisabled(false);
   });
 });

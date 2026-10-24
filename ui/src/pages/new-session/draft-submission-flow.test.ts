@@ -9,7 +9,10 @@ import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placem
 import * as toast from "../../lib/toast.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
-import { getChatAttachmentDataUrl } from "../chat/attachment-payload-store.ts";
+import {
+  getChatAttachmentDataUrl,
+  getChatAttachmentPreviewUrl,
+} from "../chat/attachment-payload-store.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import {
   createDraftFixture as makeDraftFixture,
@@ -440,6 +443,11 @@ describe("DraftSubmissionFlow", () => {
     const shared = registerTextPayload("shared");
     const displaced = registerTextPayload("displaced");
     const incoming = registerTextPayload("incoming");
+    expect([shared, displaced, incoming].map(getChatAttachmentPreviewUrl)).toEqual([
+      "blob:shared",
+      "blob:displaced",
+      "blob:incoming",
+    ]);
     flow.attachmentDraft.replace([shared, displaced]);
     noteUserMutation.mockClear();
     revokeObjectURL.mockClear();
@@ -459,6 +467,7 @@ describe("DraftSubmissionFlow", () => {
     const { flow } = createDraftFixture();
     const noteUserMutation = vi.spyOn(flow.draftPersistence, "noteUserMutation");
     const current = registerTextPayload("current");
+    expect(getChatAttachmentPreviewUrl(current)).toBe("blob:current-draft");
     flow.attachmentDraft.replace([current]);
     noteUserMutation.mockClear();
     revokeObjectURL.mockClear();

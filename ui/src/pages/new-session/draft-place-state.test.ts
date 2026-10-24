@@ -9,6 +9,7 @@ import { DraftCloudMachineState } from "./draft-cloud-machine-state.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import { waitForModelControl } from "./model-control.test-support.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 
 const REMOTE_PROJECT = {
@@ -205,7 +206,9 @@ describe("DraftPlaceState repository selection", () => {
   });
 
   it("keeps a route-selected model in the unsent composer instead of restoring a remembered model", async () => {
-    const { state, context, readPreference, persistPreference } = createRepositoryFixture({
+    // This test owns draft selection; settle lazy code loading before the interaction deadline.
+    await import("../chat/components/chat-model-picker-panel.tsx");
+    const { state, context, readPreference, persistPreference, request } = createRepositoryFixture({
       data: routeData({ requestedModel: "example/first" }),
       models: models("first", "second", "remembered"),
     });
@@ -213,16 +216,38 @@ describe("DraftPlaceState repository selection", () => {
     readPreference.mockReturnValue({ model: "example/remembered" });
     state.adoptAgentDefaults();
     await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
+    const view = await waitForModelControl(
+      state.modelControl,
+      context,
+      "main",
+      state.selectedAgent(),
+    );
+    expect(state.modelControl.modelForSubmission()).toBe("example/first");
     expect(createParams(state).model).toBe("example/first");
     expect(persistPreference).not.toHaveBeenCalled();
 
-    state.modelControl.selectModel("example/second");
+    const choice = await vi.waitFor(() => {
+      const option = view.querySelector<HTMLButtonElement>(
+        '[data-chat-model-option="example/second"]',
+      );
+      expect(option).not.toBeNull();
+      return option!;
+    });
+    choice.click();
+    expect(state.modelControl.modelForSubmission()).toBe("example/second");
+    state.modelControl.load(context, "main", true, { agent: state.selectedAgent() });
+    state.adoptAgentDefaults();
+    expect(state.modelControl.modelForSubmission()).toBe("example/second");
+    state.modelControl.invalidate();
+    state.adoptAgentDefaults();
+    await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
+    expect(state.modelControl.modelForSubmission()).toBe("example/second");
     Object.assign(context.gateway.snapshot, { hello: { ...context.gateway.snapshot.hello } });
     state.invalidateGatewayDiscovery(false);
     state.adoptAgentDefaults();
     await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
-    expect(persistPreference).toHaveBeenCalledWith(
+    expect(persistPreference).toHaveBeenCalledExactlyOnceWith(
       "main",
       "/workspace",
       expect.objectContaining({ model: "example/second" }),
@@ -237,10 +262,15 @@ describe("DraftPlaceState repository selection", () => {
     };
     await selectAgent("scout", "example/remembered");
     await selectAgent("main", "example/second");
+    expect(state.modelControl.modelForSubmission()).toBe("example/second");
     state.resetDraft();
     state.adoptAgentDefaults();
     await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
     expect(state.modelControl.modelForSubmission()).toBe("example/first");
+
+    expect(
+      request.mock.calls.some(([method]) => method === "sessions.create" || method === "chat.send"),
+    ).toBe(false);
   });
 
   it("captures pending placement preferences instead of transient discovery defaults", () => {
