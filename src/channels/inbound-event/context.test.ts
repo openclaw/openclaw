@@ -131,6 +131,7 @@ describe("buildChannelInboundEventContext", () => {
         routeSessionKey: "agent:main:test:group:room-1",
         parentSessionKey: "agent:main:test:group",
         modelParentSessionKey: "agent:main:test:model",
+        recoveryParentSessionKey: "agent:main:test:recovery",
       },
       reply: {
         to: "test:room:room-1",
@@ -198,6 +199,7 @@ describe("buildChannelInboundEventContext", () => {
         AccountId: "acct",
         ParentSessionKey: "agent:main:test:group",
         ModelParentSessionKey: "agent:main:test:model",
+        RecoveryParentSessionKey: "agent:main:test:recovery",
         MessageSid: "msg-1",
         ReplyToId: "root-1",
         ReplyToBody: "quoted",

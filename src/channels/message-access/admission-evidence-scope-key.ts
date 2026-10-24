@@ -141,6 +141,7 @@ const FINALIZED_CONTEXT_SCOPE_FIELDS = [
   "DmScope",
   "ParentSessionKey",
   "ModelParentSessionKey",
+  "RecoveryParentSessionKey",
   "MessageSid",
   "MessageSidFull",
   "ReplyToId",

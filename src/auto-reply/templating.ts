@@ -171,6 +171,14 @@ export type MsgContext = Partial<CanonicalInboundText> & {
    * forking or parent-session lifecycle behavior.
    */
   ModelParentSessionKey?: string;
+  /**
+   * Parent relationship reserved for restart-recovery replacement. Unlike
+   * ParentSessionKey, it never requests a transcript fork on ordinary session
+   * starts; the lifecycle owner uses it only when replacing an eligible
+   * restart tombstone, and that replacement still runs the required
+   * parent-fork preparation before committing.
+   */
+  RecoveryParentSessionKey?: string;
   MessageSid?: string;
   /** Provider-specific full message id when MessageSid is a shortened alias. */
   MessageSidFull?: string;

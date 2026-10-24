@@ -106,3 +106,39 @@ export async function prepareReplySessionParentFork(params: {
   };
   return forkedEntry;
 }
+
+/**
+ * Builds the prepareSessionEntry hook that runs the required parent-fork
+ * preparation before a fresh generation commits. The fork source is the
+ * ordinary parent key on a fork request, or the recovery parent key when a
+ * replacement-eligible restart tombstone authorizes the replacement.
+ */
+export function parentForkPreparationHook(params: {
+  alreadyForked: boolean;
+  forkSource?: string;
+  requireParentForkReplacement: boolean;
+  sessionTarget: { agentId: string; sessionKey: string; storePath: string };
+  signal?: AbortSignal;
+  warn: (message: string) => void;
+}) {
+  return async ({
+    readEntry,
+    sessionEntry: entryToCommit,
+  }: {
+    readEntry: (sessionKey: string) => SessionEntry | undefined;
+    sessionEntry: SessionEntry;
+  }) => {
+    if (params.signal?.aborted === true) {
+      throw new Error("reply session initialization aborted");
+    }
+    return await prepareReplySessionParentFork({
+      ...params.sessionTarget,
+      alreadyForked: params.alreadyForked,
+      parentSessionKey: params.forkSource,
+      requireParentForkReplacement: params.requireParentForkReplacement,
+      readEntry,
+      sessionEntry: entryToCommit,
+      warn: params.warn,
+    });
+  };
+}

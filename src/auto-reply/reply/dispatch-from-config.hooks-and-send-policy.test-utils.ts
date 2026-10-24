@@ -1822,6 +1822,52 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "fork handled" });
   });
 
+  it("admits a human parent-fork replacement from the recovery parent key without a transcript fork request", async () => {
+    setNoAbort();
+    const archivedAt = Date.now() - 1_000;
+    sessionStoreMocks.currentEntry = {
+      sessionId: "preseed-thread-session",
+      updatedAt: Date.now(),
+      archivedAt,
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      },
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => {
+      expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
+      return { text: "fork handled" } satisfies ReplyPayload;
+    });
+
+    // Transcript isolation withholds ParentSessionKey; Matrix supplies the
+    // room session as the explicit recovery parent key so the replacement
+    // runs the required parent-fork preparation.
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: "agent:main:slack:channel:c1:thread:123",
+        RecoveryParentSessionKey: "agent:main:slack:channel:c1",
+        Body: "thread reply",
+        CommandBody: "thread reply",
+        RawBody: "thread reply",
+        InboundAccessAuthorized: true,
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "slack" },
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "fork handled" });
+  });
+
   it.each([
     {
       label: "room event",

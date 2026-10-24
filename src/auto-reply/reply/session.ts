@@ -131,7 +131,7 @@ import {
 } from "./session-initialization-admission.js";
 import {
   canReplaceRestartTombstoneFromParent,
-  prepareReplySessionParentFork,
+  parentForkPreparationHook,
 } from "./session-parent-fork-prepare.js";
 import {
   clearCommittedSessionResetRuntimeState,
@@ -376,9 +376,13 @@ async function initSessionStateAttemptLocked(
   params.signal?.throwIfAborted();
   const sessionStoreLoadStartMs = ingressTimingEnabled ? Date.now() : 0;
   const mainSessionKey = buildAgentMainSessionKey({ agentId, mainKey });
+  const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
+  // Only the explicit recovery parent key (never the descriptive model parent
+  // key) authorizes restart-recovery replacement.
+  const recoveryKey = parentSessionKey ?? normalizeOptionalString(ctx.RecoveryParentSessionKey);
   const relatedSessionKeys = [
     mainSessionKey,
-    ctx.ParentSessionKey,
+    recoveryKey,
     ctx.ModelParentSessionKey,
     ctx.CommandTargetSessionKey,
     resolveSessionParentSessionKey(sessionKey),
@@ -411,10 +415,9 @@ async function initSessionStateAttemptLocked(
     inputDeliveryKey: attemptContext.inputDeliveryKey,
   });
   const entry = initializationSnapshot.currentEntry;
-  const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const parentForkSourceEntry =
-    parentSessionKey && parentSessionKey !== sessionKey
-      ? initializationSnapshot.readEntry(parentSessionKey)
+    recoveryKey && recoveryKey !== sessionKey
+      ? initializationSnapshot.readEntry(recoveryKey)
       : undefined;
   const actorType = isSystemEvent
     ? "system"
@@ -749,7 +752,11 @@ async function initSessionStateAttemptLocked(
     : undefined;
   let previousSessionMemory: SessionMemoryTranscript | undefined;
   let previousSessionResetMessages: unknown[] | undefined;
+  // Replacement runs the required parent-fork preparation even without an
+  // ordinary-start fork request; both paths share the guarded commit hook.
   const prepareParentFork = parentSessionKey && parentSessionKey !== sessionKey && !alreadyForked;
+  const needsParentForkPreparation =
+    prepareParentFork || (restartTombstoneParentFork && !alreadyForked);
   const routeContext =
     !isSystemEvent &&
     sessionCtxForState.InboundAccessAuthorized === true &&
@@ -761,7 +768,7 @@ async function initSessionStateAttemptLocked(
       entry &&
       recordedActivity &&
       !previousSessionEntry &&
-      !prepareParentFork &&
+      !needsParentForkPreparation &&
       !retiredLegacyMainDelivery &&
       !params.bindSessionCreation &&
       routeContext === undefined &&
@@ -799,21 +806,15 @@ async function initSessionStateAttemptLocked(
       expectedRevision: initializationSnapshot.revision,
       relatedSessionKeys,
       maintenanceConfig,
-      prepareSessionEntry: prepareParentFork
-        ? async ({ readEntry, sessionEntry: entryToCommit }) => {
-            if (params.signal?.aborted === true) {
-              throw new Error("reply session initialization aborted");
-            }
-            return await prepareReplySessionParentFork({
-              ...sessionTarget,
-              alreadyForked,
-              parentSessionKey,
-              requireParentForkReplacement: restartTombstoneParentFork,
-              readEntry,
-              sessionEntry: entryToCommit,
-              warn: (message) => log.warn(message),
-            });
-          }
+      prepareSessionEntry: needsParentForkPreparation
+        ? parentForkPreparationHook({
+            alreadyForked,
+            forkSource: restartTombstoneParentFork ? recoveryKey : parentSessionKey,
+            requireParentForkReplacement: restartTombstoneParentFork,
+            sessionTarget,
+            signal: params.signal,
+            warn: (message) => log.warn(message),
+          })
         : undefined,
       ...(resetBoundary ? { resetBoundary } : {}),
       beforeEntryMutation: async ({ currentEntry, sessionEntry: entryToCommit }) => {

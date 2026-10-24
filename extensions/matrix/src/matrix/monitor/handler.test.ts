@@ -27,6 +27,7 @@ import {
   createMatrixRoomMessageEvent,
   createMatrixTextMessageEvent as textEvent,
 } from "./handler.test-helpers.js";
+import { registerMatrixThreadIsolationTests } from "./handler.thread-isolation.test-support.js";
 import { stripMatrixMentionPrefix } from "./mentions.js";
 
 // Core owns the shared gate (DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS); plugins
@@ -674,6 +675,7 @@ describe("matrix monitor handler pairing account scope", () => {
 });
 
 registerMatrixLiveAllowlistTests();
+registerMatrixThreadIsolationTests();
 
 describe("matrix monitor handler failure handling", () => {
   it("sends a durable threaded notice after restart tombstone rejection", async () => {

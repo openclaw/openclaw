@@ -57,6 +57,7 @@ Room access, sender restrictions, and `allowBots: "mentions"` still apply.
 ### Thread inheritance and slash commands
 
 - Inbound threaded messages include the thread root message as extra agent context.
+- Thread sessions start isolated: the room transcript is not copied into a new thread's first prompt.
 - Message-tool sends auto-inherit the current Matrix thread when targeting the same room (or the same DM user target), unless an explicit `threadId` is provided.
 - DM user-target reuse only kicks in when current session metadata proves the same DM peer on the same Matrix account; otherwise OpenClaw falls back to normal user-scoped routing.
 - `/session unbind`, `/agents`, `/session idle`, `/session max-age`, and thread-bound `/acp spawn` all work in Matrix rooms and DMs.
