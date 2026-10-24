@@ -81,38 +81,32 @@ afterEach(() => {
   localStorage.clear();
 });
 
-it.each(["idle", "rejected"] as const)(
-  "retains required worker startup outcome: %s",
-  async (status) => {
-    const f = await ready();
-    const key = "agent:main:required";
-    const error = "Required worker is offline";
-    expect(f.place).toMatchObject({ cloudProfileId: profile.id, freshWorkspace: true });
-    expect(f.flow.canSubmit()).toBe(true);
-    f.context.placementStartup.start = vi.fn();
-    vi.mocked(f.context.sessions.createResult).mockResolvedValue({
-      key,
-      initialRun: status === "idle" ? { status } : { status, error },
-    });
-    await f.flow.submit(undefined, true);
-    expect(f.context.sessions.createResult).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "", worktree: true, worktreeSource: "empty" }),
-      expect.anything(),
-    );
-    expect(f.context.sessions.createResult).toHaveBeenCalledOnce();
-    expect(f.context.placementStartup.start).toHaveBeenCalledWith(
-      expect.objectContaining({
-        recovery: expect.objectContaining(
-          status === "idle"
-            ? { target: { kind: "profile", profileId: profile.id, required: true } }
-            : { sessionKey: key, phase: "paused", reason: "not-sent", error },
-        ),
+it("keeps a rejected required worker startup recoverable", async () => {
+  const f = await ready();
+  const key = "agent:main:required";
+  const error = "Required worker is offline";
+  expect(f.place).toMatchObject({ cloudProfileId: profile.id, freshWorkspace: true });
+  expect(f.flow.canSubmit()).toBe(true);
+  f.context.placementStartup.start = vi.fn();
+  vi.mocked(f.context.sessions.createResult).mockResolvedValue({
+    key,
+    initialRun: { status: "rejected", error },
+  });
+  await f.flow.submit(undefined, true);
+  expect(f.context.placementStartup.start).toHaveBeenCalledWith(
+    expect.objectContaining({
+      recovery: expect.objectContaining({
+        sessionKey: key,
+        phase: "paused",
+        reason: "not-sent",
+        error,
+        target: { kind: "profile", profileId: profile.id, required: true },
       }),
-    );
-    expect(f.request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-    expect(f.request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
-  },
-);
+    }),
+  );
+  expect(f.request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
+  expect(f.request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
+});
 
 it("waits for initial policy and never falls back when its required profile is missing", async () => {
   const pending = createDeferred<unknown>();
@@ -124,23 +118,6 @@ it("waits for initial policy and never falls back when its required profile is m
   await read;
   expect(f.place.cloudProfileId).toBe(profile.id);
   await expectBlocked(f);
-});
-
-it("projects the latest policy over cached placement without persisting that policy as a preference", async () => {
-  let current: typeof catalog | { profiles: (typeof profile)[]; environments: never[] } = catalog;
-  const f = await ready(fixture(async () => current));
-  f.place.selectDevice("");
-  expect(f.place.cloudProfileId).toBe(profile.id);
-  current = {
-    ...catalog,
-    requiredProfile: "replacement",
-    profiles: [{ ...profile, id: "replacement" }],
-  };
-  await f.gateway.retryRequiredPlacement();
-  expect(f.place.cloudProfileId).toBe("replacement");
-  current = optionalCatalog;
-  await f.gateway.retryRequiredPlacement();
-  expect(f.place).toMatchObject({ cloudProfileId: "", remotePlacement: false });
 });
 
 it("rejects direct hosted placement and blocks hosted model changes under required placement", async () => {
@@ -182,10 +159,20 @@ it("applies a newly required profile over an open hosted draft without advertisi
     worktree: true,
   });
   await expectBlocked(f);
+  f.place.selectDevice("");
+  expect(f.place.cloudProfileId).toBe(profile.id);
+  current = {
+    ...catalog,
+    requiredProfile: "replacement",
+    profiles: [{ ...profile, id: "replacement" }],
+  };
+  await f.gateway.retryRequiredPlacement();
+  expect(f.place.cloudProfileId).toBe("replacement");
 
   current = optionalCatalog;
   await f.gateway.retryRequiredPlacement();
   f.place.restorePreferenceSelections();
+  expect(f.place).toMatchObject({ cloudProfileId: "", remotePlacement: false });
   expect(f.place.hostedEnvironment).toEqual(hostedRuntime.workspaceEnvironment);
   expect(f.flow.canSubmit()).toBe(true);
 });

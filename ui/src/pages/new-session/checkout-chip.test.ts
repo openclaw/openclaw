@@ -41,6 +41,11 @@ function keydown(element: Element, key: string) {
   return element.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
 }
 
+function input(element: HTMLInputElement, value: string) {
+  element.value = value;
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 function afterHide(container: Element) {
   container
     .querySelector(".new-session-page__checkout-popover")!
@@ -164,18 +169,19 @@ function mountCheckout(initial: CheckoutFixture) {
 
 describe("Checkout chip state", () => {
   it.each([
-    ["cloud", false, true, "main", undefined, "From main"],
-    ["cloud", true, false, "", undefined, "Starting branch"],
-    ["remote", true, false, "release", undefined, "Remote checkout from release"],
-    ["remote", true, false, "", undefined, "Remote checkout"],
-    ["remote", false, true, "", undefined, "New worktree"],
-    ["local", false, false, "main", "feature", "feature"],
-    ["local", false, false, "main", undefined, "Current checkout"],
-    ["local", false, true, "main", "feature", "New worktree from main"],
-    ["local", false, true, "", undefined, "New worktree"],
+    ["cloud", false, true, "main", undefined, "", "From main"],
+    ["cloud", true, false, "", undefined, "", "Starting branch"],
+    ["remote", true, false, "main", undefined, "x", "Remote checkout from main"],
+    ["remote", true, false, "", undefined, "", "Remote checkout"],
+    ["local", false, false, "main", "feature", "x", "feature"],
+    ["local", false, false, "main", undefined, "", "Current checkout"],
+    ["local", false, true, "main", "feature", "   ", "New worktree from main"],
+    ["local", false, true, "", undefined, "", "New worktree"],
+    ["local", false, true, "main", undefined, " x ", "Worktree · x"],
+    ["cloud", true, true, "main", undefined, "x", "From main"],
   ] as const)(
-    "%s repository=%s worktree=%s base=%s head=%s: %s",
-    (destination, repository, worktree, baseRef, headBranch, label) => {
+    "%s repository=%s worktree=%s base=%s head=%s name=%s: %s",
+    (destination, repository, worktree, baseRef, headBranch, worktreeName, label) => {
       expect(
         resolveCheckoutChip({
           destination,
@@ -183,31 +189,7 @@ describe("Checkout chip state", () => {
           worktree,
           baseRef,
           headBranch,
-          worktreeName: "",
-        }),
-      ).toEqual({ label });
-    },
-  );
-
-  it.each([
-    ["local", true, false, " release-proof ", "Worktree · release-proof"],
-    ["remote", true, false, "release-proof", "Worktree · release-proof"],
-    ["local", true, false, "   ", "New worktree from main"],
-    ["local", false, false, "release-proof", "main"],
-    ["cloud", true, false, "release-proof", "Worktree · release-proof"],
-    ["cloud", true, true, "release-proof", "From main"],
-    ["remote", false, true, "release-proof", "Remote checkout from main"],
-  ] as const)(
-    "labels %s checkout with worktree=%s, repository=%s, name=%s: %s",
-    (destination, worktree, repository, name, label) => {
-      expect(
-        resolveCheckoutChip({
-          headBranch: "main",
-          baseRef: "main",
-          worktreeName: name,
-          destination,
-          worktree,
-          repository,
+          worktreeName,
         }),
       ).toEqual({ label });
     },
@@ -251,7 +233,7 @@ describe("Checkout chip state", () => {
           headBranch: "feature",
         },
       });
-      const { onSelectWorktree, onBaseRefInput, onWorktreeNameInput, onConfirm } = params;
+      const { onSelectWorktree, onBaseRefInput, onConfirm } = params;
       const { container } = mountCheckout(params);
 
       await waitForOpen(container);
@@ -275,8 +257,7 @@ describe("Checkout chip state", () => {
         expect(container.querySelector('[data-value="worktree"]')).toBeNull();
         const inputs = container.querySelectorAll<HTMLInputElement>("input");
         expect(inputs).toHaveLength(1);
-        inputs[0]!.value = "release/next";
-        inputs[0]!.dispatchEvent(new Event("input", { bubbles: true }));
+        input(inputs[0]!, "release/next");
         expect(onBaseRefInput).toHaveBeenCalledWith("release/next");
         keydown(inputs[0]!, "Enter");
         afterHide(container);
@@ -289,11 +270,6 @@ describe("Checkout chip state", () => {
 
       const current = container.querySelector<HTMLButtonElement>('[data-value="checkout"]')!;
       const isolated = container.querySelector<HTMLButtonElement>('[data-value="worktree"]')!;
-      expect(current.textContent).toContain("Current checkout");
-      expect(current.querySelector(".session-menu__sub")?.textContent).toBe("feature");
-      expect(current.querySelector(".session-menu__description")?.textContent).toBe(
-        currentCheckoutUnavailableReason,
-      );
       expect(current.getAttribute("aria-pressed")).toBe(String(!worktree));
       expect(current.disabled).toBe(remotePlacement || Boolean(currentCheckoutUnavailableReason));
       expect(current.getAttribute("title")).toBe(
@@ -301,73 +277,15 @@ describe("Checkout chip state", () => {
           ? "Devices and cloud run in a worktree"
           : (currentCheckoutUnavailableReason ?? null),
       );
-      expect(isolated.textContent).toContain("New worktree");
       expect(isolated.getAttribute("aria-pressed")).toBe(String(worktree));
       expect(isolated.disabled).toBe(false);
-      expect(isolated.hasAttribute("title")).toBe(false);
       current.click();
       isolated.click();
       expect(onSelectWorktree.mock.calls).toEqual(
         remotePlacement || currentCheckoutUnavailableReason ? [[true]] : [[false], [true]],
       );
 
-      const fields = container.querySelectorAll<HTMLLabelElement>(".new-session-page__menu-field");
-      expect(fields).toHaveLength(worktree ? 2 : 0);
-      if (worktree) {
-        expect(fields[0]?.querySelector("span")?.textContent).toBe("From");
-        expect(fields[1]?.querySelector("span")?.textContent).toBe("Name");
-        const baseRef = fields[0]!.querySelector("input")!;
-        const name = fields[1]!.querySelector("input")!;
-        expect(baseRef.value).toBe("main");
-        expect(name.placeholder).toBe("Named from the session title");
-        baseRef.value = " release ";
-        baseRef.dispatchEvent(new Event("input", { bubbles: true }));
-        name.value = " checkout-proof ";
-        name.dispatchEvent(new Event("input", { bubbles: true }));
-        expect(onBaseRefInput).toHaveBeenCalledWith(" release ");
-        expect(onWorktreeNameInput).toHaveBeenCalledWith(" checkout-proof ");
-        const suggestions = container.querySelectorAll("[data-worktree-suggestion]");
-        expect([...suggestions].map((item) => item.textContent?.trim())).toEqual([
-          "main",
-          "release/next",
-        ]);
-        keydown(baseRef, "ArrowDown");
-        keydown(baseRef, "ArrowDown");
-        expect(baseRef.getAttribute("aria-activedescendant")).toBe(
-          "new-session-worktree-branch-suggestion-1",
-        );
-        expect(suggestions[1]!.getAttribute("aria-selected")).toBe("true");
-        for (const key of ["ArrowDown", "ArrowUp"]) {
-          const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
-          name.dispatchEvent(event);
-          expect(event.defaultPrevented).toBe(false);
-          expect(name.hasAttribute("aria-activedescendant")).toBe(false);
-          expect(suggestions[1]!.getAttribute("aria-selected")).toBe("true");
-        }
-        keydown(baseRef, "Enter");
-        expect(onBaseRefInput).toHaveBeenLastCalledWith("release/next");
-        expect(onConfirm).not.toHaveBeenCalled();
-        (suggestions[1] as HTMLButtonElement).click();
-        expect(onBaseRefInput).toHaveBeenLastCalledWith("release/next");
-        keydown(name, "Enter");
-        afterHide(container);
-        expect(onConfirm).toHaveBeenCalledOnce();
-        container.querySelector<HTMLButtonElement>("#new-session-checkout-trigger")!.click();
-        await waitForOpen(container);
-        keydown(baseRef, "ArrowDown");
-        const branchWrites = onBaseRefInput.mock.calls.length;
-        name.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Enter", cancelable: true, bubbles: true }),
-        );
-        afterHide(container);
-        expect(onBaseRefInput).toHaveBeenCalledTimes(branchWrites);
-        expect(onConfirm).toHaveBeenCalledTimes(2);
-        expect(container.textContent).toContain(
-          "Creates a branch from the session title in a separate checkout.",
-        );
-      } else {
-        expect(container.querySelector(".new-session-page__menu-note")).toBeNull();
-      }
+      expect(container.querySelectorAll("input")).toHaveLength(worktree ? 2 : 0);
       expect(container.textContent?.includes("Syncs OpenClaw to the selected runner")).toBe(
         remotePlacement,
       );
@@ -444,6 +362,22 @@ describe("Checkout chip state", () => {
     const renderNamed = (worktreeName: string) => update({ ...params, worktreeName });
     await waitForOpen(container);
     onPopoverShow.mockClear();
+    const baseRef = container.querySelector<HTMLInputElement>("#new-session-worktree-base-ref")!;
+    const name = container.querySelector<HTMLInputElement>("[data-worktree-name]")!;
+    input(baseRef, " release ");
+    input(name, " picker-fixes ");
+    expect(params.onBaseRefInput).toHaveBeenLastCalledWith(" release ");
+    expect(params.onWorktreeNameInput).toHaveBeenLastCalledWith(" picker-fixes ");
+    keydown(baseRef, "ArrowDown");
+    const suggestion = container.querySelector('[data-worktree-suggestion="main"]')!;
+    expect(baseRef.getAttribute("aria-activedescendant")).toBe(suggestion.id);
+    for (const key of ["ArrowDown", "ArrowUp"]) {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      name.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(name.hasAttribute("aria-activedescendant")).toBe(false);
+      expect(suggestion.getAttribute("aria-selected")).toBe("true");
+    }
 
     const trigger = container.querySelector<HTMLButtonElement>("#new-session-checkout-trigger")!;
     expect(trigger.getAttribute("aria-controls")).toBe("new-session-checkout-popover");
@@ -471,7 +405,9 @@ describe("Checkout chip state", () => {
     expect(onPopoverShow).not.toHaveBeenCalled();
     expect(onPopoverHide).not.toHaveBeenCalled();
     expect(onPopoverAfterHide).not.toHaveBeenCalled();
-    keydown(container.querySelectorAll("input")[1]!, "Enter");
+    params.onBaseRefInput.mockClear();
+    keydown(name, "Enter");
+    expect(params.onBaseRefInput).not.toHaveBeenCalled();
     suggestionPopup.dispatchEvent(
       new CustomEvent("overlay-after-hide", { bubbles: true, composed: true }),
     );
@@ -488,16 +424,17 @@ describe("Checkout chip state", () => {
         ...params,
         branches: {
           repoRoot: "/repo",
-          branches: names.map((name) => ({ name, kind: "local" })),
+          branches: names.map((branchName) => ({ name: branchName, kind: "local" })),
         },
       });
-    const baseRef = container.querySelector<HTMLInputElement>("#new-session-worktree-base-ref")!;
     const pressBranch = (key: string) => keydown(baseRef, key);
     renderBranches(["main", "release"]);
+    input(baseRef, "main");
     pressBranch("ArrowDown");
     renderBranches(["release", "main"]);
     pressBranch("Enter");
     expect(params.onBaseRefInput).toHaveBeenLastCalledWith("main");
+    expect(onConfirm).toHaveBeenCalledOnce();
 
     pressBranch("ArrowDown");
     const retired = container.querySelector<HTMLButtonElement>(

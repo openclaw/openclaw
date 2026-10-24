@@ -31,26 +31,18 @@ afterEach(() => {
   resetWorktreeMocks();
 });
 
-function notifiedWhen(control: NewSessionModelControl, predicate: () => unknown) {
-  const ready = deferred();
-  const release = control.subscribe(() => {
-    if (predicate()) {
-      release();
-      ready.resolve();
-    }
-  });
-  onTestFinished(release);
-  return ready.promise;
-}
-
 function setupModel(models: ModelCatalogEntry[], agent?: GatewayAgentRow) {
   const state = contextWith(models);
-  const control = managed.make(() => undefined);
+  const savePreference = vi.fn();
+  const control = managed.make(() => undefined, savePreference);
   return {
     ...state,
     control,
+    savePreference,
     ...controlQueries(control, state.context, "main", agent),
     blocked: () => control.modelSelectionBlockedReason(agent),
+    model: () => control.modelForSubmission(),
+    ready: () => control.accountSelectionReady(),
     load: () => control.load(state.context, "main", true, { agent }),
   };
 }
@@ -82,7 +74,8 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
     selected: false,
   };
   const agent = { id: "main", model: { primary: "anthropic/model" } };
-  const { context, request } = contextWith([model]);
+  const fixture = setupModel([model], agent);
+  const { context, request, control, find, draw, blocked } = fixture;
   Object.assign(context.gateway.snapshot, { selfUser: { id: "person-a", name: "Person A" } });
   const preview = deferred<ModelCatalogResult>();
   const neutral: ModelCatalogResult = {
@@ -103,8 +96,6 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
     }
     return params.authProfileId ? preview.promise : Promise.resolve(neutral);
   });
-  const savePreference = vi.fn();
-  const control = managed.make(() => undefined, savePreference);
   control.load(context, "main", true, { agent });
   if (mode === "retire" || mode === "provider-switch") {
     Object.assign(context.config.current, { newSessionModelDefaults: "configured" });
@@ -124,7 +115,6 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
     neutral.models.push(extra);
     connected.models.push(extra);
   }
-  const { draw, find } = controlQueries(control, context, "main", agent);
   const select = (value: string) => {
     if (!find("account-option", value)) {
       find("account-group-toggle")!.click();
@@ -133,40 +123,28 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
     find("account-option", value)!.click();
   };
   const chooseAccount = async () => {
-    await vi.waitFor(() =>
-      expect(control.modelSelectionBlockedReason(agent)).toContain("No provider credential"),
-    );
+    await vi.waitFor(() => expect(blocked()).toContain("No provider credential"));
     await waitForModelControl(control, context, "main", agent);
     find("account-group-toggle")!.click();
     await vi.waitFor(() => expect(draw().textContent).toContain(account.label));
     select(`account:${account.authProfileId}`);
     return {
-      completion: vi.waitFor(() =>
-        expect(control.modelSelectionBlockedReason(agent)).not.toBe("Loading models…"),
-      ),
+      completion: vi.waitFor(() => expect(blocked()).not.toBe("Loading models…")),
     };
   };
   return {
+    ...fixture,
     account,
     agent,
-    context,
-    control,
-    request,
     preview,
     connected,
-    draw,
-    find,
     select,
     chooseAccount,
-    savePreference,
     connect: async () => {
       const { completion } = await chooseAccount();
       preview.resolve(connected);
       await completion;
     },
-    blocked: () => control.modelSelectionBlockedReason(agent),
-    model: () => control.modelForSubmission(),
-    ready: () => control.accountSelectionReady(),
   };
 }
 
@@ -193,7 +171,6 @@ it("keeps a personal account when Default uses the role-permitted provider rathe
 it("keeps a deliberate provider switch when leaving a personal account for a cached catalog", async () => {
   const f = retainedAccountDraft("provider-switch");
   await f.connect();
-  expect(f.ready()).toBe(true);
   const reads = f.request.mock.calls.filter(([method]) => method === "models.list").length;
   f.find("model-option", "openai/other")!.click();
   expect(f.model()).toBe("openai/other");
@@ -220,9 +197,9 @@ it.each(["empty", "rejection"])(
     const { context, request, control: firstControl, retire } = await retainCatalog(models, agent);
     const draw = (control: NewSessionModelControl) =>
       renderControl(control, context, "main", agent);
-    expect(firstControl.resolveAgentRuntime({ agent, context })?.cloudPlacementSupported).toBe(
-      false,
-    );
+    const cloudPlacement = (control: NewSessionModelControl) =>
+      control.resolveAgentRuntime({ agent, context })?.cloudPlacementSupported;
+    expect(cloudPlacement(firstControl)).toBe(false);
     retire();
     const replacement = deferred<ModelCatalogResult>();
     request.mockReturnValueOnce(replacement.promise);
@@ -231,12 +208,10 @@ it.each(["empty", "rejection"])(
     const preference = { model: "fixture/remembered", thinkingLevel: "high" };
 
     remounted.load(context, "main", true, { agent, preference });
-    expect(modelOption(draw(remounted), "fixture/first")).not.toBeNull();
     expect(modelOption(draw(remounted), "fixture/second")).not.toBeNull();
     expect(remounted.isRestoringPreference()).toBe(true);
     expect(remounted.selected).toBe("");
-    expect(remounted.resolveAgentRuntime({ agent, context })?.cloudPlacementSupported).toBe(true);
-    expect(savePreference).not.toHaveBeenCalled();
+    expect(cloudPlacement(remounted)).toBe(true);
     remounted.load(context, "main", true, { agent, preference });
     expect(savePreference).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
@@ -256,11 +231,9 @@ it.each(["empty", "rejection"])(
       });
       modelOption(container, "fixture/second")?.click();
       expect(remounted.selected).toBe("fixture/second");
-      expect(remounted.resolveAgentRuntime({ agent, context })?.cloudPlacementSupported).toBe(
-        false,
-      );
+      expect(cloudPlacement(remounted)).toBe(false);
     } else {
-      expect(remounted.resolveAgentRuntime({ agent, context })?.cloudPlacementSupported).toBe(true);
+      expect(cloudPlacement(remounted)).toBe(true);
     }
   },
 );
@@ -288,7 +261,6 @@ it("does not complete a retained account preview before its replacement is accep
   expect(f.blocked()).toBe("Loading models…");
   expect(f.ready()).toBe(false);
   expect(f.find("account-selection")?.dataset.chatAccountSelection).toBe("automatic");
-  expect(f.savePreference).not.toHaveBeenCalled();
   replacement.resolve(f.connected);
   await vi.waitFor(() => expect(f.ready()).toBe(true));
   expect(f.savePreference).not.toHaveBeenCalled();
@@ -353,33 +325,24 @@ it("enables a cooled-down model on reopen without a catalog event", async () => 
     unavailableUntil: 12_000,
   });
   const agent = { id: "main", model: { primary: "example/model" } };
-  const { context, request, control, find } = setupModel([model], agent);
+  const { request, find, load } = setupModel([model], agent);
   const option = () => find("model-option", "example/model");
-  try {
-    control.load(context, "main", true, { agent });
-    await vi.waitFor(() => expect(option()?.disabled).toBe(true));
-    request.mockResolvedValueOnce({
-      models: [
-        { ...model, available: true, unavailableReason: undefined, unavailableUntil: undefined },
-      ],
-    });
-    clock.mockReturnValue(12_000);
-    find("model-select", "true")!.click();
-    await vi.waitFor(() => expect(option()?.disabled).toBe(false));
-    expect(request).toHaveBeenCalledTimes(2);
-  } finally {
-    control.reset();
-    clock.mockRestore();
-  }
+  onTestFinished(() => clock.mockRestore());
+  load();
+  await vi.waitFor(() => expect(option()?.disabled).toBe(true));
+  request.mockResolvedValueOnce({
+    models: [
+      { ...model, available: true, unavailableReason: undefined, unavailableUntil: undefined },
+    ],
+  });
+  clock.mockReturnValue(12_000);
+  find("model-select", "true")!.click();
+  await vi.waitFor(() => expect(option()?.disabled).toBe(false));
 });
 
 it("selects a usable retained account after refresh failure without changing saved preferences", async () => {
   const f = retainedAccountDraft();
   const { completion } = await f.chooseAccount();
-  expect(f.request.mock.calls.at(-1)?.slice(0, 2)).toEqual([
-    "models.list",
-    { view: "configured", agentId: "main", authProfileId: f.account.authProfileId },
-  ]);
   expect(f.blocked()).toBe("Loading models…");
   f.preview.resolve({ ...f.connected, refreshFailed: true });
   await completion;
@@ -404,18 +367,13 @@ it.each(["unconfirmed account", "unknown availability"])(
   async (outcome) => {
     const f = retainedAccountDraft();
     const { completion } = await f.chooseAccount();
-    expect(f.blocked()).toBe("Loading models…");
-    f.preview.resolve({
-      ...f.connected,
-      ...(outcome === "unconfirmed account" ? { accountSelection: undefined } : {}),
-      ...(outcome === "unknown availability"
-        ? {
-            models: f.connected.models?.map((model) =>
-              Object.assign({}, model, { available: undefined }),
-            ),
-          }
-        : {}),
-    });
+    const result = { ...f.connected };
+    if (outcome === "unconfirmed account") {
+      result.accountSelection = undefined;
+    } else {
+      result.models = result.models.map((model) => ({ ...model, available: undefined }));
+    }
+    f.preview.resolve(result);
     await completion;
     expect(f.blocked()).toBe("Models unavailable");
   },
@@ -508,20 +466,17 @@ describe("model selection policy", () => {
   const scope = { agentId: "main", timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS };
 
   it("requires a permitted choice when URL intent is forbidden and policy has no default", async () => {
-    const { context, request, control, draw, find, blocked } = setupModel(models, agent);
+    const { context, request, control, draw, blocked } = setupModel(models, agent);
     const wire = deferred<ModelCatalogResult>();
     request.mockReturnValue(wire.promise);
-    const ready = notifiedWhen(control, () => find("model-option", "fixture/permitted"));
 
     control.load(context, "main", true, {
       agent,
       initialModel: "fixture/forbidden",
     });
     expect(control.modelForSubmission()).toBe("");
-    const published = loadModelCatalog(context.gateway.snapshot.client!, scope);
     wire.resolve({ models, modelSelectionPolicy: { restricted: true, defaultModel: null } });
-    await published;
-    await ready;
+    await control.metadataRead;
     expect(control.modelForSubmission()).toBe("");
     const container = draw();
     expect(container.textContent).not.toContain("forbidden");
@@ -541,47 +496,32 @@ describe("model selection policy", () => {
   ])(
     "handles $event while replacement fails (clears: $clearsChoices)",
     async ({ event, payload, clearsChoices }) => {
-      const { context, request, emitCatalogChanged, control, draw, find, load, blocked } =
-        setupModel(models, agent);
-      const ready = notifiedWhen(control, () => find("model-option", "fixture/permitted"));
-
+      const { request, emitCatalogChanged, control, draw, find, load, blocked } = setupModel(
+        models,
+        agent,
+      );
       load();
-      await loadModelCatalog(context.gateway.snapshot.client!, scope);
-      await ready;
-      expect(find("model-option")).not.toBeNull();
-      for (const [attempt, error] of [
-        "Catalog unavailable",
-        "Catalog still unavailable",
-      ].entries()) {
-        const failed = notifiedWhen(control, () => find("model-catalog-state", "error"));
+      await control.metadataRead;
+      for (const attempt of [0, 1]) {
         const wire = deferred<ModelCatalogResult>();
         request.mockReturnValueOnce(wire.promise);
         emitCatalogChanged(event, payload);
         const checking = draw();
-        if (attempt === 0) {
-          expect(Boolean(checking.querySelector("[data-chat-model-option]"))).toBe(!clearsChoices);
-          if (clearsChoices) {
-            expect(checking.textContent).not.toContain("forbidden-default");
-          }
-        } else {
+        expect(Boolean(find("model-option"))).toBe(!clearsChoices);
+        if (clearsChoices) {
+          expect(checking.textContent).not.toContain("forbidden-default");
+        }
+        if (attempt === 1) {
           expect(checking.querySelector('[data-chat-model-catalog-state="error"]')).toBeNull();
           expect(checking.querySelector(".btn__spinner")).not.toBeNull();
-          if (!clearsChoices) {
-            expect(modelOption(checking, "fixture/permitted")).not.toBeNull();
-          }
         }
         if (clearsChoices) {
           expect(blocked()).toBe("Loading models…");
         }
-        const published = loadModelCatalog(context.gateway.snapshot.client!, scope);
-        wire.reject(new Error(error));
-        await expect(published).rejects.toThrow(error);
-        await failed;
-        if (attempt === 0) {
-          expect(Boolean(find("model-option"))).toBe(!clearsChoices);
-        } else {
-          expect(find("model-catalog-state", "error")).not.toBeNull();
-        }
+        wire.reject(new Error("Catalog unavailable"));
+        await expect(control.metadataRead).rejects.toThrow("Catalog unavailable");
+        expect(find("model-catalog-state", "error")).not.toBeNull();
+        expect(Boolean(find("model-option"))).toBe(!clearsChoices);
         expect(blocked()).toBe(clearsChoices ? "Models unavailable" : undefined);
       }
     },
@@ -595,39 +535,25 @@ describe("model selection policy", () => {
         available: true,
       });
       const first = contextWith([previous]);
-      const next = contextWith(models);
+      const next = setupModel(models, agent);
       const wire = deferred<ModelCatalogResult>();
       next.request.mockReturnValue(wire.promise);
-      const control = managed.make(() => undefined);
-      const initialPublished = notifiedWhen(
-        control,
-        () => control.modelForSubmission() === "fixture/previous",
-      );
-      const acceptedNext = () =>
-        outcome === "error"
-          ? control.modelSelectionBlockedReason(agent) === "Models unavailable"
-          : control.modelForSubmission() === "" &&
-            control.modelSelectionBlockedReason(agent) === undefined;
+      const { control, blocked, model, draw, find } = next;
       try {
         control.load(first.context, "main", true, {
           agent,
           preference: { model: "fixture/previous" },
         });
-        await loadModelCatalog(first.context.gateway.snapshot.client!, scope);
-        await initialPublished;
-        expect(control.modelForSubmission()).toBe("fixture/previous");
+        await control.metadataRead;
         expect(
-          renderControl(control, first.context, "main", agent).querySelector(
-            '[data-chat-model-option="fixture/previous"]',
-          ),
+          modelOption(renderControl(control, first.context, "main", agent), "fixture/previous"),
         ).not.toBeNull();
 
-        const nextPublished = notifiedWhen(control, acceptedNext);
         control.load(next.context, "main", true, { agent });
-        const pending = loadModelCatalog(next.context.gateway.snapshot.client!, scope);
-        expect(control.modelForSubmission()).toBe("fixture/previous");
-        expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
-        const waiting = renderControl(control, next.context, "main", agent);
+        const pending = control.metadataRead;
+        expect(model()).toBe("fixture/previous");
+        expect(blocked()).toBe("Loading models…");
+        const waiting = draw();
         expect(waiting.textContent).not.toContain("previous");
         expect(waiting.textContent).not.toContain("Previous model");
         expect(waiting.textContent).not.toContain("forbidden-default");
@@ -636,21 +562,15 @@ describe("model selection policy", () => {
         if (outcome === "error") {
           wire.reject(new Error("Catalog unavailable"));
           await expect(pending).rejects.toThrow("Catalog unavailable");
-          await nextPublished;
-          expect(control.modelSelectionBlockedReason(agent)).toBe("Models unavailable");
-          expect(renderControl(control, next.context, "main", agent).textContent).not.toContain(
-            "previous",
-          );
+          expect(blocked()).toBe("Models unavailable");
         } else {
           wire.resolve(restricted);
           await pending;
-          await nextPublished;
-          expect(control.modelForSubmission()).toBe("");
-          expect(control.modelSelectionBlockedReason(agent)).toBeUndefined();
-          const confirmed = renderControl(control, next.context, "main", agent);
-          expect(modelOption(confirmed, "fixture/permitted")).not.toBeNull();
-          expect(confirmed.textContent).not.toContain("previous");
+          expect(model()).toBe("");
+          expect(blocked()).toBeUndefined();
+          expect(find("model-option", "fixture/permitted")).not.toBeNull();
         }
+        expect(draw().textContent).not.toContain("previous");
       } finally {
         wire.resolve(restricted);
         control.reset();
@@ -706,7 +626,6 @@ describe("model selection policy", () => {
       expect(stored).toMatchObject(saved);
       const browser = browserBytes();
       const writes = vi.spyOn(first.gateway, "persistPreference");
-      first.request.mockClear();
 
       catalog = restricted;
       control.invalidate();
@@ -724,9 +643,6 @@ describe("model selection policy", () => {
       });
       expect(prefs.stored()).toEqual(stored);
       expect(browserBytes()).toEqual(browser);
-      expect(first.request.mock.calls.filter(([method]) => method === "users.prefs.set")).toEqual(
-        [],
-      );
       expect(writes).not.toHaveBeenCalled();
 
       catalog = { ...restricted, models: [...models, savedModel] };

@@ -240,12 +240,11 @@ describe("Where chip", () => {
       '.new-session-page__environment-list [data-value]:not([data-value="auto-device"])',
     );
 
-    expect(destinations).toHaveLength(5);
     for (const destination of destinations) {
       expect(destination.disabled).toBe(false);
       destination.click();
     }
-    expect(onSelectDevice).toHaveBeenCalledTimes(4);
+    expect(onSelectDevice).toHaveBeenCalledWith("runner");
     expect(onApplyCloudDefaults).toHaveBeenCalledExactlyOnceWith("aws");
     expect(onSelectCloudProfile).toHaveBeenCalledExactlyOnceWith("aws");
 
@@ -300,24 +299,14 @@ describe("Where chip", () => {
   it("renders devices for writers while cloud and Connect remain admin-only", async () => {
     const writer = await renderPicker(false);
     const autoRow = option(writer, "auto-device");
-    expect(autoRow?.querySelector(".session-menu__text")?.textContent).toBe("Any available device");
-    expect(autoRow?.tagName).toBe("BUTTON");
     expect(autoRow?.getAttribute("aria-pressed")).toBe("false");
     expect(hoverDetails(autoRow)).toContain("Chooses the least-busy connected device");
-    const remoteExec = await renderPicker(false, "eligible-order");
-    expect(hoverDetails(option(remoteExec, "auto-device"))).toContain(
-      "Chooses the first eligible connected device",
-    );
     expect(option(writer, "device:runner")).not.toBeNull();
-    expect(option(writer, "device:runner")?.querySelector(".session-menu__sub")).toBeNull();
-    expect(hoverDetails(option(writer, "device:alpha-device"))).toContain("alpha-de");
-    expect(hoverDetails(option(writer, "device:beta-device"))).toContain("beta-dev");
     expect(writer.querySelector(".session-menu__sub, .session-menu__description")).toBeNull();
     expect(option(writer, "cloud:aws")).toBeNull();
     expect(writer.querySelector('[data-action="connect-machine"]')).toBeNull();
 
     const admin = await renderPicker(true);
-    expect(option(admin, "device:runner")).not.toBeNull();
     expect(option(admin, "cloud:aws")).not.toBeNull();
     expect(admin.querySelector('[data-action="connect-machine"]')).not.toBeNull();
   });

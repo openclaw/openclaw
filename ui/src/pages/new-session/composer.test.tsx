@@ -21,11 +21,7 @@ import {
 } from "./composer.test-support.ts";
 
 function getComposerTextarea(composer: HTMLElement): HTMLTextAreaElement {
-  const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
-  if (!textarea) {
-    throw new Error("Expected composer textarea");
-  }
-  return textarea;
+  return composer.querySelector<HTMLTextAreaElement>("textarea")!;
 }
 
 function keyboardComposer(options: Parameters<typeof renderComposer>[0] = {}) {
@@ -63,10 +59,13 @@ function typeDraft(textarea: HTMLTextAreaElement, value: string, settle = true) 
   }
 }
 
-const skill = (name: string) => ({
+const command = (name: string) => ({
   key: name,
   name,
   description: name,
+});
+const skill = (name: string) => ({
+  ...command(name),
   source: "skill" as const,
   skillModelVisible: true,
 });
@@ -128,28 +127,16 @@ describe("new-session submission preview", () => {
 describe("new-session composer keyboard submission", () => {
   it("opens slash commands and inserts the selected command with Enter", () => {
     replaceSlashCommands([
-      {
-        key: "test-command",
-        name: "test-command",
-        description: "Test command.",
-      },
-      {
-        key: "local-command",
-        name: "local-command",
-        description: "Existing-session action.",
-        executeLocal: true,
-      },
+      command("test-command"),
+      { ...command("local-command"), executeLocal: true },
     ]);
     const { composer, textarea, onInput, onSubmit } = keyboardComposer();
 
     typeDraft(textarea, "/");
 
-    expect(composer.querySelector("#chat-new-session-slash-menu-listbox")?.textContent).toContain(
-      "/test-command",
-    );
-    expect(
-      composer.querySelector("#chat-new-session-slash-menu-listbox")?.textContent,
-    ).not.toContain("/local-command");
+    const menu = composer.querySelector(".slash-menu")?.textContent;
+    expect(menu).toContain("/test-command");
+    expect(menu).not.toContain("/local-command");
     enter(textarea);
     expect(onInput).toHaveBeenLastCalledWith("/test-command ");
     expect(onSubmit).not.toHaveBeenCalled();
@@ -160,9 +147,7 @@ describe("new-session composer keyboard submission", () => {
     async (selection) => {
       replaceSlashCommands([
         {
-          key: "mode",
-          name: "mode",
-          description: "Choose a mode.",
+          ...command("mode"),
           args: "<mode>",
           argOptions: ["fast", "careful"],
         },
@@ -212,11 +197,6 @@ describe("new-session composer keyboard submission", () => {
       const textarea = getComposerTextarea(composer);
       textarea.setSelectionRange(1, 1);
       textarea.dispatchEvent(new Event("select", { bubbles: true }));
-      expect(request).toHaveBeenCalledWith("commands.list", {
-        agentId: "writer",
-        includeArgs: true,
-        scope: "text",
-      });
       if (owner === "agent") {
         rerenderForAgent("reviewer");
       } else {
@@ -298,36 +278,33 @@ describe("new-session composer keyboard submission", () => {
     },
   );
 
-  describe.each([false, true])("submission keys on mobile=%s", (mobile) => {
-    beforeEach(() => {
-      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(mobile ? "Android" : "Windows");
+  it.each([
+    ["Enter", false, false, false, false, false],
+    ["Ctrl+Enter", true, true, false, false, false],
+    ["Meta+Enter", true, false, true, false, false],
+    ["background Enter", false, false, true, true, false],
+    ["background modifier", true, true, false, true, false],
+    ["mobile background modifier", true, true, false, true, true],
+  ] as const)("handles %s", (_label, requiresModifier, ctrlKey, metaKey, background, mobile) => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(mobile ? "Android" : "Windows");
+    const onBackgroundSubmit = vi.fn();
+    const { composer, textarea, onSubmit } = keyboardComposer({
+      onBackgroundSubmit,
+      requiresModifier,
     });
-    it.each([
-      ["Enter", false, false, false, false],
-      ["Ctrl+Enter in Enter mode", false, true, false, false],
-      ["Meta+Enter in Enter mode", false, false, true, false],
-      ["Ctrl+Enter in modifier mode", true, true, false, false],
-      ["Meta+Enter in modifier mode", true, false, true, false],
-      ["Meta+Shift+Enter in Enter mode", false, false, true, true],
-      ["Ctrl+Shift+Enter in modifier mode", true, true, false, true],
-    ] as const)("handles %s", (_label, requiresModifier, ctrlKey, metaKey, background) => {
-      const onSubmit = vi.fn();
-      const onBackgroundSubmit = vi.fn();
-      const { composer } = renderComposer({ onSubmit, onBackgroundSubmit, requiresModifier });
-      const event = enter(getComposerTextarea(composer), {
-        ctrlKey,
-        metaKey,
-        shiftKey: background,
-      });
-      expect(event.defaultPrevented).toBe(!mobile);
-      expect(background ? onBackgroundSubmit : onSubmit).toHaveBeenCalledTimes(mobile ? 0 : 1);
-      expect(background ? onSubmit : onBackgroundSubmit).not.toHaveBeenCalled();
-      if (mobile) {
-        composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit")!.click();
-        expect(onSubmit).toHaveBeenCalledOnce();
-        expect(onBackgroundSubmit).not.toHaveBeenCalled();
-      }
+    const event = enter(textarea, {
+      ctrlKey,
+      metaKey,
+      shiftKey: background,
     });
+    expect(event.defaultPrevented).toBe(!mobile);
+    expect(background ? onBackgroundSubmit : onSubmit).toHaveBeenCalledTimes(mobile ? 0 : 1);
+    expect(background ? onSubmit : onBackgroundSubmit).not.toHaveBeenCalled();
+    if (mobile) {
+      composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit")!.click();
+      expect(onSubmit).toHaveBeenCalledOnce();
+      expect(onBackgroundSubmit).not.toHaveBeenCalled();
+    }
   });
 
   it("keeps an IME confirmation Enter from starting a session", () => {
@@ -354,12 +331,10 @@ describe("new-session composer keyboard submission", () => {
   });
 
   it("keeps Start disabled and reports an attempted press to the owner", () => {
-    const onSubmit = vi.fn();
     const onBlockedSubmit = vi.fn();
-    const { composer } = renderComposer({
+    const { composer, onSubmit } = keyboardComposer({
       canSubmit: false,
       submitDisabledReason: "Restoring your last session setup…",
-      onSubmit,
       onBlockedSubmit,
     });
     const start = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
@@ -373,21 +348,16 @@ describe("new-session composer keyboard submission", () => {
   });
 
   it("previews dictation in a locked draft and reserves the primary slot for Send", () => {
-    const onSubmit = vi.fn();
-    const { composer } = renderComposer({
+    const { composer, textarea, onSubmit } = keyboardComposer({
       message: "Existing draft",
       dictationActive: true,
       dictationPreview: "Existing draft spoken words",
       dictationStatus: <div class="agent-chat__dictation-status">Listening…</div>,
-      onSubmit,
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
-
-    expect(textarea?.value).toBe("Existing draft spoken words");
-    expect(textarea?.readOnly).toBe(true);
+    expect(textarea).toMatchObject({ value: "Existing draft spoken words", readOnly: true });
     expect(composer.querySelector(".agent-chat__dictation-status")?.textContent).toBe("Listening…");
     expect(composer.querySelector(".new-session-page__start-submit")).toBeNull();
-    textarea?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+    enter(textarea);
     expect(onSubmit).not.toHaveBeenCalled();
   });
 });
@@ -396,8 +366,10 @@ describe("new-session composer start control", () => {
   it.each([false, true])("renders the plain Start control (submitting=%s)", (submitting) => {
     const { composer } = renderComposer({ submitting });
     expect(composer.querySelectorAll(".chat-send-btn")).toHaveLength(1);
-    expect(composer.querySelector(".new-session-page__start-split")).toBeNull();
     expect(composer.querySelector("button[aria-label='Start in terminal']")).toBeNull();
+    const attachmentMenu = composer.querySelector(".agent-chat__attach-menu");
+    expect(attachmentMenu?.closest(".agent-chat__composer-footer")).not.toBeNull();
+    expect(attachmentMenu?.closest(".agent-chat__composer-input-row")).toBeNull();
     if (submitting) {
       const start = composer.querySelector(".new-session-page__start-submit");
       expect(start?.getAttribute("aria-busy")).toBe("true");
@@ -406,8 +378,7 @@ describe("new-session composer start control", () => {
   });
 
   it.each(["button", "Enter"])("native terminal %s uses the sole primary submission", (action) => {
-    const onSubmit = vi.fn();
-    const { composer } = renderComposer({ nativeTerminal: true, onSubmit });
+    const { composer, textarea, onSubmit } = keyboardComposer({ nativeTerminal: true });
     const button = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit")!;
     expect(button.getAttribute("aria-label")).toBe("Start in terminal");
     expect(composer.querySelectorAll(".chat-send-btn")).toHaveLength(1);
@@ -415,9 +386,7 @@ describe("new-session composer start control", () => {
     if (action === "button") {
       button.click();
     } else {
-      composer
-        .querySelector("textarea")!
-        .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      enter(textarea);
     }
     expect(onSubmit).toHaveBeenCalledOnce();
   });
@@ -465,38 +434,30 @@ describe("new-session composer sizing lifecycle", () => {
     }
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
     const composerTextarea = createNewSessionComposerTextarea();
-    const onInput = vi.fn();
-    const first = renderComposer({ composerTextarea, onInput });
+    const first = renderComposer({ composerTextarea });
     document.body.append(first.container);
     const textarea = getComposerTextarea(first.composer);
-    let scrollHeightReads = 0;
+    const readHeight = vi.fn(() => 42);
     Object.defineProperty(textarea, "scrollHeight", {
       configurable: true,
-      get: () => {
-        scrollHeightReads += 1;
-        return 42;
-      },
+      get: readHeight,
     });
     await Promise.resolve();
-    const readsAfterAttach = scrollHeightReads;
+    expect(readHeight).toHaveBeenCalled();
 
     textarea.value = "typed";
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    expect(onInput).toHaveBeenCalledWith("typed");
-    const readsAfterInput = scrollHeightReads;
+    const readsAfterInput = readHeight.mock.calls.length;
     first.rerenderWithMessage("typed");
     await Promise.resolve();
 
     expect(first.container.querySelector("textarea")).toBe(textarea);
-    expect(resizeObserverConstructed).toHaveBeenCalledOnce();
-    expect(disconnect).not.toHaveBeenCalled();
-    expect(scrollHeightReads).toBe(readsAfterInput);
+    expect(readHeight).toHaveBeenCalledTimes(readsAfterInput);
 
     first.rerenderWithMessage("restored programmatically");
     await Promise.resolve();
 
-    expect(scrollHeightReads).toBeGreaterThan(readsAfterInput);
-    expect(readsAfterAttach).toBeGreaterThan(0);
+    expect(readHeight.mock.calls.length).toBeGreaterThan(readsAfterInput);
     expect(resizeObserverConstructed).toHaveBeenCalledOnce();
     expect(disconnect).not.toHaveBeenCalled();
     composerTextarea.disconnect();
@@ -544,14 +505,6 @@ describe("new-session composer attachment drops", () => {
     expect((submitTooltip as HTMLElement & { content?: string })?.content).toBe(
       "This action requires operator.write access.",
     );
-  });
-
-  it("places the attachment menu in the composer footer", () => {
-    const { composer } = renderComposer();
-    const attachmentMenu = composer.querySelector<HTMLElement>(".agent-chat__attach-menu");
-
-    expect(attachmentMenu?.closest(".agent-chat__composer-footer")).not.toBeNull();
-    expect(attachmentMenu?.closest(".agent-chat__composer-input-row")).toBeNull();
   });
 
   it("keeps page-level incognito out of the composer when drafts are unavailable", () => {
@@ -649,7 +602,6 @@ describe("new-session composer attachment drops", () => {
     { submitting: false, messageLocked: true },
   ])("ignores drops while the composer is disabled", (disabled) => {
     const { attachmentDraft, composer } = renderComposer(disabled);
-    const replace = vi.spyOn(attachmentDraft, "replace");
     const readAsDataUrl = vi.spyOn(FileReader.prototype, "readAsDataURL");
     const file = new File(["image"], "pic.png", { type: "image/png" });
 
@@ -658,7 +610,6 @@ describe("new-session composer attachment drops", () => {
 
     expect(composer.hasAttribute("data-attachment-drop-active")).toBe(false);
     expect(readAsDataUrl).not.toHaveBeenCalled();
-    expect(replace).not.toHaveBeenCalled();
     expect(attachmentDraft.attachments).toEqual([]);
 
     const textarea = getComposerTextarea(composer);

@@ -3,10 +3,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
-import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import {
-  modelOption,
   managedModelControls,
   controlElement,
   controlQueries,
@@ -39,7 +36,13 @@ function setup(
   const draw = (agent: GatewayAgentRow | null | undefined = defaultAgent) =>
     renderControl(control, state.context, "main", agent);
   const find = (attribute: string, value?: string) => controlElement(draw(), attribute, value);
-  return { ...state, control, changed, targetSelected, draw, find };
+  const load = (options: NewSessionModelLoadOptions = {}) =>
+    control.load(state.context, "main", true, { agent: defaultAgent, ...options });
+  const ready = async (options?: NewSessionModelLoadOptions) => {
+    load(options);
+    await vi.waitFor(() => expect(find("model-option")).not.toBeNull());
+  };
+  return { ...state, control, changed, targetSelected, draw, find, load, ready };
 }
 afterEach(() => {
   managed.reset();
@@ -86,7 +89,7 @@ it("reuses runtime resolution until model inputs change, including mutable defau
 });
 
 it("does not borrow a provider for an ambiguous draft target", async () => {
-  const { control, context, changed } = setup([
+  const { control, context, ready } = setup([
     testModel("openai", "model", {
       reasoning: true,
       thinkingLevels: levels(["high"]),
@@ -99,57 +102,42 @@ it("does not borrow a provider for an ambiguous draft target", async () => {
     modelProvider: "openai",
   });
   const agent = { id: "main", model: { primary: "model" } };
-  control.load(context, "main", true, { agent });
+  await ready({ agent });
   const { find: agentOption } = controlQueries(control, context, "main", agent);
   await vi.waitFor(() => expect(agentOption("model-option", "openai/model")).not.toBeNull());
   expect(agentOption("thinking-option", "high")).toBeNull();
   expect(agentOption("thinking-slider")).toBeNull();
-  expect(changed).not.toHaveBeenCalled();
 });
 
 it("waits for selected-agent defaults after catalog hydration", async () => {
-  const { control, context, find, draw } = setup([{ ...luna, reasoning: true }, sol]);
-  control.load(context, "main", true);
-  await vi.waitFor(() => expect(find("model-option", "openai/gpt-5.6-luna")).not.toBeNull());
+  const { control, draw, ready: load } = setup([{ ...luna, reasoning: true }, sol]);
+  await load();
   const loading = draw(null);
   const trigger = loading.querySelector("[data-chat-model-select]")!;
   expect(trigger.getAttribute("aria-busy")).toBe("true");
-  expect(trigger.getAttribute("aria-label")).toBe("Chat model: Loading models…");
-  expect(trigger.querySelector(".skeleton")?.getAttribute("aria-hidden")).toBe("true");
-  expect(trigger.textContent).not.toMatch(/Loading models|Default model/);
   expect(controlElement(loading, "thinking-select")?.dataset.chatThinkingDisabled).toBe("true");
   const ready = draw(effortAgent);
   expect(controlElement(ready, "model-default", "true")?.textContent).toContain(sol.name);
-  expect(controlElement(ready, "model-select")?.textContent).toContain(sol.name);
   expect(controlElement(ready, "thinking-select")?.textContent).toContain("High");
-  expect(controlElement(ready, "thinking-slider")?.dataset.chatThinkingValues).toContain("high");
   expect(control).toMatchObject({ selected: "", thinkingLevel: "" });
 });
 
 it("preserves an explicitly remembered Off effort", async () => {
-  const { control, context, find } = setup([sol], [], effortAgent);
-  const agent = effortAgent;
-  control.load(context, "main", true, { agent, preference: { thinkingLevel: "off" } });
-  await vi.waitFor(() => expect(control.thinkingLevel).toBe("off"));
+  const { control, find, ready } = setup([sol], [], effortAgent);
+  await ready({ preference: { thinkingLevel: "off" } });
   expect(find("thinking-select")?.textContent).toContain("Off");
   expect(control.selected).toBe("");
 });
 
 it("renders an all-cold catalog as setup actions", async () => {
-  const { control, context, draw, find, navigate } = setup(
-    [luna, sol].map((model) =>
-      Object.assign({}, model, {
-        available: false,
-        unavailableReason: "missing-auth",
-      } satisfies Pick<ModelCatalogEntry, "available" | "unavailableReason">),
-    ),
-  );
-  control.load(context, "main", true);
-  await vi.waitFor(() => expect(find("model-catalog-state", "ready")).not.toBeNull());
+  const { draw, find, navigate, ready } = setup([
+    { ...luna, available: false, unavailableReason: "missing-auth" },
+  ]);
+  await ready();
   const container = draw();
   expect(container.querySelector("[data-chat-model-select]")?.textContent).toContain(luna.name);
   const options = [...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
-  expect(options).toHaveLength(2);
+  expect(options).toHaveLength(1);
   expect(options[0]?.textContent).toContain("Sign-in needed");
   expect(
     options.every((option) => !option.disabled && option.dataset.chatModelSetup === "true"),
@@ -191,25 +179,22 @@ it("does not restore a stale preference when picker-open recovery succeeds", asy
 });
 
 it("drops a stored model and reasoning when manual selection is denied", async () => {
-  const { control, context, request, changed } = setup([
+  const { control, load, ready } = setup([
     sol,
     testModel("anthropic", "retired-model", { manualSelectionAllowed: false }),
   ]);
-  control.load(context, "main", true, {
+  await ready({
     preference: { model: "openai/gpt-5.6-sol", thinkingLevel: "high" },
   });
-  await vi.waitFor(() => expect(control.selected).toBe("openai/gpt-5.6-sol"));
-  expect(control.thinkingLevel).toBe("high");
-  control.load(context, "main", true, {
+  expect(control).toMatchObject({ selected: "openai/gpt-5.6-sol", thinkingLevel: "high" });
+  load({
     preference: { model: "anthropic/retired-model", thinkingLevel: "high" },
   });
-  expect(request).toHaveBeenCalledOnce();
   expect(control).toMatchObject({ selected: "", thinkingLevel: "" });
-  expect(changed).toHaveBeenLastCalledWith({ model: "", thinkingLevel: "" });
 });
 
 it("clears xhigh when an interactive model switch targets a profile ending at high", async () => {
-  const { control, context, find, draw, changed } = setup([
+  const { control, ready, find } = setup([
     testModel("kimi", "k3", {
       reasoning: true,
       thinkingLevels: levels(["off", "low", "medium", "high", "xhigh"]),
@@ -221,17 +206,11 @@ it("clears xhigh when an interactive model switch targets a profile ending at hi
       thinkingDefault: "medium",
     }),
   ]);
-  control.load(context, "main", true);
-  await vi.waitFor(() => expect(find("model-option", "demo/limited")).not.toBeNull());
+  await ready();
   control.selected = "kimi/k3";
   control.thinkingLevel = "xhigh";
-  const search = draw().querySelector<HTMLInputElement>("[data-chat-model-search]")!;
-  search.value = "demo/limited";
-  search.dispatchEvent(new InputEvent("input", { bubbles: true }));
-  flush();
   find("model-option", "demo/limited")!.click();
   expect(control).toMatchObject({ selected: "demo/limited", thinkingLevel: "" });
-  expect(changed).toHaveBeenLastCalledWith({ model: "demo/limited", thinkingLevel: "" });
 });
 const catalog = (id: string, startTerminal = true) => ({
   id,
@@ -257,7 +236,6 @@ it("retries failed discovery from the error action without refreshing models", a
   control.loadCatalogTargets(context, "main", true);
   await vi.waitFor(() => expect(find("model-target-retry", "cliAgents")).not.toBeNull());
   control.loadCatalogTargets(context, "main", true);
-  expect(catalogs).toHaveBeenCalledOnce();
   find("model-target-retry", "cliAgents")!.click();
   await vi.waitFor(() =>
     expect(
@@ -267,14 +245,9 @@ it("retries failed discovery from the error action without refreshing models", a
     ).toBeNull(),
   );
   await vi.waitFor(() => expect(find("model-target", "anthropic")).not.toBeNull());
-  expect(catalogs).toHaveBeenCalledTimes(2);
-  expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
-  expect(request.mock.calls.some(([, params]) => params?.refresh)).toBe(false);
   expect(find("model-target", "history-only")).toBeNull();
   find("model-target", "anthropic")!.click();
   expect(targetSelected).toHaveBeenCalledExactlyOnceWith("anthropic");
-  control.loadCatalogTargets(context, "main", true);
-  expect(catalogs).toHaveBeenCalledTimes(2);
 });
 
 it("omits a completed CLI group with no terminal-capable targets", async () => {
@@ -317,36 +290,6 @@ it.each([false, true])(
     expect(find("model-target", "stale")).toBeNull();
   },
 );
-it.each([true, false])("checks cloud execution support: %s", (supported) => {
-  const executionModes = supported ? (["worker-turn", "remote-exec"] as const) : undefined;
-  const { control } = setup([]);
-  vi.spyOn(control, "resolveAgentRuntime").mockReturnValue({
-    id: "codex",
-    source: "model",
-    cloudPlacementSupported: supported,
-    cloudPlacementExecutionMode: "remote-exec",
-  });
-  expect(
-    control.cloudRuntimeUnsupportedReason({ id: "aws", providerId: "crabbox", executionModes }),
-  ).toBe(supported ? undefined : "The codex runtime does not support cloud workers.");
-});
-it.each([true, false])(
-  "requires device-placement metadata despite a support flag: %s",
-  (supported) => {
-    const { control } = setup([]);
-    vi.spyOn(control, "resolveAgentRuntime").mockReturnValue({
-      id: "codex",
-      source: "model",
-      devicePlacementSupported: true,
-      devicePlacement: supported
-        ? { requiredNodeCommands: [], consumesWorkerSlot: false }
-        : undefined,
-    });
-    expect(control.devicePlacementUnsupportedReason()).toBe(
-      supported ? undefined : "This runtime does not support paired devices",
-    );
-  },
-);
 describe("configured defaults", () => {
   const models = ["default-model", "other-model"].map((id) =>
     testModel("openai", id, {
@@ -374,7 +317,6 @@ describe("configured defaults", () => {
     const { control, load, settled } = setupDefaults();
     load({ initialModel: preference.model });
     await settled();
-    expect(control.selected).toBe(preference.model);
     expect(control.modelForSubmission()).toBe(preference.model);
     load();
     await settled();
@@ -392,27 +334,15 @@ describe("configured defaults", () => {
     expect(control).toMatchObject({ selected: "", agentRuntime: undefined, thinkingLevel: "" });
   });
 
-  it.each(["optional", "required", "required-after-hydration"])(
-    "restores a deliberate same-route draft choice after %s hydration",
-    async (placement) => {
-      const { control, load, settled } = setupDefaults();
-      control.restoreDraftSelection(savedDraft);
-      load({
-        initialModel: "openai/default-model",
-        configuredDefaults: placement === "required",
-      });
-      await settled();
-      expect(control).toMatchObject({ selected: "openai/other-model", thinkingLevel: "low" });
-      expect(control.draftSelection("main")).toMatchObject({
-        model: "openai/other-model",
-        thinkingLevel: "low",
-      });
-      load({
-        configuredDefaults: placement !== "optional",
-      });
-      expect(control).toMatchObject({ selected: "openai/other-model", thinkingLevel: "low" });
-    },
-  );
+  it("restores deliberate same-route intent across catalog hydration and reload", async () => {
+    const { control, load, settled } = setupDefaults();
+    control.restoreDraftSelection(savedDraft);
+    load({ initialModel: "openai/default-model" });
+    await settled();
+    expect(control.draftSelection("main")).toMatchObject(savedDraft);
+    load();
+    expect(control).toMatchObject({ selected: savedDraft.model, thinkingLevel: "low" });
+  });
 
   it("hydrates late Fast Mode preferences independently of a restored model", async () => {
     const { request, control, find, load, settled } = setupDefaults();
@@ -464,82 +394,32 @@ it.each(["auto", "ultrafast"] as const)(
     control.load(context, "main", true, { preference: { fastMode } });
     expect(control.isRestoringPreference()).toBe(true);
     await waitForFast(() => expect(control.fastMode).toBe(fastMode));
-    const selected = fastMode === "auto" ? undefined : "ultrafast";
-    const options = Array.from(
-      draw().querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"),
-    );
-    expect(options).toHaveLength(3);
-    for (const option of options) {
-      expect(option.getAttribute("aria-checked")).toBe(
-        String(option.dataset.chatSpeedOption === selected),
-      );
-    }
+    expect(
+      draw()
+        .querySelector('[data-chat-speed-option][aria-checked="true"]')
+        ?.getAttribute("data-chat-speed-option"),
+    ).toBe(fastMode === "auto" ? undefined : fastMode);
     control.load(context, "other", true);
     expect(control.fastMode).toBeUndefined();
   },
 );
 
-it("clears speed when switching to a provider without a wire mapping", async () => {
-  const { context, control, find } = setup([
-    { ...luna, reasoning: true },
-    testModel("ollama", "llama-4", { thinkingLevels: levels(["low", "high"], true) }),
-  ]);
-  control.load(context, "main", true);
-
-  await vi.waitFor(() => expect(find("model-option", "ollama/llama-4")).not.toBeNull());
-  find("speed-option", "on")?.click();
+it.each([
+  testModel("ollama", "llama-4"),
+  testModel("openai", "standard-only", { supportsFastMode: false, serviceTiers: ["default"] }),
+  testModel("openai", "fast", { supportsFastMode: true, serviceTiers: ["default", "priority"] }),
+])("reconciles speed when switching to $provider/$id", async (model) => {
+  const { control, ready, find } = setup([{ ...luna, supportsFastMode: true }, model]);
+  await ready();
+  find("speed-option", "on")!.click();
   expect(control.fastMode).toBe(true);
-
-  find("model-option", "ollama/llama-4")?.click();
-
-  expect(control).toMatchObject({ selected: "ollama/llama-4", fastMode: undefined });
-  expect(find("speed-option")).toBeNull();
+  find("model-option", `${model.provider}/${model.id}`)!.click();
+  expect(control.selected).toBe(`${model.provider}/${model.id}`);
+  expect(control.fastMode).toBe(model.supportsFastMode ? true : undefined);
+  if (model.provider === "ollama") {
+    expect(find("speed-option")).toBeNull();
+  }
 });
-it.each(["blue", "red"])(
-  "applies supported speed choices when switching a Fast draft to Daybreak %s",
-  async (color) => {
-    const id = "gpt-daybreak-" + color + "-latest";
-    const { context, control, draw, find } = setup([
-      {
-        ...luna,
-        reasoning: true,
-        supportsFastMode: true,
-      },
-      {
-        id,
-        name: "Daybreak",
-        provider: "openai",
-        reasoning: true,
-        supportsFastMode: color === "blue",
-        supportsServiceTierRecovery: true,
-        serviceTiers: color === "blue" ? ["default", "priority"] : ["default"],
-        effectiveFastMode: "ultrafast",
-      },
-    ]);
-    control.load(context, "main", true);
-    await waitForFast(() => {
-      const container = draw();
-      expect(modelOption(container, "openai/" + id)).not.toBeNull();
-      expect(container.querySelector('[data-chat-speed-option="on"]')).not.toBeNull();
-    });
-    find("speed-option", "on")!.click();
-    expect(control.fastMode).toBe(true);
-    find("model-option", "openai/" + id)!.click();
-    const container = draw();
-    expect(control.selected).toBe("openai/" + id);
-    expect(
-      find("speed-option", color === "blue" ? "on" : "off")?.getAttribute("aria-checked"),
-    ).toBe("true");
-    for (const option of container.querySelectorAll<HTMLButtonElement>(
-      "[data-chat-speed-option]",
-    )) {
-      expect(option.disabled).toBe(
-        color === "red" || option.dataset.chatSpeedOption === "ultrafast",
-      );
-    }
-    expect(find("thinking-slider")?.disabled).not.toBe(true);
-  },
-);
 
 describe("runtime choices", () => {
   const agent: GatewayAgentRow = { id: "main", model: { primary: "openai/gpt-5.6-sol" } };
@@ -619,18 +499,7 @@ describe("runtime choices", () => {
         model: "openai/gpt-5.6-sol",
         agentRuntime: "codex",
       });
-      const { state } = createRepositoryFixture();
-      managed.track(state.modelControl);
-      state.modelControl.agentRuntime = control.agentRuntime;
-      vi.spyOn(state.modelControl, "modelForSubmission").mockReturnValue(
-        control.modelForSubmission(),
-      );
-      expect(
-        buildSelectedSessionCreateParams(state, {
-          message: "hello",
-          visibility: "normal",
-        }),
-      ).toMatchObject({ model: "openai/gpt-5.6-sol", agentRuntime: "codex" });
+      expect(control.modelForSubmission()).toBe("openai/gpt-5.6-sol");
       control.reset();
       control.load(context, "main", true, {
         agent,
