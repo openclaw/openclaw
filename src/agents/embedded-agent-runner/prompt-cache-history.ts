@@ -159,7 +159,16 @@ export function fingerprintMessage(
     identityLength: identity.length,
     // Flat Latin-1 strings retain full SHA-256 bytes without per-hash objects.
     // The identity prefix precedes fixed-width, domain-tagged field hashes.
-    layout: `[${records.map((record) => (record.immutable ? record.layout : JSON.stringify(Array.from(record.fields.keys())))).join(",")}]`,
+    // Join flattens; template concatenation would retain cons-string cells per message.
+    layout: [
+      "[",
+      records
+        .map((record) =>
+          record.immutable ? record.layout : JSON.stringify(Array.from(record.fields.keys())),
+        )
+        .join(","),
+      "]",
+    ].join(""),
     packed: [
       identity,
       ...records.map((record) =>
