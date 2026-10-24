@@ -26,6 +26,7 @@ import {
 } from "./workspace-finalize.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
+  adoptReclaimedWorkspaceHistory,
   createWorkspaceResultJournal,
   finalizeWorkspaceResultConflicts,
   resolvePriorWorkspaceResultConflict,
@@ -346,6 +347,11 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                       report: recovery.reportConflict,
                     });
                     reauthorize?.();
+                    await adoptReclaimedWorkspaceHistory({
+                      ...recovery,
+                      assertCurrent,
+                      stagedResultRef: recordedStagedResultRef,
+                    });
                     return await settleStagedWorkspaceResult({
                       assertCurrent: recovery.assertCurrent,
                       placements,

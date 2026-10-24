@@ -674,6 +674,7 @@ it.each([
       idle: [GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION],
       disabled: [GATEWAY_SERVER_CAPS.NODE_WORKER_HOST_DIAGNOSTICS],
       workspace: [
+        GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_RESULT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE,
         GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
@@ -722,6 +723,7 @@ it.each([
                             : [...CORE_WORKER_LAUNCH_TOOL_NAMES],
                       }
                     : {}),
+                  ...(supported && kind === "workspace" ? { workspaceResultVersion: 2 } : {}),
                   ...(supported &&
                   kind === "workspace" &&
                   (platform === "linux" || platform === "win32") &&

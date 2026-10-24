@@ -4,6 +4,10 @@ import { MAX_WORKSPACE_MANIFEST_BYTES } from "../gateway/worker-environments/wor
 import type { WorkerWorkspaceManifestEntry } from "../gateway/worker-environments/workspace-manifest.js";
 import { runExec } from "../process/exec.js";
 import {
+  NODE_WORKSPACE_GIT_HISTORY_SCRIPT,
+  WorkerWorkspaceGitHistorySchema,
+} from "../worker/node-workspace-transfer-protocol.js";
+import {
   runWorkspaceCommand,
   TRANSFER_TIMEOUT_MS,
   workspaceCommandEnv,
@@ -88,4 +92,60 @@ export async function initializeNodeWorkerGitWorkspace(params: {
       input: `${checkoutPaths.join("\0")}\0`,
     });
   }
+}
+
+/** Capture immutable worker commits and stream their versioned upload trailer. */
+export async function prepareNodeWorkerGitResult(params: {
+  resultVersion?: 2;
+  workspaceDir: string;
+  manifestHome: string;
+  baseCommit: string | null;
+  packPath: string;
+  signal?: AbortSignal;
+}) {
+  if (params.resultVersion !== 2) {
+    return undefined;
+  }
+  const history = params.baseCommit
+    ? WorkerWorkspaceGitHistorySchema.parse(
+        JSON.parse(
+          await runWorkspaceCommand({
+            workspaceDir: params.workspaceDir,
+            homeDir: params.manifestHome,
+            argv: [
+              "node",
+              "-e",
+              NODE_WORKSPACE_GIT_HISTORY_SCRIPT,
+              params.workspaceDir,
+              params.baseCommit,
+              params.packPath,
+            ],
+            signal: params.signal,
+          }),
+        ),
+      )
+    : undefined;
+  const packBytes =
+    history?.descendsFromBase && history.headCommit !== history.baseCommit
+      ? (await fsp.stat(params.packPath)).size
+      : 0;
+  const metadata = Buffer.from(JSON.stringify(history ?? null));
+  return {
+    byteLength: 4 + metadata.byteLength + 8 + packBytes,
+    async write(write: (bytes: Buffer) => Promise<void>, signal?: AbortSignal) {
+      const header = Buffer.allocUnsafe(4);
+      header.writeUInt32BE(metadata.byteLength);
+      await write(header);
+      await write(metadata);
+      const size = Buffer.allocUnsafe(8);
+      size.writeBigUInt64BE(BigInt(packBytes));
+      await write(size);
+      if (packBytes) {
+        await using handle = await fsp.open(params.packPath, "r");
+        for await (const value of handle.createReadStream({ autoClose: false, signal })) {
+          await write(Buffer.isBuffer(value) ? value : Buffer.from(value));
+        }
+      }
+    },
+  };
 }

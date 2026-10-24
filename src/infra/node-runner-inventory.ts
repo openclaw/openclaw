@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { parseWorkerCapacity } from "../../packages/gateway-protocol/src/worker-capacity.js";
+import { NODE_WORKSPACE_RESULT_VERSION } from "../worker/node-workspace-transfer-protocol.js";
 import { workerProtocolObject } from "../worker/protocol-record.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
@@ -90,6 +91,7 @@ const WorkerHost = z
       deviceFolders: z.literal(true).optional(),
       preparedWorkspace: z.literal(NODE_WORKER_PREPARED_WORKSPACE_VERSION).optional(),
       capturedExecPolicy: z.literal(true).optional(),
+      workspaceResultVersion: z.literal(NODE_WORKSPACE_RESULT_VERSION).optional(),
       workspaceQuiescence: z.literal(NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION).optional(),
       launchToolNames: LaunchToolNames.optional(),
       idleRetention: z.literal(true).optional(),

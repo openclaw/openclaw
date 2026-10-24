@@ -1,3 +1,4 @@
+import type { WorkerWorkspaceGitHistory } from "../../worker/node-workspace-transfer-protocol.js";
 import type {
   readActualWorkspaceManifestImpl,
   readWorkspaceFileSnapshotWithLimit,
@@ -89,6 +90,7 @@ export type WorkspaceStageInput<Raw = Uint8Array<ArrayBuffer>> = WorkspaceStageI
   stagingRoot: string;
   stagedResultRef: string;
   buildCacheInputs?: string[];
+  gitHistory?: WorkerWorkspaceGitHistory;
 };
 
 export type WorkspaceManifestValueOutputs = {

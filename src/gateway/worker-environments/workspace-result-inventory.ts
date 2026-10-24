@@ -1,4 +1,5 @@
 import type { SessionDiffFile } from "../../../packages/gateway-protocol/src/index.js";
+import type { WorkerWorkspaceGitHistory } from "../../worker/node-workspace-transfer-protocol.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
@@ -39,6 +40,7 @@ export function requireWorkerResultStorageRef(ref: string): string {
 }
 
 export type StagedWorkerWorkspaceInventory = {
+  gitHistory?: WorkerWorkspaceGitHistory;
   baseManifestRaw: string;
   currentManifestRaw: string;
   baseManifestRef: string;

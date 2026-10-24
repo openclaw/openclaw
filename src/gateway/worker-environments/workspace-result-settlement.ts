@@ -14,12 +14,31 @@ import {
   type WorkerWorkspaceResultConflict,
 } from "./workspace-conflicts.js";
 import {
+  adoptStagedWorkerWorkspaceHistory,
   deleteStagedWorkerWorkspaceResult,
   isWorkerWorkspaceResultCleanupRef,
   moveStagedWorkerWorkspaceResultToCleanup,
 } from "./workspace-result-staging.js";
 
 const log = createSubsystemLogger("gateway/worker-placement");
+
+export async function adoptReclaimedWorkspaceHistory(
+  params: Pick<PreparedWorkerWorkspaceRecovery, "workspace" | "assertCurrent" | "reportNote"> & {
+    stagedResultRef: string | null | undefined;
+  },
+): Promise<void> {
+  if (params.workspace.kind !== "local" || !params.stagedResultRef) {
+    return;
+  }
+  const note = await adoptStagedWorkerWorkspaceHistory({
+    root: sessionWorkspaceRoot(params.workspace),
+    stagedResultRef: params.stagedResultRef,
+    assertCurrent: params.assertCurrent,
+  });
+  if (note) {
+    await params.reportNote(note);
+  }
+}
 
 export async function resolvePriorWorkspaceResultConflict(
   resolve: PreparedWorkerWorkspaceRecovery["resolveConflict"],
