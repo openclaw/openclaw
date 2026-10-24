@@ -13,6 +13,7 @@ vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
   dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
 }));
 
+// mock-isolation: Capture destination history without a session store.
 vi.mock("../../sessions/confirmed-visible-message.js", () => ({
   commitConfirmedVisibleMessage: mocks.commitConfirmedVisibleMessage,
 }));

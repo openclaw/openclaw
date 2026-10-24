@@ -8,6 +8,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/server-methods/chat-send-admission.reads.test.ts",
   "src/sessions/background-session-result.test.ts",
   "src/sessions/confirmed-visible-message.integration.test.ts",
+  "src/agents/tools/message-tool.scheduled-lifetime.test.ts",
+  "test/telegram-recovery-notice-send.test.ts",
   "test/discord-live-policy.integration.test.ts",
   "src/commands/startup-config-preflight.fresh-profiles.test.ts",
   "src/channels/message-access/x-requester.test.ts",

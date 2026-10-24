@@ -259,7 +259,7 @@ describe("confirmed outbound route and transcript ownership", () => {
           }),
         ]);
         expect(transcriptMessages(MAIN_SESSION_KEY)).toEqual([]);
-        release.resolve();
+        turnGate.release();
         await withinTest(turn, signal);
         await withinTest(drained, signal);
       } finally {

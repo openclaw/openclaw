@@ -151,6 +151,7 @@ async function ackDeliveryMock(
   return queueMocks.ackDelivery(id, stateDir, hasOptions ? legacyOptions : undefined);
 }
 
+// mock-isolation: Capture destination history without a session store.
 vi.mock("../../sessions/confirmed-visible-message.js", () => ({
   commitConfirmedVisibleMessage: mocks.commitConfirmedVisibleMessage,
 }));

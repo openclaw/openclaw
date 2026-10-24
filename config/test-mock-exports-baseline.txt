@@ -4351,7 +4351,6 @@
 ["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","../../gateway/server-methods/chat-assistant-content.js","f5563c45a12589f220eb3d175e010ffc6ca9a1923922dc87ee0246b49d97f6dc",1]
 ["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","../../infra/outbound/deliver.js","df63a9ed4460415d08dfc15044e7856f78f53444c284b8d735ba7ddb270e4eef",1]
 ["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","../../infra/outbound/identity.js","3712597d1303a42be8a98a4cbcff3f015cdc8cffbfdcd9ca7e8055582dd08954",1]
-["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","../../infra/outbound/session-context.js","1be193680b11751ee4c5e9179f4918d824d320999deedb99006751580b3186c2",1]
 ["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","../../infra/system-events.js","166a1c26330537d92b22996c93db0f468e24ca9b755a5407477125d2c1ef64e8",1]
 ["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","../../logger.js","b62d9f94ed09bd1a0cc07ee9e91f79ae1f38fee2152b894f5331b67ec3186f1a",1]
 ["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","../../sessions/background-session-result.js","354711a3ed8bd75b180bdffbf371d36e18fd5ee2696a2153a0dcbb86db039c10",1]

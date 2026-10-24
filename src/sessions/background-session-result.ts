@@ -17,7 +17,7 @@ import type { SessionTranscriptAssistantMessage } from "../config/sessions/trans
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import {
-  OPENCLAW_AUTOMATION_RESULT_MODEL,
+  AUTOMATION_RESULT_MODEL,
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
   type SUBAGENT_COMPLETION_RESULT_KIND,
@@ -137,7 +137,7 @@ export async function commitBackgroundResultToSession(params: {
             ...(displayContent ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent } : {}),
             api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
             provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
-            model: OPENCLAW_AUTOMATION_RESULT_MODEL,
+            model: AUTOMATION_RESULT_MODEL,
             usage: makeZeroUsageSnapshot(),
             stopReason: "stop",
             timestamp: Date.now(),
