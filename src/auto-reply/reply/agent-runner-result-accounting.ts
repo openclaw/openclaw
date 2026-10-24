@@ -294,7 +294,9 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
           completion.assertCurrent();
         },
       });
-      if (!recorded) {
+      if (recorded) {
+        runResult.meta.modelFallbackTranscriptToModel = fallbackTransition.selectedModelRef;
+      } else {
         fallbackTransition.fallbackCleared = false;
         fallbackTransition.stateChanged = false;
       }
