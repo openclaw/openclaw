@@ -59,19 +59,6 @@ vi.mock("./schtasks-runtime.js", async (original) => ({
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const originalXml =
   "<Task><Settings><Enabled>false</Enabled></Settings><Actions><Exec><Command>original</Command></Exec></Actions></Task>";
-const transactionHooks: GatewayServiceDefinitionTransactionHooks = {
-  assertCurrent: () => {},
-  beforeWrite: async () => {},
-  filePrepared: async () => {},
-  fileWritten: async () => {},
-  taskPrepared: async () => {},
-  taskWritten: async () => {},
-};
-const commands = () => native.exec.mock.calls.map(([command]) => command);
-function expectReadOnly() {
-  expect(native.run).not.toHaveBeenCalled();
-  expect(commands().every(([verb]) => verb === "/Query")).toBe(true);
-}
 beforeEach(() => {
   native.exec.mockReset();
   native.run.mockReset().mockResolvedValue("scheduled-task");
@@ -163,17 +150,22 @@ it.each([false, true])(
       );
     }
     await f.assertBackups();
+    expect(f.args.stdout.read(f.args.stdout.readableLength)?.toString()).toContain(
+      `${f.scriptPath}.task.xml.bak and launcher .bak files beside it are retained for recovery`,
+    );
+    expect(f.args.warn).not.toHaveBeenCalled();
   },
 );
 
-it.each([
-  { change: "runtime", unattended: true },
-  { change: "arguments", unattended: false },
-  { change: "environment", unattended: false },
-])(
+it.each(
+  ["runtime", "arguments", "environment"].flatMap((change) => [
+    { change, unattended: false },
+    { change, unattended: true },
+  ]),
+)(
   "replaces a running registered task before publishing a changed $change (unattended=$unattended)",
   async ({ change, unattended }) => {
-    const { args, scriptPath, original } = await fixture(true);
+    const { args, scriptPath, original, registration } = await fixture(true);
     let running = original;
     native.probe.mockReturnValue({ status: "found", state: 4, enabled: true });
     native.stop.mockImplementation(async (params) => {
@@ -202,6 +194,15 @@ it.each([
     });
     expect(running).toEqual(await fs.readFile(scriptPath));
     expect(running).not.toEqual(original);
+    if (unattended) {
+      expect(registration.xml).toContain("<LogonType>S4U</LogonType>");
+      expect(registration.xml).toContain("<BootTrigger><Enabled>true</Enabled></BootTrigger>");
+      expect(registration.xml).toContain("<LogonTrigger>");
+      expect(registration.xml).toContain("<Command>C:\\Windows\\System32\\cmd.exe</Command>");
+      expect(registration.xml).toContain(
+        `<Arguments>/d /s /c &quot;&quot;${scriptPath}&quot;&quot;</Arguments>`,
+      );
+    }
   },
 );
 
@@ -277,6 +278,7 @@ it.each(
     await expect(installScheduledTask(args)).rejects.toThrow(`Synthetic ${phase} failure`);
     await assertRestored();
     expect(running).toBe(wasRunning);
+    expect(native.run).toHaveBeenCalledTimes(phase === "publication" ? 0 : 1);
   },
 );
 
@@ -296,6 +298,7 @@ it("restores the previous definition when registration fails after changing its 
   });
   await expect(installScheduledTask(f.args)).rejects.toThrow("spawn EINVAL");
   await f.assertRestored();
+  expect(f.args.warn).not.toHaveBeenCalled();
 });
 
 it.each(["process", "definition"])(
@@ -317,7 +320,8 @@ it.each(["process", "definition"])(
     if (kind === "definition") {
       expect(registration.xml).toBe(foreign);
     }
-    expectReadOnly();
+    expect(native.run).not.toHaveBeenCalled();
+    expect(native.exec.mock.calls.every(([command]) => command[0] === "/Query")).toBe(true);
   },
 );
 
@@ -361,7 +365,15 @@ it.each(["stopped", "running", "unknown"] as const)(
       }
       return false;
     });
-    const install = installScheduledTask({ ...args, definitionTransaction: transactionHooks });
+    const definitionTransaction: GatewayServiceDefinitionTransactionHooks = {
+      assertCurrent: () => {},
+      beforeWrite: async () => {},
+      filePrepared: async () => {},
+      fileWritten: async () => {},
+      taskPrepared: async () => {},
+      taskWritten: async () => {},
+    };
+    const install = installScheduledTask({ ...args, definitionTransaction });
     if (evidence === "unknown") {
       await expect(install).rejects.toThrow("Stopped-state ownership cannot be acquired");
       expect(await fs.readFile(scriptPath)).toEqual(original);
@@ -415,18 +427,32 @@ it("leaves both original launchers intact when staging cannot capture the hidden
   expect((await fs.stat(launcherPath)).isDirectory()).toBe(true);
 });
 
-it("preserves recovery when registration fails", async () => {
-  const { args, assertRestored, assertBackups } = await fixture();
+it.each(["registration", "xml-upgrade"])("preserves recovery when %s fails", async (failure) => {
+  const { args, scriptPath, assertRestored, assertBackups } = await fixture();
   const execute = native.exec.getMockImplementation()!;
   native.exec.mockImplementation(async (command) =>
-    command[0] === "/Create" || command[0] === "/Change"
+    command[0] === "/Create" || (failure === "registration" && command[0] === "/Change")
       ? { code: 2, stdout: "", stderr: "registration rejected" }
       : execute(command),
   );
-  await expect(installScheduledTask(args)).rejects.toThrow("registration rejected");
-  await assertRestored();
-  expect(native.run).not.toHaveBeenCalled();
-  expect(args.warn).not.toHaveBeenCalled();
+  const installation = installScheduledTask(args);
+  if (failure === "xml-upgrade") {
+    await expect(installation).resolves.toEqual({ scriptPath });
+    expect(args.warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /launch command.*refreshed.*XML settings.*battery settings.*not.*registration rejected.*Inspect Task Scheduler.*retry the service installation/u,
+      ),
+    );
+    expect(native.run).toHaveBeenCalledOnce();
+    expect((await readScheduledTaskCommand(args.env))?.programArguments).toEqual(
+      args.programArguments,
+    );
+  } else {
+    await expect(installation).rejects.toThrow("registration rejected");
+    await assertRestored();
+    expect(native.run).not.toHaveBeenCalled();
+    expect(args.warn).not.toHaveBeenCalled();
+  }
   await assertBackups();
 });
 
@@ -499,10 +525,23 @@ it.each([
   } else {
     await assertBackups();
   }
-  if (phase !== "during-activation" && phase !== "after-registration") {
-    expect(commands().filter(([verb]) => verb !== "/Query")).toEqual([]);
+  const mutations = native.exec.mock.calls
+    .map(([command]) => command)
+    .filter((command) => command[0] !== "/Query");
+  if (phase === "during-activation" || phase === "after-registration") {
+    expect(mutations.map((command) => command[0])).toEqual([
+      "/Change",
+      "/Create",
+      "/Change",
+      "/End",
+      "/Create",
+    ]);
+    expect(mutations[2]).toContain("/DISABLE");
+  } else {
+    expect(mutations).toEqual([]);
     expect(native.run).not.toHaveBeenCalled();
   }
+  expect(args.warn).not.toHaveBeenCalled();
 });
 
 it.each(["before-rename", "after-rename", "foreign-after-rename"])(
@@ -578,7 +617,8 @@ it.each(["before-rename", "after-rename", "foreign-after-rename"])(
       expect((await fs.stat(scriptPath)).mode & 0o7777).toBe(originalMode);
     }
     await assertBackups();
-    expectReadOnly();
+    expect(native.run).not.toHaveBeenCalled();
+    expect(native.exec.mock.calls.every(([command]) => command[0] === "/Query")).toBe(true);
   },
 );
 
@@ -643,7 +683,7 @@ it.each([
   await assertBackups();
   expect(await fs.readFile(scriptPath)).not.toEqual(original);
   expect(args.warn).toHaveBeenCalledWith(expect.stringContaining("queued task may still start"));
-  expect(commands().filter(([verb]) => verb === "/Create")).toHaveLength(
+  expect(native.exec.mock.calls.filter(([command]) => command[0] === "/Create")).toHaveLength(
     failure === "foreign-partial-publication" ? 0 : 1,
   );
   if (failure.startsWith("foreign-")) {
@@ -662,13 +702,17 @@ it.each(["publication", "activation"])(
     let revoked = false;
     const written: string[] = [];
     const definitionTransaction: GatewayServiceDefinitionTransactionHooks = {
-      ...transactionHooks,
+      assertCurrent: () => {},
+      beforeWrite: async () => {},
+      filePrepared: async () => {},
       fileWritten: async (file) => {
         written.push(file);
         if (phase === "publication" && file === scriptPath) {
           revoked = true;
         }
       },
+      taskPrepared: async () => {},
+      taskWritten: async () => {},
     };
     native.run.mockImplementation(async () => {
       revoked = true;
@@ -679,7 +723,7 @@ it.each(["publication", "activation"])(
     ).rejects.toMatchObject({ code: "service-authority-revoked", outcome: undefined });
     expect(await fs.readFile(scriptPath)).not.toEqual(original);
     expect(written).toEqual(phase === "publication" ? [scriptPath] : [scriptPath, launcherPath]);
-    expect(commands().map(([verb]) => verb)).toEqual(
+    expect(native.exec.mock.calls.map(([command]) => command[0])).toEqual(
       phase === "publication" ? [] : ["/Query", "/Create"],
     );
     for (const backup of [
@@ -689,6 +733,7 @@ it.each(["publication", "activation"])(
     ]) {
       await expect(fs.stat(backup)).rejects.toMatchObject({ code: "ENOENT" });
     }
+    expect(args.warn).not.toHaveBeenCalled();
   },
 );
 
@@ -747,6 +792,10 @@ it.each([
   });
   await assertRestored();
   await assertBackups();
+  expect(native.exec.mock.calls.filter(([command]) => command[0] === "/Run")).toHaveLength(
+    originallyRunning ? 1 : 0,
+  );
+  expect(native.exec.mock.calls.some(([command]) => command.includes("/ENABLE"))).toBe(true);
   expect(taskRunning).toBe(originallyRunning && !pending);
   if (pending) {
     expect(args.warn).toHaveBeenCalledWith(

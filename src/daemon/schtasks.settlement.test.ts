@@ -42,7 +42,7 @@ const test = it.extend<GatewayFixture & { gateway: GatewayFixture }>({
 });
 
 const taskAction = (...actions: string[]) =>
-  schtasksCalls.some(([action]) => actions.includes(action));
+  schtasksCalls.some(([action]) => action !== undefined && actions.includes(action));
 const killedOwner = () => spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"));
 const processList = (pid = 4242) => `"node.exe","${pid}","Console","1","1 K"`;
 function expectNoNativeMutation() {

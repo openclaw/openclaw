@@ -141,7 +141,7 @@ function shortcutBody() {
     type: "shortcut" as const,
     callback_id: "capture-note",
     trigger_id: "123.trigger",
-    user: { id: "U123", username: "ada", team_id: "T9" },
+    user: { id: "U123", name: "ada", username: "ada", team_id: "T9" },
     team: { id: "T9", domain: "example" },
     token: "secret",
     action_ts: "100.200",
@@ -852,7 +852,7 @@ describe("registerSlackInteractionEvents", () => {
     ],
   ] satisfies Array<[string, Record<string, unknown>, string, Record<string, unknown>?]>)(
     "renders %s confirmation",
-    async (type, selection, label, summary) => {
+    async (type, selection, label, summary = undefined) => {
       const { app, click } = setupInteractions();
       const untouched = [
         actions("time", [{ type: "timepicker", action_id: "openclaw:time" }]),
@@ -961,10 +961,11 @@ describe("registerSlackInteractionEvents", () => {
         deliveryContext: {
           channel: "slack",
           accountId: "default",
-          to: recorded ? undefined : submission ? "team:T1:user:U777" : "channel:C777",
+          ...(!recorded ? { to: submission ? "team:T1:user:U777" : "channel:C777" } : {}),
         },
       });
       if (recorded) {
+        expect(eventOptions().deliveryContext?.to).toBeUndefined();
         expect(resolveSessionKey).not.toHaveBeenCalled();
       } else if (submission) {
         expect(resolveSessionKey).toHaveBeenCalledWith({

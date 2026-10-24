@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
+import {
+  type HelloOk,
+  validateSessionsDescribeParams,
+  validateSessionsListParams,
+} from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";

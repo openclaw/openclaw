@@ -768,26 +768,32 @@ describe("runDaemonRestart health checks", () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
   }
 
-  it.each([
-    { caller: "root", error: undefined },
-    { caller: "non-root", error: "run `sudo systemctl restart openclaw.service` to restart it" },
-  ])(
-    "routes system-scope restart through systemctl as $caller (openclaw#87577)",
-    async ({ error }) => {
-      mockSystemdScope("openclaw.service");
-      mockUnmanagedRestart();
-      if (error) {
-        restartSystemdService.mockRejectedValue(new Error(error));
-        await expect(runDaemonRestart({ json: true })).rejects.toThrow(
-          /sudo systemctl restart openclaw\.service/,
-        );
-      } else {
-        await expect(runDaemonRestart({ json: true })).resolves.toBe(true);
-        expect(restartSystemdService).toHaveBeenCalled();
-      }
-      expectNoCalls(signalVerifiedGatewayPidSync, probeGateway);
-    },
-  );
+  it("delegates system-scope restart to systemctl without unmanaged signaling when root (openclaw#87577)", async () => {
+    mockSystemdScope("openclaw.service");
+    restartSystemdService.mockResolvedValue({ outcome: "completed" });
+    mockUnmanagedRestart();
+
+    await expect(runDaemonRestart({ json: true })).resolves.toBe(true);
+
+    expect(restartSystemdService).toHaveBeenCalled();
+    expectNoCalls(signalVerifiedGatewayPidSync, probeGateway);
+  });
+
+  it("surfaces systemd sudo guidance and never signals when restarting a system-scope unit as non-root (openclaw#87577)", async () => {
+    mockSystemdScope("openclaw.service");
+    restartSystemdService.mockRejectedValue(
+      new Error(
+        "openclaw.service is a system-scope unit (/etc/systemd/system/openclaw.service); run `sudo systemctl restart openclaw.service` to restart it",
+      ),
+    );
+    mockUnmanagedRestart();
+
+    await expect(runDaemonRestart({ json: true })).rejects.toThrow(
+      /sudo systemctl restart openclaw\.service/,
+    );
+
+    expectNoCalls(signalVerifiedGatewayPidSync, probeGateway);
+  });
 
   it("delegates system-scope stop to systemctl without unmanaged signaling when root (openclaw#87577)", async () => {
     mockSystemdScope("openclaw-gateway.service");
@@ -929,6 +935,28 @@ describe("runDaemonRestart health checks", () => {
         true,
       );
       expectNoCalls(loadConfig, writeGatewayRestartIntentSync, signalVerifiedGatewayPidSync);
+    });
+
+    it("does not touch state when lock ownership changes before delivery", async () => {
+      const gatewayLockIdentity = createGatewayLockIdentity();
+      readActiveGatewayLockIdentity
+        .mockResolvedValueOnce(gatewayLockIdentity)
+        .mockResolvedValueOnce(gatewayLockIdentity)
+        .mockResolvedValue({
+          ...gatewayLockIdentity,
+          pid: 4300,
+          ownerId: "gateway-owner-new",
+          createdAt: "2026-07-16T12:00:01.000Z",
+        });
+
+      await expectExternalRestartFailure("gateway lock owner changed");
+
+      expectNoCalls(
+        writeGatewayRestartIntentSync,
+        clearGatewayRestartIntentSync,
+        callGatewayCli,
+        signalVerifiedGatewayPidSync,
+      );
     });
 
     it("rejects a legacy generic restart acknowledgement", async () => {
