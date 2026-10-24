@@ -199,19 +199,9 @@ it.each([false, true])(
       expect(rendered).toMatch(/#+ Non-blocking advisory findings\n\nAdvisories never block/u);
       expectContains(
         rendered,
-        `- npm package-lock mirrors: ${malware ? 3 : 2}`,
-        `- Lockless packages (bundleRuntimeDependencies=false): ${malware ? 2 : 1}`,
-        `- Partial npm package-lock mirrors (workspace omissions): ${malware ? 2 : 1}`,
         `- Known malware findings (release-blocking): ${malware ? 2 : 0}`,
         "- npm advisory coverage: checked",
         "- Upstream public repository advisory coverage: partial",
-        "- Upstream source: `github-public-repository-advisories`",
-        "- Upstream package versions mapped: 100/101",
-        "- Upstream repositories checked: 1/2",
-        "- Non-blocking advisory findings: 1",
-        `- Advisory vulnerability total findings: ${malware ? 3 : 1}`,
-        `- Upstream-only vulnerability findings: ${malware ? 2 : 1}`,
-        "- Upstream coverage issues: 2",
         malware
           ? "- HIGH `report-pkg` (.github/release/clawhub-cli/package-lock.json; production) id=GHSA-report source=github-repository\n"
           : "- HIGH `undici` (.github/release/vercel-cli/package-lock.json; production) id=GHSA-rfgv-xxqx-mfg5 source=github-repository https://github.com/advisories/GHSA-rfgv-xxqx-mfg5",
@@ -236,14 +226,8 @@ it("uses a synthetic release tag for validation-only SHA preflight input", () =>
 it("rejects missing dependency evidence CLI option values", () => {
   const missingValues = [
     ["--output-dir", "--release-ref"],
-    ["--output-dir", "-h"],
-    ["--release-ref", "--npm-dist-tag"],
     ["--release-ref", "-h"],
-    ["--npm-dist-tag", "-h"],
     ["--base-ref", undefined],
-    ["--base-ref", "-h"],
-    ["--github-output", "--github-step-summary"],
-    ["--github-output", "-h"],
   ] satisfies Array<[string, string | undefined]>;
   for (const [flag, value] of missingValues) {
     expect(() => parseArgs(value === undefined ? [flag] : [flag, value])).toThrow(

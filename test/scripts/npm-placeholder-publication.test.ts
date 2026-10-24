@@ -18,6 +18,7 @@ import { writeJsonFile as writeJson } from "../helpers/temp-repo.js";
 
 const SHA = "a".repeat(40);
 const WORKFLOW_SHA = "b".repeat(40);
+const binding = { targetSha: SHA, workflowSha: WORKFLOW_SHA };
 const WORKFLOW = ".github/workflows/npm-placeholder-bootstrap.yml";
 const packageName = "@openclaw/meta-provider";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -90,7 +91,6 @@ async function publication(
   fetchImpl: typeof fetch = async () => registryResponse(),
   packages = entries.map(({ manifest }) => manifest.name).join(","),
 ) {
-  const binding = { targetSha: SHA, workflowSha: WORKFLOW_SHA };
   const artifactDir = join(tempDirs.make("npm-placeholder-parent-"), "artifact");
   const manifest = await createPlaceholderPublication({
     ...binding,
@@ -150,10 +150,8 @@ describe("npm placeholder publication", () => {
   });
 
   it("creates deterministic canonical two-file placeholder tarballs", () => {
-    const first = createPlaceholderTarball("@openclaw/comfy-provider");
-    const second = createPlaceholderTarball("@openclaw/comfy-provider");
-
-    expect(first).toEqual(second);
+    const first = createPlaceholderTarball(packageName);
+    expect(first).toEqual(createPlaceholderTarball(packageName));
     expect(first.subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
   });
 
@@ -222,26 +220,18 @@ describe("npm placeholder publication", () => {
     );
     expect(() => parseSelectedPackages("@openclaw/good,@openclaw/good")).toThrow("duplicates");
 
-    const duplicateRoot = createRepo([
-      packageEntry("one", "@openclaw/good"),
-      packageEntry("two", "@openclaw/good"),
-    ]);
-    expect(() => resolveSelectedPackageSources(duplicateRoot, ["@openclaw/good"])).toThrow(
-      "must map uniquely",
-    );
-
-    const unsafeRoot = createRepo([packageEntry("good", "@openclaw/good")]);
-    writeJson(join(unsafeRoot, "extensions", "good", "package.json"), {});
-    expect(() => resolveSelectedPackageSources(unsafeRoot, ["@openclaw/good"])).toThrow(
-      "must map uniquely",
-    );
-
-    const privateRoot = createRepo([
-      packageEntry("private", "@openclaw/private", { publishConfig: { access: "private" } }),
-    ]);
-    expect(() => resolveSelectedPackageSources(privateRoot, ["@openclaw/private"])).toThrow(
-      "not a public release-enabled npm plugin",
-    );
+    for (const [entries, error] of [
+      [[packageEntry("one", packageName), packageEntry("two", packageName)], "must map uniquely"],
+      [[{ dir: "missing", manifest: {} }], "must map uniquely"],
+      [
+        [packageEntry("private", packageName, { publishConfig: { access: "private" } })],
+        "not a public release-enabled npm plugin",
+      ],
+    ] as const) {
+      expect(() => resolveSelectedPackageSources(createRepo([...entries]), [packageName])).toThrow(
+        error,
+      );
+    }
   });
 
   it("fails final verification when any pre-existing dist-tag changes", () => {
@@ -363,9 +353,8 @@ describe("npm placeholder publication", () => {
         repository: "openclaw/openclaw",
         runId: 123,
         targetRoot: "/tmp/unused",
-        targetSha: SHA,
+        ...binding,
         token: "test-token",
-        workflowSha: WORKFLOW_SHA,
       }),
     ).rejects.toThrow("artifact name does not match its workflow run and attempt");
   });
