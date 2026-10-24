@@ -17,7 +17,6 @@ import type { PluginServiceCronHost } from "../plugins/service-cron.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { AgentRecoveryProgress } from "../state/agent-database-preparation-recovery.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
@@ -28,6 +27,7 @@ import { scheduleGatewayPrewarm } from "./server-startup-handler-prewarm.js";
 import {
   markGatewayStartupMainSessionOrphans,
   runGatewayStartupObservers,
+  startGatewayMainSessionRecovery,
 } from "./server-startup-observers.js";
 import {
   createGatewayStartupOutcomeRecorder,
@@ -45,10 +45,6 @@ import { createDeferredGatewayUpdateCheck } from "./server-startup-update-check.
 import type { ReadinessChecker } from "./server/readiness.js";
 import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 type Awaitable<T> = T | Promise<T>;
-
-const loadMainSessionRestartRecoveryModule = createLazyRuntimeModule(
-  () => import("../agents/main-session-recovery/main-session-restart-recovery.js"),
-);
 
 /** Start work that depends on the HTTP server being attached and visible. */
 export async function startGatewayPostAttachRuntime(params: {
@@ -113,6 +109,7 @@ export async function startGatewayPostAttachRuntime(params: {
   trackStartupWork: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
   startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
   onSidecarsReady?: () => void;
+  recoverDurableQuestionInteractions?: () => Promise<void>;
   getReadiness: ReadinessChecker;
   isClosing?: () => boolean;
   startupTrace?: GatewayStartupTrace;
@@ -405,28 +402,16 @@ export async function startGatewayPostAttachRuntime(params: {
                 loaderStatsBefore.sourceTransformFallbacks,
             ],
           ]);
-          let mainSessionRecoverySidecar: GatewayPostReadySidecarHandle | undefined;
-          await startupLog;
-          if (params.isClosing?.()) {
-            return pluginRegistry;
-          }
-          try {
-            const { scheduleRestartAbortedMainSessionRecovery } =
-              await loadMainSessionRestartRecoveryModule();
-            if (params.isClosing?.() !== true) {
-              mainSessionRecoverySidecar = scheduleRestartAbortedMainSessionRecovery({
-                getConfig: params.getConfig,
-                shouldContinue: () => params.isClosing?.() !== true,
-                startupCheckedStorePaths: params.mainSessionRecoveryStartupCheckedStorePaths,
-                // Requester continuations need the restored cohort's Gateway binding
-                // and operator authority before their first recovery attempt.
-                waitForStart: () => subagentRecoverySettled.promise,
-                gatewayRuntime: params.recoveryRuntime,
-              });
-            }
-          } catch (err) {
-            params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
-          }
+          const mainSessionRecoverySidecar = await startGatewayMainSessionRecovery({
+            recoverDurableQuestionInteractions: params.recoverDurableQuestionInteractions,
+            startupLog,
+            isClosing: params.isClosing,
+            getConfig: params.getConfig,
+            startupCheckedStorePaths: params.mainSessionRecoveryStartupCheckedStorePaths,
+            waitForStart: () => subagentRecoverySettled.promise,
+            gatewayRuntime: params.recoveryRuntime,
+            log: params.log,
+          });
           if (params.isClosing?.()) {
             if (mainSessionRecoverySidecar) {
               params.onGatewayLifetimeSidecars(mainSessionRecoverySidecar);

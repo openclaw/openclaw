@@ -18,6 +18,7 @@ export {
   retainSqliteWorkerErrorCode,
   isSqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
+  hasSqliteWorkerErrorCodeInEnvelope,
 } from "./sqlite-worker-error.js";
 
 export type SqliteWorkerRequestCustodyDescriptor = {

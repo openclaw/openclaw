@@ -30,6 +30,8 @@ import {
 import { hasLiveAgentRunContext, listAgentRunsForSession } from "../../infra/agent-run-registry.js";
 import {
   captureGatewaySessionControllerWork,
+  runSessionMutation,
+  captureSessionTarget,
   captureSessionControllerSettlement,
   isSessionControllerWorkActive,
 } from "../../sessions/session-controller.lifecycle.js";
@@ -420,117 +422,133 @@ async function markOrphanedMainSessionStore(
     );
   }
   const orphanChecks: Array<() => boolean> = [];
-  return await markRecoveryStore({
-    ...params.target,
-    sessionKeys,
-    assertCommitAllowed: () => {
-      assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
-      params.assertCommitAllowed?.();
-      if (orphanChecks.some((hasLiveOwner) => hasLiveOwner())) {
-        throw new Error("Startup orphan acquired a live owner before recovery commit");
-      }
-    },
-    plan: (entry, sessionKey) => {
-      params.assertCommitAllowed?.();
-      if (
-        !hasOrphanedMainSessionWork(entry, sessionKey) ||
-        isRetryableUnadoptedChatClaim(entry) ||
-        entry.mainRestartRecovery?.tombstone ||
-        (params.expectedSessionId !== undefined && entry.sessionId !== params.expectedSessionId) ||
-        (params.expectedLifecycleRevision !== undefined &&
-          entry.lifecycleRevision !== params.expectedLifecycleRevision)
-      ) {
-        return undefined;
-      }
-      const updatedAt = asFiniteNumber(entry.updatedAt);
-      if (updatedBeforeMs !== undefined && updatedAt !== undefined && updatedAt > updatedBeforeMs) {
-        return undefined;
-      }
-      const writerRunIds = [
-        entry.activeWriterRunId,
-        entry.lifecycleRunId,
-        ...(entry.restartRecoveryRuns ?? []).map((run) => run.runId),
-      ];
-      const hasLiveOwner = () =>
-        writerRunIds.some((runId) => runId && hasLiveAgentRunContext(runId)) ||
-        listAgentRunsForSession({ sessionKey, sessionId: entry.sessionId }).some(({ runId }) =>
-          hasLiveAgentRunContext(runId),
-        ) ||
-        isSessionControllerWorkActive(params.target.storePath, [sessionKey, entry.sessionId]);
-      if (hasLiveOwner()) {
-        const settled = captureSessionControllerSettlement({
-          scope: params.target.storePath,
-          identities: [sessionKey, entry.sessionId],
-        });
-        if (settled) {
-          params.onOwnerPending?.(
-            { ...params.target, sessionKey, sessionId: entry.sessionId },
-            settled,
-          );
-        }
-        return undefined;
-      }
-      const continuation = captureYieldedMainSessionContinuation({
-        entry,
-        requester: requesters.get(sessionKey),
-        purpose: "recovery",
-      });
-      if (continuation) {
-        // A newer foreground start clears endedAt. Only an unclaimed waiting cycle
-        // may hand its interruption marker back to the exact durable child batch.
-        const state = entry.mainRestartRecovery;
-        if (
-          entry.abortedLastRun === true &&
-          !state?.reservation &&
-          !state?.foregroundClaims &&
-          !state?.tombstone &&
-          !entry.restartRecoveryDeliveryRunId
-        ) {
-          return {
-            action: "restore_yielded",
-            isCurrent: () => continuation() && !hasLiveOwner(),
-          };
-        }
-        return undefined;
-      }
-      if (isKilledMainSessionRecoveryFenceOnly(entry)) {
-        // Stop is terminal. An ownerless fence must not resurrect the run or
-        // hold the conversation forever; pending delivery remains with recovery.
-        orphanChecks.push(hasLiveOwner);
-        return { action: "release_killed" };
-      }
-      // A crash or early restart abort can persist the interruption without a claim.
-      // Reuse the normal mark transition, preserving budgets on existing cycles.
-      const hasClaim = hasMainSessionRecoveryClaim(entry);
-      const completed = hasCompletedMainSessionRecoveryOutcome(entry);
-      // A receipt for this continuation wins even when its saved outcome is interrupted.
-      if (
-        !hasClaim &&
-        (completed ||
-          [
-            entry.lifecycleRunId,
+  return await runSessionMutation({
+    diagnosticLabel: "recovery-mark",
+    targets: sessionKeys.map((sessionKey) =>
+      captureSessionTarget({
+        storeScope: params.target.storePath,
+        sessionKey,
+        agentId: params.target.agentId,
+      }),
+    ),
+    run: () =>
+      markRecoveryStore({
+        ...params.target,
+        sessionKeys,
+        assertCommitAllowed: () => {
+          assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+          params.assertCommitAllowed?.();
+          if (orphanChecks.some((hasLiveOwner) => hasLiveOwner())) {
+            throw new Error("Startup orphan acquired a live owner before recovery commit");
+          }
+        },
+        plan: (entry, sessionKey) => {
+          params.assertCommitAllowed?.();
+          if (
+            !hasOrphanedMainSessionWork(entry, sessionKey) ||
+            isRetryableUnadoptedChatClaim(entry) ||
+            entry.mainRestartRecovery?.tombstone ||
+            (params.expectedSessionId !== undefined &&
+              entry.sessionId !== params.expectedSessionId) ||
+            (params.expectedLifecycleRevision !== undefined &&
+              entry.lifecycleRevision !== params.expectedLifecycleRevision)
+          ) {
+            return undefined;
+          }
+          const updatedAt = asFiniteNumber(entry.updatedAt);
+          if (
+            updatedBeforeMs !== undefined &&
+            updatedAt !== undefined &&
+            updatedAt > updatedBeforeMs
+          ) {
+            return undefined;
+          }
+          const writerRunIds = [
             entry.activeWriterRunId,
-            entry.restartRecoveryDeliverySourceRunId,
-          ].some((runId) => runId !== undefined && hasRestartRecoveryTerminalRun(entry, runId)))
-      ) {
-        return undefined;
-      }
-      if (
-        hasClaim &&
-        !completed &&
-        (entry.abortedLastRun === true ||
-          (!entry.pendingFinalDelivery &&
-            entry.status !== undefined &&
-            entry.status !== "failed" &&
-            entry.status !== "interrupted"))
-      ) {
-        return undefined;
-      }
-      orphanChecks.push(hasLiveOwner);
-      return completed || isMainRestartRecoveryTerminalOnly(entry)
-        ? { action: "retire_terminal" }
-        : { action: "mark" };
-    },
+            entry.lifecycleRunId,
+            ...(entry.restartRecoveryRuns ?? []).map((run) => run.runId),
+          ];
+          const hasLiveOwner = () =>
+            writerRunIds.some((runId) => runId && hasLiveAgentRunContext(runId)) ||
+            listAgentRunsForSession({ sessionKey, sessionId: entry.sessionId }).some(({ runId }) =>
+              hasLiveAgentRunContext(runId),
+            ) ||
+            isSessionControllerWorkActive(params.target.storePath, [sessionKey, entry.sessionId]);
+          if (hasLiveOwner()) {
+            const settled = captureSessionControllerSettlement({
+              scope: params.target.storePath,
+              identities: [sessionKey, entry.sessionId],
+            });
+            if (settled) {
+              params.onOwnerPending?.(
+                { ...params.target, sessionKey, sessionId: entry.sessionId },
+                settled,
+              );
+            }
+            return undefined;
+          }
+          const continuation = captureYieldedMainSessionContinuation({
+            entry,
+            requester: requesters.get(sessionKey),
+            purpose: "recovery",
+          });
+          if (continuation) {
+            // A newer foreground start clears endedAt. Only an unclaimed waiting cycle
+            // may hand its interruption marker back to the exact durable child batch.
+            const state = entry.mainRestartRecovery;
+            if (
+              entry.abortedLastRun === true &&
+              !state?.reservation &&
+              !state?.foregroundClaims &&
+              !state?.tombstone &&
+              !entry.restartRecoveryDeliveryRunId
+            ) {
+              return {
+                action: "restore_yielded",
+                isCurrent: () => continuation() && !hasLiveOwner(),
+              };
+            }
+            return undefined;
+          }
+          if (isKilledMainSessionRecoveryFenceOnly(entry)) {
+            // Stop is terminal. An ownerless fence must not resurrect the run or
+            // hold the conversation forever; pending delivery remains with recovery.
+            orphanChecks.push(hasLiveOwner);
+            return { action: "release_killed" };
+          }
+          // A crash or early restart abort can persist the interruption without a claim.
+          // Reuse the normal mark transition, preserving budgets on existing cycles.
+          const hasClaim = hasMainSessionRecoveryClaim(entry);
+          const completed = hasCompletedMainSessionRecoveryOutcome(entry);
+          // A receipt for this continuation wins even when its saved outcome is interrupted.
+          if (
+            !hasClaim &&
+            (completed ||
+              [
+                entry.lifecycleRunId,
+                entry.activeWriterRunId,
+                entry.restartRecoveryDeliverySourceRunId,
+              ].some((runId) => runId !== undefined && hasRestartRecoveryTerminalRun(entry, runId)))
+          ) {
+            return undefined;
+          }
+          if (
+            hasClaim &&
+            !completed &&
+            (entry.abortedLastRun === true ||
+              (!entry.pendingFinalDelivery &&
+                entry.status !== undefined &&
+                entry.status !== "failed" &&
+                entry.status !== "interrupted"))
+          ) {
+            return undefined;
+          }
+          orphanChecks.push(hasLiveOwner);
+          return completed || isMainRestartRecoveryTerminalOnly(entry)
+            ? { action: "retire_terminal" }
+            : { action: "mark" };
+        },
+      }),
   });
 }
 

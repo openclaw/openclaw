@@ -297,6 +297,8 @@ export async function startGatewayCoreRuntime(input: {
       await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
     const auxHandlers = createGatewayAuxHandlers({
       scheduler: runtime.scheduler,
+      getQuestionRuntime: () => runtime.gatewayInstanceRuntimeRef.current,
+      getQuestionContext: () => runtime.resolvePluginGatewayContext(),
       log,
       hasRunAbortMarker: (runId) => chatRunState.hasAbortMarker(runId),
       getNativeApprovalRouteCoordinator: () =>

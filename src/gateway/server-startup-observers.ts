@@ -14,7 +14,9 @@ import { sweepSessionStateWatchNotices } from "../sessions/session-state-events.
 import { createDeferredCore } from "../shared/deferred.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { AgentRecoveryProgress } from "../state/agent-database-preparation-recovery.js";
+import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
+import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
 // Keep orphan marking independent of the resume and delivery runtime.
@@ -73,6 +75,51 @@ export async function markGatewayStartupMainSessionOrphans(
       params.log.warn(`main-session startup orphan marking failed: ${String(err)}`);
     }
   });
+}
+
+const loadMainSessionRestartRecoveryModule = createLazyRuntimeModule(
+  () => import("../agents/main-session-recovery/main-session-restart-recovery.js"),
+);
+
+/** Restore question custody before scheduling ordinary recovery on the restored cohort. */
+export async function startGatewayMainSessionRecovery(params: {
+  recoverDurableQuestionInteractions?: () => Promise<void>;
+  startupLog: Promise<unknown>;
+  isClosing?: () => boolean;
+  getConfig: () => OpenClawConfig;
+  startupCheckedStorePaths: Set<string>;
+  waitForStart: () => Promise<void>;
+  gatewayRuntime: GatewayRecoveryRuntime;
+  log: { warn: (message: string) => void };
+}): Promise<GatewayPostReadySidecarHandle | undefined> {
+  if (params.isClosing?.() !== true) {
+    try {
+      await params.recoverDurableQuestionInteractions?.();
+    } catch (error) {
+      params.log.warn(`durable question restart recovery failed: ${String(error)}`);
+    }
+  }
+  await params.startupLog;
+  if (params.isClosing?.()) {
+    return undefined;
+  }
+  try {
+    const { scheduleRestartAbortedMainSessionRecovery } =
+      await loadMainSessionRestartRecoveryModule();
+    if (params.isClosing?.() !== true) {
+      return scheduleRestartAbortedMainSessionRecovery({
+        getConfig: params.getConfig,
+        shouldContinue: () => params.isClosing?.() !== true,
+        startupCheckedStorePaths: params.startupCheckedStorePaths,
+        // Requester continuations need the restored cohort's Gateway binding and authority.
+        waitForStart: params.waitForStart,
+        gatewayRuntime: params.gatewayRuntime,
+      });
+    }
+  } catch (err) {
+    params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
+  }
+  return undefined;
 }
 
 type SubagentRegistryActivation = (

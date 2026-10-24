@@ -2,11 +2,15 @@ import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.contracts.js";
 import type { AgentRequestPreflight } from "./agent-request-preflight.js";
-import type { RequesterSettleWakeReplay } from "./internal-facade.types.js";
+import type {
+  AgentTurnAdmissionCommit,
+  RequesterSettleWakeReplay,
+} from "./internal-facade.types.js";
 import type { AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export type AgentTurnStartRequest = {
   controllerInput?: SessionControllerInput;
+  commitAdmission?: AgentTurnAdmissionCommit;
   privateCompletion?: true;
   /** Trusted input-owner policy; not accepted from the wire request. */
   replyExpectation?: ReplyExpectation;

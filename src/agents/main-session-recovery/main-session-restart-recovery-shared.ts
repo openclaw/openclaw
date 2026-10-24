@@ -14,7 +14,10 @@ import { prepareSessionStoreTargetInventoryRead } from "../../config/sessions/se
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
-import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import {
+  AgentDatabaseAdmissionError,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
 import { resolveAgentSessionDirs } from "../session-dirs.js";
 
 export const mainSessionRecoveryLog = createSubsystemLogger("main-session-restart-recovery");
@@ -64,6 +67,7 @@ export async function discoverRestartRecoveryStoreTargets(params: {
   agentIds?: ReadonlySet<string>;
   stateDir?: string;
   shouldContinue?: () => boolean;
+  onUnavailable?: (target: SessionStoreTarget, error: unknown) => void;
 }): Promise<SessionStoreTarget[]> {
   if (params.shouldContinue?.() === false) {
     return [];
@@ -71,6 +75,15 @@ export async function discoverRestartRecoveryStoreTargets(params: {
   const storeTargets: SessionStoreTarget[] = [];
   const stateDir = params.stateDir ?? resolveStateDir(process.env);
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const reportedRefusals = new Set<string>();
+  const reportRefusal = (target: SessionStoreTarget) => {
+    const refusal = readAgentDatabaseAdmissionRefusal(target.agentId, { env });
+    if (refusal && !reportedRefusals.has(target.agentId) && params.shouldContinue?.() !== false) {
+      reportedRefusals.add(target.agentId);
+      params.onUnavailable?.(target, new AgentDatabaseAdmissionError(refusal));
+    }
+    return refusal;
+  };
   if (params.cfg) {
     // Recovery must not reopen a deleted or otherwise unconfigured agent database merely
     // because its old directory still exists on disk. Those stores are intentionally fenced
@@ -101,6 +114,14 @@ export async function discoverRestartRecoveryStoreTargets(params: {
     if (params.shouldContinue?.() === false) {
       return [];
     }
+    // Native recovery inventory excludes refused sources before opening them. Keep
+    // their current admission diagnostic even though no target row can be returned.
+    for (const agentId of selectedAgentIds) {
+      reportRefusal({
+        agentId,
+        storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId, env }),
+      });
+    }
     for (const target of targets) {
       const storePath = path.resolve(target.storePath);
       // Fixed configured stores can retain a durable owner whose ID differs from the
@@ -129,11 +150,12 @@ export async function discoverRestartRecoveryStoreTargets(params: {
     return [];
   }
   return storeTargets
-    .filter(
-      (target) =>
-        (params.cfg !== undefined || !params.agentIds || params.agentIds.has(target.agentId)) &&
-        !readAgentDatabaseAdmissionRefusal(target.agentId, { env }),
-    )
+    .filter((target) => {
+      if (params.cfg === undefined && params.agentIds && !params.agentIds.has(target.agentId)) {
+        return false;
+      }
+      return !reportRefusal(target);
+    })
     .toSorted(
       (a, b) => a.storePath.localeCompare(b.storePath) || a.agentId.localeCompare(b.agentId),
     );

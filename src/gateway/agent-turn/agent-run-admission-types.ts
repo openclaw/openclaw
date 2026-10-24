@@ -62,7 +62,9 @@ export type PreparedAgentRunDispatch = PreparedAgentRunModelRuntime & {
   >;
 };
 
-export type PrepareAgentRunDispatchParams = Omit<
+export type PrepareAgentRunDispatchParams = {
+  commitAdmission?: import("./internal-facade.types.js").AgentTurnAdmissionCommit;
+} & Omit<
   Parameters<typeof prepareAgentRunUserTurn>[0],
   | "assertCurrent"
   | "assertCompletionCurrent"
@@ -72,42 +74,42 @@ export type PrepareAgentRunDispatchParams = Omit<
   | "resolvedThreadId"
   | "freshChildStorePath"
 > & {
-  sourceWork: Promise<void>;
-  needsImageUnderstanding?: boolean;
-  /** Consumed host-bound child creation facts, never a wire-request option. */
-  freshChild?: boolean;
-  assertAdmissionCurrent?: () => void;
-  hasCurrentClientAuthority?: () => boolean;
-  promptedAt: number;
-  lifecycleStorePath: string;
-  requestedSessionKey?: string;
-  preAcceptedReservedSessionKey?: string;
-  delivery: AgentDeliveryPhaseResult;
-  restoredCronContinuationIdentity?: Pick<
-    RestoredCronContinuation,
-    "lifecycleRevision" | "sessionId"
-  >;
-  providerOverride?: string;
-  modelOverride?: string;
-  allowModelOverride: boolean;
-  lifecycleGeneration: string;
-  getAdmittedSessionId: () => string;
-  ownerConnId?: string;
-  ownerDeviceId?: string;
-  pendingChatRun?: { sessionKey: string; agentId?: string };
-  isOneShotModelRun: boolean;
-  isRestartRecoveryResumeRun: boolean;
-  onUserTurnMediaPersisted: () => void;
-  agentDedupeKeys: readonly string[];
-  getOwnedAgentDedupeKeys: () => readonly string[];
-  io: AgentTurnIo;
-  acquireGatewayWorkAdmission: (scope: string) => Promise<void>;
-  assertGatewayWorkAdmissionAllowed: () => SessionEntry | undefined;
-  hasGatewayAdmissionOutcome: () => boolean;
-  respondToGatewayAdmissionOutcome: () => boolean;
-  admissionAgentId: () => string | undefined;
-  getGatewayWorkAdmission: () => SessionEffectRef | undefined;
-  setAdmittedRunAbort: (value: ReturnType<typeof registerChatAbortController>) => void;
-  getAdmittedRunAbort: () => ReturnType<typeof registerChatAbortController> | undefined;
-  markAgentRunAccepted: (accepted: boolean) => void;
-};
+    sourceWork: Promise<void>;
+    needsImageUnderstanding?: boolean;
+    /** Consumed host-bound child creation facts, never a wire-request option. */
+    freshChild?: boolean;
+    assertAdmissionCurrent?: () => void;
+    hasCurrentClientAuthority?: () => boolean;
+    promptedAt: number;
+    lifecycleStorePath: string;
+    requestedSessionKey?: string;
+    preAcceptedReservedSessionKey?: string;
+    delivery: AgentDeliveryPhaseResult;
+    restoredCronContinuationIdentity?: Pick<
+      RestoredCronContinuation,
+      "lifecycleRevision" | "sessionId"
+    >;
+    providerOverride?: string;
+    modelOverride?: string;
+    allowModelOverride: boolean;
+    lifecycleGeneration: string;
+    getAdmittedSessionId: () => string;
+    ownerConnId?: string;
+    ownerDeviceId?: string;
+    pendingChatRun?: { sessionKey: string; agentId?: string };
+    isOneShotModelRun: boolean;
+    isRestartRecoveryResumeRun: boolean;
+    onUserTurnMediaPersisted: () => void;
+    agentDedupeKeys: readonly string[];
+    getOwnedAgentDedupeKeys: () => readonly string[];
+    io: AgentTurnIo;
+    acquireGatewayWorkAdmission: (scope: string) => Promise<void>;
+    assertGatewayWorkAdmissionAllowed: () => SessionEntry | undefined;
+    hasGatewayAdmissionOutcome: () => boolean;
+    respondToGatewayAdmissionOutcome: () => boolean;
+    admissionAgentId: () => string | undefined;
+    getGatewayWorkAdmission: () => SessionEffectRef | undefined;
+    setAdmittedRunAbort: (value: ReturnType<typeof registerChatAbortController>) => void;
+    getAdmittedRunAbort: () => ReturnType<typeof registerChatAbortController> | undefined;
+    markAgentRunAccepted: (accepted: boolean) => void;
+  };

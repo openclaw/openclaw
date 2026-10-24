@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
@@ -14,6 +15,7 @@ import {
   readSessionTranscriptSummaryAsync,
   type SessionTranscriptReadScope,
 } from "../../gateway/session-transcript-readers.js";
+import { isCompetingSessionControllerWorkActive } from "../../sessions/session-controller.lifecycle.js";
 import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.js";
 import { readTerminalSourceReplyDeliveryMirror } from "../../shared/chat-message-content.js";
 import { getOwedHarnessCompletionTask } from "../agent-harness-completion-recovery.js";
@@ -21,8 +23,15 @@ import {
   getTranscriptMessageRole as getMessageRole,
   isTerminalSilentAssistantMessage,
 } from "../embedded-agent-runner/message-visibility.js";
+import {
+  buildDurableQuestionRecoverySettlementPatch,
+  isDurableQuestionCurrentSource,
+  isDurableQuestionRecoveryOwned,
+} from "./main-session-question-recovery.js";
 import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
+import { pendingFinalRecoveryAction } from "./main-session-restart-recovery-delivery.js";
+import type { MainSessionRecoveryDecision } from "./main-session-restart-recovery-diagnostics.js";
 import { isRestartAbortTailArtifact } from "./main-session-restart-recovery-resume-policy.js";
 import {
   mainSessionRecoveryLog,
@@ -94,18 +103,31 @@ export async function completePendingFinalRecoveryWithNotice(
     target,
     (current) => {
       if (
+        isCompetingSessionControllerWorkActive(target.storePath, [current.sessionId]) ||
         current.sessionId !== entry.sessionId ||
-        current.pendingFinalDelivery?.intentId !== entry.pendingFinalDelivery?.intentId
+        current.pendingFinalDelivery?.intentId !== entry.pendingFinalDelivery?.intentId ||
+        (isDurableQuestionCurrentSource(entry) &&
+          (current.lifecycleRevision !== entry.lifecycleRevision ||
+            current.restartRecoveryDeliveryRunId !== entry.restartRecoveryDeliveryRunId ||
+            current.restartRecoveryDeliverySourceRunId !==
+              entry.restartRecoveryDeliverySourceRunId ||
+            current.mainRestartRecovery?.cycleId !== entry.mainRestartRecovery?.cycleId ||
+            current.mainRestartRecovery?.revision !== entry.mainRestartRecovery?.revision ||
+            !isDeepStrictEqual(current.restartRecoveryRuns, entry.restartRecoveryRuns) ||
+            !isDeepStrictEqual(current.pendingFinalDelivery, entry.pendingFinalDelivery) ||
+            !isDeepStrictEqual(current.durableQuestionOwners, entry.durableQuestionOwners)))
       ) {
         return null;
       }
       const pending = current.pendingFinalDelivery;
       completed = true;
       return {
-        ...buildMainSessionRecoverySettlementPatch({
-          entry: current,
-          recordTerminalSource: true,
-        }),
+        ...(isDurableQuestionCurrentSource(current)
+          ? buildDurableQuestionRecoverySettlementPatch(current, { completedFinal: true })
+          : buildMainSessionRecoverySettlementPatch({
+              entry: current,
+              recordTerminalSource: true,
+            })),
         endedAt,
         lifecycleRunId: undefined,
         lastRunId: completedOutcome
@@ -490,4 +512,77 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     );
   }
   return { outcome: marked ? "completed" : "changed" };
+}
+
+/** Settle native question custody without replaying its original model turn. */
+export async function recoverDurableQuestionCheckpoint(params: {
+  entry: SessionEntry;
+  target: MainSessionRecoveryStoreTarget;
+  stateDir?: string;
+  shouldContinue: () => boolean;
+}): Promise<
+  | { status: "stopped" }
+  | { status: "skipped"; reason: "live_owner" | "pending_delivery" | "state_changed" }
+  | { status: "settled"; decision: MainSessionRecoveryDecision }
+  | { status: "separate"; entry: SessionEntry }
+> {
+  const { entry, target } = params;
+  if (isCompetingSessionControllerWorkActive(target.storePath, [entry.sessionId])) {
+    return { status: "skipped", reason: "live_owner" };
+  }
+  const currentSourceOwned = isDurableQuestionCurrentSource(entry);
+  const pendingAction =
+    currentSourceOwned && entry.pendingFinalDelivery
+      ? await pendingFinalRecoveryAction(entry.pendingFinalDelivery, params.stateDir)
+      : undefined;
+  if (!params.shouldContinue()) {
+    return { status: "stopped" };
+  }
+  if (pendingAction === "defer") {
+    return { status: "skipped", reason: "pending_delivery" };
+  }
+  if (pendingAction === "notice") {
+    return (await completePendingFinalRecoveryWithNotice(entry, target))
+      ? {
+          status: "settled",
+          decision: { decision: "settled", reason: "pending_delivery_notice", nextOwner: "none" },
+        }
+      : { status: "skipped", reason: "state_changed" };
+  }
+  let settled = false;
+  const updated = await updateSessionEntry(target, (current) => {
+    if (
+      isCompetingSessionControllerWorkActive(target.storePath, [current.sessionId]) ||
+      current.sessionId !== entry.sessionId ||
+      current.lifecycleRevision !== entry.lifecycleRevision ||
+      current.restartRecoveryDeliveryRunId !== entry.restartRecoveryDeliveryRunId ||
+      current.restartRecoveryDeliverySourceRunId !== entry.restartRecoveryDeliverySourceRunId ||
+      current.mainRestartRecovery?.cycleId !== entry.mainRestartRecovery?.cycleId ||
+      current.mainRestartRecovery?.revision !== entry.mainRestartRecovery?.revision ||
+      !isDeepStrictEqual(current.restartRecoveryRuns, entry.restartRecoveryRuns) ||
+      !isDeepStrictEqual(current.pendingFinalDelivery, entry.pendingFinalDelivery) ||
+      !isDeepStrictEqual(current.durableQuestionOwners, entry.durableQuestionOwners) ||
+      !isDurableQuestionRecoveryOwned(current)
+    ) {
+      return null;
+    }
+    settled = true;
+    return buildDurableQuestionRecoverySettlementPatch(current, {
+      completedFinal: pendingAction === "complete",
+    });
+  });
+  if (!settled || !updated) {
+    return { status: "skipped", reason: "state_changed" };
+  }
+  // Mixed native cohorts retain their independent recovery source and remaining work.
+  return currentSourceOwned
+    ? {
+        status: "settled",
+        decision: {
+          decision: "settled",
+          reason: "durable-question-custody",
+          nextOwner: "question-owner",
+        },
+      }
+    : { status: "separate", entry: updated };
 }

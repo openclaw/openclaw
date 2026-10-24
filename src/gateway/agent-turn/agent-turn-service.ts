@@ -59,6 +59,7 @@ export function createAgentTurnService(
 ) {
   const startTurn = async ({
     controllerInput,
+    commitAdmission,
     privateCompletion,
     replyExpectation,
     settleWakeReplay,
@@ -105,8 +106,6 @@ export function createAgentTurnService(
       suppressVisibleSessionEffects,
       agentDedupeKeys,
     } = preflight;
-    // Cached replay returns before a new lifecycle generation is observed, matching
-    // the idempotency path that preceded this service extraction.
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const initialSessionGroups = {
       groupId: normalizedSpawned.groupId,
@@ -192,12 +191,10 @@ export function createAgentTurnService(
       dedupeLifecycle.clearUnaccepted();
       throw error;
     });
-    const releaseSessionStorage = async () => {
-      if (!storageActive) {
-        return;
-      }
+    const releaseSessionStorage = () => {
+      const wasActive = storageActive;
       storageActive = false;
-      await sessionStorage?.actor.release();
+      return wasActive ? sessionStorage?.actor.release() : undefined;
     };
     const execute = async () => {
       const {
@@ -636,6 +633,7 @@ export function createAgentTurnService(
             preparedOffloadedRefs = [];
           },
           privateCompletion,
+          commitAdmission,
           replyExpectation,
           settleWakeReplay,
           acquireGatewayWorkAdmission: admissionController.acquire,

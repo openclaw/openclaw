@@ -325,6 +325,7 @@ export function createInternalAgentTurnFacade(
                 io,
                 onRunObserved,
                 assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
+                commitAdmission: dispatchOptions.commitAdmission,
                 assertCancellationCurrent: dispatchOptions.assertCancellationCurrent
                   ? () => {
                       const owner = emittedAbortOwner?.entry;

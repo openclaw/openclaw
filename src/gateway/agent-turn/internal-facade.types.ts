@@ -33,6 +33,15 @@ export type RequesterSettleWakeReplay = {
   assertCurrent: () => void;
 };
 
+export type AgentTurnAdmissionCommit = (target: {
+  runId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  lifecycleGeneration: string;
+  assertCurrent: () => void;
+}) => Promise<void>;
+
 export type InternalAgentTurnDispatchOptions = {
   /** Validated saved input; its owner rechecks live custody at admission. */
   recoveryInput?: {
@@ -42,6 +51,8 @@ export type InternalAgentTurnDispatchOptions = {
     runId: string;
     assertCurrent: () => void;
   };
+  /** Private durable input transfers custody before native acceptance. */
+  commitAdmission?: AgentTurnAdmissionCommit;
   /** Exact in-process mailbox source reserved by the input owner. */
   controllerInput?: SessionControllerInput;
   /** Internal completion delivery owns its hidden input and durable processing receipt. */

@@ -164,6 +164,7 @@ import {
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { registerHarnessCompletionRecoveryCases } from "./main-session-harness-completion.test-harness.js";
 import { registerParentRestartRecoveryCases } from "./main-session-parent-recovery.test-harness.js";
+import { registerDurableQuestionRecoveryCases } from "./main-session-question-recovery.test-harness.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import { registerReplayBoundaryRecoveryCases } from "./main-session-recovery-replay-boundary.test-harness.js";
 import {
@@ -179,6 +180,7 @@ import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-disp
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
 import {
   createRestartRecoveryStoreFixture,
+  loadTestTranscript,
   mainSessionEntry,
   makePendingFinalDelivery,
   readStore,
@@ -501,17 +503,6 @@ async function prepareTranscript(
   return sessionsDir;
 }
 
-async function loadTestTranscript(
-  sessionKey: string,
-  storePath: string,
-): Promise<Array<{ message?: Record<string, unknown> }>> {
-  return (await loadTranscriptEvents({
-    sessionId: "main-session",
-    sessionKey,
-    storePath,
-  })) as Array<{ message?: Record<string, unknown> }>;
-}
-
 function observeRecoveryRoots(
   expectedOrigin: "main-session:startup-recovery" | "main-session:restart-recovery",
   expectedCount: number,
@@ -593,6 +584,14 @@ function getHarnessRecoveryFixture() {
 }
 
 describe("main-session-restart-recovery", () => {
+  registerDurableQuestionRecoveryCases(() => ({
+    gatewayRuntime: mockRecoveryRuntime,
+    makeMainSessionFixture,
+    expectRecovery,
+    seedQueuedFinal,
+    tmpDir,
+    discordDeliveryContext,
+  }));
   it.for(["finish", "stop"] as const)(
     "starts recovery in interruption order across stores and preserves waiting work on %s",
     async (outcome, { signal }) => {

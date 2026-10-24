@@ -8,6 +8,8 @@ import type { RequesterOrigin } from "../agents/requester-origin.js";
 import { readRestartRecoveryRequesterSource } from "../agents/requester-run-recovery-source.js";
 import { prepareCommandOwnerAuthority } from "../auto-reply/command-auth.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { readSessionQuestionCustody } from "../config/sessions/session-questions.js";
+import type { DurableQuestion } from "../config/sessions/session-questions.types.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -668,4 +670,54 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
     release();
     throw error;
   }
+}
+
+/** Restore only the exact canonical question custody under current operator policy. */
+export async function restoreGatewayQuestionOperatorRecovery(params: {
+  target: OperatorRecoveryTarget;
+  questionId: string;
+  expectedQuestion: DurableQuestion;
+  context: GatewayRequestContext;
+  assertCurrent: () => void;
+}): Promise<RestoredGatewayOperatorAuthority> {
+  const { target, expectedQuestion } = params;
+  const source = decodeGatewayOperatorRecoverySource(expectedQuestion.provenance.recoverySource);
+  const prepareCurrent = async () => {
+    params.assertCurrent();
+    const current = await readSessionQuestionCustody(
+      expectedQuestion.sessionBinding,
+      params.questionId,
+      params.assertCurrent,
+    );
+    params.assertCurrent();
+    if (
+      !current ||
+      Array.isArray(current) ||
+      !isDeepStrictEqual(current.record, expectedQuestion.record) ||
+      !isDeepStrictEqual(current.sessionBinding, expectedQuestion.sessionBinding) ||
+      !isDeepStrictEqual(current.provenance, expectedQuestion.provenance) ||
+      current.resolutionId !== expectedQuestion.resolutionId ||
+      current.sessionId !== target.sessionId ||
+      current.lifecycleRevision !== source.lifecycleRevision ||
+      current.sessionKey !== target.sessionKey ||
+      current.provenance.issuer !== "operator" ||
+      current.provenance.sourceRunId !== target.sourceRunId ||
+      current.continuation.status !== "owed" ||
+      source.agentId !== target.agentId ||
+      source.sessionKey !== target.sessionKey ||
+      source.sessionId !== target.sessionId ||
+      source.sourceRunId !== target.sourceRunId ||
+      !isDeepStrictEqual(current.provenance.recoverySource, source)
+    ) {
+      throw new Error("Durable question operator source no longer owns this input.");
+    }
+  };
+  await prepareCurrent();
+  return restoreGatewayOperatorSource({
+    snapshot: source.snapshot,
+    target,
+    context: params.context,
+    assertCurrent: params.assertCurrent,
+    prepareCurrent,
+  });
 }

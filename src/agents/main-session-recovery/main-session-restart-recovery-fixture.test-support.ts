@@ -8,6 +8,7 @@ import {
   applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
   loadSessionEntry,
+  loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -191,4 +192,15 @@ export function createRestartRecoveryStoreFixture(getStateDir: () => string) {
     writeTranscript,
     writeCompletedToolTranscript,
   };
+}
+
+export async function loadTestTranscript(
+  sessionKey: string,
+  storePath: string,
+): Promise<Array<{ message?: Record<string, unknown> }>> {
+  return (await loadTranscriptEvents({
+    sessionId: "main-session",
+    sessionKey,
+    storePath,
+  })) as Array<{ message?: Record<string, unknown> }>;
 }

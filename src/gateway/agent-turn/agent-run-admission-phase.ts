@@ -35,14 +35,11 @@ import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { prepareGatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import { assertParentSubagentResumeSuccessorCurrent } from "../session-subagent-resume.js";
 import { formatForLog } from "../ws-log.js";
-import {
-  isPreRegistrationAbortedAgentDedupeEntryForSession,
-  readGatewayDedupeEntry,
-  setGatewayDedupeEntries,
-} from "./agent-dedupe.js";
+import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { canPrepareAgentSessionWorktree } from "./agent-handler-helpers.js";
 import { cleanupRejectedAgentRunAdmission } from "./agent-run-admission-cleanup.js";
 import { resolveAgentRunAdmissionModel } from "./agent-run-admission-model.js";
+import { completeAgentRunPreRegistration } from "./agent-run-admission-preflight.js";
 import {
   createAgentRunAdmissionRevalidator,
   releaseFailedAgentRunAdmission,
@@ -54,6 +51,7 @@ import type {
   PreparedAgentRunDispatch,
 } from "./agent-run-admission-types.js";
 import { isGatewayAgentAbortRejection } from "./agent-run-dispatch-outcome.js";
+import { commitAgentRunInputAdmission } from "./agent-run-input-admission.js";
 import { admitAgentRestartRecovery } from "./agent-run-recovery-admission.js";
 import {
   consumeGatewaySubagentCompletionToolHandoff,
@@ -83,32 +81,7 @@ export async function prepareAgentRunDispatch(
     params.privateCompletion || isSubagentCoordinationInputProvenance(params.inputProvenance);
   const controlUiVisible = !params.suppressVisibleSessionEffects && !privateConversationWork;
   const parentResume = readInProcessSubagentResume(params.client?.internal);
-  const preRegistrationAbort = readGatewayDedupeEntry({
-    dedupe: params.context.dedupe,
-    keys: params.agentDedupeKeys,
-  });
-  if (
-    isPreRegistrationAbortedAgentDedupeEntryForSession({
-      entry: preRegistrationAbort,
-      runId: params.runId,
-      sessionKey: params.resolvedSessionKey,
-      alternateSessionKeys: [params.preAcceptedReservedSessionKey, params.requestedSessionKey],
-      agentId: params.activeSessionAgentId,
-    })
-  ) {
-    params.markAgentRunAccepted(true);
-    params.io.emitAcceptance([true, preRegistrationAbort?.payload, undefined], {
-      cached: true,
-      runId: params.runId,
-    });
-    return undefined;
-  }
-  if (params.restoredCronContinuationIdentity && !params.restoredCronContinuation) {
-    params.io.emitAcceptance([
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, "cron run continuation could not be restored"),
-    ]);
+  if (completeAgentRunPreRegistration(params)) {
     return undefined;
   }
 
@@ -653,6 +626,19 @@ export async function prepareAgentRunDispatch(
       },
       activeRunAbort.controller.signal,
     );
+    if (params.commitAdmission) {
+      const assertCurrent = () => {
+        assertInputOwnerCurrent();
+        params.assertGatewayWorkAdmissionAllowed();
+        activeRunAbort.controller.signal.throwIfAborted();
+        capturedOperator.authority?.assertCurrent();
+      };
+      await commitAgentRunInputAdmission(params, lifecycleStorePath, assertCurrent);
+      const durableAdmission = revalidateAdmission(userTurn);
+      if (durableAdmission !== true) {
+        return await durableAdmission;
+      }
+    }
     followupCompletion?.markAccepted(params.runId);
     params.markAgentRunAccepted(true);
     adoptedParentResume = undefined;
@@ -671,8 +657,7 @@ export async function prepareAgentRunDispatch(
         },
       },
     });
-    // Pending input outlives admission; only the child controller and lifecycle
-    // may reject its execution after this synchronous ownership transfer.
+    // After ownership transfer, only the child controller and lifecycle may reject execution.
     assertInputAdmissionCurrent = undefined;
     preparing = false;
     params.io.emitAcceptance([true, accepted, undefined], { runId: params.runId });

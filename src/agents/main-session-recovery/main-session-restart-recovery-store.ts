@@ -9,14 +9,10 @@ import { readSessionEntrySummariesInWorker } from "../../config/sessions/session
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionWorkStartBlock } from "../../config/sessions/session-work-start.js";
 import { isTerminalSessionStatus } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { canPrepareAgentSessionWorktree } from "../../gateway/agent-turn/agent-handler-helpers.js";
-import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import type { CommandLane } from "../../process/lanes.js";
 import { isSessionControllerWorkActive } from "../../sessions/session-controller.lifecycle.js";
-import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import {
   getOwedHarnessCompletionTask,
   createHarnessCompletionSourceAssertion,
@@ -24,16 +20,19 @@ import {
 } from "../agent-harness-completion-recovery.js";
 import { resolveExecDefaultsAsync } from "../exec-defaults.js";
 import { readRestartRecoveryRequesterSource } from "../requester-run-recovery-source.js";
+import { isDurableQuestionRecoveryOwned } from "./main-session-question-recovery.js";
 import {
   getMainSessionRecoveryRetryCount,
   isMainRestartRecoveryTerminalOnly,
 } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import { resumeMainSession } from "./main-session-restart-dispatch.js";
+import type { RecoverMainSessionStoreParams } from "./main-session-restart-dispatch.types.js";
 import {
   completePendingFinalRecoveryWithNotice,
   markSessionCompletedAfterRecoveryCheckpoint,
   readMainSessionRecoveryCheckpoint,
+  recoverDurableQuestionCheckpoint,
   reconcileInvalidHarnessCompletion,
 } from "./main-session-restart-recovery-checkpoint.js";
 import {
@@ -58,33 +57,14 @@ import {
   resolveMainSessionResumePolicy,
 } from "./main-session-restart-recovery-resume-policy.js";
 import {
-  type ExhaustedRestartRecoveryTarget,
-  type ExpectedRestartRecoveryTarget,
   mainSessionRecoveryLog,
   MAX_RECOVERY_RETRIES,
 } from "./main-session-restart-recovery-shared.js";
 import { resolveRestartRecoveryDispatchTarget } from "./main-session-restart-recovery-target.js";
 
-export async function recoverStore(params: {
-  storeAgentId?: string;
-  preparedEntries?: readonly { sessionKey: string; entry: SessionEntry }[];
-  cfg?: OpenClawConfig;
-  controllerInput?: SessionControllerInput;
-  lane?: CommandLane.Main | CommandLane.RestartRecovery;
-  observationOnly?: boolean;
-  onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
-  onSkipped?: (reason: MainSessionRecoverySkipReason) => void;
-  onPreparationPending?: (target: ExhaustedRestartRecoveryTarget) => void;
-  passId?: string;
-  storePath: string;
-  stateDir?: string;
-  handledSessionKeys: Set<string>;
-  expectedTarget?: ExpectedRestartRecoveryTarget;
-  lifecycleGeneration?: string;
-  shouldContinue?: () => boolean;
-  signal?: AbortSignal;
-  gatewayRuntime: GatewayRecoveryRuntime;
-}): Promise<{ started: number; settled: number; failed: number; skipped: number }> {
+export async function recoverStore(
+  params: RecoverMainSessionStoreParams,
+): Promise<{ started: number; settled: number; failed: number; skipped: number }> {
   const result = { started: 0, settled: 0, failed: 0, skipped: 0 };
   const passId = params.passId ?? randomUUID();
   const lifecycleGeneration = params.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
@@ -189,10 +169,32 @@ export async function recoverStore(params: {
       // A supplied input already owns this session's selection for its resend.
       if (
         !params.controllerInput &&
+        !isDurableQuestionRecoveryOwned(entry) &&
         isSessionControllerWorkActive(params.storePath, [sessionKey, entry.sessionId])
       ) {
         skip("live_owner");
         continue;
+      }
+      if (isDurableQuestionRecoveryOwned(entry)) {
+        const checkpoint = await recoverDurableQuestionCheckpoint({
+          entry,
+          target,
+          stateDir: params.stateDir,
+          shouldContinue: () => !stopped(),
+        });
+        if (checkpoint.status === "stopped") {
+          return result;
+        }
+        if (checkpoint.status === "skipped") {
+          skip(checkpoint.reason);
+          continue;
+        }
+        if (checkpoint.status !== "separate") {
+          result.settled++;
+          decision = checkpoint.decision;
+          continue;
+        }
+        entry = checkpoint.entry;
       }
       const resumeDedupeKey = JSON.stringify([agentId, dispatchSessionKey]);
       if (params.handledSessionKeys.has(resumeDedupeKey)) {
