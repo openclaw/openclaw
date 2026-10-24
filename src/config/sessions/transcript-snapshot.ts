@@ -5,20 +5,29 @@ import { isOwnedTranscriptPayload } from "./transcript-json.js";
 const nativeCloneRequired = new Error("Opaque session snapshot requires native cloning");
 
 /** Detach mutable containers while sharing sealed transcript payloads. */
-export function cloneTranscriptView<T>(snapshot: T): T {
+export function cloneTranscriptView<T>(
+  snapshot: T,
+  {
+    shareImmutablePayloads = true,
+    stringSource,
+  }: { shareImmutablePayloads?: boolean; stringSource?: unknown } = {},
+): T {
   const copies = new Map<object, object>();
-  const copy = (value: unknown): unknown => {
+  const copy = (value: unknown, source?: unknown): unknown => {
     if (typeof value === "function" || typeof value === "symbol") {
       throw nativeCloneRequired;
     }
     if (value === null || typeof value !== "object") {
-      return value;
+      return typeof value === "string" && value === source ? source : value;
     }
     if (isProxy(value)) {
       throw nativeCloneRequired;
     }
     // Public mutable SDK views can also alias frozen descendants outside admitted roots.
-    if (isOwnedTranscriptPayload(value) || isDeeplyFrozenPlainData(value)) {
+    if (
+      shareImmutablePayloads &&
+      (isOwnedTranscriptPayload(value) || isDeeplyFrozenPlainData(value))
+    ) {
       return value;
     }
     if (copies.has(value)) {
@@ -45,13 +54,18 @@ export function cloneTranscriptView<T>(snapshot: T): T {
       result.length = value.length;
     }
     copies.set(value, result);
+    const sourceObject =
+      source !== null && typeof source === "object" && !isProxy(source) ? source : undefined;
     for (const key of Object.keys(value)) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
       if (!("value" in descriptor)) {
         throw nativeCloneRequired;
       }
+      // Borrow equal strings without adopting SDK edits, key order, or invoking getters.
+      const sourceValue: unknown =
+        sourceObject && Object.getOwnPropertyDescriptor(sourceObject, key)?.value;
       Object.defineProperty(result, key, {
-        value: copy(descriptor.value),
+        value: copy(descriptor.value, sourceValue),
         enumerable: true,
         configurable: true,
         writable: true,
@@ -61,7 +75,7 @@ export function cloneTranscriptView<T>(snapshot: T): T {
   };
   try {
     // SAFETY: Copying containers preserves the snapshot's shape and shared references.
-    return copy(snapshot) as T;
+    return copy(snapshot, stringSource) as T;
   } catch (error) {
     if (error !== nativeCloneRequired) {
       throw error;

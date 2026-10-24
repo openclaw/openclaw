@@ -38,6 +38,7 @@ import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   getOpenClawAgentDatabaseIfOpen,
@@ -383,10 +384,9 @@ it.each(["durable", "admitted", "incognito"] as const)(
           unsubscribe();
         }
       };
-      const context =
-        mode === "admitted"
-          ? await withSelectedTranscriptReader(scope, readContext)
-          : await readContext();
+      const readInitial = () =>
+        mode === "admitted" ? withSelectedTranscriptReader(scope, readContext) : readContext();
+      const context = await readInitial();
       const user = manager.getEntry(userId!);
       const reply = manager.getEntry(replyId!);
       const projectedReply = context.messages[1];
@@ -402,6 +402,18 @@ it.each(["durable", "admitted", "incognito"] as const)(
       expect(JSON.stringify(context)).not.toContain("synthetic-private-native-payload");
       expect(Reflect.set(projectedReply.content[0]!, "text", "changed")).toBe(true);
       expect(reply.message.content).toEqual([{ type: "text", text: "answer" }]);
+
+      freezeJsonSnapshot(reply.message.content);
+      const reread = await readInitial();
+      const rereadReply = reread.messages[1];
+      assert(rereadReply?.role === "assistant");
+      expect(Reflect.set(rereadReply.content[0]!, "text", "changed again")).toBe(true);
+      expect(reply.message.content).toEqual([{ type: "text", text: "answer" }]);
+
+      reply.message.content = [{ type: "text", text: "unpersisted manager edit" }];
+      expect((await readInitial()).messages[1]).toMatchObject({
+        content: [{ type: "text", text: "answer" }],
+      });
     }),
 );
 

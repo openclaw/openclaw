@@ -181,7 +181,7 @@ export class SessionManager extends SessionManagerBranching {
     ) {
       throw new Error("Session manager changed during initial context read");
     }
-    return buildCoreSessionContext(context.getBranch());
+    return buildCoreSessionContext(cloneSessionModelContextEntries(context.getBranch(), this.byId));
   }
 
   /** No buffered writes remain here; asynchronous metadata methods own their settlement. */
@@ -572,9 +572,8 @@ export class SessionManager extends SessionManagerBranching {
             sqliteSessionIdWriteScope(captured.sessionId),
           ]);
         if (writeToken && !manager.migrated && branch.length === context.totalEvents) {
-          const events = cloneSessionModelContextEntries(manager.getHeader(), branch);
           manager.preparedInitialContext = {
-            branch: events.filter((entry) => entry.type !== "session"),
+            branch: cloneSessionModelContextEntries(branch),
             writeToken,
             view: manager.captureTranscriptView(),
           };

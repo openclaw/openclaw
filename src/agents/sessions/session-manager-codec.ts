@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
 import { stripCompactionReplayCheckpointInPlace } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
+import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
 import { logWarn } from "../../logger.js";
@@ -13,7 +14,6 @@ import type {
   FileEntry,
   SessionContext,
   SessionEntry,
-  SessionHeader,
 } from "./session-manager-types.js";
 
 export {
@@ -141,11 +141,11 @@ export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEnt
 }
 
 export function cloneSessionModelContextEntries(
-  header: SessionHeader | null,
   branch: readonly SessionEntry[],
-): FileEntry[] {
+  residentEntries?: ReadonlyMap<string, SessionEntry>,
+): SessionEntry[] {
   // Project storage-only payloads before cloning, while isolating mutable manager entries.
-  const events: FileEntry[] = [...(header ? [header] : []), ...branch];
+  const events = [...branch];
   for (let index = 0; index < events.length; index++) {
     const entry = events[index]!;
     if (entry.type === "message") {
@@ -155,7 +155,11 @@ export function cloneSessionModelContextEntries(
       }
     }
   }
-  return structuredClone(events);
+  // Initial model history stays writable even when resident payloads are frozen.
+  return cloneTranscriptView(events, {
+    shareImmutablePayloads: false,
+    stringSource: residentEntries && events.map((entry) => residentEntries.get(entry.id)),
+  });
 }
 
 export function buildSessionContext(

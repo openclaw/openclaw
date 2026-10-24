@@ -6684,6 +6684,12 @@ not require another full byte copy on the main thread. Prepared views remain
 independently mutable. Opaque structured-cloneable SDK data retains native snapshot
 semantics. Worker write ordering, atomic publication, and stored bytes are unchanged.
 
+Initial model-context snapshots also reuse equal string values from the loaded
+SessionManager. The context reader still owns selection and admission; its projected
+fields, property order, and mutable containers remain authoritative. Resident SDK
+edits and accessors cannot change the returned context, and frozen resident payloads
+do not make the initial model view immutable.
+
 Append receipts read active identity, projection readiness, and the latest sequence
 in one transaction-local query. A clean latest message shares that result with
 the visible-tail consumer; native reentry or pending-input mutations require a
