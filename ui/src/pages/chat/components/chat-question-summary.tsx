@@ -26,7 +26,10 @@ export function terminalAnswer(prompt: QuestionPrompt, question: QuestionPanelQu
   );
 }
 
-export function ChatQuestionSummary(props: { prompt: QuestionPrompt }) {
+export function ChatQuestionSummary(props: {
+  prompt: QuestionPrompt;
+  continuationMessage?: string;
+}) {
   return (
     <Show when={props.prompt.status !== "pending"}>
       <div class="chat-question-summary" aria-label={t("chat.questions.summaryLabel")}>
@@ -41,6 +44,9 @@ export function ChatQuestionSummary(props: { prompt: QuestionPrompt }) {
             </div>
           )}
         </For>
+        <Show when={props.continuationMessage}>
+          {(message) => <p role="status">{message()}</p>}
+        </Show>
       </div>
     </Show>
   );

@@ -46,20 +46,23 @@ type QuestionPageProps = { questionId: string };
 
 const questionIdHandlers = new WeakMap<HTMLElement, () => void>();
 
-function QuestionSummary(props: { prompt: QuestionPrompt }) {
+function QuestionSummary(props: { prompt: () => QuestionPrompt | undefined }) {
   return (
     <div class="chat-question-summary" aria-label={t("chat.questions.summaryLabel")}>
-      <For each={props.prompt.questions} keyed={(question) => question.questionId}>
+      <For each={props.prompt()?.questions ?? []} keyed={(question) => question.questionId}>
         {(question) => (
           <div class="chat-question-summary__item">
             <div class="chat-question-summary__prompt">{question().question}</div>
             <div class="chat-question-summary__line">
               <strong>{question().header}:</strong>
-              <span>{terminalAnswer(props.prompt, question())}</span>
+              <span>{terminalAnswer(props.prompt()!, question())}</span>
             </div>
           </div>
         )}
       </For>
+      <Show when={props.prompt()?.continuationMessage}>
+        {(message) => <p role="status">{message()}</p>}
+      </Show>
     </div>
   );
 }
@@ -183,12 +186,30 @@ function QuestionPageContent(
       return;
     }
     const generation = ++operationGeneration;
+    const initialPrompt = listQuestionPrompts(questionState).find(
+      (candidate) => candidate.id === id,
+    );
+    const initialRevision = initialPrompt?.revision;
     const complete = beginRead();
     let requestError: QuestionPageRequestError = null;
     rememberPanelFocus();
     try {
-      const result = await requestQuestionGateway(client, "question.get", { id });
+      const result = await requestQuestionGateway(client, "question.get", {
+        id,
+        includeContinuation: true,
+      });
       if (clientOwner !== client || operationGeneration !== generation || questionId() !== id) {
+        return;
+      }
+      const currentPrompt = listQuestionPrompts(questionState).find(
+        (candidate) => candidate.id === id,
+      );
+      // Live outcomes and receipts own newer state; local expiry still needs the authoritative read.
+      if (
+        currentPrompt &&
+        !currentPrompt.locallyExpired &&
+        (currentPrompt !== initialPrompt || currentPrompt.revision !== initialRevision)
+      ) {
         return;
       }
       if (result.question.id !== id) {
@@ -204,6 +225,16 @@ function QuestionPageContent(
       ) {
         requestError = "unavailable";
         return;
+      }
+      const receipt = result.continuation;
+      const updatedPrompt = listQuestionPrompts(questionState).find(
+        (candidate) => candidate.id === id,
+      );
+      if (updatedPrompt) {
+        updatedPrompt.continuationMessage =
+          receipt && (receipt.status === "blocked" || receipt.status === "interrupted")
+            ? [receipt.reason, receipt.nextAction].filter(Boolean).join(" ")
+            : undefined;
       }
       if (record.status === "answered") {
         const accepted = handleQuestionPromptEvent(questionState, {
@@ -324,13 +355,13 @@ function QuestionPageContent(
               }
             >
               <Show when={readPrompt()}>
-                {(prompt) => (
+                {() => (
                   <Show
                     when={readPrompt()?.status === "pending"}
                     fallback={
                       <div
                         class="approval-page__state"
-                        data-question-status={prompt().status}
+                        data-question-status={readPrompt()?.status}
                         role="status"
                       >
                         <h1
@@ -340,9 +371,9 @@ function QuestionPageContent(
                           id="question-page-title"
                           tabindex="-1"
                         >
-                          {questionStatusLabel(prompt())}
+                          {questionStatusLabel(readPrompt()!)}
                         </h1>
-                        <QuestionSummary prompt={prompt()} />
+                        <QuestionSummary prompt={readPrompt} />
                       </div>
                     }
                   >

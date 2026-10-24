@@ -114,7 +114,10 @@ export function StreamPartView(props: {
           <Show when={question()}>
             {(prompt) => (
               <ChatLazyBoundary>
-                <ChatQuestionSummary prompt={prompt()} />
+                <ChatQuestionSummary
+                  prompt={prompt()}
+                  continuationMessage={question()?.continuationMessage}
+                />
               </ChatLazyBoundary>
             )}
           </Show>

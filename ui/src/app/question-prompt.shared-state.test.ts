@@ -98,6 +98,123 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each(["blocked", "interrupted"] as const)(
+  "refreshes a live %s continuation receipt after its answer event",
+  async (status) => {
+    let continuationStatus = "owed";
+    const request = vi.fn(async () => ({
+      questions: [
+        {
+          id: "question-1",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          questions: [
+            {
+              questionId: "format",
+              header: "Format",
+              question: "Which format should I use?",
+              options: [{ label: "Compact" }, { label: "Detailed" }],
+            },
+          ],
+          createdAtMs: 1_000,
+          expiresAtMs: Date.now() + 60_000,
+          status: "answered",
+          answers: { answers: { format: ["Compact"] } },
+        },
+      ],
+      continuations: [
+        {
+          questionId: "question-1",
+          status: continuationStatus,
+          ...(continuationStatus === "owed"
+            ? {}
+            : { reason: "Original caller is unavailable", nextAction: "Start a new user turn" }),
+        },
+      ],
+    }));
+    const state = connectQuestionState({ request });
+    const event = {
+      event: "question.resolved",
+      payload: {
+        id: "question-1",
+        status: "answered",
+        answers: { answers: { format: ["Compact"] } },
+      },
+    };
+    handleQuestionPromptEvent(state, event);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(state.prompts.get("question-1")?.continuationMessage).toBeUndefined();
+    continuationStatus = status;
+    handleQuestionPromptEvent(state, event);
+    await vi.waitFor(() =>
+      expect(state.prompts.get("question-1")?.continuationMessage).toContain(
+        "Start a new user turn",
+      ),
+    );
+    expect(request).toHaveBeenLastCalledWith(
+      "question.list",
+      { includeContinuation: true },
+      expect.any(Object),
+    );
+    expect(request).toHaveBeenCalledTimes(2);
+  },
+);
+
+it.each([
+  { status: "blocked", disposeSubmitter: false },
+  { status: "interrupted", disposeSubmitter: false },
+  { status: "blocked", disposeSubmitter: true },
+  { status: "interrupted", disposeSubmitter: true },
+] as const)(
+  "refreshes $status guidance without a broadcast (submitter disposed=$disposeSubmitter)",
+  async ({ status, disposeSubmitter }) => {
+    let finishResolution: ((result: QuestionResolveResult) => void) | undefined;
+    const client: QuestionClient = {
+      request: vi.fn((method) => {
+        if (method === "question.resolve") {
+          return new Promise<QuestionResolveResult>((resolve) => {
+            finishResolution = resolve;
+          });
+        }
+        return Promise.resolve({
+          questions: [],
+          continuations: [
+            {
+              questionId: "question-1",
+              status,
+              reason: "Original caller is unavailable",
+              nextAction: "Start a new user turn",
+            },
+          ],
+        });
+      }),
+    };
+    const submitter = connectQuestionState(client);
+    const sibling = connectQuestionState(client);
+    const submission = submitQuestionPrompt(submitter, "question-1", { format: ["Compact"] });
+    if (disposeSubmitter) {
+      disposeQuestionPromptState(submitter);
+    }
+    finishResolution?.({ status: "answered", answers: { answers: { format: ["Compact"] } } });
+    await submission;
+    for (const projection of disposeSubmitter ? [sibling] : [submitter, sibling]) {
+      await vi.waitFor(() =>
+        expect(projection.prompts.get("question-1")).toMatchObject({
+          status: "answered",
+          answers: { answers: { format: ["Compact"] } },
+          continuationMessage: "Original caller is unavailable Start a new user turn",
+        }),
+      );
+    }
+    expect(client.request).toHaveBeenCalledWith(
+      "question.list",
+      { includeContinuation: true },
+      expect.any(Object),
+    );
+  },
+);
+
 describe("Gateway-client question outcome ownership", () => {
   it("publishes in-place prompt changes synchronously and releases subscribers", () => {
     const state = createQuestionPromptState();
@@ -172,7 +289,12 @@ describe("Gateway-client question outcome ownership", () => {
           answers: { format: ["Compact"] },
         });
       }
-      expect(client.request).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(client.request).mock.calls.map(([method]) => method)).toEqual([
+        "question.resolve",
+        "question.list",
+        "question.list",
+        "question.list",
+      ]);
     },
   );
 
@@ -254,6 +376,7 @@ describe("Gateway-client question outcome ownership", () => {
       );
       expect(vi.mocked(client.request).mock.calls.map(([method]) => method)).toEqual([
         "question.resolve",
+        "question.list",
         "question.list",
         "question.get",
       ]);
