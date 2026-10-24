@@ -1206,6 +1206,11 @@ its recovery ownership together with its delivery claim, so the next agent turn
 can proceed. The notice and terminal deduplication evidence survive another
 restart; completed work is not replayed.
 
+A legacy replayable final without delivery identity is retired when the resume
+turn it launched ends terminally. Recovery writes the saved reply to the local
+transcript as delivery-unconfirmed and clears only that exact marker, so a later
+startup does not run the same failed turn again.
+
 Message-tool-only replies use a second durable correlation. Before a terminal
 same-conversation send reaches the channel, the gateway records an unresolved
 delivery intent on the exact session and source turn. A confirmed provider

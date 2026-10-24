@@ -15,7 +15,10 @@ import {
 } from "./main-session-recovery-store.js";
 import type { RestartRecoveryTerminalStatus } from "./main-session-restart-dispatch-start.js";
 import type { ResumeMainSessionParams } from "./main-session-restart-dispatch.types.js";
-import { finishDelegatedRestartRecovery } from "./main-session-restart-recovery-failure.js";
+import {
+  finishDelegatedRestartRecovery,
+  settleTerminalPendingFinalRestartRecovery,
+} from "./main-session-restart-recovery-failure.js";
 
 export async function rollbackRestartRecoveryReservation(
   params: MainSessionRecoveryStoreTarget & {
@@ -82,6 +85,15 @@ function isReleasedRecoveryRun(entry: SessionEntry, runId: string): boolean {
     normalizeOptionalString(entry.restartRecoveryDeliveryRunId) === undefined &&
     entry.lifecycleRunId === runId &&
     hasRestartRecoveryTerminalRun(entry, runId)
+  );
+}
+
+function isConsumedLegacyPendingFinal(entry: SessionEntry | undefined): boolean {
+  const pending = entry?.pendingFinalDelivery;
+  return (
+    pending?.kind === "replayable" &&
+    !pending.intentId &&
+    (pending.deliveries === undefined || pending.deliveries.length === 0)
   );
 }
 
@@ -213,6 +225,35 @@ export async function settleAcceptedRestartRecovery(
   }
   if (params.shouldContinue?.() === false) {
     return true;
+  }
+  // A terminal continuation cannot prove channel delivery. Preserve its saved
+  // reply as delivery-unconfirmed and retire only the legacy marker it consumed.
+  if (
+    params.terminalStatus &&
+    params.terminalStatus !== "ok" &&
+    admission.entry?.mainRestartRecovery &&
+    isConsumedLegacyPendingFinal(admission.entry)
+  ) {
+    const state = admission.entry.mainRestartRecovery;
+    const result = await settleTerminalPendingFinalRestartRecovery({
+      agentId: params.agentId,
+      entry: admission.entry,
+      observation: {
+        sessionId: admission.entry.sessionId,
+        cycleId: state.cycleId,
+        revision: state.revision,
+      },
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      assertCurrent: () => {
+        if (params.shouldContinue?.() === false) {
+          throw new Error("Restart recovery settlement is no longer current.");
+        }
+      },
+      reason: `the recovery run ended with ${params.terminalStatus} before completing`,
+      terminalStatus: params.terminalStatus,
+    });
+    return result.outcome === "settled";
   }
   if (params.reservation) {
     await commitMainSessionRecovery({

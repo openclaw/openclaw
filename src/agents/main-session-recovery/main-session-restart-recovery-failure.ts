@@ -52,15 +52,17 @@ export async function prepareRequesterRestartRecovery(params: {
   if (recovered?.status === "ready") {
     return { outcome: "ready", source: recovered.source };
   }
-  return await settleInterruptedRestartRecovery({
+  return await settleRestartRecoveryLocally({
     ...params,
     reason: recovered?.reason ?? "the original completion cohort is no longer available",
   });
 }
 
-/** Publish one local interruption notice and retire the exact input without replay or delivery. */
-async function settleInterruptedRestartRecovery(params: {
-  agentId: string;
+type LocalRestartRecoverySettlementStatus = "failed" | "interrupted" | "killed" | "timeout";
+
+/** Publish one local settlement notice and retire the exact input without replay or delivery. */
+async function settleRestartRecoveryLocally(params: {
+  agentId?: string;
   entry: SessionEntry;
   observation: MainSessionRecoveryObservation;
   sessionKey: string;
@@ -68,8 +70,10 @@ async function settleInterruptedRestartRecovery(params: {
   assertCurrent: () => void;
   reason: string;
   cronOwned?: boolean;
+  terminalStatus?: Exclude<LocalRestartRecoverySettlementStatus, "interrupted">;
 }): Promise<{ outcome: "settled" | "changed" | "failed" }> {
   const { entry, reason } = params;
+  const status = params.terminalStatus ?? "interrupted";
   // Legacy interrupted inputs can lack both run IDs. The recovery cycle still
   // identifies their settlement; this receipt never authorizes execution.
   const terminalRunId =
@@ -92,12 +96,17 @@ async function settleInterruptedRestartRecovery(params: {
       pendingFinalDelivery: entry.pendingFinalDelivery ?? null,
     },
     assertCurrent: params.assertCurrent,
-    idempotencyKey: `main-session-restart-recovery:${entry.restartRecoveryDeliverySourceRunId ?? terminalRunId}:interrupted`,
+    idempotencyKey: `main-session-restart-recovery:${entry.restartRecoveryDeliverySourceRunId ?? terminalRunId}:${
+      status === "interrupted" ? "interrupted" : "terminal-failure"
+    }`,
     text:
       (params.cronOwned
         ? "The scheduled turn was interrupted by a Gateway restart. Cron owns its continuation; check the job history for its retry or interruption outcome. Your session and transcript are preserved."
-        : `This interrupted turn could not resume after the Gateway restarted: ${reason}. ` +
-          "Your session and transcript are preserved. Send a new authenticated message to continue.") +
+        : status === "interrupted"
+          ? `This interrupted turn could not resume after the Gateway restarted: ${reason}. ` +
+            "Your session and transcript are preserved. Send a new authenticated message to continue."
+          : `This recovered turn ended before it could finish: ${reason}. ` +
+            "Your session and transcript are preserved. Send a new authenticated message to continue.") +
       (capturedReply ? `\n\nSaved reply (delivery unconfirmed):\n${capturedReply}` : ""),
     sessionLifecyclePatch: {
       ...buildMainSessionRecoverySettlementPatch({
@@ -105,7 +114,7 @@ async function settleInterruptedRestartRecovery(params: {
         recordTerminalSource: true,
         terminalRunId,
       }),
-      status: "interrupted",
+      status,
       pendingFinalDelivery: undefined,
       lifecycleRunId: undefined,
       lastRunId: resolveRestartRecoveryTerminalClientRunId(entry) ?? terminalRunId,
@@ -122,9 +131,31 @@ async function settleInterruptedRestartRecovery(params: {
     return { outcome: "changed" };
   }
   mainSessionRecoveryLog.warn(
-    `failed to settle interrupted recovery ${params.sessionKey}: ${result.reason}`,
+    `failed to settle ${status} recovery ${params.sessionKey}: ${result.reason}`,
   );
   return { outcome: "failed" };
+}
+
+/** Retire a legacy pending final consumed by a terminally failed recovery run. */
+export async function settleTerminalPendingFinalRestartRecovery(params: {
+  agentId?: string;
+  entry: SessionEntry;
+  observation: MainSessionRecoveryObservation;
+  sessionKey: string;
+  storePath: string;
+  assertCurrent: () => void;
+  reason: string;
+  terminalStatus: "error" | "cancelled" | "timeout";
+}): Promise<{ outcome: "settled" | "changed" | "failed" }> {
+  return await settleRestartRecoveryLocally({
+    ...params,
+    terminalStatus:
+      params.terminalStatus === "error"
+        ? "failed"
+        : params.terminalStatus === "cancelled"
+          ? "killed"
+          : "timeout",
+  });
 }
 
 /** Sender loss retires one input only when no other execution or delivery custody remains. */
@@ -153,7 +184,7 @@ export async function finishDelegatedRestartRecovery(
   ) {
     return await tombstoneMainRestartRecoveryWithNotice(params);
   }
-  const result = await settleInterruptedRestartRecovery(params);
+  const result = await settleRestartRecoveryLocally(params);
   return result.outcome === "failed"
     ? "notice_failed"
     : result.outcome === "changed"
