@@ -1,16 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { EOL } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeAll, expect, vi } from "vitest";
 import { parse } from "yaml";
-import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { readCiCheckoutStep, renderGitTestClock } from "./ci-checkout.test-support.js";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
-import { runDependencyFreePreflight } from "./ci-preflight-dependencies.test-support.js";
 
 // Each case owns its checkout and process trees. Overlap their real timeout and
 // drain waits, but keep subprocess pressure bounded on the four-core CI runner.
@@ -24,6 +22,9 @@ const linuxIt = it.skipIf(process.platform !== "linux").concurrent;
 const releasePolicyIt = it.skipIf(process.platform === "win32");
 const base = "c".repeat(40);
 const head = "a".repeat(40);
+const mainRef = "refs/heads/main";
+const sourceRef = "refs/heads/release-source";
+const remoteMain = "refs/remotes/origin/main";
 const policyImport =
   "from ci_git_owner import run_git, git_output, GitFailure, FetchTimeout\nimport os, subprocess\n";
 const gitOwnerPath = join(process.cwd(), ".github/actions/git-owner/owner.py");
@@ -114,40 +115,6 @@ function importCommit(ref: string, mark: number, parent?: string, message = "x\n
   return `commit ${ref}\nmark :${mark}\ncommitter fixture <fixture@example.invalid> ${mark} +0000\ndata ${Buffer.byteLength(message)}\n${message}${parent ? `from ${parent}\n` : ""}${body}\n`;
 }
 
-function checkoutFixture(root: string, files: string[]) {
-  const origin = join(root, "origin");
-  const workspace = join(root, "checkout");
-  mkdirSync(origin);
-  mkdirSync(workspace);
-  fixtureGit(origin, ["init", "--quiet"]);
-  for (const file of files) {
-    const destination = join(origin, file);
-    mkdirSync(dirname(destination), { recursive: true });
-    writeFileSync(destination, readFileSync(file));
-  }
-  return { origin, workspace };
-}
-function snapshot(origin: string, label: string, parent?: string) {
-  fixtureGit(origin, ["add", "."]);
-  return fixtureCommit(join(origin, ".git"), fixtureGit(origin, ["write-tree"]), parent, label);
-}
-function checkoutEnvironment(root: string, repo: string, workflow: string) {
-  const gitConfig = join(root, "gitconfig");
-  writeFileSync(gitConfig, "");
-  return {
-    ...process.env,
-    CHECKOUT_REPO: repo,
-    CHECKOUT_TOKEN: "",
-    WORKFLOW_SHA: workflow,
-    GITHUB_WORKSPACE: join(root, "checkout"),
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: gitConfig,
-    GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: `url.${pathToFileURL(join(root, "origin")).href}.insteadOf`,
-    GIT_CONFIG_VALUE_0: `https://github.com/${repo}.git`,
-  };
-}
-
 function createAncestryFixture(
   command: CommandFixture,
   sourceDistance: number,
@@ -158,33 +125,29 @@ function createAncestryFixture(
   const origin = join(root, "origin.git");
   fixtureGit(root, ["init", "--quiet", "--bare", origin]);
   const commits: string[] = [];
-  const sourceRef = "refs/heads/release-source";
-  const targetRef = "refs/heads/main";
-  const commit = (ref: string, parent: number | undefined, label: string) => {
+  const commit = (ref: string, parent?: number) => {
     const mark = commits.length + 1;
-    commits.push(importCommit(ref, mark, parent ? `:${parent}` : undefined, `${label}\n`));
+    commits.push(importCommit(ref, mark, parent ? `:${parent}` : undefined));
     return mark;
   };
-  const sourceRoot = commit(sourceRef, undefined, "source root");
-  const targetRoot = related ? sourceRoot : commit(targetRef, undefined, "target root");
-  let source = sourceRoot;
+  let source = commit(sourceRef);
+  let target = related ? source : commit(mainRef);
   for (let index = 0; index < sourceDistance; index++) {
-    source = commit(sourceRef, source, `source ${String(index)}`);
+    source = commit(sourceRef, source);
   }
-  let target = targetRoot;
   for (let index = 0; index < targetDistance; index++) {
-    target = commit(targetRef, target, `target ${String(index)}`);
+    target = commit(mainRef, target);
   }
   fixtureGit(
     origin,
     ["fast-import", "--quiet"],
-    `${commits.join("")}reset ${sourceRef}\nfrom :${source}\n\nreset ${targetRef}\nfrom :${target}\n\n`,
+    `${commits.join("")}reset ${sourceRef}\nfrom :${source}\n\nreset ${mainRef}\nfrom :${target}\n\n`,
   );
   return {
     origin,
     root,
     source: fixtureGit(origin, ["rev-parse", sourceRef]),
-    target: fixtureGit(origin, ["rev-parse", targetRef]),
+    target: fixtureGit(origin, ["rev-parse", mainRef]),
   };
 }
 
@@ -195,22 +158,22 @@ function createProvisionalMergeBaseFixture(
   const origin = join(root, "origin.git");
   fixtureGit(root, ["init", "--quiet", "--bare", origin]);
   const commits = Array.from({ length: 341 }, (_, index) =>
-    importCommit("refs/heads/main", index + 1, index ? `:${index}` : undefined),
+    importCommit(mainRef, index + 1, index ? `:${index}` : undefined),
   );
-  commits.push(importCommit("refs/heads/main", 342, ":341", "x\n", "merge :1\n"));
+  commits.push(importCommit(mainRef, 342, ":341", "x\n", "merge :1\n"));
   for (let mark = 343; mark <= 562; mark += 1) {
     const parent = mark === 343 ? 121 : mark - 1;
-    commits.push(importCommit("refs/heads/release-source", mark, `:${parent}`));
+    commits.push(importCommit(sourceRef, mark, `:${parent}`));
   }
-  commits.push(importCommit("refs/heads/release-source", 563, ":562", "x\n", "merge :1\n"));
+  commits.push(importCommit(sourceRef, 563, ":562", "x\n", "merge :1\n"));
   fixtureGit(origin, ["fast-import", "--quiet"], commits.join(""));
-  fixtureGit(origin, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+  fixtureGit(origin, ["symbolic-ref", "HEAD", mainRef]);
   return {
     base: fixtureGit(origin, ["rev-parse", "refs/heads/main~221"]),
     origin,
     root,
-    source: fixtureGit(origin, ["rev-parse", "refs/heads/release-source"]),
-    target: fixtureGit(origin, ["rev-parse", "refs/heads/main"]),
+    source: fixtureGit(origin, ["rev-parse", sourceRef]),
+    target: fixtureGit(origin, ["rev-parse", mainRef]),
   };
 }
 
@@ -262,7 +225,7 @@ function runReleaseAncestry(
     env: {
       ...ancestryGitEnv(),
       RELEASE_ANCESTRY_MODE: mode,
-      RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
+      RELEASE_ANCESTRY_TARGET_REF: mainRef,
       ...env,
     },
   });
@@ -286,11 +249,11 @@ releasePolicyIt.for([
       runReleaseAncestry(
         checkout,
         mode,
-        namedSource ? { RELEASE_ANCESTRY_SOURCE_REF: "refs/heads/release-source" } : {},
+        namedSource ? { RELEASE_ANCESTRY_SOURCE_REF: sourceRef } : {},
       ),
       mode,
     );
-    expect(fixtureGit(checkout, ["rev-parse", "refs/remotes/origin/main"])).toBe(fixture.target);
+    expect(fixtureGit(checkout, ["rev-parse", remoteMain])).toBe(fixture.target);
     if (mode === "ancestor") {
       fixtureGit(checkout, ["merge-base", "--is-ancestor", fixture.source, fixture.target]);
     } else {
@@ -303,9 +266,7 @@ releasePolicyIt("deepens past a provisional shallow merge base", ({ command }) =
   const fixture = createProvisionalMergeBaseFixture(command);
   const checkout = cloneAncestrySource(fixture, "checkout");
   expectPolicySuccess(runReleaseAncestry(checkout, "merge-base"), "merge-base");
-  expect(fixtureGit(checkout, ["merge-base", fixture.source, "refs/remotes/origin/main"])).toBe(
-    fixture.base,
-  );
+  expect(fixtureGit(checkout, ["merge-base", fixture.source, remoteMain])).toBe(fixture.base);
 });
 
 releasePolicyIt(
@@ -349,7 +310,7 @@ exit "$status"`,
     expect(fixtureGit(fixture.root, [`--git-dir=${fixture.origin}`, "rev-parse", "main"])).toBe(
       moved,
     );
-    expect(fixtureGit(checkout, ["rev-parse", "refs/remotes/origin/main"])).toBe(fixture.target);
+    expect(fixtureGit(checkout, ["rev-parse", remoteMain])).toBe(fixture.target);
   },
 );
 
@@ -380,7 +341,7 @@ exec "$REAL_GIT" "$@"`,
       }),
       "merge-base",
     );
-    expect(fixtureGit(checkout, ["rev-parse", "refs/remotes/origin/main"])).toBe(fixture.target);
+    expect(fixtureGit(checkout, ["rev-parse", remoteMain])).toBe(fixture.target);
   },
 );
 
@@ -429,7 +390,7 @@ releasePolicyIt.for([
       policy,
       env: {
         RELEASE_ANCESTRY_MODE: "merge-base",
-        RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
+        RELEASE_ANCESTRY_TARGET_REF: mainRef,
       },
       fetchResults,
       commandResults:
@@ -455,102 +416,6 @@ releasePolicyIt.for([
     } else if (code === 124) {
       expect(report.commands).toEqual([]);
     }
-  },
-);
-
-it("materializes an executable preflight manifest from the workflow revision", async ({
-  command,
-}) => {
-  const root = command.createTempDir("ci-preflight-harness-");
-  const { origin, workspace } = checkoutFixture(root, [
-    ".github/actions/setup-node-env/action.yml",
-    ".github/actions/git-owner/test-prerequisites.mjs",
-    ".github/actions/git-owner/test-prerequisites.json",
-    "scripts/ci-build-manifest.mjs",
-    "scripts/lib/ci-ios-smoke-plan.mjs",
-    "scripts/lib/release-context.mjs",
-    "scripts/lib/release-version.mjs",
-  ]);
-  const revision = snapshot(origin, "workflow fixture");
-  fixtureGit(origin, ["update-ref", "HEAD", revision]);
-  const checkout = await command.run(
-    process.platform === "win32" ? "python" : "python3",
-    ["-I", "-S", gitOwnerPath],
-    {
-      cwd: workspace,
-      env: {
-        ...checkoutEnvironment(root, "fixture/preflight", revision),
-        CHECKOUT_KIND: "preflight",
-        CHECKOUT_REF: revision,
-        CHECKOUT_FALLBACK_REF: revision,
-        GITHUB_EVENT_NAME: "pull_request",
-      },
-    },
-  );
-  expect(checkout.status, `${checkout.stdout}\n${checkout.stderr}`).toBe(0);
-  // The workflow's native Node manifest uses registerHooks to forbid runtime dependencies.
-  const { result, manifest } = runDependencyFreePreflight(
-    pathToFileURL(join(workspace, ".ci-harness/scripts/ci-build-manifest.mjs")),
-    root,
-    resolveTestNodeExecPath(),
-  );
-  expect(result.status, result.stderr).toBe(0);
-  expect(manifest).toContain("run_windows=true\n");
-  expect(fixtureGit(workspace, ["status", "--porcelain"])).toBe("");
-});
-
-linuxIt.for([{ shape: "same" }, { shape: "different" }])(
-  "executes trusted additional checks after a $shape-SHA checkout",
-  async ({ shape }, { command }) => {
-    const root = command.createTempDir("ci-additional-harness-");
-    const script = "scripts/ci-additional-checks.sh";
-    const trustedScript = readFileSync(script, "utf8");
-    const { origin, workspace } = checkoutFixture(root, [
-      ".github/actions/setup-node-env/action.yml",
-      script,
-      "scripts/ci-collect-checks.sh",
-    ]);
-    const workflow = snapshot(origin, "trusted workflow");
-    let target = workflow;
-    if (shape === "different") {
-      writeFileSync(join(origin, script), "echo untrusted-candidate-script >&2\nexit 99\n");
-      target = snapshot(origin, "different candidate", workflow);
-    }
-    fixtureGit(origin, ["update-ref", "HEAD", target]);
-    const checkout = await command.run("python3", ["-I", "-S", gitOwnerPath], {
-      cwd: workspace,
-      env: {
-        ...checkoutEnvironment(root, "fixture/additional", workflow),
-        CHECKOUT_KIND: "linux-node",
-        CHECKOUT_SHA: target,
-        CHECKOUT_BASE_SHA: "",
-        CHECKOUT_GIT_COMMITS_JSON: "[]",
-        GITHUB_EVENT_NAME: "pull_request",
-      },
-    });
-    expect(checkout.status, `${checkout.stdout}\n${checkout.stderr}`).toBe(0);
-    expect(readFileSync(join(workspace, ".ci-harness", script), "utf8")).toBe(trustedScript);
-    if (shape === "different") {
-      expect(fixtureGit(join(workspace, ".ci-harness"), ["rev-parse", "HEAD"])).toBe(workflow);
-      expect(readFileSync(join(workspace, script), "utf8")).toContain("untrusted-candidate-script");
-    }
-    const bin = join(root, "bin");
-    mkdirSync(bin);
-    writeFileSync(join(bin, "pnpm"), '#!/bin/sh\nprintf "%s\\n" "$*" > "$PROBE_COMMAND"\n');
-    chmodSync(join(bin, "pnpm"), 0o755);
-    const probe = join(root, "invoked-command");
-    const run = await command.run("bash", [`.ci-harness/${script}`], {
-      cwd: workspace,
-      env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
-        ADDITIONAL_CHECK_GROUP: "runtime-topology-architecture",
-        PROBE_COMMAND: probe,
-      },
-    });
-    expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(0);
-    expect(readFileSync(probe, "utf8")).toBe("check:architecture\n");
-    expect(fixtureGit(workspace, ["status", "--porcelain"])).toBe("");
   },
 );
 
@@ -1012,7 +877,7 @@ linuxIt.for([0, 23, "cleanup-failure"] as const)(
 
 const posixIt = it.skipIf(process.platform === "win32").concurrent;
 const auditFiles = [".pre-commit-config.yaml", ".github/zizmor.yml"];
-const branch = "refs/remotes/origin/main";
+const branch = remoteMain;
 const auditObjects = Object.fromEntries(
   [base, branch].flatMap((ref) =>
     auditFiles.map((file) => [

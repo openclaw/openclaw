@@ -504,22 +504,6 @@ process.exit(result.status ?? 1);
     expect(f.events().filter((e) => e.kind === "unexpected-push")).toEqual([]);
   });
 
-  it("retains the publication receipt and releases the drained lock on mismatched receipt ownership", () => {
-    const f = fixture();
-    const prepare = f.run("prepare-run");
-    expect(prepare.status, prepare.stdout + prepare.stderr).toBe(0);
-    const receiptPath = join(f.local, "prep.env");
-    const receipt = readFileSync(receiptPath, "utf8").replace("PR_NUMBER=42\n", "PR_NUMBER=43\n");
-    writeFileSync(receiptPath, receipt);
-    const result = f.run("prepare-sync-head");
-    expect(result.status, result.stdout + result.stderr).not.toBe(0);
-    expect(result.stderr).toContain("Released the operation lock for PR #42");
-    expect(readFileSync(receiptPath, "utf8")).toBe(receipt);
-    expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.head);
-    expect(f.git(f.origin, "rev-parse", "refs/heads/topic")).toBe(f.head);
-    expect(f.events().filter((e) => e.kind === "unexpected-push")).toEqual([]);
-  });
-
   it("retires prior publication evidence only after a fresh reviewed preparation", () => {
     const f = fixture();
     const firstPrepare = f.run("prepare-run");

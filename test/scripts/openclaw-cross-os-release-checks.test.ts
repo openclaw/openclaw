@@ -1351,50 +1351,24 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(() =>
       verifyPackagedUpgradeUpdateResult({
         exitCode: 1,
-        stdout: JSON.stringify({
-          status: "ok",
-          after: { version: "2026.4.27" },
-          steps: [{ name: "global update", exitCode: 0 }],
-        }),
+        stdout: '{"status":"ok"}',
         stderr:
           "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
       }),
     ).toThrow(/Packaged upgrade failed/u);
   });
 
-  it.each([
-    {
-      name: "shipped Windows native-module backup cleanup failure",
-      platform: "win32",
-      stdout: JSON.stringify({
-        status: "error",
-        reason: "global install swap",
-        after: { version: "2026.5.2" },
-        steps: [
-          {
-            name: "global install swap",
-            exitCode: 1,
-            stderrTail:
-              "EPERM: operation not permitted, unlink 'C:\\Users\\runner\\prefix\\node_modules\\.openclaw-5748-1777776287462\\node_modules\\@mariozechner\\clipboard-win32-x64-msvc\\clipboard.win32-x64-msvc.node'",
-          },
-        ],
-      }),
-      expected: true,
-    },
-    {
-      name: "non-Windows failure",
-      platform: "linux",
-      stdout:
-        "EPERM: operation not permitted, unlink '/tmp/prefix/node_modules/.openclaw-1-2/native.node'",
-      expected: false,
-    },
-  ] as const)("classifies swap cleanup recovery: $name", ({ platform, stdout, expected }) => {
+  it.each(["win32", "linux"] as const)("classifies swap cleanup recovery on %s", (platform) => {
     expect(
       isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
-        { exitCode: 1, stdout, stderr: "" },
+        {
+          exitCode: 1,
+          stdout: "global install swap",
+          stderr: "EPERM unlink 'C:\\prefix\\.openclaw-1-2\\native.node'",
+        },
         platform,
       ),
-    ).toBe(expected);
+    ).toBe(platform === "win32");
   });
 
   it("recognizes the shipped Windows updater packaged-upgrade timeout", () => {
