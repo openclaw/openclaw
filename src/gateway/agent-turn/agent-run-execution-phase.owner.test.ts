@@ -350,6 +350,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
     replyChannel?: string;
     sessionDelivery?: SessionEntry["delivery"];
     recoveryIngress?: "internal" | "control-ui";
+    legacyRecovery?: "control-ui" | "channel";
     expectedChannel?: string;
   }>([
     { name: "unbound CLI" },
@@ -375,6 +376,8 @@ describe("startAgentRunExecution Gateway ownership", () => {
       expectedChannel: "discord",
     },
     { name: "explicit internal channel", replyChannel: "webchat", expectedChannel: "webchat" },
+    { name: "legacy UI recovery", legacyRecovery: "control-ui", expectedChannel: "webchat" },
+    { name: "targetless channel recovery", legacyRecovery: "channel", expectedChannel: "discord" },
   ])("preserves $name provider context at command dispatch", async (testCase) => {
     const execution = createExecution();
     let sessionEntry: SessionEntry = {
@@ -402,6 +405,15 @@ describe("startAgentRunExecution Gateway ownership", () => {
         isSessionRollover: false,
         opts: { message: "continue", operatorAuthority, messageChannel: testCase.expectedChannel },
       }).nextEntry;
+    } else if (testCase.legacyRecovery) {
+      Object.assign(sessionEntry, {
+        restartRecoveryDeliverySourceRunId: "source-run",
+        restartRecoverySourceIngress: testCase.legacyRecovery,
+        restartRecoveryDeliveryContext:
+          testCase.legacyRecovery === "channel" ? { channel: "discord" } : undefined,
+      });
+    }
+    if (testCase.recoveryIngress || testCase.legacyRecovery) {
       sessionEntry.restartRecoveryDeliveryRunId = execution.params.runId;
       Object.assign(execution.params, {
         canUseInternalRuntimeHandoff: true,
@@ -448,6 +460,9 @@ describe("startAgentRunExecution Gateway ownership", () => {
       throw new Error("delivery planning failed");
     }
     execution.params.delivery = delivery;
+    if (testCase.legacyRecovery) {
+      execution.params.delivery.originMessageChannel = "slack";
+    }
     execution.params.client = client;
     dispatchAgentRunFromGateway.mockResolvedValueOnce(undefined);
 
@@ -463,43 +478,6 @@ describe("startAgentRunExecution Gateway ownership", () => {
       expect(dispatch.ingressOpts.channel).toBeUndefined();
     }
   });
-
-  it.each([
-    { sourceIngress: "control-ui" as const, sourceChannel: "webchat", deliveryContext: undefined },
-    {
-      sourceIngress: "channel" as const,
-      sourceChannel: "discord",
-      deliveryContext: { channel: "discord" },
-    },
-  ])(
-    "preserves targetless $sourceChannel policy context at recovery dispatch",
-    async ({ sourceIngress, sourceChannel, deliveryContext }) => {
-      const execution = createExecution();
-      Object.assign(execution.params, {
-        canUseInternalRuntimeHandoff: true,
-        isRestartRecoveryResumeRun: true,
-        resolvedSessionId: "recovery-session",
-        sessionEntry: {
-          sessionId: "recovery-session",
-          updatedAt: 1,
-          restartRecoveryDeliveryRunId: execution.params.runId,
-          restartRecoveryDeliverySourceRunId: "source-run",
-          restartRecoveryDeliveryContext: deliveryContext,
-          restartRecoverySourceIngress: sourceIngress,
-        },
-      });
-      execution.params.request.expectedExistingSessionId = "recovery-session";
-      execution.params.delivery.originMessageChannel = "slack";
-      dispatchAgentRunFromGateway.mockResolvedValueOnce(undefined);
-
-      await startAgentRunExecution(execution.params);
-
-      expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
-      const dispatch = dispatchAgentRunFromGateway.mock.calls[0]?.[0];
-      expect(dispatch?.ingressOpts.runContext.messageChannel).toBe(sourceChannel);
-      expect(dispatch?.ingressOpts.runContext.currentChannelId).toBeUndefined();
-    },
-  );
 
   it.each([true, false])(
     "dispatches admitted runtime and workspace (override=%s)",

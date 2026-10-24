@@ -118,11 +118,6 @@ function waitThroughGateway(
   params: { runId: string; timeoutMs: number },
   activeKind?: "agent" | "chat",
 ) {
-  const respond = vi.fn();
-  const handler = expectDefined(
-    agentHandlers["agent.wait"],
-    'agentHandlers["agent.wait"] test invariant',
-  );
   const source = activeKind
     ? createTestRpcSource(
         {
@@ -135,20 +130,19 @@ function waitThroughGateway(
     : undefined;
   const claim = source ? claimSessionControllerTask(source.input, () => {}) : undefined;
   rpcSourceTesting.reset(source ? [[params.runId, source]] : []);
-  const promise = (async () => {
-    try {
-      return await handler({
-        params,
-        respond,
-        context: { dedupe: new Map() },
-      } as unknown as Parameters<typeof handler>[0]);
-    } finally {
+  const waiter = invokeWait(
+    createGatewayRequestContext(makeContextParams()),
+    params.runId,
+    params.timeoutMs,
+  );
+  return {
+    respond: waiter.respond,
+    promise: Promise.resolve(waiter.promise).finally(async () => {
       if (claim !== undefined) {
         releaseSessionControllerClaim(await claim);
       }
-    }
-  })();
-  return { promise, respond };
+    }),
+  };
 }
 
 function completeRun(
@@ -729,12 +723,8 @@ it("retires only its scope's observer without ending the shared run", async () =
   const observer = () => {
     const scope = new AsyncWorkScope();
     const settled = vi.fn();
-    const wait = scope
-      .track(() => waitForAgentJob({ runId, timeoutMs: 600_000 }))
-      .then((result) => {
-        settled();
-        return result;
-      });
+    const wait = scope.track(() => waitForAgentJob({ runId, timeoutMs: 600_000 }));
+    void wait.then(settled);
     return { scope, settled, wait };
   };
   const first = observer();
