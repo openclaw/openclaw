@@ -5,7 +5,7 @@ import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 import type { ControlUiSessionFixture } from "../../test-helpers/control-ui-session-fixtures.ts";
 import { assertSessionSectionCountAlignment } from "../../test-helpers/control-ui-session-section-layout.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
-import { button, createWorkboardProof } from "./workboard.e2e.test-support.ts";
+import { button } from "./workboard.e2e.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Workboard sidebar layout" });
 
@@ -23,9 +23,6 @@ suite.define(() => {
     await suite.withPage(
       { viewport: { width: 1440, height: 1000 }, colorScheme: "dark" },
       async ({ page }) => {
-        const proof = createWorkboardProof(suite, "sidebar-workboard", undefined, {
-          captureMode: "element",
-        });
         const sessions = ["infra", "infra", "fixes", ""].map((category, index) =>
           session(`layout-${index}`, {
             category: category || undefined,
@@ -94,10 +91,7 @@ suite.define(() => {
         await button(sidebar, "Sessions").click();
         const initialWidths = await widths();
         expect(await page.locator(".sidebar-session-group-status:empty").count()).toBe(0);
-        const capture = (name: string) =>
-          proof.capture(page, name, page.locator(".sidebar"), [workboard]);
         await workboard.hover();
-        await capture("before-workboard");
         await workboard.click();
         await page.locator(".workboard-filter-trigger").click();
         await button(page.locator(".workboard-filter-display"), "Compact").click();
@@ -106,7 +100,6 @@ suite.define(() => {
         await button(page, "Open Home full page").click();
         await expect.poll(() => new URL(page.url()).pathname).toMatch(/^\/chat(?:\/|$)/u);
         await workboard.hover();
-        await capture("after-workboard");
         const finalWidths = await widths();
         expect(finalWidths.map((row) => row.label)).toEqual(initialWidths.map((row) => row.label));
         for (const row of finalWidths) {
@@ -137,7 +130,6 @@ suite.define(() => {
         await page
           .locator('[data-session-section="category:infra"] .sidebar-recent-sessions__head')
           .hover();
-        await capture("aligned-counts");
         const codingSection = page.locator('[data-session-section="work"]');
         const codingStatus = codingSection.locator(".sidebar-session-group-status");
         await codingStatus.locator(".sidebar-session-group-running").waitFor();

@@ -8,14 +8,7 @@ import {
   installMockGateway,
 } from "../../test-helpers/control-ui-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
-import {
-  createWorkboardProof,
-  button,
-  expectFocus,
-  focused,
-  makeBoard,
-  makeCard,
-} from "./workboard.e2e.test-support.ts";
+import { button, expectFocus, focused, makeBoard, makeCard } from "./workboard.e2e.test-support.ts";
 
 let webkitBrowser: Browser | undefined;
 const suite = createControlUiE2eSuite({
@@ -55,12 +48,6 @@ suite.define(() => {
   it.each(["chromium", "webkit"] as const)(
     "loads the native bundle and preserves overlay focus and card identity in %s",
     async (engine) => {
-      const proof = createWorkboardProof(
-        suite,
-        "workboard-native-bundle-overlay-parity",
-        undefined,
-        { captureMode: engine },
-      );
       for (const view of views) {
         for (const theme of ["light", "dark"] as const) {
           const options = {
@@ -107,11 +94,6 @@ suite.define(() => {
               reports: [{ pluginId: "workboard", status: "activated" }],
             });
             expect([...requestedAssets].some((url) => url.endsWith("/index.js"))).toBe(true);
-            const prefix = `${engine}-${view.name}-${theme}`;
-            await proof.capture(page, `${prefix}-board`, page.locator(".workboard-main"), [
-              page.locator(".workboard-page-title"),
-              tile,
-            ]);
 
             const retained = expectDefined(await tile.elementHandle(), "Native Workboard card");
             await tile.focus();
@@ -136,9 +118,6 @@ suite.define(() => {
             const detailContent = page.locator(".workboard-detail");
             await details.waitFor();
             await expectFocus(details, true);
-            await proof.capture(page, `${prefix}-details`, details, [
-              detailContent.getByRole("tab", { name: "Overview", exact: true }),
-            ]);
             const actions = button(detailContent, "Card actions");
             await actions.click();
             await button(detailContent, "Edit card").focus();
@@ -157,7 +136,6 @@ suite.define(() => {
             const title = modal.getByLabel("Title", { exact: true });
             await title.waitFor();
             await expectFocus(title);
-            await proof.capture(page, `${prefix}-create`, modal, [title]);
             await page.keyboard.press("Escape");
             await modal.waitFor({ state: "detached" });
             await expectFocus(create);
