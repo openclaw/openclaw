@@ -4,12 +4,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createDeferredCore as deferred } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { commitSkillUploadInDatabase } from "./upload-store-commit.js";
 import { SkillUploadRequestError } from "./upload-store-error.js";
@@ -20,6 +20,7 @@ import {
   renewSkillUploadInstallLease,
 } from "./upload-store.sqlite.js";
 import {
+  observeExpiredUploadInventory,
   observeSkillUploadRenewal,
   useSkillUploadStoreLocation,
 } from "./upload-store.test-support.js";
@@ -88,34 +89,6 @@ function expireUpload(databasePath: string, uploadId: string) {
     .run(uploadId);
 }
 
-function observeExpiredUploadInventory(): Promise<void> {
-  const observed = deferred();
-  const runOperation = stateWorker.runOpenClawStateWorkerOperation;
-  vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-    new Proxy(runOperation, {
-      apply(target, receiver, [context, operation, options]: Parameters<typeof runOperation>) {
-        return Reflect.apply(target, receiver, [
-          context,
-          (scope: Parameters<typeof operation>[0]) =>
-            operation({
-              execute: new Proxy(scope.execute, {
-                async apply(execute, executeReceiver, args: Parameters<typeof scope.execute>) {
-                  const result = await Reflect.apply(execute, executeReceiver, args);
-                  if (args[0].type === "skillUploads.expired") {
-                    observed.resolve();
-                  }
-                  return result;
-                },
-              }),
-            }),
-          options,
-        ]);
-      },
-    }),
-  );
-  return observed.promise;
-}
-
 function chunkCount(databasePath: string, uploadId: string): number {
   const row = stateDatabase(databasePath)
     .prepare("SELECT count(*) AS count FROM skill_upload_chunks WHERE upload_id = ?")
@@ -140,14 +113,6 @@ function commitStagedFixture(databasePath: string, uploadId: string) {
 
 function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
-}
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((innerResolve) => {
-    resolve = innerResolve;
-  });
-  return { promise, resolve };
 }
 
 function holdUpload(store: typeof defaultSkillUploadStore, uploadId: string) {

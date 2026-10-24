@@ -1,4 +1,4 @@
-import { lstat } from "node:fs/promises";
+import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -32,6 +32,7 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   await tempDirs.cleanup();
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 function readAuthProfileStore(stateDir: string, agentId: string) {
@@ -56,6 +57,60 @@ async function stageLive(env: NodeJS.ProcessEnv, cfg: OpenClawConfig = {}) {
 }
 
 describe("QA Gateway auth profile staging", () => {
+  it.each(["explicit", "default"])(
+    "prepares selected providers and auth from the %s JSON5 config",
+    async (source) => {
+      const home = await tempDirs.makeTempDir("qa-json5-home-");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await mkdir(path.dirname(configPath));
+      await writeFile(
+        configPath,
+        `{
+          // Normal OpenClaw config syntax, not strict JSON.
+          models: { providers: {
+            'custom-openai': {
+              baseUrl: 'https://proxy.example.test/v1',
+              api: 'openai-responses',
+              apiKey: 'qa-json5-key',
+              models: [],
+            },
+            ignored: { baseUrl: 'https://ignored.example.test', models: [] },
+          } },
+        }`,
+      );
+      vi.spyOn(os, "homedir").mockReturnValue(home);
+      const {
+        cfg,
+        stateDir,
+        configPath: childConfigPath,
+      } = await setup.prepare(
+        {
+          providerMode: "live-frontier",
+          primaryModel: "custom-openai/fixture",
+          alternateModel: "custom-openai/fixture",
+        },
+        {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: source === "explicit" ? configPath : undefined,
+        },
+      );
+      expect(JSON.parse(await readFile(childConfigPath, "utf8")).models.providers).toEqual({
+        "custom-openai": {
+          baseUrl: "https://proxy.example.test/v1",
+          api: "openai-responses",
+          apiKey: "qa-json5-key",
+          models: [],
+        },
+      });
+      expect(cfg.plugins?.allow).toContain("openai");
+      for (const agentId of ["main", "qa"]) {
+        expect(
+          (await readAuthProfileStore(stateDir, agentId)).profiles["qa-live-custom-openai-env"],
+        ).toMatchObject({ type: "api_key", provider: "custom-openai", key: "qa-json5-key" });
+      }
+    },
+  );
+
   it("stages a live Anthropic setup-token profile for isolated QA workers", async () => {
     const stateDir = await tempDirs.makeTempDir("qa-setup-token-state-");
     const token = `sk-ant-oat01-${"c".repeat(80)}`;

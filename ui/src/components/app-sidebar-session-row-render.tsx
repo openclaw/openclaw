@@ -14,7 +14,11 @@ import { renderSidebarSessionIndicators } from "./app-sidebar-session-indicators
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import { visibleSessionChildren } from "./app-sidebar-session-types.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
+import {
+  resolveSidebarSessionSubtitle,
+  sidebarSessionRowSubtitleParams,
+} from "./session-row-subtitle.ts";
+import { sameSidebarPresentation } from "./sidebar-projection-cache.ts";
 import { Icon } from "./solid/icon.tsx";
 import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
 import { SessionTitlePlaceholder } from "./solid/session-title-placeholder.tsx";
@@ -54,15 +58,23 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       ? target.position
       : undefined;
   });
+  const archiveTarget = createMemo(
+    () => ({
+      key: session().key,
+      archived: session().archived,
+      sharingRole: session().sharingRole,
+    }),
+    { equals: sameSidebarPresentation },
+  );
   const archiveAccess = createMemo(() =>
     host().readSessionMutationAccess({
       method: "sessions.patch",
       params: {
-        key: session().key,
-        archived: !session().archived,
+        key: archiveTarget().key,
+        archived: !archiveTarget().archived,
       },
       sessionScope: true,
-      session: session(),
+      session: archiveTarget(),
     }),
   );
   const archiveAllowed = createMemo(
@@ -84,11 +96,24 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     () => (team() ? (session().ownAttention ?? session().attention) : session().attention).kind,
   );
   const label = createMemo(() => session().label);
-  const subtitleState = createMemo(
-    () =>
-      (host().sidebarSnapshot ? session().snapshotSubtitle : undefined) ??
-      resolveSidebarSessionRowSubtitle(host(), session(), display()),
+  const subtitleInput = createMemo(
+    () => {
+      const snapshot = host().sidebarSnapshot ? session().snapshotSubtitle : undefined;
+      const input = snapshot ? null : sidebarSessionRowSubtitleParams(host(), session(), display());
+      return {
+        input,
+        value: snapshot ?? (input ? host().sessionProjection.heldSubtitle(input) : undefined),
+      };
+    },
+    { equals: sameSidebarPresentation },
   );
+  const subtitleState = createMemo(() => {
+    const { input, value } = subtitleInput();
+    return (
+      value ??
+      (input ? resolveSidebarSessionSubtitle(input) : { subtitle: undefined, narration: undefined })
+    );
+  });
   const subtitle = createMemo(() => subtitleState().subtitle),
     narration = createMemo(() => subtitleState().narration),
     toolName = createMemo(() => subtitleState().toolName);

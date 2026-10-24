@@ -987,68 +987,6 @@ describe("GatewayClient connect auth payload", () => {
     },
   );
 
-  it.each([
-    { canonical: "macos", protocolBounds: {} },
-    {
-      canonical: "macos",
-      protocolBounds: { minProtocol: MIN_NODE_PROTOCOL_VERSION },
-    },
-    {
-      canonical: "windows",
-      protocolBounds: { maxProtocol: PROTOCOL_VERSION },
-    },
-  ])(
-    "retries a previous-version Gateway without changing $canonical pairing metadata",
-    async ({ canonical, protocolBounds }) => {
-      const signDevicePayload = vi.fn((_privateKeyPem: string, _payload: string) => "signature");
-      const deviceFamily = canonical === "macos" ? "Mac" : "Windows";
-      const modelIdentifier = "TestMachine1,1";
-      const client = createClientWithIdentity(`device-${canonical}`, vi.fn(), {
-        role: "node",
-        mode: GATEWAY_CLIENT_MODES.NODE,
-        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-        platform: canonical,
-        deviceFamily,
-        modelIdentifier,
-        hostDeps: { signDevicePayload },
-        ...protocolBounds,
-      });
-
-      const { ws: currentWs, connect: currentConnect } = await startClientAndConnect({ client });
-      expect(currentConnect.params).toMatchObject({
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: { platform: canonical, deviceFamily, modelIdentifier },
-      });
-      expect(signDevicePayload.mock.calls[0]?.[1]?.split("|").slice(9)).toEqual([
-        canonical,
-        deviceFamily.toLowerCase(),
-      ]);
-
-      emitConnectFailure(
-        currentWs,
-        currentConnect.id,
-        { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
-        "protocol mismatch",
-      );
-      const legacyWs = await advanceToNextReconnect();
-      legacyWs.emitOpen();
-      emitConnectChallenge(legacyWs, "nonce-previous");
-      const legacyConnect = connectRequestFrom(legacyWs);
-
-      expect(legacyConnect.params).toMatchObject({
-        minProtocol: MIN_NODE_PROTOCOL_VERSION,
-        maxProtocol: MIN_NODE_PROTOCOL_VERSION,
-        client: { platform: canonical, deviceFamily, modelIdentifier },
-      });
-      expect(signDevicePayload.mock.calls.at(-1)?.[1]?.split("|").slice(9)).toEqual([
-        canonical,
-        deviceFamily.toLowerCase(),
-      ]);
-      client.stop();
-    },
-  );
-
   it("reconnects with the current envelope when a legacy probe reaches an upgraded Gateway", async () => {
     const onHelloOk = vi.fn();
     const client = createClientWithIdentity("device-gateway-upgrade", vi.fn(), {
@@ -1067,17 +1005,17 @@ describe("GatewayClient connect auth payload", () => {
       { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
-    const previousWs = await advanceToNextReconnect();
-    previousWs.emitOpen();
-    emitConnectChallenge(previousWs, "nonce-previous-initial");
-    const previousConnect = connectRequestFrom(previousWs);
-    emitHelloOk(previousWs, previousConnect.id, MIN_NODE_PROTOCOL_VERSION);
+    const v3Ws = await advanceToNextReconnect();
+    v3Ws.emitOpen();
+    emitConnectChallenge(v3Ws, "nonce-v3-initial");
+    const v3Connect = connectRequestFrom(v3Ws);
+    emitHelloOk(v3Ws, v3Connect.id, MIN_NODE_PROTOCOL_VERSION);
     await waitForFast(() => expect(onHelloOk).toHaveBeenCalledOnce());
 
-    previousWs.emitClose(1012, "gateway restarting after upgrade");
+    v3Ws.emitClose(1012, "gateway restarting after upgrade");
     const upgradedProbeWs = await advanceToNextReconnect();
     upgradedProbeWs.emitOpen();
-    emitConnectChallenge(upgradedProbeWs, "nonce-previous-upgraded");
+    emitConnectChallenge(upgradedProbeWs, "nonce-v3-upgraded");
     const upgradedProbeConnect = connectRequestFrom(upgradedProbeWs);
     expect(upgradedProbeConnect.params).toMatchObject({
       minProtocol: MIN_NODE_PROTOCOL_VERSION,
@@ -1093,7 +1031,7 @@ describe("GatewayClient connect auth payload", () => {
     const currentReconnectWs = await advanceToNextReconnect();
     expect(onHelloOk).toHaveBeenCalledOnce();
     currentReconnectWs.emitOpen();
-    emitConnectChallenge(currentReconnectWs, "nonce-current-upgraded");
+    emitConnectChallenge(currentReconnectWs, "nonce-v4-upgraded");
     const currentReconnect = connectRequestFrom(currentReconnectWs);
     expect(currentReconnect.params).toMatchObject({
       minProtocol: PROTOCOL_VERSION,
@@ -1106,7 +1044,7 @@ describe("GatewayClient connect auth payload", () => {
     currentReconnectWs.emitClose(1012, "gateway rolled back");
     const rolledBackProbeWs = await advanceToNextReconnect();
     rolledBackProbeWs.emitOpen();
-    emitConnectChallenge(rolledBackProbeWs, "nonce-current-rolled-back");
+    emitConnectChallenge(rolledBackProbeWs, "nonce-v4-rolled-back");
     const rolledBackProbeConnect = connectRequestFrom(rolledBackProbeWs);
     expect(rolledBackProbeConnect.params).toMatchObject({
       minProtocol: PROTOCOL_VERSION,
@@ -1120,7 +1058,7 @@ describe("GatewayClient connect auth payload", () => {
     );
     const rolledBackLegacyWs = await advanceToNextReconnect();
     rolledBackLegacyWs.emitOpen();
-    emitConnectChallenge(rolledBackLegacyWs, "nonce-previous-rolled-back");
+    emitConnectChallenge(rolledBackLegacyWs, "nonce-v3-rolled-back");
     expect(connectRequestFrom(rolledBackLegacyWs).params).toMatchObject({
       minProtocol: MIN_NODE_PROTOCOL_VERSION,
       maxProtocol: MIN_NODE_PROTOCOL_VERSION,
@@ -1128,9 +1066,9 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
-  it("keeps explicitly previous-version node hosts connected when a current Gateway accepts them", async () => {
+  it("keeps explicitly v3-only node hosts connected when a v4 Gateway accepts them", async () => {
     const onHelloOk = vi.fn();
-    const client = createClientWithIdentity("device-previous-only", vi.fn(), {
+    const client = createClientWithIdentity("device-v3-only", vi.fn(), {
       role: "node",
       mode: GATEWAY_CLIENT_MODES.NODE,
       clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
@@ -1153,7 +1091,7 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
-  it("returns to the previous version when the Gateway rolls back before current-version readiness", async () => {
+  it("returns to v3 when the Gateway rolls back before v4 readiness", async () => {
     const onHelloOk = vi.fn();
     const client = createClientWithIdentity("device-gateway-rollback-before-ready", vi.fn(), {
       role: "node",
@@ -1169,40 +1107,40 @@ describe("GatewayClient connect auth payload", () => {
       { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
-    const previousWs = await advanceToNextReconnect();
-    previousWs.emitOpen();
-    emitConnectChallenge(previousWs, "nonce-previous-ready");
-    const previousConnect = connectRequestFrom(previousWs);
-    emitHelloOk(previousWs, previousConnect.id, MIN_NODE_PROTOCOL_VERSION);
+    const v3Ws = await advanceToNextReconnect();
+    v3Ws.emitOpen();
+    emitConnectChallenge(v3Ws, "nonce-v3-ready");
+    const v3Connect = connectRequestFrom(v3Ws);
+    emitHelloOk(v3Ws, v3Connect.id, MIN_NODE_PROTOCOL_VERSION);
     await waitForFast(() => expect(onHelloOk).toHaveBeenCalledOnce());
 
-    previousWs.emitClose(1012, "gateway upgrading");
-    const previousUpgradeProbeWs = await advanceToNextReconnect();
-    previousUpgradeProbeWs.emitOpen();
-    emitConnectChallenge(previousUpgradeProbeWs, "nonce-previous-upgrade-probe");
-    const previousUpgradeProbe = connectRequestFrom(previousUpgradeProbeWs);
+    v3Ws.emitClose(1012, "gateway upgrading");
+    const v3UpgradeProbeWs = await advanceToNextReconnect();
+    v3UpgradeProbeWs.emitOpen();
+    emitConnectChallenge(v3UpgradeProbeWs, "nonce-v3-upgrade-probe");
+    const v3UpgradeProbe = connectRequestFrom(v3UpgradeProbeWs);
     emitConnectFailure(
-      previousUpgradeProbeWs,
-      previousUpgradeProbe.id,
+      v3UpgradeProbeWs,
+      v3UpgradeProbe.id,
       { code: "PROTOCOL_MISMATCH", expectedProtocol: PROTOCOL_VERSION },
       "protocol mismatch",
     );
 
-    const currentWs = await advanceToNextReconnect();
-    currentWs.emitOpen();
-    emitConnectChallenge(currentWs, "nonce-current-before-rollback");
-    const currentConnect = connectRequestFrom(currentWs);
+    const v4Ws = await advanceToNextReconnect();
+    v4Ws.emitOpen();
+    emitConnectChallenge(v4Ws, "nonce-v4-before-rollback");
+    const v4Connect = connectRequestFrom(v4Ws);
     emitConnectFailure(
-      currentWs,
-      currentConnect.id,
+      v4Ws,
+      v4Connect.id,
       { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
 
-    const recoveredPreviousWs = await advanceToNextReconnect();
-    recoveredPreviousWs.emitOpen();
-    emitConnectChallenge(recoveredPreviousWs, "nonce-previous-after-rollback");
-    expect(connectRequestFrom(recoveredPreviousWs).params).toMatchObject({
+    const recoveredV3Ws = await advanceToNextReconnect();
+    recoveredV3Ws.emitOpen();
+    emitConnectChallenge(recoveredV3Ws, "nonce-v3-after-rollback");
+    expect(connectRequestFrom(recoveredV3Ws).params).toMatchObject({
       minProtocol: MIN_NODE_PROTOCOL_VERSION,
       maxProtocol: MIN_NODE_PROTOCOL_VERSION,
     });

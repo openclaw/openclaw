@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 // Production-renderer warm interactions. Trace once for attribution; compare untraced AB pairs.
+// --thread-cpu-time excludes renderer descheduling from duration metrics.
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -33,6 +34,7 @@ const { values } = parseArgs({
     viewport: { type: "string", default: "both" },
     pairs: { type: "string", default: "1" },
     trace: { type: "boolean", default: false },
+    "thread-cpu-time": { type: "boolean", default: false },
     "invalidation-tracking": { type: "boolean", default: false },
   },
 });
@@ -91,6 +93,7 @@ type Result = {
   bundle: number;
   pair: number;
   status: "passed" | "failed";
+  hostLoadAverage: number[];
   wallMs?: number;
   scriptMs?: number;
   taskMs?: number;
@@ -157,6 +160,7 @@ try {
         collection: values.trace
           ? "CDP trace + 1ms CPU profiler (overhead included)"
           : "untraced CDP metrics",
+        metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
         invalidationTracking: values.trace && values["invalidation-tracking"],
         fixture: { sessions: 1000, messagesPerSession: 400, models: 1000, cronJobs: 500 },
         acceptance:
@@ -201,6 +205,7 @@ try {
             pair,
             bundle,
             status: "failed",
+            hostLoadAverage: os.loadavg(),
             artifactPrefix,
           };
           let cdp: CDPSession | undefined;
@@ -231,7 +236,9 @@ try {
             await page.evaluate(() => document.fonts.ready.then(() => undefined));
             await settle(page);
             cdp = await context.newCDPSession(page);
-            await cdp.send("Performance.enable");
+            await cdp.send("Performance.enable", {
+              timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+            });
             if (values.trace) {
               cdp.on("Tracing.dataCollected", ({ value }: { value: unknown[] }) =>
                 events.push(...value),

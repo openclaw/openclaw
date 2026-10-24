@@ -682,6 +682,10 @@ export class SidebarSessionProjection {
   }
 
   resolveSubtitle(params: SidebarSubtitleParams): SidebarSubtitleValue {
+    return this.heldSubtitle(params) ?? resolveSidebarSessionSubtitle(params);
+  }
+
+  heldSubtitle(params: SidebarSubtitleParams): SidebarSubtitleValue | undefined {
     // While a run is live the held value is the display: observeSubtitle
     // refreshed it this update pass, applying the minimum-display floor.
     // Tool identity and its prepared progress must advance together; the
@@ -690,12 +694,7 @@ export class SidebarSessionProjection {
       params.session.hasActiveRun && params.showPreview && !params.toolActivity
         ? this.heldSubtitles.get(params.session.key)
         : undefined;
-    if (!held) {
-      return resolveSidebarSessionSubtitle(params);
-    }
-    return params.hasDisplay
-      ? (held.catalogValue ?? resolveSidebarSessionSubtitle(params))
-      : held.value;
+    return params.hasDisplay ? held?.catalogValue : held?.value;
   }
 
   private observeSubtitle(

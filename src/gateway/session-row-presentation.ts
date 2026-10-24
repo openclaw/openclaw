@@ -91,8 +91,12 @@ function toProjectedSessionSharingTarget(record: records.MaterializedRow): Sessi
 function createSessionRowFactSharing<T extends GatewaySessionRow>() {
   const prepared = new WeakMap<T, { facts: [string, Partial<T>][]; bytes: number }>();
   const share = (sessions: T[]) => {
+    // Empty and single-row deltas cannot share facts; keep their prepared wire rows.
+    if (sessions.length < 2) {
+      return { sessions, sharedFacts: [] };
+    }
     type SharedFact = { fact: Partial<T>; rows: number[] };
-    const candidates = new Map<string, SharedFact>();
+    const candidates = new Map<string, { fact: Partial<T>; rows: number | number[] }>();
     const rows: GatewaySessionRow[] = [];
     sessions.forEach((row, index) => {
       const { key, kind, updatedAt, sessionId, rowMode } = row;
@@ -121,17 +125,21 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
       for (const [encoded, fact] of facts) {
         const candidate = candidates.get(encoded);
         if (candidate) {
-          candidate.rows.push(index);
+          if (typeof candidate.rows === "number") {
+            candidate.rows = [candidate.rows, index];
+          } else {
+            candidate.rows.push(index);
+          }
         } else {
-          candidates.set(encoded, { fact, rows: [index] });
+          candidates.set(encoded, { fact, rows: index });
         }
       }
     });
     // Facts with the same recipients share one reference, including common scalar defaults.
     const groups = new Map<string, SharedFact>();
     for (const candidate of candidates.values()) {
-      if (candidate.rows.length < 2) {
-        Object.assign(rows[candidate.rows[0]!]!, candidate.fact);
+      if (typeof candidate.rows === "number") {
+        Object.assign(rows[candidate.rows]!, candidate.fact);
         continue;
       }
       const key = candidate.rows.join(",");
@@ -190,7 +198,8 @@ export function shareSidebarSessionRows(
       ? undefined
       : rowHistory?.find((previous) => previous.revision === baseRevision);
   if (baseRevision !== undefined && previousGeneration) {
-    const previous = new Map(Array.from(previousGeneration.ids, (id, index) => [id, index]));
+    const previous = new Map<number, number>();
+    previousGeneration.ids.forEach((id, index) => previous.set(id, index));
     const changed: GatewaySessionRow[] = [];
     const order = rows.map(
       (row) =>

@@ -123,13 +123,7 @@ export class UiE2eSequencer extends BaseSequencer {
     // eslint-disable-next-line unicorn/no-array-sort -- BaseSequencer.sort is Vitest's ordering API.
     const ordered = await super.sort(files);
     const parallel = ordered.filter((file) => file.project.config.sequence.groupOrder === 0);
-    if (
-      parallel.some((file) =>
-        this.ctx.cache.getFileTestResults(
-          `${file.project.name}:${relative(this.ctx.config.root, file.moduleId).replaceAll("\\", "/")}`,
-        ),
-      )
-    ) {
+    if (parallel.some((file) => this.ctx.cache.getTestSpecificationResult(file))) {
       // Keep native failed-first and observed-duration ordering on warm reruns.
       return ordered;
     }

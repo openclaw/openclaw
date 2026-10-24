@@ -42,11 +42,15 @@ function start(
   return { run, fakeProcess };
 }
 
-async function expectEscalation({ run, fakeProcess }: ReturnType<typeof start>, child: FakeChild) {
+async function expectEscalation(
+  { run, fakeProcess }: ReturnType<typeof start>,
+  child: FakeChild,
+  graceMs: number,
+) {
   let resolvedCode: Awaited<typeof run> | undefined;
   const settled = run.then((code) => (resolvedCode = code));
   fakeProcess.emit("SIGTERM");
-  await vi.advanceTimersByTimeAsync(4_999);
+  await vi.advanceTimersByTimeAsync(graceMs - 1);
   expect(resolvedCode).toBeUndefined();
   expect(child.signals).toEqual(["SIGTERM"]);
 
@@ -68,7 +72,7 @@ it.each([false, true])(
       expect(children).toHaveLength(0);
       await watchReady();
     }
-    await expectEscalation(watch, child);
+    await expectEscalation(watch, child, repair ? 5_000 : 335_000);
   },
 );
 
