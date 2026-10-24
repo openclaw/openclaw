@@ -33,10 +33,11 @@ beforeAll(async () => {
     "workboard-28-kv-to-sqlite",
     "memory-core-qmd-workspace-retired",
     "memory-core-qmd-file-locks-to-sqlite-leases",
+    "discord-legacy-state",
   ]);
-  noDataMigrations = (await bundledMigrations(["crabbox", "workboard", "memory-core"])).filter(
-    ({ migration }) => ids.has(migration.id),
-  );
+  noDataMigrations = (
+    await bundledMigrations(["crabbox", "workboard", "memory-core", "discord"])
+  ).filter(({ migration }) => ids.has(migration.id));
   recoveryMigrations = await bundledMigrations(["codex", "voice-call"]);
 });
 
@@ -107,7 +108,7 @@ it.each([
 );
 
 it("does not claim missing recovery coverage for bundled core-only and disposable migrations", async () => {
-  expect(noDataMigrations).toHaveLength(4);
+  expect(noDataMigrations).toHaveLength(5);
   const result = await preparePluginDoctorMigrationResources(noDataMigrations, input);
   expect(result.resources).toEqual([]);
   expect(input.warnings).toEqual([]);

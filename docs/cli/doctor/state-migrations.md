@@ -467,6 +467,7 @@ existing SQLite call store, including a configured custom location.
 Crabbox's shared SQLite records are core-captured; the retired Workboard check
 leaves its legacy rows unchanged. QMD retirement removes only empty directories
 and disposable stale coordination locks, so it has no additional data to retain.
+Discord's migration discards only a rebuildable command-deploy cache.
 These declarations prevent misleading missing-inventory warnings without hiding
 warnings about failed migrations or unresolved state.
 

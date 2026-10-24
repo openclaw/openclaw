@@ -20,6 +20,8 @@ export const stateMigrations = [
   definePluginDoctorMigrationFromPlans({
     id: "discord-legacy-state",
     label: "Discord command deployment cache",
+    // The rebuildable cache is discarded, so there is nothing to retain.
+    collectBackupResources: () => [],
     resolvePlans: detectDiscordCommandDeployCacheMigration,
   }),
 ];
