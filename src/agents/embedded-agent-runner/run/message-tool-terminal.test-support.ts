@@ -1,9 +1,6 @@
-import {
-  createAssistantMessageEventStream,
-  type AssistantMessage,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import { Agent, type AgentTool } from "../../runtime/index.js";
+import { createQueuedAssistantStream } from "../../test-helpers/assistant-event-stream.test-support.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
 
@@ -36,16 +33,13 @@ export function terminalResponse(
     stopReason,
     ...overrides,
   };
-  const stream = createAssistantMessageEventStream();
-  queueMicrotask(() => {
+  return createQueuedAssistantStream((push) => {
     if (stopReason === "error") {
-      stream.push({ type: "error", reason: "error", error: message });
+      push({ type: "error", reason: "error", error: message });
     } else {
-      stream.push({ type: "done", reason: stopReason, message });
+      push({ type: "done", reason: stopReason, message });
     }
-    stream.end();
   });
-  return stream;
 }
 
 export function terminalToolCall(name: string, id: string, args: Record<string, unknown> = {}) {

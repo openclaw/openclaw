@@ -51,6 +51,7 @@ import {
   runWithCronCreatorAuthorityCapability,
 } from "../../cron-creator-authority-context.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
+import { createRequesterTranscriptWriter } from "../../test-helpers/requester-transcript-writer.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { createStructuredOutputTool } from "../../tools/structured-output-tool.js";
 import { readSubagentRunAnnounceResultUsing } from "../announce/subagent-announce-result.js";
@@ -4092,14 +4093,8 @@ describe("requester settle wake trigger", () => {
     const entry = createRunEntry({ requesterSessionKey: sessionKey, endedAt: 4_000 });
     let disposed = false;
     const wakeReady = createDeferredCore();
-    const requesterTranscriptWrite = vi.fn();
-    const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
-      requesterTranscriptWrite();
-      if (disposed) {
-        throw new Error("attempt disposed before transcript write");
-      }
-      return await operation();
-    };
+    const { requesterTranscriptWrite, withRequesterTranscriptWrite } =
+      createRequesterTranscriptWriter(() => disposed);
     const freshTranscriptWrite = vi.fn(async () => {});
     const settleWake = vi.fn(async () => {
       await wakeReady.promise;

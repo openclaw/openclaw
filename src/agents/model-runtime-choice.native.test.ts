@@ -5,7 +5,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
+import {
+  createClaudeCliBackends,
+  testing as cliBackendsTesting,
+} from "./cli-backends.test-support.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { prepareModelChoice, preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
@@ -189,14 +192,7 @@ it("reports missing sign-in instead of a catalog refresh", async () => {
 it("keeps the configured Claude CLI runtime when switching models with saved setup tokens", async () => {
   vi.stubEnv("ANTHROPIC_API_KEY", "");
   cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-      },
-    ],
+    resolveRuntimeCliBackends: createClaudeCliBackends,
   });
   const entry: ModelCatalogEntry = {
     provider: "anthropic",
