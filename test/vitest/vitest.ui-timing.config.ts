@@ -16,7 +16,7 @@ export function createUiTimingVitestConfig(
     intersectIncludeFile: true,
     isolate: true,
     name: "ui-timing",
-    setupFiles: ["ui/src/test-helpers/dom.setup.ts"],
+    setupFiles: ["ui/src/test-helpers/dom.setup.ts", "ui/src/test-helpers/github-network.setup.ts"],
   });
   return {
     ...config,

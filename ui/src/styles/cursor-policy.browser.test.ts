@@ -183,7 +183,8 @@ beforeAll(async () => {
   fs.writeFileSync(fixtureFile, fixtureDocument(), "utf8");
   // Only a real app window, not media emulation, proves standalone display mode.
   appContext = await chromium.launchPersistentContext(path.join(fixtureDirectory, "profile"), {
-    args: [`--app=file://${fixtureFile}`],
+    // Navigate only after the context's network guard has installed its routes.
+    args: ["--app=data:text/html,"],
     executablePath: fixture.executablePath,
     headless: true,
   });
@@ -283,7 +284,7 @@ fixture.describe("Control UI cursor policy", () => {
   it("uses the same semantic cursors in an installed window", async () => {
     const [page] = appContext.pages();
     expect(page, "Chromium --app window did not expose a page").toBeDefined();
-    await page!.waitForLoadState("load");
+    await page!.goto(`file://${fixtureFile}`);
     expect(await probeWindow(page!)).toEqual({
       displayMode: "standalone",
       cursors: expectedCursors,

@@ -35,7 +35,10 @@ const directories = useAutoCleanupTempDirTracker(afterEach);
 const fixture = (state = postState("macos")) => {
   const scratch = join(REPO_ROOT, ".tmp");
   mkdirSync(scratch, { recursive: true });
-  const release = releaseFixture(directories.make(".release-stable-post-test-", scratch));
+  const release = releaseFixture(
+    directories.make(".release-stable-post-test-", scratch),
+    directories.make("release-stable-post-bin-"),
+  );
   release.seed(state);
   return release;
 };

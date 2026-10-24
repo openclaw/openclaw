@@ -278,11 +278,10 @@ export const npmVisibility = (visible = true): FakeStep =>
     visible ? {} : { exit: 1, stderr: "E404 not published yet" },
   );
 
-export function releaseFixture(root: string) {
+export function releaseFixture(root: string, binDir: string) {
   const node = resolveTestNodeExecPath();
   const stateDir = join(root, "release");
-  const binDir = join(root, "bin");
-  mkdirSync(binDir);
+  mkdirSync(binDir, { recursive: true });
   mkdirSync(join(root, "tmp"));
   const fake = `#!${node}
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';

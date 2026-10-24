@@ -32,7 +32,7 @@ export function createUiVitestConfig(env?: Record<string, string | undefined>): 
     intersectIncludeFile: true,
     isolate: false,
     name: "ui",
-    setupFiles: ["ui/src/test-helpers/dom.setup.ts"],
+    setupFiles: ["ui/src/test-helpers/dom.setup.ts", "ui/src/test-helpers/github-network.setup.ts"],
     useNonIsolatedRunner: true,
   });
   return {
