@@ -175,7 +175,9 @@ describe("Gateway restored requester settlement", () => {
           { timeout: POST_RESUME_SETTLEMENT_TIMEOUT_MS },
         );
         expect(modelServer.requestCount()).toBe(2);
-        expect(modelServer.countRequestsContaining(TOMBSTONED_CHILD_RESULT)).toBe(1);
+        // Resume also sees pending child facts; only the settlement turn consumes the result.
+        expect(modelServer.requestBody(1)).toContain(RESTORED_WAKE_MARKER);
+        expect(modelServer.requestBody(1)).toContain(TOMBSTONED_CHILD_RESULT);
         modelServer.release(1);
         await vi.waitFor(
           async () =>
@@ -580,6 +582,7 @@ async function startHeldModelServer() {
     release: (index: number) => requests[index]?.release.resolve(undefined),
     releaseAll,
     requestCount: () => requests.length,
+    requestBody: (index: number) => requests[index]?.body,
     url: server.baseUrl,
     close: async () => {
       releaseAll();
