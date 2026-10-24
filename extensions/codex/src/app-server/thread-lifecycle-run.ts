@@ -121,6 +121,7 @@ export async function startOrResumeThread(
       restrictedToolSurfaceInheritedMcpServerNames,
       userMcpServersFingerprint,
       webSearchThreadConfigFingerprint,
+      webSearchUninformedThreadConfigFingerprint,
     } = preflight;
     let retainBackgroundPredecessor = false;
     let replacementPredecessor: CodexAppServerThreadBinding | undefined;
@@ -466,10 +467,22 @@ export async function startOrResumeThread(
       params.nativeCodeModeEnabled === false &&
       binding?.webSearchThreadConfigFingerprint === undefined &&
       !persistentWebSearchRestriction;
+    // A binding created while the capability probe ran on a cold app-server
+    // carries the uninformed plan (support silence), not an operator policy
+    // choice. When the probe later resolves with a definitive verdict, adopt
+    // the informed fingerprint on the existing thread instead of replacing it:
+    // a replacement re-sends the full selected history. Genuine policy edits
+    // move the plan away from the uninformed shape and still rotate below.
+    const coldWebSearchSupportSettled =
+      Boolean(binding?.threadId) &&
+      Boolean(webSearchBindingChanged) &&
+      binding?.webSearchThreadConfigFingerprint === webSearchUninformedThreadConfigFingerprint &&
+      webSearchThreadConfigFingerprint !== webSearchUninformedThreadConfigFingerprint;
     if (
       binding?.threadId &&
       webSearchBindingChanged &&
-      !deferLegacyWebSearchRotationToTransientNativeSurface
+      !deferLegacyWebSearchRotationToTransientNativeSurface &&
+      !coldWebSearchSupportSettled
     ) {
       assertReplacementAllowed("changing web-search configuration");
       if (!ringZeroActive && transientWebSearchRestriction) {
