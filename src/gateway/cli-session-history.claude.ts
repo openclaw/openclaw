@@ -381,6 +381,15 @@ function resolveClaudeCliInternalSourceTool(text: string): string | undefined {
   ) {
     return "exec";
   }
+  // A run that cannot reach the user gets the same completion without the event details.
+  if (
+    body.startsWith(
+      "An async command completion event was triggered, but user delivery is disabled for this run. ",
+    ) &&
+    body.includes(" Do not mention, summarize, or reuse command output.")
+  ) {
+    return "exec";
+  }
   // Default prompts only; a configured heartbeat prompt is not recognized here.
   if (body.startsWith(HEARTBEAT_PROMPT) || body.startsWith(HEARTBEAT_RESPONSE_TOOL_PROMPT)) {
     return "heartbeat";
