@@ -1,6 +1,5 @@
 import { sleepWithAbort } from "@openclaw/retry";
 import type {
-  AgentsListResult,
   SessionPlacement,
   SessionsDispatchResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -22,23 +21,13 @@ import {
 } from "../../pages/chat/chat-send-ack.ts";
 import type { HumanMention } from "../chat/chat-types.ts";
 import type { SessionCapability } from "./session-capability.ts";
+import { readSessionPlacementPolicy } from "./session-placement-policy.ts";
 import type {
   SessionPlacementStartMode,
   SessionPlacementTarget,
 } from "./session-placement-recovery.ts";
 
 registerNewSessionRuntimeEnglish();
-
-/** Session bootstrap exposes intent only; inventory and execution retain their own grants. */
-async function readSessionPlacementPolicy(client: Pick<GatewayBrowserClient, "request">) {
-  const result = await client.request<AgentsListResult>("agents.list", {
-    includeSessionPlacement: true,
-  });
-  if (!result.sessionPlacement) {
-    throw new Error("Session placement policy is unavailable");
-  }
-  return result.sessionPlacement;
-}
 
 type SessionPlacementRequests = {
   client: Pick<GatewayBrowserClient, "request"> | null;

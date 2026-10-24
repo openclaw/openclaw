@@ -47,6 +47,9 @@ import { createWizardLogin, WizardLogin } from "./wizard-login-controller.tsx";
 
 registerMcpEnglish();
 
+type McpServersCardProps = { pluginsHref: string; docsUrl: string };
+type McpServerMessage = { kind: "error" | "success"; text: string };
+
 function quoteShellArg(value: string): string {
   return /^[A-Za-z0-9._:/-]+$/.test(value) ? value : shellEscapeBackslash(value);
 }
@@ -62,12 +65,12 @@ function tlsLabel(tls: McpServerSummary["tls"]): string | null {
   }
 }
 
-export function McpServersCard(props: { pluginsHref: string; docsUrl: string }) {
+export function McpServersCard(props: McpServersCardProps) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const config = projectOwner(context.runtimeConfig, (source) => source.state);
   const [view, setView] = createStore<{
-    message: { kind: "error" | "success"; text: string } | null;
+    message: McpServerMessage | null;
     formOpen: boolean;
   }>({ message: null, formOpen: false });
   const [busy, setBusy] = createOptimistic(false);

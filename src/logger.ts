@@ -7,16 +7,25 @@ import { defaultRuntime, type RuntimeEnv } from "./runtime.js";
 
 const subsystemPrefixRe = /^([a-z][a-z0-9-]{1,20}):\s+(.*)$/i;
 
+function splitSubsystem(message: string) {
+  const match = message.match(subsystemPrefixRe);
+  if (!match) {
+    return null;
+  }
+  const subsystem = match.at(1);
+  const rest = match.at(2);
+  if (subsystem === undefined || rest === undefined) {
+    return null;
+  }
+  return { subsystem, rest };
+}
+
 type LogMethod = "info" | "warn" | "error";
 function logWithSubsystem(level: LogMethod, message: string, runtime: RuntimeEnv) {
-  if (runtime === defaultRuntime) {
-    const match = message.match(subsystemPrefixRe);
-    const subsystem = match?.at(1);
-    const rest = match?.at(2);
-    if (subsystem !== undefined && rest !== undefined) {
-      createSubsystemLogger(subsystem)[level](rest);
-      return;
-    }
+  const parsed = runtime === defaultRuntime ? splitSubsystem(message) : null;
+  if (parsed) {
+    createSubsystemLogger(parsed.subsystem)[level](parsed.rest);
+    return;
   }
   const runtimeMethod = level === "error" ? "error" : "log";
   const formatted = theme[level](message);

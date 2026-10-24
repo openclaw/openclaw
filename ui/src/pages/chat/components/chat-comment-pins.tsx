@@ -14,13 +14,7 @@ import "../../../styles/chat/selection-annotations.css";
 
 registerChatMessageMetadataEnglish();
 
-export type ChatCommentPinsHandle = {
-  visiblePin: (id: string) => HTMLButtonElement | undefined;
-};
-const inputHandlers = new WeakMap<HTMLElement, () => void>();
-
-/** Draft attachments own the data; this transcript-local view owns source pins. */
-export const ChatCommentPins = defineSolidBridge<{
+type ChatCommentPinsProps = {
   threadState?: { commentPins?: ChatCommentPinsHandle };
   transcript?: {
     readonly messageElements: TranscriptMessageElements;
@@ -29,7 +23,15 @@ export const ChatCommentPins = defineSolidBridge<{
   attachments: readonly ChatAttachment[];
   sessionKey: string;
   disabled: boolean;
-}>(
+};
+
+export type ChatCommentPinsHandle = {
+  visiblePin: (id: string) => HTMLButtonElement | undefined;
+};
+const inputHandlers = new WeakMap<HTMLElement, () => void>();
+
+/** Draft attachments own the data; this transcript-local view owns source pins. */
+export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
   "openclaw-chat-comment-pins",
   (props, host) => {
     let root: HTMLElement | null = null;

@@ -279,6 +279,17 @@ export type NativeDeviceSettingsCapability = {
   dispose(): void;
 };
 
+type NativeDeviceSettingsWindow = Window & {
+  __OPENCLAW_NATIVE_DEVICE_SETTINGS__?: unknown;
+  webkit?: {
+    messageHandlers?: {
+      openclawDeviceSettings?: {
+        postMessage: (message: NativeDeviceSettingsMessage) => Promise<unknown>;
+      };
+    };
+  };
+};
+
 const CHANGE_EVENT = "openclaw:native-device-settings-changed";
 
 export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapability | null {
@@ -286,16 +297,7 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     return null;
   }
   // SAFETY: the host adds optional WebKit fields; the handler and snapshot are validated below.
-  const nativeWindow = window as Window & {
-    __OPENCLAW_NATIVE_DEVICE_SETTINGS__?: unknown;
-    webkit?: {
-      messageHandlers?: {
-        openclawDeviceSettings?: {
-          postMessage: (message: NativeDeviceSettingsMessage) => Promise<unknown>;
-        };
-      };
-    };
-  };
+  const nativeWindow = window as NativeDeviceSettingsWindow;
   const handler = nativeWindow.webkit?.messageHandlers?.openclawDeviceSettings;
   if (typeof handler?.postMessage !== "function") {
     return null;

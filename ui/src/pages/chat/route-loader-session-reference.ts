@@ -24,6 +24,8 @@ export type MissingSessionRouteData = {
   sessionsHref: string;
 };
 
+type SessionReferenceSearch = { agentId: string; key: string; slug?: string };
+
 type PendingSessionReference = {
   controller: AbortController;
   promise: Promise<SessionReferenceResolution | null>;
@@ -81,7 +83,7 @@ export function uniqueShortIdPrefix(
 
 export async function querySessionReference(
   context: ApplicationContext,
-  search: { agentId: string; key: string; slug?: string },
+  search: SessionReferenceSearch,
   signal: AbortSignal,
 ): Promise<SessionReferenceResolution | null> {
   const client = await waitForGatewayClient(context.gateway, signal);

@@ -55,6 +55,7 @@ import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.t
 import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
+type ChatRenderItem = SystemEventRenderItem;
 const questionIndexes = createTranscriptMemo<NonNullable<StreamGroupOptions["questionPrompts"]>>();
 const emptyQuestions: NonNullable<StreamGroupOptions["questionPrompts"]> = new Map();
 
@@ -379,7 +380,7 @@ export function projectChatTranscript(
   // Only the working indicator shows live usage and subagent status, so rows
   // without one keep memoizing across usage and child-roster patches.
   const workingUsageKey = JSON.stringify([runOutputTokens, subagents.statusKey, presented]);
-  const liveStatusSignature = (item: SystemEventRenderItem): string => {
+  const liveStatusSignature = (item: ChatRenderItem): string => {
     if (item.kind === "stream-run") {
       return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
     }
