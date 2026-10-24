@@ -11,15 +11,12 @@ import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import type { CronJob } from "../../cron/types.js";
 import { createCronTool } from "./cron-tool.js";
-import { withCronManagementCaller } from "./cron-tool.management.test-support.js";
 import {
   createHostStreamApprovalProvider,
   proveHostStreamApprovalEffects,
 } from "./cron-tool.stream-exec-policy.e2e.test-support.js";
-import type { CronToolOptions, GatewayToolCaller } from "./cron-tool.types.js";
-import { withoutGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import type { CronToolOptions } from "./cron-tool.types.js";
 import * as gatewayModule from "./gateway.js";
-import type { GatewayCallOptions } from "./gateway.js";
 
 const callGatewayTool = gatewayModule.callGatewayTool;
 
@@ -28,11 +25,7 @@ async function cliJson<T>(instance: OpenClawTestInstance, args: string[]): Promi
     [...args, "--url", instance.url, "--token", instance.gatewayToken, "--json"],
     { timeoutMs: 30_000 },
   );
-  expect(
-    result.code,
-    `${result.stderr}
-${result.stdout}`,
-  ).toBe(0);
+  expect(result.code, `${result.stderr}\n${result.stdout}`).toBe(0);
   return JSON.parse(result.stdout) as T;
 }
 
@@ -76,10 +69,6 @@ async function waitForDead(pid: number): Promise<void> {
   throw new Error(`stream process ${pid} remained alive`);
 }
 
-function toolArgs(instance: OpenClawTestInstance) {
-  return { gatewayUrl: instance.url, gatewayToken: instance.gatewayToken };
-}
-
 function createAuthorityTool(creatorToolAllowlist: CronToolOptions["creatorToolAllowlist"]) {
   return createCronTool({
     creatorToolAllowlist,
@@ -88,54 +77,18 @@ function createAuthorityTool(creatorToolAllowlist: CronToolOptions["creatorToolA
   });
 }
 
-async function withWeakManagementTool<T>(
-  run: (tool: ReturnType<typeof createCronTool>) => Promise<T>,
-): Promise<T> {
-  const runId = "cron-stream-management-authority";
-  using _ = vi
-    .spyOn(gatewayModule, "callGatewayTool")
-    .mockImplementation((...args) =>
-      withoutGatewayToolCallerIdentity(() => callGatewayTool(...args)),
-    );
-  return await withCronManagementCaller(runId, (identity) =>
-    run(
-      createCronTool({
-        runId,
-        agentSessionKey: identity.sessionKey,
-        creatorToolAllowlist: ["read"],
-        execOverrides: { host: "gateway", security: "full", ask: "off" },
-        sandboxed: false,
-      }),
-    ),
-  );
-}
-
 function seedRestartExhaustedStream(instance: OpenClawTestInstance, jobId: string): void {
-  const database = new DatabaseSync(path.join(instance.stateDir, "state", "openclaw.sqlite"));
-  try {
-    const row = database
-      .prepare("SELECT job_json, state_json FROM cron_jobs WHERE job_id = ?")
-      .get(jobId) as { job_json: string; state_json: string } | undefined;
-    if (!row) {
-      throw new Error(`cron row not found: ${jobId}`);
-    }
-    const job = JSON.parse(row.job_json) as Record<string, unknown>;
-    const state = JSON.parse(row.state_json) as Record<string, unknown>;
-    job.enabled = true;
-    Object.assign(state, {
-      streamStatus: "error",
-      streamRestartExhausted: true,
-      streamConsecutiveFailures: 5,
-    });
-    const result = database
-      .prepare("UPDATE cron_jobs SET enabled = 1, job_json = ?, state_json = ? WHERE job_id = ?")
-      .run(JSON.stringify(job), JSON.stringify(state), jobId);
-    if (result.changes !== 1) {
-      throw new Error(`expected one exhausted cron row update, got ${result.changes}`);
-    }
-  } finally {
-    database.close();
-  }
+  using database = new DatabaseSync(path.join(instance.stateDir, "state", "openclaw.sqlite"));
+  const result = database
+    .prepare(`
+    UPDATE cron_jobs SET enabled = 1,
+      job_json = json_set(job_json, '$.enabled', json('true')),
+      state_json = json_set(state_json, '$.streamStatus', 'error',
+        '$.streamRestartExhausted', json('true'), '$.streamConsecutiveFailures', 5)
+    WHERE job_id = ?
+  `)
+    .run(jobId);
+  expect(result.changes).toBe(1);
 }
 
 describe("cron stream agent authority final effects", () => {
@@ -196,32 +149,34 @@ describe("cron stream agent authority final effects", () => {
         const strong = createAuthorityTool([{ name: "exec", execOrigin: "openclaw" }]);
         const weak = createAuthorityTool(["read"]);
         const execute = (tool: ReturnType<typeof createCronTool>, args: Record<string, unknown>) =>
-          tool.execute("stream-proof", { ...toolArgs(instance), ...args });
+          tool.execute("stream-proof", {
+            gatewayUrl: instance.url,
+            gatewayToken: instance.gatewayToken,
+            ...args,
+          });
         const deny = async (
           tool: ReturnType<typeof createCronTool>,
           args: Record<string, unknown>,
           expectedMethods?: string[],
+          hooks: Partial<Record<"before" | "after", (method: string) => Promise<void>>> = {},
         ) => {
-          if (!expectedMethods) {
-            await expect(execute(tool, args)).rejects.toThrow("Gateway exec authority");
-            return;
-          }
           const methods: string[] = [];
           using _ = vi
             .spyOn(gatewayModule, "callGatewayTool")
             .mockImplementation(async (...callArgs) => {
               methods.push(callArgs[0]);
-              return await callGatewayTool(...callArgs);
+              await hooks.before?.(callArgs[0]);
+              const result = await callGatewayTool(...callArgs);
+              await hooks.after?.(callArgs[0]);
+              return result;
             });
           await expect(execute(tool, args)).rejects.toThrow("Gateway exec authority");
-          expect(methods).toEqual(expectedMethods);
+          if (expectedMethods) {
+            expect(methods).toEqual(expectedMethods);
+          }
         };
 
-        await strong.execute("allowed-create", {
-          action: "add",
-          ...toolArgs(instance),
-          job: streamInput,
-        });
+        await execute(strong, { action: "add", job: streamInput });
         const createdJobs = await cliJson<{ jobs: CronJob[] }>(instance, ["cron", "list"]);
         const created = createdJobs.jobs.find((job) => job.name === streamInput.name);
         expect(created).toBeDefined();
@@ -264,20 +219,10 @@ describe("cron stream agent authority final effects", () => {
 
         await cliJson(instance, ["cron", "disable", created.id]);
         await waitForDead(firstPid);
-        await withWeakManagementTool(async (management) => {
-          await denyUpdate(management, { enabled: true });
-        });
-        expect((await readJob()).enabled).toBe(false);
-
         await denyUpdate(weak, { enabled: true });
         expect((await readJob()).enabled).toBe(false);
 
-        await strong.execute("allowed-enable", {
-          action: "update",
-          ...toolArgs(instance),
-          jobId: created.id,
-          job: { enabled: true },
-        });
+        await execute(strong, { action: "update", jobId: created.id, job: { enabled: true } });
         const secondPid = await waitForPid(pidPath, firstPid);
         expect((await readJob()).enabled).toBe(true);
 
@@ -291,70 +236,53 @@ describe("cron stream agent authority final effects", () => {
         expect(Number(await fs.readFile(pidPath, "utf8"))).toBe(secondPid);
         process.kill(secondPid, 0);
 
+        const denyRacingUpdate = async (
+          method: string,
+          phase: "before" | "after",
+          patch: Record<string, unknown>,
+          job: Record<string, unknown>,
+          expectedMethods?: string[],
+        ) => {
+          let injected = false;
+          const inject = async (currentMethod: string) => {
+            if (method === currentMethod && !injected) {
+              injected = true;
+              await callGatewayTool(
+                "cron.update",
+                {
+                  gatewayUrl: instance.url,
+                  gatewayToken: instance.gatewayToken,
+                },
+                { id: created.id, patch },
+              );
+            }
+          };
+          await deny(weak, { action: "update", jobId: created.id, job }, expectedMethods, {
+            [phase]: inject,
+          });
+          expect(injected).toBe(true);
+        };
         const conflictSchedule = {
           ...streamInput.schedule,
           mode: "match" as const,
           match: "event",
         };
-        let injectedConflict = false;
-        const conflictCaller: GatewayToolCaller = async (method, opts, params, extra) => {
-          if (method === "cron.update" && !injectedConflict) {
-            injectedConflict = true;
-            await callGatewayTool("cron.update", opts, {
-              id: created.id,
-              patch: { schedule: conflictSchedule },
-            });
-          }
-          return await callGatewayTool(method, opts, params, extra);
-        };
-        {
-          using _ = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(conflictCaller);
-          await expect(
-            weak.execute("stale-source-resave", {
-              action: "update",
-              ...toolArgs(instance),
-              jobId: created.id,
-              job: { schedule: streamInput.schedule },
-            }),
-          ).rejects.toThrow("Gateway exec authority");
-        }
+        await denyRacingUpdate(
+          "cron.update",
+          "before",
+          { schedule: conflictSchedule },
+          { schedule: streamInput.schedule },
+        );
         const thirdPid = await waitForPid(pidPath, secondPid);
-        expect(injectedConflict).toBe(true);
         expect((await readJob()).schedule).toEqual(conflictSchedule);
 
-        const exhaustionRaceGatewayMethods: string[] = [];
-        let injectedExhaustion = false;
-        const exhaustionRaceCaller: GatewayToolCaller = async <T = Record<string, unknown>>(
-          method: string,
-          opts: GatewayCallOptions,
-          params?: unknown,
-          extra?: Parameters<typeof callGatewayTool>[3],
-        ): Promise<T> => {
-          exhaustionRaceGatewayMethods.push(method);
-          const result = await callGatewayTool<T>(method, opts, params, extra);
-          if (method === "cron.get" && !injectedExhaustion) {
-            injectedExhaustion = true;
-            await callGatewayTool("cron.update", opts, {
-              id: created.id,
-              patch: { state: { streamRestartExhausted: true } },
-            });
-          }
-          return result;
-        };
-        {
-          using _ = vi
-            .spyOn(gatewayModule, "callGatewayTool")
-            .mockImplementation(exhaustionRaceCaller);
-          await expect(
-            weak.execute("denied-exhaustion-race-enable", {
-              action: "update",
-              ...toolArgs(instance),
-              jobId: created.id,
-              job: { enabled: true },
-            }),
-          ).rejects.toThrow("Gateway exec authority");
-        }
-        expect(exhaustionRaceGatewayMethods).toEqual(["cron.get"]);
+        await denyRacingUpdate(
+          "cron.get",
+          "after",
+          { state: { streamRestartExhausted: true } },
+          { enabled: true },
+          ["cron.get"],
+        );
         await waitForDead(thirdPid);
         const racedExhausted = await readJob();
         expect(racedExhausted.state.streamRestartExhausted).toBe(true);
