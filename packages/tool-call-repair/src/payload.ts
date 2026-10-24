@@ -43,17 +43,17 @@ const HARMONY_CHANNELS = ["commentary", "analysis", "final"] as const;
 const PLAIN_TEXT_TOOL_CALL_CANDIDATE_RE =
   /(?:^|[\r\n])[^\S\r\n]*(?:\[(?:tool:)?[A-Za-z0-9_-]+\]\s*(?:\{|<parameter=)|(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=|<function=)/i;
 
-type PlainTextJsonToolCallSpan = { end: number; start: number };
-type PlainTextJsonToolCallSyntax = "harmony" | "named-bracket" | "tool-bracket";
-type PlainTextJsonToolCallState = JsonObjectScanState;
-type PlainTextJsonToolCallCandidate = {
+export type PlainTextJsonToolCallSpan = { end: number; start: number };
+export type PlainTextJsonToolCallSyntax = "harmony" | "named-bracket" | "tool-bracket";
+export type PlainTextJsonToolCallState = JsonObjectScanState;
+export type PlainTextJsonToolCallCandidate = {
   json?: PlainTextJsonToolCallState;
   name: PlainTextJsonToolCallSpan;
   nameComplete: boolean;
   payload?: PlainTextJsonToolCallSpan;
   syntax: PlainTextJsonToolCallSyntax;
 };
-type PlainTextJsonToolCallScan =
+export type PlainTextJsonToolCallScan =
   | { at: number; candidate?: PlainTextJsonToolCallCandidate; kind: "invalid" }
   | { candidate?: PlainTextJsonToolCallCandidate; kind: "prefix" }
   | (PlainTextJsonToolCallCandidate & {
@@ -234,7 +234,7 @@ function scanHarmonyOpening(text: string, start: number): PlainTextJsonToolCallO
 }
 
 /** Uncapped structural scan shared by parsing, stripping, and stream buffering. */
-function scanPlainTextJsonToolCall(
+export function scanPlainTextJsonToolCall(
   text: string,
   start = 0,
   structuralLineBreaks?: StructuralLineBreakOptions,
