@@ -45,7 +45,7 @@ type PluginStateRetention = {
   namespaceCount: number;
   nextExpiry: number;
   now: number;
-  sweepPending: boolean;
+  sweepPending: false | "known" | "unknown";
 };
 
 type PluginStateRetentionParams = { pluginId: string; namespace: string; now: number };
@@ -101,7 +101,10 @@ export function readPluginStateRetention(
     namespaceCount: coerceRequiredSqliteNumber(row?.namespace_count ?? 0),
     nextExpiry: normalizeSqliteNumber(row?.next_expiry ?? null) ?? Infinity,
     now: params.now,
-    sweepPending: (normalizeSqliteNumber(row?.first_expiry ?? null) ?? Infinity) <= params.now,
+    sweepPending:
+      (normalizeSqliteNumber(row?.first_expiry ?? null) ?? Infinity) <= params.now
+        ? "known"
+        : false,
   };
 }
 
@@ -237,9 +240,14 @@ export function registerPluginStateEntry(
     Object.assign(retention, readPluginStateRetention(store.db, { ...params, now }));
   }
   if (!retention || retention.sweepPending) {
-    const deleted = deleteExpiredPluginStateEntries(store.db, now, params);
+    const deleted = deleteExpiredPluginStateEntries(
+      store.db,
+      now,
+      params,
+      retention?.sweepPending === "known",
+    );
     if (retention) {
-      retention.sweepPending = deleted === PLUGIN_STATE_EXPIRY_BATCH_ROWS;
+      retention.sweepPending = deleted === PLUGIN_STATE_EXPIRY_BATCH_ROWS ? "unknown" : false;
     }
   }
   // Quotas and batch counts need existence, never the previous JSON payload.
