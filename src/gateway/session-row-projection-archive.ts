@@ -175,7 +175,7 @@ export function createSessionRowProjectionArchive(params: {
           readPins.delete(pins);
           limit = Math.max(
             DEFAULT_ARCHIVED_MATERIALIZED_ROWS,
-            ...Array.from(readPins, (pins) => pins.size),
+            ...Array.from(readPins, (heldPins) => heldPins.size),
           );
           trim();
         },
