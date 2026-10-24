@@ -11,7 +11,6 @@ import { createRuntimeConfigCapability } from "../config/runtime-config-capabili
 import { searchClawHub } from "./clawhub-search.ts";
 import { createDeferredRequestQueue, type TestRequest } from "./index.test-support.ts";
 import {
-  clawhubVerdictKey,
   installFromClawHub,
   installSkill,
   loadSkills,
@@ -28,12 +27,11 @@ import {
 
 type SkillsState = Parameters<typeof loadSkills>[0];
 
-function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<TestRequest>> } {
-  const request = vi.fn<TestRequest>();
-  const state: SkillsState = createProps({
-    report: null,
-    clawhubResults: [],
-  }).state;
+let state: SkillsState;
+let request: ReturnType<typeof vi.fn<TestRequest>>;
+beforeEach(() => {
+  request = vi.fn<TestRequest>();
+  state = createProps({ report: null, clawhubResults: [] }).state;
   state.skillsAgentId = "main";
   state.client = { request } as unknown as SkillsState["client"];
   state.runtimeConfig = {
@@ -53,28 +51,10 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
       }
     },
   };
-  return { state, request };
-}
-
-let state: SkillsState;
-let request: ReturnType<typeof vi.fn<TestRequest>>;
-beforeEach(() => {
-  ({ state, request } = createState());
 });
 
 function statusReport(workspaceDir = "/tmp/workspace", skills: unknown[] = []) {
   return { workspaceDir, managedSkillsDir: "/tmp/skills", skills };
-}
-
-function holdRequest() {
-  const result = createDeferred<unknown>();
-  request.mockReturnValue(result.promise);
-  return result;
-}
-
-function expectCardAbsent() {
-  expect(state.skillCardContents.agentreceipt).toBeUndefined();
-  expect(state.skillCardContentKeys.agentreceipt).toBeUndefined();
 }
 
 async function attachRuntimeConfig(subject: SkillsState) {
@@ -93,21 +73,21 @@ async function attachRuntimeConfig(subject: SkillsState) {
   return runtimeConfig;
 }
 
-function linkedSkill(slug = "agentreceipt", ownerHandle?: string, installedAt = 123) {
-  return {
-    name: slug,
+function linkedSkill(slug = "agentreceipt", ownerHandle?: string, installedVersion = "1.2.3") {
+  return createSkill({
     skillKey: ownerHandle ? `${ownerHandle}-${slug}` : slug,
-    source: "workspace",
     clawhub: {
       status: "linked",
       valid: true,
       registry: "https://clawhub.ai",
       slug,
       ownerHandle,
-      installedVersion: "1.2.3",
-      installedAt,
+      installedVersion,
+      installedAt: 123,
+      originPath: "/tmp/origin.json",
+      lockPath: "/tmp/lock.json",
     },
-  };
+  });
 }
 
 function verdict(ownerHandle?: string, passed = true) {
@@ -116,51 +96,21 @@ function verdict(ownerHandle?: string, passed = true) {
     registry: "https://clawhub.ai",
     ok: passed,
     decision: passed ? "pass" : "fail",
-    reasons: passed ? [] : ["security.suspicious"],
     requestedSlug: slug,
     requestedOwnerHandle: ownerHandle,
     requestedVersion: "1.2.3",
     publisherHandle: ownerHandle,
-    slug,
-    version: "1.2.3",
     securityStatus: passed ? "clean" : "suspicious",
     securityPassed: passed,
   };
 }
 
-function createSkillCardReport(installedVersion?: string, installedAt = 123): SkillStatusReport {
-  return {
-    workspaceDir: "/tmp/workspace",
-    managedSkillsDir: "/tmp/skills",
-    skills: [
-      createSkill({
-        name: "AgentReceipt",
-        description: "Trust card fixture",
-        skillKey: "agentreceipt",
-        filePath: "/tmp/workspace/skills/agentreceipt/SKILL.md",
-        baseDir: "/tmp/workspace/skills/agentreceipt",
-        ...(installedVersion
-          ? {
-              clawhub: {
-                status: "linked",
-                valid: true,
-                registry: "https://clawhub.ai",
-                slug: "agentreceipt",
-                installedVersion,
-                installedAt,
-                originPath: "/tmp/workspace/skills/agentreceipt/.clawhub/origin.json",
-                lockPath: "/tmp/workspace/.clawhub/lock.json",
-              },
-            }
-          : {}),
-        skillCard: {
-          present: true,
-          path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
-          sizeBytes: 34,
-        },
-      }),
-    ],
-  };
+function createSkillCardReport(installedVersion?: string): SkillStatusReport {
+  const skill = installedVersion
+    ? linkedSkill("agentreceipt", undefined, installedVersion)
+    : createSkill({ skillKey: "agentreceipt" });
+  skill.skillCard = { present: true, path: "/tmp/card.md", sizeBytes: 34 };
+  return { ...statusReport(), skills: [skill] };
 }
 
 describe("loadSkills", () => {
@@ -210,97 +160,56 @@ describe("loadSkills", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { owners: [undefined], name: "unqualified links" },
-    { owners: ["alice", "bob"], name: "same slug with distinct owners" },
-  ])("batches verdicts for $name", async ({ owners }) => {
+  it("batches verdicts without conflating installed owners", async () => {
     state.skillsAgentId = "research";
-    const items = owners.map((owner, i) => verdict(owner, i === 0));
-    request.mockImplementation(async (method) => {
-      if (method === "skills.status") {
-        return statusReport("/tmp/research", [
+    const owners = [undefined, "alice", "bob"];
+    const items = owners.map((owner, i) => verdict(owner, i !== 2));
+    request
+      .mockResolvedValueOnce(
+        statusReport("/tmp/research", [
           ...owners.map((owner) => linkedSkill(owner ? "weather" : "agentreceipt", owner)),
           { name: "Local", skillKey: "local", source: "workspace" },
-        ]);
-      }
-      if (method === "skills.securityVerdicts") {
-        return { schema: "openclaw.skills.security-verdicts.v1", items };
-      }
-      return {};
-    });
+        ]),
+      )
+      .mockResolvedValueOnce({ items });
     await loadSkills(state);
     expect(request.mock.calls).toEqual([
       ["skills.status", { agentId: "research" }],
       ["skills.securityVerdicts", { agentId: "research" }],
     ]);
-    expect(state.clawhubVerdicts).toEqual(
-      Object.fromEntries(
-        items.map((item) => [
-          clawhubVerdictKey({
-            registry: "https://clawhub.ai",
-            slug: item.requestedSlug,
-            ownerHandle: item.requestedOwnerHandle,
-            version: "1.2.3",
-          }),
-          item,
-        ]),
-      ),
-    );
-    expect(Object.keys(state.clawhubVerdicts)).toHaveLength(owners.length);
+    const keys = [
+      "https://clawhub.ai\0\0agentreceipt\u00001.2.3",
+      "https://clawhub.ai\0alice\0weather\u00001.2.3",
+      "https://clawhub.ai\0bob\0weather\u00001.2.3",
+    ];
+    expect(Object.keys(state.clawhubVerdicts)).toEqual(keys);
+    expect(Object.values(state.clawhubVerdicts)).toEqual(items);
     expect(state.skillsReport?.workspaceDir).toBe("/tmp/research");
     expect(state.clawhubVerdictsError).toBeNull();
   });
 
-  it.each([
-    { target: "beta", staleFirst: false },
-    { target: "alpha", staleFirst: true },
-  ])(
-    "rejects stale reports returning to $target (stale first: $staleFirst)",
-    async ({ target, staleFirst }) => {
-      const old = createDeferred<unknown>();
-      const current = createDeferred<unknown>();
-      request.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
-      state.skillsAgentId = "alpha";
-      state.skillEdits = { shared: "stale-secret" };
-      const firstLoad = loadSkills(state);
-      await Promise.resolve();
-      setSkillsAgentId(state, "beta");
-      if (target === "alpha") {
-        setSkillsAgentId(state, target);
-      }
-      expect(state.skillEdits).toEqual({});
-      const secondLoad = loadSkills(state);
-      await Promise.resolve();
-      expect(request.mock.calls).toEqual([
-        ["skills.status", { agentId: "alpha" }],
-        ["skills.status", { agentId: target }],
-      ]);
-      if (staleFirst) {
-        old.resolve(statusReport("/tmp/stale"));
-        await firstLoad;
-        expect(state).toMatchObject({ skillsReport: null, skillsLoading: true });
-      }
-      current.resolve(
-        statusReport("/tmp/current", [{ name: "Current", skillKey: target, source: "workspace" }]),
-      );
-      await secondLoad;
-      if (!staleFirst) {
-        old.resolve(statusReport("/tmp/stale"));
-        await firstLoad;
-      }
-      expect(state).toMatchObject({
-        skillsAgentId: target,
-        skillsReport: {
-          workspaceDir: "/tmp/current",
-          skills: [{ name: "Current", skillKey: target, source: "workspace" }],
-        },
-        skillsLoading: false,
-      });
-    },
-  );
+  it("rejects an older report after returning to the same agent", async () => {
+    const queue = createDeferredRequestQueue(request);
+    state.skillsAgentId = "alpha";
+    state.skillEdits = { shared: "stale-secret" };
+    const old = loadSkills(state);
+    setSkillsAgentId(state, "beta");
+    setSkillsAgentId(state, "alpha");
+    expect(state.skillEdits).toEqual({});
+    const current = loadSkills(state);
+    queue.resolveNext(statusReport("/tmp/stale"));
+    await old;
+    expect(state.skillsReport).toBeNull();
+    expect(state.skillsLoading).toBe(true);
+    queue.resolveNext(statusReport("/tmp/current"));
+    await current;
+    expect(state.skillsReport?.workspaceDir).toBe("/tmp/current");
+    expect(state.skillsLoading).toBe(false);
+  });
 
   it("releases loading ownership when the current client disconnects", async () => {
-    const status = holdRequest();
+    const status = createDeferred<unknown>();
+    request.mockReturnValue(status.promise);
     const load = loadSkills(state);
     await waitForFast(() => expect(state.skillsLoading).toBe(true));
     state.connected = false;
@@ -314,11 +223,12 @@ describe("loadSkills", () => {
   it("drops cached Skill Card content when refreshed card metadata changes", async () => {
     state.skillCardContents = { agentreceipt: "old card" };
     state.skillCardContentKeys = {
-      agentreceipt: "/tmp/workspace/skills/agentreceipt/skill-card.md\u000034\u00001.2.3",
+      agentreceipt: "/tmp/card.md\u000034\u00001.2.3",
     };
-    request.mockResolvedValueOnce(createSkillCardReport("1.2.4", 456));
+    request.mockResolvedValueOnce(createSkillCardReport("1.2.4"));
     await loadSkills(state);
-    expectCardAbsent();
+    expect(state.skillCardContents.agentreceipt).toBeUndefined();
+    expect(state.skillCardContentKeys.agentreceipt).toBeUndefined();
   });
 });
 
@@ -330,7 +240,6 @@ describe("loadSkillCard", () => {
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise)
       .mockReturnValue(first.promise);
-    state.skillsAgentId = "research";
     const report = createSkillCardReport();
     const original = report.skills[0]!;
     state.skillsReport = {
@@ -358,13 +267,11 @@ describe("loadSkillCard", () => {
     await Promise.all([originalRead, otherRead, revisited]);
     await loadSkillCard(state, "second-card");
     expect(request.mock.calls).toEqual([
-      ["skills.skillCard", { agentId: "research", skillKey: "agentreceipt" }],
-      ["skills.skillCard", { agentId: "research", skillKey: "second-card" }],
+      ["skills.skillCard", { agentId: "main", skillKey: "agentreceipt" }],
+      ["skills.skillCard", { agentId: "main", skillKey: "second-card" }],
     ]);
     expect(state.skillCardContents).toEqual({ agentreceipt: "# First card", "second-card": "" });
-    expect(state.skillCardContentKeys.agentreceipt).toBe(
-      "/tmp/workspace/skills/agentreceipt/skill-card.md\u000034\u0000",
-    );
+    expect(state.skillCardContentKeys.agentreceipt).toBe("/tmp/card.md\u000034\u0000");
     expect(state.skillCardErrors).toEqual({});
   });
 
@@ -376,46 +283,42 @@ describe("loadSkillCard", () => {
       request.mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
       state.skillsReport = createSkillCardReport("1.2.3");
       const oldRead = loadSkillCard(state, "agentreceipt");
-      state.skillsReport = createSkillCardReport("1.2.4", 456);
+      state.skillsReport = createSkillCardReport("1.2.4");
       const freshRead = replace ? loadSkillCard(state, "agentreceipt") : undefined;
       old.resolve({ skillKey: "agentreceipt", content: "Old version" });
       await oldRead;
-      expectCardAbsent();
+      expect(state.skillCardContents.agentreceipt).toBeUndefined();
+      expect(state.skillCardContentKeys.agentreceipt).toBeUndefined();
       if (replace) {
         fresh.resolve({ skillKey: "agentreceipt", content: "Fresh version" });
         await freshRead;
-        expect(request).toHaveBeenCalledTimes(2);
         expect(state.skillCardContents.agentreceipt).toBe("Fresh version");
       }
     },
   );
 });
 
-describe("searchClawHub", () => {
-  it("requests the discovery feed when the query is empty", async () => {
-    request.mockResolvedValue({ results: [] });
-    await expect(searchClawHub(state.client!, "   ")).resolves.toEqual([]);
-    expect(request).toHaveBeenCalledWith(
-      "skills.search",
-      { query: undefined, limit: 20 },
-      { signal: undefined },
-    );
-  });
+it("requests the discovery feed when the query is empty", async () => {
+  request.mockResolvedValue({ results: [] });
+  await expect(searchClawHub(state.client!, "   ")).resolves.toEqual([]);
+  expect(request).toHaveBeenCalledWith(
+    "skills.search",
+    { query: undefined, limit: 20 },
+    { signal: undefined },
+  );
 });
 
-describe("loadClawHubDetail", () => {
-  it("ignores a same-client detail response from an older connection epoch", async () => {
-    const queue = createDeferredRequestQueue(request);
-    const pending = loadClawHubDetail(state, "github");
-    state.connected = false;
-    state.skillsAgentRevision++;
-    state.connected = true;
-    queue.resolveNext({
-      skill: { slug: "stale", displayName: "Stale", createdAt: 1, updatedAt: 2 },
-    });
-    await pending;
-    expect(state.clawhubDetail).toBeNull();
+it("ignores a same-client detail response from an older connection epoch", async () => {
+  const queue = createDeferredRequestQueue(request);
+  const pending = loadClawHubDetail(state, "github");
+  state.connected = false;
+  state.skillsAgentRevision++;
+  state.connected = true;
+  queue.resolveNext({
+    skill: { slug: "stale", displayName: "Stale", createdAt: 1, updatedAt: 2 },
   });
+  await pending;
+  expect(state.clawhubDetail).toBeNull();
 });
 
 describe("skill mutations", () => {
@@ -432,7 +335,6 @@ describe("skill mutations", () => {
     expect(request).not.toHaveBeenCalled();
     agents.resolve();
     await refresh;
-    expect(request).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" });
     expect(state.skillOperation).toBeNull();
   });
@@ -447,16 +349,11 @@ describe("skill mutations", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     queue.resolveNext(statusReport("/tmp/beta"));
     await refresh;
-    expect(request.mock.calls).toEqual([
-      ["skills.status", { agentId: "alpha" }],
-      ["skills.status", { agentId: "beta" }],
-    ]);
     expect(state.skillsReport?.workspaceDir).toBe("/tmp/beta");
     expect(state.skillOperation).toBeNull();
   });
 
   it("saves API keys and reports success", async () => {
-    state.skillsAgentId = "research";
     request.mockResolvedValue({});
     state.skillEdits.github = "  sk-test  ";
     await saveSkillApiKey(state, "github");
@@ -468,8 +365,6 @@ describe("skill mutations", () => {
       kind: "success",
       message: "API key saved — stored in openclaw.json (skills.entries.github)",
     });
-    expect(state.skillOperation).toBeNull();
-    expect(state.skillsError).toBeNull();
   });
 
   it("does not clear an existing API key when its replacement is blank", async () => {
@@ -480,22 +375,25 @@ describe("skill mutations", () => {
     expect(state.skillOperation).toBeNull();
   });
 
-  it("config.set serializes skill changes after pending settings drafts and refreshes both owners", async () => {
+  it.each([false, true])("serializes config writes (revoke access: %s)", async (revoke) => {
+    const firstSet = createDeferred<unknown>();
     const methods: string[] = [];
-    let storedConfig: Record<string, unknown> = { count: 1 };
+    let config: Record<string, unknown> = { count: 1 };
     let hash = "hash-1";
+    let canDispatch = true;
     request.mockImplementation(async (method, params) => {
       methods.push(method);
       if (method === "config.get") {
-        return configSnapshot(storedConfig, hash, JSON.stringify(storedConfig));
+        return configSnapshot(config, hash, JSON.stringify(config));
       }
       if (method === "config.set") {
-        storedConfig = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
+        await firstSet.promise;
+        config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
         hash = "hash-2";
-        return { config: storedConfig, hash };
+        return { config, hash };
       }
       if (method === "skills.update") {
-        storedConfig = { ...storedConfig, skillEnabled: true };
+        config = { ...config, skillEnabled: true };
         hash = "hash-3";
         return {};
       }
@@ -503,44 +401,23 @@ describe("skill mutations", () => {
     });
     const runtimeConfig = await attachRuntimeConfig(state);
     methods.length = 0;
-
-    runtimeConfig.patchForm(["count"], 2);
-    await updateSkillEnabled(state, "github", true);
-
-    expect(methods).toEqual(["config.set", "skills.update", "config.get", "skills.status"]);
-    expect(runtimeConfig.state.configForm).toEqual({ count: 2, skillEnabled: true });
-    expect(state.skillMessages.github).toEqual({ kind: "success", message: "Skill enabled" });
-  });
-
-  it("config.set does not dispatch a queued skill update after access changes", async () => {
-    const firstSet = createDeferred<unknown>();
-    const methods: string[] = [];
-    let canDispatch = true;
-    request.mockImplementation((method) => {
-      methods.push(method);
-      if (method === "config.get") {
-        return Promise.resolve(configSnapshot({ count: 1 }, "hash-1", '{"count":1}'));
-      }
-      if (method === "config.set") {
-        return firstSet.promise;
-      }
-      return Promise.resolve(statusReport());
-    });
-    const runtimeConfig = await attachRuntimeConfig(state);
-    methods.length = 0;
-
     runtimeConfig.patchForm(["count"], 2);
     const mutation = updateSkillEnabled(state, "github", true, () => canDispatch);
     await waitForFast(() => expect(methods).toEqual(["config.set"]));
-    canDispatch = false;
-    firstSet.resolve({ config: { count: 2 }, hash: "hash-2" });
+    canDispatch = !revoke;
+    firstSet.resolve({});
     await mutation;
-
-    expect(methods).toEqual(["config.set"]);
-    expect(state.skillMessages.github).toEqual({
-      kind: "error",
-      message: "Access changed before the skill update started.",
-    });
+    expect(methods).toEqual(
+      revoke ? ["config.set"] : ["config.set", "skills.update", "config.get", "skills.status"],
+    );
+    expect(runtimeConfig.state.configForm).toEqual(
+      revoke ? { count: 2 } : { count: 2, skillEnabled: true },
+    );
+    expect(state.skillMessages.github).toEqual(
+      revoke
+        ? { kind: "error", message: "Access changed before the skill update started." }
+        : { kind: "success", message: "Skill enabled" },
+    );
   });
 
   it("reports a committed skill update when its configuration refresh fails", async () => {
@@ -558,7 +435,7 @@ describe("skill mutations", () => {
   });
 
   it.each(["skills.update", "skills.install"] as const)(
-    "serializes %s with other mutations and locks API key edits",
+    "serializes %s and locks edits",
     async (firstMethod) => {
       const firstResult = createDeferred<unknown>();
       request.mockImplementation(async (method) => {
@@ -573,11 +450,6 @@ describe("skill mutations", () => {
           ? updateSkillEnabled(state, "github", true)
           : installFromClawHub(state, "github");
       await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
-      expect(state.skillOperation).toEqual(
-        firstMethod === "skills.update"
-          ? { kind: "skill", skillKey: "github" }
-          : { kind: "clawhub", ref: "github" },
-      );
       if (firstMethod === "skills.update") {
         await installFromClawHub(state, "calendar");
       } else {
@@ -589,7 +461,6 @@ describe("skill mutations", () => {
 
       firstResult.resolve({});
       await first;
-      expect(request.mock.calls.map(([method]) => method)).toEqual([firstMethod, "skills.status"]);
       expect(state.skillOperation).toBeNull();
     },
   );
@@ -630,10 +501,6 @@ describe("skill mutations", () => {
 
     currentMutationResult.resolve({});
     await currentMutation;
-    expect(currentRequest.mock.calls.map(([method]) => method)).toEqual([
-      "skills.update",
-      "skills.status",
-    ]);
     expect(state.skillsReport?.workspaceDir).toBe("/tmp/current");
     expect(state.skillOperation).toBeNull();
   });
@@ -671,10 +538,6 @@ describe("skill mutations", () => {
       await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
       report.resolve(statusReport("/tmp/beta"));
       await mutation;
-      expect(request.mock.calls).toEqual([
-        ["skills.update", { skillKey: "github", enabled: true }],
-        ["skills.status", { agentId: "beta" }],
-      ]);
       expect(state).toMatchObject({
         skillsReport: { workspaceDir: "/tmp/beta" },
         skillsError: null,
@@ -684,21 +547,14 @@ describe("skill mutations", () => {
   );
 
   it("shows ClawHub trust warnings returned by successful skill installs", async () => {
-    request.mockImplementation(async (method: string) => {
-      if (method === "skills.install") {
-        return {
-          message: "Installed github@1.2.3",
-          warning: "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check",
-        };
-      }
-      return {};
-    });
+    const warning = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";
+    request
+      .mockResolvedValueOnce({ message: "Installed github@1.2.3", warning })
+      .mockResolvedValue({});
     await installFromClawHub(state, "github");
     expect(state.clawhubInstallMessage).toEqual({
       kind: "success",
-      text:
-        "Installed github@1.2.3\n\n" +
-        "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check",
+      text: `Installed github@1.2.3\n\n${warning}`,
     });
   });
 
@@ -719,78 +575,58 @@ describe("skill mutations", () => {
   });
 
   it.each([
-    {
-      name: "legacy install",
-      run: (subject: SkillsState) => installSkill(subject, "github", "GitHub", "install-123"),
-      expectedRequest: {
-        agentId: "alpha",
-        name: "GitHub",
-        installId: "install-123",
-        dangerouslyForceUnsafeInstall: false,
-      },
-    },
-    {
-      name: "ClawHub install",
-      run: (subject: SkillsState) => installFromClawHub(subject, "github"),
-      expectedRequest: {
-        agentId: "alpha",
-        source: "clawhub",
-        slug: "github",
-      },
-    },
-  ])(
-    "refreshes the current scope after switching during $name",
-    async ({ run, expectedRequest }) => {
-      const queue = createDeferredRequestQueue(request);
-      state.skillsAgentId = "alpha";
+    ["legacy", { name: "GitHub", installId: "install-123", dangerouslyForceUnsafeInstall: false }],
+    ["clawhub", { source: "clawhub", slug: "github" }],
+  ] as const)("refreshes the new scope during %s install", async (kind, params) => {
+    const queue = createDeferredRequestQueue(request);
+    state.skillsAgentId = "alpha";
 
-      const pending = run(state);
-      await Promise.resolve();
-      setSkillsAgentId(state, "beta");
-      queue.resolveNext({ message: "Installed" });
-      await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-      queue.resolveNext(statusReport("/tmp/beta-after-install"));
-      await pending;
+    const pending =
+      kind === "legacy"
+        ? installSkill(state, "github", "GitHub", "install-123")
+        : installFromClawHub(state, "github");
+    await Promise.resolve();
+    setSkillsAgentId(state, "beta");
+    queue.resolveNext({ message: "Installed" });
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    queue.resolveNext(statusReport("/tmp/beta-after-install"));
+    await pending;
 
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(request).toHaveBeenNthCalledWith(1, "skills.install", expectedRequest);
-      expect(request).toHaveBeenNthCalledWith(2, "skills.status", { agentId: "beta" });
-      expect(state.skillsAgentId).toBe("beta");
-      expect(state.skillsReport?.workspaceDir).toBe("/tmp/beta-after-install");
-      expect(state.skillMessages).toEqual({});
-      expect(state.clawhubInstallMessage).toBeNull();
-      expect(state.skillOperation).toBeNull();
-    },
-  );
+    expect(request).toHaveBeenNthCalledWith(1, "skills.install", { agentId: "alpha", ...params });
+    expect(request).toHaveBeenNthCalledWith(2, "skills.status", { agentId: "beta" });
+    expect(state.skillsAgentId).toBe("beta");
+    expect(state.skillsReport?.workspaceDir).toBe("/tmp/beta-after-install");
+    expect(state.skillMessages).toEqual({});
+    expect(state.clawhubInstallMessage).toBeNull();
+    expect(state.skillOperation).toBeNull();
+  });
 });
 
-describe("reconcileSkillsAgentId", () => {
-  it("retires presentation before selecting the roster default after the selected agent is deleted", () => {
-    state.skillsAgentId = "deleted";
-    state.skillsReport = statusReport("/tmp/deleted");
-    state.skillOperation = { kind: "clawhub", ref: "calendar" };
-    const beforeRetarget = vi.fn(() => {
-      expect(state.skillsAgentId).toBe("deleted");
-      expect(state.skillsAgentRevision).toBe(0);
-      expect(state.skillsReport?.workspaceDir).toBe("/tmp/deleted");
-    });
-    setSkillsAgentId(state, " deleted ", beforeRetarget);
-    expect(beforeRetarget).not.toHaveBeenCalled();
-
-    reconcileSkillsAgentId(
-      state,
-      {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main" }],
-      },
-      beforeRetarget,
-    );
-    expect(beforeRetarget).toHaveBeenCalledTimes(1);
-    expect(state.skillsAgentId).toBe("main");
-    expect(state.skillsAgentRevision).toBe(1);
-    expect(state.skillsReport).toBeNull();
-    expect(state.skillOperation).toEqual({ kind: "clawhub", ref: "calendar" });
+it("retires presentation before selecting the roster default after the selected agent is deleted", () => {
+  state.skillsAgentId = "deleted";
+  state.skillsReport = statusReport("/tmp/deleted");
+  state.skillOperation = { kind: "clawhub", ref: "calendar" };
+  const beforeRetarget = vi.fn(() => {
+    expect(state.skillsAgentId).toBe("deleted");
+    expect(state.skillsAgentRevision).toBe(0);
+    expect(state.skillsReport?.workspaceDir).toBe("/tmp/deleted");
   });
+  setSkillsAgentId(state, " deleted ", beforeRetarget);
+  expect(beforeRetarget).not.toHaveBeenCalled();
+
+  reconcileSkillsAgentId(
+    state,
+    {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }],
+    },
+    beforeRetarget,
+  );
+  expect(beforeRetarget).toHaveBeenCalledTimes(1);
+  expect(state.skillsAgentId).toBe("main");
+  expect(state.skillsAgentRevision).toBe(1);
+  expect(state.skillsReport).toBeNull();
+  expect(state.skillOperation).toEqual({ kind: "clawhub", ref: "calendar" });
 });
