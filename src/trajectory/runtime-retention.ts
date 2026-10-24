@@ -1,7 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
-import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { readSqliteInspectionBudget } from "../infra/sqlite-readonly-worker.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -71,7 +70,12 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
       Promise.resolve().then(() => reader?.release()),
       Promise.resolve().then(() => execution?.release()),
     ]);
-    throwSettledAggregate(outcomes, "Trajectory retention cleanup failed");
+    const failures = outcomes.flatMap((outcome) =>
+      outcome.status === "rejected" ? [outcome.reason] : [],
+    );
+    if (failures.length) {
+      throw new AggregateError(failures, "Trajectory retention cleanup failed");
+    }
     unregisterRoot?.();
     unregister?.();
     state.pending = undefined;

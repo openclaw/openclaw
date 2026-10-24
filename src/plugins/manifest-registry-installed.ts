@@ -65,7 +65,7 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
   index: InstalledPluginIndex,
 ): string {
   const facts = getInstalledPluginIndexFacts(index);
-  const cached = facts.fingerprint;
+  const cached = facts?.fingerprint;
   if (cached) {
     return cached;
   }
@@ -94,7 +94,9 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
       }),
     ),
   });
-  facts.fingerprint = fingerprint;
+  if (facts) {
+    facts.fingerprint = fingerprint;
+  }
   return fingerprint;
 }
 
@@ -575,14 +577,18 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
           })
         : params.index.diagnostics;
       if (params.manifestRegistry && !params.bundledChannelConfigCollector) {
-        const cache = getPluginCache().metadata.preparedManifests;
-        let selections = cache.get(params.manifestRegistry);
-        const key = JSON.stringify([
-          resolveInstalledManifestRegistryIndexFingerprint(params.index),
-          pluginIdSet ? [...pluginIdSet].toSorted() : null,
-          params.includeDisabled === true,
-        ]);
-        const cached = selections?.get(key);
+        const cache = getInstalledPluginIndexFacts(params.index)
+          ? getPluginCache().metadata.preparedManifests
+          : undefined;
+        let selections = cache?.get(params.manifestRegistry);
+        const key = cache
+          ? JSON.stringify([
+              resolveInstalledManifestRegistryIndexFingerprint(params.index),
+              pluginIdSet ? [...pluginIdSet].toSorted() : null,
+              params.includeDisabled === true,
+            ])
+          : undefined;
+        const cached = key ? selections?.get(key) : undefined;
         if (cached) {
           return cached;
         }
@@ -595,11 +601,13 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
           ).map(normalizePreparedManifestRecord),
           diagnostics: [...diagnostics],
         };
-        if (!selections) {
-          cache.set(params.manifestRegistry, (selections = new Map()));
+        if (cache && key) {
+          if (!selections) {
+            cache.set(params.manifestRegistry, (selections = new Map()));
+          }
+          selections.set(key, prepared);
+          pruneMapToMaxSize(selections, 64);
         }
-        selections.set(key, prepared);
-        pruneMapToMaxSize(selections, 64);
         return prepared;
       }
       const resolveCandidate = prepareInstalledPluginCandidateResolver({

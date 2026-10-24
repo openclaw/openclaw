@@ -1,4 +1,3 @@
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   executeExistingOpenClawStateRead,
@@ -25,7 +24,20 @@ export function readUserProfileCatalogSnapshot(
     getActiveOpenClawStateDatabaseReadSnapshot(options)
       ? undefined
       : JSON.stringify([revision.identityKey, revision.profileRevision, revision.bindingRevision]);
-  const read = () =>
-    executeExistingOpenClawStateRead(options, { type: "userProfiles.catalog" }, { current: true });
-  return key ? getOrCreatePromise(pendingReads, key, read, { evictOnSettled: true }) : read();
+  let pending = key && pendingReads.get(key);
+  if (!pending) {
+    pending = executeExistingOpenClawStateRead(
+      options,
+      { type: "userProfiles.catalog" },
+      { current: true },
+    ).finally(() => {
+      if (key) {
+        pendingReads.delete(key);
+      }
+    });
+    if (key) {
+      pendingReads.set(key, pending);
+    }
+  }
+  return pending;
 }

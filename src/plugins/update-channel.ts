@@ -145,8 +145,36 @@ async function syncPluginsForUpdateChannelWithLease(
     logger.warn?.(warning);
   }
 
-  const isDevChannel = params.channel === "dev";
-  if (!isDevChannel) {
+  if (params.channel === "dev") {
+    for (const [pluginId, record] of Object.entries(installs)) {
+      const bundledInfo = bundled.get(pluginId);
+      if (!bundledInfo || retainedLinks.has(pluginId) || params.skipIds?.has(pluginId)) {
+        continue;
+      }
+
+      addBundledLoadPath(bundledInfo.localPath);
+
+      const alreadyBundled =
+        record.source === "path" && userPathsEqual(record.sourcePath, bundledInfo.localPath, env);
+      if (alreadyBundled) {
+        continue;
+      }
+
+      next = recordPluginInstall(next, {
+        pluginId,
+        source: "path",
+        sourcePath: bundledInfo.localPath,
+        installPath: bundledInfo.localPath,
+        ...(bundledInfo.contextEngineIds
+          ? { contextEngineIdsByPlugin: { [pluginId]: [...bundledInfo.contextEngineIds] } }
+          : {}),
+        spec: record.spec ?? bundledInfo.npmSpec,
+        version: record.version,
+      });
+      summary.switchedToBundled.push(pluginId);
+      changed = true;
+    }
+  } else {
     const bridges = params.externalizedBundledPluginBridges ?? [];
     for (const bridge of bridges) {
       const targetPluginId = getExternalizedBundledPluginTargetId(bridge);
@@ -405,23 +433,13 @@ async function syncPluginsForUpdateChannelWithLease(
       }
       changed = true;
     }
-  }
 
-  for (const [pluginId, record] of Object.entries(installs)) {
-    const bundledInfo = bundled.get(pluginId);
-    if (!bundledInfo || retainedLinks.has(pluginId) || params.skipIds?.has(pluginId)) {
-      continue;
-    }
-
-    if (isDevChannel) {
-      addBundledLoadPath(bundledInfo.localPath);
-      if (
-        record.source === "path" &&
-        userPathsEqual(record.sourcePath, bundledInfo.localPath, env)
-      ) {
+    for (const [pluginId, record] of Object.entries(installs)) {
+      const bundledInfo = bundled.get(pluginId);
+      if (!bundledInfo || retainedLinks.has(pluginId) || params.skipIds?.has(pluginId)) {
         continue;
       }
-    } else {
+
       if (record.source === "npm") {
         loadHelpers.removePath(bundledInfo.localPath);
         continue;
@@ -439,23 +457,20 @@ async function syncPluginsForUpdateChannelWithLease(
       if (userPathsEqual(record.installPath, bundledInfo.localPath, env)) {
         continue;
       }
-    }
 
-    next = recordPluginInstall(next, {
-      pluginId,
-      source: "path",
-      sourcePath: bundledInfo.localPath,
-      installPath: bundledInfo.localPath,
-      ...(bundledInfo.contextEngineIds
-        ? { contextEngineIdsByPlugin: { [pluginId]: [...bundledInfo.contextEngineIds] } }
-        : {}),
-      spec: record.spec ?? bundledInfo.npmSpec,
-      version: record.version,
-    });
-    if (isDevChannel) {
-      summary.switchedToBundled.push(pluginId);
+      next = recordPluginInstall(next, {
+        pluginId,
+        source: "path",
+        sourcePath: bundledInfo.localPath,
+        installPath: bundledInfo.localPath,
+        ...(bundledInfo.contextEngineIds
+          ? { contextEngineIdsByPlugin: { [pluginId]: [...bundledInfo.contextEngineIds] } }
+          : {}),
+        spec: record.spec ?? bundledInfo.npmSpec,
+        version: record.version,
+      });
+      changed = true;
     }
-    changed = true;
   }
 
   if (loadHelpers.changed) {

@@ -1,5 +1,4 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
@@ -212,8 +211,13 @@ function createSharedStateWorkerOwner() {
     const settled = await Promise.allSettled(
       [...retiring.keys()].filter((entry) => matches(entry, identity)).map(retire),
     );
+    const errors = settled.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
     refreshPressureSubscription();
-    throwSettledAggregate(settled, "Failed to close shared-state SQLite workers");
+    if (errors.length) {
+      throw new AggregateError(errors, "Failed to close shared-state SQLite workers");
+    }
   }
   registerOpenClawStateDatabaseAsyncResource({ close });
   registerOpenClawStateDatabaseLifecycleListener((event) => {

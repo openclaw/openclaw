@@ -12,7 +12,6 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { captureSqliteWorkerEnvironmentData } from "./bun-sqlite-library.js";
-import { throwSettledAggregate } from "./error-graph-internal.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import {
@@ -101,6 +100,10 @@ function forgetNativeSource(source: NativeSource): void {
   } else if (lifetime.defaultSource === source) {
     lifetime.defaultSource = undefined;
   }
+}
+
+function nativeCleanupFailures(results: PromiseSettledResult<unknown>[]): unknown[] {
+  return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
 }
 
 function nativeRuntime(source: NativeSource): NativeRuntime {
@@ -306,7 +309,10 @@ export function captureRetainedNativeWorkerSource(options?: {
     close() {
       return (closingOwners ??= Promise.resolve().then(async () => {
         const results = await Promise.allSettled([...owners.values()].map((close) => close()));
-        throwSettledAggregate(results, "Native worker execution owner cleanup failed");
+        const errors = nativeCleanupFailures(results);
+        if (errors.length) {
+          throw new AggregateError(errors, "Native worker execution owner cleanup failed");
+        }
         source.closing = true;
         await source.runtime?.close();
         await source.brokerClose;

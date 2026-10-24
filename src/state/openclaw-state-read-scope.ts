@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   SqliteCoordinatorError,
-  runWithSqliteAsyncCleanup,
   throwSqliteLifecycleErrors,
 } from "../infra/sqlite-lifecycle-errors.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
@@ -88,7 +87,20 @@ export async function runRetainedReadScope<T>(
   scope: RetainedReadScope,
   operation: () => Promise<T>,
 ): Promise<T> {
-  return runWithSqliteAsyncCleanup(scope, "Shared-state read scope and cleanup failed", operation);
+  let result!: T;
+  const errors: unknown[] = [];
+  try {
+    result = await operation();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await scope.close();
+  } catch (error) {
+    errors.push(error);
+  }
+  throwSqliteLifecycleErrors(errors, "Shared-state read scope and cleanup failed");
+  return result;
 }
 
 /** Leave synchronous admission before native cleanup can reenter a reader. */

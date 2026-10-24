@@ -242,6 +242,7 @@ it("feeds merged workspace plugins to snapshot-backed read-only discovery", () =
     "/srv/research",
   ]);
   expect(snapshot?.discovery?.candidates.map(resolvePluginCandidateInstallOwner)).toEqual(ids);
+  expect(Object.isFrozen(snapshot?.index.plugins)).toBe(true);
   expect(
     resolveReadOnlyChannelPluginsForConfig(cfg, {
       env: {},

@@ -6,6 +6,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { freezeTrustedJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import {
   getCurrentPluginMetadataSnapshot,
@@ -104,6 +105,9 @@ function indexesMatch(
 export function finalizePluginMetadataSnapshot(
   snapshot: PluginMetadataSnapshot,
 ): PluginMetadataSnapshot {
+  // Index freezing admits reusable facts; descriptive views rely on their readonly contract.
+  freezeTrustedJsonSnapshot(snapshot.index);
+  freezeTrustedJsonSnapshot(snapshot.registryIndex);
   bindPluginMetadataSnapshotCache(snapshot);
   const cache = getPluginMetadataSnapshotCache(snapshot);
   preparePluginNativeAdmissions(snapshot.index, cache);
@@ -636,11 +640,17 @@ export function buildPluginMetadataSnapshot(
   params: Pick<LoadPluginMetadataSnapshotParams, "config" | "env">,
 ): Omit<PluginMetadataSnapshot, "normalizePluginId"> {
   const startedAt = performance.now();
-  const { index } = input;
+  const cloneIndex = (index: InstalledPluginIndex) =>
+    isDeeplyFrozenPlainData(index) ? index : structuredClone(index);
+  const index = cloneIndex(input.index);
+  const registryIndex =
+    input.registryIndex === input.index ? index : cloneIndex(input.registryIndex);
   const manifestFacts = buildPluginMetadataManifestFacts(input.manifestRegistry, index);
   const ownerMapsMs = performance.now() - startedAt;
   return {
     ...input,
+    index,
+    registryIndex,
     ...manifestFacts,
     configFingerprint: resolvePluginControlPlaneFingerprint({
       config: params.config,

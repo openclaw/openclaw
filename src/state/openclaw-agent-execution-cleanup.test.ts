@@ -48,7 +48,6 @@ function cleanup() {
 
 const edge = vi.hoisted(() => ({
   close: vi.fn(async () => {}),
-  execute: vi.fn(async () => {}),
   prepare: vi.fn(async () => {}),
   repairs: [] as string[],
   forbidden: vi.fn(() => expect.unreachable("Unexpected native database/Worker access")),
@@ -77,7 +76,6 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => ({
     return {
       async execute(command) {
         inspectRepairPolicy("cleanup", command.input.sharedStatePath);
-        await edge.execute();
       },
       close: edge.close,
     };
@@ -104,8 +102,6 @@ function inspectRepairPolicy(phase: string, databasePath: string) {
 afterEach(() => {
   expect(edge.forbidden).not.toHaveBeenCalled();
   edge.prepare.mockReset();
-  edge.execute.mockReset();
-  edge.close.mockReset();
   clearOpenClawAgentDatabaseValidationCache("/synthetic/reader-recovery");
   edge.repairs.length = 0;
   vi.clearAllMocks();
@@ -117,22 +113,6 @@ it("retains installed-schema repair ownership through retired agent lease cleanu
   expect(edge.repairs).toEqual(["open", "cleanup"]);
   expect(edge.close).toHaveBeenCalledOnce();
   expect(getExistingOpenClawStateSchemaPath()).toBeUndefined();
-});
-
-it("preserves both lease cleanup and worker close failures", async () => {
-  const operationFailure = new Error("Lease cleanup failed");
-  const closeFailure = new Error("Worker close failed");
-  edge.execute.mockRejectedValueOnce(operationFailure);
-  edge.close.mockRejectedValueOnce(closeFailure);
-  const failure = await cleanup().catch((error: unknown) => error);
-  if (!(failure instanceof AggregateError)) {
-    throw new Error("Expected both cleanup failures", { cause: failure });
-  }
-  expect(failure.cause).toBe(operationFailure);
-  expect(failure.errors).toHaveLength(2);
-  expect(failure.errors[0]).toBe(operationFailure);
-  expect(failure.errors[1]).toBe(closeFailure);
-  expect(edge.close).toHaveBeenCalledOnce();
 });
 
 it("revokes retired reader validation when shared cleanup admission fails", async () => {

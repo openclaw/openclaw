@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 /** Prepares and submits bounded issue content to openclaw/openclaw. */
 import { createHash } from "node:crypto";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
 export type PreparedGithubIssue = ReturnType<typeof prepareGithubIssue>;
@@ -280,12 +279,17 @@ export function submitGithubIssue(
   if (hooks.beforeIssueCreate) {
     return submitGithubIssueOnce(issue, runGh, hooks);
   }
-  return getOrCreatePromise(
-    inflightSubmissions,
-    issue.marker,
-    () => submitGithubIssueOnce(issue, runGh, hooks),
-    { evictOnSettled: true },
-  );
+  const current = inflightSubmissions.get(issue.marker);
+  if (current) {
+    return current;
+  }
+  const submission = submitGithubIssueOnce(issue, runGh, hooks).finally(() => {
+    if (inflightSubmissions.get(issue.marker) === submission) {
+      inflightSubmissions.delete(issue.marker);
+    }
+  });
+  inflightSubmissions.set(issue.marker, submission);
+  return submission;
 }
 
 async function runGithubCli(

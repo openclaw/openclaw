@@ -4,7 +4,7 @@ import { requireNativeDatabaseFile } from "../infra/database-engine/physical-fac
 import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
 import { resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
-import { runWithSqliteAsyncCleanup } from "../infra/sqlite-lifecycle-errors.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { retainSnapshotTempDirectory } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationFromOwnedDatabase } from "../infra/sqlite-readonly-location.js";
 import type {
@@ -296,11 +296,19 @@ export function startOpenClawStateReadOperation(
 
   const producer = run();
   return (async () => {
-    const value = await runWithSqliteAsyncCleanup(
-      { close: cleanup },
-      "Shared-state read and cleanup failed",
-      () => producer,
-    );
+    let value: OpenClawStateReadReply | undefined;
+    const errors: unknown[] = [];
+    try {
+      value = await producer;
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      await cleanup();
+    } catch (error) {
+      errors.push(error);
+    }
+    throwSqliteLifecycleErrors(errors, "Shared-state read and cleanup failed");
     selection.callerSignal?.throwIfAborted();
     return value;
   })().catch((error: unknown) => {

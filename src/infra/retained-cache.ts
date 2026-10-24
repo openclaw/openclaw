@@ -1,10 +1,10 @@
-import { LruCache } from "./lru-cache.js";
+import { pruneMapToMaxSize } from "./map-size.js";
 
 const UNWATCHED_CACHE_LIMIT = 100;
 
 /** Signal-scoped watchers retain one canonical entry beyond the unobserved bound. */
 export function createRetainedCache<T>() {
-  const entries = new LruCache<T>(UNWATCHED_CACHE_LIMIT);
+  const entries = new Map<string, T>();
   const retained = new Map<string, { entry: T | undefined; watchers: Set<AbortSignal> }>();
   const pins = new WeakMap<AbortSignal, { key: string; release: () => void }>();
 
@@ -39,7 +39,7 @@ export function createRetainedCache<T>() {
       if (signal && pins.get(signal)?.key !== key) {
         release(signal);
       }
-      const entry = retained.get(key)?.entry ?? entries.peek(key);
+      const entry = retained.get(key)?.entry ?? entries.get(key);
       if (entry !== undefined) {
         retain(key, entry, signal);
       }
@@ -51,11 +51,13 @@ export function createRetainedCache<T>() {
       if (current) {
         current.entry = entry;
       }
+      entries.delete(key);
       entries.set(key, entry);
+      pruneMapToMaxSize(entries, UNWATCHED_CACHE_LIMIT);
       retain(key, entry, signal);
     },
     delete(key: string, expected: T): void {
-      if (entries.peek(key) === expected) {
+      if (entries.get(key) === expected) {
         entries.delete(key);
       }
       const current = retained.get(key);

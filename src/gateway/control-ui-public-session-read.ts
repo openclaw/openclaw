@@ -260,34 +260,6 @@ export function isPublicSessionShareActive(
   return Boolean(readAuthorizedTarget(cfg, locator, projection));
 }
 
-async function preparePublicSessionRead(
-  cfg: OpenClawConfig,
-  locator: PublicSessionShareLocator,
-  projection: SessionRowProjection,
-) {
-  if (isIncognitoSessionKey(locator.sessionKey) || !listAgentIds(cfg).includes(locator.agentId)) {
-    return null;
-  }
-  const queries = () => [{ key: locator.sessionKey, agentId: locator.agentId }];
-  const initial = await withReadySessionRows(projection, queries, () =>
-    readAuthorizedTarget(cfg, locator, projection),
-  );
-  if (!initial) {
-    return null;
-  }
-  return {
-    queries,
-    initial,
-    scope: {
-      agentId: initial.source.agentId,
-      sessionKey: locator.sessionKey,
-      sessionId: locator.sessionId,
-      storePath: initial.source.path,
-      sessionEntry: initial.target.entry,
-    },
-  };
-}
-
 /** Only the exact published generation is readable; this grants no Gateway session authority. */
 export async function readPublicSessionShare(
   cfg: OpenClawConfig,
@@ -300,11 +272,23 @@ export async function readPublicSessionShare(
   },
 ): Promise<PublicSessionShareReadResult | null> {
   const { projection } = options;
-  const prepared = await preparePublicSessionRead(cfg, locator, projection);
-  if (!prepared) {
+  if (isIncognitoSessionKey(locator.sessionKey) || !listAgentIds(cfg).includes(locator.agentId)) {
     return null;
   }
-  const { queries, initial, scope } = prepared;
+  const queries = () => [{ key: locator.sessionKey, agentId: locator.agentId }];
+  const initial = await withReadySessionRows(projection, queries, () =>
+    readAuthorizedTarget(cfg, locator, projection),
+  );
+  if (!initial) {
+    return null;
+  }
+  const scope = {
+    agentId: initial.source.agentId,
+    sessionKey: locator.sessionKey,
+    sessionId: locator.sessionId,
+    storePath: initial.source.path,
+    sessionEntry: initial.target.entry,
+  };
   // Read forward source positions for cards: a newest-first byte bound within
   // the oldest page can otherwise hide the opening behind a later oversized row.
   const history = options.card
@@ -358,17 +342,32 @@ export async function readPublicSessionMessage(
   options: { entryId: string; projection: SessionRowProjection },
 ): Promise<Record<string, unknown> | null> {
   const { projection } = options;
-  const prepared = await preparePublicSessionRead(cfg, locator, projection);
-  if (!prepared) {
+  if (isIncognitoSessionKey(locator.sessionKey) || !listAgentIds(cfg).includes(locator.agentId)) {
     return null;
   }
-  const { queries, initial, scope } = prepared;
-  const selected = await readSessionMessageByIdAsync(scope, options.entryId, {
-    currentOnly: true,
-    // A permitted image may be inline base64, plus bounded message metadata.
-    maxBytes: PUBLIC_SESSION_MEDIA_ENTRY_BYTES,
-    allowResetArchiveFallback: false,
-  });
+  const queries = () => [{ key: locator.sessionKey, agentId: locator.agentId }];
+  const initial = await withReadySessionRows(projection, queries, () =>
+    readAuthorizedTarget(cfg, locator, projection),
+  );
+  if (!initial) {
+    return null;
+  }
+  const selected = await readSessionMessageByIdAsync(
+    {
+      agentId: initial.source.agentId,
+      sessionKey: locator.sessionKey,
+      sessionId: locator.sessionId,
+      storePath: initial.source.path,
+      sessionEntry: initial.target.entry,
+    },
+    options.entryId,
+    {
+      currentOnly: true,
+      // A permitted image may be inline base64, plus bounded message metadata.
+      maxBytes: PUBLIC_SESSION_MEDIA_ENTRY_BYTES,
+      allowResetArchiveFallback: false,
+    },
+  );
   return withReadySessionRows(projection, queries, () => {
     const current = readAuthorizedTarget(cfg, locator, projection);
     return current &&
@@ -389,15 +388,26 @@ export async function readPublicSessionWidget(
   options: { docId: string; projection: SessionRowProjection },
 ): Promise<boolean> {
   const { projection } = options;
-  const prepared = await preparePublicSessionRead(cfg, locator, projection);
-  if (!prepared) {
+  if (isIncognitoSessionKey(locator.sessionKey) || !listAgentIds(cfg).includes(locator.agentId)) {
     return false;
   }
-  const { queries, initial, scope } = prepared;
-  const selected = await findTranscriptEvent(scope, {
-    kind: "canvas-widget",
-    docId: options.docId,
-  });
+  const queries = () => [{ key: locator.sessionKey, agentId: locator.agentId }];
+  const initial = await withReadySessionRows(projection, queries, () =>
+    readAuthorizedTarget(cfg, locator, projection),
+  );
+  if (!initial) {
+    return false;
+  }
+  const selected = await findTranscriptEvent(
+    {
+      agentId: initial.source.agentId,
+      sessionKey: locator.sessionKey,
+      sessionId: locator.sessionId,
+      storePath: initial.source.path,
+      sessionEntry: initial.target.entry,
+    },
+    { kind: "canvas-widget", docId: options.docId },
+  );
   return withReadySessionRows(projection, queries, () => {
     const current = readAuthorizedTarget(cfg, locator, projection);
     return Boolean(

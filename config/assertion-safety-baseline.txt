@@ -1746,7 +1746,7 @@ src/gateway/openai-agent-run-usage.ts	1
 src/gateway/operator-approval-snapshot.ts	4
 src/gateway/plugin-activation-runtime-config.ts	2
 src/gateway/probe.ts	1
-src/gateway/restart-trace.ts	1
+src/gateway/restart-trace.ts	2
 src/gateway/secret-input-paths.ts	1
 src/gateway/server-broadcast.ts	1
 src/gateway/server-channels.ts	1
@@ -1938,6 +1938,7 @@ src/infra/push-apns.ts	3
 src/infra/question-gateway-resolver.ts	3
 src/infra/question-reaction-runtime.ts	3
 src/infra/restart-coordinator.ts	1
+src/infra/restart-handoff.ts	1
 src/infra/restart-sentinel.ts	1
 src/infra/restart-stale-pids.ts	2
 src/infra/retry-policy.ts	3

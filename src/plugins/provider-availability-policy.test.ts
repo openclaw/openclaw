@@ -106,19 +106,10 @@ it("preserves literal owner precedence and excludes disabled declarations", () =
       { id: "disabled", providers: ["disabled-local"], managesOwnAvailability: true },
     ],
   });
-  const prepared = rebaseRegistry(
-    {
-      ...snapshot,
-      index: {
-        ...snapshot.index,
-        plugins: snapshot.index.plugins.map((plugin) => ({
-          ...plugin,
-          enabled: plugin.pluginId !== "disabled",
-        })),
-      },
-    },
-    snapshot.manifestRegistry,
-  );
+  for (const plugin of snapshot.index.plugins) {
+    plugin.enabled = plugin.pluginId !== "disabled";
+  }
+  const prepared = rebaseRegistry(snapshot, snapshot.manifestRegistry);
   within(prepared, () => {
     expect(managesAvailability("shared")).toBe(false);
     expect(managesAvailability("local")).toBe(true);

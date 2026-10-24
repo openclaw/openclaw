@@ -190,8 +190,13 @@ export async function prepareLogicalVisibleModelCatalog(
       return [...previousCatalog];
     }
     const publish = (catalog: ModelCatalogEntry[]) => {
+      if (!params.isCurrent?.()) {
+        previousStates = undefined;
+        previousCatalog = undefined;
+        return catalog;
+      }
       previousStates = states;
-      previousCatalog = params.isCurrent ? [...catalog] : undefined;
+      previousCatalog = [...catalog];
       return catalog;
     };
     const publicationKeyOf = createModelCatalogIdentityKeyResolver();

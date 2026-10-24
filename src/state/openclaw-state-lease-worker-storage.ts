@@ -1,4 +1,4 @@
-import { runWithSqliteAsyncCleanup } from "../infra/sqlite-lifecycle-errors.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerWriteAdmission,
@@ -262,8 +262,9 @@ export function createOpenClawStateLeaseWorkerStorage(
         if (!store) {
           throw new Error("State lease cleanup lost its original database");
         }
-        await runWithSqliteAsyncCleanup(store, "State lease release and worker close failed", () =>
-          runSqliteWorkerStoreOperation(
+        const errors: unknown[] = [];
+        try {
+          await runSqliteWorkerStoreOperation(
             store,
             (scope) =>
               scope.execute({
@@ -277,8 +278,16 @@ export function createOpenClawStateLeaseWorkerStorage(
             cleanupContext,
             admission.assertCurrent,
             admission.createAdmission,
-          ),
-        );
+          );
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          await store.close();
+        } catch (error) {
+          errors.push(error);
+        }
+        throwSqliteLifecycleErrors(errors, "State lease release and worker close failed");
       });
     },
   };

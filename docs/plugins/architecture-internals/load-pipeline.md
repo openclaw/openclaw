@@ -157,13 +157,10 @@ replacement clears those results, as does metadata invalidation; repeated
 imports do not repeat filesystem path resolution or containment checks.
 
 The same cache generation prepares installed-index scope lookups, compiled model
-matching patterns, and manifest fingerprints once per admitted index. Producers
-normalize install records before admission. After handoff, internal callers publish
-replacement indexes and records instead of mutating the admitted values. Lookup
-methods and nested install records remain shared; extracted outer maps remain
-caller-owned. Enablement and trust are evaluated from the current operation's
-policy rather than stored in these facts. Violating the handoff convention can
-leave stale facts until the next metadata lifecycle or restart.
+matching patterns, parsed install-record projections, and manifest fingerprints
+once per immutable index. Mutable management indexes remain uncached. Lookup
+methods and install-record results remain caller-owned; enablement and trust are
+evaluated from the current operation's policy rather than stored in these facts.
 
 Outside a retained generation, reusing a loaded plugin requires the
 selected ID, origin, root, entry point, and artifact-selection inputs to agree.

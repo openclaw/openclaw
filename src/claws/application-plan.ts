@@ -12,18 +12,6 @@ import type {
   ClawPackagePreflightResult,
 } from "./types.js";
 
-export function clawPreflightCapabilities(preflight: ClawPackagePreflightResult) {
-  return {
-    ...(preflight.declaredCapabilities
-      ? { declaredCapabilities: preflight.declaredCapabilities }
-      : {}),
-    ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
-    ...(preflight.capabilityGrantsByPluginId
-      ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
-      : {}),
-  };
-}
-
 export function clawAddCapabilityChange(
   change: Omit<ClawAddCapabilityChange, "classification" | "requiresDistinctConsent" | "digest">,
 ): ClawAddCapabilityChange {
@@ -176,7 +164,13 @@ export async function planClawExtensions(params: {
       ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
       ...(preflight.installId ? { installId: preflight.installId } : {}),
       ...(preflight.action ? { ownerAction: preflight.action } : {}),
-      ...clawPreflightCapabilities(preflight),
+      ...(preflight.declaredCapabilities
+        ? { declaredCapabilities: preflight.declaredCapabilities }
+        : {}),
+      ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
+      ...(preflight.capabilityGrantsByPluginId
+        ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
+        : {}),
       requirementState,
       mapped: preflight.mapped ?? [],
       unavailable: preflight.unavailable ?? [],
@@ -198,7 +192,13 @@ export async function planClawExtensions(params: {
         ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
         ...(preflight.installId ? { installId: preflight.installId } : {}),
         ...(preflight.action ? { ownerAction: preflight.action } : {}),
-        ...clawPreflightCapabilities(preflight),
+        ...(preflight.declaredCapabilities
+          ? { declaredCapabilities: preflight.declaredCapabilities }
+          : {}),
+        ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
+        ...(preflight.capabilityGrantsByPluginId
+          ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
+          : {}),
         requirementState,
         ...(preflight.requirements ? { prerequisites: preflight.requirements } : {}),
         ...(completeProvenance

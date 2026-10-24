@@ -1,5 +1,4 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { getTtsMachinePathAdmission } from "../state/config-machine-state.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -32,9 +31,17 @@ export async function prepareTtsPreferences(): Promise<PreparedTtsPreferences> {
     return loadPath(context);
   }
   const key = `${identity.key}:${identity.birthtime ?? ""}`;
-  return getOrCreatePromise(pendingPaths, key, () => loadPath(context), {
-    evictOnSettled: true,
-  });
+  let pending = pendingPaths.get(key);
+  if (!pending) {
+    const load = loadPath(context);
+    pendingPaths.set(key, load);
+    const release = () => {
+      pendingPaths.delete(key);
+    };
+    void load.then(release, release);
+    pending = load;
+  }
+  return pending;
 }
 
 async function loadPath(context: OpenClawStateWorkerContext): Promise<PreparedTtsPreferences> {
