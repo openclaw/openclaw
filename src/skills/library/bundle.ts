@@ -147,17 +147,11 @@ function encodeSkillLibraryFile(buffer: Buffer): Pick<SkillLibraryFile, "content
   // ASCII stays a one-byte JS string; a single non-Latin-1 character can double it.
   if (isAscii(buffer)) {
     const content = buffer.toString("utf8");
-    if (!/[^\t\n\r -~]/u.test(content)) {
-      const base64Bytes = Math.ceil(buffer.length / 3) * 4;
-      let jsonBytes = buffer.length;
-      const escapes = /["\\\t\n\r]/g;
-      // Count JSON escapes without allocating another serialized copy or match array.
-      while (jsonBytes <= base64Bytes && escapes.test(content)) {
-        jsonBytes++;
-      }
-      if (jsonBytes <= base64Bytes) {
-        return { content, encoding: "utf8" };
-      }
+    if (
+      !/[^\t\n\r -~]/u.test(content) &&
+      JSON.stringify(content).length - 2 <= Math.ceil(buffer.length / 3) * 4
+    ) {
+      return { content, encoding: "utf8" };
     }
   }
   return { content: buffer.toString("base64"), encoding: "base64" };

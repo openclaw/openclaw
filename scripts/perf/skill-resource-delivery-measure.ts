@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
@@ -12,6 +13,7 @@ import { createSyntheticSourceInfo } from "../../src/skills/loading/skill-contra
 import { prepareSkillResourceDelivery } from "../../src/skills/runtime/resources.js";
 import type { SkillSnapshot } from "../../src/skills/types.js";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
+import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 
 // Metadata-shaped synthetic trees, never copies of operator instructions or scripts.
 const supportSizes = [
@@ -30,13 +32,21 @@ const { values } = parseArgs({
     "prepare-only": { type: "boolean", default: false },
     existing: { type: "boolean", default: false },
     functional: { type: "boolean", default: false },
+    "gc-log": { type: "string" },
   },
 });
 assert(values["state-dir"]);
 assert(typeof globalThis.gc === "function", "Run this workload with --expose-gc");
+assert(!(values.allocations && values["gc-log"]), "Measure allocation and promotion separately");
 assert(["delivery", "transfer"].includes(values.mode));
 assert(["ascii", "unicode", "binary"].includes(values.content));
 const directory = path.resolve(values["state-dir"]);
+const profilePath = path.join(directory, "skill-resource-profile");
+const marker = (phase: string) =>
+  writeSync(
+    1,
+    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
+  );
 const workspace = path.join(directory, "workspace");
 const operations = Number(values.operations);
 const concurrency = Number(values.concurrency);
@@ -161,7 +171,13 @@ for (const item of retained) {
   }
 }
 retained = [];
+if (values["gc-log"]) {
+  marker("identify-start");
+}
 globalThis.gc?.();
+if (values["gc-log"]) {
+  marker("identify-stop");
+}
 await delay(25);
 globalThis.gc?.();
 const before = process.memoryUsage();
@@ -257,6 +273,9 @@ if (values.allocations) {
   });
 }
 const stopDiagnostics = startGatewayBenchDiagnostics();
+if (values["gc-log"]) {
+  marker("heap-start");
+}
 const cpuStart = process.cpuUsage();
 const start = performance.now();
 for (let count = 0; count < operations; count += concurrency) {
@@ -264,6 +283,9 @@ for (let count = 0; count < operations; count += concurrency) {
 }
 const elapsedMs = performance.now() - start;
 const cpu = process.cpuUsage(cpuStart);
+if (values["gc-log"]) {
+  marker("heap-stop");
+}
 const diagnostics = stopDiagnostics();
 let allocationBytes: number | null = null;
 function sumAllocation(node: HeapProfiler.SamplingHeapProfileNode): number {
@@ -322,6 +344,9 @@ console.log(
     jsonBytes,
     instructionBytes,
     supportBytesConsumed,
+    promotion: values["gc-log"]
+      ? readGatewayGcTrace(path.resolve(values["gc-log"]), profilePath)
+      : null,
     diagnostics,
   }),
 );

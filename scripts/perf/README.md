@@ -4562,6 +4562,12 @@ include source reads and bytes per turn, retained payload characters, JSON bytes
 and post-GC retained heap. The transfer readback is performed by the verifier,
 not a model.
 
+Measure promotion in a separate pass with `--trace-gc-nvp --gc-log /path/to/run.log`
+and redirect stdout to that log. The existing warmup collection identifies the
+main isolate; capture markers exclude warmup and post-capture collections. The
+report includes promoted bytes and collection counts. Do not combine this mode
+with `--allocations`, and use only untraced runs for CPU, GC timing, and pause gates.
+
 Run on the authorized benchmark host. Prepare fixtures before acquiring the
 shared measurement slot, then use `--existing --start-file /path/to/barrier` on
 both sides. Each side prints `READY <pid>` after warmup; write a future Unix time
