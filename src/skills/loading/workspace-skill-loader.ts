@@ -18,6 +18,7 @@ import { recordSkillFileHost } from "../skill-file-host.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
 import { prepareSkillBinaryProbe, resolveSkillRequiredBins } from "./config.js";
 import type { Skill } from "./skill-contract.js";
+import { createSkillLoadDiagnostics, type SkillLoadDiagnostics } from "./skill-load-diagnostics.js";
 import { resolvePluginSkillsDir, resolveSkillsUserHomeDir } from "./skill-paths.js";
 import {
   appendLowerPrecedenceSkillRecords,
@@ -44,9 +45,10 @@ type LocalSkillTiers = {
   sourceKey: string;
   agent: SkillEntry[];
   execution: SkillEntry[];
+  diagnostics: SkillLoadDiagnostics;
 };
 const skillEntryCache = new Map<string, LocalSkillTiers>();
-const agentSkillEntryCache = new Map<string, SkillEntry[]>();
+const agentSkillEntryCache = new Map<string, Pick<LocalSkillTiers, "agent" | "diagnostics">>();
 const pluginMetadataIds = new WeakMap<PluginMetadataSnapshot, number>();
 let nextPluginMetadataId = 0;
 
@@ -134,20 +136,28 @@ function loadLocalSkillTiers(
   let agentTier = agentSkillEntryCache.get(agentCacheKey);
   if (!agentTier) {
     const plan = resolveWorkspaceSkillSourcePlan(workspaceDir, opts);
-    agentTier = loadWorkspaceSkillSourceEntries(
-      opts?.gatewayOnly ? splitSkillSourcePlan(plan).gatewayPlan : plan,
-      opts?.config,
-    );
+    const diagnostics = createSkillLoadDiagnostics();
+    agentTier = {
+      agent: loadWorkspaceSkillSourceEntries(
+        opts?.gatewayOnly ? splitSkillSourcePlan(plan).gatewayPlan : plan,
+        diagnostics,
+        opts?.config,
+      ),
+      diagnostics: diagnostics.snapshot(),
+    };
     agentSkillEntryCache.set(agentCacheKey, agentTier);
     pruneMapToMaxSize(agentSkillEntryCache, MAX_SKILL_ENTRY_CACHE_SIZE);
   }
+  const diagnostics = createSkillLoadDiagnostics();
+  diagnostics.merge(agentTier.diagnostics);
   const entries = {
     sourceKey,
-    agent: agentTier,
+    agent: agentTier.agent,
     execution:
       executionWorkspaceDir && !workspaceOnly && !opts?.gatewayOnly
-        ? loadExecutionSkillEntries(executionWorkspaceDir, opts?.config)
+        ? loadExecutionSkillEntries(executionWorkspaceDir, diagnostics, opts?.config)
         : [],
+    diagnostics: diagnostics.snapshot(),
   };
   skillEntryCache.set(cacheKey, entries);
   pruneMapToMaxSize(skillEntryCache, MAX_SKILL_ENTRY_CACHE_SIZE);
@@ -155,7 +165,7 @@ function loadLocalSkillTiers(
 }
 
 function mergeSkillTiers(
-  tiers: LocalSkillTiers,
+  tiers: Pick<LocalSkillTiers, "sourceKey" | "agent" | "execution">,
   opts?: LocalWorkspaceSkillLoadOptions,
   libraryEntries = opts?.librarySelections?.length
     ? loadSkillLibrarySelection(opts.librarySelections)
@@ -218,6 +228,7 @@ async function prepareCapturedWorkspaceSkillEntries(
   preparation: ReturnType<typeof captureWorkspaceSkillPreparation>,
 ): Promise<{
   entries: SkillEntry[];
+  diagnostics: SkillLoadDiagnostics;
   runtime?: WorkspaceSkillSources["runtime"];
   status?: WorkspaceSkillSources["status"];
 }> {
@@ -226,7 +237,7 @@ async function prepareCapturedWorkspaceSkillEntries(
   const access = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
   const bundledOnly = opts?.bundledSkillName !== undefined;
   if (!access?.loadSkills && !bundledOnly && opts?.entries !== undefined) {
-    return { entries: opts.entries };
+    return { entries: opts.entries, diagnostics: opts.diagnostics ?? { items: [], omitted: 0 } };
   }
   const libraryEntries = libraryContext
     ? await prepareSkillLibrarySelection(
@@ -272,6 +283,7 @@ async function prepareCapturedWorkspaceSkillEntries(
             opts,
             libraryEntries,
           ),
+      diagnostics: sources.diagnostics ?? { items: [], omitted: 0 },
       runtime: sources.runtime,
       status: sources.status,
     };
@@ -329,6 +341,9 @@ async function prepareCapturedWorkspaceSkillEntries(
     status: opts?.status,
   });
   assertCurrent();
+  const diagnostics = createSkillLoadDiagnostics();
+  diagnostics.merge(gatewaySources.diagnostics);
+  diagnostics.merge(sources.diagnostics);
   // A host-supplied source label or path must never authorize Gateway-local reads.
   const onWorkspace = (entry: WorkspaceSkillSources["entries"][number]) => ({
     ...entry,
@@ -362,6 +377,7 @@ async function prepareCapturedWorkspaceSkillEntries(
           opts,
           libraryEntries,
         )),
+    diagnostics: diagnostics.snapshot(),
     runtime: sources.runtime,
     status: sources.status
       ? {
@@ -377,11 +393,13 @@ export async function prepareWorkspaceSkillEntries(
   workspaceDir: string,
   opts?: LocalWorkspaceSkillLoadOptions & {
     entries?: SkillEntry[];
+    diagnostics?: SkillLoadDiagnostics;
     status?: { skillCardKey?: string };
   },
   assertCurrent?: () => void,
 ): Promise<{
   entries: SkillEntry[];
+  diagnostics: SkillLoadDiagnostics;
   runtime?: WorkspaceSkillSources["runtime"];
   status?: WorkspaceSkillSources["status"];
 }> {
@@ -478,6 +496,29 @@ export async function prepareWorkspaceSkills(
 ): Promise<SkillEntry[]> {
   return (await prepareWorkspaceSkillSelection(workspaceDir, opts, "runtime", assertCurrent))
     .entries;
+}
+
+export function loadWorkspaceSkillDiscovery(
+  workspaceDir: string,
+  opts?: LocalWorkspaceSkillLoadOptions,
+): { entries: SkillEntry[]; diagnostics: SkillLoadDiagnostics } {
+  const roots = normalizeWorkspaceSkillRoots({
+    agentWorkspaceDir: workspaceDir,
+    executionWorkspaceDir: opts?.executionWorkspaceDir,
+    executionWorkspaceFileHost: opts?.executionWorkspaceFileHost,
+  });
+  const tiers = loadLocalSkillTiers(roots.agentWorkspaceDir, opts);
+  const { entries, effectiveSkillFilter, shouldFilter } = resolveWorkspaceSkillLoad(
+    workspaceDir,
+    opts,
+    mergeSkillTiers(tiers, opts),
+  );
+  return {
+    entries: shouldFilter
+      ? filterSkillEntries(entries, { ...opts, skillFilter: effectiveSkillFilter })
+      : entries,
+    diagnostics: tiers.diagnostics,
+  };
 }
 
 export function loadWorkspaceSkills(
