@@ -4,12 +4,26 @@ type WebView2Bridge = {
   removeEventListener(type: "message", listener: (event: MessageEvent) => void): void;
 };
 
+export type NativeChatDrafts = {
+  subscribe: (listener: (draft: string) => void) => () => void;
+  dispose: () => void;
+};
+
+function readNativeDraft(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object" || !("type" in raw) || raw.type !== "draft-text") {
+    return null;
+  }
+  const payload = "payload" in raw ? raw.payload : null;
+  const text = payload && typeof payload === "object" && "text" in payload ? payload.text : null;
+  return typeof text === "string" ? text : null;
+}
+
 /**
  * WebView2's message-only bridge is not a DOM EventTarget. Subscribe before
  * the ready handshake and pair its native subscription with disposal below.
  * Drafts received while Chat is not mounted are retained for its next subscriber.
  */
-export function createNativeChatDrafts() {
+export function createNativeChatDrafts(): NativeChatDrafts {
   const bridge = (window as Window & { chrome?: { webview?: WebView2Bridge } }).chrome?.webview;
   if (!bridge) {
     return {
@@ -21,13 +35,8 @@ export function createNativeChatDrafts() {
   let pendingDraft: string | null = null;
   const listeners = new Set<(draft: string) => void>();
   const handler = (event: MessageEvent) => {
-    const raw: unknown = event.data;
-    if (!raw || typeof raw !== "object" || !("type" in raw) || raw.type !== "draft-text") {
-      return;
-    }
-    const payload = "payload" in raw ? raw.payload : null;
-    const draft = payload && typeof payload === "object" && "text" in payload ? payload.text : null;
-    if (typeof draft !== "string") {
+    const draft = readNativeDraft(event.data);
+    if (draft === null) {
       return;
     }
     if (listeners.size === 0) {
@@ -45,7 +54,7 @@ export function createNativeChatDrafts() {
   bridge.postMessage({ type: "ready" });
 
   return {
-    subscribe(listener: (draft: string) => void): () => void {
+    subscribe(listener) {
       listeners.add(listener);
       if (pendingDraft !== null) {
         const draft = pendingDraft;

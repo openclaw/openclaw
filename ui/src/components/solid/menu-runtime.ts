@@ -42,11 +42,32 @@ const normalizer: Parameters<typeof connect>[1] = {
   rect: normalize,
   style: normalizeProps.style,
 };
-export type MenuRuntime = ReturnType<typeof createMenuRuntime>;
-
-type ParentMenuRuntime = {
+export type MenuRuntime = {
+  service: MenuService;
   read(): Api;
+  start(): () => void;
+  updateInputs(
+    dir: "ltr" | "rtl",
+    catalog: readonly { value: string; disabled?: boolean }[] | undefined,
+    selected: string | null | undefined,
+  ): void;
   pointerDelta(x: number): number;
+  item(
+    value: string,
+    disabled?: boolean,
+    type?: "checkbox" | "radio",
+    checked?: boolean,
+    label?: string,
+  ): Record<string, unknown>;
+  trigger(
+    parentBinding?: MenuRuntime,
+    disabled?: boolean,
+  ): Record<string, unknown> & {
+    onKeyDown(event: KeyboardEvent): void;
+    onPointerMove(event: PointerEvent): void;
+  };
+  content(): Record<string, unknown> & { onKeyDown(event: KeyboardEvent): void };
+  keydown(event: KeyboardEvent): void;
 };
 
 export type MenuNavigationOptions = {
@@ -66,7 +87,7 @@ export function createMenuRuntime(
   options: MenuNavigationOptions,
   items: () => HTMLElement[],
   notify: () => void,
-) {
+): MenuRuntime {
   let lastPointerX: number | undefined;
   let lastPointerY: number | undefined;
   let focusFromKeyboard = false;
@@ -412,7 +433,7 @@ export function createMenuRuntime(
     start,
     updateInputs,
     keydown,
-    pointerDelta(x: number) {
+    pointerDelta(x) {
       const delta = lastPointerX === undefined ? 0 : x - lastPointerX;
       lastPointerX = x;
       return delta;
@@ -449,7 +470,7 @@ export function createMenuRuntime(
         tabIndex: options.focus !== "retain" && api.highlightedValue === value ? 0 : -1,
       };
     },
-    trigger(parentBinding?: ParentMenuRuntime, disabled = false) {
+    trigger(parentBinding?: MenuRuntime, disabled = false) {
       const api = read();
       const result = parentBinding
         ? parentBinding.read().getTriggerItemProps(api)

@@ -9,6 +9,11 @@ const FULL_GIT_SHA = /^[0-9a-f]{40}$/u;
 const UTC_BUILD_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u;
 const BUILD_ID_MAX_LENGTH = 96;
 
+function normalizeControlUiCommit(value: unknown): string | null {
+  const commit = normalizeNullableString(value)?.toLowerCase() ?? null;
+  return commit && FULL_GIT_SHA.test(commit) ? commit : null;
+}
+
 function normalizeControlUiBranch(value: unknown): string | null {
   const branch = normalizeNullableString(value);
   return branch && branch !== "HEAD" ? truncateUtf16Safe(branch, 100) : null;
@@ -37,8 +42,7 @@ function normalizeControlUiBuildId(value: unknown): string {
 export function normalizeControlUiBuildInfo(value: unknown): ControlUiBuildInfo {
   const record = asRecord(value);
   const version = normalizeNullableString(record.version);
-  const normalizedCommit = normalizeNullableString(record.commit)?.toLowerCase() ?? null;
-  const commit = normalizedCommit && FULL_GIT_SHA.test(normalizedCommit) ? normalizedCommit : null;
+  const commit = normalizeControlUiCommit(record.commit);
   const builtAt = normalizeControlUiBuildTimestamp(record.builtAt);
   const release = record.release === true;
   return {

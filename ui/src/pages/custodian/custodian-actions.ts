@@ -3,8 +3,29 @@ import type { SetupAutoCandidate } from "./custodian-auto-setup.ts";
 import type { CustodianSessionStore } from "./custodian-session-store.ts";
 import type { CustodianMessage } from "./transcript.ts";
 
-export type CustodianActions = ReturnType<typeof createCustodianActions>["actions"];
-export type CustodianSetupActions = CustodianActions["setup"];
+export type CustodianSetupActions = {
+  readonly verifying: boolean;
+  readonly answering: boolean;
+  readonly cancelling: boolean;
+  activate: (candidate: SetupAutoCandidate) => void;
+  retry: () => void;
+  signIn: () => void;
+  answer: (value: unknown) => void;
+  cancel: () => void;
+};
+
+type CustodianSessionActions = {
+  readonly sending: boolean;
+  send: () => void;
+  retry: () => void;
+  sendEventNudge: () => void;
+  answerQuestion: (message: CustodianMessage, label: string) => void;
+  dismissQuestion: (message: CustodianMessage) => void;
+  answerWizardStep: (message: CustodianMessage, value: unknown) => void;
+  cancelWizardStep: (message: CustodianMessage) => void;
+};
+
+export type CustodianActions = { setup: CustodianSetupActions; session: CustodianSessionActions };
 
 /** Shared by the full page and the standalone compact surface. */
 export function createCustodianActions(getStore: () => CustodianSessionStore) {
@@ -88,7 +109,7 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
     }
   }
 
-  const setup = {
+  const setup: CustodianSetupActions = {
     get verifying() {
       return verifying();
     },
@@ -98,28 +119,26 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
     get cancelling() {
       return cancelling();
     },
-    activate: (candidate: SetupAutoCandidate) =>
+    activate: (candidate) =>
       void run("verification", (source) => source.autoSetup.activate(candidate)),
     retry: () => void run("verification", (source) => source.autoSetup.retry()),
     signIn: () => void run("wizard", (source) => source.autoSetup.signIn()),
-    answer: (value: unknown) =>
-      void run("wizard", (source) => source.autoSetup.answerWizard(value)),
+    answer: (value) => void run("wizard", (source) => source.autoSetup.answerWizard(value)),
     cancel: () => void run("cancellation", (source) => source.autoSetup.cancelWizard()),
   };
-  const session = {
+  const session: CustodianSessionActions = {
     get sending() {
       return sending();
     },
     send: () => void run("session", (source) => source.send()),
     retry: () => void run("session", (source) => source.retry()),
     sendEventNudge: () => void run("session", (source) => source.sendEventNudge()),
-    answerQuestion: (message: CustodianMessage, label: string) =>
+    answerQuestion: (message, label) =>
       void run("session", (source) => source.answerQuestion(message, label)),
-    dismissQuestion: (message: CustodianMessage) =>
-      void run("session", (source) => source.dismissQuestion(message)),
-    answerWizardStep: (message: CustodianMessage, value: unknown) =>
+    dismissQuestion: (message) => void run("session", (source) => source.dismissQuestion(message)),
+    answerWizardStep: (message, value) =>
       void run("session", (source) => source.answerWizardStep(message, value)),
-    cancelWizardStep: (message: CustodianMessage) =>
+    cancelWizardStep: (message) =>
       void run("session", (source) => source.cancelWizardStep(message)),
   };
   return { actions: { setup, session }, retire };

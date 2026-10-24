@@ -1,10 +1,7 @@
 import type {
   SystemAgentChatHistoryResult,
-  SystemAgentChatQuestion,
   SystemAgentChatResult,
 } from "@openclaw/gateway-protocol";
-import { normalizeNullableString as nonEmptyString } from "@openclaw/normalization-core/string-coerce";
-import type { SchemaContract } from "../../../../packages/gateway-protocol/src/schema-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { WizardStep } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -18,47 +15,9 @@ import {
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
+import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 
 const CUSTODIAN_TRANSCRIPT_TIMEOUT_MS = 15_000;
-
-type CustodianStructuredQuestion = SchemaContract<
-  Omit<SystemAgentChatQuestion, "isOther"> & { isOther: boolean }
->;
-
-/** Normalize display text; the Gateway owns the question and option contract. */
-function parseCustodianQuestion(
-  value: SystemAgentChatQuestion | undefined,
-): CustodianStructuredQuestion | null {
-  if (!value) {
-    return null;
-  }
-  const [id, header, question] = [value.id, value.header, value.question].map(nonEmptyString);
-  if (!id || !header || !question) {
-    return null;
-  }
-  const options: CustodianStructuredQuestion["options"] = [];
-  for (const option of value.options) {
-    const label = nonEmptyString(option.label);
-    if (!label) {
-      return null;
-    }
-    const [description, reply] = [option.description, option.reply].map(nonEmptyString);
-    options.push({
-      label,
-      ...(description ? { description } : {}),
-      ...(option.recommended === true ? { recommended: true } : {}),
-      ...(reply ? { reply } : {}),
-    });
-  }
-  return {
-    id,
-    header,
-    question,
-    options,
-    isOther: value.isOther === true,
-    ...(value.skipAction === "exit" ? { skipAction: "exit" as const } : {}),
-  };
-}
 
 export type CustodianMessage = {
   id: number;
