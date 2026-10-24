@@ -17,12 +17,7 @@ function formatChildMemoryLimit(limitBytes: number, observedBytes: number): stri
   return `Command killed for exceeding its host memory bound (${Math.ceil(observedBytes / 1024 ** 2)} MiB observed; ${Math.ceil(limitBytes / 1024 ** 2)} MiB limit). Reduce command concurrency or input size, split the work, or use a separately resource-limited worker.`;
 }
 
-async function readProcNumbers(
-  path: string,
-  memory: boolean,
-  consume: (value: number) => void,
-): Promise<void> {
-  const data = await readFile(path);
+function parseProcNumbers(data: Buffer, memory: boolean, consume: (value: number) => void): void {
   let column = 0;
   let rss = true;
   let swap = true;
@@ -75,7 +70,7 @@ async function readTreeMemory(
     }
     try {
       // Include swapped private pages so swapping cannot hide a runaway allocation.
-      await readProcNumbers(`/proc/${pid}/status`, true, addMemory);
+      parseProcNumbers(await readFile(`/proc/${pid}/status`), true, addMemory);
       if (bytes > limitBytes) {
         return bytes;
       }
@@ -84,7 +79,7 @@ async function readTreeMemory(
           return bytes;
         }
         try {
-          await readProcNumbers(`/proc/${pid}/task/${tid}/children`, false, addChild);
+          parseProcNumbers(await readFile(`/proc/${pid}/task/${tid}/children`), false, addChild);
         } catch (error) {
           if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ESRCH")) {
             throw error;
