@@ -43,7 +43,8 @@ export ELEVENLABS_API_KEY="..."
 ```
 
 Set `modelId` to `eleven_v3` to use ElevenLabs v3 TTS. OpenClaw keeps
-`eleven_multilingual_v2` as the default for existing installs.
+`eleven_multilingual_v2` as the default for existing installs. If an older config
+uses `model`, run `openclaw doctor --fix` to move it to `modelId`.
 
 Discord voice channels use ElevenLabs' streaming TTS endpoint when ElevenLabs
 is the selected `voice.tts`/`tts` provider: playback starts from the

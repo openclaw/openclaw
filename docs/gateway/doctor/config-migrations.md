@@ -93,6 +93,13 @@ Ordinary configuration reads and Gateway startup do not write this setting.
 
 See [Queue steering](/concepts/queue-steering) for the opt-in authority tradeoff.
 
+## ElevenLabs speech model key
+
+Older TTS examples used `model` under an ElevenLabs provider block. Doctor moves
+that value to the canonical `modelId` key for root, per-agent, persona, channel,
+account, and Talk configuration. An existing `modelId` wins and the obsolete
+`model` key is removed. Runtime synthesis reads only `modelId`.
+
 ## Cloud setup secret migration
 
 The Crabbox plugin retires `cloudWorkers.profiles.<id>.settings.setupEnv`.

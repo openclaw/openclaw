@@ -2,13 +2,20 @@ import type { ChannelDoctorLegacyConfigRule } from "openclaw/plugin-sdk/channel-
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   ELEVENLABS_TALK_PROVIDER_ID,
+  hasLegacyElevenLabsModel,
   hasLegacyTalkFields,
+  migrateElevenLabsModelConfig,
   migrateElevenLabsLegacyTalkConfig,
 } from "./config-compat.js";
 
-export { hasLegacyTalkFields } from "./config-compat.js";
+export { hasLegacyElevenLabsModel, hasLegacyTalkFields } from "./config-compat.js";
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
+  {
+    path: [],
+    message: "ElevenLabs TTS model is legacy; use modelId and run openclaw doctor --fix.",
+    match: hasLegacyElevenLabsModel,
+  },
   {
     path: ["talk"],
     message:
@@ -23,7 +30,9 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   config: OpenClawConfig;
   changes: string[];
 } {
-  return migrateElevenLabsLegacyTalkConfig(cfg);
+  const talkResult = migrateElevenLabsLegacyTalkConfig(cfg);
+  const modelResult = migrateElevenLabsModelConfig(talkResult.config);
+  return { config: modelResult.config, changes: [...talkResult.changes, ...modelResult.changes] };
 }
 
 export { ELEVENLABS_TALK_PROVIDER_ID };
