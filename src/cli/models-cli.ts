@@ -244,6 +244,23 @@ export function registerModelsCli(program: Command) {
       );
     });
 
+  addAccountOptions(
+    accounts
+      .command("remove <account-id>")
+      .description(
+        "Remove your saved credential and its chat selections from this Gateway (no provider revoke)",
+      ),
+  )
+    .option("--yes", "Confirm removal without prompting", false)
+    .action(async (authProfileId: string, opts: { yes?: boolean }, command: Command) => {
+      await run(command, (commands, runtime, options) =>
+        commands.modelsAccountsRemoveCommand(
+          { ...options, authProfileId, yes: opts.yes },
+          runtime.defaultRuntime,
+        ),
+      );
+    });
+
   for (const [action, argument, description] of [
     ["use", "account-id", "Select one of your accounts for new sessions"],
     [

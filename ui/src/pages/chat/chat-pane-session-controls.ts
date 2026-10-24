@@ -203,6 +203,7 @@ export function renderChatPaneComposerControls(params: {
             client,
             selection: accountSelection,
             modelAuthStatusResult: state.modelAuthStatusResult,
+            authRevision: state.modelAuthStatusRequestVersion,
             model: accountModel,
             disabled:
               !modelAccess.allowed ||

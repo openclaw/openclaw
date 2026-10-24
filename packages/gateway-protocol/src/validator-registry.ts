@@ -153,6 +153,7 @@ export const validateUsersSetAvatarResult = compile(S.UsersSetAvatarResultSchema
 export const validateUsersListAuthLinksParams = compile(S.UsersListAuthLinksParamsSchema);
 export const validateUsersListModelAccountsParams = compile(S.UsersListModelAccountsParamsSchema);
 export const validateUsersSelectModelAccountParams = compile(S.UsersSelectModelAccountParamsSchema);
+export const validateUsersRemoveModelAccountParams = compile(S.UsersRemoveModelAccountParamsSchema);
 export const validateUsersAuthConnectCatalogParams = compile(S.UsersAuthConnectCatalogParamsSchema);
 export const validateUsersAuthConnectStartParams = compile(S.UsersAuthConnectStartParamsSchema);
 export const validateUsersAuthConnectAnswerParams = compile(S.UsersAuthConnectAnswerParamsSchema);

@@ -12,6 +12,7 @@ import {
   validateUsersUnlinkAuthProfileParams,
   validateUsersListModelAccountsParams,
   validateUsersSelectModelAccountParams,
+  validateUsersRemoveModelAccountParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { UserProfileNotFoundError } from "../../state/user-profiles.js";
 import type { ModelAccountConnectAction } from "../model-account-authority.js";
@@ -96,6 +97,11 @@ export const usersAuthConnectHandlers: GatewayRequestHandlers = {
     "users.selectModelAccount",
     validateUsersSelectModelAccountParams,
     (service, action, params) => service.selectAsync(action, params.authProfileId),
+  ),
+  "users.removeModelAccount": connectHandler(
+    "users.removeModelAccount",
+    validateUsersRemoveModelAccountParams,
+    (service, action, params) => service.removeAsync(action, params.authProfileId),
   ),
   "users.authConnect.start": connectHandler(
     "users.authConnect.start",

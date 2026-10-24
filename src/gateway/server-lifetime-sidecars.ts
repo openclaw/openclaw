@@ -58,7 +58,11 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
   }
   const modelAccountConnect = createModelAccountConnectService({
     getConfig: params.gatewayRequestContext.getRuntimeConfig,
-    onChanged: () => broadcastChatMetadataChanged(params.gatewayRequestContext),
+    onChanged: () =>
+      broadcastChatMetadataChanged(params.gatewayRequestContext, {
+        authChanged: true,
+        modelSelectionChanged: true,
+      }),
   });
   params.gatewayRequestContext.modelAccountConnectService = modelAccountConnect;
   params.publishSidecars({
