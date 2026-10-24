@@ -8,12 +8,12 @@ import type {
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ModelAuthStatusProfile, WizardNextResult } from "../../api/types.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
-import "../../lib/toast-host.tsx";
 import {
   getRenderedModalDialog,
   installDialogPolyfill,
   nextFrame,
 } from "../../test-helpers/modal-dialog.ts";
+import "../../lib/toast-host.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
@@ -32,6 +32,16 @@ import {
   startSelectedLogin,
   submitCredential,
 } from "./model-providers-page.test-support.tsx";
+import {
+  loginOption,
+  capability,
+  expectAbsent,
+  expectPresent,
+  profile as authProfile,
+  click,
+  expectDisabled,
+  expectContent,
+} from "./model-providers.test-fixtures.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -98,8 +108,8 @@ describe("ModelProvidersPage profile actions", () => {
     await waitForSolid(() => expect(toast.textContent).toContain(warning));
     expect(page.view.props.profileOrders.openai).toBeUndefined();
     expect(page.view.props.authStatus?.providers).toEqual([]);
-    expect(page.querySelector('li.provider-row[data-provider-id="openai"]')).toBeNull();
-    expect(page.querySelector(".model-providers__profile")).toBeNull();
+    expectAbsent(page, 'li.provider-row[data-provider-id="openai"]');
+    expectAbsent(page, ".model-providers__profile");
   });
 
   it("keeps the latest queued order through paused and resumed configuration work", async () => {
@@ -162,11 +172,9 @@ describe("ModelProvidersPage profile actions", () => {
       if (method === "models.authStatus") {
         return createAuthStatus([
           {
-            profiles: ["openai:one", "openai:two", "openai:three"].map((profileId) => ({
-              profileId,
-              type: "oauth",
-              status: "ok",
-            })),
+            profiles: ["openai:one", "openai:two", "openai:three"].map((profileId) =>
+              authProfile(profileId),
+            ),
             profileOrder: [...savedOrder],
             profileOrderStored: true,
           },
@@ -240,20 +248,8 @@ describe("ModelProvidersPage profile actions", () => {
     const logout = deferred();
     let failLogout = true;
     let profiles: ModelAuthStatusProfile[] = [
-      {
-        profileId: "work",
-        type: "oauth",
-        status: "ok",
-        email: "work@example.com",
-        logoutSupported: true,
-      },
-      {
-        profileId: "personal",
-        type: "oauth",
-        status: "ok",
-        email: "personal@example.com",
-        logoutSupported: true,
-      },
+      authProfile("work", { email: "work@example.com", logoutSupported: true }),
+      authProfile("personal", { email: "personal@example.com", logoutSupported: true }),
     ];
     request.mockImplementation(async (method: string, params?: unknown) => {
       if (method === "models.authStatus") {
@@ -291,7 +287,7 @@ describe("ModelProvidersPage profile actions", () => {
         await waitForSolid(() =>
           expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(2),
         );
-        page.querySelector<HTMLButtonElement>('[aria-label="Log out work@example.com"]')!.click();
+        click(page, '[aria-label="Log out work@example.com"]');
         await page.updateComplete;
         return getRenderedModalDialog(document.body);
       };
@@ -299,11 +295,11 @@ describe("ModelProvidersPage profile actions", () => {
       let modal = initialModal;
       expect(page.renderRoot.contains(modal)).toBe(false);
       expect(dialog.getAttribute("aria-label")).toBe("Log out work@example.com");
-      expect(modal.textContent).toContain("work@example.com");
+      expectContent(modal, ["work@example.com"]);
       expect(requestCount(request, "models.authLogout")).toBe(0);
-      modal.querySelector<HTMLButtonElement>("button[autofocus]")!.click();
+      click(modal, "button[autofocus]");
       await page.updateComplete;
-      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+      expectAbsent(document.body, "openclaw-modal-dialog");
       expect(requestCount(request, "models.authLogout")).toBe(0);
       expect(
         [...page.querySelectorAll<HTMLButtonElement>(".model-providers__profile-logout")].every(
@@ -322,9 +318,7 @@ describe("ModelProvidersPage profile actions", () => {
         ({ modal } = await openConfirmation());
         const confirm = modal.querySelector<HTMLButtonElement>("button.danger")!;
         invalidate();
-        await waitForSolid(() =>
-          expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull(),
-        );
+        await waitForSolid(() => expectAbsent(document.body, "openclaw-modal-dialog"));
         confirm.click();
         expect(requestCount(request, "models.authLogout")).toBe(0);
         settingsAgentSelection.state.selectedId = "writer";
@@ -337,25 +331,22 @@ describe("ModelProvidersPage profile actions", () => {
       }
 
       ({ modal } = await openConfirmation());
-      modal.querySelector<HTMLButtonElement>("button.danger")!.click();
+      click(modal, "button.danger");
       await waitForSolid(() =>
         expect(toast.textContent).toContain("The account could not be logged out"),
       );
       expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(2);
-      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-      expect(page.querySelector(".model-providers__row > .callout")).toBeNull();
+      expectAbsent(document.body, "openclaw-modal-dialog");
+      expectAbsent(page, ".model-providers__row > .callout");
       expect(page.view.props.messages.anthropic).toBeUndefined();
       expect(requestCount(request, "models.authLogout")).toBe(1);
       await waitForSolid(() =>
-        expect(
-          page.querySelector<HTMLButtonElement>('[aria-label="Log out work@example.com"]')
-            ?.disabled,
-        ).toBe(false),
+        expectDisabled(page, '[aria-label="Log out work@example.com"]', false),
       );
 
       ({ modal } = await openConfirmation());
-      expect(modal.querySelector('[role="alert"]')).toBeNull();
-      modal.querySelector<HTMLButtonElement>("button.danger")!.click();
+      expectAbsent(modal, '[role="alert"]');
+      click(modal, "button.danger");
       await waitForSolid(() => expect(requestCount(request, "models.authLogout")).toBe(2));
       await page.updateComplete;
       expect(request).toHaveBeenCalledWith("models.authLogout", {
@@ -363,7 +354,7 @@ describe("ModelProvidersPage profile actions", () => {
         profileIds: ["work"],
         agentId: "writer",
       });
-      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+      expectAbsent(document.body, "openclaw-modal-dialog");
       expect(
         [...page.querySelectorAll<HTMLButtonElement>(".model-providers__profile-logout")].every(
           (button) => button.disabled,
@@ -375,10 +366,7 @@ describe("ModelProvidersPage profile actions", () => {
       );
       expect(requestCount(request, "models.authLogout")).toBe(2);
       await waitForSolid(() =>
-        expect(
-          page.querySelector<HTMLButtonElement>('[aria-label="Log out personal@example.com"]')
-            ?.disabled,
-        ).toBe(false),
+        expectDisabled(page, '[aria-label="Log out personal@example.com"]', false),
       );
       expect(
         [...page.querySelectorAll<HTMLElement>(".model-providers__profile")].map(
@@ -388,9 +376,9 @@ describe("ModelProvidersPage profile actions", () => {
       await toast.updateComplete;
       expect(toast.isConnected).toBe(true);
       expect(toast.parentElement).toBe(shell);
-      expect(toast.querySelector(".app-toast--bottom .app-toast__icon")).not.toBeNull();
-      expect(toast.querySelector('[role="status"]')?.textContent).toContain("Logged out.");
-      expect(page.querySelector(".model-providers__row > .callout")).toBeNull();
+      expectPresent(toast, ".app-toast--bottom .app-toast__icon");
+      expectContent(toast.querySelector('[role="status"]'), ["Logged out."]);
+      expectAbsent(page, ".model-providers__row > .callout");
       expect(page.view.props.messages.anthropic).toBeUndefined();
     } finally {
       logout.resolve();
@@ -438,15 +426,13 @@ describe("ModelProvidersPage profile actions", () => {
         target: { provider: "openai", profileIds: ["openai:first"] },
       });
       await waitForSolid(() =>
-        expect(document.body.querySelector(".exec-approval-actions button.danger")).not.toBeNull(),
+        expectPresent(document.body, ".exec-approval-actions button.danger"),
       );
       // The unrelated defaults write stays held while this confirmation opens.
       await drainPageUpdates(page);
       expect(page.view.props.busy.defaults).toBe(true);
       expect(runtimeConfig.patch).not.toHaveBeenCalled();
-      document.body
-        .querySelector<HTMLButtonElement>(".exec-approval-actions button.danger")!
-        .click();
+      click(document.body, ".exec-approval-actions button.danger");
       await waitForSolid(() => expect(requestCount(request, "models.authLogout")).toBe(1));
       settingsAgentSelection.state.selectedId = "writer";
       settingsAgentSelection.state.scopeId = "writer";
@@ -466,7 +452,7 @@ describe("ModelProvidersPage profile actions", () => {
       await drainPageUpdates(page);
       expect(requestCount(request, "models.authLogout")).toBe(1);
       await toast.updateComplete;
-      expect(toast.querySelector('[role="status"]')).toBeNull();
+      expectAbsent(toast, '[role="status"]');
     } finally {
       firstLogout.resolve({});
       defaultsSave.resolve();
@@ -483,14 +469,8 @@ function accountRecoveryHarness(
   const harness = createHarness("writer");
   const originalRequest = harness.request.getMockImplementation()!;
   const modelRef = "example/selected-model";
-  const profile = (id: string): ModelAuthStatusProfile => ({
-    profileId: `example:${id}`,
-    type: "oauth",
-    status: "ok",
-    source,
-    email: `${id}@example.invalid`,
-    logoutSupported: true,
-  });
+  const profile = (id: string): ModelAuthStatusProfile =>
+    authProfile(`example:${id}`, { source, email: `${id}@example.invalid`, logoutSupported: true });
   let profiles = initialAccount === "unavailable" ? [] : [profile(initialAccount)];
   let configuredModel = `${modelRef}@example:original`;
   let activating = false;
@@ -523,20 +503,13 @@ function accountRecoveryHarness(
               }
             : {}),
           providerCapabilities: [
-            {
-              provider: "example",
-              apiKeySupported: false,
-              quickApiKeySetup: false,
+            capability("example", {
               loginOptions: [
-                {
-                  id: "example-browser",
-                  brandId: "example",
-                  label: "Example browser sign-in",
-                  kind: "oauth",
+                loginOption("example-browser", "example", "Example browser sign-in", "oauth", {
                   featured: true,
-                },
+                }),
               ],
-            },
+            }),
           ],
         };
       case "models.authLogout":
@@ -602,7 +575,7 @@ async function useReplacementAccount(page: ModelProvidersPageTestElement) {
   const account = page.querySelector(
     'openclaw-modal-dialog [data-profile-id="example:replacement"]',
   )!;
-  expect(account.textContent).toContain("replacement@example.invalid");
+  expectContent(account, ["replacement@example.invalid"]);
   const use = account.querySelector<HTMLButtonElement>("[data-models-use-account]");
   expect(use?.disabled).toBe(false);
   use!.click();
@@ -625,14 +598,12 @@ describe("Models account recovery", () => {
     const page = appendPage(context);
     try {
       await waitForProviders(page);
-      expect(page.querySelector("[data-models-account-recovery]")).toBeNull();
+      expectAbsent(page, "[data-models-account-recovery]");
       await expandProvider(page, "example");
-      page
-        .querySelector<HTMLButtonElement>('[aria-label="Log out original@example.invalid"]')!
-        .click();
+      click(page, '[aria-label="Log out original@example.invalid"]');
       await page.updateComplete;
       const { modal } = await getRenderedModalDialog(document.body);
-      modal.querySelector<HTMLButtonElement>("button.danger")!.click();
+      click(modal, "button.danger");
       await waitForSolid(() =>
         expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(0),
       );
@@ -642,11 +613,11 @@ describe("Models account recovery", () => {
         agentId: "writer",
       });
       const recovery = page.querySelector("[data-models-account-recovery]");
-      expect(recovery?.textContent).toContain(modelRef);
+      expectContent(recovery, [modelRef]);
       expect(runtimeConfig.patch).not.toHaveBeenCalled();
 
       await openAccountRecovery(page);
-      expect(page.querySelector("[data-models-use-account]")).toBeNull();
+      expectAbsent(page, "[data-models-use-account]");
       await startSelectedLogin(page, "Example browser sign-in");
       await submitCredential(page);
       login.resolve({ done: true, status: "done" });
@@ -659,13 +630,11 @@ describe("Models account recovery", () => {
       expect(close).toBeDefined();
       close!.click();
       await page.updateComplete;
-      expect(page.querySelector("[data-models-account-recovery]")).not.toBeNull();
+      expectPresent(page, "[data-models-account-recovery]");
       expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
         agents: { entries: { writer: { model: `${modelRef}@example:original` } } },
       });
-      expect(
-        request.mock.calls.some(([method]) => method === "openclaw.setup.activate.start"),
-      ).toBe(false);
+      expect(requestCount(request, "openclaw.setup.activate.start")).toBe(0);
 
       await useReplacementAccount(page);
       expect(request).toHaveBeenCalledWith(
@@ -680,8 +649,8 @@ describe("Models account recovery", () => {
       );
       activation.resolve({ done: true, status: "done", modelActivation: { modelRef } });
       await waitForSolid(() => {
-        expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
-        expect(page.querySelector("[data-models-account-recovery]")).toBeNull();
+        expectAbsent(page, "openclaw-modal-dialog");
+        expectAbsent(page, "[data-models-account-recovery]");
       });
       expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
         agents: {
@@ -709,20 +678,18 @@ describe("Models account recovery", () => {
         waiting.resolve();
         await release.promise;
       });
-      page.querySelector<HTMLButtonElement>("[data-models-use-account]")!.click();
+      click(page, "[data-models-use-account]");
       await waiting.promise;
       await waitForSolid(() =>
         expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(
           "Checking your model setup",
         ),
       );
-      page.querySelector<HTMLButtonElement>(".model-setup-wizard__footer button")!.click();
-      await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
+      click(page, ".model-setup-wizard__footer button");
+      await waitForSolid(() => expectAbsent(page, "openclaw-modal-dialog"));
       release.resolve();
       await drainPageUpdates(page);
-      expect(
-        request.mock.calls.some(([method]) => method === "openclaw.setup.activate.start"),
-      ).toBe(false);
+      expect(requestCount(request, "openclaw.setup.activate.start")).toBe(0);
       expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
         agents: { entries: { writer: { model: `${modelRef}@example:original` } } },
       });
@@ -744,22 +711,20 @@ describe("Models account recovery", () => {
       if (outcome === "cancel") {
         await waitForSolid(() => {
           expect(requestCount(request, "wizard.next")).toBe(1);
-          expect(page.querySelector(".model-setup-wizard__footer button")).not.toBeNull();
+          expectPresent(page, ".model-setup-wizard__footer button");
         });
-        page.querySelector<HTMLButtonElement>(".model-setup-wizard__footer button")!.click();
-        await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
-        expect(request.mock.calls.some(([method]) => method === "wizard.cancel")).toBe(true);
+        click(page, ".model-setup-wizard__footer button");
+        await waitForSolid(() => expectAbsent(page, "openclaw-modal-dialog"));
+        expect(requestCount(request, "wizard.cancel")).toBeGreaterThan(0);
       } else {
         activation.resolve({ done: true, status: "done" });
-        await waitForSolid(() =>
-          expect(page.querySelector("openclaw-modal-dialog [role=alert]")).not.toBeNull(),
-        );
+        await waitForSolid(() => expectPresent(page, "openclaw-modal-dialog [role=alert]"));
       }
-      expect(page.querySelector("[data-models-account-recovery]")?.textContent).toContain(modelRef);
+      expectContent(page.querySelector("[data-models-account-recovery]"), [modelRef]);
       expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
         agents: { entries: { writer: { model: `${modelRef}@example:original` } } },
       });
-      expect(page.renderRoot.textContent).not.toContain("Provider credentials saved.");
+      expectContent(page.renderRoot, [], ["Provider credentials saved."]);
     },
   );
 
@@ -768,7 +733,7 @@ describe("Models account recovery", () => {
     const page = appendPage(context);
     await waitForProviders(page);
     expect(page.view.props.authStatus?.unavailable).toBeDefined();
-    expect(page.querySelector("[data-models-account-recovery]")).toBeNull();
+    expectAbsent(page, "[data-models-account-recovery]");
   });
 
   it("offers only compatible accounts for minimax-portal-cn when the display card combines auth owners", async () => {
@@ -788,13 +753,10 @@ describe("Models account recovery", () => {
                 displayName: "MiniMax",
                 status: "ok",
                 profiles: [
-                  {
-                    profileId: "minimax-portal:replacement",
+                  authProfile("minimax-portal:replacement", {
                     source: "saved",
-                    type: "oauth",
-                    status: "ok",
                     email: "replacement@example.invalid",
-                  },
+                  }),
                 ],
               },
               {
@@ -803,45 +765,32 @@ describe("Models account recovery", () => {
                 displayName: "MiniMax",
                 status: "static",
                 profiles: [
-                  {
-                    profileId: "minimax:api-key",
+                  authProfile("minimax:api-key", {
                     source: "saved",
                     type: "api_key",
                     status: "static",
                     displayName: "API key account",
-                  },
+                  }),
                 ],
               },
             ],
             providerCapabilities: [
-              {
-                provider: "minimax",
+              capability("minimax", {
                 apiKeySupported: true,
                 quickApiKeySetup: true,
+                loginOptions: [loginOption("minimax-key", "minimax", "MiniMax API key", "secret")],
+              }),
+              capability("minimax-portal", {
                 loginOptions: [
-                  {
-                    id: "minimax-key",
-                    brandId: "minimax",
-                    label: "MiniMax API key",
-                    kind: "secret",
-                    featured: false,
-                  },
+                  loginOption(
+                    "minimax-login",
+                    "minimax-portal",
+                    "MiniMax browser sign-in",
+                    "oauth",
+                    { featured: true },
+                  ),
                 ],
-              },
-              {
-                provider: "minimax-portal",
-                apiKeySupported: false,
-                quickApiKeySetup: false,
-                loginOptions: [
-                  {
-                    id: "minimax-login",
-                    brandId: "minimax-portal",
-                    label: "MiniMax browser sign-in",
-                    kind: "oauth",
-                    featured: true,
-                  },
-                ],
-              },
+              }),
             ],
           }
         : originalRequest(method),
@@ -853,18 +802,16 @@ describe("Models account recovery", () => {
         .map((provider) => provider.dataset.modelsLoginProvider)
         .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
     ).toEqual(["minimax", "minimax-portal"]);
-    page.querySelector<HTMLButtonElement>('[data-models-login-provider="minimax-portal"]')!.click();
+    click(page, '[data-models-login-provider="minimax-portal"]');
     await page.updateComplete;
     const dialog = page.querySelector("openclaw-modal-dialog")!;
-    expect(dialog.textContent).toContain("MiniMax browser sign-in");
+    expectContent(dialog, ["MiniMax browser sign-in"]);
     const account = dialog.querySelector('[data-profile-id="minimax-portal:replacement"]')!;
-    expect(account.textContent).toContain("replacement@example.invalid");
-    expect(account.querySelector<HTMLButtonElement>("[data-models-use-account]")?.disabled).toBe(
-      false,
-    );
+    expectContent(account, ["replacement@example.invalid"]);
+    expectDisabled(account, "[data-models-use-account]", false);
     const incompatible = dialog.querySelector('[data-profile-id="minimax:api-key"]')!;
-    expect(incompatible.textContent).toContain("API key account");
-    expect(incompatible.querySelector("[data-models-use-account]")).toBeNull();
+    expectContent(incompatible, ["API key account"]);
+    expectAbsent(incompatible, "[data-models-use-account]");
   });
 
   it("rejects account recovery when the selected profile changes before activation dispatch", async () => {
@@ -879,7 +826,7 @@ describe("Models account recovery", () => {
         waiting.resolve();
         await release.promise;
       });
-      page.querySelector<HTMLButtonElement>("[data-models-use-account]")!.click();
+      click(page, "[data-models-use-account]");
       await waiting.promise;
       const newSelection = `${modelRef}@example:chosen-elsewhere`;
       setConfiguredModel(newSelection);
@@ -890,9 +837,7 @@ describe("Models account recovery", () => {
           /changed/i,
         ),
       );
-      expect(
-        request.mock.calls.some(([method]) => method === "openclaw.setup.activate.start"),
-      ).toBe(false);
+      expect(requestCount(request, "openclaw.setup.activate.start")).toBe(0);
       expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
         agents: { entries: { writer: { model: newSelection } } },
       });

@@ -6,8 +6,8 @@ import type { ModelsProbeResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
-import "../../lib/toast-host.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import "../../lib/toast-host.tsx";
 import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
@@ -28,6 +28,15 @@ import {
   openApiKeyProvider,
   expandProvider,
 } from "./model-providers-page.test-support.tsx";
+import {
+  expectAbsent,
+  expectPresent,
+  expectDisabled,
+  profile as authProfile,
+  model as catalogModel,
+  click,
+  expectContent,
+} from "./model-providers.test-fixtures.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -117,7 +126,7 @@ describe("ModelProvidersPage agent scope", () => {
     page.loaderPending = true;
     await page.updateComplete;
     expect(page.view.props.authStatus).toBe(data);
-    expect(page.querySelector(".settings-loading-skeleton")).toBeNull();
+    expectAbsent(page, ".settings-loading-skeleton");
     expect(page.querySelector("[data-provider-id]")).toBe(row);
 
     page.loaderPending = false;
@@ -165,7 +174,7 @@ describe("ModelProvidersPage agent scope", () => {
     page.view.props.onPrimaryChange("openai/draft-model");
     await page.updateComplete;
     expect(page.view.props.authStatus).toBe(previousData);
-    expect(page.querySelector(".model-providers__defaults")).not.toBeNull();
+    expectPresent(page, ".model-providers__defaults");
     expect(page.view.props.keyDraft).toBe("synthetic-unsaved-key");
     expect(page.view.props.addProviderKey).toBe("synthetic-added-key");
     expect(page.view.props.defaultModels.primary).toBe("openai/draft-model");
@@ -196,9 +205,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.querySelector<HTMLInputElement>("[data-models-login-search]")?.value).toBe(
       "anthropic",
     );
-    expect(page.querySelector<HTMLInputElement>("[data-models-login-search]")?.disabled).toBe(
-      false,
-    );
+    expectDisabled(page, "[data-models-login-search]", false);
     await waitForSolid(() =>
       expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual({
         agents: { defaults: { model: "openai/replacement-model" } },
@@ -219,7 +226,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.view.props.addProviderKey).toBe("");
     expect(page.view.props.defaultModels.primary).not.toBe("openai/draft-model");
     expect(page.view.props.profileOrders).toEqual({});
-    expect(page.querySelector("[data-models-login-search]")).toBeNull();
+    expectAbsent(page, "[data-models-login-search]");
   });
 
   it.each(["rejected", "not dispatched", "offline"] as const)(
@@ -267,7 +274,7 @@ describe("ModelProvidersPage agent scope", () => {
         return {
           ...createAuthStatus([
             {
-              profiles: [{ profileId: "openai:owner@example.com", type: "oauth", status: "ok" }],
+              profiles: [authProfile("openai:owner@example.com")],
             },
           ]),
           providerCapabilities: [],
@@ -280,11 +287,9 @@ describe("ModelProvidersPage agent scope", () => {
     await waitForSolid(() => expect(page.view.props.authStatus?.providers).toHaveLength(1));
     await expandProvider(page, "openai");
 
-    expect(page.querySelector(".model-providers__profiles")).toBeNull();
-    expect(page.renderRoot.textContent).not.toContain("owner@example.com");
-    expect(page.querySelector(".model-providers__credentials")?.textContent).toContain(
-      "OAuth profiles: 1",
-    );
+    expectAbsent(page, ".model-providers__profiles");
+    expectContent(page.renderRoot, [], ["owner@example.com"]);
+    expectContent(page.querySelector(".model-providers__credentials"), ["OAuth profiles: 1"]);
   });
 
   it.each([
@@ -326,13 +331,13 @@ describe("ModelProvidersPage agent scope", () => {
       pending.resolve(
         createAuthStatus([
           {
-            profiles: [{ profileId: "openai:retired@example.test", type: "oauth", status: "ok" }],
+            profiles: [authProfile("openai:retired@example.test")],
           },
         ]),
       );
       await drainPageUpdates(page);
       expect(page.view.props.authStatus).toBeNull();
-      expect(page.renderRoot.textContent).not.toContain("retired@example.test");
+      expectContent(page.renderRoot, [], ["retired@example.test"]);
 
       request.mockImplementation(originalRequest);
       gatewaySource.publish(grantedSnapshot);
@@ -355,16 +360,11 @@ describe("ModelProvidersPage agent scope", () => {
       };
       const catalog = {
         models: [
-          { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },
-          {
-            id: "claude-sonnet",
-            name: "Claude Sonnet",
-            provider: "anthropic",
-            available: true,
-          },
-          { id: "gemini-pro", name: "Gemini Pro", provider: "google", available: true },
-          { id: "grok", name: "Grok", provider: "xai", available: true },
-          { id: "gpt-5-mini", name: "GPT-5 mini", provider: "openai", available: true },
+          catalogModel("gpt-5", "GPT-5"),
+          catalogModel("claude-sonnet", "Claude Sonnet", "anthropic"),
+          catalogModel("gemini-pro", "Gemini Pro", "google"),
+          catalogModel("grok", "Grok", "xai"),
+          catalogModel("gpt-5-mini", "GPT-5 mini"),
         ],
       };
       const originalRequest = request.getMockImplementation()!;
@@ -389,11 +389,11 @@ describe("ModelProvidersPage agent scope", () => {
           select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Fallback Model",
       );
       expect(fallback).toBeDefined();
-      expect(page.querySelector(".model-providers__defaults")?.textContent).toContain(
+      expectContent(page.querySelector(".model-providers__defaults"), [
         "2 more fallbacks after this one",
-      );
+      ]);
       await openPicker(fallback!);
-      expect(fallback?.textContent).toContain("No fallback model (remove all 3)");
+      expectContent(fallback, ["No fallback model (remove all 3)"]);
       await choosePickerValue(fallback!, selection);
 
       await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
@@ -426,7 +426,7 @@ describe("ModelProvidersPage agent scope", () => {
       '#settings-model-behavior .settings-segmented[role="radiogroup"]',
     );
     expect(groups).toHaveLength(2);
-    groups[0]!.querySelector<HTMLInputElement>('.settings-segmented__input[value=""]')!.click();
+    click(groups[0]!, '.settings-segmented__input[value=""]');
     await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: {
@@ -498,9 +498,9 @@ describe("ModelProvidersPage agent scope", () => {
       warning: "Authentication refresh failed. Provider refresh failed.",
     });
     await page.updateComplete;
-    expect(page.renderRoot.textContent).toContain(page.view.props.messages.openai?.warning);
+    expectContent(page.renderRoot, [page.view.props.messages.openai?.warning]);
     expect(page.view.props.error).toBeNull();
-    expect(page.querySelector(".model-providers__provider-list .provider-usage-error")).toBeNull();
+    expectAbsent(page, ".model-providers__provider-list .provider-usage-error");
   });
 
   it("removes a provider only after confirmation and reports the Gateway warning", async () => {
@@ -518,15 +518,15 @@ describe("ModelProvidersPage agent scope", () => {
         : originalRequest(method),
     );
     const row = await expandProvider(page, "openai");
-    row.querySelector<HTMLButtonElement>(".provider-row__remove")!.click();
+    click(row, ".provider-row__remove");
     const modal = await vi.waitFor(() => {
       const dialog = document.body.querySelector<HTMLElement>("openclaw-modal-dialog");
       expect(dialog).not.toBeNull();
       return dialog!;
     });
-    expect(modal.textContent).toContain("Remove OpenAI");
+    expectContent(modal, ["Remove OpenAI"]);
     expect(requestCount(request, "models.authLogout")).toBe(0);
-    modal.querySelector<HTMLButtonElement>("button.danger")!.click();
+    click(modal, "button.danger");
     await waitForSolid(() => expect(toast.textContent).toContain("Authentication refresh failed."));
     // The saved API-key profile is a provider-wide sign-out; nothing goes through config.
     expect(request.mock.calls.filter(([method]) => method === "models.authLogout")).toEqual([
@@ -746,19 +746,15 @@ describe("ModelProvidersPage agent scope", () => {
     );
     await page.updateComplete;
 
-    expect(page.querySelector('[role="alert"]')).toBeNull();
+    expectAbsent(page, '[role="alert"]');
     expect(page.view.props.messages.openai).toBeUndefined();
-    expect(toast.querySelector(".app-toast--bottom .app-toast__icon")).not.toBeNull();
+    expectPresent(toast, ".app-toast--bottom .app-toast__icon");
     expect(
       [...page.querySelectorAll<HTMLElement>(".model-providers__profile")].map(
         (row) => row.dataset.profileId,
       ),
     ).toEqual(["openai:two", "openai:one"]);
-    expect(
-      page.querySelector<HTMLButtonElement>(
-        '[data-profile-id="openai:two"] .model-providers__profile-grip',
-      )?.disabled,
-    ).toBe(false);
+    expectDisabled(page, '[data-profile-id="openai:two"] .model-providers__profile-grip', false);
   });
 
   it("shows a roster failure without automatically retrying it", async () => {
@@ -772,7 +768,7 @@ describe("ModelProvidersPage agent scope", () => {
     await page.updateComplete;
 
     expect(context.agents.ensureList).not.toHaveBeenCalled();
-    expect(page.renderRoot.textContent).toContain("Agent roster unavailable");
+    expectContent(page.renderRoot, ["Agent roster unavailable"]);
 
     page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
     expect(context.agents.refreshList).toHaveBeenCalledOnce();
@@ -841,7 +837,7 @@ describe("ModelProvidersPage agent scope", () => {
     firstProbe.resolve({ provider: "anthropic", status: "ok", results: [] });
     await drainPageUpdates(page);
 
-    expect(request.mock.calls.filter(([method]) => method === "models.probe")).toHaveLength(1);
+    expect(requestCount(request, "models.probe")).toBe(1);
     expect(page.view.props.probeResults).toEqual({});
     expect(page.view.props.busy).toEqual({});
   });
@@ -868,15 +864,15 @@ it("finishes loading with a system-only roster and keeps global defaults editabl
     await runtimeConfig.ensureLoaded();
     await page.updateComplete;
     expect(selection.state.selectedId).toBeNull();
-    expect(page.querySelector(".settings-loading-skeleton")).toBeNull();
-    expect(page.renderRoot.textContent).toContain("No agents");
-    expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(true);
+    expectAbsent(page, ".settings-loading-skeleton");
+    expectContent(page.renderRoot, ["No agents"]);
+    expectDisabled(page, "[data-models-connect]", true);
 
     const groups = page.querySelectorAll(
       '.model-providers__defaults .settings-segmented[role="radiogroup"]',
     );
     expect(groups).toHaveLength(2);
-    expect(groups[0]!.querySelector('.settings-segmented__input[value="high"]')).toBeNull();
+    expectAbsent(groups[0]!, '.settings-segmented__input[value="high"]');
     const savedThinking = groups[0]!.querySelector<HTMLInputElement>(
       '.settings-segmented__input[value="low"]',
     )!;

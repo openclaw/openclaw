@@ -22,6 +22,7 @@ import {
   openLogin,
 } from "./model-providers-page.login.test-support.ts";
 import {
+  requestCount,
   appendPage,
   expandProvider,
   unmountPage,
@@ -29,6 +30,17 @@ import {
   startSelectedLogin,
   submitCredential,
 } from "./model-providers-page.test-support.tsx";
+import {
+  loginOption,
+  capability as authCapability,
+  expectPresent,
+  expectAbsent,
+  model as catalogModel,
+  expectDisabled,
+  click,
+  profile as authProfile,
+  expectContent,
+} from "./model-providers.test-fixtures.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -61,21 +73,16 @@ describe("Models provider login", () => {
     vi.spyOn(window, "open").mockReturnValue(null);
     const { context, request, answer } = loginHarness({
       capabilities: [
-        {
-          provider: "meta",
+        authCapability("meta", {
           apiKeySupported: true,
           quickApiKeySetup: true,
           loginOptions: [
-            {
-              id: "meta/muse-code",
-              brandId: "meta",
-              label: "Muse Code",
-              kind: "device-code",
+            loginOption("meta/muse-code", "meta", "Muse Code", "device-code", {
               featured: true,
               requiresSetup: true,
-            },
+            }),
           ],
-        },
+        }),
       ],
     });
     const originalRequest = request.getMockImplementation()!;
@@ -86,7 +93,7 @@ describe("Models provider login", () => {
       }
       return method === "models.list" && !setup
         ? {
-            models: [{ provider: "openai", id: "working", name: "Working model", available: true }],
+            models: [catalogModel("working", "Working model")],
           }
         : originalRequest(method, ...args);
     });
@@ -96,27 +103,25 @@ describe("Models provider login", () => {
       const connect = setup ? "[data-model-readiness] button" : "[data-models-connect]";
       await waitForSolid(() => {
         expect(page.querySelector("[data-model-readiness]") !== null).toBe(setup);
-        expect(page.querySelector<HTMLButtonElement>(connect)?.disabled).toBe(false);
+        expectDisabled(page, connect, false);
       });
       if (setup) {
         expect(page.view.props.loading).toBe(true);
       }
-      page.querySelector<HTMLButtonElement>(connect)!.click();
+      click(page, connect);
       await page.updateComplete;
     } else {
       await openPicker(page);
     }
     if (setup) {
-      await waitForSolid(() =>
-        expect(page.querySelector('.model-provider-login [role="status"]')).not.toBeNull(),
-      );
+      await waitForSolid(() => expectPresent(page, '.model-provider-login [role="status"]'));
       authStatusReady.resolve();
     }
     await selectProvider(page, "meta");
     if (!setup) {
-      expect(page.renderRoot.textContent).toContain(
+      expectContent(page.renderRoot, [
         "Sign in and enable this provider for this agent without changing the active model.",
-      );
+      ]);
     }
     await startSelectedLogin(page, "Muse Code");
     expect(request).toHaveBeenCalledWith(
@@ -129,7 +134,7 @@ describe("Models provider login", () => {
       },
       { timeoutMs: null },
     );
-    const authReads = request.mock.calls.filter(([name]) => name === "models.authStatus").length;
+    const authReads = requestCount(request, "models.authStatus");
     answer.resolve({
       done: true,
       status: "done",
@@ -144,12 +149,10 @@ describe("Models provider login", () => {
       ),
     );
     if (!setup) {
-      expect(page.renderRoot.textContent).not.toContain("selected for this agent");
+      expectContent(page.renderRoot, [], ["selected for this agent"]);
     }
     await waitForSolid(() =>
-      expect(
-        request.mock.calls.filter(([name]) => name === "models.authStatus").length,
-      ).toBeGreaterThan(authReads),
+      expect(requestCount(request, "models.authStatus")).toBeGreaterThan(authReads),
     );
   });
 
@@ -262,7 +265,7 @@ describe("Models provider login", () => {
             "https://provider.example/sign-in",
           ),
         );
-        expect(page.renderRoot.textContent).not.toContain("Scope:");
+        expectContent(page.renderRoot, [], ["Scope:"]);
         expect(
           [...page.querySelectorAll("openclaw-modal-dialog button")].some(
             (button) => button.textContent?.trim() === "Continue",
@@ -276,12 +279,8 @@ describe("Models provider login", () => {
           );
         }
         if (cancel) {
-          page
-            .querySelector<HTMLButtonElement>(
-              'openclaw-modal-dialog button[aria-label="Cancel sign-in"]',
-            )!
-            .click();
-          await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
+          click(page, 'openclaw-modal-dialog button[aria-label="Cancel sign-in"]');
+          await waitForSolid(() => expectAbsent(page, "openclaw-modal-dialog"));
           expect(session?.getStatus()).toBe("cancelled");
         } else {
           completed.resolve();
@@ -295,19 +294,15 @@ describe("Models provider login", () => {
             () => expect(page.renderRoot.textContent).toContain("Provider credentials saved."),
             { timeout: 3000 },
           );
-          expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
+          expectContent(page.querySelector(".model-setup-wizard"), [
             "Example browser sign-in is connected",
-          );
+          ]);
           expect(session?.getStatus()).toBe("done");
-          expect(page.renderRoot.textContent).toContain(
-            "Saved sign-in; configuration refresh failed.",
-          );
+          expectContent(page.renderRoot, ["Saved sign-in; configuration refresh failed."]);
         }
-        const reads = request.mock.calls.filter(([method]) => method === "wizard.next").length;
+        const reads = requestCount(request, "wizard.next");
         await vi.advanceTimersByTimeAsync(1100);
-        expect(request.mock.calls.filter(([method]) => method === "wizard.next")).toHaveLength(
-          reads,
-        );
+        expect(requestCount(request, "wizard.next")).toBe(reads);
       } finally {
         session?.cancel();
         completed.resolve();
@@ -365,12 +360,12 @@ describe("Models provider login", () => {
         expect(alert.querySelector(".model-setup-wizard__error-text")?.textContent).toBe(
           ["Certificate validation failed.", guidance].join("\n\n"),
         );
-        expect(alert.querySelector<HTMLButtonElement>('button[aria-label="Copy"]')).not.toBeNull();
-        expect(page.querySelector("openclaw-modal-dialog details")).toBeNull();
+        expectPresent(alert, 'button[aria-label="Copy"]');
+        expectAbsent(page, "openclaw-modal-dialog details");
       }
-      expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+      expectContent(page.querySelector("openclaw-modal-dialog"), [
         outcome === "error" ? "Certificate validation failed." : "Enter the client ID",
-      );
+      ]);
       expect(request).toHaveBeenCalledWith(
         "wizard.next",
         { sessionId: expect.any(String), answer: { stepId: "provider-help" } },
@@ -414,20 +409,16 @@ describe("Models provider login", () => {
     await waitForSolid(() =>
       expect(page.renderRoot.textContent).toContain("Credentials are being saved."),
     );
-    expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
-    expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(true);
+    expectPresent(page, "openclaw-modal-dialog");
+    expectDisabled(page, "[data-models-connect]", true);
 
     answer.resolve({ done: true, status: "done" });
     await waitForSolid(() =>
       expect(page.renderRoot.textContent).toContain("Provider credentials saved."),
     );
-    expect(page.renderRoot.textContent).not.toContain("cancelled");
-    await waitForSolid(() =>
-      expect(page.querySelector('[data-provider-id="example"]')).not.toBeNull(),
-    );
-    expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
-      "Example API key is connected",
-    );
+    expectContent(page.renderRoot, [], ["cancelled"]);
+    await waitForSolid(() => expectPresent(page, '[data-provider-id="example"]'));
+    expectContent(page.querySelector(".model-setup-wizard"), ["Example API key is connected"]);
     expect(context.navigate).not.toHaveBeenCalled();
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
     expect(request.mock.calls.some(([method]) => method.startsWith("openclaw.setup."))).toBe(false);
@@ -453,11 +444,9 @@ describe("Models provider login", () => {
                     provider: "example",
                     displayName: "Example provider",
                     status: "ok",
-                    profiles: [...profiles].map((profileId) => ({
-                      profileId,
-                      type: "api_key",
-                      status: "ok",
-                    })),
+                    profiles: [...profiles].map((profileId) =>
+                      authProfile(profileId, { type: "api_key" }),
+                    ),
                   },
                 ]
               : [],
@@ -513,7 +502,7 @@ describe("Models provider login", () => {
     await waitForSolid(() =>
       expect(page.renderRoot.textContent).toContain("Credentials saved. Continue to finish."),
     );
-    page.querySelector<HTMLButtonElement>(".wizard-step__actions .btn")!.click();
+    click(page, ".wizard-step__actions .btn");
     await cancelReceived.promise;
     const first = [...sessions.values()][0]!;
     expect(first.isSettled()).toBe(false);
@@ -525,14 +514,12 @@ describe("Models provider login", () => {
     expect(profiles.has("example:1")).toBe(true);
     const replacement = appendPage(context);
     await openLogin(replacement);
-    expect(replacement.querySelector('[data-provider-id="example"]')).not.toBeNull();
+    expectPresent(replacement, '[data-provider-id="example"]');
     cancelled.resolve({ status: "running" });
     await replacement.updateComplete;
     expect(context.gateway.snapshot.client).toBe(client);
-    expect(replacement.renderRoot.textContent).not.toContain("Provider credentials saved.");
-    expect(replacement.querySelector<HTMLInputElement>('input[name="wizard-text"]')?.disabled).toBe(
-      false,
-    );
+    expectContent(replacement.renderRoot, [], ["Provider credentials saved."]);
+    expectDisabled(replacement, 'input[name="wizard-text"]', false);
 
     await submitCredential(replacement);
     await waitForSolid(() =>
@@ -540,7 +527,7 @@ describe("Models provider login", () => {
         "Credentials saved. Continue to finish.",
       ),
     );
-    replacement.querySelector<HTMLButtonElement>(".wizard-step__actions .btn.primary")!.click();
+    click(replacement, ".wizard-step__actions .btn.primary");
     await waitForSolid(() =>
       expect(replacement.renderRoot.textContent).toContain("Provider credentials saved."),
     );
@@ -552,13 +539,11 @@ describe("Models provider login", () => {
     const { context, request, cancel, status } = loginHarness();
     const page = appendPage(context);
     await openLogin(page);
-    page.querySelector<HTMLButtonElement>(".wizard-step__actions .btn")!.click();
+    click(page, ".wizard-step__actions .btn");
     cancel.resolve({ status: "cancelled" });
-    await waitForSolid(() =>
-      expect(request.mock.calls.some(([method]) => method === "wizard.status")).toBe(true),
-    );
-    expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
-    expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(true);
+    await waitForSolid(() => expect(requestCount(request, "wizard.status")).toBeGreaterThan(0));
+    expectPresent(page, "openclaw-modal-dialog");
+    expectDisabled(page, "[data-models-connect]", true);
 
     status.reject(
       new GatewayRequestError({
@@ -568,12 +553,12 @@ describe("Models provider login", () => {
       }),
     );
 
-    await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
-    expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(false);
-    expect(page.renderRoot.textContent).not.toContain("Provider credentials saved.");
-    page.querySelector<HTMLButtonElement>("[data-models-connect]")!.click();
+    await waitForSolid(() => expectAbsent(page, "openclaw-modal-dialog"));
+    expectDisabled(page, "[data-models-connect]", false);
+    expectContent(page.renderRoot, [], ["Provider credentials saved."]);
+    click(page, "[data-models-connect]");
     await page.updateComplete;
-    expect(page.querySelector("[data-models-login-search]")).not.toBeNull();
+    expectPresent(page, "[data-models-login-search]");
   });
 
   it("does not publish a previous agent's completion after selection changes", async () => {
@@ -585,14 +570,14 @@ describe("Models provider login", () => {
     settingsAgentSelection.state.selectedId = "main";
     settingsAgentSelection.state.scopeId = "main";
     notifySelection();
-    await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
+    await waitForSolid(() => expectAbsent(page, "openclaw-modal-dialog"));
 
     cancel.resolve({ status: "running" });
     answer.resolve({ done: true, status: "done" });
     await mutations.mock.results.at(-1)?.value;
     await page.updateComplete;
-    expect(page.renderRoot.textContent).not.toContain("Provider credentials saved.");
-    expect(page.querySelector<HTMLInputElement>('input[name="wizard-text"]')).toBeNull();
+    expectContent(page.renderRoot, [], ["Provider credentials saved."]);
+    expectAbsent(page, 'input[name="wizard-text"]');
   });
 
   it("groups and searches advertised providers before selecting their supported sign-in method", async () => {
@@ -607,48 +592,35 @@ describe("Models provider login", () => {
     }
     const { context, request } = loginHarness({
       capabilities: [
-        {
-          provider: "zebra",
-          apiKeySupported: false,
-          quickApiKeySetup: false,
+        authCapability("zebra", {
           loginOptions: [
-            {
-              id: "plugin/zebra-login",
-              brandId: "zebra",
+            loginOption("plugin/zebra-login", "zebra", "Device sign-in", "device-code", {
               groupLabel: "Zebra",
-              label: "Device sign-in",
-              kind: "device-code",
               featured: true,
-            },
+            }),
           ],
-        },
+        }),
         example,
         { ...example, provider: "example-alias" },
-        {
-          provider: "alpha",
+        authCapability("alpha", {
           apiKeySupported: true,
           quickApiKeySetup: true,
           loginOptions: [
-            {
-              id: "plugin/alpha-key",
-              brandId: "alpha",
+            loginOption("plugin/alpha-key", "alpha", "Account key", "secret", {
               groupLabel: "Alpha",
-              label: "Account key",
-              kind: "secret",
-              featured: false,
-            },
+            }),
           ],
-        },
-        { provider: "quick-key-only", apiKeySupported: true, quickApiKeySetup: true },
-        { provider: "unsupported", apiKeySupported: false, quickApiKeySetup: false },
+        }),
+        authCapability("quick-key-only", { apiKeySupported: true, quickApiKeySetup: true }),
+        authCapability("unsupported"),
       ],
     });
     const page = appendPage(context);
     await openPicker(page);
     expect(providerChoices(page)).toEqual(["alpha", "example", "quick-key-only", "zebra"]);
-    expect(page.querySelector("[data-models-login-choice]")).toBeNull();
-    expect(page.querySelector("[data-models-login-discover]")).not.toBeNull();
-    expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
+    expectAbsent(page, "[data-models-login-choice]");
+    expectPresent(page, "[data-models-login-discover]");
+    expect(requestCount(request, "models.authLogin")).toBe(0);
 
     await searchProviders(page, "  EXAMPLE  ");
     expect(providerChoices(page)).toEqual(["example"]);
@@ -663,11 +635,11 @@ describe("Models provider login", () => {
       ),
     ).toEqual(["Example browser sign-in", "Example API key"]);
     expect(document.activeElement).toBe(page.querySelector("[data-models-login-choice] button"));
-    expect(page.querySelector("[data-models-login-start]")).toBeNull();
-    expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
-    expect(page.querySelector("[data-models-login-discover]")).toBeNull();
+    expectAbsent(page, "[data-models-login-start]");
+    expect(requestCount(request, "models.authLogin")).toBe(0);
+    expectAbsent(page, "[data-models-login-discover]");
 
-    page.querySelector<HTMLButtonElement>("[data-models-login-back]")!.click();
+    click(page, "[data-models-login-back]");
     await page.updateComplete;
     expect(document.activeElement).toBe(page.querySelector("[data-models-login-search]"));
     expect(page.querySelector<HTMLInputElement>("[data-models-login-search]")!.value).toBe(
@@ -675,15 +647,15 @@ describe("Models provider login", () => {
     );
     await searchProviders(page, "no such provider");
     expect(providerChoices(page)).toEqual([]);
-    expect(page.querySelector(".model-provider-login [role=status]")?.textContent).toContain(
+    expectContent(page.querySelector(".model-provider-login [role=status]"), [
       "No providers match",
-    );
+    ]);
     await searchProviders(page, "");
     expect(providerChoices(page)).toEqual(["alpha", "example", "quick-key-only", "zebra"]);
     await selectProvider(page, "quick-key-only");
-    expect(page.querySelector("[data-models-login-choice] button")).toBeNull();
+    expectAbsent(page, "[data-models-login-choice] button");
     expect(document.activeElement).toBe(page.querySelector("[data-models-login-api-key]"));
-    page.querySelector<HTMLButtonElement>("[data-models-login-back]")!.click();
+    click(page, "[data-models-login-back]");
     await page.updateComplete;
     expect(document.activeElement).toBe(page.querySelector("[data-models-login-search]"));
     await selectProvider(page, "zebra");
@@ -703,21 +675,14 @@ describe("Models provider login", () => {
   it("shows accounts from the selected provider's credential owner before another login", async () => {
     const { context, request, answer } = loginHarness({
       capabilities: [
-        {
-          provider: "example-owner",
-          apiKeySupported: false,
-          quickApiKeySetup: false,
+        authCapability("example-owner", {
           loginOptions: [
-            {
-              id: "example-browser",
-              brandId: "example",
+            loginOption("example-browser", "example", "Example browser sign-in", "oauth", {
               groupLabel: "Example provider",
-              label: "Example browser sign-in",
-              kind: "oauth",
               featured: true,
-            },
+            }),
           ],
-        },
+        }),
       ],
       providers: [
         {
@@ -726,36 +691,24 @@ describe("Models provider login", () => {
           displayName: "Example provider",
           status: "ok",
           profiles: [
-            {
-              profileId: "example:external",
-              type: "oauth",
-              status: "ok",
+            authProfile("example:external", {
               source: "external",
               email: "same-account@example.invalid",
               displayName: "External CLI account",
-            },
-            {
-              profileId: "example:saved",
-              type: "oauth",
+            }),
+            authProfile("example:saved", {
               status: "expiring",
               source: "saved",
               email: "same-account@example.invalid",
               displayName: "Saved browser account",
-            },
+            }),
           ],
         },
         {
           provider: "unrelated",
           displayName: "Unrelated provider",
           status: "ok",
-          profiles: [
-            {
-              profileId: "unrelated:one",
-              type: "oauth",
-              status: "ok",
-              email: "other-provider@example.invalid",
-            },
-          ],
+          profiles: [authProfile("unrelated:one", { email: "other-provider@example.invalid" })],
         },
       ],
     });
@@ -767,12 +720,10 @@ describe("Models provider login", () => {
     expect(addAccount?.disabled).toBe(false);
     addAccount!.click();
     await page.updateComplete;
-    expect(page.querySelector("[data-models-login-search]")).toBeNull();
-    expect(page.querySelector(".model-provider-login__provider")?.textContent).toContain(
-      "Example provider",
-    );
+    expectAbsent(page, "[data-models-login-search]");
+    expectContent(page.querySelector(".model-provider-login__provider"), ["Example provider"]);
     const dialog = page.querySelector("openclaw-modal-dialog")!;
-    expect(dialog.textContent).toContain("Accounts available to this agent");
+    expectContent(dialog, ["Accounts available to this agent"]);
     const profiles = [...dialog.querySelectorAll<HTMLElement>("[data-profile-id]")];
     expect(profiles.map((profile) => profile.dataset.profileId)).toEqual([
       "example:external",
@@ -781,11 +732,10 @@ describe("Models provider login", () => {
     expect(
       profiles.every((profile) => profile.textContent?.includes("same-account@example.invalid")),
     ).toBe(true);
-    expect(profiles[0]?.textContent).toContain("External CLI account");
-    expect(profiles[1]?.textContent).toContain("Saved browser account");
-    expect(profiles[1]?.textContent).toContain("Expiring");
-    expect(dialog.textContent).not.toContain("other-provider@example.invalid");
-    expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
+    expectContent(profiles[0], ["External CLI account"]);
+    expectContent(profiles[1], ["Saved browser account", "Expiring"]);
+    expectContent(dialog, [], ["other-provider@example.invalid"]);
+    expect(requestCount(request, "models.authLogin")).toBe(0);
     const originalRequest = request.getMockImplementation()!;
     request.mockImplementation(async (method, ...args) => {
       if (method !== "models.authStatus") {
@@ -798,14 +748,7 @@ describe("Models provider login", () => {
             provider: "example-owner",
             displayName: "Example provider",
             status: "ok",
-            profiles: [
-              {
-                profileId: "example:new",
-                type: "oauth",
-                status: "ok",
-                email: "new-account@example.invalid",
-              },
-            ],
+            profiles: [authProfile("example:new", { email: "new-account@example.invalid" })],
           },
         ],
       };
@@ -823,7 +766,7 @@ describe("Models provider login", () => {
     answer.resolve({ done: true, status: "done" });
     await submitCredential(page);
     await waitForSolid(() => expect(card.textContent).toContain("new-account@example.invalid"));
-    expect(card.textContent).not.toContain("same-account@example.invalid");
+    expectContent(card, [], ["same-account@example.invalid"]);
   });
 
   it("preserves quick API-key setup alongside browser login", async () => {
@@ -838,21 +781,16 @@ describe("Models provider login", () => {
         },
       ],
       capabilities: [
-        {
-          provider: "quick-key",
+        authCapability("quick-key", {
           apiKeySupported: true,
           quickApiKeySetup: true,
           loginOptions: [
-            {
-              id: "fixture/browser",
-              brandId: "quick-key",
-              label: "Browser sign-in",
-              kind: "oauth",
+            loginOption("fixture/browser", "quick-key", "Browser sign-in", "oauth", {
               featured: true,
-            },
+            }),
           ],
-        },
-        { provider: "unsupported", apiKeySupported: true, quickApiKeySetup: false },
+        }),
+        authCapability("unsupported", { apiKeySupported: true }),
       ],
     });
     const page = appendPage(context);
@@ -867,24 +805,24 @@ describe("Models provider login", () => {
     ).toEqual(["Browser sign-in"]);
 
     const dialog = page.querySelector("openclaw-modal-dialog")!;
-    expect(dialog.textContent).toContain("Accounts available to this agent");
-    expect(dialog.textContent).toContain("API key from environment (QUICK_KEY_API_KEY)");
-    expect(dialog.querySelector('input[type="password"]')).toBeNull();
-    expect(
-      dialog.querySelector('a[href="https://docs.openclaw.ai/concepts/model-providers"]'),
-    ).not.toBeNull();
-    expect(request.mock.calls.some(([method]) => method === "models.authSetApiKey")).toBe(false);
+    expectContent(dialog, [
+      "Accounts available to this agent",
+      "API key from environment (QUICK_KEY_API_KEY)",
+    ]);
+    expectAbsent(dialog, 'input[type="password"]');
+    expectPresent(dialog, 'a[href="https://docs.openclaw.ai/concepts/model-providers"]');
+    expect(requestCount(request, "models.authSetApiKey")).toBe(0);
     const apiKey = page.querySelector<HTMLButtonElement>("[data-models-login-api-key]");
     expect(apiKey).not.toBeNull();
     apiKey!.click();
     await page.updateComplete;
-    expect(page.querySelector("[data-models-login-search]")).toBeNull();
-    expect(page.querySelector("[data-models-login-choice]")).toBeNull();
-    expect(page.querySelector('openclaw-modal-dialog input[type="password"]')).not.toBeNull();
+    expectAbsent(page, "[data-models-login-search]");
+    expectAbsent(page, "[data-models-login-choice]");
+    expectPresent(page, 'openclaw-modal-dialog input[type="password"]');
     expect(page.view.props.addProviderId).toBe("quick-key");
     expect(page.view.props.addProviderOpen).toBe(true);
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
-    expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
+    expect(requestCount(request, "models.authLogin")).toBe(0);
     expect(request.mock.calls.some(([method]) => method.startsWith("openclaw.setup."))).toBe(false);
   });
 
@@ -917,7 +855,7 @@ describe("Models provider login", () => {
         view.container.querySelector('.model-provider-login [role="status"]')?.textContent,
       ).toBe("Loading…"),
     );
-    view.container.querySelector<HTMLButtonElement>("openclaw-modal-actions .btn")!.click();
+    click(view.container, "openclaw-modal-actions .btn");
     expect(controller.busy).toBe(false);
     agentId = "reviewer";
     await controller.open();
@@ -960,18 +898,16 @@ describe("Models provider login", () => {
         "Inventory unavailable",
       ),
     );
-    view.container.querySelector<HTMLButtonElement>("openclaw-modal-actions .btn")!.click();
+    click(view.container, "openclaw-modal-actions .btn");
     if (cached) {
       authStatus = ready;
     }
     await controller.open();
     await waitForSolid(() => {
-      expect(view.container.querySelector('[role="alert"]')).toBeNull();
+      expectAbsent(view.container, '[role="alert"]');
       expect(providerChoices(view.container)).toEqual(["example"]);
     });
-    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(
-      cached ? 1 : 2,
-    );
+    expect(requestCount(request, "models.authStatus")).toBe(cached ? 1 : 2);
     view.unmount();
   });
 
@@ -1001,14 +937,12 @@ describe("Models provider login", () => {
       );
       expect(controller.pageActions.connectDisabled).toBe(false);
       await controller.pageActions.onConnect();
-      await waitForSolid(() =>
-        expect(container.querySelector("openclaw-modal-dialog")).not.toBeNull(),
-      );
+      await waitForSolid(() => expectPresent(container, "openclaw-modal-dialog"));
       const modal = container.querySelector("openclaw-modal-dialog")!;
       expect(modal.isConnected).toBe(true);
       expect(providerChoices(container)).toEqual([]);
       expect(controller.busy).toBe(true);
-      container.querySelector<HTMLButtonElement>("[data-models-login-discover]")!.click();
+      click(container, "[data-models-login-discover]");
       expect(onDiscover).toHaveBeenCalledOnce();
       expect(controller.busy).toBe(false);
       expect(
@@ -1017,7 +951,7 @@ describe("Models provider login", () => {
         ),
       ).toBe(false);
       view.unmount();
-      expect(container.querySelector("[data-models-login-search]")).toBeNull();
+      expectAbsent(container, "[data-models-login-search]");
       // Discovery can replace the picker before its custom-element update finishes.
       await modal.updateComplete;
       expect(document.openClawModalLayers?.has(modal)).toBe(false);
