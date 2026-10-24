@@ -8,6 +8,7 @@ import {
 } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import * as ttsSettings from "../tts/tts-settings.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 import * as preparedModelCatalog from "./prepared-model-catalog.js";
 import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configured-completion.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
@@ -270,15 +271,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         {},
         {
           plugins: { enabled: false },
-          models: {
-            providers: {
-              fixture: {
-                api: "openai-completions",
-                baseUrl: "https://custom.invalid/v1",
-                models: [],
-              },
-            },
-          },
+          ...configFor("fixture", "https://custom.invalid/v1", { api: "openai-completions" }),
         },
       ),
     },

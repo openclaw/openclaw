@@ -6,6 +6,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
 import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
 import { flushDiagnosticsTimeline } from "../../../infra/diagnostics-timeline.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -442,14 +443,7 @@ describe("recoverEmbeddedRunAttempt", () => {
         precedingMessages: [
           { role: "user", content: "Send the previous result.", timestamp: 0 },
           previousAssistant,
-          {
-            role: "toolResult",
-            toolCallId: "previous_reply",
-            toolName: "message",
-            content: [{ type: "text", text: "Delivered." }],
-            isError: false,
-            timestamp: 0,
-          },
+          makeTextToolResult("previous_reply", "message", "Delivered.", false, 0),
         ],
         answerSegments: [
           { textEnd: 0, messageEnd: 1, finalMessageStart: 1, lastAssistant: previousAssistant },

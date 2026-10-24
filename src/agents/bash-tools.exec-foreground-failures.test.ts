@@ -7,6 +7,7 @@ import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { getBashShellConfig } from "./shell-utils.js";
 
@@ -50,17 +51,7 @@ function mockSpawn(exit: Partial<RunExit> = {}) {
     runId: input.runId ?? "call",
     pid: 1234,
     startedAtMs: Date.now(),
-    wait: vi.fn(async () => ({
-      reason: "exit" as const,
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 1,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
-      ...exit,
-    })),
+    wait: vi.fn(async () => createRunExit(exit)),
     cancel: vi.fn(),
   }));
 }
