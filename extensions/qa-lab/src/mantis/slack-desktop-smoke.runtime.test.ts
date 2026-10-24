@@ -145,9 +145,11 @@ describe("mantis Slack desktop smoke runtime", () => {
     );
     const authScript = expectDefined(
       remoteScript.split("<<'MANTIS_SLACK_AUTH'\n")[1]?.split("\nMANTIS_SLACK_AUTH")[0],
+      "generated Slack auth script",
     );
     const pinScript = expectDefined(
       remoteScript.split("read -r pnpm_version pnpm_sha512 < <(node -e '\n")[1]?.split("\n')")[0],
+      "generated pnpm pin validator",
     );
     for (const ok of [true, false]) {
       const write = vi.fn<(chunk: string) => boolean>(() => true);
@@ -289,7 +291,7 @@ describe("mantis Slack desktop smoke runtime", () => {
     async ({ expectedError, failure }) => {
       vi.useFakeTimers();
       const events: string[] = [];
-      const outputDir = path.join(repoRoot, ".artifacts/slack-desktop-convex");
+      const outputDir = ".artifacts/slack-desktop-convex";
       const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
       const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
         const url = new Request(input).url;
@@ -322,7 +324,7 @@ describe("mantis Slack desktop smoke runtime", () => {
         },
         onCopy: async () => {
           if (failure === "report write") {
-            await fs.mkdir(path.join(outputDir, "mantis-slack-desktop-smoke-report.md"));
+            await fs.mkdir(path.join(repoRoot, outputDir, "mantis-slack-desktop-smoke-report.md"));
           }
         },
       });
@@ -432,7 +434,10 @@ describe("mantis Slack desktop smoke runtime", () => {
   it.each([false, true])("validates approval CLI gateway=%s", async (gatewaySetup) => {
     vi.resetModules();
     const command = vi.fn(async () => undefined);
-    vi.doMock("./cli.runtime.js", () => ({ runMantisSlackDesktopSmokeCommand: command }));
+    vi.doMock("./cli.runtime.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./cli.runtime.js")>()),
+      runMantisSlackDesktopSmokeCommand: command,
+    }));
     const { registerMantisCli } = await import("./cli.js");
     const qa = new Command("qa");
     registerMantisCli(qa);

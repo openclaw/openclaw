@@ -519,7 +519,7 @@ describe("automatic metadata admission", () => {
     }
     active = true;
     const visible = refresh();
-    pendingCatalog.resolve({ models: [{ ...models[0], id: "old" }] });
+    pendingCatalog.resolve({ models: [{ id: "old", name: "Old", provider: "test" }] });
     missingCommands.resolve(empty);
     await Promise.all([startup.completed, fallback.completed, visible.completed]);
     expect(counts()).toEqual(owner === "catalog" ? [1, 2] : [2, 1]);

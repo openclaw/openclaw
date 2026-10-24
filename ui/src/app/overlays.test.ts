@@ -42,7 +42,7 @@ afterEach(() => {
 
 const successfulRequest = () =>
   vi.fn<RequestFn>(async (method) => (method.endsWith(".list") ? [] : { ok: true }));
-const isDecision = (method: string) => !method.endsWith(".list");
+const isDecision = (method: string) => method.endsWith(".resolve");
 const replyRequest = (response: Promise<unknown>) =>
   vi.fn<RequestFn>((method) => (method.endsWith(".list") ? Promise.resolve([]) : response));
 const reviewOnly = "Review only. Sign in with approval access to record a decision.";

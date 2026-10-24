@@ -41,12 +41,14 @@ vi.mock("../version.js", async (importOriginal) => ({
   VERSION: "2026.9.7",
 }));
 
+// mock-isolation: Keep config reads and writes on the supplied synthetic snapshots.
 vi.mock("../config/config.js", () => ({
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshotForWrite: mocks.readConfig,
   replaceConfigFile: mocks.replaceConfig,
 }));
 
+// mock-isolation: Capture persistence without writing installed plugin state.
 vi.mock("./install-persistence.js", () => ({
   persistPluginInstall: mocks.persistInstall,
 }));
@@ -57,14 +59,17 @@ vi.mock("./install-config-mutation.js", async (importOriginal) => ({
   selectInstallMutationWriteOptions: (writeOptions: unknown) => writeOptions,
 }));
 
+// mock-isolation: Keep slot selection independent of the installed plugin registry.
 vi.mock("./slot-selection.js", () => ({
   applySlotSelectionForPlugin: (config: unknown) => config,
 }));
 
+// mock-isolation: Observe refresh ordering without rebuilding the live registry.
 vi.mock("./registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: mocks.refreshRegistry,
 }));
 
+// mock-isolation: Supply only the synthetic metadata admitted by each installation case.
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.metadata,
   resolvePluginMetadataSnapshot: mocks.metadata,
@@ -200,6 +205,16 @@ it("requires artifact consent before a linked source is enabled or recorded", as
     install: { installPath: dir, acceptedSurfaceHash: consent.reviewToken },
     snapshot: { config: { plugins: { load: { paths: [dir] } } } },
   });
+});
+
+it("refuses managed installs in Nix mode before config or artifact work", async () => {
+  await expect(
+    installPlugin({ source: "official", pluginId: "diffs" }, { env: { OPENCLAW_NIX_MODE: "1" } }),
+  ).rejects.toThrow("OPENCLAW_NIX_MODE=1");
+  expect(mocks.readConfig).not.toHaveBeenCalled();
+  expect(mocks.clawhubInstall).not.toHaveBeenCalled();
+  expect(mocks.npmInstall).not.toHaveBeenCalled();
+  expect(mocks.persistInstall).not.toHaveBeenCalled();
 });
 
 it.each([

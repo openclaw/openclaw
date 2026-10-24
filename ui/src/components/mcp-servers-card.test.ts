@@ -274,7 +274,7 @@ it("starts the selected connector and keeps a usable link when the popup is bloc
   await waitForFast(() => expect(card.querySelector("openclaw-modal-dialog")).toBeNull());
   expect(actionButton(card, "Sign in").disabled).toBe(false);
 });
-it.each([
+const unavailableLoginCases: [NonNullable<Parameters<typeof mountLoginCard>[0]>, string][] = [
   [{ methods: [] }, loginCommand],
   [{ admin: false }, loginCommand],
   [{ server: { ...oauthServer, enabled: false } }, loginCommand],
@@ -286,7 +286,8 @@ it.each([
     { server: { ...oauthServer, oauth: { authProfileId: "linked-account" } } },
     "Sign in through the linked account in Models.",
   ],
-] satisfies [Parameters<typeof mountLoginCard>[0], string][])(
+];
+it.each(unavailableLoginCases)(
   "withholds native login for %j and shows %s",
   async (options, alternative) => {
     const { card, request, open, harness } = await mountLoginCard(options);

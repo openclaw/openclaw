@@ -3,6 +3,7 @@ import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
 import { resolveGroupThreadMentionFacts } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import * as replyRuntime from "openclaw/plugin-sdk/reply-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi, afterEach } from "vitest";
@@ -462,7 +463,10 @@ it.each([false, true])("binds group-thread delivery (warning=%s)", async (warnin
     agents: { ownership: "explicit", entries },
     broadcast: { "discord:c1": agents },
   };
-  const warningPayload = h.createNonTerminalToolWarningPayload();
+  const warningPayload = setReplyPayloadMetadata(
+    { text: "The attachment could not be processed.", isError: true },
+    { nonTerminalToolErrorWarning: true },
+  );
   const mediaReply = (id: string, file: string) => ({
     text: id,
     mediaUrl: join(workspace(id), file),

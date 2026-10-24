@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createApiKeyCredential,
@@ -273,7 +274,7 @@ describe("applyNonInteractiveAuthChoice", () => {
             "loadAuthProfileStoreWithoutExternalProfilesAsync",
           ).mockResolvedValue(
             createAuthProfileStoreFixture({
-              [String(apiKey)]: createApiKeyCredential(profile, discoveryKey),
+              [apiKey]: createApiKeyCredential(profile, discoveryKey),
             }),
           );
         }
@@ -569,8 +570,11 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(applyPlugin).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ authChoice: "demo-provider-api-key", nextConfig, target }),
     );
-    const warningOrder = runtime.log.mock.invocationCallOrder[0];
-    const dispatchOrder = applyPlugin.mock.invocationCallOrder[0];
+    const warningOrder = expectDefined(runtime.log.mock.invocationCallOrder[0], "legacy warning");
+    const dispatchOrder = expectDefined(
+      applyPlugin.mock.invocationCallOrder[0],
+      "provider dispatch",
+    );
     expect(warningOrder).toBeLessThan(dispatchOrder);
   });
 });

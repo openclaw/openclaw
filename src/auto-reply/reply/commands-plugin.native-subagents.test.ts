@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it as baseIt, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import { hasMainSessionRecoveryClaim } from "../../config/sessions/restart-recovery-state.js";
@@ -13,6 +13,11 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  createRestartSafeChatRequest,
+  resolveRestartSafeChatAdmission,
+} from "../../gateway/server-methods/chat-restart-recovery.js";
 // This deprecated public entrypoint is the caller-controlled registrar under test.
 import { registerPluginCommand } from "../../plugin-sdk/plugin-runtime.js";
 import {
@@ -25,6 +30,7 @@ import { waitForPluginCacheRetirement } from "../../plugins/plugin-cache.js";
 import {
   createPluginCommandRuntime,
   matchPluginCommandInvocation,
+  PLUGIN_COMMAND_DISPATCH,
 } from "../../plugins/plugin-command-runtime.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
@@ -36,9 +42,10 @@ import {
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { NativeSubagentRuntime } from "../../plugins/runtime/types-native-subagent.js";
 import type { PluginCommandContext, PluginCommandResult } from "../../plugins/types.js";
-import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
+import { buildPluginCommandContext } from "./commands-context.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import {
   createPersistedPluginCommandParams,
@@ -55,6 +62,7 @@ type CommandMetadata = {
   name: string;
   requireAuth?: boolean;
   runtimeCapabilities?: unknown;
+  channels?: string[];
 };
 const declaredCommand: CommandMetadata = {
   name: "review-panel",
@@ -63,6 +71,7 @@ const declaredCommand: CommandMetadata = {
 };
 
 type Fixture = {
+  cfg: OpenClawConfig;
   registry: PluginRegistry;
   params: (body?: string) => HandleCommandsParams;
   handler: ReturnType<typeof vi.fn<Handler>>;
@@ -105,10 +114,16 @@ async function withCommandPlugin(
     const commands = options.commands ?? [declaredCommand, { name: "ordinary" }];
     await fs.writeFile(
       pluginFile,
-      `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
-        for (const command of ${JSON.stringify(commands)}) {
+      `module.exports = { id: ` +
+        JSON.stringify(pluginId) +
+        `, register(api) {
+        for (const command of ` +
+        JSON.stringify(commands) +
+        `) {
           api.registerCommand({ ...command, description: "Synthetic review command", acceptsArgs: true,
-            handler(ctx) { return globalThis[Symbol.for(${JSON.stringify(Symbol.keyFor(bridge))})](ctx); }
+            handler(ctx) { return globalThis[Symbol.for(` +
+        JSON.stringify(Symbol.keyFor(bridge)) +
+        `)](ctx); }
           });
         }
       } };`,
@@ -168,6 +183,7 @@ async function withCommandPlugin(
         },
         () =>
           run({
+            cfg,
             registry: expectDefined(registry, "loaded registry"),
             params,
             handler,
@@ -193,48 +209,12 @@ function select(body: string) {
   return matchPluginCommandInvocation(createPluginCommandRuntime(), body, { channel: "discord" });
 }
 
-const nativeTools = () => ["sessions_spawn", "agents_wait", "read"];
-const commandInvocation = (fixture: Fixture, body = "/review-panel") =>
-  createPluginCommandInvocation(fixture.params(body), nativeTools());
-type Invocation = ReturnType<typeof commandInvocation>;
-const reply = (text: string) => ({ shouldContinue: false, reply: { text } });
-const capabilityReply = (subagents: boolean, args?: string) =>
-  reply(JSON.stringify({ subagents, args }));
-
-async function expectUncommitted(fixture: Fixture, invocation: Invocation) {
-  expect(invocation.recorder.getAdmissionReceipt()).toBeUndefined();
-  expect(await fixture.userInputs()).toEqual([]);
-}
-
-async function expectNoCapability(fixture: Fixture, invocation: Invocation) {
-  expect(await invocation.run()).toEqual(capabilityReply(false));
-  await expectUncommitted(fixture, invocation);
-}
-
-function changeAuthority(fixture: Fixture, change: "owner" | "registry") {
-  if (change === "owner") {
-    fixture.revokeOwner();
-  } else {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  }
-}
-
-// Keep the early-settlement guard and unconditional release identical for every race.
-async function whilePaused<T>(
-  pending: Promise<T>,
-  entered: Deferred,
-  release: Deferred,
-  run: () => Promise<void>,
-) {
-  try {
-    expect(
-      await Promise.race([entered.promise.then(() => "entered"), pending.then(() => "finished")]),
-    ).toBe("entered");
-    await run();
-  } finally {
-    release.resolve();
-    await pending;
-  }
+function commandInvocation(fixture: Fixture, body = "/review-panel") {
+  return createPluginCommandInvocation(fixture.params(body), [
+    "sessions_spawn",
+    "agents_wait",
+    "read",
+  ]);
 }
 
 afterEach(() => {
@@ -242,20 +222,37 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-const it = baseIt.extend<{ fixture: Fixture }>({
-  fixture: async ({ task: _task }, use) => withCommandPlugin(use),
-});
-
 describe("command-scoped native subagent boundary", () => {
-  baseIt.each<[string, Partial<CommandMetadata>, string, unknown?]>([
-    ["missing manifest grant", {}, "commandRuntimeCapabilities", []],
-    ["public command", { requireAuth: false }, "requireAuth"],
-    ["implicit authorization", { requireAuth: undefined }, "requireAuth"],
-    ["unknown capability", { runtimeCapabilities: ["unknown-capability"] }, "runtimeCapabilities"],
-    ["malformed capability", { runtimeCapabilities: "subagents" }, "runtimeCapabilities"],
+  it.each([
+    {
+      name: "missing manifest grant",
+      manifestCapabilities: [],
+      command: declaredCommand,
+      reason: "commandRuntimeCapabilities",
+    },
+    {
+      name: "public command",
+      command: { ...declaredCommand, requireAuth: false },
+      reason: "requireAuth",
+    },
+    {
+      name: "implicit authorization default",
+      command: { ...declaredCommand, requireAuth: undefined },
+      reason: "requireAuth",
+    },
+    {
+      name: "unknown runtime capability",
+      command: { ...declaredCommand, runtimeCapabilities: ["unknown-capability"] },
+      reason: "runtimeCapabilities",
+    },
+    {
+      name: "malformed runtime capability",
+      command: { ...declaredCommand, runtimeCapabilities: "subagents" },
+      reason: "runtimeCapabilities",
+    },
   ])(
-    "refuses %s at the real loader registration boundary",
-    async (_name, command, reason, manifestCapabilities) => {
+    "refuses $name at the real loader registration boundary",
+    async ({ command, manifestCapabilities, reason }) => {
       await withCommandPlugin(
         async (fixture) => {
           expect(select("/review-panel")).toBeNull();
@@ -266,221 +263,487 @@ describe("command-scoped native subagent boundary", () => {
           expect(fixture.handler).not.toHaveBeenCalled();
           expect(await fixture.userInputs()).toEqual([]);
         },
-        { commands: [{ ...declaredCommand, ...command }], manifestCapabilities },
+        { commands: [command], manifestCapabilities },
       );
     },
   );
 
-  it("rejects a direct registrar borrowing the loaded plugin's grant", async ({ fixture }) => {
-    expect(select("/review-panel")).not.toBeNull();
-    const spoofed = registerPluginCommand(pluginId, {
-      name: "spoofed-review",
-      description: "Caller-supplied plugin ID is not an admitted manifest",
-      requireAuth: true,
-      runtimeCapabilities: ["subagents"],
-      handler: fixture.handler,
-    });
-    expect(spoofed).toMatchObject({ ok: false });
-    expect(spoofed.error).toContain("commandRuntimeCapabilities");
-    expect(await commandInvocation(fixture, "/spoofed-review").run()).toBeNull();
-    expect(fixture.handler).not.toHaveBeenCalled();
-
-    // The deprecated registrar remains usable for ordinary commands, without authority grants.
-    expect(
-      registerPluginCommand(pluginId, {
-        name: "legacy-command",
-        description: "Ordinary direct SDK command",
+  it("does not let the public direct registrar borrow a loaded plugin's manifest grant", async () => {
+    await withCommandPlugin(async (fixture) => {
+      expect(fixture.registry.plugins.find((plugin) => plugin.id === pluginId)).toMatchObject({
+        status: "loaded",
+        contracts: { commandRuntimeCapabilities: ["subagents"] },
+      });
+      const spoofed = registerPluginCommand(pluginId, {
+        name: "spoofed-review",
+        description: "Caller-supplied plugin ID is not an admitted manifest",
+        requireAuth: true,
+        runtimeCapabilities: ["subagents"],
         handler: fixture.handler,
-      }),
-    ).toEqual({ ok: true });
-    expect(await commandInvocation(fixture, "/legacy-command").run()).toEqual(
-      capabilityReply(false),
-    );
-    expect(await fixture.userInputs()).toEqual([]);
+      });
+      expect(spoofed).toMatchObject({ ok: false });
+      expect(spoofed.error).toContain("commandRuntimeCapabilities");
+      expect(select("/spoofed-review")).toBeNull();
+      expect(await commandInvocation(fixture, "/spoofed-review").run()).toBeNull();
+      expect(fixture.handler).not.toHaveBeenCalled();
+
+      // The deprecated registrar remains usable for ordinary commands, without authority grants.
+      expect(
+        registerPluginCommand(pluginId, {
+          name: "legacy-command",
+          description: "Ordinary direct SDK command",
+          handler: fixture.handler,
+        }),
+      ).toEqual({ ok: true });
+      expect(await commandInvocation(fixture, "/legacy-command").run()).toEqual({
+        shouldContinue: false,
+        reply: { text: JSON.stringify({ subagents: false }) },
+      });
+      expect(await fixture.userInputs()).toEqual([]);
+    });
   });
 
-  it("withholds native runtime from ordinary and legacy command paths", async ({ fixture }) => {
-    expect(await commandInvocation(fixture, "/ordinary /review-panel").run()).toEqual(
-      capabilityReply(false, "/review-panel"),
-    );
-    // Older command surfaces cannot obtain authority from an ambient hook facade.
-    expect(await handlePluginCommand(fixture.params(), true)).toEqual(capabilityReply(false));
-    expect(await fixture.userInputs()).toEqual([]);
+  it("exposes the real requester-bound runtime only to the selected declaring command", async () => {
+    await withCommandPlugin(async (fixture) => {
+      expect(await commandInvocation(fixture, "/ordinary /review-panel").run()).toEqual({
+        shouldContinue: false,
+        reply: { text: JSON.stringify({ subagents: false, args: "/review-panel" }) },
+      });
+      // Older command surfaces cannot obtain authority from an ambient hook facade.
+      expect(await handlePluginCommand(fixture.params(), true)).toEqual({
+        shouldContinue: false,
+        reply: { text: JSON.stringify({ subagents: false }) },
+      });
+      expect(await fixture.userInputs()).toEqual([]);
+      const invocation = commandInvocation(fixture);
+      expect(await invocation.run()).toEqual({
+        shouldContinue: false,
+        reply: { text: JSON.stringify({ subagents: true }) },
+      });
+      expect(invocation.recorder.getAdmissionReceipt()).toMatchObject({
+        agentId: "main",
+        sessionKey: invocation.params.sessionKey,
+        sessionId: "command-parent",
+      });
+      expect(await fixture.userInputs()).toEqual(["/review-panel"]);
+    });
   });
 
-  it.for(["> /review-panel", "/foreign /review-panel"])(
-    "does not turn quoted or foreign text into a native command: %s",
-    async (body, { fixture }) => {
+  it("commits command input before the handler and reuses that commitment on agent continuation", async () => {
+    await withCommandPlugin(async (fixture) => {
+      const invocation = commandInvocation(fixture);
+      fixture.handler.mockImplementation(async (ctx) => {
+        expect(ctx.runtimeContext?.subagents).toBeDefined();
+        expect(await fixture.userInputs()).toEqual(["/review-panel"]);
+        expect(invocation.recorder.getAdmissionReceipt()).toMatchObject({
+          agentId: "main",
+          sessionId: "command-parent",
+          sessionKey: invocation.params.sessionKey,
+        });
+        return { continueAgent: true };
+      });
+      expect(await invocation.run()).toEqual({ shouldContinue: true, reply: undefined });
+      const receipt = invocation.recorder.getAdmissionReceipt();
+      // The continuing agent uses the same request recorder, not a second logical user input.
+      await invocation.recorder.persistApproved({ expectedSessionId: "command-parent" });
+      await invocation.recorder.persistFallback();
+      expect(invocation.recorder.getAdmissionReceipt()).toEqual(receipt);
+      expect(await fixture.userInputs()).toEqual(["/review-panel"]);
+      expect(fixture.handler).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it.each([
+    "> /review-panel",
+    "Please run /review-panel",
+    "`/review-panel`",
+    "/foreign /review-panel",
+  ])("does not turn quoted or foreign text into a native command: %s", async (body) => {
+    await withCommandPlugin(async (fixture) => {
       expect(select(body)).toBeNull();
       expect(await commandInvocation(fixture, body).run()).toBeNull();
       expect(fixture.handler).not.toHaveBeenCalled();
       expect(await fixture.userInputs()).toEqual([]);
-    },
-  );
+    });
+  });
 
-  it.for(["external_user", "internal_system"] as const)(
-    "prepares command capabilities only for admitted external input: %s",
-    async (kind, { fixture }) => {
-      const params = fixture.params();
-      params.ctx.InputProvenance = { kind, sourceTool: "task_suggestion" };
-      const state = createPluginCommandDispatchState(params, nativeTools());
-      params.opts = {
-        withCommandNativeSubagents: (binding, run) =>
-          runWithCommandNativeSubagents(state, binding, run),
-      };
-      expect(await handlePluginCommand(params, true)).toEqual(
-        capabilityReply(kind === "external_user"),
-      );
-      expect(await fixture.userInputs()).toEqual(kind === "external_user" ? ["/review-panel"] : []);
-    },
-  );
-
-  it.for(["both", "sessions_spawn", "agents_wait", "agent", "session", "commit"] as const)(
-    "withholds native capability after a failed %s gate",
-    async (gate, { fixture }) => {
+  it("does not rematch a non-plugin catalog decision from command-looking text", async () => {
+    await withCommandPlugin(async (fixture) => {
       const invocation = commandInvocation(fixture);
-      if (gate === "agent") {
-        invocation.state.sessionAgentId = "different-agent";
-      } else if (gate === "session") {
-        invocation.state.sessionKey = "agent:main:different-session";
-      } else if (gate === "commit") {
-        invocation.recorder.markBlocked();
-      } else {
-        expectDefined(invocation.state.params.replyOptions, "reply authority").toolsAllow =
-          nativeTools().filter((tool) => (gate === "both" ? tool === "read" : tool !== gate));
-      }
-      await expectNoCapability(fixture, invocation);
-      expect(fixture.handler).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("honors a spawn hook veto after command preparation", async ({ fixture }) => {
-    const beforeSpawn = vi.fn((event: { toolName: string }) =>
-      event.toolName === "sessions_spawn"
-        ? { block: true, blockReason: "Synthetic command spawn veto" }
-        : undefined,
-    );
-    addTestHook({
-      registry: fixture.registry,
-      pluginId,
-      hookName: "before_tool_call",
-      handler: beforeSpawn,
+      invocation.params.opts = {
+        ...invocation.params.opts,
+        [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" },
+      };
+      expect(await invocation.run()).toBeNull();
+      expect(fixture.handler).not.toHaveBeenCalled();
+      expect(invocation.recorder.getAdmissionReceipt()).toBeUndefined();
     });
-    initializeGlobalHookRunner(fixture.registry);
-    const acceptedBefore = [...subagentRuns.keys()];
-    fixture.handler.mockImplementation(async (ctx) => {
-      const native = expectDefined(ctx.runtimeContext?.subagents, "prepared command capability");
-      try {
-        await native.spawn(spawnRequest);
-        return { text: "unexpected child", continueAgent: true };
-      } catch (error) {
-        return { text: error instanceof Error ? error.message : String(error) };
-      }
-    });
-    const invocation = commandInvocation(fixture);
-    expect(await invocation.run()).toEqual(reply("Native subagent spawn was not accepted."));
-    expect(beforeSpawn).toHaveBeenCalledOnce();
-    expect(await fixture.userInputs()).toEqual(["/review-panel"]);
-    expect([...subagentRuns.keys()]).toEqual(acceptedBefore);
-    expect(
-      await listSessionChildEntriesReadOnly({
-        agentId: "main",
-        sessionKey: invocation.params.sessionKey,
-        storePath: invocation.params.storePath,
-      }),
-    ).toEqual([]);
   });
 
-  it("closes retained spawn and collect references on settlement", async ({ fixture }) => {
-    let native: NativeSubagentRuntime | undefined;
-    fixture.handler.mockImplementation((ctx) => {
-      native = ctx.runtimeContext?.subagents;
-      return { text: "saved" };
+  it("does not bind native authority for an unauthorized sender", async () => {
+    await withCommandPlugin(async (fixture) => {
+      const invocation = commandInvocation(fixture);
+      invocation.params.command.isAuthorizedSender = false;
+      expect(await invocation.run()).toEqual({
+        shouldContinue: false,
+        reply: { text: "⚠️ This command requires authorization." },
+      });
+      expect(fixture.handler).not.toHaveBeenCalled();
+      expect(invocation.recorder.getAdmissionReceipt()).toBeUndefined();
+      expect(await fixture.userInputs()).toEqual([]);
     });
-    expect(await commandInvocation(fixture).run()).toEqual(reply("saved"));
-    const retained = expectDefined(native, "retained native capability");
-    await expect(retained.spawn(spawnRequest)).rejects.toSatisfy((error: unknown) =>
-      String(error).includes("command invocation closed"),
-    );
-    await expect(retained.collect({ ids: ["child"], timeoutSeconds: 0 })).rejects.toSatisfy(
-      (error: unknown) => String(error).includes("command invocation closed"),
-    );
   });
 
-  it.for([
-    ["owner", "preparation"],
-    ["registry", "preparation"],
-    ["owner", "handler"],
-    ["registry", "handler"],
-  ] as const)("revokes %s authority during %s", async ([change, phase], { fixture }) => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const pause = async () => {
-      entered.resolve();
-      await release.promise;
-    };
-    const invocation = commandInvocation(fixture);
-    if (phase === "preparation") {
-      invocation.state.assertCurrentBindingRoute = pause;
-    } else {
-      fixture.handler.mockImplementation(async (ctx) => {
-        const native = expectDefined(ctx.runtimeContext?.subagents, "native capability");
-        await pause();
-        return native.spawn(spawnRequest).then(
-          () => ({ text: "unexpected child", continueAgent: true }),
-          (error: unknown) => ({ text: String(error) }),
+  it.each(["external_user", "internal_system", "inter_session"] as const)(
+    "prepares command capabilities only for admitted external input: %s",
+    async (kind) => {
+      await withCommandPlugin(async (fixture) => {
+        const params = fixture.params();
+        params.ctx.InputProvenance = { kind, sourceTool: "task_suggestion" };
+        const state = createPluginCommandDispatchState(params, [
+          "sessions_spawn",
+          "agents_wait",
+          "read",
+        ]);
+        params.opts = {
+          withCommandNativeSubagents: (binding, run) =>
+            runWithCommandNativeSubagents(state, binding, run),
+        };
+        expect(await handlePluginCommand(params, true)).toEqual({
+          shouldContinue: false,
+          reply: { text: JSON.stringify({ subagents: kind === "external_user" }) },
+        });
+        expect(await fixture.userInputs()).toEqual(
+          kind === "external_user" ? ["/review-panel"] : [],
         );
       });
-    }
-    const acceptedBefore = [...subagentRuns.keys()];
-    const pending = invocation.run();
-    await whilePaused(pending, entered, release, async () => {
-      changeAuthority(fixture, change);
-      release.resolve();
-      const result = await pending;
-      if (phase === "preparation") {
-        expect(result).toEqual(reply("⚠️ Command failed. Please try again later."));
-        expect(fixture.handler).not.toHaveBeenCalled();
-        await expectUncommitted(fixture, invocation);
-      } else {
-        expect(result?.reply?.text).toMatch(
-          change === "owner"
-            ? /authority.*changed|authority.*revoked/i
-            : /^Error: Plugin command runtime is no longer active\.$/,
-        );
-        expect(result?.shouldContinue).toBe(false);
-      }
-      expect([...subagentRuns.keys()]).toEqual(acceptedBefore);
+    },
+  );
+
+  it.each([
+    { name: "both tools", allow: ["read"] },
+    { name: "sessions_spawn", allow: ["read", "agents_wait"] },
+    { name: "agents_wait", allow: ["read", "sessions_spawn"] },
+  ])("withholds the capability when real tool policy excludes $name", async ({ allow }) => {
+    await withCommandPlugin(async (fixture) => {
+      const invocation = commandInvocation(fixture);
+      expectDefined(invocation.state.params.replyOptions, "reply authority").toolsAllow = allow;
+      expect(await invocation.run()).toEqual({
+        shouldContinue: false,
+        reply: { text: JSON.stringify({ subagents: false }) },
+      });
+      expect(invocation.recorder.getAdmissionReceipt()).toBeUndefined();
+      expect(await fixture.userInputs()).toEqual([]);
     });
   });
 
-  it("does not arm recovery while a committed command awaits", async ({ fixture }) => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const invocation = commandInvocation(fixture);
-    fixture.handler.mockImplementation(async (ctx) => {
-      expect(ctx.runtimeContext?.subagents).toBeDefined();
-      expect(await fixture.userInputs()).toEqual(["/review-panel"]);
-      entered.resolve();
-      await release.promise;
-      return { text: "command finished" };
+  it.each(["agent", "session"] as const)(
+    "withholds capability for a mismatched %s binding",
+    async (binding) => {
+      await withCommandPlugin(async (fixture) => {
+        const invocation = commandInvocation(fixture);
+        if (binding === "agent") {
+          invocation.state.sessionAgentId = "different-agent";
+        } else {
+          invocation.state.sessionKey = "agent:main:different-session";
+        }
+        expect(await invocation.run()).toEqual({
+          shouldContinue: false,
+          reply: { text: JSON.stringify({ subagents: false }) },
+        });
+        expect(invocation.recorder.getAdmissionReceipt()).toBeUndefined();
+        expect(await fixture.userInputs()).toEqual([]);
+      });
+    },
+  );
+
+  it("lets the handler fall back without capability when command input cannot be committed", async () => {
+    await withCommandPlugin(async (fixture) => {
+      const invocation = commandInvocation(fixture);
+      invocation.recorder.markBlocked();
+      expect(await invocation.run()).toEqual({
+        shouldContinue: false,
+        reply: { text: JSON.stringify({ subagents: false }) },
+      });
+      expect(fixture.handler).toHaveBeenCalledTimes(1);
+      expect(invocation.recorder.getAdmissionReceipt()).toBeUndefined();
+      expect(await fixture.userInputs()).toEqual([]);
     });
-    const pending = invocation.run();
-    await whilePaused(pending, entered, release, async () => {
-      const persisted = expectDefined(
-        loadSessionEntry({
+  });
+
+  it("honors a before_tool_call veto of sessions_spawn after real command preparation", async () => {
+    await withCommandPlugin(async (fixture) => {
+      const beforeSpawn = vi.fn((event: { toolName: string }) =>
+        event.toolName === "sessions_spawn"
+          ? { block: true, blockReason: "Synthetic command spawn veto" }
+          : undefined,
+      );
+      addTestHook({
+        registry: fixture.registry,
+        pluginId,
+        hookName: "before_tool_call",
+        handler: beforeSpawn,
+      });
+      initializeGlobalHookRunner(fixture.registry);
+      const acceptedBefore = [...subagentRuns.keys()];
+      fixture.handler.mockImplementation(async (ctx) => {
+        const native = expectDefined(ctx.runtimeContext?.subagents, "prepared command capability");
+        try {
+          await native.spawn(spawnRequest);
+          return { text: "unexpected child", continueAgent: true };
+        } catch (error) {
+          return { text: error instanceof Error ? error.message : String(error) };
+        }
+      });
+      const invocation = commandInvocation(fixture);
+      expect(await invocation.run()).toEqual({
+        shouldContinue: false,
+        reply: { text: "Native subagent spawn was not accepted." },
+      });
+      expect(beforeSpawn).toHaveBeenCalledTimes(1);
+      expect(beforeSpawn.mock.calls[0]?.[0]).toMatchObject({ toolName: "sessions_spawn" });
+      expect(await fixture.userInputs()).toEqual(["/review-panel"]);
+      expect([...subagentRuns.keys()]).toEqual(acceptedBefore);
+      expect(
+        await listSessionChildEntriesReadOnly({
           agentId: "main",
           sessionKey: invocation.params.sessionKey,
           storePath: invocation.params.storePath,
         }),
-        "committed requester session",
-      );
-      expect(hasMainSessionRecoveryClaim(persisted)).toBe(false);
-      expect(invocation.recorder.getAdmissionReceipt()).toMatchObject({
-        sessionId: persisted.sessionId,
+      ).toEqual([]);
+      expect(fixture.handler).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("closes retained spawn and collect references when the real command invocation settles", async () => {
+    await withCommandPlugin(async (fixture) => {
+      let native: NativeSubagentRuntime | undefined;
+      fixture.handler.mockImplementation((ctx) => {
+        native = ctx.runtimeContext?.subagents;
+        return { text: "saved" };
       });
-      release.resolve();
-      expect(await pending).toEqual(reply("command finished"));
+      expect(await commandInvocation(fixture).run()).toEqual({
+        shouldContinue: false,
+        reply: { text: "saved" },
+      });
+      const retained = expectDefined(native, "retained native capability");
+      await expect(retained.spawn(spawnRequest)).rejects.toSatisfy((error: unknown) =>
+        String(error).includes("command invocation closed"),
+      );
+      await expect(retained.collect({ ids: ["child"], timeoutSeconds: 0 })).rejects.toSatisfy(
+        (error: unknown) => String(error).includes("command invocation closed"),
+      );
+    });
+  });
+
+  it.each(["owner", "registry"] as const)(
+    "revokes %s authority while a real admitted command awaits",
+    async (change) => {
+      await withCommandPlugin(async (fixture) => {
+        const entered = createDeferredCore();
+        const resume = createDeferredCore();
+        fixture.handler.mockImplementation(async (ctx) => {
+          const native = expectDefined(ctx.runtimeContext?.subagents, "native capability");
+          entered.resolve();
+          await resume.promise;
+          try {
+            await native.spawn(spawnRequest);
+            return { text: "unexpected child", continueAgent: true };
+          } catch (error) {
+            return { text: String(error) };
+          }
+        });
+        const acceptedBefore = [...subagentRuns.keys()];
+        const pending = commandInvocation(fixture).run();
+        try {
+          expect(
+            await Promise.race([
+              entered.promise.then(() => "entered"),
+              pending.then(() => "finished"),
+            ]),
+          ).toBe("entered");
+          if (change === "owner") {
+            fixture.revokeOwner();
+          } else {
+            setActivePluginRegistry(createEmptyPluginRegistry());
+          }
+          resume.resolve();
+          const result = await pending;
+          expect(result?.reply?.text).toMatch(
+            change === "owner"
+              ? /authority.*changed|authority.*revoked/i
+              : /^Error: Plugin command runtime is no longer active\.$/,
+          );
+          expect(result?.shouldContinue).toBe(false);
+          expect([...subagentRuns.keys()]).toEqual(acceptedBefore);
+        } finally {
+          resume.resolve();
+          await pending;
+        }
+      });
+    },
+  );
+
+  it.each(["owner", "registry"] as const)(
+    "rejects %s changes during real command preparation before entering the handler",
+    async (change) => {
+      await withCommandPlugin(async (fixture) => {
+        const prepared = createDeferredCore();
+        const release = createDeferredCore();
+        const invocation = commandInvocation(fixture);
+        invocation.state.assertCurrentBindingRoute = async () => {
+          prepared.resolve();
+          await release.promise;
+        };
+        const pending = invocation.run();
+        try {
+          expect(
+            await Promise.race([
+              prepared.promise.then(() => "prepared"),
+              pending.then(() => "finished"),
+            ]),
+          ).toBe("prepared");
+          if (change === "owner") {
+            fixture.revokeOwner();
+          } else {
+            setActivePluginRegistry(createEmptyPluginRegistry());
+          }
+          release.resolve();
+          expect(await pending).toEqual({
+            shouldContinue: false,
+            reply: { text: "⚠️ Command failed. Please try again later." },
+          });
+          expect(fixture.handler).not.toHaveBeenCalled();
+          expect(invocation.recorder.getAdmissionReceipt()).toBeUndefined();
+          expect(await fixture.userInputs()).toEqual([]);
+        } finally {
+          release.resolve();
+          await pending;
+        }
+      });
+    },
+  );
+
+  it("rejects a selected command after its registry is replaced", async () => {
+    await withCommandPlugin(async (fixture) => {
+      const selection = expectDefined(select("/review-panel"), "original selection");
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      const params = fixture.params();
+      const result = await runWithCommandNativeSubagents(
+        createPluginCommandDispatchState(params, ["sessions_spawn", "agents_wait", "read"]),
+        {
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          entry: expectDefined(params.sessionEntry, "command session"),
+        },
+        async (createSubagents) =>
+          selection.dispatch.execute({
+            ...buildPluginCommandContext(params),
+            commandBody: "/review-panel",
+            runtimeContext: { createSubagents },
+          }),
+      );
+      expect(result.text).toContain("registry changed");
+      expect(fixture.handler).not.toHaveBeenCalled();
+      expect(await fixture.userInputs()).toEqual([]);
+    });
+  });
+
+  it("does not arm an agent restart-recovery claim while a committed command handler awaits", async () => {
+    await withCommandPlugin(async (fixture) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const invocation = commandInvocation(fixture);
+      fixture.handler.mockImplementation(async (ctx) => {
+        expect(ctx.runtimeContext?.subagents).toBeDefined();
+        expect(await fixture.userInputs()).toEqual(["/review-panel"]);
+        entered.resolve();
+        await release.promise;
+        return { text: "command finished" };
+      });
+      const pending = invocation.run();
+      try {
+        expect(
+          await Promise.race([
+            entered.promise.then(() => "entered"),
+            pending.then(() => "finished"),
+          ]),
+        ).toBe("entered");
+        const persisted = expectDefined(
+          loadSessionEntry({
+            agentId: "main",
+            sessionKey: invocation.params.sessionKey,
+            storePath: invocation.params.storePath,
+          }),
+          "committed requester session",
+        );
+        expect(hasMainSessionRecoveryClaim(persisted)).toBe(false);
+        expect(invocation.recorder.getAdmissionReceipt()).toMatchObject({
+          sessionId: persisted.sessionId,
+        });
+        release.resolve();
+        expect(await pending).toEqual({
+          shouldContinue: false,
+          reply: { text: "command finished" },
+        });
+      } finally {
+        release.resolve();
+        await pending;
+      }
+    });
+  });
+
+  it("keeps restart-safe normal and literal Goal requests admissible with the declaring plugin loaded", async () => {
+    await withCommandPlugin(async (fixture) => {
+      initializeGlobalHookRunner(fixture.registry);
+      const params = fixture.params();
+      const entry = expectDefined(params.sessionEntry, "direct parent session");
+      const identity = { operationId: "literal-goal", issuedAtMs: Date.now() };
+      for (const goalOperation of [
+        undefined,
+        {
+          ...identity,
+          action: "start",
+          requestFingerprint: "goal-start-receipt",
+          objective: "/review-panel is literal Goal objective text",
+        },
+        {
+          ...identity,
+          action: "resume",
+          requestFingerprint: "goal-resume-receipt",
+          goalId: "literal-goal",
+        },
+      ] as const) {
+        const request = await createRestartSafeChatRequest({
+          eligible: true,
+          senderIsOwner: true,
+          message: goalOperation
+            ? "/review-panel is literal Goal objective text"
+            : "Continue the review",
+          cfg: fixture.cfg,
+          goalOperation,
+        });
+        expect(request).toBeDefined();
+        expect(
+          resolveRestartSafeChatAdmission({
+            cfg: fixture.cfg,
+            agentId: "main",
+            sessionKey: params.sessionKey,
+            sessionId: entry.sessionId,
+            storePath: path.join(params.workspaceDir, "restart-sessions.json"),
+            clientRunId: "restart-safe-request",
+            context: {},
+            entry,
+            initialSessionEntry: entry,
+            acpMeta: null,
+            now: Date.now(),
+            placement: undefined,
+            request,
+          }),
+        ).toMatchObject({ requestFingerprint: request?.fingerprint });
+      }
+      expect(fixture.handler).not.toHaveBeenCalled();
+      expect(await fixture.userInputs()).toEqual([]);
     });
   });
 });

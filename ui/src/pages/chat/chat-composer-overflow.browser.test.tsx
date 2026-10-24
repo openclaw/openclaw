@@ -38,8 +38,10 @@ const afterLayout = () =>
 let container: HTMLDivElement;
 const [presented, setPresented] = createSignal(true);
 let attachmentsView: ReturnType<typeof mountSolidProps<ChatAttachmentControlsProps>> | undefined;
-const query = <T extends Element = HTMLElement>(selector: string, root: ParentNode = container) =>
-  root.querySelector<T>(selector)!;
+const query = <T extends Element = HTMLElement>(
+  selector: string,
+  root: ParentNode = container,
+): T => root.querySelector<T>(selector)!;
 const rect = (selector: string, root: ParentNode = container) =>
   query(selector, root).getBoundingClientRect();
 const click = (selector: string) => page.elementLocator(query(selector)).click();
@@ -173,7 +175,7 @@ it.each([
   expect(attachmentBox.height).toBeGreaterThan(0);
   expect(attachmentBox.bottom).toBeLessThanOrEqual(rect("textarea").top);
   expect(composer.scrollWidth).toBeLessThanOrEqual(composer.clientWidth + 1);
-  const reply = query(".chat-reply-preview");
+  const reply = query(".chat-reply-preview:not([role])");
   const text = query(".chat-reply-preview__text", reply);
   expectInside(rect("button", reply), reply.getBoundingClientRect());
   expect(text.getBoundingClientRect().width).toBeGreaterThan(0);
