@@ -17,7 +17,6 @@ import { setCommandJsonMode } from "./json-mode.js";
 const STATE_SQLITE_ALLOWED_OPTION_NAMES = new Set(["stateSqlite", "json"]);
 const CLIENT_CREDENTIALS_ALLOWED_OPTION_NAMES = new Set([
   "clientCredentials",
-  "rebindMissingCredentials",
   "repair",
   "fix",
   "nonInteractive",
@@ -43,7 +42,7 @@ export function registerMaintenanceCommands(
     .addHelpText("after", () => formatDocsHelp("/cli/doctor"))
     .option("--no-workspace-suggestions", "Disable workspace memory system suggestions", true)
     .option("--yes", "Accept defaults without prompting", false)
-    .option("--repair", "Apply recommended repairs without prompting", false)
+    .option("--repair", "Apply recommended repairs", false)
     .option("--fix", "Apply recommended repairs (alias for --repair)", false)
     .option(
       "--force",
@@ -54,11 +53,6 @@ export function registerMaintenanceCommands(
     .option(
       "--client-credentials",
       "Prepare only local client credentials (requires --repair --non-interactive)",
-      false,
-    )
-    .option(
-      "--rebind-missing-credentials",
-      "With --client-credentials on PostgreSQL state: recreate a missing local credential store; clients on this host must pair again",
       false,
     )
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
@@ -109,12 +103,6 @@ export function registerMaintenanceCommands(
       if (hasCliProcessScope()) {
         installCliDoctorSignalExitHandlers();
       }
-      if (opts.rebindMissingCredentials === true && opts.clientCredentials !== true) {
-        return exitDoctorError(
-          "doctor --rebind-missing-credentials requires --client-credentials.",
-          opts.json === true,
-        );
-      }
       if (
         typeof opts.stateSqlite === "string" &&
         listExplicitOptionFlagsExcept(command, STATE_SQLITE_ALLOWED_OPTION_NAMES).length > 0
@@ -138,7 +126,7 @@ export function registerMaintenanceCommands(
         listExplicitOptionFlagsExcept(command, CLIENT_CREDENTIALS_ALLOWED_OPTION_NAMES).length > 0
       ) {
         return exitDoctorError(
-          "doctor --client-credentials can only be combined with --repair (or --fix), --non-interactive, --rebind-missing-credentials, and --json.",
+          "doctor --client-credentials can only be combined with --repair (or --fix), --non-interactive, and --json.",
           opts.json === true,
         );
       }
@@ -227,7 +215,6 @@ export function registerMaintenanceCommands(
           await prepareStartupClientCredentials({
             env: process.env,
             runtime: defaultRuntime,
-            ...(opts.rebindMissingCredentials === true ? { rebindMissing: true } : {}),
           });
           if (opts.json === true) {
             defaultRuntime.writeJson({ ok: true });

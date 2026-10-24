@@ -320,7 +320,9 @@ export function recoverClientCredentialStore(
       return "rebound";
     }
     throw new Error(
-      "Local credentials are missing; restore the matching client credential backup.",
+      isPostgresSqlConnection(source)
+        ? "Local credentials are missing; restore the matching client credential backup or run openclaw doctor --fix to create new local identities."
+        : "Local credentials are missing; restore the matching client credential backup.",
     );
   }
   try {

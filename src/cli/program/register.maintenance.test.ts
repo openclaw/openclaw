@@ -150,28 +150,6 @@ describe("registered maintenance commands", () => {
     },
   );
 
-  it("passes missing-credential rebind only to the explicit credential repair", async () => {
-    await runCli(
-      "doctor --client-credentials --repair --non-interactive --rebind-missing-credentials",
-    );
-    expect(mocks.prepareStartupClientCredentials).toHaveBeenCalledExactlyOnceWith({
-      env: process.env,
-      runtime,
-      rebindMissing: true,
-    });
-    expectNoCalls(doctorCommand, runDoctorLintCli);
-    expect(runtime.exit).toHaveBeenCalledWith(0);
-  });
-
-  it.each(["--repair --non-interactive", "--lint", "--state-sqlite compact"])(
-    "refuses rebind outside credential repair (%s)",
-    async (options) => {
-      await runCli(`doctor --rebind-missing-credentials ${options} --json`);
-      expectNoCalls(mocks.prepareStartupClientCredentials, doctorCommand, runDoctorLintCli);
-      expectFailure("doctor --rebind-missing-credentials requires --client-credentials.", true);
-    },
-  );
-
   it.each([
     ["", "requires --repair (or --fix) and --non-interactive."],
     ["--repair", "requires --repair (or --fix) and --non-interactive."],
@@ -179,7 +157,7 @@ describe("registered maintenance commands", () => {
     ...["--lint", "--post-upgrade", "--session-sqlite inspect", "--force", "--yes"].map(
       (option) => [
         `--repair --non-interactive ${option}`,
-        "can only be combined with --repair (or --fix), --non-interactive, --rebind-missing-credentials, and --json.",
+        "can only be combined with --repair (or --fix), --non-interactive, and --json.",
       ],
     ),
   ])("rejects ambiguous credential preparation options %s", async (options, reason) => {

@@ -478,15 +478,12 @@ describe("automatic client credential preparation", () => {
     expect(fs.readFileSync(fixture.local)).toEqual(refusedBytes);
   });
 
-  it.each([false, true])(
-    "does not replace missing SQLite credentials (rebind: %s)",
-    async (rebindMissing) => {
-      const fixture = await bootstrap();
-      fs.unlinkSync(fixture.local);
-      await expect(
-        prepareStartupClientCredentials({ env: fixture.env, runtime, rebindMissing }),
-      ).rejects.toThrow(ClientCredentialMigrationRequiredError);
-      expect(fs.existsSync(fixture.local)).toBe(false);
-    },
-  );
+  it("does not replace missing SQLite credentials", async () => {
+    const fixture = await bootstrap();
+    fs.unlinkSync(fixture.local);
+    await expect(prepareStartupClientCredentials({ env: fixture.env, runtime })).rejects.toThrow(
+      ClientCredentialMigrationRequiredError,
+    );
+    expect(fs.existsSync(fixture.local)).toBe(false);
+  });
 });

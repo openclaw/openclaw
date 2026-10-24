@@ -133,8 +133,6 @@ export async function prepareStartupClientCredentials(
     env?: NodeJS.ProcessEnv;
     runtime?: RuntimeEnv;
     config?: OpenClawConfig;
-    /** Explicit Doctor repair; ordinary startup never replaces lost credentials. */
-    rebindMissing?: boolean;
   } = {},
 ): Promise<void> {
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
@@ -233,7 +231,7 @@ export async function prepareStartupClientCredentials(
           await import("../state/openclaw-state-db.js");
         const { isStatePostgres } = await import("../state/openclaw-state-db-engine.js");
         if (isStatePostgres()) {
-          await preparePostgresClientCredentials(env, runtime, params.rebindMissing === true);
+          await preparePostgresClientCredentials(env, runtime);
         } else {
           const result = await prepareOpenClawStateDatabaseSchema({ env }, "doctor");
           for (const warning of result.warnings) {
@@ -279,10 +277,10 @@ export async function prepareStartupClientCredentials(
   });
 }
 
-async function preparePostgresClientCredentials(
+export async function preparePostgresClientCredentials(
   env: NodeJS.ProcessEnv,
   runtime: RuntimeEnv,
-  rebindMissing: boolean,
+  rebindMissing = false,
 ) {
   const [
     preflight,
