@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import * as installRecordMap from "../config/plugin-install-record-map.js";
 import * as safeRegex from "../security/safe-regex.js";
-import { extractPluginInstallRecordsFromInstalledPluginIndex as recordsFrom } from "./installed-plugin-index-install-records.js";
+import {
+  extractPluginInstallRecordsFromInstalledPluginIndex as recordsFrom,
+  normalizeInstallRecordMap,
+} from "./installed-plugin-index-install-records.js";
 import { createInstalledPluginIndexScopeLookup as scopeLookup } from "./installed-plugin-index-scope-lookup.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
@@ -13,9 +16,9 @@ function createSnapshot(provider = "shared") {
   const snapshot = createPluginMetadataSnapshotFixture({
     plugins: ["alpha", "beta"].map((id) => ({ id, origin: "global" as const })),
   });
-  snapshot.index.installRecords = {
+  snapshot.index.installRecords = normalizeInstallRecordMap({
     alpha: { source: "npm", spec: " alpha@1 ", clawhubTrustReasons: [" reviewed "] },
-  };
+  });
   for (const plugin of snapshot.index.plugins) {
     plugin.startup.agentHarnesses = ["fixture-runtime"];
     plugin.contributions = {
@@ -54,7 +57,7 @@ it("indexes canonical transcript sources and retained legacy installed-index con
   expect(ownerIds(lookup, "fixture-legacy-source")).toEqual(["alpha"]);
 });
 
-it("prepares immutable ownership and install records once while preserving policy and caller copies", () => {
+it("prepares admitted ownership once while preserving policy and caller maps", () => {
   withPluginCache(createPluginCache(), () => {
     const snapshot = createSnapshot();
     const acceptedSurface = {
@@ -74,14 +77,10 @@ it("prepares immutable ownership and install records once while preserving polic
     finalizePluginMetadataSnapshot(snapshot);
     const compile = vi.spyOn(safeRegex, "compileSafeRegex");
     const parse = vi.spyOn(installRecordMap, "parsePluginInstallRecordMap");
-    const first = scopeLookup(snapshot.index);
+    scopeLookup(snapshot.index);
     const records = recordsFrom(snapshot.index);
     assert(records.alpha?.acceptedSurface);
-    records.alpha.spec = "caller-owned";
-    records.alpha.clawhubTrustReasons?.push("caller-owned");
-    records.alpha.acceptedSurface.channels.push("caller-owned");
     delete records.alpha;
-    first.addProviderContributionOwners = () => {};
     for (let call = 0; call < 5; call++) {
       const lookup = scopeLookup(snapshot.index);
       expect(ownerIds(lookup, " SHARED ")).toEqual(["alpha", "beta"]);
@@ -105,33 +104,12 @@ it("prepares immutable ownership and install records once while preserving polic
       expect(Object.getPrototypeOf(recordsFrom(snapshot.index))).toBeNull();
     }
     expect.soft(compile).toHaveBeenCalledTimes(2);
-    expect.soft(parse).toHaveBeenCalledTimes(1);
+    expect.soft(parse).not.toHaveBeenCalled();
     for (const policy of ["allow", "deny"] as const) {
       const config = { plugins: policy === "allow" ? { allow: ["alpha"] } : { deny: ["alpha"] } };
       expect(isInstalledPluginEnabled(snapshot.index, "alpha", config)).toBe(policy === "allow");
     }
     expect(isInstalledPluginEnabled(snapshot.index, "missing")).toBe(false);
-  });
-});
-
-it.each([false, true])("rereads mutable nested inputs (frozen shell: %s)", (freezeShell) => {
-  withPluginCache(createPluginCache(), () => {
-    const snapshot = createSnapshot();
-    if (freezeShell) {
-      Object.freeze(snapshot.index);
-    }
-    const owners = (id: string) => ownerIds(scopeLookup(snapshot.index), id);
-    expect(owners("shared")).toEqual(["alpha", "beta"]);
-    expect(recordsFrom(snapshot.index).alpha?.spec).toBe("alpha@1");
-    for (const plugin of snapshot.index.plugins) {
-      plugin.contributions!.providers = ["replacement"];
-      plugin.contributions!.contracts = {};
-    }
-    assert(snapshot.index.installRecords.alpha);
-    snapshot.index.installRecords.alpha.spec = "alpha@2";
-    expect(owners("shared")).toEqual([]);
-    expect(owners("replacement")).toEqual(["alpha", "beta"]);
-    expect(recordsFrom(snapshot.index).alpha?.spec).toBe("alpha@2");
   });
 });
 
@@ -142,11 +120,11 @@ it("keeps operation caches independent and retained lookup callbacks on their or
     recordsFrom(snapshot.index);
     return scopeLookup(snapshot.index);
   };
-  const parse = vi.spyOn(installRecordMap, "parsePluginInstallRecordMap");
+  const compile = vi.spyOn(safeRegex, "compileSafeRegex");
   const retained = withPluginCache(cache, read);
   withPluginCache(createPluginCache(), read);
   withPluginCache(cache, read);
-  expect(parse).toHaveBeenCalledTimes(2);
+  expect(compile).toHaveBeenCalledTimes(4);
   const replacement = finalizePluginMetadataSnapshot(createSnapshot("replacement"));
   const current = withPluginCache(cache, () => scopeLookup(replacement.index));
   expect(ownerIds(current, "shared")).toEqual([]);

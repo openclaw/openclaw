@@ -2,7 +2,6 @@
 import { getRuntimeConfigCapture } from "../config/runtime-config-capture-state.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { isBundledProviderCompatPlugin } from "./bundled-provider-compat.js";
@@ -134,15 +133,15 @@ function buildInstalledPluginIndex(
   const cached = config && key ? cache?.get(config)?.get(key) : undefined;
   if (cached) {
     const { workspaceDir: _workspaceDir, ...payload } = cached.index;
-    const index = freezeTrustedJsonSnapshot({
+    const index = {
       ...payload,
       generatedAtMs: (params.now?.() ?? new Date()).getTime(),
       ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-    });
+    };
     const sourceFacts = getInstalledPluginIndexFacts(cached.index);
     const facts = getInstalledPluginIndexFacts(index);
     // Workspace and capture time do not change the inventory fingerprint.
-    if (facts && sourceFacts?.fingerprint) {
+    if (sourceFacts.fingerprint) {
       facts.fingerprint = sourceFacts.fingerprint;
     }
     return { index, discovery, manifestRegistry: cached.manifestRegistry };
@@ -171,7 +170,7 @@ function buildInstalledPluginIndex(
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
   });
 
-  let index: InstalledPluginIndex = {
+  const index: InstalledPluginIndex = {
     version: INSTALLED_PLUGIN_INDEX_VERSION,
     warning: INSTALLED_PLUGIN_INDEX_WARNING,
     hostContractVersion,
@@ -192,8 +191,6 @@ function buildInstalledPluginIndex(
     if (!entries) {
       cache.set(config, (entries = new Map()));
     }
-    // Parsing retains passthrough install-record values; own them before freezing.
-    index = freezeTrustedJsonSnapshot(structuredClone(index));
     entries.set(key, { index, manifestRegistry: registry });
     pruneMapToMaxSize(entries, 64);
   }

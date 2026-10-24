@@ -794,7 +794,7 @@ describe("plugin metadata snapshot", () => {
   });
 
   it.each([false, true])(
-    "freezes a cloned index instead of caller-owned records (worker: %s)",
+    "retains admitted metadata facts and restores worker behavior (worker: %s)",
     (worker) => {
       const index = makeIndex();
       mockRegistrySnapshot(index);
@@ -813,17 +813,9 @@ describe("plugin metadata snapshot", () => {
       expect(snapshot.owners.modelIdNormalizationPolicies.get("demo")).toEqual({
         aliases: { raw: "prepared-model" },
       });
-      const callerRecord = index.plugins[0];
-      const snapshotRecord = snapshot.index.plugins[0];
-      if (!callerRecord || !snapshotRecord) {
-        throw new Error("expected metadata records");
+      if (!worker) {
+        expect(snapshot.index).toBe(index);
       }
-
-      callerRecord.pluginId = "caller-mutated";
-      expect(snapshotRecord.pluginId).toBe("demo");
-      expect(() => {
-        snapshotRecord.pluginId = "snapshot-mutated";
-      }).toThrow();
     },
   );
 });

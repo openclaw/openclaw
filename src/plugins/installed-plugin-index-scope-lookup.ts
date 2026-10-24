@@ -78,8 +78,8 @@ export function createInstalledPluginIndexScopeLookup(
   index: InstalledPluginIndex,
 ): InstalledPluginIndexScopeLookup {
   const facts = getInstalledPluginIndexFacts(index);
-  if (facts?.scopeLookup) {
-    return { ...facts.scopeLookup };
+  if (facts.scopeLookup) {
+    return facts.scopeLookup;
   }
   const agentHarnessOwners = createOwnerLookup();
   const channelContributionOwners = createOwnerLookup();
@@ -161,9 +161,6 @@ export function createInstalledPluginIndexScopeLookup(
       ),
     normalizePluginId: normalizeInstalledPluginId,
   };
-  if (facts) {
-    // Callers own their method object; immutable maps remain private to these closures.
-    facts.scopeLookup = { ...lookup };
-  }
+  facts.scopeLookup = lookup;
   return lookup;
 }

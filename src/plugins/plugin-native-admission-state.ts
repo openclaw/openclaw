@@ -1,6 +1,5 @@
 import path from "node:path";
 import { isPathInside } from "../infra/path-guards.js";
-import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
@@ -372,7 +371,5 @@ export function preparePluginNativeAdmissions(
       }
     }
   }
-  if (isDeeplyFrozenPlainData(index)) {
-    state.preparedIndexes.add(index);
-  }
+  state.preparedIndexes.add(index);
 }
