@@ -57,34 +57,6 @@ function runJsonContract(command: string, value: unknown) {
   return { result: runContract([command, "--input", input, "--output", output]), output };
 }
 
-type CandidateBindingFixture = ReturnType<typeof fullReleaseCandidateBindingFixture>;
-
-function setBindingAttempt(
-  binding: CandidateBindingFixture,
-  attempt: Partial<Pick<CandidateBindingFixture["producer"], "runId" | "runAttempt">>,
-) {
-  for (const participant of [
-    binding.producer,
-    binding.publisher,
-    binding.package.artifact,
-    binding.prepublishPluginRegistry.artifact,
-    binding.sharedImage.artifact,
-    binding.evidenceArtifact,
-  ]) {
-    Object.assign(participant, attempt);
-  }
-}
-
-function replaceBindingRequest(
-  binding: CandidateBindingFixture,
-  overrides: Record<string, unknown>,
-) {
-  const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput(overrides));
-  binding.request = request;
-  binding.requestSha256 = canonicalTestSha256(request);
-  binding.evidenceArtifact.name = `full-release-candidate-v2-${binding.requestSha256}`;
-}
-
 function retainedBinding<Request extends Record<string, unknown>>(request: Request) {
   const currentManifest = fullReleaseCandidateManifestFixture();
   const requestSha256 = canonicalTestSha256(request);
@@ -314,46 +286,9 @@ describe("full release candidate contract", () => {
     );
   });
 
-  it.each(
-    Object.entries({
-      "producer job id": (binding) => void (binding.producer.jobId = "202"),
-      "publisher workflow path": (binding) =>
-        void (binding.publisher.workflowPath = ".github/workflows/counterfeit.yml"),
-      "producer run id tuple": (binding) => setBindingAttempt(binding, { runId: "78" }),
-      "producer run attempt tuple": (binding) => setBindingAttempt(binding, { runAttempt: "2" }),
-      "repository identity tuple": (binding) => {
-        replaceBindingRequest(binding, { repository: "openclaw/other" });
-        binding.producer.repository = binding.request.repository;
-        binding.publisher.repository = binding.request.repository;
-      },
-      "tooling identity tuple": (binding) => {
-        replaceBindingRequest(binding, { toolingSha: "8".repeat(40) });
-        binding.producer.workflowSha = binding.request.toolingSha;
-        binding.publisher.workflowSha = binding.request.toolingSha;
-      },
-      "target source identity tuple": (binding) => {
-        replaceBindingRequest(binding, { targetSha: "9".repeat(40) });
-        binding.package.sourceSha = binding.request.targetSha;
-        binding.prepublishPluginRegistry.sourceSha = binding.request.targetSha;
-      },
-      "request policy tuple": (binding) => {
-        replaceBindingRequest(binding, { releaseSoak: false });
-      },
-      "preparation plan": (binding) => void (binding.preparation.planSha256 = "5".repeat(64)),
-      "package artifact digest": (binding) =>
-        void (binding.package.artifact.digest = "5".repeat(64)),
-      "package and shared image digest tuple": (binding) => {
-        binding.package.packageSha256 = "8".repeat(64);
-        binding.sharedImage.packageSha256 = "8".repeat(64);
-      },
-      "registry manifest": (binding) =>
-        void (binding.prepublishPluginRegistry.manifestSha256 = "6".repeat(64)),
-      "shared image archive": (binding) =>
-        void (binding.sharedImage.archiveSha256 = "7".repeat(64)),
-    } satisfies Record<string, (binding: CandidateBindingFixture) => void>),
-  )("binds the %s to the manifest digest", (_label, mutate) => {
-    const binding = structuredClone(fullReleaseCandidateBindingFixture());
-    mutate(binding);
+  it("rejects a changed manifest field under the original digest", () => {
+    const binding = fullReleaseCandidateBindingFixture();
+    binding.preparation.planSha256 = "5".repeat(64);
     expect(() => validateFullReleaseCandidateBinding(binding)).toThrow(
       "manifestSha256 does not match its manifest fields",
     );

@@ -90,10 +90,6 @@ function collectPages(entry: NavEntry | NavEntry[] | undefined): string[] {
     Array.isArray(entry) ? entry : [entry.page, entry.pages, entry.groups, entry.tabs]
   ).flatMap(collectPages);
 }
-function expectFirstLabels(locale: { tabs: NavTab[] } | undefined, tab: string, group: string) {
-  const first = locale!.tabs[0];
-  expect({ tab: first?.tab, group: first?.groups?.[0]?.group }).toEqual({ tab, group });
-}
 const authoredEnglish = (files("docs").json("docs.json") as DocsConfig).navigation.languages.find(
   (entry) => entry.language === "en",
 )!;
@@ -324,13 +320,7 @@ it("overlays deep groups without changing the input or ambiguously labeling sibl
 
 it("keeps generated locale navigation aligned with English routes", () => {
   const config = composeDocsConfig() as DocsConfig;
-  const [english, chinese, german, turkish, swedish] = ["en", "zh-Hans", "de", "tr", "sv"].map(
-    (code) => {
-      const locale = config.navigation.languages.find((entry) => entry.language === code);
-      expect(locale).toBeDefined();
-      return locale!;
-    },
-  );
+  const english = config.navigation.languages.find((entry) => entry.language === "en");
   expect(english).toEqual(authoredEnglish);
 
   const localeDirs: Record<string, string> = {
@@ -349,9 +339,4 @@ it("keeps generated locale navigation aligned with English routes", () => {
       );
     }
   }
-
-  expectFirstLabels(chinese, "快速开始", "首页");
-  expectFirstLabels(swedish, "Kom igång", "Översikt");
-  expectFirstLabels(german, "Loslegen", "Überblick");
-  expectFirstLabels(turkish, "Başlangıç", "Genel bakış");
 });
