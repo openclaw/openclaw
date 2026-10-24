@@ -53,50 +53,40 @@ async function fixture(options: LauncherVersionFixtureOptions = {}): Promise<str
   return fixtureRoot;
 }
 
-function runLauncherVersion(fixtureRoot: string) {
-  return spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--version"], {
-    cwd: fixtureRoot,
-    env: {
-      ...process.env,
-      GIT_COMMIT: undefined,
-      GIT_SHA: undefined,
-      OPENCLAW_CONTAINER: undefined,
-    },
-    encoding: "utf8",
-  });
-}
-
-it.each([
+it.each<LauncherVersionFixtureOptions>([
   { checkout: true, buildVersion: packageVersion },
   { checkout: false, buildVersion: "2026.8.1" },
-])(
-  "reports built $buildVersion with checkout=$checkout without loading runtime",
-  async (options) => {
-    const result = runLauncherVersion(await fixture(options));
-    expect(result).toMatchObject({
-      status: 0,
-      stdout: versionOutput(options.buildVersion),
-      stderr: "",
-    });
-  },
-);
-
-it.each(["complete", "fail"] as const)(
-  "handles pending lifecycle %s before version output",
-  async (pendingLifecycle) => {
-    const fixtureRoot = await fixture({ pendingLifecycle });
-    const result = runLauncherVersion(fixtureRoot);
-    const marker = path.join(fixtureRoot, ".openclaw-lifecycle-pending");
-    expect(result).toMatchObject({
-      status: pendingLifecycle === "complete" ? 0 : 1,
-      stdout: pendingLifecycle === "complete" ? versionOutput() : "",
-    });
-    if (pendingLifecycle === "complete") {
-      await expect(fs.access(marker)).rejects.toHaveProperty("code", "ENOENT");
-      return;
-    }
+  { pendingLifecycle: "complete" },
+  { pendingLifecycle: "fail" },
+])("reports build provenance without loading runtime: %j", async (options) => {
+  const fixtureRoot = await fixture(options);
+  const result = spawnSync(
+    process.execPath,
+    [path.join(fixtureRoot, "openclaw.mjs"), "--version"],
+    {
+      cwd: fixtureRoot,
+      env: {
+        ...process.env,
+        GIT_COMMIT: undefined,
+        GIT_SHA: undefined,
+        OPENCLAW_CONTAINER: undefined,
+      },
+      encoding: "utf8",
+    },
+  );
+  const failed = options.pendingLifecycle === "fail";
+  expect(result).toMatchObject({
+    status: failed ? 1 : 0,
+    stdout: failed ? "" : versionOutput(options.buildVersion),
+  });
+  const marker = path.join(fixtureRoot, ".openclaw-lifecycle-pending");
+  if (failed) {
     expect(result.stderr).toContain("package lifecycle is incomplete");
     expect(result.stderr).toContain("fixture postinstall failed");
     await expect(fs.readFile(marker, "utf8")).resolves.toBe("pending\n");
-  },
-);
+  } else if (options.pendingLifecycle === "complete") {
+    await expect(fs.access(marker)).rejects.toHaveProperty("code", "ENOENT");
+  } else {
+    expect(result.stderr).toBe("");
+  }
+});

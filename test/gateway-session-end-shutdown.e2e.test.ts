@@ -10,16 +10,18 @@ import {
 } from "./gateway-restart.test-support.js";
 import { withBuiltGateway } from "./helpers/built-gateway-proof.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
-import { createTempDirTracker } from "./helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const PLUGIN_ID = "session-end-shutdown-proof";
 const SESSION_KEY = "agent:main:dashboard:session-end-shutdown-proof";
 const WAIT_OPTIONS = { timeout: 10_000, interval: 25 } as const;
 
-const fixtureDirs = createTempDirTracker();
-afterEach(fixtureDirs.cleanup);
+const fixtureDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function writeSessionEndPlugin(pluginDir: string, tracePath: string): Promise<void> {
+it("finishes a real reset-started session_end hook after an operating-system SIGTERM", async () => {
+  const fixtureDir = fixtureDirs.make("openclaw-session-end-shutdown-");
+  const pluginDir = path.join(fixtureDir, "plugin");
+  const tracePath = path.join(fixtureDir, "session-end.trace");
   await writeRestartPlugin(
     pluginDir,
     {
@@ -43,14 +45,6 @@ export default {
 `,
     "index.mjs",
   );
-}
-
-it("finishes a real reset-started session_end hook after an operating-system SIGTERM", async () => {
-  const fixtureDir = fixtureDirs.make("openclaw-session-end-shutdown-");
-  const pluginDir = path.join(fixtureDir, "plugin");
-  const tracePath = path.join(fixtureDir, "session-end.trace");
-  await writeSessionEndPlugin(pluginDir, tracePath);
-
   await withBuiltGateway(
     {
       name: "session-end-shutdown",
