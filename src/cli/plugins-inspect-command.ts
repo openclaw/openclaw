@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
@@ -29,7 +30,7 @@ function failPluginInspect(message: string, json: boolean | undefined): void {
   if (json) {
     defaultRuntime.writeJson(formatCliJsonFailure(message));
   } else {
-    defaultRuntime.error(message);
+    defaultRuntime.error(sanitizeTerminalText(message));
   }
   defaultRuntime.exit(1);
 }
@@ -42,7 +43,7 @@ function formatGlobalPluginDiagnostics(diagnostics: readonly PluginDiagnostic[])
       ({ level, message }) =>
         `${formatConsoleDiagnosticLine({
           level,
-          message: shortenHomeInString(`${level.toUpperCase()}: ${message}`),
+          message: sanitizeTerminalText(shortenHomeInString(`${level.toUpperCase()}: ${message}`)),
         })}\n`,
     )
     .join("");
@@ -109,22 +110,31 @@ export async function runPluginsInspectCommand(
       }
       const tableWidth = getTerminalTableWidth();
       const rows = inspectAll.map((inspect) => ({
-        Name: inspect.plugin.name || inspect.plugin.id,
+        Name: sanitizeTerminalText(inspect.plugin.name || inspect.plugin.id),
         ID:
-          inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id ? inspect.plugin.id : "",
+          inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id
+            ? sanitizeTerminalText(inspect.plugin.id)
+            : "",
         Status: formatPluginStatus(inspect.plugin, runtimeInspect),
         Shape: inspect.shape,
         Capabilities:
           inspect.capabilities.length > 0
-            ? inspect.capabilities.map((entry) => entry.kind).join(", ")
+            ? inspect.capabilities.map((entry) => sanitizeTerminalText(entry.kind)).join(", ")
             : "-",
         Compatibility:
           inspect.compatibility.length > 0
             ? inspect.compatibility
-                .map((entry) => (entry.severity === "warn" ? `warn:${entry.code}` : entry.code))
+                .map((entry) =>
+                  sanitizeTerminalText(
+                    entry.severity === "warn" ? `warn:${entry.code}` : entry.code,
+                  ),
+                )
                 .join(", ")
             : "none",
-        Bundle: inspect.bundleCapabilities.length > 0 ? inspect.bundleCapabilities.join(", ") : "-",
+        Bundle:
+          inspect.bundleCapabilities.length > 0
+            ? inspect.bundleCapabilities.map(sanitizeTerminalText).join(", ")
+            : "-",
         Hooks:
           [
             inspect.typedHooks.length > 0 ? `${inspect.typedHooks.length} typed` : "",
@@ -230,15 +240,15 @@ export async function runPluginsInspectCommand(
       const lines: string[] = [];
       const appendSection = (title: string, content: string[]) => {
         if (content.length > 0) {
-          lines.push("", theme.muted(`${title}:`), ...content);
+          lines.push("", theme.muted(`${title}:`), ...content.map(sanitizeTerminalText));
         }
       };
-      lines.push(theme.heading(inspect.plugin.name || inspect.plugin.id));
+      lines.push(theme.heading(sanitizeTerminalText(inspect.plugin.name || inspect.plugin.id)));
       if (inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id) {
-        lines.push(theme.muted(`id: ${inspect.plugin.id}`));
+        lines.push(theme.muted(`id: ${sanitizeTerminalText(inspect.plugin.id)}`));
       }
       if (inspect.plugin.description) {
-        lines.push(inspect.plugin.description);
+        lines.push(sanitizeTerminalText(inspect.plugin.description));
       }
       lines.push("");
       lines.push(`${theme.muted("Status:")} ${formatPluginStatus(inspect.plugin, inspectRuntime)}`);
@@ -254,13 +264,17 @@ export async function runPluginsInspectCommand(
           `${theme.muted("Bundle format:")} ${formatPluginBundleFormat(inspect.plugin.bundleFormat)}`,
         );
       }
-      lines.push(`${theme.muted("Source:")} ${shortenHomePath(inspect.plugin.source)}`);
+      lines.push(
+        `${theme.muted("Source:")} ${sanitizeTerminalText(shortenHomePath(inspect.plugin.source))}`,
+      );
       lines.push(`${theme.muted("Origin:")} ${inspect.plugin.origin}`);
       if (inspect.plugin.trust) {
-        lines.push(`${theme.muted("Trust:")} ${formatPluginTrustDiagnostic(inspect.plugin.trust)}`);
+        lines.push(
+          `${theme.muted("Trust:")} ${sanitizeTerminalText(formatPluginTrustDiagnostic(inspect.plugin.trust))}`,
+        );
       }
       if (inspect.plugin.version) {
-        lines.push(`${theme.muted("Version:")} ${inspect.plugin.version}`);
+        lines.push(`${theme.muted("Version:")} ${sanitizeTerminalText(inspect.plugin.version)}`);
       }
       lines.push(`${theme.muted("Shape:")} ${inspect.shape}`);
       lines.push(`${theme.muted("Capability mode:")} ${inspect.capabilityMode}`);
@@ -378,7 +392,7 @@ export async function runPluginsInspectCommand(
       if (inspect.plugin.error) {
         const label =
           inspect.plugin.status === "error" ? theme.error("Error:") : theme.muted("Reason:");
-        lines.push("", `${label} ${inspect.plugin.error}`);
+        lines.push("", `${label} ${sanitizeTerminalText(inspect.plugin.error)}`);
       }
       return lines.join("\n");
     }
