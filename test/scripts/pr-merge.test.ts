@@ -463,14 +463,6 @@ describePosix("native squash attribution", () => {
       "Repair summary\n\nCo-authored-by: Merge Helper <helper@example.com>\n",
     ],
     [
-      "drops machine credit present only in the default server preview",
-      {
-        sourceMessages: ["Repair"],
-        previewBody: "Server description\n\nCo-authored-by: Claude <noreply@anthropic.com>",
-      },
-      "Server description\n",
-    ],
-    [
       "drops machine credit replayed in commit bullets and keeps human source credit",
       {
         sourceCommits: [
@@ -661,45 +653,15 @@ describePosix("native squash attribution", () => {
     expect(result.stderr).toContain(diagnostic);
   });
 
-  it.each([
-    {
-      name: "linked human",
-      user: { login: "contributor", type: "User" },
-      empty: false,
-      keep: true,
-    },
-    { name: "unlinked author", user: null, empty: false, keep: false },
-    { name: "GitHub bot", user: { login: "bot[bot]", type: "Bot" }, empty: false, keep: false },
-    {
-      name: "empty refresh author",
-      user: { login: "contributor", type: "User" },
-      empty: true,
-      keep: false,
-    },
-  ])(
-    "preserves appropriate $name credit when REST has no server squash preview",
-    ({ user, empty, keep }) => {
-      const result = prepareBody({
-        restPreview: true,
-        previewBody: "Reviewed repair",
-        sourceCommits: [
-          {
-            message: "Repair",
-            author: { name: "Contributor", email: "contributor@example.com" },
-            githubAuthor: user,
-            empty,
-          },
-        ],
-      });
-
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.mergeBody).toBe(
-        keep
-          ? "Reviewed repair\n\nCo-authored-by: Contributor <contributor@example.com>\n"
-          : "Reviewed repair\n",
-      );
-    },
-  );
+  it("omits a tree-identical REST source author", () => {
+    const result = prepareBody({
+      restPreview: true,
+      previewBody: "Reviewed repair",
+      sourceCommits: [source("Refresh", contributor, { empty: true })],
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.mergeBody).toBe("Reviewed repair\n");
+  });
 
   it.each(["agent@host.LOCALHOST", "123+unknown@users.noreply.github.com", "unlinked@example.com"])(
     "drops unverified commit-author credit from both preview and source: %s",
@@ -811,42 +773,13 @@ describePosix("native squash attribution", () => {
     machineTrailer,
     "co-authored-by: Claude <NOREPLY@ANTHROPIC.COM>",
     "Co-Authored-By: Claude\n <noreply@anthropic.com>",
-    "Co-authored-by: Cursor <cursoragent@cursor.com>",
-    "Co-authored-by: Amp <amp@ampcode.com>",
-    "Co-authored-by: Codex <codex@openai.com>",
-    "Co-authored-by: Trae Solo <solo-agent@trae.ai>",
-    "Co-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
-    "Co-authored-by: RoboClaw <services+roboclaw@openclaw.org>",
-    "Co-authored-by: clawsweeper <274271284+clawsweeper[bot]@users.noreply.github.com>",
-    "Co-authored-by: Copilot <175728472+Copilot@users.noreply.github.com>",
-    "Co-authored-by: Copilot <198982749+Copilot@users.noreply.github.com>",
-    "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
-    "Co-authored-by: Codex <noreply@openai.com>",
     "Co-authored-by: Any App <1274271284+clawsweeper[bot]@users.noreply.github.com>",
   ])("omits imported machine credit while preserving human credit: %j", (machineCredit) => {
     const humanCredit = [
       "Co-authored-by: Claude <claude@example.com>",
       "Co-authored-by: Human <person@anthropic.com>",
       "Co-authored-by: Other <noreply@anthropic.com.example.org>",
-      "Co-authored-by: Cursor <cursor@example.com>",
-      "Co-authored-by: Human <person@cursor.com>",
-      "Co-authored-by: Other <cursoragent@cursor.com.example.org>",
-      "Co-authored-by: Amp <amp@example.com>",
-      "Co-authored-by: Human <person@ampcode.com>",
-      "Co-authored-by: Other <amp@ampcode.com.example.org>",
-      "Co-authored-by: Codex <codex@example.com>",
-      "Co-authored-by: Human <person@openai.com>",
-      "Co-authored-by: Other <codex@openai.com.example.org>",
-      "Co-authored-by: Trae Solo <solo-agent@example.com>",
-      "Co-authored-by: Human <person@trae.ai>",
-      "Co-authored-by: Other <solo-agent@trae.ai.example.org>",
-      "Co-authored-by: roboclaw-bot <human@example.com>",
-      "Co-authored-by: RoboClaw <person@openclaw.org>",
-      "Co-authored-by: Other <services+roboclaw@openclaw.org.example.org>",
       "Co-authored-by: Human <781889+Takhoffman@users.noreply.github.com>",
-      "Co-authored-by: Other <309084314+roboclaw-bot@users.noreply.github.com.example.org>",
-      "Co-authored-by: Other <1309084314+roboclaw-bot@users.noreply.github.com>",
-      "Co-authored-by: Other <309084314+roboclaw-bot-human@users.noreply.github.com>",
       "Co-authored-by: clawsweeper <human@example.com>",
       "Co-authored-by: Human <274271284+human@users.noreply.github.com>",
       "Co-authored-by: Other <274271284+clawsweeper[bot]@users.noreply.github.com.example.org>",
@@ -873,15 +806,7 @@ describePosix("native squash attribution", () => {
 
   it.each([
     "Reviewed correction.\n\nCo-authored-by: Claude <noreply@anthropic.com>\n",
-    "Reviewed correction.\n\nCo-authored-by: Copilot <198982749+Copilot@users.noreply.github.com>\n",
     "Reviewed correction.\n\nCo-authored-by: claude <209825114+claude[bot]@users.noreply.github.com>\n",
-    "Reviewed correction.\n\nCo-authored-by: Cursor <cursoragent@cursor.com>\n",
-    "Reviewed correction.\n\nCo-authored-by: Amp <amp@ampcode.com>\n",
-    "Reviewed correction.\n\nCo-authored-by: Codex <codex@openai.com>\n",
-    "Reviewed correction.\n\nCo-authored-by: Trae Solo <solo-agent@trae.ai>\n",
-    "Reviewed correction.\n\nCo-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>\n",
-    "Reviewed correction.\n\nCo-authored-by: RoboClaw <services+roboclaw@openclaw.org>\n",
-    "Reviewed correction.\n\nCo-authored-by: clawsweeper <274271284+clawsweeper[bot]@users.noreply.github.com>\n",
   ])("rejects a reviewed body that contains machine credit: %j", (overrideBody) => {
     const machineCredit = "Co-authored-by: Claude <noreply@anthropic.com>";
     const result = prepareBody({

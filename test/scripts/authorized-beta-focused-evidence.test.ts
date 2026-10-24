@@ -28,11 +28,9 @@ type ParsedWorkflow = {
     {
       environment?: string;
       needs?: string | string[];
-      outputs?: Record<string, string>;
       permissions?: Record<string, string>;
       steps?: Array<{
         env?: Record<string, string>;
-        if?: string;
         name?: string;
         run?: string;
         uses?: string;
@@ -40,11 +38,7 @@ type ParsedWorkflow = {
       }>;
     }
   >;
-  on: {
-    workflow_dispatch: null | {
-      inputs: Record<string, { options?: string[] }>;
-    };
-  };
+  on: { workflow_dispatch: unknown };
   permissions?: Record<string, string>;
 };
 
