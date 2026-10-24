@@ -10,6 +10,7 @@ import {
   readGitMetadataPrefix,
 } from "../infra/git-root.js";
 import { gitFilesystemEnvironmentRevision } from "../infra/git-worker-context.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { gitOutput, runPullRequestGit } from "./control-ui-session-prs-landing.js";
 
 type GitInstallationFiles = { revision: string; config: string[]; attributes: string[] };
@@ -17,6 +18,8 @@ type GitInstallationFiles = { revision: string; config: string[]; attributes: st
 let gitInstallationFiles:
   | { key: string; promise: Promise<GitInstallationFiles | null> }
   | undefined;
+// Worker retirement drops these bounded observations of externally owned checkouts.
+const smallDiffRevisions = new Map<string, { fingerprint: string; revision: string }>();
 
 async function readGitInstallationFiles(
   root: string,
@@ -82,6 +85,7 @@ async function readGitInstallationFiles(
 export async function readCheckoutDiffRevision(
   cwd: string,
   previousPaths: string[] = [],
+  summaryOnly = false,
   timing?: DiffReadTiming,
 ): Promise<string | null> {
   const environment = createHash("sha256")
@@ -199,6 +203,7 @@ export async function readCheckoutDiffRevision(
       : [nodePath.join(home, ".gitconfig"), nodePath.join(xdg, "git/config")]),
     ...installation.config,
   ];
+  let hasExcludesFile = false;
   for (const file of configFiles) {
     if (!nodePath.isAbsolute(file)) {
       return unavailableDiffRevision(timing, "no-revision-config");
@@ -216,6 +221,25 @@ export async function readCheckoutDiffRevision(
     const config = readGitMetadataPrefix(file, Number(stat.size));
     if (/\[\s*(?:include|filter)|(?:attributesfile|worktree|orderfile)\s*=/i.test(config)) {
       return unavailableDiffRevision(timing, "no-revision-config");
+    }
+    hasExcludesFile ||= /excludesfile\s*=/i.test(config);
+  }
+  if (hasExcludesFile) {
+    // Git owns precedence, quoting and ~/ expansion; the external ignore file
+    // must invalidate both the filesystem memo and the semantic revision.
+    const excludes = await runPullRequestGit(root, [
+      "config",
+      "--null",
+      "--path",
+      "--get",
+      "core.excludesFile",
+    ]);
+    if (excludes.code !== 0 || excludes.termination !== "exit" || excludes.stdoutTruncatedBytes) {
+      return unavailableDiffRevision(timing, "no-revision-config");
+    }
+    const file = excludes.stdout.replace(/\0$/, "");
+    if (file) {
+      observe(nodePath.resolve(root, file));
     }
   }
   for (const file of ["attributes", "ignore"]) {
@@ -246,6 +270,62 @@ export async function readCheckoutDiffRevision(
       .toSorted()) {
       observe(nodePath.join(objects, child));
     }
+  }
+  // Preserve the zero-Git path for small idle checkouts. Any filesystem churn
+  // revalidates through Git; only Git's semantic revision invalidates the diff.
+  const semanticBudget = remaining;
+  const fingerprint = (() => {
+    try {
+      const files = [root];
+      const pending = [root];
+      let hasNestedRepository = false;
+      for (const parent of pending) {
+        const children = entries(parent);
+        if (parent !== root && children.some((entry) => entry.name === ".git")) {
+          hasNestedRepository = true;
+          continue;
+        }
+        for (const entry of children) {
+          if (entry.name === ".git") {
+            continue;
+          }
+          const file = nodePath.join(parent, entry.name);
+          if (files.push(file) > remaining - 2) {
+            oversized();
+          }
+          if (entry.isDirectory()) {
+            pending.push(file);
+          }
+        }
+      }
+      // Keep the parent census budget, but let Git own opaque repositories' state.
+      if (hasNestedRepository) {
+        return undefined;
+      }
+      const stamp = hash.copy();
+      observe(nodePath.join(gitDir, "HEAD"), false, stamp);
+      observe(nodePath.join(gitDir, "index"), false, stamp);
+      for (const file of files.toSorted()) {
+        observe(file, true, stamp);
+      }
+      return stamp.digest("hex");
+    } catch (error) {
+      // Optional memo admission must not disable the semantic revision.
+      return unavailableDiffRevision(timing, undefined, error);
+    }
+  })();
+  remaining = semanticBudget;
+  // Oversized summaries already allow a 10-second fallback. A full status scan
+  // on each poll costs more than that retained summary; full diffs require freshness.
+  if (fingerprint === null && summaryOnly) {
+    return null;
+  }
+  const memoKey = JSON.stringify([root, environment, summaryOnly, previousPaths.toSorted()]);
+  const memo = smallDiffRevisions.get(memoKey);
+  smallDiffRevisions.delete(memoKey);
+  if (fingerprint && memo?.fingerprint === fingerprint) {
+    smallDiffRevisions.set(memoKey, memo);
+    return memo.revision;
   }
   const status = await runPullRequestGit(
     root,
@@ -338,5 +418,9 @@ export async function readCheckoutDiffRevision(
     worktreeMtime: worktreeMtime.digest("hex"),
     metadata: hash.digest("hex"),
   });
+  if (fingerprint) {
+    smallDiffRevisions.set(memoKey, { fingerprint, revision });
+    pruneMapToMaxSize(smallDiffRevisions, 64);
+  }
   return revision;
 }

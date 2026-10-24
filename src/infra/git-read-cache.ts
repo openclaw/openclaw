@@ -433,6 +433,7 @@ function createDiffReadCache(
   ): GitReadOperations["checkout.revision"]["input"] => ({
     root: input.cwd,
     scope: "diff",
+    summaryOnly: input.summaryOnly === true,
     paths: previous?.files
       .flatMap((file) => (file.oldPath ? [file.path, file.oldPath] : [file.path]))
       .toSorted(),
