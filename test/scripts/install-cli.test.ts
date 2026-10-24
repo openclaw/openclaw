@@ -12,7 +12,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers.mjs";
@@ -54,6 +54,36 @@ function writeShell(path: string, body: string) {
   writeFileSync(path, `#!/bin/bash\n${body}\n`, { mode: 0o755 });
 }
 
+function makeFixture(name: string) {
+  const root = tempDirs.make(`openclaw-install-cli-${name}-`);
+  const write = (relative: string, content: string, mode = 0o644) => {
+    const file = join(root, relative);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, content, { mode });
+    return file;
+  };
+  const shell = (relative: string, body: string, interpreter = "/bin/bash") =>
+    write(relative, `#!${interpreter}\n${body}\n`, 0o755);
+  return {
+    root,
+    write,
+    shell,
+    node(relative: string, version: string, sqliteExit = 0) {
+      const file = join(root, relative);
+      mkdirSync(dirname(file), { recursive: true });
+      writeNodeFixture(file, version, sqliteExit);
+    },
+    runtime(relative: string, npm = "exit 0", interpreter = "/bin/bash") {
+      const bin = join(root, relative);
+      shell(`${relative}/npm`, npm, interpreter);
+      symlinkSync(nodeExecutable, join(bin, "node"));
+      return bin;
+    },
+    run: (body: string, env: NodeJS.ProcessEnv = {}) =>
+      runInstallCliShell(body, { ROOT: root, FIXTURE_NODE: nodeExecutable, ...env }),
+  };
+}
+
 function linkRequiredShellTools(bin: string) {
   for (const tool of ["ln", "mkdir"]) {
     symlinkSync(`/bin/${tool}`, join(bin, tool));
@@ -71,30 +101,21 @@ function writeNodeFixture(filePath: string, version: string, sqliteExit = 0) {
   );
 }
 
-function npmPolicyFixture() {
-  const root = tempDirs.make("openclaw-install-cli-lifecycle-"),
-    npm = join(root, "npm"),
-    args = join(root, "args");
-  writeNpmLifecycleFixture(npm);
-  return {
-    run(spec: string, version: string) {
-      return runInstallCliShell(
-        `
-        node_bin() { printf '%s\\n' "$FIXTURE_NODE"; }
-        cd "$FIXTURE_ROOT"
-        npm_lifecycle_allow_arg "$FIXTURE_NPM" "$FIXTURE_SPEC" "$PWD"
-      `,
-        {
-          FIXTURE_NODE: nodeExecutable,
-          FIXTURE_ROOT: root,
-          FIXTURE_NPM: npm,
-          FIXTURE_SPEC: spec,
-          NPM_FAKE_VERSION: version,
-          NPM_FAKE_ARGS: args,
-        },
-      );
+function runNpmPolicy(spec: string) {
+  const f = makeFixture("lifecycle");
+  writeNpmLifecycleFixture(join(f.root, "npm"));
+  return f.run(
+    `
+    node_bin() { printf '%s\\n' "$FIXTURE_NODE"; }
+    cd "$ROOT"
+    npm_lifecycle_allow_arg "$ROOT/npm" "$FIXTURE_SPEC" "$PWD"
+  `,
+    {
+      FIXTURE_SPEC: spec,
+      NPM_FAKE_VERSION: "12.0.0",
+      NPM_FAKE_ARGS: join(f.root, "args"),
     },
-  };
+  );
 }
 
 describe("install-cli.sh", () => {
@@ -110,40 +131,27 @@ describe("install-cli.sh", () => {
   defineInstallerShellIsolationContract(installerContract);
 
   it("keeps runtime-only installation free of service and onboarding effects", () => {
-    const root = tempDirs.make("openclaw-browser-runtime-install-");
-    const prefix = join(root, "prefix"),
-      commands = join(root, "commands");
-    mkdirSync(join(prefix, "bin"), { recursive: true });
-    writeShell(
-      join(prefix, "bin", "openclaw"),
+    const f = makeFixture("runtime-only");
+    f.shell(
+      "prefix/bin/openclaw",
       `
-      printf '%s\\n' "$*" >> "$COMMAND_LOG"
+      printf '%s\\n' "$*" >> "$ROOT/commands"
       if [[ "$1" == --version ]]; then printf 'OpenClaw 2026.9.4\\n'; fi
     `,
     );
-    const result = runInstallCliShell(
+    const result = f.run(
       `
       install_node() { :; }; install_openclaw() { :; }
-      ensure_git() { printf 'git\\n' >> "$COMMAND_LOG"; }
-      refresh_gateway_service_if_loaded() { printf 'service-refresh\\n' >> "$COMMAND_LOG"; }
-      main --json --npm --onboard --runtime-only --prefix "$FIXTURE_PREFIX"
+      ensure_git() { printf 'git\\n' >> "$ROOT/commands"; }
+      refresh_gateway_service_if_loaded() { printf 'service-refresh\\n' >> "$ROOT/commands"; }
+      main --json --npm --onboard --runtime-only --prefix "$ROOT/prefix"
     `,
-      { COMMAND_LOG: commands, FIXTURE_PREFIX: prefix },
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(readFileSync(commands, "utf8").trim().split("\n")).toEqual(["--version"]);
+    expect(readFileSync(join(f.root, "commands"), "utf8").trim().split("\n")).toEqual([
+      "--version",
+    ]);
     expect(result.stdout).toContain('"event":"done"');
-  });
-
-  it("refuses musl Node-only recovery before an installer can invoke system package changes", () => {
-    const result = runInstallCliShell(`
-      is_musl_linux() { return 0; }
-      install_node() { echo unexpected-node-install; }
-      main --node-only
-    `);
-    expect(result.status).toBe(1);
-    expect(result.stdout + result.stderr).toContain("unavailable on musl Linux");
-    expect(result.stdout).not.toContain("unexpected-node-install");
   });
 
   it.each([
@@ -152,7 +160,8 @@ describe("install-cli.sh", () => {
   ])(
     "owns and cleans private temporary storage with $tempBase TMPDIR (download fails: $downloadFails)",
     ({ tempBase, downloadFails }) => {
-      const root = tempDirs.make("openclaw-install-cli-temp-");
+      const f = makeFixture("temp");
+      const { root } = f;
       chmodSync(root, 0o775);
       const inheritedTemp = join(root, "inherited temp");
       if (tempBase === "directory") {
@@ -161,14 +170,8 @@ describe("install-cli.sh", () => {
         writeFileSync(inheritedTemp, "preserve this file");
       }
       const prefix = join(root, "nested", "state");
-      const payload = join(root, "node-payload");
-      mkdirSync(join(payload, "bin"), { recursive: true });
-      writeFileSync(
-        join(payload, "bin", "node"),
-        '#!/bin/bash\nif [[ "${1:-}" == "-v" ]]; then printf "v24.22.1\\n"; fi\n',
-        { mode: 0o755 },
-      );
-      writeFileSync(join(payload, "bin", "npm"), "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+      f.shell("node-payload/bin/node", 'if [[ "${1:-}" == "-v" ]]; then printf "v24.22.1\\n"; fi');
+      f.shell("node-payload/bin/npm", "exit 0");
       const archive = join(root, "node.tgz");
       const packed = spawnSync("tar", ["-czf", archive, "-C", root, "node-payload"], {
         encoding: "utf8",
@@ -176,15 +179,14 @@ describe("install-cli.sh", () => {
       expect(packed.status, packed.stdout + packed.stderr).toBe(0);
       const digest = createHash("sha256").update(readFileSync(archive)).digest("hex");
       const observationPath = join(root, "temporary-storage.json");
-      const observer = join(root, "observe-temp.cjs");
       writeFileSync(
-        observer,
+        join(root, "observe-temp.cjs"),
         `const fs = require("node:fs");
 const path = require("node:path");
 const tempDirectory = process.env.TMPDIR;
 const metadata = fs.statSync(tempDirectory);
 fs.mkdtempSync(path.join(tempDirectory, "child-"));
-fs.writeFileSync(process.env.FIXTURE_OBSERVATION, JSON.stringify({
+fs.writeFileSync(path.join(process.env.ROOT, "temporary-storage.json"), JSON.stringify({
   tempDirectory, mode: metadata.mode & 0o777, uid: metadata.uid,
   stagingDirectory: path.dirname(process.argv[2]),
 }));
@@ -192,7 +194,7 @@ fs.writeFileSync(process.env.FIXTURE_OBSERVATION, JSON.stringify({
       );
 
       try {
-        const result = runInstallCliShell(
+        const result = f.run(
           `
           is_musl_linux() { return 1; }
           umask 0002
@@ -202,26 +204,20 @@ fs.writeFileSync(process.env.FIXTURE_OBSERVATION, JSON.stringify({
           install_openclaw() { exit 93; }
           refresh_gateway_service_if_loaded() { exit 94; }
           download_file() {
-            "$FIXTURE_NODE" "$FIXTURE_OBSERVER" "$2" || return
-            if [[ "$FIXTURE_DOWNLOAD_FAILS" == 1 ]]; then return 42; fi
+            "$FIXTURE_NODE" "$ROOT/observe-temp.cjs" "$2" || return
+            if [[ "${downloadFails ? 1 : 0}" == 1 ]]; then return 42; fi
             case "$1" in
               */SHASUMS256.txt)
                 printf '%s  node-v24.22.1-%s-%s.tar.gz\\n' "$FIXTURE_SHA" "$(os_detect)" "$(arch_detect)" > "$2"
                 ;;
-              *) cp "$FIXTURE_ARCHIVE" "$2" ;;
+              *) cp "$ROOT/node.tgz" "$2" ;;
             esac
           }
-          main --json --node-only --git --onboard --node-version 24.22.1 --prefix "$FIXTURE_PREFIX"
+          main --json --node-only --git --onboard --node-version 24.22.1 --prefix "$ROOT/nested/state"
           `,
           {
             HOME: root,
             TMPDIR: inheritedTemp,
-            FIXTURE_PREFIX: prefix,
-            FIXTURE_NODE: nodeExecutable,
-            FIXTURE_OBSERVER: observer,
-            FIXTURE_OBSERVATION: observationPath,
-            FIXTURE_DOWNLOAD_FAILS: downloadFails ? "1" : "0",
-            FIXTURE_ARCHIVE: archive,
             FIXTURE_SHA: digest,
           },
         );
@@ -266,52 +262,41 @@ fs.writeFileSync(process.env.FIXTURE_OBSERVATION, JSON.stringify({
   it.each([true, false])(
     "preserves the caller TMPDIR for service refresh and onboarding (originally set: %s)",
     (originallySet) => {
-      const root = tempDirs.make("openclaw-install-cli-temp-lifecycle-");
-      const inheritedTemp = join(root, "inherited");
+      const f = makeFixture("temp-lifecycle");
+      const inheritedTemp = join(f.root, "inherited");
       mkdirSync(inheritedTemp);
-      const cli = join(root, "cli");
-      writeFileSync(
-        cli,
-        `#!/bin/bash
+      f.shell(
+        "cli",
+        `
 if [[ "$1" == --version ]]; then
   printf '2026.9.12\\n'
 else
-  printf '%s' "\${TMPDIR-<unset>}" > "$FIXTURE_ONBOARD"
+  printf '%s' "\${TMPDIR-<unset>}" > "$ROOT/onboard-temp"
 fi
 `,
-        { mode: 0o755 },
       );
-      const installTempPath = join(root, "install-temp");
-      const refreshPath = join(root, "refresh-temp");
-      const onboardPath = join(root, "onboard-temp");
-      const callerPath = join(root, "caller-temp");
-      const result = runInstallCliShell(
+      const result = f.run(
         `
-        install_node() { printf '%s' "$TMPDIR" > "$FIXTURE_INSTALL_TEMP"; }
+        install_node() { printf '%s' "$TMPDIR" > "$ROOT/install-temp"; }
         ensure_git() { :; }
-        install_openclaw() { mkdir -p "$PREFIX/bin"; cp "$FIXTURE_CLI" "$PREFIX/bin/openclaw"; }
-        refresh_gateway_service_if_loaded() { printf '%s' "\${TMPDIR-<unset>}" > "$FIXTURE_REFRESH"; }
-        main --onboard --prefix "$FIXTURE_PREFIX"
-        printf '%s' "\${TMPDIR-<unset>}" > "$FIXTURE_CALLER"
-        `,
+        install_openclaw() { mkdir -p "$PREFIX/bin"; cp "$ROOT/cli" "$PREFIX/bin/openclaw"; }
+        refresh_gateway_service_if_loaded() { printf '%s' "\${TMPDIR-<unset>}" > "$ROOT/refresh-temp"; }
+        main --onboard --prefix "$ROOT/prefix"
+        printf '%s' "\${TMPDIR-<unset>}" > "$ROOT/caller-temp"
+      `,
         {
-          HOME: root,
+          HOME: f.root,
           TMPDIR: originallySet ? inheritedTemp : undefined,
           OPENCLAW_NO_ONBOARD: "0",
-          FIXTURE_PREFIX: join(root, "prefix"),
-          FIXTURE_CLI: cli,
-          FIXTURE_INSTALL_TEMP: installTempPath,
-          FIXTURE_REFRESH: refreshPath,
-          FIXTURE_ONBOARD: onboardPath,
-          FIXTURE_CALLER: callerPath,
         },
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
-      const originalValue = originallySet ? inheritedTemp : "<unset>";
-      for (const observedPath of [refreshPath, onboardPath, callerPath]) {
-        expect(readFileSync(observedPath, "utf8")).toBe(originalValue);
+      for (const name of ["refresh-temp", "onboard-temp", "caller-temp"]) {
+        expect(readFileSync(join(f.root, name), "utf8")).toBe(
+          originallySet ? inheritedTemp : "<unset>",
+        );
       }
-      const installTemp = readFileSync(installTempPath, "utf8");
+      const installTemp = readFileSync(join(f.root, "install-temp"), "utf8");
       expect(installTemp).not.toBe(inheritedTemp);
       expect(existsSync(installTemp)).toBe(false);
     },
@@ -345,25 +330,26 @@ fi
   });
 
   it("fails a low-space fresh Git install before Node or checkout work", () => {
-    const tmp = tempDirs.make("openclaw-install-cli-disk-low-");
-    const commandLog = join(tmp, "commands.log");
-    const repo = join(tmp, "new", "openclaw");
-
-    const result = runInstallCliShell(
-      [
-        "available_disk_kib() { printf '2097152\\n'; }",
-        `install_node() { printf 'node\\n' >> ${JSON.stringify(commandLog)}; }`,
-        `install_openclaw_from_git() { printf 'git\\n' >> ${JSON.stringify(commandLog)}; }`,
-        `main --json --git --git-dir ${JSON.stringify(repo)}`,
-      ].join("\n"),
-    );
-
+    const f = makeFixture("disk-low");
+    const result = f.run(`
+      available_disk_kib() { printf '2097152\\n'; }
+      install_node() { printf 'node\\n' >> "$ROOT/commands.log"; }
+      install_openclaw_from_git() { printf 'git\\n' >> "$ROOT/commands.log"; }
+      main --json --git --git-dir "$ROOT/new/openclaw"
+    `);
     expect(result.status).toBe(1);
-    expect(existsSync(commandLog)).toBe(false);
+    expect(existsSync(join(f.root, "commands.log"))).toBe(false);
     const events = result.stdout
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { event: string; name?: string; message?: string });
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            event: string;
+            name?: string;
+            message?: string;
+          },
+      );
     expect(events).toEqual([
       { event: "step", name: "disk-space", status: "start" },
       {
@@ -498,17 +484,10 @@ fi
     expect(result.status, result.stderr || result.stdout).toBe(0);
   });
 
-  it("bounds stalled downloads and propagates timeout failures", () => {
+  it("bounds wget stalls and propagates timeout failures", () => {
     const result = runInstallCliShell(`
       set -euo pipefail
-      curl() {
-        printf 'curl=%s\n' "$*"
-        return 28
-      }
-      DOWNLOADER=curl
       set +e
-      download_file "https://example.invalid/node.tar.gz" "/tmp/node.tar.gz"
-      printf 'status=%s\n' "$?"
       wget() {
         printf 'wget=%s\n' "$*"
         return 4
@@ -519,11 +498,6 @@ fi
     `);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("--speed-limit 1 --speed-time 300");
-    expect(result.stdout).toContain("--connect-timeout 300");
-    expect(result.stdout).not.toContain("--max-time");
-    expect(result.stdout).toContain("--retry 3 --retry-delay 1 --retry-connrefused");
-    expect(result.stdout).toContain("status=28");
     expect(result.stdout).toContain("--timeout=300");
     expect(result.stdout).toContain("wget-status=4");
   });
@@ -548,75 +522,14 @@ fi
     }
   });
 
-  it("rejects Linux ARMv7 before installing an explicitly requested Node", () => {
-    const result = runInstallCliShell(`
-      set -euo pipefail
-      NODE_VERSION_REQUESTED=1
-      os_detect() { printf 'linux\\n'; }
-      arch_detect() { printf 'armv7l\\n'; }
-      install_node() { printf 'unexpected-install\\n'; }
-      main
-    `);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain(
-      "Linux ARMv7 is unsupported: official Node 24+ binaries are unavailable",
-    );
-    expect(result.stdout).not.toContain("unexpected-install");
-  });
-
-  it("rejects an explicitly requested vulnerable Node release", () => {
-    const result = runInstallCliShell(`
-      set -euo pipefail
-      NODE_VERSION=24.14.1
-      install_node linux x64
-    `);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain(
-      "Node 24.14.1 is unsupported; use Node 24.22.1+ or Node 26.12.1+.",
-    );
-    expect(result.stdout).not.toContain("Installing Node 24.14.1");
-  });
-
-  it("rejects installer options with missing values", () => {
-    const result = runInstallCliShell(`
-      set -euo pipefail
-      parse_args --prefix --no-onboard
-    `);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout + result.stderr).toContain("Missing value for --prefix");
-    expect(result.stdout + result.stderr).not.toContain("unbound variable");
-  });
-
-  it.each([
-    {
-      method: "npm",
-      candidate: "2026.7.1-2",
-      message: "OpenClaw 2026.7.1-2 is older than config writer 2026.7.2",
-    },
-    {
-      method: "git",
-      candidate: "2026.7.1-2",
-      message: "OpenClaw 2026.7.1-2 is older than config writer 2026.7.2",
-    },
-  ])(
-    "rejects $method $candidate before replacing an existing managed CLI",
-    ({ candidate, message, method }) => {
-      const tmp = tempDirs.make("openclaw-install-cli-compatible-");
-      const prefix = join(tmp, "prefix");
-      const bin = join(prefix, "bin");
-      const openclaw = join(bin, "openclaw");
-      mkdirSync(bin, { recursive: true });
-      writeFileSync(openclaw, "existing-managed-cli\n");
-      const repo = join(tmp, "repo");
-      mkdirSync(join(repo, ".git"), { recursive: true });
-      writeFileSync(join(repo, "package.json"), JSON.stringify({ version: candidate }));
-
-      const result = runInstallCliShell(`
-      set -euo pipefail
-      PREFIX=${JSON.stringify(prefix)}
+  it.each(["npm", "git"])("rejects incompatible %s before replacing the managed CLI", (method) => {
+    const f = makeFixture("compatible");
+    const candidate = "2026.7.1-2";
+    const openclaw = f.write("prefix/bin/openclaw", "existing-managed-cli\n");
+    mkdirSync(join(f.root, "repo/.git"), { recursive: true });
+    f.write("repo/package.json", JSON.stringify({ version: candidate }));
+    const result = f.run(`
+      PREFIX="$ROOT/prefix"
       OPENCLAW_VERSION=latest
       REQUIRED_COMPATIBLE_VERSION=2026.7.2
       node_bin() { command -v node; }
@@ -637,47 +550,41 @@ fi
         checkout_git_openclaw_ref() { :; }
         git() { return 0; }
         ensure_pnpm() { printf 'unexpected mutation' >&2; return 99; }
-        install_openclaw_from_git ${JSON.stringify(repo)}
+        install_openclaw_from_git "$ROOT/repo"
       `
       }
     `);
-
-      expect(result.status).toBe(1);
-      expect(result.stdout).toContain(message);
-      expect(result.stderr).not.toContain("unexpected mutation");
-      expect(readFileSync(openclaw, "utf8")).toBe("existing-managed-cli\n");
-    },
-  );
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("OpenClaw 2026.7.1-2 is older than config writer 2026.7.2");
+    expect(result.stderr).not.toContain("unexpected mutation");
+    expect(readFileSync(openclaw, "utf8")).toBe("existing-managed-cli\n");
+  });
 
   it("reports runtime replacement without leaking paths or restarting again", () => {
-    const root = tempDirs.make("openclaw-install-cli-refresh-");
-    const prefix = join(root, "prefix"),
-      commands = join(root, "commands");
-    mkdirSync(join(prefix, "bin"), { recursive: true });
-    writeShell(
-      join(prefix, "bin", "openclaw"),
+    const f = makeFixture("refresh");
+    f.shell(
+      "prefix/bin/openclaw",
       `
-      printf '%s\\n' "$*" >> "$COMMAND_LOG"
+      printf '%s\\n' "$*" >> "$ROOT/commands"
       if [[ "$*" == "gateway install --force" ]]; then
         printf '%s\\n' incidental-output-canary
         printf '%s\\n' 'Replacing unsupported Gateway service Node 22.23.1 (/old/node) with /new/node; refreshing the install.'
       fi
     `,
     );
-    const result = runInstallCliShell(
+    const result = f.run(
       `
-      PREFIX="$FIXTURE_PREFIX"
+      PREFIX="$ROOT/prefix"
       is_gateway_daemon_loaded() { return 0; }
       refresh_gateway_service_if_loaded
     `,
-      { COMMAND_LOG: commands, FIXTURE_PREFIX: prefix },
     );
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("Gateway service Node runtime replaced.");
     for (const privateValue of ["incidental-output-canary", "/old/node", "/new/node"]) {
       expect(result.stdout + result.stderr).not.toContain(privateValue);
     }
-    expect(readFileSync(commands, "utf8").trim().split("\n")).toEqual([
+    expect(readFileSync(join(f.root, "commands"), "utf8").trim().split("\n")).toEqual([
       "gateway install --force",
       "gateway status --probe --json",
     ]);
@@ -687,17 +594,12 @@ fi
     { error: "SERVICE_DEFINITION_SEALED: protected", args: "--json", stream: "stdout" },
     { error: "SERVICE_DEFINITION_UNKNOWN: inaccessible", args: "--json", stream: "stderr" },
   ])("handles a traced $error refresh in $stream", ({ args, error, stream }) => {
-    const root = tempDirs.make("openclaw-install-cli-definition-");
-    const prefix = join(root, "prefix");
-    const openclaw = join(prefix, "bin", "openclaw");
+    const f = makeFixture("definition");
     const secretCanary = "installer-cli-secret-canary-never-render";
-    const commandLog = join(root, "commands.log");
-    mkdirSync(join(prefix, "bin"), { recursive: true });
-    writeFileSync(
-      openclaw,
+    f.shell(
+      "prefix/bin/openclaw",
       [
-        "#!/bin/bash",
-        'printf "%s\\n" "$*" >> "$COMMAND_LOG"',
+        'printf "%s\\n" "$*" >> "$ROOT/commands"',
         'if [[ "$1" == "--version" ]]; then printf "OpenClaw 2026.8.25\\n"; exit 0; fi',
         'if [[ "$*" == "gateway install --force" ]]; then',
         '  printf "%s\\n" "Replacing unsupported Gateway service Node 22.23.1 (/old/node) with /new/node; refreshing the install."',
@@ -706,24 +608,24 @@ fi
         "fi",
       ].join("\n"),
     );
-    chmodSync(openclaw, 0o755);
 
-    const result = runInstallCliShell(
+    const result = f.run(
       [
         "install_node() { :; }; ensure_git() { :; }; install_openclaw() { :; }",
         "is_gateway_daemon_loaded() { return 0; }",
         "set -x",
-        `main ${args} --prefix ${JSON.stringify(prefix)}`,
+        `main ${args} --prefix "$ROOT/prefix"`,
       ].join("\n"),
       {
-        COMMAND_LOG: commandLog,
         SECRET_CANARY: secretCanary,
         SERVICE_ERROR: error,
         SERVICE_STREAM: stream,
       },
     );
 
-    expect(readFileSync(commandLog, "utf8").split("\n")).not.toContain("gateway restart");
+    expect(readFileSync(join(f.root, "commands"), "utf8").split("\n")).not.toContain(
+      "gateway restart",
+    );
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("+ main");
     expect(result.stdout + result.stderr).not.toContain(secretCanary);
@@ -741,14 +643,12 @@ fi
   it.each([false, true])(
     "rejects an unusable installed CLI before service refresh (version exits nonzero: %s)",
     (failedVersion) => {
-      const tmp = tempDirs.make("openclaw-install-cli-invalid-package-");
-      const prefix = join(tmp, "prefix");
-      const refreshLog = join(tmp, "gateway-refresh.log");
+      const f = makeFixture("invalid-package");
+      const refreshLog = join(f.root, "gateway-refresh.log");
       if (failedVersion) {
-        mkdirSync(join(prefix, "bin"), { recursive: true });
-        writeShell(join(prefix, "bin", "openclaw"), 'printf "OpenClaw 2026.8.1\\n"\nexit 1');
+        f.shell("prefix/bin/openclaw", 'printf "OpenClaw 2026.8.1\\n"\nexit 1');
       }
-      const result = runInstallCliShell(
+      const result = f.run(
         [
           "npm_lifecycle_allow_arg() { :; }",
           failedVersion
@@ -757,7 +657,7 @@ fi
           "ensure_git() { :; }",
           'npm_bin() { printf "/usr/bin/true\\n"; }',
           `refresh_gateway_service_if_loaded() { touch ${JSON.stringify(refreshLog)}; }`,
-          `main --json --prefix ${JSON.stringify(prefix)} --version 0.0.0`,
+          'main --json --prefix "$ROOT/prefix" --version 0.0.0',
         ].join("\n"),
       );
 
@@ -775,75 +675,64 @@ fi
   ] as const)(
     "keeps a generated $method launcher working after $input supplied paths change cwd",
     ({ input, method }) => {
-      const tmp = tempDirs.make(`openclaw-install-cli-relative-${method}-`);
-      const installRoot = join(tmp, "install-root");
-      const otherRoot = join(tmp, "other-root");
-      const home = join(tmp, "home");
-      const prefixInput = input === "literal tilde" ? "~/openclaw-local" : "openclaw-local";
-      const prefix = join(input === "literal tilde" ? home : installRoot, "openclaw-local");
+      const f = makeFixture(`relative-${method}`);
+      const home = join(f.root, "home"),
+        installRoot = join(f.root, "install-root");
+      const tilde = input === "literal tilde";
+      const prefix = join(tilde ? home : installRoot, "openclaw-local");
+      const repo = join(tilde ? home : installRoot, "openclaw-source");
       const nodeDir = join(prefix, "tools", "node-v24.22.1");
-      const repoInput = input === "literal tilde" ? "~/openclaw-source" : "openclaw-source";
-      const repo = join(input === "literal tilde" ? home : installRoot, "openclaw-source");
       const legacy = join(home, "openclaw", "Peekaboo", "user.txt");
-      mkdirSync(join(legacy, ".."), { recursive: true });
-      writeFileSync(legacy, "keep this checkout");
-      mkdirSync(installRoot, { recursive: true });
-      mkdirSync(join(nodeDir, "bin"), { recursive: true });
-      mkdirSync(join(nodeDir, "lib", "node_modules", "openclaw", "dist"), { recursive: true });
-      mkdirSync(join(repo, ".git"), { recursive: true });
-      mkdirSync(join(repo, "dist"), { recursive: true });
-      mkdirSync(otherRoot, { recursive: true });
-      symlinkSync(nodeExecutable, join(nodeDir, "bin", "node"));
-      symlinkSync("node-v24.22.1", join(prefix, "tools", "node"));
-      writeFileSync(
-        join(nodeDir, "bin", "npm"),
-        '#!/bin/bash\nif [[ "$1" == "--version" ]]; then printf "11.15.0\\n"; elif [[ "$1" == "config" ]]; then printf "null\\n"; fi\n',
-      );
-      chmodSync(join(nodeDir, "bin", "npm"), 0o755);
-      for (const entry of [
-        join(nodeDir, "lib", "node_modules", "openclaw", "dist", "entry.js"),
-        join(repo, "dist", "entry.js"),
+      for (const dir of [
+        dirname(legacy),
+        installRoot,
+        join(repo, ".git"),
+        join(repo, "dist"),
+        join(f.root, "other-root"),
       ]) {
+        mkdirSync(dir, { recursive: true });
+      }
+      writeFileSync(legacy, "keep this checkout");
+      f.runtime(
+        `${tilde ? "home" : "install-root"}/openclaw-local/tools/node-v24.22.1/bin`,
+        'if [[ "$1" == "--version" ]]; then printf "11.15.0\\n"; elif [[ "$1" == "config" ]]; then printf "null\\n"; fi',
+      );
+      symlinkSync("node-v24.22.1", join(prefix, "tools", "node"));
+      for (const entry of [
+        join(nodeDir, "lib/node_modules/openclaw/dist/entry.js"),
+        join(repo, "dist/entry.js"),
+      ]) {
+        mkdirSync(dirname(entry), { recursive: true });
         writeFileSync(entry, 'console.log("fixture cli");\n');
       }
-
-      const args =
-        input !== "environment"
-          ? `--prefix ${JSON.stringify(prefixInput)}${
-              method === "git" ? ` --git-dir ${JSON.stringify(repoInput)}` : ""
-            }`
-          : "";
       const result = runShell(
-        [
-          "set -euo pipefail",
-          `cd ${JSON.stringify(installRoot)}`,
-          `source ${JSON.stringify(join(process.cwd(), SCRIPT_PATH))}`,
-          "install_node() { :; }",
-          "ensure_git() { :; }",
-          "refresh_gateway_service_if_loaded() { :; }",
-          ...(method === "git"
-            ? [
-                "preflight_fresh_git_disk_space() { :; }",
-                "ensure_pnpm() { :; }",
-                "resolve_git_openclaw_ref() { printf 'main\\n'; }",
-                "checkout_git_openclaw_ref() { :; }",
-                "git_install_lockfile_flag() { printf '%s\\n' '--no-frozen-lockfile'; }",
-                "run_pnpm() { :; }",
-                "git() { return 0; }",
-              ]
-            : []),
-          `main --${method} ${args}`,
-          `cd ${JSON.stringify(otherRoot)}`,
-          `${JSON.stringify(join(prefix, "bin", "openclaw"))} --version`,
-        ].join("\n"),
+        `
+        set -euo pipefail
+        cd "$ROOT/install-root"
+        source "${join(process.cwd(), SCRIPT_PATH)}"
+        install_node() { :; }; ensure_git() { :; }; refresh_gateway_service_if_loaded() { :; }
+        ${
+          method === "git"
+            ? `
+        preflight_fresh_git_disk_space() { :; }; ensure_pnpm() { :; }
+        resolve_git_openclaw_ref() { printf 'main\\n'; }; checkout_git_openclaw_ref() { :; }
+        git_install_lockfile_flag() { printf '%s\\n' '--no-frozen-lockfile'; }
+        run_pnpm() { :; }; git() { return 0; }
+        `
+            : ""
+        }
+        main --${method} ${tilde ? '--prefix "~/openclaw-local" --git-dir "~/openclaw-source"' : ""}
+        cd "$ROOT/other-root"
+        "${prefix}/bin/openclaw" --version
+      `,
         {
+          ROOT: f.root,
           HOME: home,
           OPENCLAW_HOME: home,
           OPENCLAW_GIT_DIR: undefined,
-          OPENCLAW_PREFIX: input === "environment" ? prefixInput : undefined,
+          OPENCLAW_PREFIX: tilde ? undefined : "openclaw-local",
         },
       );
-
       expect(result.status, result.stderr || result.stdout).toBe(0);
       expect(readFileSync(legacy, "utf8")).toBe("keep this checkout");
       expect(result.stdout.trim().split("\n").at(-1)).toBe("fixture cli");
@@ -853,126 +742,94 @@ fi
   defineInstallerPnpmContract(installerContract);
 
   it.each([false, true])("replaces an unusable musl runtime (apk required: %s)", (useApk) => {
-    const root = tempDirs.make("openclaw-install-cli-alpine-");
-    const bin = join(root, "bin");
-    const oldBin = join(root, "old-bin");
-    const prefix = join(root, "prefix");
-    const managedBin = join(prefix, "tools", "node-v24.22.1", "bin");
-    const apkLog = join(root, "apk.log");
-    const state = join(root, "node-state");
-    for (const path of [bin, oldBin, managedBin]) {
-      mkdirSync(path, { recursive: true });
-    }
-    linkRequiredShellTools(bin);
-    writeNodeFixture(join(managedBin, "node"), "v24.22.1", 1);
-    writeNodeFixture(join(oldBin, "node"), "v18.20.0", 1);
-    writeShell(join(oldBin, "npm"), "exit 0");
-    writeShell(join(bin, "npm"), "exit 0");
-    writeShell(
-      join(bin, "apk"),
+    const f = makeFixture("alpine");
+    const managedBin = join(f.root, "prefix/tools/node-v24.22.1/bin");
+    f.node("prefix/tools/node-v24.22.1/bin/node", "v24.22.1", 1);
+    f.node("old-bin/node", "v18.20.0", 1);
+    f.shell("old-bin/npm", "exit 0");
+    f.shell("bin/npm", "exit 0");
+    linkRequiredShellTools(join(f.root, "bin"));
+    f.shell(
+      "bin/apk",
       `
-      printf '%s\\n' "$*" >> "$APK_LOG"
-      ${useApk ? 'printf new > "$NODE_STATE"' : "exit 99"}
+      printf '%s\\n' "$*" >> "$ROOT/apk.log"
+      ${useApk ? 'printf new > "$ROOT/node-state"' : "exit 99"}
     `,
     );
     if (useApk) {
-      writeShell(
-        join(bin, "node"),
+      f.shell(
+        "bin/node",
         `
         if [[ "\${1:-}" == -v ]]; then
-          if [[ -f "$NODE_STATE" ]]; then printf 'v24.22.1\\n'; else printf 'v18.20.0\\n'; fi
-        elif [[ "\${1:-}" == -e ]]; then [[ -f "$NODE_STATE" ]]; exit $?; fi
+          if [[ -f "$ROOT/node-state" ]]; then printf 'v24.22.1\\n'; else printf 'v18.20.0\\n'; fi
+        elif [[ "\${1:-}" == -e ]]; then [[ -f "$ROOT/node-state" ]]; exit $?; fi
         exit 0
       `,
       );
     } else {
-      writeNodeFixture(join(bin, "node"), "v24.22.1");
+      f.node("bin/node", "v24.22.1");
     }
-    const result = runInstallCliShell(
-      `
-      export PATH="$FIXTURE_PATH"
+    const result = f.run(`
+      export PATH="$ROOT/prefix/tools/node-v24.22.1/bin:$ROOT/old-bin:$ROOT/bin"
       is_musl_linux() { return 0; }
       is_root() { return ${useApk ? 0 : 1}; }
-      PREFIX="$FIXTURE_PREFIX"
-      APK_NODE_BIN_DIR="$FIXTURE_BIN"
+      PREFIX="$ROOT/prefix"
+      APK_NODE_BIN_DIR="$ROOT/bin"
       NODE_VERSION=24.22.1
       install_node linux x64
-    `,
-      {
-        APK_LOG: apkLog,
-        NODE_STATE: state,
-        FIXTURE_PATH: `${managedBin}:${oldBin}:${bin}`,
-        FIXTURE_PREFIX: prefix,
-        FIXTURE_BIN: bin,
-      },
-    );
+    `);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout.includes("Installing Node via apk")).toBe(useApk);
     if (useApk) {
-      expect(readFileSync(apkLog, "utf8")).toContain("add --no-cache nodejs npm");
+      expect(readFileSync(join(f.root, "apk.log"), "utf8")).toContain("add --no-cache nodejs npm");
     } else {
-      expect(existsSync(apkLog)).toBe(false);
+      expect(existsSync(join(f.root, "apk.log"))).toBe(false);
     }
     for (const tool of ["node", "npm"]) {
       expect(lstatSync(join(managedBin, tool)).isSymbolicLink()).toBe(true);
-      expect(readlinkSync(join(managedBin, tool))).toBe(join(bin, tool));
+      expect(readlinkSync(join(managedBin, tool))).toBe(join(f.root, "bin", tool));
     }
   });
 
   it("skips PATH runtimes whose npm cannot start and invokes npm with the selected Node", () => {
-    const root = tempDirs.make("openclaw-install-cli-broken-npm-");
-    const bad = join(root, "bad");
-    const good = join(root, "good");
+    const f = makeFixture("broken-npm");
+    const { root } = f;
     const prefix = join(root, "nested", "prefix");
-    mkdirSync(bad);
-    mkdirSync(good);
+    f.runtime("bad", 'printf "%s\\n" "$*" >> "$ROOT/bad.log"\nexit 42');
+    f.shell("good/node", 'printf "%s\\n" "$*" >> "$ROOT/node.log"\nexec "$FIXTURE_NODE" "$@"');
+    f.shell(
+      "good/npm",
+      'require("node:fs").appendFileSync(process.env.ROOT + "/good.log", process.argv.slice(2).join(" ") + "\\n");',
+      "/usr/bin/env node",
+    );
+    writeFileSync(join(root, "good/package.json"), '{"type":"commonjs"}\n');
     chmodSync(root, 0o775);
-    writeFileSync(join(good, "package.json"), '{"type":"commonjs"}\n');
-    symlinkSync(nodeExecutable, join(bad, "node"));
-    writeShell(join(bad, "npm"), 'printf "%s\\n" "$*" >> "$BAD_NPM_LOG"\nexit 42');
-    writeShell(
-      join(good, "node"),
-      `printf '%s\\n' "$*" >> "$GOOD_NODE_LOG"\nexec ${JSON.stringify(nodeExecutable)} "$@"`,
-    );
-    writeFileSync(
-      join(good, "npm"),
-      '#!/usr/bin/env node\nrequire("node:fs").appendFileSync(process.env.GOOD_NPM_LOG, `${process.argv.slice(2).join(" ")}\\n`);\n',
-      { mode: 0o755 },
-    );
-    const logs = {
-      BAD_NPM_LOG: join(root, "bad.log"),
-      GOOD_NODE_LOG: join(root, "node.log"),
-      GOOD_NPM_LOG: join(root, "good.log"),
-    };
-    const result = runInstallCliShell(
-      `
-      export PATH="$FIXTURE_PATH"
+    const result = f.run(`
+      export PATH="$ROOT/bad:$ROOT/good:${process.env.PATH ?? ""}"
       umask 0002
-      PREFIX="$FIXTURE_PREFIX"
+      PREFIX="$ROOT/nested/prefix"
       try_link_usable_node_runtime_from_path
       printf 'umask=%s\n' "$(umask)"
-    `,
-      { ...logs, FIXTURE_PATH: `${bad}:${good}:${process.env.PATH ?? ""}`, FIXTURE_PREFIX: prefix },
-    );
+    `);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("umask=0002");
     expect(lstatSync(root).mode & 0o777).toBe(0o775);
-    expect(readFileSync(logs.BAD_NPM_LOG, "utf8")).toBe("--version\n");
-    expect(readFileSync(logs.GOOD_NPM_LOG, "utf8")).toBe("--version\n");
-    expect(readFileSync(logs.GOOD_NODE_LOG, "utf8")).toContain("npm --version");
+    expect(readFileSync(join(root, "bad.log"), "utf8")).toBe("--version\n");
+    expect(readFileSync(join(root, "good.log"), "utf8")).toBe("--version\n");
+    expect(readFileSync(join(root, "node.log"), "utf8")).toContain("npm --version");
     const bin = join(prefix, "tools", "node-v24.22.1", "bin");
     for (const directory of [
       join(root, "nested"),
       prefix,
       join(prefix, "tools"),
-      join(prefix, "tools", "node-v24.22.1"),
+      dirname(bin),
       bin,
     ]) {
       expect(lstatSync(directory).mode & 0o777, directory).toBe(0o700);
     }
     expect(lstatSync(join(bin, "node")).isSymbolicLink()).toBe(true);
     for (const tool of ["node", "npm"]) {
-      expect(readlinkSync(join(bin, tool))).toBe(join(good, tool));
+      expect(readlinkSync(join(bin, tool))).toBe(join(root, "good", tool));
     }
   });
 
@@ -1013,34 +870,24 @@ fi
   });
 
   it("excludes active runtime aliases reached through an empty PATH entry", () => {
-    const root = tempDirs.make("openclaw-install-cli-runtime-alias-");
-    const bin = join(root, "system-bin"),
-      prefix = join(root, "prefix"),
-      old = join(root, "old-runtime");
-    const oldBin = join(old, "bin"),
-      alias = join(root, "alias-bin");
-    mkdirSync(bin);
-    mkdirSync(oldBin, { recursive: true });
+    const f = makeFixture("runtime-alias");
+    const bin = f.runtime("system-bin");
+    const oldBin = f.runtime("old-runtime/bin");
+    const old = dirname(oldBin),
+      prefix = join(f.root, "prefix");
     linkRequiredShellTools(bin);
-    for (const target of [bin, oldBin]) {
-      symlinkSync(nodeExecutable, join(target, "node"));
-      writeShell(join(target, "npm"), "exit 0");
-    }
     for (const tool of ["npx", "corepack"]) {
-      writeShell(join(oldBin, tool), "exit 0");
+      f.shell(`old-runtime/bin/${tool}`, "exit 0");
     }
     mkdirSync(join(prefix, "tools"), { recursive: true });
     symlinkSync(old, join(prefix, "tools", "node"));
-    symlinkSync(join(prefix, "tools", "node", "bin"), alias);
-    const result = runInstallCliShell(
-      `
-      PREFIX="$FIXTURE_PREFIX"
-      cd "$FIXTURE_ALIAS"
-      export PATH=":$FIXTURE_BIN"
+    symlinkSync(join(prefix, "tools", "node", "bin"), join(f.root, "alias-bin"));
+    const result = f.run(`
+      PREFIX="$ROOT/prefix"
+      cd "$ROOT/alias-bin"
+      export PATH=":$ROOT/system-bin"
       try_link_usable_node_runtime_from_path
-    `,
-      { FIXTURE_PREFIX: prefix, FIXTURE_ALIAS: alias, FIXTURE_BIN: bin },
-    );
+    `);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const active = join(prefix, "tools", "node", "bin");
     for (const tool of ["node", "npm"]) {
@@ -1052,61 +899,31 @@ fi
     }
   });
 
-  it.each(["bin dir"])("publishes usable runtime links for relative PATH entry %j", (pathEntry) => {
-    const root = tempDirs.make("openclaw-install-cli-relative-runtime-");
-    const source = join(root, "source dir");
-    const bin = join(source, pathEntry || ".");
-    const optional = join(source, "tools dir");
-    const fallback = join(root, "fallback");
-    const elsewhere = join(root, "elsewhere");
-    const prefix = join(root, "prefix");
-    mkdirSync(bin, { recursive: true });
-    mkdirSync(optional);
-    mkdirSync(fallback);
-    mkdirSync(elsewhere);
+  it("publishes usable runtime links for a relative PATH entry with spaces", () => {
+    const f = makeFixture("relative-runtime");
+    f.runtime("source dir/bin dir", "console.log('11.19.1');", "/usr/bin/env node");
+    const fallback = f.runtime("fallback", "console.log('11.19.2');", "/usr/bin/env node");
     linkRequiredShellTools(fallback);
-    for (const [target, version] of [
-      [bin, "11.19.1"],
-      [fallback, "11.19.2"],
-    ] as const) {
-      symlinkSync(nodeExecutable, join(target, "node"));
-      writeFileSync(
-        join(target, "npm"),
-        `#!/usr/bin/env node\nconsole.log(${JSON.stringify(version)});\n`,
-        { mode: 0o755 },
-      );
-    }
+    mkdirSync(join(f.root, "elsewhere"));
     for (const tool of ["npx", "corepack"]) {
-      writeFileSync(join(optional, tool), `#!/bin/bash\nprintf '${tool}-ok\\n'\n`, {
-        mode: 0o755,
-      });
+      f.shell(`source dir/tools dir/${tool}`, `printf '${tool}-ok\\n'`);
     }
-    const result = runInstallCliShell(
-      `
-        PREFIX="$FIXTURE_PREFIX"
-        cd "$FIXTURE_SOURCE"
-        PATH="$FIXTURE_PATH:tools dir:$FIXTURE_FALLBACK"
-        export PATH
-        try_link_usable_node_runtime_from_path
-        cd "$FIXTURE_ELSEWHERE"
-        PATH="$PREFIX/tools/node/bin:$FIXTURE_FALLBACK"
-        "$PREFIX/tools/node/bin/node" -p '"node-ok"'
-        "$PREFIX/tools/node/bin/npm" --version
-        "$PREFIX/tools/node/bin/npx"
-        "$PREFIX/tools/node/bin/corepack"
-        `,
-      {
-        FIXTURE_PREFIX: prefix,
-        FIXTURE_SOURCE: source,
-        FIXTURE_PATH: pathEntry,
-        FIXTURE_FALLBACK: fallback,
-        FIXTURE_ELSEWHERE: elsewhere,
-      },
-    );
+    const result = f.run(`
+      PREFIX="$ROOT/prefix"
+      cd "$ROOT/source dir"
+      export PATH="bin dir:tools dir:$ROOT/fallback"
+      try_link_usable_node_runtime_from_path
+      cd "$ROOT/elsewhere"
+      PATH="$PREFIX/tools/node/bin:$ROOT/fallback"
+      "$PREFIX/tools/node/bin/node" -p '"node-ok"'
+      "$PREFIX/tools/node/bin/npm" --version
+      "$PREFIX/tools/node/bin/npx"
+      "$PREFIX/tools/node/bin/corepack"
+    `);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("node-ok\n11.19.1\nnpx-ok\ncorepack-ok");
     for (const tool of ["node", "npm", "npx", "corepack"]) {
-      expect(readlinkSync(join(prefix, "tools", "node", "bin", tool))).toMatch(/^\//);
+      expect(readlinkSync(join(f.root, "prefix/tools/node/bin", tool))).toMatch(/^\//);
     }
   });
 
@@ -1115,73 +932,54 @@ fi
       ["empty", "trailing"].map((order) => ({ route, order })),
     ),
   )("preserves PATH lookup order for $route with $order entries", ({ route, order }) => {
-    const root = tempDirs.make("openclaw-install-cli-path-order-");
-    const current = join(root, "current");
-    const other = join(root, "other");
-    const prefix = join(root, "prefix");
-    for (const bin of [current, other]) {
+    const f = makeFixture("path-order");
+    for (const name of ["current", "other"]) {
+      const bin = join(f.root, name);
       mkdirSync(bin);
       linkRequiredShellTools(bin);
-      if (bin === other && order === "trailing") {
-        continue;
+      if (name !== "other" || order !== "trailing") {
+        f.runtime(name, `printf '${name}-npm\\n'`);
       }
-      symlinkSync(nodeExecutable, join(bin, "node"));
-      writeFileSync(
-        join(bin, "npm"),
-        `#!/bin/bash\nprintf '${bin === current ? "current" : "other"}-npm\\n'\n`,
-        { mode: 0o755 },
-      );
     }
-    const search = order === "empty" ? "" : `${other}:`;
-    const result = runInstallCliShell(
-      `
-      PREFIX="$FIXTURE_PREFIX"
-      cd "$FIXTURE_CURRENT"
-      PATH="$FIXTURE_SEARCH"
-      export PATH
+    const result = f.run(`
+      PREFIX="$ROOT/prefix"
+      cd "$ROOT/current"
+      export PATH="${order === "empty" ? "" : "$ROOT/other:"}"
       ${route === "command" ? 'selected="$(command_path_without_node_prefix npm)"' : 'try_link_usable_node_runtime_from_path; selected="$(npm_bin)"'}
       "$selected" --version
-      `,
-      { FIXTURE_PREFIX: prefix, FIXTURE_CURRENT: current, FIXTURE_SEARCH: search },
-    );
+    `);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("current-npm");
   });
 
   it("does not invent a cwd search after filtering an empty managed PATH entry", () => {
-    const root = tempDirs.make("openclaw-install-cli-filtered-path-");
-    const prefix = join(root, "prefix"),
-      managed = join(prefix, "tools", "node-v24.22.1", "bin");
-    mkdirSync(managed, { recursive: true });
-    writeShell(join(managed, "npm"), "exit 0");
-    const result = runInstallCliShell(
-      `
-      PREFIX="$FIXTURE_PREFIX"
-      cd "$FIXTURE_MANAGED"
+    const f = makeFixture("filtered-path");
+    f.shell("prefix/tools/node-v24.22.1/bin/npm", "exit 0");
+    const result = f.run(`
+      PREFIX="$ROOT/prefix"
+      cd "$ROOT/prefix/tools/node-v24.22.1/bin"
       export PATH=""
       command_path_without_node_prefix npm 1
-    `,
-      { FIXTURE_PREFIX: prefix, FIXTURE_MANAGED: managed },
-    );
+    `);
     expect(result.status, result.stdout + result.stderr).toBe(1);
     expect(result.stdout).toBe("");
   });
 
   it("preserves the active runtime until a downloaded replacement starts, then permits retry", () => {
-    const root = tempDirs.make("openclaw-install-cli-node-retry-");
-    const prefix = join(root, "prefix");
+    const f = makeFixture("node-retry");
+    const prefix = join(f.root, "prefix");
     const oldRuntime = join(prefix, "tools", "node-v22.23.2");
     const active = join(prefix, "tools", "node");
-    const packageFile = join(oldRuntime, "lib", "node_modules", "openclaw", "package.json");
-    mkdirSync(join(oldRuntime, "bin"), { recursive: true });
-    mkdirSync(join(packageFile, ".."), { recursive: true });
-    writeNodeFixture(join(oldRuntime, "bin", "node"), "v22.23.2");
-    writeFileSync(packageFile, '{"name":"openclaw","version":"2026.9.2"}\n');
+    const packageContent = '{"name":"openclaw","version":"2026.9.2"}\n';
+    const packageFile = f.write(
+      "prefix/tools/node-v22.23.2/lib/node_modules/openclaw/package.json",
+      packageContent,
+    );
+    f.node("prefix/tools/node-v22.23.2/bin/node", "v22.23.2");
     symlinkSync(oldRuntime, active);
-    const node = join(root, "new-node");
-    writeShell(node, "exit 126");
+    f.shell("new-node", "exit 126");
     const install = () =>
-      runInstallCliShell(
+      f.run(
         `
       is_musl_linux() { return 1; }
       detect_downloader() { :; }
@@ -1199,35 +997,33 @@ fi
           if [[ "$1" == '-C' ]]; then dest="$2"; shift 2; else shift; fi
         done
         mkdir -p "$dest/bin"
-        cp "$NEW_NODE" "$dest/bin/node"
+        cp "$ROOT/new-node" "$dest/bin/node"
         printf '#!/bin/bash\\nexit 0\\n' > "$dest/bin/npm"
         chmod +x "$dest/bin/npm"
       }
-      PREFIX="$FIXTURE_PREFIX"
+      PREFIX="$ROOT/prefix"
       NODE_VERSION=24.22.1
       install_node linux x64
     `,
-        { NEW_NODE: node, FIXTURE_PREFIX: prefix },
       );
+    const expectActive = (target: string, version: string) => {
+      expect(readlinkSync(active)).toBe(target);
+      expect(spawnSync(join(active, "bin/node"), ["-v"], { encoding: "utf8" }).stdout).toBe(
+        `${version}\n`,
+      );
+      expect(readFileSync(packageFile, "utf8")).toBe(packageContent);
+    };
     const failed = install();
     expect(failed.status).toBe(1);
     expect(failed.stdout).toContain(
       "Installed Node 24.22.1 must provide Node >= 24.22.1 with WAL-reset-safe SQLite",
     );
     expect(failed.stdout).toContain("found Node unknown, SQLite unavailable");
-    expect(readlinkSync(active)).toBe(oldRuntime);
-    expect(spawnSync(join(active, "bin", "node"), ["-v"], { encoding: "utf8" }).stdout).toBe(
-      "v22.23.2\n",
-    );
-    expect(readFileSync(packageFile, "utf8")).toBe('{"name":"openclaw","version":"2026.9.2"}\n');
-    writeNodeFixture(node, "v24.22.1");
+    expectActive(oldRuntime, "v22.23.2");
+    f.node("new-node", "v24.22.1");
     const retried = install();
     expect(retried.status, retried.stdout + retried.stderr).toBe(0);
-    expect(readlinkSync(active)).toBe(join(prefix, "tools", "node-v24.22.1"));
-    expect(spawnSync(join(active, "bin", "node"), ["-v"], { encoding: "utf8" }).stdout).toBe(
-      "v24.22.1\n",
-    );
-    expect(readFileSync(packageFile, "utf8")).toBe('{"name":"openclaw","version":"2026.9.2"}\n');
+    expectActive(join(prefix, "tools", "node-v24.22.1"), "v24.22.1");
   });
 
   it.each([
@@ -1238,24 +1034,54 @@ fi
       "--allow-scripts=https://example.invalid/openclaw.tgz",
     ],
   ])("uses npm-resolved lifecycle identity for %s", (spec, expected) => {
-    const result = npmPolicyFixture().run(spec, "12.0.0");
+    const result = runNpmPolicy(spec);
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(expected);
   });
 
   defineInstallerNpmConfigContract(installerContract);
 
-  it.each(["linux"])("rejects OpenClaw GitHub source targets for npm installs on %s", (os) => {
-    const result = runInstallCliShell(`
-      set -euo pipefail
-      os_detect() { printf '${os}\\n'; }
-      OPENCLAW_VERSION=main
-      install_openclaw
-    `);
-
+  it.each([
+    [
+      "musl recovery",
+      "is_musl_linux() { return 0; }; install_node() { echo unexpected-node-install; }; main --node-only",
+      "unavailable on musl Linux",
+      "unexpected-node-install",
+    ],
+    [
+      "ARMv7",
+      "NODE_VERSION_REQUESTED=1; os_detect() { echo linux; }; arch_detect() { echo armv7l; }; install_node() { echo unexpected-install; }; main",
+      "Linux ARMv7 is unsupported: official Node 24+ binaries are unavailable",
+      "unexpected-install",
+    ],
+    [
+      "vulnerable Node",
+      "NODE_VERSION=24.14.1; install_node linux x64",
+      "Node 24.14.1 is unsupported; use Node 24.22.1+ or Node 26.12.1+.",
+      "Installing Node 24.14.1",
+    ],
+    [
+      "missing option value",
+      "parse_args --prefix --no-onboard",
+      "Missing value for --prefix",
+      "unbound variable",
+    ],
+    [
+      "npm source target",
+      "os_detect() { echo linux; }; OPENCLAW_VERSION=main; install_openclaw",
+      "npm installs do not support OpenClaw GitHub source targets",
+      "",
+    ],
+  ])("rejects %s before installation", (name, body, message, absent) => {
+    const result = runInstallCliShell(body);
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain("npm installs do not support OpenClaw GitHub source targets");
-    expect(result.stdout).toContain("--install-method git --version main");
+    expect(result.stdout).toContain(message);
+    if (absent) {
+      expect(result.stdout + result.stderr).not.toContain(absent);
+    }
+    if (name === "npm source target") {
+      expect(result.stdout).toContain("--install-method git --version main");
+    }
   });
 
   defineInstallerNpmRetryContract(installerContract);

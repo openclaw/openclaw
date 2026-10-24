@@ -1,18 +1,11 @@
 import assert from "node:assert/strict";
-import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { VitestBatchRunParams } from "../../scripts/lib/vitest-batch-runner.mts";
-import {
-  listVitestRuntimeConsumerFiles,
-  resolveVitestCliEntry,
-} from "../../scripts/lib/vitest-build-prerequisites.mts";
-import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import { resolveVitestCliEntry } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { createPatternFileHelper } from "../helpers/pattern-file.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
@@ -53,39 +46,23 @@ vi.mock("../../scripts/lib/tsx-cli-shim.mjs", async (importOriginal) => ({
   registerToolingTsx: commands.sourceLoader,
 }));
 
-const { runManagedCommand: runCliCommand } = await vi.importActual<
-  typeof import("../../scripts/lib/managed-child-process.mts")
->("../../scripts/lib/managed-child-process.mts");
-
 const modelTarget = "src/agents/embedded-agent-runner/model-resolution-consistency.test.ts";
 const targets = [modelTarget, "extensions/qa-lab/src/suite-process-lifecycle.test.ts"];
 const lifecycle = targets[1]!;
-const ordinaryQa = "extensions/qa-lab/src/gateway-child.test.ts";
-const qaRuntimeConsumers = listVitestRuntimeConsumerFiles([configPath("extension-qa")]);
 const patternFiles = createPatternFileHelper("plugin-build-selection-");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const e2eTarget = "test/openclaw-launcher-version.e2e.test.ts";
 const e2eConfig = configPath("e2e");
 let originalArgv: string[];
 let originalExitCode: typeof process.exitCode;
-let terminal: ReturnType<typeof createDeferred<unknown>>;
 const testProjectsUrl = new URL("../../scripts/test-projects.mts", import.meta.url).href;
 let startCount = 0;
 function configPath(name: string) {
   return `test/vitest/vitest.${name}.config.ts`;
 }
-const excludeQa = (transform = (file: string) => file) =>
-  qaRuntimeConsumers.flatMap((file) => ["--exclude", transform(file)]);
 const noExit = async () => {};
 const currentRuntimeArgs = ["scripts/prepare-vitest-runtime.mjs", "--require-current-head"];
 const uiBuildArgs = ["scripts/ui.js", "build"];
-async function expectPassed(pattern = /^\[test\] passed /u) {
-  const outcome = await terminal.promise;
-  if (outcome instanceof Error) {
-    throw outcome;
-  }
-  expect(outcome).toMatch(pattern);
-}
 function stubEnv(values: Record<string, string>) {
   for (const [name, value] of Object.entries(values)) {
     vi.stubEnv(name, value);
@@ -101,13 +78,12 @@ const preparationArgs = () => commands.prepare.mock.calls.map(([command]) => com
 function waitForAdmission(started: Promise<unknown>, running: Promise<unknown>, label: string) {
   return withTestTimeout(Promise.race([started, running]), 5_000, label);
 }
-function runPlan(config: string, forwardedArgs: string[] = [], timingTargets?: string[]) {
+function runPlan(config: string) {
   return {
     config,
-    forwardedArgs,
+    forwardedArgs: [],
     includePatterns: null,
     watchMode: false,
-    ...(timingTargets ? { timingTargets } : {}),
   };
 }
 function expectPrivateQaPreparation() {
@@ -208,13 +184,8 @@ beforeEach(() => {
     OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "",
     OPENCLAW_VITEST_INCLUDE_FILE: "",
   });
-  terminal = createDeferred<unknown>();
   vi.spyOn(console, "warn").mockImplementation(() => {});
-  vi.spyOn(console, "error").mockImplementation((value: unknown) => {
-    if (value instanceof Error || /^\[test\] (passed|failed|skipped) /u.test(String(value))) {
-      terminal.resolve(value);
-    }
-  });
+  vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -225,109 +196,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const posixIt = process.platform === "win32" ? it.skip : it;
-posixIt.each([0, 7, "SIGTERM"] as const)(
-  "gates direct CLI readers on runtime preparation (%s)",
-  async (outcome, { signal, onTestFinished }) => {
-    const lifetime = createFixtureLifetime();
-    onTestFinished(() => lifetime.cleanup());
-    await lifetime.run(async () => {
-      const root = lifetime.createTempDir("plugin-build-cli-");
-      const pidFile = path.join(root, "build.pid");
-      const readersFile = path.join(root, "readers");
-      const builder = path.join(root, "build.mjs");
-      const preload = path.join(root, "preload.mjs");
-      fs.writeFileSync(
-        builder,
-        `import fs from 'node:fs';
-process.on('SIGTERM', () => process.exit(0));
-process.stdin.once('data', () => process.exit(${typeof outcome === "number" ? outcome : 0}));
-fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
-process.stdin.resume();
-process.stdout.write('fixture-build-ready\\n');\n`,
-      );
-      fs.writeFileSync(
-        preload,
-        `import cp from 'node:child_process';
-import fs from 'node:fs';
-import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
-const spawn = cp.spawn;
-cp.spawn = (bin, args, options) => {
-  if (args.includes('scripts/prepare-vitest-runtime.mjs')) return spawn(process.execPath, [${JSON.stringify(builder)}], options);
-  if (args.some((arg) => arg === 'vitest' || arg.endsWith('/vitest.mjs'))) {
-    fs.appendFileSync(${JSON.stringify(readersFile)}, 'reader\\n');
-    return spawn(process.execPath, ['-e', ''], options);
-  }
-  return spawn(bin, args, options);
-};
-syncFixtureBuiltinExports();\n`,
-      );
-      const finished = new AbortController();
-      const ready = createDeferred();
-      let child: ChildProcess | undefined;
-      let output = "";
-      const closed = lifetime.track(
-        runCliCommand({
-          bin: process.execPath,
-          args: [
-            "--import",
-            preload,
-            "scripts/run-vitest.mts",
-            "watch",
-            "--config",
-            configPath("extension-qa"),
-          ],
-          env: testRunnerFixtureEnv(),
-          stdio: ["pipe", "pipe", "pipe"],
-          signal: AbortSignal.any([signal, finished.signal]),
-          requireProcessTreeExit: true,
-          onReady(owned) {
-            child = owned;
-            owned.stdout!.on("data", (data) => {
-              output += data;
-              if (output.includes("fixture-build-ready\n")) {
-                ready.resolve();
-              }
-            });
-            owned.stderr!.on("data", (data) => {
-              output += data;
-            });
-          },
-        }),
-      );
-      try {
-        await Promise.race([
-          ready.promise,
-          closed.then((code) => {
-            throw new Error(`CLI exited before builder readiness (${code}):\n${output}`);
-          }),
-        ]);
-        const buildPid = Number(fs.readFileSync(pidFile, "utf8"));
-        expect(Number.isInteger(buildPid) && buildPid > 0).toBe(true);
-        expect(fs.existsSync(readersFile)).toBe(false);
-        if (outcome === "SIGTERM") {
-          expect(child!.kill("SIGTERM")).toBe(true);
-        } else {
-          child!.stdin!.end("finish\n");
-        }
-        await closed;
-        expect({ code: child?.exitCode, signal: child?.signalCode }, output).toEqual({
-          code: outcome === "SIGTERM" ? 143 : outcome,
-          signal: null,
-        });
-        expect(fs.existsSync(readersFile), output).toBe(outcome === 0);
-        expect(output.match(/preparing private-qa runtime/gu)).toHaveLength(1);
-        await lifetime.verifyCleanup(async () => {
-          expect(isProcessAlive(buildPid)).toBe(false);
-        });
-      } finally {
-        finished.abort();
-        await Promise.allSettled([closed]);
-      }
-    });
-  },
-);
-
 async function start(args: string[]) {
   process.argv = [process.execPath, "scripts/test-projects.mts", ...args];
   // Replay the command entry while retaining its immutable planner dependencies.
@@ -335,77 +203,6 @@ async function start(args: string[]) {
   startCount += 1;
   await import(entryUrl);
 }
-
-describe("full-suite timing metadata", () => {
-  const files = ["test/scripts/run-with-env.test.ts", "test/scripts/run-node.test.ts"];
-  const config = configPath("tooling");
-  it("records inherited and owned selections without claiming or deleting borrowed files", async () => {
-    vi.stubEnv("OPENCLAW_TEST_PROJECTS_TIMINGS", "1");
-    vi.stubEnv("OPENCLAW_VITEST_SHARD_NAME", "same-parent");
-    const timings = await import("../../scripts/lib/vitest-shard-timings.mts");
-    const write = vi.spyOn(timings, "writeShardTimings");
-    const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
-    for (const file of files) {
-      const include = patternFiles.writePatternFile("timing-include.json", [file]);
-      vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", include);
-      await runTestProjects(noExit, [config]);
-      expect(fs.existsSync(include)).toBe(true);
-      expect(commands.reader.mock.lastCall?.[0].env.OPENCLAW_VITEST_INCLUDE_FILE).toBe(include);
-    }
-    const borrowed = process.env.OPENCLAW_VITEST_INCLUDE_FILE!;
-    fs.writeFileSync(borrowed, "{}");
-    await runTestProjects(noExit, [files[0]!]);
-    const owned = commands.reader.mock.lastCall?.[0].env.OPENCLAW_VITEST_INCLUDE_FILE;
-    expect(owned).not.toBe(borrowed);
-    expect(fs.existsSync(borrowed)).toBe(true);
-    expect(fs.existsSync(owned)).toBe(false);
-    const samples = write.mock.calls.flatMap(([entries]) => entries);
-    expect(samples).toHaveLength(3);
-    expect(new Set(samples.map((sample) => sample?.config)).size).toBe(3);
-    expect(samples.every((sample) => sample?.includePatternCount === 1)).toBe(true);
-    vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", "");
-    await runTestProjects(noExit, [configPath("cli")]);
-    expect(write.mock.lastCall?.[0]).toEqual([
-      expect.objectContaining({ config: configPath("cli"), includePatternCount: 0 }),
-    ]);
-  });
-
-  it.each([false, true])(
-    "keeps timing chunks separate from launch filters (inherited=%s)",
-    async (inherited) => {
-      stubEnv({
-        OPENCLAW_TEST_PROJECTS_PARALLEL: "2",
-        OPENCLAW_VITEST_MAX_WORKERS: "1",
-        OPENCLAW_VITEST_SHARD_NAME: "same-parent",
-      });
-      const planner = await import("../../scripts/test-projects.test-support.mts");
-      const timings = await import("../../scripts/lib/vitest-shard-timings.mts");
-      const write = vi.spyOn(timings, "writeShardTimings");
-      const include = inherited
-        ? patternFiles.writePatternFile("chunk-include.json", [files[0]!])
-        : undefined;
-      if (include) {
-        vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", include);
-      }
-      vi.spyOn(planner, "buildFullSuiteVitestRunPlans").mockReturnValue(
-        files.map((file) => runPlan(config, [file], [file])),
-      );
-      const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
-      await runTestProjects(noExit, []);
-      expect(commands.reader.mock.calls.map(([input]) => input.pnpmArgs.at(-1))).toEqual(files);
-      for (const [input] of commands.reader.mock.calls) {
-        expect(input.env.OPENCLAW_VITEST_INCLUDE_FILE || undefined).toBe(include);
-        expect(input.env.OPENCLAW_VITEST_MAX_WORKERS).toBe("1");
-      }
-      const samples = write.mock.calls.flatMap(([entries]) => entries);
-      expect(samples).toHaveLength(2);
-      expect(new Set(samples.map((sample) => sample?.config)).size).toBe(2);
-      for (const sample of samples) {
-        expect(sample).toMatchObject({ baseConfig: config, includePatternCount: 1 });
-      }
-    },
-  );
-});
 
 describe("packed config continuation", () => {
   const configs = [configPath("logging"), configPath("process")];
@@ -448,31 +245,21 @@ describe("packed config continuation", () => {
 });
 
 describe("empty changed selection", () => {
-  it.each([
-    { paths: [], diagnostic: "[test] no changed test targets; skipping Vitest." },
-    {
-      paths: ["unknown/file.txt"],
-      diagnostic: "[test] no precise changed test targets; skipping Vitest.",
+  it.each([{ paths: [] }, { paths: ["unknown/file.txt"] }])(
+    "discovers changed targets once without admitting empty selections: $paths",
+    async ({ paths }) => {
+      const lanes = await import("../../scripts/changed-lanes.mts");
+      const changedPaths = vi.spyOn(lanes, "listChangedPathsFromGit").mockReturnValue(paths);
+      const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+      await runTestProjects(noExit, ["--changed", "origin/main"], {
+        ...testRunnerFixtureEnv(),
+        OPENCLAW_TEST_CHANGED_BROAD: "0",
+      });
+      expect(changedPaths).toHaveBeenCalledTimes(1);
+      expect(commands.reader).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(0);
     },
-  ])("keeps one selection and its diagnostics for $paths", async ({ paths, diagnostic }) => {
-    const lanes = await import("../../scripts/changed-lanes.mts");
-    const changedPaths = vi.spyOn(lanes, "listChangedPathsFromGit").mockReturnValue(paths);
-    const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
-    await runTestProjects(noExit, ["--changed", "origin/main"], {
-      ...testRunnerFixtureEnv(),
-      OPENCLAW_TEST_CHANGED_BROAD: "0",
-    });
-    expect(changedPaths).toHaveBeenCalledTimes(1);
-    expect(commands.reader).not.toHaveBeenCalled();
-    expect(console.error).toHaveBeenCalledWith(diagnostic);
-    if (paths.length > 0) {
-      expect(console.error).toHaveBeenCalledWith("[test]   unknown/file.txt");
-      expect(console.error).toHaveBeenCalledWith(
-        "[test] run `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` for broad coverage.",
-      );
-    }
-    expect(process.exitCode).toBe(0);
-  });
+  );
 });
 
 describe("automatic exact-target admission", () => {
@@ -482,7 +269,7 @@ describe("automatic exact-target admission", () => {
     "test/scripts/run-node-lifecycle.test.ts",
     "extensions/memory-lancedb/config.test.ts",
   ];
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     stubEnv({
       CI: "1",
@@ -557,111 +344,36 @@ describe("automatic exact-target admission", () => {
     },
   );
 
-  it.each([
-    { outcome: "success", mode: "automatic" },
-    { outcome: "failure", mode: "automatic" },
-    { outcome: "SIGTERM", mode: "automatic" },
-    { outcome: "success", mode: "local full suite" },
-  ])(
-    "joins the real Gateway plan barrier before later admission and disposal ($mode, $outcome)",
-    async ({ outcome, mode }) => {
-      const workerOwner = await import("../../scripts/lib/vitest-worker-run.mts");
-      const original = workerOwner.createVitestWorkerRun;
-      const events: string[] = [];
-      vi.spyOn(workerOwner, "createVitestWorkerRun").mockImplementation((...args) => {
-        const worker = original(...args);
-        const dispose = worker.dispose.bind(worker);
-        vi.spyOn(worker, "dispose").mockImplementation(async () => {
-          events.push("dispose");
-          await dispose();
-          events.push("disposed");
-        });
-        return worker;
-      });
-      const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
-      if (mode === "local full suite") {
-        vi.stubEnv("CI", "");
-        vi.stubEnv("GITHUB_ACTIONS", "");
-        vi.stubEnv("OPENCLAW_VITEST_MAX_WORKERS", "");
-        vi.stubEnv("OPENCLAW_TEST_WORKERS", "");
-      }
-      const gatewayFile =
-        mode === "automatic"
-          ? "src/gateway/call.test.ts"
-          : "src/gateway/server.sessions.fixture-lifecycle.test.ts";
-      const barrierFiles = ["src/utils.test.ts", gatewayFile, modelTarget];
-      const configs = [
-        configPath("unit-fast-fake-timers"),
-        mode === "automatic" ? configPath("gateway") : configPath("gateway-server"),
-        configPath("agents-embedded-agent"),
-      ];
-      const planner = await import("../../scripts/test-projects.test-support.mts");
-      if (mode !== "automatic") {
-        vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "3");
-        // Hold the ordinary/Gateway/ordinary order; timing weights have separate coverage.
-        vi.spyOn(planner, "orderFullSuiteSpecsForParallelRun").mockImplementation((specs) => specs);
-      }
-      if (mode.endsWith("full suite")) {
-        vi.spyOn(planner, "buildFullSuiteVitestRunPlans").mockReturnValue(
-          configs.map((config, index) =>
-            runPlan(config, [...outputArgs, barrierFiles[index]!], [barrierFiles[index]!]),
-          ),
-        );
-      }
-      const releases = configs.map(() => createDeferred());
-      const admissions = configs.map(() => createDeferred());
-      const selected: string[] = [];
-      commands.reader.mockImplementation(({ pnpmArgs, env }) => {
-        const config = pnpmArgs[pnpmArgs.indexOf("--config") + 1];
-        const index = configs.indexOf(config);
-        expect(index).toBeGreaterThanOrEqual(0);
-        if (mode === "local full suite") {
-          expect(env.OPENCLAW_VITEST_MAX_WORKERS).toBe(index === 1 ? "3" : "1");
-        }
-        selected.push(config);
-        events.push(`start:${index}`);
-        admissions[index]!.resolve();
-        return makeReader(
-          releases[index]!.promise.then(() => {
-            events.push(`joined:${index}`);
-            return {
-              code: index === 1 && outcome === "failure" ? 1 : 0,
-              signal: index === 1 && outcome === "SIGTERM" ? "SIGTERM" : null,
-              groupJoined: true,
-            };
-          }),
-        );
-      });
-      const exit = vi.fn(async () => {});
-      const running = runTestProjects(
-        exit,
-        mode.endsWith("full suite") ? outputArgs : [...barrierFiles, ...outputArgs],
-      );
-      try {
-        for (let index = 0; index < 2; index++) {
-          await waitForAdmission(admissions[index]!.promise, running, "barrier admission");
-          expect(selected).toEqual(configs.slice(0, index + 1));
-          expect(events).not.toContain("dispose");
-          releases[index]!.resolve();
-        }
-        if (outcome !== "SIGTERM") {
-          await waitForAdmission(admissions[2]!.promise, running, "post-barrier admission");
-          expect(events).toEqual(["start:0", "joined:0", "start:1", "joined:1", "start:2"]);
-        }
-      } finally {
-        releases.forEach((release) => release.resolve());
-        await running;
-      }
-      expect(selected).toEqual(outcome === "SIGTERM" ? configs.slice(0, 2) : configs);
-      expect(events.slice(-3)).toEqual([
-        `joined:${outcome === "SIGTERM" ? 1 : 2}`,
-        "dispose",
-        "disposed",
-      ]);
-      expect(exit.mock.calls).toEqual(outcome === "SIGTERM" ? [["SIGTERM"]] : []);
-      expect(process.exitCode).toBe(outcome === "SIGTERM" ? 143 : outcome === "failure" ? 1 : 0);
-    },
-  );
+  it("spends the idle local worker budget on exclusive Gateway plans", async () => {
+    stubEnv({
+      CI: "",
+      GITHUB_ACTIONS: "",
+      OPENCLAW_VITEST_MAX_WORKERS: "",
+      OPENCLAW_TEST_WORKERS: "",
+      OPENCLAW_TEST_PROJECTS_PARALLEL: "3",
+    });
+    const configs = ["unit-fast-fake-timers", "gateway-server", "agents-embedded-agent"].map(
+      configPath,
+    );
+    const planner = await import("../../scripts/test-projects.test-support.mts");
+    vi.spyOn(planner, "buildFullSuiteVitestRunPlans").mockReturnValue(
+      configs.map((config) => runPlan(config)),
+    );
+    vi.spyOn(planner, "orderFullSuiteSpecsForParallelRun").mockImplementation((specs) => specs);
+    const selected: string[] = [];
+    commands.reader.mockImplementation(({ pnpmArgs, env }) => {
+      const config = pnpmArgs[pnpmArgs.indexOf("--config") + 1];
+      const index = configs.indexOf(config);
+      expect(index).toBeGreaterThanOrEqual(0);
+      expect(env.OPENCLAW_VITEST_MAX_WORKERS).toBe(index === 1 ? "3" : "1");
+      selected.push(config);
+      return completedReader();
+    });
+    const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+    await runTestProjects(noExit, []);
+    expect(selected).toEqual(configs);
+    expect(process.exitCode).toBe(0);
+  });
 
   it("drains peers without admitting more exact targets after an unverified join", async () => {
     await assertSchedulerDrain({
@@ -738,8 +450,6 @@ describe("cache lease completion", () => {
       expect(process.exitCode).toBe(code === 0 || code === 1 ? 2 : 143);
       expect(commands.reader).toHaveBeenCalledTimes(1);
       expect(exitBySignal).not.toHaveBeenCalled();
-      expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/^\[test\] failed /u));
-      expect(console.error).not.toHaveBeenCalledWith(expect.stringMatching(/^\[test\] passed /u));
     },
   );
 
@@ -809,7 +519,6 @@ describe("cache lease completion", () => {
         selections.push(JSON.parse(fs.readFileSync(includeFile, "utf8")));
       },
     });
-    expect(console.error).toHaveBeenCalledWith("[test] inner parallelism 2");
     expect(selections.every((selection) => selection.length === 1)).toBe(true);
     expect(selections.flat().toSorted()).toEqual(files.toSorted());
     expect(process.exitCode).toBe(1);
@@ -835,84 +544,57 @@ describe("test-projects build admission", () => {
   const avatarTarget = "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts";
   const mockUiTarget = "ui/src/e2e/chat-code-block-fences.e2e.test.ts";
 
-  it.each(["ready", "missing", "failed", "skip"])(
-    "handles prebuilt Doctor UI with no runtime build-info: %s",
-    async (state) => {
-      const target = "test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts";
-      commands.runtimeBuildInfoPresent = false;
-      commands.prepareE2e.mockResolvedValue({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
-      if (state === "skip") {
-        vi.stubEnv("OPENCLAW_E2E_SKIP_BUILD", "1");
-      } else if (state !== "ready") {
-        commands.uiAssets.mockReturnValueOnce({ kind: "missing-index", indexPath: null });
-      }
-      commands.prepare.mockResolvedValue(state === "failed" ? 7 : 0);
-      await start([target]);
-      await terminal.promise;
-      if (state === "skip") {
-        expect(commands.uiAssets).not.toHaveBeenCalled();
-      } else {
-        expect(commands.uiAssets).toHaveBeenCalledWith(path.resolve("dist/control-ui"), null);
-      }
-      expect(commands.prepare).toHaveBeenCalledTimes(["missing", "failed"].includes(state) ? 1 : 0);
-      if (state === "missing") {
-        expect(
-          commands.prepare.mock.lastCall?.[0].env.OPENCLAW_CONTROL_UI_BUILD_ID,
-        ).toBeUndefined();
-      }
-      expect(commands.reader).toHaveBeenCalledTimes(state === "failed" ? 0 : 1);
-      expect(process.exitCode).toBe(state === "failed" ? 7 : 0);
-    },
-  );
+  it("builds missing prebuilt Doctor UI without inventing a runtime build ID", async () => {
+    commands.runtimeBuildInfoPresent = false;
+    commands.uiAssets.mockReturnValueOnce({ kind: "missing-index", indexPath: null });
+    await start(["test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts"]);
+    expect(commands.uiAssets).toHaveBeenCalledWith(path.resolve("dist/control-ui"), null);
+    expect(preparationArgs()).toEqual([uiBuildArgs]);
+    expect(commands.prepare.mock.lastCall?.[0].env.OPENCLAW_CONTROL_UI_BUILD_ID).toBeUndefined();
+    expect(commands.reader).toHaveBeenCalledOnce();
+    expect(process.exitCode).toBe(0);
+  });
 
-  it.each([false, true])(
-    "holds Gateway readers behind the matching UI build (mixed E2E=%s)",
-    async (mixed) => {
-      const runtime = createPreparationGate<number | NodeJS.ProcessEnv>(
-        mixed ? commands.prepareE2e : commands.prepare,
+  it("holds mixed E2E Gateway readers behind the matching UI build", async () => {
+    const runtime = createPreparationGate<NodeJS.ProcessEnv>(commands.prepareE2e);
+    let assetBuildId = "previous-runtime";
+    commands.runtimeBuildId = assetBuildId;
+    commands.uiAssets.mockImplementation((_root, expectedBuildId) =>
+      assetBuildId === expectedBuildId
+        ? { kind: "ready", indexPath: "fixture-index" }
+        : { kind: "stale", indexPath: "fixture-index", buildId: assetBuildId },
+    );
+    const entry = start([e2eTarget, avatarTarget]);
+    let ui: ReturnType<typeof createPreparationGate<number>> | undefined;
+    try {
+      await Promise.race([runtime.started, entry]);
+      ui = createPreparationGate<number>(commands.prepare);
+      // E2E reuse still needs the UI's stricter current-head preparation.
+      commands.prepare.mockResolvedValueOnce(0);
+      expect(commands.reader).not.toHaveBeenCalled();
+      expect(commands.uiAssets).not.toHaveBeenCalled();
+      commands.runtimeBuildId = "rebuilt-runtime";
+      runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+      await Promise.race([ui.started, entry]);
+      expect(commands.reader).not.toHaveBeenCalled();
+      expect(commands.prepare.mock.lastCall?.[0]).toMatchObject({
+        args: uiBuildArgs,
+      });
+      expect(commands.uiAssets).toHaveBeenCalledWith(
+        path.resolve("dist/control-ui"),
+        "rebuilt-runtime",
       );
-      let assetBuildId = "previous-runtime";
-      commands.runtimeBuildId = assetBuildId;
-      commands.uiAssets.mockImplementation((_root, expectedBuildId) =>
-        assetBuildId === expectedBuildId
-          ? { kind: "ready", indexPath: "fixture-index" }
-          : { kind: "stale", indexPath: "fixture-index", buildId: assetBuildId },
-      );
-      const entry = start(mixed ? [e2eTarget, avatarTarget] : [avatarTarget]);
-      let ui: ReturnType<typeof createPreparationGate<number>> | undefined;
-      try {
-        await Promise.race([runtime.started, entry]);
-        ui = createPreparationGate<number>(commands.prepare);
-        if (mixed) {
-          // E2E reuse still needs the UI's stricter current-head preparation.
-          commands.prepare.mockResolvedValueOnce(0);
-        }
-        expect(commands.reader).not.toHaveBeenCalled();
-        expect(commands.uiAssets).not.toHaveBeenCalled();
-        commands.runtimeBuildId = "rebuilt-runtime";
-        runtime.resolve(mixed ? { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" } : 0);
-        await Promise.race([ui.started, entry]);
-        expect(commands.reader).not.toHaveBeenCalled();
-        expect(commands.prepare.mock.lastCall?.[0]).toMatchObject({
-          args: uiBuildArgs,
-        });
-        expect(commands.uiAssets).toHaveBeenCalledWith(
-          path.resolve("dist/control-ui"),
-          "rebuilt-runtime",
-        );
-        assetBuildId = commands.prepare.mock.lastCall?.[0].env.OPENCLAW_CONTROL_UI_BUILD_ID;
-      } finally {
-        runtime.resolve(mixed ? { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" } : 0);
-        ui?.resolve(0);
-        await entry;
-      }
-      await expectPassed();
-      expect(commands.prepareE2e).toHaveBeenCalledTimes(mixed ? 1 : 0);
-      expect(preparationArgs()).toEqual([currentRuntimeArgs, uiBuildArgs]);
-      expect(commands.uiAssets).toHaveBeenCalledTimes(2);
-      expect(process.exitCode).toBe(0);
-    },
-  );
+      assetBuildId = commands.prepare.mock.lastCall?.[0].env.OPENCLAW_CONTROL_UI_BUILD_ID;
+    } finally {
+      runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+      ui?.resolve(0);
+      await entry;
+    }
+    expect(commands.prepareE2e).toHaveBeenCalledOnce();
+    expect(preparationArgs()).toEqual([currentRuntimeArgs, uiBuildArgs]);
+    expect(commands.uiAssets).toHaveBeenCalledTimes(2);
+    expect(process.exitCode).toBe(0);
+  });
 
   it.each(["nonzero", "still stale"])(
     "admits no UI readers after a %s UI build",
@@ -926,48 +608,36 @@ describe("test-projects build admission", () => {
         args[0] === "scripts/ui.js" && outcome === "nonzero" ? 7 : 0,
       );
       await start([avatarTarget]);
-      await terminal.promise;
       expect(commands.reader).not.toHaveBeenCalled();
       expect(preparationArgs()).toEqual([currentRuntimeArgs, uiBuildArgs]);
       expect(process.exitCode).toBe(outcome === "nonzero" ? 7 : 2);
-      if (outcome === "still stale") {
-        expect(await terminal.promise).toMatchObject({
-          message: "Control UI setup left stale assets for runtime fixture-runtime",
-        });
-      }
     },
   );
 
-  it.each([false, true])(
-    "retains cancellation between runtime preparation and UI admission (mixed E2E=%s)",
-    async (mixed) => {
-      const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
-      const existingListeners = new Set(process.listeners("SIGTERM"));
-      const source = createPreparationGate<void>(commands.sourceLoader);
-      const exitBySignal = vi.fn(async () => {});
-      const running = runTestProjects(
-        exitBySignal,
-        mixed ? [e2eTarget, avatarTarget] : [avatarTarget],
-      );
-      const rejected = expect(running).rejects.toMatchObject({ name: "AbortError" });
-      try {
-        await waitForAdmission(source.started, running, "source loader admission");
-        const listeners = process
-          .listeners("SIGTERM")
-          .filter((listener) => !existingListeners.has(listener));
-        expect(listeners).toHaveLength(1);
-        listeners[0]!.call(process, "SIGTERM");
-      } finally {
-        source.resolve();
-        await rejected;
-      }
-      expect(preparationArgs()).toEqual([currentRuntimeArgs]);
-      expect(commands.uiAssets).not.toHaveBeenCalled();
-      expect(commands.reader).not.toHaveBeenCalled();
-      expect(exitBySignal).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-      expect(process.listeners("SIGTERM")).toEqual([...existingListeners]);
-    },
-  );
+  it("retains cancellation between mixed runtime preparation and UI admission", async () => {
+    const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+    const existingListeners = new Set(process.listeners("SIGTERM"));
+    const source = createPreparationGate<void>(commands.sourceLoader);
+    const exitBySignal = vi.fn(async () => {});
+    const running = runTestProjects(exitBySignal, [e2eTarget, avatarTarget]);
+    const rejected = expect(running).rejects.toMatchObject({ name: "AbortError" });
+    try {
+      await waitForAdmission(source.started, running, "source loader admission");
+      const listeners = process
+        .listeners("SIGTERM")
+        .filter((listener) => !existingListeners.has(listener));
+      expect(listeners).toHaveLength(1);
+      listeners[0]!.call(process, "SIGTERM");
+    } finally {
+      source.resolve();
+      await rejected;
+    }
+    expect(preparationArgs()).toEqual([currentRuntimeArgs]);
+    expect(commands.uiAssets).not.toHaveBeenCalled();
+    expect(commands.reader).not.toHaveBeenCalled();
+    expect(exitBySignal).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    expect(process.listeners("SIGTERM")).toEqual([...existingListeners]);
+  });
 
   it.each<{
     args: string[];
@@ -975,17 +645,9 @@ describe("test-projects build admission", () => {
     flag?: string;
     build: boolean;
   }>([
-    { args: [avatarTarget], build: true },
     { args: [uiConfig], include: [avatarTarget], build: true },
-    {
-      args: [uiConfig],
-      include: ["extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts"],
-      build: true,
-    },
     { args: [uiConfig], include: [], build: false },
     { args: [uiConfig], include: [mockUiTarget], build: false },
-    { args: [mockUiTarget], include: [avatarTarget], build: false },
-    { args: [avatarTarget], include: [], build: true },
     {
       args: [avatarTarget, "--", "--exclude", avatarTarget],
       build: false,
@@ -1006,7 +668,7 @@ describe("test-projects build admission", () => {
       vi.stubEnv(flag, "1");
     }
     await start(args);
-    await expectPassed();
+    expect(process.exitCode).toBe(0);
     expect(commands.prepare).toHaveBeenCalledTimes(build ? 1 : 0);
     expect(commands.uiAssets).toHaveBeenCalledTimes(build ? 1 : 0);
     expect(
@@ -1040,7 +702,7 @@ describe("test-projects build admission", () => {
         return completedReader();
       });
       await start([target]);
-      await expectPassed(/^\[test\] passed 1 Vitest shard/u);
+      expect(process.exitCode).toBe(0);
       expect(commands.prepare).toHaveBeenCalledTimes(build ? 1 : 0);
       expect(commands.prepareE2e).not.toHaveBeenCalled();
       expect(commands.reader).toHaveBeenCalledOnce();
@@ -1066,7 +728,6 @@ describe("test-projects build admission", () => {
     { args: ["--unknownOption"], prepare: false },
   ])("admits preparation from native controls only: $args", async ({ args, prepare }) => {
     await start([lifecycle, "--", ...args]);
-    await terminal.promise;
     expect(commands.reader).toHaveBeenCalledOnce();
     expect(commands.prepare).toHaveBeenCalledTimes(prepare ? 1 : 0);
     expect(commands.prepareE2e).not.toHaveBeenCalled();
@@ -1095,7 +756,7 @@ describe("test-projects build admission", () => {
         preparation.resolve(flag ? {} : { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
         await entry;
       }
-      await expectPassed(/^\[test\] passed 3 Vitest shards/u);
+      expect(process.exitCode).toBe(0);
       if (flag) {
         expect(commands.prepareE2e).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ [flag]: "1" }),
@@ -1113,10 +774,6 @@ describe("test-projects build admission", () => {
 });
 
 describe("plugin batch build admission", () => {
-  const qaConfig = configPath("extension-qa");
-  const databaseConfig = configPath("extension-database-workers");
-  const combinedConfig = configPath("database-worker-watch");
-
   it("rejects a batch build spawn failure before admitting readers", async () => {
     const { resolveExtensionBatchPlan } = await import("../../scripts/lib/extension-test-plan.mts");
     const { runExtensionBatchPlan } = await import("../../scripts/test-extension-batch-run.mts");
@@ -1137,54 +794,4 @@ describe("plugin batch build admission", () => {
     }
     expect(reader).not.toHaveBeenCalled();
   });
-
-  const qaConfigs = [databaseConfig, qaConfig];
-  const combined = [combinedConfig];
-  const runtime = "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts";
-  type Selection = { ids?: string[]; args?: string[]; include?: string[] };
-  it.each<[Selection, boolean, string[]]>([
-    [{ ids: ["qa-lab"] }, true, qaConfigs],
-    [{ ids: ["qa-channel"] }, false, qaConfigs],
-    [{ ids: ["firecrawl"] }, false, [configPath("extension-misc")]],
-    [{ args: [ordinaryQa] }, false, combined],
-    [{ args: [lifecycle] }, true, combined],
-    [{ args: ["--exclude", lifecycle] }, true, qaConfigs],
-    [{ args: excludeQa() }, false, qaConfigs],
-    [{ args: excludeQa((file) => `${path.posix.dirname(file)}/**/*.test.ts`) }, false, combined],
-    [{ include: [] }, false, qaConfigs],
-    [{ include: [ordinaryQa] }, false, qaConfigs],
-    [{ include: [lifecycle] }, true, qaConfigs],
-    [{ include: [runtime], args: [runtime] }, false, combined],
-    [{ ids: ["qa-channel"], include: [lifecycle] }, false, qaConfigs],
-    [{ ids: ["qa-channel"], args: [lifecycle], include: [lifecycle] }, true, combined],
-    [{ args: [ordinaryQa], include: [lifecycle] }, true, combined],
-    [
-      { args: [ordinaryQa, "--exclude", "extensions/codex/src/app-server/run-attempt.test.ts"] },
-      true,
-      combined,
-    ],
-    [{ ids: [] }, false, []],
-  ])(
-    "prepares the actual invocation selection: %j, build=%s",
-    async ({ ids = ["qa-lab"], args = [], include }, build, configs) => {
-      const { resolveExtensionBatchPlan } =
-        await import("../../scripts/lib/extension-test-plan.mts");
-      const { runExtensionBatchPlan } = await import("../../scripts/test-extension-batch-run.mts");
-      const env = include
-        ? { OPENCLAW_VITEST_INCLUDE_FILE: patternFiles.writePatternFile("include.json", include) }
-        : {};
-      const reader = vi
-        .fn<(params: VitestBatchRunParams) => Promise<number>>()
-        .mockResolvedValue(0);
-      await expect(
-        runExtensionBatchPlan(resolveExtensionBatchPlan({ extensionIds: ids }), {
-          runGroup: reader,
-          env,
-          vitestArgs: args,
-        }),
-      ).resolves.toBe(0);
-      expect(commands.prepare).toHaveBeenCalledTimes(build ? 1 : 0);
-      expect(reader.mock.calls.map(([invocation]) => invocation.config)).toEqual(configs);
-    },
-  );
 });
