@@ -1,14 +1,15 @@
 import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
 import type { NodeBootstrapArtifactWorkerTasks } from "./node-bootstrap-artifact-contract.js";
 import {
   extract,
   readText,
   useNodeBootstrapArtifactFixtures,
   write,
-  writeBundledBrowser,
   writeFiles,
 } from "./node-bootstrap-artifact.test-support.js";
 
@@ -41,14 +42,84 @@ describe("node bootstrap bundled dependency ownership", () => {
     expect(manifest.bundleDependencies).toEqual(["@fixture/ai"]);
   });
 
-  it("retains registry bundle dependency declarations for npm installation", async () => {
-    const { root, packageRoot, provider } = await fixture();
-    await writeBundledBrowser(packageRoot, { "transitive-runtime": "^1.2.3" });
-
-    const target = await extract(root, await provider.prepare());
-    expect(
-      JSON.parse(await readText(target, "node_modules/@fixture/browser/package.json")),
-    ).toMatchObject({ dependencies: { "transitive-runtime": "^1.2.3" } });
+  it("installs a node artifact with a registry bundle's own dependency closure", async () => {
+    const { root, packageRoot, sourcePackage, options } = await fixture();
+    const name = "@fixture/codec";
+    await write(packageRoot, "package.json", {
+      ...sourcePackage,
+      dependencies: { [name]: "1.2.3" },
+      bundleDependencies: [name],
+    });
+    const bundledRoot = path.join(packageRoot, "node_modules", name);
+    await writeFiles(bundledRoot, {
+      "package.json": {
+        name,
+        version: "1.2.3",
+        main: "index.cjs",
+        dependencies: { "transitive-runtime": "^1.2.3" },
+        optionalDependencies: { "unavailable-platform-runtime": "1.0.0" },
+      },
+      "index.cjs": 'module.exports = require("transitive-runtime");',
+      "node_modules/transitive-runtime/package.json": {
+        name: "transitive-runtime",
+        version: "1.2.3",
+        main: "index.cjs",
+        dependencies: { "leaf-runtime": "1.2.3" },
+      },
+      "node_modules/transitive-runtime/index.cjs": 'module.exports = require("leaf-runtime");',
+      "node_modules/transitive-runtime/node_modules/leaf-runtime/package.json": {
+        name: "leaf-runtime",
+        version: "1.2.3",
+        main: "index.cjs",
+        dependencies: { "@fixture/codec": "1.2.3" },
+      },
+      "node_modules/transitive-runtime/node_modules/leaf-runtime/index.cjs":
+        'require.resolve("@fixture/codec"); module.exports = "bundle-transitive";',
+    });
+    await writeFiles(packageRoot, {
+      "node_modules/transitive-runtime/package.json": {
+        name: "transitive-runtime",
+        version: "2.0.0",
+        main: "index.cjs",
+      },
+      "node_modules/transitive-runtime/index.cjs": 'module.exports = "root-decoy";',
+      "dist/entry.js": `import value from "${name}"; console.log(value);`,
+    });
+    const artifact = await createProvider({ ...options, plugins: [] }).prepare();
+    const installRoot = path.join(root, "fresh-install");
+    await fs.mkdir(installRoot);
+    await write(installRoot, "package.json", { private: true });
+    await write(installRoot, ".npmrc", "");
+    const env = {
+      ...Object.fromEntries(
+        ["PATH", "Path", "SystemRoot", "COMSPEC", "PATHEXT"].map((key) => [key, process.env[key]]),
+      ),
+      HOME: installRoot,
+      USERPROFILE: installRoot,
+      npm_config_cache: path.join(installRoot, "empty-cache"),
+      npm_config_userconfig: path.join(installRoot, ".npmrc"),
+    };
+    const npm = resolveNpmRunner({
+      env,
+      npmArgs: [
+        "install",
+        artifact.tarballPath,
+        "--offline",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+      ],
+    });
+    await promisify(execFile)(npm.command, npm.args, {
+      cwd: installRoot,
+      env: npm.env ?? env,
+      shell: npm.shell,
+      windowsVerbatimArguments: npm.windowsVerbatimArguments,
+      timeout: 30_000,
+    });
+    expect(await runNode(path.join(installRoot, "node_modules/openclaw"))).toBe(
+      "bundle-transitive",
+    );
   });
 
   it("runs package-owned modules under src/node_modules", async () => {

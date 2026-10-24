@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { list as listTar } from "tar";
 import { collectNpmPackInventory } from "./npm-pack-inventory.mts";
 import { listBundleDependencies } from "./package-bundle-dependencies.mts";
+import {
+  hasInstalledPackageAncestor,
+  installedPackageDependencies,
+  installedPackagePath,
+  validateBundledPackageName,
+} from "./package-installed-dependencies.mts";
 import { isRecord } from "./record-shared.mjs";
 
 export async function hasMissingBundledDependencies(tarballPath: string): Promise<boolean> {
@@ -35,29 +40,6 @@ async function directory(target: string) {
   if (!(await fs.lstat(target)).isDirectory()) {
     throw new Error(`Bundled package destination is not a directory: ${target}`);
   }
-}
-
-function validatePackageName(name: string) {
-  if (!/^(?:@[a-z0-9._-]+\/)?[a-z0-9][a-z0-9._-]*$/u.test(name)) {
-    throw new Error(`Invalid bundled dependency name: ${name}`);
-  }
-}
-
-async function installedPackagePath(owner: string, name: string): Promise<string | undefined> {
-  validatePackageName(name);
-  const search = createRequire(path.join(owner, "package.json")).resolve.paths(name) ?? [];
-  for (const modules of search) {
-    const candidate = path.join(modules, name);
-    try {
-      await fs.access(path.join(candidate, "package.json"));
-      return candidate;
-    } catch (error) {
-      if (!isRecord(error) || error.code !== "ENOENT") {
-        throw error;
-      }
-    }
-  }
-  return undefined;
 }
 
 async function stagePackage(
@@ -113,41 +95,18 @@ async function stagePackage(
       }
     }
     const staged = new Map(ancestors).set(destination, source);
-    const required = isRecord(packageJson.dependencies) ? packageJson.dependencies : {};
-    const optional = isRecord(packageJson.optionalDependencies)
-      ? packageJson.optionalDependencies
-      : {};
-    const peers = isRecord(packageJson.peerDependencies) ? packageJson.peerDependencies : {};
-    const peerMetadata = isRecord(packageJson.peerDependenciesMeta)
-      ? packageJson.peerDependenciesMeta
-      : {};
-    for (const name of Object.keys({ ...peers, ...required, ...optional })) {
-      const dependency = await installedPackagePath(source, name);
-      const metadata = peerMetadata[name];
-      const isOptional =
-        Object.hasOwn(optional, name) ||
-        (!Object.hasOwn(required, name) && isRecord(metadata) && metadata.optional === true);
-      if (!dependency) {
-        if (isOptional) {
-          continue;
-        }
-        throw new Error(
-          `Linked bundle requires dependency-closure staging: ${source} is missing ${name}`,
-        );
-      }
-      const realDependency = await fs.realpath(dependency);
-      const search =
-        createRequire(path.join(destination, "package.json")).resolve.paths(name) ?? [];
+    for (const dependency of await installedPackageDependencies(source, packageJson)) {
       // A cycle can use an already staged ancestor through ordinary Node resolution.
-      if (search.some((modules) => staged.get(path.join(modules, name)) === realDependency)) {
+      if (hasInstalledPackageAncestor(destination, dependency, staged)) {
         continue;
       }
+      const { name } = dependency;
       const modules = path.join(destination, "node_modules");
       await directory(modules);
       if (name.startsWith("@")) {
         await directory(path.join(modules, name.split("/")[0]!));
       }
-      await stagePackage(dependency, path.join(modules, name), timeoutMs, staged);
+      await stagePackage(dependency.path, path.join(modules, name), timeoutMs, staged);
     }
     const current = await fs.lstat(packagePath);
     if (current.dev !== original.dev || current.ino !== original.ino) {
@@ -186,7 +145,7 @@ export async function materializeMissingBundledDependencies(
   );
   let changed = false;
   for (const name of new Set(listBundleDependencies(manifest))) {
-    validatePackageName(name);
+    validateBundledPackageName(name);
     const modules = path.join(packedRoot, "node_modules");
     await directory(modules);
     if (name.startsWith("@")) {
