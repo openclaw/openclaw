@@ -104,6 +104,7 @@ export const healthHandlers: GatewayRequestHandlers = {
             : {}),
           // Live check. The cache must not keep a path that disappeared after it was stored.
           childRuntime: readChildRuntimeViability(),
+          observedAt: Date.now(),
         },
         undefined,
         { cached: true },
@@ -124,6 +125,7 @@ export const healthHandlers: GatewayRequestHandlers = {
           coreReady: context.getReadiness?.().coreReady,
           modelRuntime: getPreparedModelRuntimeStartupStatus(),
           childRuntime: readChildRuntimeViability(),
+          observedAt: Date.now(),
         },
         undefined,
       );

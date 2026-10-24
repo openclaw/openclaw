@@ -75,7 +75,10 @@ const HealthSnapshotSchema = closedObject({
   ok: Type.Optional(Type.Literal(true)),
   // Live health RPC readiness, independent of optional channel health.
   coreReady: Type.Optional(Type.Boolean()),
+  /** Collection completion time (Unix ms); cached RPC reads preserve it. */
   ts: Type.Optional(Type.Integer({ minimum: 0 })),
+  /** RPC response composition time (Unix ms), not the measurement time of owner-held samples. */
+  observedAt: Type.Optional(Type.Integer({ minimum: 0 })),
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   eventLoop: Type.Optional(GatewayEventLoopHealthSchema),
   plugins: Type.Optional(
