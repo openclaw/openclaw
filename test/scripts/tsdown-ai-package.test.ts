@@ -28,10 +28,6 @@ it("streams Mistral from the built AI package without installing the SDK", async
   const { bundles } = await build({
     ...config,
     config: false,
-    entry: {
-      index: "packages/ai/src/index.ts",
-      providers: "packages/ai/src/providers.ts",
-    },
     outDir,
     dts: false,
     logLevel: "silent",
@@ -45,13 +41,25 @@ it("streams Mistral from the built AI package without installing the SDK", async
       import assert from "node:assert/strict";
       import { registerHooks } from "node:module";
       const loadedDependencies = new Set();
+      let startedProvider = false;
       registerHooks({ resolve(specifier, context, next) {
         assert(!specifier.startsWith("@mistralai/"), "Mistral SDK must be bundled");
         loadedDependencies.add(specifier);
         return next(specifier, context);
+      }, load(url, context, next) {
+        const result = next(url, context);
+        if (!startedProvider && result.source != null) {
+          assert(!String(result.source).includes("function createReasoningTagTextPartitioner("),
+            "generic built imports must not load the reasoning parser");
+        }
+        return result;
       }});
       const { createApiRegistry, createNodeLlmRuntime } = await import("./dist/index.mjs");
       const { registerBuiltInApiProviders } = await import("./dist/providers.mjs");
+      await import("./dist/transports.mjs");
+      await import("./dist/internal/runtime.mjs");
+      await import("./dist/internal/openai.mjs");
+      await import("./dist/internal/anthropic.mjs");
       const registry = createApiRegistry();
       registerBuiltInApiProviders(registry);
       let request;
@@ -66,6 +74,7 @@ it("streams Mistral from the built AI package without installing the SDK", async
           });
         }
       });
+      startedProvider = true;
       const result = await runtime.stream({
         id: "mistral-test", name: "Mistral Test", api: "mistral-conversations",
         provider: "mistral", baseUrl: "https://mistral.invalid", reasoning: false,
