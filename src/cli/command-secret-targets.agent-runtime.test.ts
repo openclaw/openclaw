@@ -5,6 +5,7 @@ const firecrawlPath = "plugins.entries.firecrawl.config.webFetch.apiKey";
 const exaPath = "plugins.entries.exa.config.webSearch.apiKey";
 const dottedExaPath = 'plugins.entries["exa.internal"].config.webSearch.apiKey';
 
+// mock-isolation: use synthetic plugin entries without production manifest or registry discovery.
 vi.mock("../secrets/target-registry.js", () => ({
   listSecretTargetRegistryEntries: () => [
     { id: firecrawlPath, pathPatternSegments: firecrawlPath.split(".") },
