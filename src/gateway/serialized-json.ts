@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { encodeOwnedBuffer } from "../shared/owned-buffer.js";
 
 const serializedArrays = new WeakMap<readonly unknown[], Uint8Array>();
 /** Owned immutable segments; only transports that require contiguous bytes materialize them. */
@@ -11,7 +12,16 @@ export class SerializedGatewayFrame {
   }
 
   toBuffer(): Buffer {
-    return (this.#buffer ??= Buffer.concat(this.segments, this.byteLength));
+    if (!this.#buffer) {
+      const bytes = Buffer.allocUnsafeSlow(this.byteLength);
+      let offset = 0;
+      for (const segment of this.segments) {
+        bytes.set(segment, offset);
+        offset += segment.byteLength;
+      }
+      this.#buffer = bytes;
+    }
+    return this.#buffer;
   }
 
   toString(): string {
@@ -25,7 +35,7 @@ export class SerializedJsonPayload {
 
   constructor(payload: unknown) {
     const frame = serializeGatewayFrame({ type: "res", payload });
-    const bytes = typeof frame === "string" ? Buffer.from(frame) : frame.toBuffer();
+    const bytes = typeof frame === "string" ? encodeOwnedBuffer(frame) : frame.toBuffer();
     this.bytes = bytes.subarray('{"type":"res"'.length, -1);
   }
 
@@ -46,7 +56,7 @@ export function registerSerializedJsonArray<T>(
   values: readonly T[],
   encodedRows: readonly string[],
 ): readonly T[] {
-  serializedArrays.set(values, Buffer.from(`[${encodedRows.join(",")}]`));
+  serializedArrays.set(values, encodeOwnedBuffer(`[${encodedRows.join(",")}]`));
   return values;
 }
 

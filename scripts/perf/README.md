@@ -84,6 +84,48 @@ absolute deltas and sample counts; this workload does not measure event-loop tai
 promotion, native SQL, or whole-Gateway performance. The measured loop reattaches
 synthetic reference cells directly, excluding worker admission and transport costs.
 
+## Retained Buffer pool storage
+
+These synthetic probes keep the production owners live while interleaving small
+retained values with disposable pooled allocations. They report distinct backing
+stores, logical bytes, and retained backing bytes. Read the runtime's observed
+slab size: `Buffer.poolSize` need not equal the backing allocation's byte length.
+Do not assume an 8 KiB pool. Sparse insertion is the amplification case; adjacent
+small values can share a slab efficiently.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/gateway-buffer-pool-retention.ts
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/process-output-pool-retention.ts
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/command-capture-pool-retention.ts
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/audio-queue-pool-retention.ts --site voice
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/audio-queue-pool-retention.ts --site meeting
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/audio-queue-pool-retention.ts --site transcription
+```
+
+Run identical workloads on baseline and candidate. Acceptance is unchanged output
+bytes and source-copy isolation, no unrelated pooled slabs retained by repaired
+owners, and collection after their normal release boundary. The Gateway owner
+probe covers registered list arrays and both ordinary and segmented shared
+response payloads. Process probes cover live output/poll retention and a real
+running child command, plus clipped and string captures. Audio probes cover
+provider-readiness/reconnect queues and a meeting capture transport fixture.
+Their fixed PCM workloads correspond to 6.4 seconds of voice readiness backlog,
+about 17 seconds of meeting input, and 20.5 seconds of transcription backlog.
+
+These are retained-storage measurements, not CPU, GC-rate, latency, or production
+saving estimates. Command allocation attribution uses stack inspection; do not
+reuse its timing as a throughput result. Audio and process probes support
+synthetic heap snapshots and release controls; keep snapshots local.
+
+For whole-Gateway attribution, use the synthetic state generator and the
+`diagnostics.heapSnapshot` procedure in [the retention runbook](heap-retention-runbook.md).
+Keep clients and mock providers alive through completed turns and capture.
+Deduplicate backing stores within each owner; different owners can share a slab,
+so their totals cannot be added as exclusive savings. Presence publications are
+transient: `listSystemPresence()` creates fresh arrays, and the delivery cache's
+weak keys do not keep those arrays alive between publications. Artificially
+retaining every roster would manufacture a lifetime absent from this flow.
+
 ## Retained heap
 
 Use the [heap retention runbook](heap-retention-runbook.md) to capture a main-isolate

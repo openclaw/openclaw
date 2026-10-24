@@ -1,11 +1,39 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   registerSerializedJsonArray,
+  SerializedGatewayFrame,
   SerializedJsonArray,
+  SerializedJsonPayload,
   serializeGatewayFrame,
 } from "./serialized-json.js";
 
 describe("serialized Gateway response arrays", () => {
+  it("retains only owned bytes for cached arrays and shared response payloads", () => {
+    const rows = [{ label: '雪🦞\\"\n' }];
+    registerSerializedJsonArray(
+      rows,
+      rows.map((row) => JSON.stringify(row)),
+    );
+    const frame = serializeGatewayFrame({ type: "res", payload: { rows } });
+    expect(frame).toBeInstanceOf(SerializedGatewayFrame);
+    const bytes = (frame as SerializedGatewayFrame).segments.find(
+      (part) =>
+        Buffer.from(part.buffer, part.byteOffset, part.byteLength).toString() ===
+        JSON.stringify(rows),
+    )!;
+    expect(bytes.buffer.byteLength).toBe(bytes.byteLength);
+
+    for (const payload of [{ rows }, { text: '雪🦞\\"\n' }, undefined, null]) {
+      const shared = new SerializedJsonPayload(payload);
+      expect(shared.toJSON()).toEqual(payload);
+      // The cached slice may borrow its own response envelope, never a global slab.
+      expect(shared.bytes.buffer.byteLength).toBeLessThanOrEqual(shared.bytes.byteLength + 14);
+      expect(serializeGatewayFrame({ type: "res", id: "one", payload: shared }).toString()).toBe(
+        JSON.stringify({ type: "res", id: "one", payload }),
+      );
+    }
+  });
+
   it("forwards worker JSON without materializing its messages", () => {
     const messages = [{ role: "assistant", content: 'é🦞\\\"\n__RAW_JSON_0__' }, null];
     const bytes = Buffer.from(`prefix${JSON.stringify(messages)}suffix`);

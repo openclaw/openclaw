@@ -6,6 +6,7 @@ import { sleepWithAbort } from "../infra/backoff.js";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { captureWsEventAsync } from "../proxy-capture/runtime.js";
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
+import { copyOwnedBuffer } from "../shared/owned-buffer.js";
 import type {
   RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCallbacks,
@@ -473,7 +474,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   }
 
   private queueAudio(audio: Buffer): void {
-    const queued = Buffer.from(audio);
+    const queued = copyOwnedBuffer(audio);
     this.queuedAudio.push(queued);
     this.queuedBytes += queued.byteLength;
     while (
