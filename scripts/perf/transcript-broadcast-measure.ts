@@ -627,6 +627,7 @@ const workerHeapEvidence = {
   acceptanceTiming:
     !values.allocations &&
     !values["stream-start-allocations"] &&
+    !values["worker-snapshots"] &&
     !idleScenario &&
     (!soakScenario || retainedProfileMs === 0),
   errors: [] as string[],

@@ -1973,6 +1973,7 @@ across workers. Each `snapshot-<category>.json` records the thread, last task,
 before/after memory, and heap-snapshot path. Snapshots force GC and block the
 isolate; exclude this pass from latency and GC acceptance. Both sides include
 the same TypeScript observer overhead, including its parser source.
+
 For SQLite and model-catalog isolate retention, add `--worker-retained-heap`.
 `result.json.workerHeapEvidence` records each warmed worker's post-collection heap,
 thread CPU, GC totals and per-kind pause tails/maxima, event-loop tails, and final
