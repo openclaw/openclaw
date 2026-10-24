@@ -22,7 +22,6 @@ import { createStreamSteering } from "./stream-steering.js";
 import { mergeToolExecutionFailure } from "./tool-batch-completion.js";
 import type { FinalizedToolCallOutcome } from "./tool-call-outcome.js";
 import { resolveAgentAssistantTurnId } from "./tool-execution-context.js";
-import { normalizeCoreContextMessages } from "./turn-interruption.js";
 import { withToolResultContentSource } from "./turn-taint.js";
 import type {
   AgentContext,
@@ -169,7 +168,21 @@ export async function streamAgentResponse(
     const transformed = config.transformContext
       ? await config.transformContext(messages, projectionSignal)
       : messages;
-    return config.convertToLlm(normalizeCoreContextMessages(transformed));
+    return config.convertToLlm(
+      transformed.map<AgentMessage>((message) => {
+        if (message.role !== "custom" || message.customType !== "openclaw:turn-aborted") {
+          return message;
+        }
+        return {
+          role: "user",
+          content:
+            typeof message.content === "string"
+              ? [{ type: "text", text: message.content }]
+              : message.content,
+          timestamp: message.timestamp,
+        };
+      }),
+    );
   };
   const llmMessages = await convertMessages(sourceMessages);
   let requestPrefix: string | undefined;
