@@ -95,3 +95,34 @@ it("retains public-only repository admission even when a caller supplies session
   ).rejects.toThrow("not public");
   expect(fetcher).toHaveBeenCalledOnce();
 });
+
+it("previews Enterprise commits through the admitted API base without loading discussion", async () => {
+  const sha = "abcdef0123456789abcdef0123456789abcdef01";
+  const fetchRepository = fetchFixture();
+  const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === apiBaseUrl + "/repos/example/project/commits/" + sha + "?per_page=1") {
+      return Response.json({
+        sha,
+        url: apiBaseUrl + "/repos/example/project/commits/" + sha,
+        commit: { message: "Private commit", author: { date: time }, comment_count: 0 },
+        author: { login: "reader" },
+        stats: { additions: 2, deletions: 1 },
+      });
+    }
+    return fetchRepository(input, init);
+  });
+  const preview = await loadSessionGitHubPreview(
+    { owner: "example", repo: "project", kind: "commit", sha },
+    identity("commit-session"),
+    fetcher,
+  );
+  expect(preview).toMatchObject({
+    kind: "commit",
+    sha,
+    title: "Private commit",
+    additions: 2,
+    deletions: 1,
+  });
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});

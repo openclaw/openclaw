@@ -32,7 +32,11 @@ describe("VisitorAccessService", () => {
 
     const result = await fixture.service.invite(
       { github: "Visitor" },
-      { ...fixture.authority, invitedVia: "session:maintainer" },
+      {
+        ...fixture.authority,
+        invitedVia: "session:maintainer",
+        signInUrl: "https://team.openclaw.ai",
+      },
     );
 
     expect(fixture.targets()).toEqual([42]);
@@ -42,6 +46,7 @@ describe("VisitorAccessService", () => {
       githubAccountId: 42,
       githubLogin: "Current-Visitor",
       invitedVia: "session:maintainer",
+      onboarding: { state: "pending", updatedAt: NOW },
       createdAt: NOW,
       expiresAt: NOW + 14 * DAY_MS,
     });

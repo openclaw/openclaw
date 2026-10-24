@@ -72,6 +72,27 @@ retain restart behavior under a broader no-op prefix.
 
 ## Reusable runtime utilities
 
+### Runtime execution profile
+
+`getRuntimeExecutionProfile()` from `openclaw/plugin-sdk/runtime-env` returns
+`dynamic-execution` for Node/Bun installations and JIT/bytecode standalone hosts,
+or `embedded-aot` for an AOT standalone. The artifact owns this process-stable
+fact; it is not a user setting or an authorization grant.
+
+Before intentionally evaluating host JavaScript, call
+`assertRuntimeSupportsDynamicExecution("Your feature name")` from the same
+entrypoint. In an embedded AOT host it throws an error naming the required
+runtime and the next step. Propagate that error instead of switching to another
+host evaluator. Fixed programs should be ordinary source functions; runtime
+schemas and syntax checks need codegen-free validators and parsers.
+
+Installing a plugin after compilation does not embed it, even if it ships
+JavaScript rather than TypeScript. Run fetched code in a dynamic-execution host
+or rebuild the complete artifact with the plugin. Metadata discovery does not
+execute its runtime. See [Runtime execution profiles](/concepts/runtime-profiles).
+
+### Process and network utilities
+
 `runInDetachedAsyncContext` from `openclaw/plugin-sdk/concurrency-runtime` starts
 work in the host's context-free async root. Use it at an independently admitted
 service request boundary when a long-lived listener can retain its startup
@@ -427,9 +448,11 @@ the optional `includeTrusted` list further restricts only events marked trusted
 by the dispatcher. Omitting it preserves existing behavior, and an empty list
 accepts only untrusted events that pass `include`/`exclude`. Event payload fields
 cannot override the dispatcher's trust metadata. Accepted plain event payloads
-share one frozen snapshot across listeners in a dispatch. Payloads with mutable
-opaque values (such as Maps or Dates) and private listener data retain individual
-copies. Absent private data uses a shared frozen empty payload, including for
+share one frozen snapshot across listeners in a dispatch. Plain private listener
+data also shares a frozen snapshot among interested trusted listeners, with
+listener-specific host attribution in a frozen shallow copy. Payloads with mutable
+opaque values (such as Maps or Dates) retain individual copies. Absent private data
+uses a shared frozen empty payload, including for
 OTel listeners without host-plugin attribution. Listener mutations remain isolated
 from other listeners and producers; filtering does not change diagnostic collection
 or queue behavior.

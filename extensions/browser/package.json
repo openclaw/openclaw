@@ -6,6 +6,7 @@
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/client": "2.3.1",
+    "acorn": "8.19.0",
     "chrome-devtools-mcp": "1.11.0",
     "express": "5.3.0",
     "playwright-core": "1.64.1",
@@ -26,5 +27,8 @@
     "assetScripts": {
       "copy": "node scripts/copy-chrome-extension.mjs"
     }
-  }
+  },
+  "bundleDependencies": [
+    "playwright-core"
+  ]
 }

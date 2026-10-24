@@ -607,7 +607,11 @@ export async function handleControlUiHttpRequest(
 
   applyControlUiSecurityHeaders(res, getRemoteControlUiIngressContext(req));
 
-  if (isControlUiSharePath(pathname, basePath) && pathname !== `${basePath}/share/card.png`) {
+  if (
+    isControlUiSharePath(pathname, basePath) &&
+    pathname !== `${basePath}/share/card.png` &&
+    pathname !== `${basePath}/share/preview-v1.mp4`
+  ) {
     serveControlUiShareDocument(req, res, url, basePath, resolveGatewayPublicOrigin(opts?.config));
     return true;
   }
@@ -655,6 +659,9 @@ export async function handleControlUiHttpRequest(
   const rel = (() => {
     if (uiPath === "/share/card.png") {
       return "social-card.png";
+    }
+    if (uiPath === "/share/preview-v1.mp4") {
+      return "social-preview-v1.mp4";
     }
     if (uiPath === ROOT_PREFIX) {
       return "";

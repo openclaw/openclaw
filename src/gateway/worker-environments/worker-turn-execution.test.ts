@@ -931,7 +931,7 @@ describe("worker turn execution", () => {
       expect(descriptor?.assignment.systemPrompt).not.toContain("Use `sessions_spawn`");
       expect(runLocal).not.toHaveBeenCalled();
       expect(descriptor?.assignment.toolAuthority).toMatchObject({
-        allowedToolNames: [],
+        allowedToolNames: ["exec", "process"],
         exec: { host: "gateway", security: "full", ask: "always" },
       });
     },

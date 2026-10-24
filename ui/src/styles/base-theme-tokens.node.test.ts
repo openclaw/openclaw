@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import postcss, { type AnyNode } from "postcss";
 import { describe, expect, it } from "vitest";
 import { readThemeBlocks } from "./theme-palette.test-support.ts";
 
@@ -93,28 +94,36 @@ describe("Control UI theme --bg mirrors", () => {
   });
 
   it("keeps the Appearance preview chips on every theme's --bg", () => {
-    const css = readStyle("config.css");
+    const css = postcss.parse(readStyle("config.css"));
     let checked = 0;
-    for (const match of css.matchAll(/\.settings-theme-card--([\w-]+)[^{]*\{([^}]*)\}/gu)) {
-      const chip = match[2]?.match(/--theme-chip-bg:\s*([^;]+);/u)?.[1]?.trim();
-      if (!chip || chip.startsWith("var(")) {
-        continue;
+    css.walkRules((rule) => {
+      const match = rule.selector.match(/\.settings-theme-card--([\w-]+)/u);
+      const declaration = rule.nodes.find(
+        (node) => node.type === "decl" && node.prop === "--theme-chip-bg",
+      );
+      if (!match || declaration?.type !== "decl") {
+        return;
       }
-      const light = css
-        .slice(0, match.index ?? 0)
-        .split(".settings-theme-card--")
-        .at(-1)
-        ?.includes('data-theme-mode="light"');
+      const chip = declaration.value.trim();
+      if (chip.startsWith("var(")) {
+        return;
+      }
+      let light = rule.selector.includes('data-theme-mode="light"');
+      for (let parent: AnyNode | undefined = rule.parent; parent; parent = parent.parent) {
+        if (parent.type === "rule" && parent.selector.includes('data-theme-mode="light"')) {
+          light = true;
+        }
+      }
       const family = match[1] === "knot" ? "openknot" : (match[1] ?? "");
       const name =
         family === "claw" ? (light ? "light" : "dark") : `${family}${light ? "-light" : ""}`;
       const bg = canonical.get(name);
       if (!bg) {
-        continue;
+        return;
       }
       checked += 1;
       expect(chip.toLowerCase(), `${name}: chip background`).toBe(bg.toLowerCase());
-    }
+    });
     expect(checked).toBeGreaterThan(0);
   });
 });

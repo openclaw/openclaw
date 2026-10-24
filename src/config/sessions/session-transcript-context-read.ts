@@ -27,6 +27,8 @@ import { readSessionTranscriptModelContextInWorker } from "./session-transcript-
 import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import {
   sameTranscriptEntryAnchor,
+  snapshotTranscriptEntryAnchor,
+  snapshotTranscriptTurnAdmission,
   type TranscriptEntryAnchor,
 } from "./transcript-entry-anchor.js";
 import { getOwnedSessionTranscriptReader } from "./transcript-write-context.js";
@@ -64,7 +66,7 @@ export async function readSessionTranscriptContextProjectionAsync<T>(
 ): Promise<T> {
   const captured = { ...target };
   const admission = resolveSessionTranscriptReadFence(captured);
-  const capturedAdmission = admission && structuredClone(admission);
+  const capturedAdmission = admission && snapshotTranscriptTurnAdmission(admission);
   const memory = captureSessionActorTranscriptRead(captured, signal);
   if (memory) {
     const result = await project({ target: memory.target, admission: capturedAdmission });
@@ -118,8 +120,8 @@ export function readSessionTranscriptModelContextAsync<T>(
   consumeSynchronously = false,
 ): Promise<T> {
   const capturedTarget = { ...target };
-  const capturedAdmission = admission ? structuredClone(admission) : undefined;
-  const capturedThrough = through ? structuredClone(through) : undefined;
+  const capturedAdmission = admission ? snapshotTranscriptTurnAdmission(admission) : undefined;
+  const capturedThrough = through ? snapshotTranscriptEntryAnchor(through) : undefined;
   const capturedLimits = limits ? { ...limits } : undefined;
   const accept = async (
     scope: SessionTranscriptRuntimeTarget,
@@ -128,11 +130,14 @@ export function readSessionTranscriptModelContextAsync<T>(
     contextAdmission = capturedAdmission,
     source?: SessionTranscriptWorkerReadSource,
   ): Promise<T> => {
-    const contextValidation = structuredClone({
-      version: context.version,
+    const version = context.version;
+    const contextValidation = {
+      version: version
+        ? { generation: version.generation, rawSeq: version.rawSeq, updatedAt: version.updatedAt }
+        : undefined,
       admission: contextAdmission,
       through: capturedThrough,
-    });
+    };
     const admissionAnchor = source ? contextAdmission : undefined;
     const sharesThroughAnchor =
       admissionAnchor && capturedThrough?.entryId === admissionAnchor.entryId;

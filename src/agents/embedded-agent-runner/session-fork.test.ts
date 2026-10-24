@@ -753,6 +753,7 @@ it("denies Anthropic hosted search while preserving the real request prefix", as
 it("retains the full parent prefix when HTTP continuation sends only a suffix", async () => {
   const { parent, request } = guardedTransport();
   const requestModel: Model = { ...model, compat: { supportsResponsesContinuation: true } };
+  let prepared: Record<string, unknown> = {};
   const options = {
     ...sseOptions,
     sessionId: identity.sessionId,
@@ -760,21 +761,48 @@ it("retains the full parent prefix when HTTP continuation sends only a suffix", 
       if (!isRecord(payload)) {
         throw new Error("Expected request");
       }
-      return { ...payload, store: true };
+      prepared = { ...payload, store: true };
+      return prepared;
     },
   };
   const completed = await complete(parent, requestModel, context, options);
+  const stringify = JSON.stringify;
+  let fullHistoryEncodings = 0;
+  const spy = vi.spyOn(JSON, "stringify").mockImplementation((value, ...args) => {
+    const json = stringify(value, ...args);
+    if (json?.includes("Parent question")) {
+      fullHistoryEncodings++;
+    }
+    return json;
+  });
   await complete(
     parent,
     requestModel,
     history(completed, { role: "user", content: "Continue parent", timestamp: 3 }),
     options,
   );
-  const continuation = await request(1).json();
+  spy.mockRestore();
+  expect(fullHistoryEncodings).toBe(2);
+  const continuationBody = await request(1).text();
+  const continuation = JSON.parse(continuationBody);
+  expect(continuationBody).toBe(
+    JSON.stringify({
+      ...prepared,
+      input: Array.isArray(prepared.input) ? prepared.input.slice(-1) : [],
+      previous_response_id: "resp_fork",
+    }),
+  );
   expect(continuation.previous_response_id).toBe("resp_fork");
   expect(JSON.stringify(continuation.input)).not.toContain("Parent question");
   await expect(fork(requestModel)).resolves.toBe("Answer");
-  const replay = await request().json();
+  const replayBody = await request().text();
+  const replay = JSON.parse(replayBody);
+  expect(replayBody).toBe(
+    JSON.stringify({
+      ...prepared,
+      input: [...(Array.isArray(prepared.input) ? prepared.input : []), replay.input.at(-1)],
+    }),
+  );
   expect(replay.previous_response_id).toBeUndefined();
   expectText(JSON.stringify(replay.input), ["Parent question", "Continue parent", "Review only"]);
 });

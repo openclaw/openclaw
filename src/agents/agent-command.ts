@@ -177,6 +177,9 @@ async function agentCommandInternalOwned(
   let lifecycleGeneration = opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
   let sessionEntry = prepared.sessionEntry,
     runOwnedSessionId = sessionId;
+  const pendingFinalRecovery = opts.mainRestartRecoveryAdmitted
+    ? sessionEntry?.pendingFinalDelivery
+    : undefined;
   // Subagent-lane turns are the parent's own task dispatch into the child (they
   // carry no inter_session provenance today); classifying them as human would tell
   // the parent a human interjected on every spawn, for embedded and ACP children alike.
@@ -534,6 +537,7 @@ async function agentCommandInternalOwned(
       runOwnedSessionId,
       sessionReboundDuringRun,
       trackedRestartRecoveryDeliveryClaim,
+      pendingFinalRecovery,
       terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
       terminalEvent: {
         data: { phase: commandError === undefined ? "end" : "error", error: commandError },

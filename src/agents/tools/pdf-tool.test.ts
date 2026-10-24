@@ -380,7 +380,31 @@ it.each(["bedrock-converse-stream", "openai-completions"])(
 );
 
 it("reports omitted images for a text-only model and supplies Codex instructions", async () => {
+  // Codex is the subscription route: a ChatGPT catalog row with only an API key is
+  // stale and resolves to the Platform contract, so the fixture holds the OAuth login.
+  const codexLogin = {
+    version: 1,
+    profiles: {
+      "openai:default": {
+        provider: "openai",
+        type: "oauth" as const,
+        access: "test-access",
+        refresh: "test-refresh",
+        expires: 4_102_444_800_000,
+      },
+    },
+  };
+  vi.mocked(authProfileRuntime.ensureAuthProfileStoreAsync).mockResolvedValue(codexLogin);
+  vi.mocked(
+    authProfileRuntime.ensureAuthProfileStoreWithoutExternalProfilesAsync,
+  ).mockResolvedValue(codexLogin);
   const { pdf, extract } = await extraction("openai-chatgpt-responses", pdfConfig(FALLBACK));
+  vi.mocked(modelAuth.getApiKeyForModelCore).mockResolvedValue({
+    apiKey: "test-access",
+    mode: "oauth",
+    profileId: "openai:default",
+    source: "profile:openai:default",
+  });
   extract.mockResolvedValue({
     text: "Extracted content",
     images: [{ type: "image", data: "base64img", mimeType: "image/png" }],

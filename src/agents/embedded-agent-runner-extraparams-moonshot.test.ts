@@ -1,12 +1,8 @@
 // Covers Moonshot-specific extra-params thinking payload behavior.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  createMoonshotThinkingWrapper,
-  resolveMoonshotThinkingKeep,
-  resolveMoonshotThinkingType,
-} from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 import { runExtraParamsPayloadCase } from "./embedded-agent-runner-extraparams.test-support.js";
 import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
 
@@ -22,14 +18,7 @@ beforeEach(() => {
     resolveProviderExtraParamsForTransport: () => undefined,
     wrapProviderStreamFn: (params) => {
       if (params.provider === "moonshot") {
-        const thinkingType = resolveMoonshotThinkingType({
-          configuredThinking: params.context.extraParams?.thinking,
-          thinkingLevel: params.context.thinkingLevel,
-        });
-        const thinkingKeep = resolveMoonshotThinkingKeep({
-          configuredThinking: params.context.extraParams?.thinking,
-        });
-        return createMoonshotThinkingWrapper(params.context.streamFn, thinkingType, thinkingKeep);
+        return buildProviderStreamFamilyHooks("moonshot-thinking").wrapStreamFn?.(params.context);
       }
       return params.context.streamFn;
     },

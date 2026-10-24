@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { assertRuntimeSupportsDynamicExecution } from "../infra/runtime-profile.js";
 import {
   CodeModeHeadlessAbortError,
   CodeModeHeadlessTimeoutError,
@@ -29,6 +30,10 @@ export async function runCodeModeExecutor(
   };
   try {
     options.signal?.throwIfAborted();
+    const executorId = input.kind === "resume" ? input.continuation.executor : options.executor;
+    if (executorId === "node") {
+      assertRuntimeSupportsDynamicExecution("The Node Code Mode executor");
+    }
     if (input.kind === "resume") {
       const { continuation, ...resumeInput } = input;
       return normalizeCodeModeTimeoutResult(

@@ -75,14 +75,12 @@ import {
 } from "../agent-runtime-identity-token.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import {
-  bindWorkerTurnOwner,
-  type WorkerTurnPromptCacheContext,
-} from "./placement-turn-claim-events.js";
+import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import type { WorkerTurnProcessResult } from "./tunnel-contract.js";
 import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
 import { WorkerTurnExecutionError } from "./worker-turn-failure.js";
 import type { prepareWorkerTurnPrompt } from "./worker-turn-prompt.js";
+import type { WorkerTurnPromptCacheContext } from "./worker-turn-prompt.types.js";
 import {
   captureWorkerTurnTranscriptSource,
   resolveWorkerTurnTranscriptTarget,
@@ -376,6 +374,7 @@ export async function finalizeWorkerTurnResult(
   params: Parameters<typeof reconcileWorkspaceAfterTurn>[0] & {
     turn: SessionPlacementTurnParams;
     processResult: WorkerTurnProcessResult;
+    assertInputAdmitted: () => void;
     modelRef: ReturnType<typeof assertSupportedTurn>;
     baseLeafId: string | null;
     promptContext: Awaited<ReturnType<typeof prepareWorkerTurnPrompt>>;
@@ -390,6 +389,8 @@ export async function finalizeWorkerTurnResult(
 ) {
   const { turn, placement, transcriptTarget, promptContext } = params;
   const runtimeResult = parseWorkerTurnProcessResult(params.processResult);
+  // Report launch failures before enforcing admission for transcript-backed results.
+  params.assertInputAdmitted();
   const workerTurnFailed = runtimeResult.status === "failed";
 
   // A terminal result settles under its pending-result owner, even after execution ends.

@@ -2,9 +2,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
-import { afterEach, expect } from "vitest";
+import { afterEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
+
+// mock-isolation: archive fixtures have synthetic registry dependencies; install-lock tests own npm I/O.
+vi.mock("./node-bootstrap-install-lock.js", () => ({
+  prepareNodeBootstrapInstallLock: async () => undefined,
+}));
 
 export const buildId = "fixture-source-build";
 export const version = "2026.8.1";

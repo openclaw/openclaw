@@ -464,7 +464,6 @@ export async function recoverInterruptedSubagentRow(
     ) {
       // Keep the task and its parent delivery with the registry. Ordinary admission
       // transfers that custody to the continuation before executing any model work.
-      const continuationRunId = `subagent-restart-recovery:${runId}`;
       const { continuation, agentToolCaller } = await subagentRuns.runWithCompletionAuthority(
         entry,
         async () => ({
@@ -476,23 +475,6 @@ export async function recoverInterruptedSubagentRow(
         if (!continuation) {
           return { status: "deferred" };
         }
-        const assertAdmissionCurrent = () => {
-          agentToolCaller?.assertCurrent?.();
-          const successor = subagentRuns.get(continuationRunId);
-          const ownsSuccessor =
-            successor?.taskRunId === (entry.taskRunId ?? runId) &&
-            successor.childSessionKey === childSessionKey &&
-            successor.childAgentId === entry.childAgentId &&
-            successor.execution.status === "running" &&
-            !successor.killIntent &&
-            !successor.killReconciliation;
-          if (!isGatewayCurrent() || (!ownsSuccessor && !isCurrent())) {
-            throw new Error("Subagent restart continuation owner changed");
-          }
-          // Admission can outlive the temporary RPC capture. Registry custody transfers
-          // to the successor and retains the restored principal until its work settles.
-          subagentRuns.runWithCompletionAuthority(ownsSuccessor ? successor : entry, () => {});
-        };
         const recovered = await continuation.run(() =>
           dispatchGatewayMethodInProcess<SessionsRecoverResult>(
             "sessions.recover",
@@ -502,7 +484,9 @@ export async function recoverInterruptedSubagentRow(
               syntheticScopeMode: "exact",
               syntheticScopes: continuation.scopes,
               agentToolCaller,
-              sessionMutationCommitGuard: assertAdmissionCurrent,
+              // Recovery/chat admission owns the handoff. Retain requester revocation,
+              // not the predecessor registry row that admission replaces.
+              sessionMutationCommitGuard: agentToolCaller?.assertCurrent,
             },
           ),
         );

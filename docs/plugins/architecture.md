@@ -174,6 +174,8 @@ Plugin reload reconciles config watcher events after asynchronous metadata prepa
 
 Ordinary plugin source captures use independent files, including copies reached through aliases. On filesystems with copy-on-write support, these captures can share storage without sharing file identity, reducing data writes for large plugins. File containment and receipt validation run during capture; later source edits take effect on the next reload rather than invalidating the existing snapshot.
 
+Source capture preserves referenced URL assets, including directory URLs that the plugin uses. Unused standalone URL calculations do not cause the surrounding directory to be copied into the plugin generation.
+
 Asynchronous host loading prepares selected non-bundled plugin sources in a worker before evaluating or registering their code. Selection, trust checks, and entry-path validation happen first; the host checks inventory retirement and the expected source digest before installing the prepared capture. Each live external artifact retains its own worker, so later capture and publication cannot block a loaded sibling's synchronous source resolution. Existing registry and plugin-instance caching provide reuse; recovery retains the original artifact's worker. This isolation uses more worker memory when many external artifacts are active. A failed acquisition records that plugin's load error without discarding successfully prepared siblings. Synchronous CLI loading and loading inside an existing compute worker retain their inline acquisition path. Plugin evaluation and registration still run in their original owner; moving source preparation does not make arbitrary plugin initialization nonblocking.
 
 Legacy session-key migration selects plugins that declare that capability before checking channel presence. Owners already eligible under migration policy do not need a channel-presence check. Scoped selections check persisted credentials only for their channel owners, so unrelated authentication modules stay unloaded during Doctor repairs. This credential scope does not limit environment-based presence signals: configured channels with missing plugins still produce installation and recovery hints.
@@ -369,7 +371,9 @@ removes unreferenced captures while preserving installed-index references, warm
 generations, and live owners. System-temp fallback captures are scoped to their
 state directory; captures with unknown ownership are preserved.
 
-Gateway idle cleanup checks capture directories and npm retention markers before
+Gateway idle cleanup runs after startup and repeats hourly after each completed
+pass, deferring while the Gateway is busy and stopping during shutdown. It
+checks capture directories and npm retention markers before
 acquiring the plugin lifecycle lease. An empty scan makes no shared-state writes
 and leaves the Gateway's metadata caches intact. When candidates exist, cleanup
 uses a private operation-scoped cache and one fresh installed-index payload for
@@ -377,7 +381,7 @@ install records and native receipt protection. Invalid receipts still preserve
 captures, and every deletion retains its live lease and custody checks. The
 private cache is disposed before the lease is released. These best-effort scans
 do not freeze the filesystem: artifacts created or retired after inspection
-remain for a later cleanup attempt. Scheduling and deletion criteria are unchanged.
+remain for a later cleanup attempt.
 
 Each captured generation links the selected host `openclaw` package so Workers
 and child processes started from its modules can resolve the host SDK. This link

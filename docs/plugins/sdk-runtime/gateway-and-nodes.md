@@ -54,12 +54,22 @@ await a scope's `stop()` from one of its own running callbacks.
 
 The host first closes scheduling admission and signals cancellation, then invokes
 the service's stop hook. Retirement waits for both that hook and scheduled work.
+For managed plugins, service startup, scheduled callbacks, and cleanup use the
+instance's background readers, so a startup or reload caller ending does not retire them.
 Plugins retain ownership of reconnection policy, sockets, watchers, durable flush
 ordering, and delivery custody. Stop transports and flush pending delivery in the
 owner's required order, then join its child scope before closing resources used
 by that work. Pass the lifetime signal to operations that support cancellation,
 and finish admitted writes before returning. Scheduling creates no durable jobs
 and changes no stored config or state; an update requires no state migration.
+
+Config-only service restarts share plugin replacement's five-second startup
+observation budget. If startup exceeds it, the host reports a service health
+failure and closes scheduling and managed capability admission. Raw startup
+remains owned until it settles, then the service's final stop runs exactly once.
+This does not forcibly terminate native plugin work: shutdown still waits for
+physical cleanup. After cleanup, reload the plugin to retry a timed-out service.
+This changes no stored config or state and requires no migration on update.
 
 Channel Gateway adapters opt in with `apiVersion: 2`. Their `startAccount` and
 `stopAccount` callbacks receive `ChannelGatewayContextV2`, including the required
@@ -300,6 +310,17 @@ applicable policy also requires fresh publication admission.
     can ignore them. Unchanged facts need no age-based retry.
     Retained handles reject after their owner closes; no new SDK barrel export
     is needed.
+
+    `await api.runtime.gateway.appendAgentMessage({ sessionKey, agentId?, text, mentions?, idempotencyKey })`
+    adds one agent-authored message to an existing session without running the
+    model. Bundled or trusted official plugins can call it only while handling
+    an authenticated person's Gateway request, and only for a session that
+    person may write, such as their own session. The text is normalized like
+    typed chat input. `mentions` select `@label` spans; each mentioned person
+    gets the usual Inbox entry and involvement, with the caller named as the
+    sender, under the same rules as a typed mention. A retry with the same
+    `idempotencyKey` returns the original message with `replayed: true`
+    instead of writing another.
 
     `api.runtime.gateway.withSessionFacts(select, async (snapshot) => result)`
     selects immutable facts through the same session-list filtering owner,

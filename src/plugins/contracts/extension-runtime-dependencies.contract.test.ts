@@ -17,11 +17,6 @@ const EXTENSION_RUNTIME_FILE_EXTENSIONS = new Set([".cjs", ".js", ".jsx", ".mjs"
 const BUILTIN_MODULES = new Set(builtinModules.map((moduleId) => moduleId.replace(/^node:/, "")));
 const OPTIONAL_UNDECLARED_RUNTIME_IMPORTS = new Map<string, Set<string>>([
   [
-    "extensions/canvas",
-    // The A2UI bundle probes this optional markdown renderer and falls back when absent.
-    new Set(["@a2ui/markdown-it"]),
-  ],
-  [
     "extensions/discord",
     // @discordjs/voice still probes the native addon in its dependency report path.
     new Set(["@discordjs/opus"]),

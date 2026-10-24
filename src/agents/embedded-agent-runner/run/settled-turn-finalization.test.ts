@@ -197,6 +197,42 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
   });
 
+  it.each(["answered", "empty"] as const)(
+    "carries only a real finalizer answer across message-tool-only suppression (%s)",
+    async (outcome) => {
+      // #181226: the stranded-reply retry finalizes in message_tool_only mode with the
+      // harness-captured context. A real answer must reach the source channel; a failed
+      // recovery must leave no visible text for the retry's diagnostic to misread.
+      const attempt = settledAttempt(false);
+      attempt.settledTurnFinalizationContext = { source: "harness", data: [] } as never;
+      const input = finalizationInput(attempt, { sourceReplyDeliveryMode: "message_tool_only" });
+      backendMocks.finalize.mockResolvedValueOnce(
+        outcome === "answered"
+          ? finalizationReply("answered", "Update: shipped.")
+          : finalizationReply("empty"),
+      );
+
+      const result = await finalize(input);
+
+      if (outcome === "answered") {
+        expect(result.finalizationOutcome).toBe("answered");
+        expectPayload(result, { text: "Update: shipped." });
+        expect(
+          getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia![0]!)
+            ?.deliverDespiteSourceReplySuppression,
+        ).toBe(true);
+      } else {
+        expect(result.finalizationOutcome).toBe("failed");
+        expect(result.prepared.finalAssistantVisibleText).toBe("");
+        expect(
+          (result.prepared.payloadsWithToolMedia ?? []).filter(
+            (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression,
+          ),
+        ).toEqual([]);
+      }
+    },
+  );
+
   it("does not finalize an empty post-tool turn when media was delivered", async () => {
     const assistant = textAssistant();
     const attempt = makeAttempt({
@@ -595,26 +631,29 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.attempt.assistantTexts).toEqual([]);
   });
 
-  it("does not replace terminal ownership when cancellation arrives during delivery observation", async () => {
-    const input = finalizationInput();
-    const controller = new AbortController();
-    input.finalization.abortSignal = AbortSignal.any([
-      input.finalization.abortSignal,
-      controller.signal,
-    ]);
-    let observations = 0;
-    input.terminalBase.runParams.resolveReplyDelivery = async () => {
-      if (++observations === 2) {
-        controller.abort(new Error("cancelled before acceptance"));
-      }
-      return "missing";
-    };
-    const text = "The completed tools produced a result.";
-    backendMocks.finalize.mockResolvedValueOnce(finalizationReply("answered", text));
-    await expect(finalize(input)).rejects.toThrow();
-    expect(observations).toBe(2);
-    expect(input.terminalBase.runParams.onAttemptTerminalReplaced).not.toHaveBeenCalled();
-  });
+  it.each(["failed", "stop", "length"] as const)(
+    "does not replace %s terminal ownership when cancellation arrives during delivery observation",
+    async (source) => {
+      const input = finalizationInput(source === "failed" ? undefined : cutOffAttempt(source));
+      const controller = new AbortController();
+      input.finalization.abortSignal = AbortSignal.any([
+        input.finalization.abortSignal,
+        controller.signal,
+      ]);
+      let observations = 0;
+      input.terminalBase.runParams.resolveReplyDelivery = async () => {
+        if (++observations === 2) {
+          controller.abort(new Error("cancelled before acceptance"));
+        }
+        return "missing";
+      };
+      const text = "The completed tools produced a result.";
+      backendMocks.finalize.mockResolvedValueOnce(finalizationReply("answered", text));
+      await expect(finalize(input)).rejects.toThrow();
+      expect(observations).toBe(2);
+      expect(input.terminalBase.runParams.onAttemptTerminalReplaced).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["outer", "Stop"])(
     "preserves %s cancellation during finalization without a fallback",

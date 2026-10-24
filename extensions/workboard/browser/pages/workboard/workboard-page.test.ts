@@ -27,6 +27,8 @@ afterEach(() => vi.useRealTimers());
 it("loads, refreshes, and searches cards through the plugin's authenticated host", async () => {
   const page = mountPage({ connected: true });
   await afterWorkboardUpdate(() => expect(page.container.textContent).toContain("Initial card"));
+  page.focus();
+  expect(document.activeElement).toBe(page.container.querySelector(".workboard-search-trigger"));
   page.cards([createWorkboardCard({ title: "Updated card" })]);
   page.fixture.emit("plugin.workboard.changed", { epoch: "current", revision: 1 });
   await afterWorkboardUpdate(() => expect(page.container.textContent).toContain("Updated card"));
@@ -43,6 +45,8 @@ it("loads, refreshes, and searches cards through the plugin's authenticated host
     expect(document.activeElement).toBe(current);
     return current;
   });
+  page.focus();
+  expect(document.activeElement).toBe(input);
   input.value = "Updated";
   input.dispatchEvent(new InputEvent("input", { bubbles: true }));
   await afterWorkboardUpdate(() => {

@@ -11,6 +11,7 @@ import { redactConfigObject } from "../config/redact-snapshot.js";
 import { buildConfigSchemaCore } from "../config/schema.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { collectRuntimeCapabilities } from "../infra/runtime-capabilities.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { VERSION } from "../version.js";
@@ -55,6 +56,7 @@ type DiagnosticSupportExportOptions = {
   stabilityBundle?: string | false;
   readStatusSnapshot?: SupportSnapshotReader;
   readHealthSnapshot?: SupportSnapshotReader;
+  readGatewayCapabilities?: SupportSnapshotReader;
 };
 
 type ConfigShape = {
@@ -461,20 +463,33 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
     logTail = failedLogTail(error, redaction);
   }
   const config = readConfigExport(configPath, redaction);
-  const [statusSnapshot, healthSnapshot] = await Promise.all([
-    collectSupportSnapshot({
-      path: "status/gateway-status.json",
-      reader: options.readStatusSnapshot,
-      generatedAt,
-      redaction,
-    }),
-    collectSupportSnapshot({
-      path: "health/gateway-health.json",
-      reader: options.readHealthSnapshot,
-      generatedAt,
-      redaction,
-    }),
-  ]);
+  const [statusSnapshot, healthSnapshot, runtimeCapabilities, gatewayCapabilities] =
+    await Promise.all([
+      collectSupportSnapshot({
+        path: "status/gateway-status.json",
+        reader: options.readStatusSnapshot,
+        generatedAt,
+        redaction,
+      }),
+      collectSupportSnapshot({
+        path: "health/gateway-health.json",
+        reader: options.readHealthSnapshot,
+        generatedAt,
+        redaction,
+      }),
+      collectSupportSnapshot({
+        path: "runtime/capabilities.json",
+        reader: collectRuntimeCapabilities,
+        generatedAt,
+        redaction,
+      }),
+      collectSupportSnapshot({
+        path: "runtime/gateway-capabilities.json",
+        reader: options.readGatewayCapabilities,
+        generatedAt,
+        redaction,
+      }),
+    ]);
   const diagnostics = {
     generatedAt,
     openclawVersion: VERSION,
@@ -517,6 +532,8 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
     bonjour: summarizeBonjourLogs(logTail),
     status: statusSnapshot.summary,
     health: healthSnapshot.summary,
+    runtimeCapabilities: runtimeCapabilities.summary,
+    gatewayCapabilities: gatewayCapabilities.summary,
   };
   const files: DiagnosticSupportBundleFile[] = [
     jsonSupportBundleFile("diagnostics.json", diagnostics),
@@ -527,7 +544,12 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
       logTail.lines.map((line) => JSON.stringify(line)),
     ),
   ];
-  for (const snapshot of [statusSnapshot, healthSnapshot]) {
+  for (const snapshot of [
+    statusSnapshot,
+    healthSnapshot,
+    runtimeCapabilities,
+    gatewayCapabilities,
+  ]) {
     if (snapshot.file) {
       files.push(snapshot.file);
     }
@@ -574,6 +596,8 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
     `- ${configLine}`,
     `- ${supportSnapshotLine("gateway status", statusSnapshot.summary)}`,
     `- ${supportSnapshotLine("gateway health", healthSnapshot.summary)}`,
+    `- ${supportSnapshotLine("exporting process capabilities", runtimeCapabilities.summary)}`,
+    `- ${supportSnapshotLine("gateway capabilities", gatewayCapabilities.summary)}`,
     "",
     "## Maintainer Quick Read",
     "",
@@ -582,6 +606,8 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
     "- `config/sanitized.json`: config values with credentials, private identifiers, and prompt text redacted",
     "- `status/gateway-status.json`: sanitized service/connectivity snapshot",
     "- `health/gateway-health.json`: sanitized Gateway health snapshot",
+    "- `runtime/capabilities.json`: exporting process capabilities and build identity",
+    "- `runtime/gateway-capabilities.json`: serving Gateway capabilities, when reachable",
     "- `logs/openclaw-sanitized.jsonl`: sanitized log summaries and metadata",
     "- `stability/latest.json`: newest payload-free stability bundle, when available",
     "",
@@ -589,7 +615,7 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
     "",
     "- raw chat text, webhook bodies, tool outputs, tokens, cookies, and secrets are not included intentionally",
     "- log records keep operational summaries and safe metadata fields",
-    "- status and health snapshots redact secret fields, payload-like fields, and account/message identifiers",
+    "- status, health, and capability snapshots redact secret fields, payload-like fields, and account/message identifiers",
     "- config output keeps useful settings but redacts secrets, private identifiers, and prompt text",
   ].join("\n");
   files.push(textSupportBundleFile("summary.md", summary));

@@ -52,6 +52,10 @@ export class WorkerTranscriptCommitClient {
     return this.nextSeqValue;
   }
 
+  admitInput(baseLeafId: string | null): void {
+    this.baseLeafIdValue = baseLeafId;
+  }
+
   async commit(
     messages: readonly WorkerTranscriptMessage[],
   ): Promise<WorkerTranscriptCommitResult> {
