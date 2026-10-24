@@ -426,7 +426,11 @@ describe("plugin update publication authority", () => {
                 );
               } else {
                 const result = await operation;
+                if (route === "bridge") {
+                  expect(result.config.plugins?.load?.paths).toEqual([]);
+                }
                 const record = result.config.plugins?.installs?.[packageName];
+                expect(record?.source).toBe("npm");
                 expect(record?.version).toBe("2.0.0");
                 expect(result.remainingMissingPayloads).toEqual([]);
                 if (!record?.installPath) {

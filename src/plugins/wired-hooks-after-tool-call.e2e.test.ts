@@ -12,10 +12,6 @@ const hookMocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => hookMocks.runner,
-}));
-
 vi.mock("../infra/agent-events.js", () => ({
   emitAgentCommandOutputEvent: vi.fn(),
   emitAgentItemEvent: vi.fn(),
@@ -46,14 +42,6 @@ function createToolHandlerCtx(params: {
     emitToolOutput: vi.fn(),
     trimMessagingToolSent: vi.fn(),
   };
-}
-
-function requireAfterToolCallCall(index = 0) {
-  const call = hookMocks.runner.runAfterToolCall.mock.calls[index];
-  if (!call) {
-    throw new Error(`missing after_tool_call payload at index ${index}`);
-  }
-  return { event: call[0], context: call[1] };
 }
 
 function startTool(
@@ -90,13 +78,13 @@ function expectAfterToolCallPayload(
   result: unknown,
   index = 0,
 ) {
-  const { event, context } = requireAfterToolCallCall(index);
-  const { durationMs, ...stableEvent } = event;
-  expect(typeof durationMs).toBe("number");
   const identity = { toolName: "read", runId: ctx.params.runId, toolCallId };
-  expect(stableEvent).toEqual({ ...identity, params: args, result, error: undefined });
   const { agentId, sessionId, sessionKey } = ctx.params;
-  expect(context).toEqual({ ...identity, agentId, sessionId, sessionKey });
+  expect(hookMocks.runner.runAfterToolCall).toHaveBeenNthCalledWith(
+    index + 1,
+    { ...identity, params: args, result, error: undefined, durationMs: expect.any(Number) },
+    { ...identity, agentId, sessionId, sessionKey },
+  );
 }
 
 describe("after_tool_call hook wiring", () => {
@@ -113,9 +101,10 @@ describe("after_tool_call hook wiring", () => {
     await finishTool(ctx, "exec", "call-err", { status: "error", error: "command failed" }, true);
 
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
-    const { event, context } = requireAfterToolCallCall();
-    expect(event.error).toBe("command failed");
-    expect(context.agentId).toBeUndefined();
+    expect(hookMocks.runner.runAfterToolCall.mock.calls[0]).toEqual([
+      expect.objectContaining({ error: "command failed" }),
+      expect.objectContaining({ agentId: undefined }),
+    ]);
   });
 
   it("does not call runAfterToolCall when no hooks registered", async () => {
@@ -132,18 +121,15 @@ describe("after_tool_call hook wiring", () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sharedToolCallId = "shared-tool-call-id";
 
-    const ctxA = createToolHandlerCtx({
-      runId: "run-a",
-      sessionKey: "session-a",
-      sessionId: "ephemeral-a",
-      agentId: "agent-a",
-    });
-    const ctxB = createToolHandlerCtx({
-      runId: "run-b",
-      sessionKey: "session-b",
-      sessionId: "ephemeral-b",
-      agentId: "agent-b",
-    });
+    const runContext = (id: string) =>
+      createToolHandlerCtx({
+        runId: `run-${id}`,
+        sessionKey: `session-${id}`,
+        sessionId: `ephemeral-${id}`,
+        agentId: `agent-${id}`,
+      });
+    const ctxA = runContext("a");
+    const ctxB = runContext("b");
 
     await startTool(ctxA, "read", sharedToolCallId, { path: "/tmp/path-a.txt" });
     await startTool(ctxB, "read", sharedToolCallId, { path: "/tmp/path-b.txt" });
