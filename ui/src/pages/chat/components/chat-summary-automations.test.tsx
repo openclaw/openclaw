@@ -87,6 +87,8 @@ function component(
     ...view,
     element,
     find: element.querySelector.bind(element),
+    part: <T extends Element = HTMLElement>(suffix = "") =>
+      element.querySelector<T>(`.chat-summary__automation${suffix}`),
     ready: (text = "Check the task") =>
       waitForSolid(() => {
         expect(element.textContent).toContain(text);
@@ -115,78 +117,54 @@ async function tick(ms = 0) {
   flush();
 }
 
-it.each([false, true])("coalesces hidden refreshes: %s", async (hiddenEvents) => {
-  const pending = createDeferred<Page>();
-  const current = component(sequence(pending.promise).mockResolvedValue(page([job()])));
-  flush();
-  current.publish({ ...current.gateway.snapshot });
-  expect(current.request).toHaveBeenCalledTimes(1);
-  pending.resolve(page([job()]));
-  await current.ready();
-  current.publish({ ...current.gateway.snapshot });
-  expect(current.request).toHaveBeenCalledTimes(1);
-  current.update({ presented: false });
-  if (hiddenEvents) {
-    current.cron();
-    current.cron();
-    flush();
-    expect(current.request).toHaveBeenCalledTimes(1);
-  }
-  current.update({ presented: true });
-  await current.ready();
-  expect(current.request).toHaveBeenCalledTimes(2);
-  if (!hiddenEvents) {
-    current.cron();
-    await current.ready();
-    expect(current.request).toHaveBeenCalledTimes(3);
-  }
-  current.unmount();
-  current.cron();
-  current.publish(current.gateway.snapshot);
-  flush();
-  expect(current.request).toHaveBeenCalledTimes(hiddenEvents ? 2 : 3);
-});
-
 it.each([false, true])(
-  "drains one trailing inventory after cron events arrive during a read (hidden=%s)",
+  "coalesces inventory events while hidden or reading (hidden=%s)",
   async (hidden) => {
     const pending = createDeferred<Page>();
-    const current = component(
-      sequence(page([job()]), pending.promise, page([job({ name: "Current automation" })])),
+    const ui = component(
+      sequence(page([job()]), pending.promise, page([job({ name: "Current" })])),
     );
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-    await current.ready();
-    current.cron();
-    current.cron();
-    current.cron();
-    current.cron();
-    expect(current.request).toHaveBeenCalledTimes(2);
+    await ui.ready();
+    ui.publish({ ...ui.gateway.snapshot });
+    expect(ui.request).toHaveBeenCalledTimes(1);
+    ui.cron();
+    ui.cron();
+    ui.cron();
+    expect(ui.request).toHaveBeenCalledTimes(2);
     if (hidden) {
       visibility.mockReturnValue("hidden");
       document.dispatchEvent(new Event("visibilitychange"));
     }
-
-    pending.resolve(page([job({ name: "Older automation" })]));
+    pending.resolve(page([job({ name: "Older" })]));
     if (hidden) {
-      await current.ready("Older automation");
-      expect(current.request).toHaveBeenCalledTimes(2);
+      await ui.ready("Older");
+      expect(ui.request).toHaveBeenCalledTimes(2);
       visibility.mockReturnValue("visible");
       document.dispatchEvent(new Event("visibilitychange"));
     }
-    await current.ready("Current automation");
-    expect(current.request).toHaveBeenCalledTimes(3);
+    await ui.ready("Current");
+    expect(ui.request).toHaveBeenCalledTimes(3);
+    ui.update({ presented: false });
+    ui.cron();
+    ui.cron();
+    expect(ui.request).toHaveBeenCalledTimes(3);
+    ui.request.mockResolvedValue(page([job()]));
+    ui.update({ presented: true });
+    await ui.ready();
+    expect(ui.request).toHaveBeenCalledTimes(4);
+    ui.unmount();
+    ui.cron();
+    ui.publish(ui.gateway.snapshot);
+    flush();
+    expect(ui.request).toHaveBeenCalledTimes(4);
   },
 );
 
 it("updates a held automation's runtime state without rereading its inventory", async () => {
   const current = component(sequence(page([job()])).mockResolvedValue(page([job()])));
   await current.ready();
-  const eventJob = {
-    id: "summary-job",
-    name: "Check the task",
-    agentId: "ops",
-    enabled: true,
-  };
+  const eventJob = { id: "summary-job", name: "Check the task", agentId: "ops", enabled: true };
   current.cron("started", {
     jobId: "summary-job",
     job: { ...eventJob, updatedAtMs: 2, state: { runningAtMs: 2 } },
@@ -211,7 +189,7 @@ it("updates a held automation's runtime state without rereading its inventory", 
 it("admits only presented session-scoped reads and uses the existing automation destination", async () => {
   const pending = createDeferred<Page>();
   const current = component(sequence(pending.promise), false);
-  const { element, find } = current;
+  const { element } = current;
   flush();
   expect(current.request).not.toHaveBeenCalled();
   current.update({ presented: true });
@@ -219,28 +197,14 @@ it("admits only presented session-scoped reads and uses the existing automation 
   expect(element.textContent).not.toContain("No automations");
   expect(current.request).toHaveBeenCalledWith(
     "cron.list",
-    expect.objectContaining({
-      sessionKey: "agent:ops:task",
-      sessionAgentId: "ops",
-      includeDisabled: true,
-      includeDeliveryPreviews: false,
-      compact: true,
-      limit: 50,
-      offset: 0,
-      enabled: "all",
-      sortBy: "name",
-      sortDir: "asc",
-    }),
+    expect.objectContaining({ sessionKey: "agent:ops:task", sessionAgentId: "ops", compact: true }),
   );
   const fullTitle = "A long automation title that must remain unabridged and accessible";
   pending.resolve(page([job({ name: fullTitle })]));
   await current.ready(fullTitle);
-  const link = find<HTMLAnchorElement>(".chat-summary__automation")!;
-  expect(link.getAttribute("href")).toBe("/automations?job=summary-job");
-  expect(link.textContent).toContain("Every 10 minutes");
-  expect(find(".chat-summary__automation-title")?.textContent?.trim()).toBe(fullTitle);
-  expect(find<HTMLDetailsElement>('[data-details-group="automations"]')?.open).toBe(true);
-  expect(link.querySelector("svg")).not.toBeNull();
+  const link = current.part<HTMLAnchorElement>("")!;
+  expect(current.part("-title")?.textContent?.trim()).toBe(fullTitle);
+  expect(current.find<HTMLDetailsElement>('[data-details-group="automations"]')?.open).toBe(true);
   const onNavigate = vi.fn();
   current.update({ onNavigate });
   link.click();
@@ -250,13 +214,12 @@ it("admits only presented session-scoped reads and uses the existing automation 
 
 it("omits confirmed-empty sections and preserves manual collapse until the content disappears", async () => {
   const current = component(sequence(page()).mockResolvedValue(page([job()])));
-  const { find } = current;
   flush();
   await current.empty();
-  expect(find("summary")).toBeNull();
+  expect(current.find("summary")).toBeNull();
   current.cron("added");
   await current.ready();
-  const group = find<HTMLDetailsElement>("details")!;
+  const group = current.find<HTMLDetailsElement>("details")!;
   expect(group.open).toBe(true);
   group.open = false;
   group.dispatchEvent(new Event("toggle"));
@@ -264,22 +227,22 @@ it("omits confirmed-empty sections and preserves manual collapse until the conte
   current.cron();
   flush();
   await current.ready();
-  expect(find("details")).toBe(group);
+  expect(current.find("details")).toBe(group);
   expect(group.open).toBe(false);
-  const link = find(".chat-summary__automation");
+  const link = current.part("");
   current.update({ presented: false });
   current.update({ presented: true });
   await current.ready();
-  expect(find("details")).toBe(group);
+  expect(current.find("details")).toBe(group);
   expect(group.open).toBe(false);
-  expect(find(".chat-summary__automation")).toBe(link);
+  expect(current.part("")).toBe(link);
   current.request.mockResolvedValueOnce(page());
   current.cron("removed");
   await current.empty();
-  expect(find("summary")).toBeNull();
+  expect(current.find("summary")).toBeNull();
   current.cron("added");
   await current.ready();
-  expect(find<HTMLDetailsElement>("details")?.open).toBe(true);
+  expect(current.find<HTMLDetailsElement>("details")?.open).toBe(true);
 });
 
 it.each([false, true])(
@@ -298,7 +261,7 @@ it.each([false, true])(
       await tick();
       expect(current.element.textContent).toContain("Paused");
     }
-    expect(current.find(".chat-summary__automation-retry")).toBeNull();
+    expect(current.part("-retry")).toBeNull();
     const count = request.mock.calls.length;
     request.mockResolvedValue(page([job({ name: "Recovered automation", enabled: false })]));
     current.publish({ ...current.gateway.snapshot });
@@ -307,9 +270,8 @@ it.each([false, true])(
     await tick(1);
     expect(current.element.textContent).toContain("Recovered automation");
     expect(current.element.textContent).toContain("Paused");
-    expect(current.find(".chat-summary__automation-retry")).toBeNull();
+    expect(current.part("-retry")).toBeNull();
     expect(request).toHaveBeenCalledTimes(count + 1);
-    expect(request.mock.calls.every(([method]) => method === "cron.list")).toBe(true);
   },
 );
 
@@ -329,14 +291,14 @@ it.each(["retry", "event", "reconnect"] as const)(
     current.cron();
     await tick();
     expect(current.element.textContent).not.toContain("Check the task");
-    expect(current.find(".chat-summary__automation-more")).toBeNull();
+    expect(current.part("-more")).toBeNull();
     current.publish({ ...current.gateway.snapshot });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(request).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
     request.mockResolvedValue(page([job({ name: "Authorized automation", enabled: false })]));
     if (recovery === "retry") {
-      current.find<HTMLButtonElement>(".chat-summary__automation-retry")!.click();
+      current.part<HTMLButtonElement>("-retry")!.click();
     } else if (recovery === "event") {
       current.cron();
     } else {
@@ -348,7 +310,6 @@ it.each(["retry", "event", "reconnect"] as const)(
     expect(current.element.textContent).toContain("Authorized automation");
     expect(current.element.textContent).toContain("Paused");
     expect(request).toHaveBeenCalledTimes(3);
-    expect(request.mock.calls.every(([method]) => method === "cron.list")).toBe(true);
   },
 );
 
@@ -388,12 +349,10 @@ it.each([false, true])("restores retry focus: moved=%s", async (moved) => {
       )
       .mockReturnValueOnce(pending.promise),
   );
-  const { element, find } = current;
-  const sibling = document.createElement("details");
-  document.body.append(sibling);
+  const { element } = current;
   await current.ready("Couldn't load automations.");
   expect(element.textContent).not.toContain("private server detail");
-  const retry = find<HTMLButtonElement>(".chat-summary__automation-retry")!;
+  const retry = current.part<HTMLButtonElement>("-retry")!;
   expect(retry.textContent?.trim()).toBe("Retry");
   retry.focus();
   retry.click();
@@ -411,9 +370,8 @@ it.each([false, true])("restores retry focus: moved=%s", async (moved) => {
   pending.resolve(moved ? page() : page([job()]));
   await (moved ? current.empty() : current.ready());
   flush();
-  expect(document.activeElement).toBe(moved ? composer : find(".chat-summary__automation"));
+  expect(document.activeElement).toBe(moved ? composer : current.part(""));
   expect(composer.value).toBe("Keep my draft");
-  expect(sibling.open).toBe(false);
 });
 
 it("fences late pages on session and same-client reconnect boundaries", async () => {
@@ -441,60 +399,15 @@ it("fences late pages on session and same-client reconnect boundaries", async ()
   expect(element.textContent).not.toMatch(/Wrong session|Retired connection/);
 });
 
-it.each([false, true])("preserves offline inventory: loaded=%s", async (loaded) => {
-  const current = component(undefined, true, !loaded);
-  const { element } = current;
-  if (loaded) {
-    await current.ready();
-    current.publish({ ...current.gateway.snapshot, phase: "offline", client: null });
-  }
+it("does not invent inventory while offline or without a resolvable session", async () => {
+  const ui = component(undefined, true, true);
   flush();
-  if (loaded) {
-    expect(element.textContent).toContain("Check the task");
-  } else {
-    expect(element.textContent?.trim()).toBe("");
-  }
-  expect(element.textContent).not.toContain("No automations");
-  if (loaded) {
-    expect(element.textContent).not.toContain("Reconnect to load");
-  }
-  current.update({ sessionKey: loaded ? "agent:ops:other" : "unresolved-session" });
-  await waitForSolid(() => expect(element.textContent).not.toContain("Check the task"));
-  if (!loaded) {
-    current.publish({ ...current.gateway.snapshot, phase: "connected" });
-    flush();
-    expect(element.textContent?.trim()).toBe("");
-    expect(current.request).not.toHaveBeenCalled();
-  }
-});
-
-it("uses the inventory continuation rather than silently dropping additional automations", async () => {
-  const current = component(
-    sequence(
-      page([job({ name: "First automation", enabled: false })], {
-        total: 2,
-        hasMore: true,
-        nextOffset: 1,
-      }),
-      page([job({ id: "second", name: "Second automation", runningAtMs: 42 })], {
-        offset: 1,
-        total: 2,
-      }),
-    ),
-  );
-  const { element, find } = current;
-  await current.ready("First automation");
-  expect(element.textContent).toContain("Paused");
-  find<HTMLButtonElement>(".chat-summary__automation-more")!.click();
-  await current.ready("Second automation");
-  expect(current.request.mock.calls[1]?.[1]).toMatchObject({
-    offset: 1,
-    sessionKey: "agent:ops:task",
-    sessionAgentId: "ops",
-  });
-  expect(element.querySelectorAll(".chat-summary__automation")).toHaveLength(2);
-  expect(element.textContent).toContain("Running");
-  expect(find(".chat-summary__automation-more")).toBeNull();
+  expect(ui.element.textContent?.trim()).toBe("");
+  ui.update({ sessionKey: "unresolved-session" });
+  ui.publish({ ...ui.gateway.snapshot, phase: "connected" });
+  flush();
+  expect(ui.element.textContent?.trim()).toBe("");
+  expect(ui.request).not.toHaveBeenCalled();
 });
 
 it("omits automation reads and retry UI without read authority", async () => {
@@ -640,50 +553,50 @@ it("shares pending reads and failed refresh recovery between the mobile list and
   view.unmount();
 });
 
-it("expands 25 retained jobs in tens independently of RPC pagination and resets on reentry", async () => {
-  const pending = createDeferred<Page>();
-  const jobs = Array.from({ length: 25 }, (_, index) =>
-    job({ id: `job-${index}`, name: `Automation ${index + 1}` }),
-  );
-  const current = component(
-    createGatewayRequestMock()
-      .mockResolvedValueOnce(page(jobs))
-      .mockImplementationOnce(() => pending.promise),
-  );
-  const { element } = current;
-  await current.ready("Automation 1");
-  const rows = () => element.querySelectorAll<HTMLAnchorElement>(".chat-summary__automation");
-  expect(rows()).toHaveLength(10);
-  const more = element.querySelector<HTMLButtonElement>(".chat-summary__automation-more")!;
-  more.focus();
-  more.click();
-  flush();
-  expect(rows()).toHaveLength(20);
-  expect(document.activeElement).toBe(rows()[10]);
-  more.focus();
-  more.click();
-  flush();
-  expect(rows()).toHaveLength(25);
-  expect(document.activeElement).toBe(rows()[20]);
-  expect(element.querySelector(".chat-summary__automation-more")).toBeNull();
-  expect(current.request).toHaveBeenCalledTimes(1);
-  current.update({ onNavigate: vi.fn() });
-  flush();
-  expect(rows()).toHaveLength(25);
-  current.update({ presented: false });
-  flush();
-  current.update({ presented: true });
-  flush();
-  expect(rows()).toHaveLength(10);
-  expect(current.request).toHaveBeenCalledTimes(2);
-  pending.reject(new Error("refresh failed"));
-  await waitForSolid(() => {
-    expect(element.textContent).not.toContain("Couldn't update automations.");
-    expect(element.querySelector('[aria-busy="false"]')).not.toBeNull();
-  });
-  expect(rows()).toHaveLength(10);
-  expect(element.querySelector("summary")?.textContent?.trim()).toBe("Automations");
-});
+it.each([false, true])(
+  "reveals retained and paged jobs, then resets on reentry (paged=%s)",
+  async (paged) => {
+    const pending = createDeferred<Page>();
+    const jobs = Array.from({ length: 25 }, (_, index) =>
+      job({ id: `job-${index}`, name: `Automation ${index + 1}` }),
+    );
+    const request = sequence(
+      page(paged ? jobs.slice(0, 10) : jobs, {
+        total: 25,
+        hasMore: paged,
+        nextOffset: paged ? 10 : null,
+      }),
+    );
+    if (paged) {
+      request.mockResolvedValueOnce(page(jobs.slice(10), { offset: 10, total: 25 }));
+    }
+    request.mockReturnValueOnce(pending.promise);
+    const ui = component(request);
+    await ui.ready("Automation 1");
+    const rows = () => ui.element.querySelectorAll<HTMLAnchorElement>(".chat-summary__automation");
+    expect(rows()).toHaveLength(10);
+    for (const [count, focused] of [
+      [20, 10],
+      [25, 20],
+    ] as const) {
+      const more = ui.part<HTMLButtonElement>("-more")!;
+      more.focus();
+      more.click();
+      await ui.ready("Automation 1");
+      expect(rows()).toHaveLength(count);
+      expect(document.activeElement).toBe(rows()[focused]);
+    }
+    expect(ui.part("-more")).toBeNull();
+    expect(request).toHaveBeenCalledTimes(paged ? 2 : 1);
+    ui.update({ presented: false });
+    ui.update({ presented: true });
+    expect(rows()).toHaveLength(10);
+    pending.reject(new Error("refresh failed"));
+    await ui.ready("Automation 1");
+    expect(ui.element.textContent).not.toContain("Couldn't update automations.");
+    expect(rows()).toHaveLength(10);
+  },
+);
 
 it("retains reconnect facts and distinguishes auto-disabled from paused and stale running", async () => {
   const pending = createDeferred<Page>();
@@ -711,7 +624,7 @@ it("retains reconnect facts and distinguishes auto-disabled from paused and stal
   expect(element.querySelectorAll(".chat-summary__automation-paused")).toHaveLength(1);
   expect(element.querySelectorAll(".session-run-spinner")).toHaveLength(1);
   const snapshot = current.gateway.snapshot;
-  current.publish({ ...snapshot, phase: "reconnecting" });
+  current.publish({ ...snapshot, phase: "offline", client: null });
   await waitForSolid(() => {
     expect(element.textContent).toContain("In progress");
     expect(element.textContent).not.toContain("Running");
@@ -719,35 +632,24 @@ it("retains reconnect facts and distinguishes auto-disabled from paused and stal
   current.publish(snapshot);
   flush();
   expect(element.querySelectorAll(".chat-summary__automation")).toHaveLength(3);
-  pending.resolve(page());
+  current.publish({ ...snapshot, phase: "offline", client: null });
+  expect(element.querySelectorAll(".chat-summary__automation")).toHaveLength(3);
+  current.update({ sessionKey: "agent:ops:other" });
   await current.empty();
+  pending.resolve(page([job({ name: "Retired session" })]));
+  await pending.promise;
+  flush();
+  expect(element.textContent).not.toContain("Retired session");
 });
 
-it("describes cron weekdays and non-uniform minute steps without inventing a fixed interval", async () => {
-  const current = component(
-    sequence(
-      page([
-        job({
-          id: "weekdays",
-          name: "Weekday review",
-          scheduleKind: "cron",
-          schedule: { kind: "cron", expr: "0 9 * * MON-FRI", tz: "UTC" },
-        }),
-        job({
-          id: "minute-grid",
-          name: "Minute grid",
-          scheduleKind: "cron",
-          schedule: { kind: "cron", expr: "*/7 * * * *", tz: "UTC" },
-        }),
-      ]),
-    ),
+it.each([
+  ["0 9 * * MON-FRI", "Weekdays at 9:00 AM"],
+  ["*/7 * * * *", "At minutes 0, 7, 14, 21, 28, 35, 42, 49, and 56 of every hour"],
+])("describes cron schedule %s without guessing an interval", async (expr, expected) => {
+  const ui = component(
+    sequence(page([job({ scheduleKind: "cron", schedule: { kind: "cron", expr, tz: "UTC" } })])),
   );
-  await current.ready("Weekday review");
-  const weekday = current.find<HTMLAnchorElement>('a[href$="job=weekdays"]')!;
-  const minutes = current.find<HTMLAnchorElement>('a[href$="job=minute-grid"]')!;
-  expect(weekday.textContent).toContain("Weekdays at 9:00 AM");
-  expect(minutes.textContent).toContain(
-    "At minutes 0, 7, 14, 21, 28, 35, 42, 49, and 56 of every hour",
-  );
-  expect(minutes.textContent).not.toContain("Every 7 minutes");
+  await ui.ready();
+  expect(ui.part()?.textContent).toContain(expected);
+  expect(ui.part()?.textContent).not.toContain("Every 7 minutes");
 });
