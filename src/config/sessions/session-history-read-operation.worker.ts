@@ -351,6 +351,14 @@ async function prepareHistoryRead(
       );
       return () => ({ kind: request.kind, present: read() });
     }
+    case "transcript-inactive-identity": {
+      const { readInactiveTranscriptIdentitySync } =
+        await import("./transcript-inactive-identities.worker.js");
+      return () => ({
+        kind: request.kind,
+        inactive: readInactiveTranscriptIdentitySync(request.scope, request.probe),
+      });
+    }
     case "session-pending-input-receipts": {
       const { listSessionPendingInputReceipts } =
         await import("./session-accessor.sqlite-pending-input-receipts.js");

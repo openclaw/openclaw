@@ -96,6 +96,7 @@ const readers: Readers & ThisType<ReaderContext> = {
   readBoardWidgetDocument: reader("board-widget-document", (result) => result.value),
   readBranchSummaries: reader("branch-summaries", (value) => value.result),
   readMessagePresence: reader("transcript-message-presence", (value) => value.present),
+  readInactiveIdentity: reader("transcript-inactive-identity", (value) => value.inactive),
   readAnchors: reader("transcript-anchors", (value) => value.facts),
   readRuntimeTarget: reader("session-runtime-target", (value) => value.target),
   readConversations: reader("conversation-rows", (value) => value.rows),
