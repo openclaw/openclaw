@@ -201,7 +201,16 @@ export function registerModelCapabilityCommands(capability: Command): void {
         const imageFiles = await Promise.all(
           (files ?? []).map(async (filePath) => {
             const resolvedPath = path.resolve(filePath);
-            const buffer = await fs.readFile(resolvedPath);
+            const { readRegularFile } = await import("../../infra/fs-safe.js");
+            const { buffer } = await fs
+              .realpath(resolvedPath)
+              .then((realFilePath) => readRegularFile({ filePath: realFilePath }))
+              .catch((error: unknown) => {
+                throw new Error(
+                  `Cannot read model image file: ${resolvedPath}. Use a readable regular file containing an image and retry.`,
+                  { cause: error },
+                );
+              });
             const mimeType = normalizeMimeType(
               await detectMime({
                 buffer,
