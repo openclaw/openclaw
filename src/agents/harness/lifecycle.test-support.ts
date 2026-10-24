@@ -10,9 +10,20 @@ import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-contex
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import type {
+  AgentHarness,
   AgentHarnessAttemptParamsV2 as AttemptParams,
   AgentHarnessSettledTurnFinalizationAttemptParams as SettledParams,
 } from "./types.js";
+
+export function createLifecycleHarness(overrides: Partial<AgentHarness> = {}): AgentHarness {
+  return {
+    id: "codex",
+    label: "Codex",
+    supports: () => ({ supported: true }),
+    runAttempt: async () => createAttemptResult(),
+    ...overrides,
+  };
+}
 
 export const createBaseAttemptParams = () => ({
   prompt: "hello",

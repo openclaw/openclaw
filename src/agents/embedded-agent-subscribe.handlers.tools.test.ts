@@ -1457,56 +1457,40 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     ]);
     const [
       { normalizeAgentRunTerminalReceipt },
-      { createUsageAccumulator },
-      { createEmbeddedRunContextRecoveryState },
+      { createTerminalPreparationInput },
       { prepareEmbeddedRunTerminal },
     ] = await Promise.all([
       import("./agent-run-terminal-receipt.js"),
-      import("./embedded-agent-runner/usage-accumulator.js"),
-      import("./embedded-agent-runner/run/context-recovery-state.js"),
+      import("./embedded-agent-runner/run/terminal-preparation.test-support.js"),
       import("./embedded-agent-runner/run/terminal-preparation.js"),
     ]);
-    const prepared = prepareEmbeddedRunTerminal({
-      runParams: {
+    const prepared = prepareEmbeddedRunTerminal(
+      createTerminalPreparationInput({
         admittedRunContext: createTestAdmittedRunContext("run-test"),
-        sessionId: "session-test-id",
-        runId: "run-test",
-        workspaceDir: "/tmp/openclaw-test",
-        prompt: "run",
-        trigger: "user",
-        timeoutMs: 60_000,
-      },
-      attempt: {
-        terminal: { kind: "ok" },
-        sessionIdUsed: "session-test-id",
-        messagesSnapshot: [],
-        assistantTexts: [],
-        toolMetas: ctx.state.toolMetas.flatMap(({ toolName, ...entry }) =>
-          toolName ? [{ ...entry, toolName }] : [],
-        ),
-        lastAssistant: undefined,
-        didSendViaMessagingTool: false,
-        messagingToolSentTexts: [],
-        messagingToolSentMediaUrls: [],
-        messagingToolSentTargets: [],
-        cloudCodeAssistFormatError: false,
-        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-      },
-      provider: "openai",
-      model: "gpt-5.4",
-      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
-      authProfileStore: { version: 1, profiles: {} },
-      sessionIdUsed: "session-test-id",
-      outerContextTokenMeta: {},
-      usageAccumulator: createUsageAccumulator(),
-      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-      resolvedToolResultFormat: "markdown",
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
-    });
+        runParams: {
+          sessionId: "session-test-id",
+          runId: "run-test",
+          prompt: "run",
+        },
+        attempt: {
+          terminal: { kind: "ok" },
+          sessionIdUsed: "session-test-id",
+          messagesSnapshot: [],
+          assistantTexts: [],
+          toolMetas: ctx.state.toolMetas.flatMap(({ toolName, ...entry }) =>
+            toolName ? [{ ...entry, toolName }] : [],
+          ),
+          lastAssistant: undefined,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          messagingToolSentTargets: [],
+          cloudCodeAssistFormatError: false,
+          replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+        },
+      }),
+    );
     expect(
       normalizeAgentRunTerminalReceipt(Reflect.get(prepared.agentMeta, "terminalReceipt"))
         ?.successfulToolNames,

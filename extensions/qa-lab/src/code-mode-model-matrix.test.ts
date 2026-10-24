@@ -19,6 +19,10 @@ import {
   projectQaEvidenceScenarioOutcomes,
   validateQaEvidenceSummaryJson,
 } from "../api.js";
+import {
+  matrixArtifactOptions,
+  matrixSourceIdentity,
+} from "./code-mode-model-matrix.test-support.js";
 
 const extendedTasks = [
   "large-result-reduction",
@@ -342,11 +346,7 @@ describe("Code Mode model matrix extended fixtures", () => {
       const result = await runCodeModeModelMatrix(options, {
         buildCliArtifacts: async () => {},
         readBuildSha256: async () => "fixture-build",
-        readSourceIdentity: async () => ({
-          gitSha: "fixture-source",
-          sourceDirty: false,
-          sourcePatchSha256: null,
-        }),
+        readSourceIdentity: matrixSourceIdentity("fixture-source"),
       });
       const readArtifact = async (name: string) =>
         await fs.readFile(path.join(result.outputDir, name), "utf8");
@@ -468,11 +468,7 @@ describe("Code Mode model matrix extended fixtures", () => {
       throw new Error("dry run must not execute");
     };
     const result = await runCodeModeModelMatrix(options, {
-      readSourceIdentity: async () => ({
-        gitSha: "fixture-source",
-        sourceDirty: false,
-        sourcePatchSha256: null,
-      }),
+      readSourceIdentity: matrixSourceIdentity("fixture-source"),
       buildCliArtifacts: forbidden,
       readBuildSha256: forbidden,
       runCell: forbidden,
@@ -513,25 +509,9 @@ describe("Code Mode model matrix artifacts", () => {
       await fs.mkdir(path.join(repoRoot, ".git"));
       await expect(
         runCodeModeModelMatrix(
+          matrixArtifactOptions(repoRoot, path.join(".git", "refs", "evidence"), { dryRun: true }),
           {
-            allowFailures: false,
-            dryRun: true,
-            keepState: false,
-            models: ["ollama/qwen3.5:9b"],
-            modes: ["code"],
-            outputDir: path.join(".git", "refs", "evidence"),
-            repetitions: 1,
-            repoRoot,
-            tasks: ["read"],
-            thinking: "off",
-            timeoutSeconds: 10,
-          },
-          {
-            readSourceIdentity: async () => ({
-              gitSha: "abc123",
-              sourceDirty: false,
-              sourcePatchSha256: null,
-            }),
+            readSourceIdentity: matrixSourceIdentity("abc123"),
           },
         ),
       ).rejects.toThrow("must not overlap Git metadata");
@@ -566,25 +546,9 @@ describe("Code Mode model matrix artifacts", () => {
 
       await expect(
         runCodeModeModelMatrix(
+          matrixArtifactOptions(repoRoot, path.join("DIST", "evidence"), { dryRun: true }),
           {
-            allowFailures: false,
-            dryRun: true,
-            keepState: false,
-            models: ["ollama/qwen3.5:9b"],
-            modes: ["code"],
-            outputDir: path.join("DIST", "evidence"),
-            repetitions: 1,
-            repoRoot,
-            tasks: ["read"],
-            thinking: "off",
-            timeoutSeconds: 10,
-          },
-          {
-            readSourceIdentity: async () => ({
-              gitSha: "abc123",
-              sourceDirty: false,
-              sourcePatchSha256: null,
-            }),
+            readSourceIdentity: matrixSourceIdentity("abc123"),
           },
         ),
       ).rejects.toThrow("must not overlap runtime artifacts");
@@ -602,25 +566,13 @@ describe("Code Mode model matrix artifacts", () => {
       await fs.mkdir(path.join(repoRoot, "packages"));
       await expect(
         runCodeModeModelMatrix(
-          {
-            allowFailures: false,
-            dryRun: true,
-            keepState: false,
-            models: ["ollama/qwen3.5:9b"],
-            modes: ["code"],
-            outputDir: path.join("packages", "new-package", "dist", "evidence"),
-            repetitions: 1,
+          matrixArtifactOptions(
             repoRoot,
-            tasks: ["read"],
-            thinking: "off",
-            timeoutSeconds: 10,
-          },
+            path.join("packages", "new-package", "dist", "evidence"),
+            { dryRun: true },
+          ),
           {
-            readSourceIdentity: async () => ({
-              gitSha: "abc123",
-              sourceDirty: false,
-              sourcePatchSha256: null,
-            }),
+            readSourceIdentity: matrixSourceIdentity("abc123"),
           },
         ),
       ).rejects.toThrow("must not overlap runtime artifacts");
@@ -642,19 +594,7 @@ describe("Code Mode model matrix artifacts", () => {
       try {
         await expect(
           runCodeModeModelMatrix(
-            {
-              allowFailures: false,
-              dryRun: false,
-              keepState: false,
-              models: ["ollama/qwen3.5:9b"],
-              modes: ["code"],
-              outputDir: path.join(artifactDir, "evidence"),
-              repetitions: 1,
-              repoRoot,
-              tasks: ["read"],
-              thinking: "off",
-              timeoutSeconds: 10,
-            },
+            matrixArtifactOptions(repoRoot, path.join(artifactDir, "evidence")),
             {
               buildCliArtifacts: async () => {
                 await fs.mkdir(path.join(repoRoot, artifactDir), { recursive: true });
@@ -663,11 +603,7 @@ describe("Code Mode model matrix artifacts", () => {
                 hashed = true;
                 return "build123";
               },
-              readSourceIdentity: async () => ({
-                gitSha: "abc123",
-                sourceDirty: false,
-                sourcePatchSha256: null,
-              }),
+              readSourceIdentity: matrixSourceIdentity("abc123"),
             },
           ),
         ).rejects.toThrow("must not overlap runtime artifacts");
@@ -691,27 +627,11 @@ describe("Code Mode model matrix artifacts", () => {
   ] as const)("keeps tool summary scopes separate: %s", async (_name, calls, outerCalls) => {
     const repoRoot = tempDirs.make("openclaw-code-mode-metrics-");
     const result = await runCodeModeModelMatrix(
-      {
-        allowFailures: false,
-        dryRun: false,
-        keepState: false,
-        models: ["ollama/fixture"],
-        modes: ["code"],
-        outputDir: "artifacts",
-        repetitions: 1,
-        repoRoot,
-        tasks: ["read"],
-        thinking: "off",
-        timeoutSeconds: 10,
-      },
+      matrixArtifactOptions(repoRoot, "artifacts", { models: ["ollama/fixture"] }),
       {
         buildCliArtifacts: async () => {},
         readBuildSha256: async () => "build123",
-        readSourceIdentity: async () => ({
-          gitSha: "abc123",
-          sourceDirty: false,
-          sourcePatchSha256: null,
-        }),
+        readSourceIdentity: matrixSourceIdentity("abc123"),
         runCell: async (params) => ({
           ...params.cell,
           buildSha256: params.buildSha256,
@@ -807,19 +727,7 @@ describe("Code Mode model matrix artifacts", () => {
       let calls = 0;
       let initialBuildRead = true;
       const result = await runCodeModeModelMatrix(
-        {
-          allowFailures: false,
-          dryRun: false,
-          keepState: false,
-          models: ["ollama/qwen3.5:9b"],
-          modes: ["code"],
-          outputDir: "artifacts",
-          repetitions: 2,
-          repoRoot,
-          tasks: ["read"],
-          thinking: "off",
-          timeoutSeconds: 10,
-        },
+        matrixArtifactOptions(repoRoot, "artifacts", { repetitions: 2 }),
         {
           buildCliArtifacts: async () => {},
           now: () => new Date("2026-07-28T12:00:00Z"),
@@ -830,11 +738,7 @@ describe("Code Mode model matrix artifacts", () => {
             }
             return "build123";
           },
-          readSourceIdentity: async () => ({
-            gitSha: "abc123",
-            sourceDirty: false,
-            sourcePatchSha256: null,
-          }),
+          readSourceIdentity: matrixSourceIdentity("abc123"),
           runCell: async ({ cell, gitSha }) => {
             calls += 1;
             const before = validateQaEvidenceSummaryJson(

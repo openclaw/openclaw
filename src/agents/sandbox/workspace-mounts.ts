@@ -1,5 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isNotFoundPathError } from "@openclaw/fs-safe/path";
+import { hasErrnoCode } from "../../infra/errno.js";
+import { findExistingAncestor, root as createWorkspaceRoot } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS } from "../../shared/sandbox-workspace-paths.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
@@ -14,6 +17,14 @@ export const SANDBOX_MOUNT_FORMAT_VERSION = 4;
 export type ReadOnlyWorkspaceSkillMount = {
   hostPath: string;
   containerPath: string;
+};
+
+type WorkspaceSkillMountParams = {
+  workspaceDir: string;
+  agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
+  workdir: string;
+  workspaceAccess: SandboxWorkspaceAccess;
 };
 
 function containerJoin(root: string, ...parts: string[]): string {
@@ -53,13 +64,7 @@ function isExistingWorkspaceSkillMountSource(params: {
 }
 
 /** Protects managed skills inside writable shared or private sandbox workspaces. */
-export function resolveReadOnlyWorkspaceSkillMounts(params: {
-  workspaceDir: string;
-  agentWorkspaceDir: string;
-  skillsWorkspaceDir?: string;
-  workdir: string;
-  workspaceAccess: SandboxWorkspaceAccess;
-}): ReadOnlyWorkspaceSkillMount[] {
+function resolveReadOnlyWorkspaceSkillMountCandidates(params: WorkspaceSkillMountParams) {
   if (params.workspaceAccess === "ro") {
     return [];
   }
@@ -94,7 +99,62 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
     });
   }
 
-  return mounts
+  return mounts;
+}
+
+/** Materialize protected sources before selecting the first sandbox's mounts. */
+export async function ensureReadOnlyWorkspaceSkillMountSources(
+  params: WorkspaceSkillMountParams,
+  assertCurrent?: () => void,
+): Promise<void> {
+  for (const mount of resolveReadOnlyWorkspaceSkillMountCandidates(params)) {
+    const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(path.resolve(mount.rootDir));
+    const canonicalSource = resolveSandboxHostPathViaExistingAncestor(path.resolve(mount.hostPath));
+    if (!isPathInside(canonicalRoot, canonicalSource)) {
+      continue;
+    }
+    try {
+      fs.lstatSync(mount.hostPath);
+      continue;
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOTDIR")) {
+        continue;
+      }
+      if (!isNotFoundPathError(error)) {
+        throw error;
+      }
+    }
+    const ancestor = await findExistingAncestor(canonicalSource);
+    if (!ancestor || !fs.lstatSync(ancestor).isDirectory()) {
+      continue;
+    }
+    // Create through the canonical source, with custody and alias checks at every
+    // mkdir, so a replaced workspace parent cannot redirect host preparation.
+    const directory = await createWorkspaceRoot(ancestor, {
+      mutationSymlinks: "reject",
+      assertBeforeMutation: () => {
+        assertCurrent?.();
+        if (
+          resolveSandboxHostPathViaExistingAncestor(path.resolve(mount.rootDir)) !==
+            canonicalRoot ||
+          resolveSandboxHostPathViaExistingAncestor(path.resolve(mount.hostPath)) !==
+            canonicalSource
+        ) {
+          throw new Error(
+            `Sandbox skill mount source changed during preparation: ${mount.hostPath}`,
+          );
+        }
+      },
+    });
+    await directory.mkdir(path.relative(ancestor, canonicalSource));
+    assertCurrent?.();
+  }
+}
+
+export function resolveReadOnlyWorkspaceSkillMounts(
+  params: WorkspaceSkillMountParams,
+): ReadOnlyWorkspaceSkillMount[] {
+  return resolveReadOnlyWorkspaceSkillMountCandidates(params)
     .filter(isExistingWorkspaceSkillMountSource)
     .map(({ hostPath, containerPath }) => ({ hostPath, containerPath }));
 }

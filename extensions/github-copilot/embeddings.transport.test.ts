@@ -3,11 +3,11 @@
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { DiagnosticsChannel } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 
 const resolveFirstGithubTokenMock = vi.hoisted(() => vi.fn());
 const resolveCopilotRuntimeAuthMock = vi.hoisted(() => vi.fn());
@@ -61,13 +61,7 @@ async function startCopilotServer(handle: {
     })();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  const port = await listenOnLoopback(server);
 
   servers.push({
     close: () =>
@@ -77,8 +71,7 @@ async function startCopilotServer(handle: {
       }),
   });
 
-  const address = server.address() as AddressInfo;
-  return { baseUrl: `http://127.0.0.1:${address.port}`, requests };
+  return { baseUrl: `http://127.0.0.1:${port}`, requests };
 }
 
 function pointTokenAt(baseUrl: string): void {

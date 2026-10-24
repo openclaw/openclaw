@@ -598,6 +598,20 @@ collection counts and both maximum pauses. Trace and profile timing are context,
 not latency gates. These are owner measurements, not Gateway latency measurements.
 Do not infer tail percentiles from five runs.
 
+For default request instrumentation, add `--lifecycle` with the absolute path to
+`attempt.model-diagnostic-lifecycle.ts` (or its baseline copy beside the original).
+This uses the real activity and stability listeners and completes each lifecycle;
+there is no provider call or Gateway. Allocation includes the whole lifecycle,
+not just the size helper. Use `--start-file` for synchronized warmed pairs: wait
+for both drivers to print `WARM_READY`, then write a future epoch in milliseconds.
+Compare concurrent pairs under the shared guard and quiet lock, swapping
+interleaved CPU placements. Timing reports natural GC per kind (counts, total
+milliseconds per call, tails and maximum pause) and event-loop sample counts.
+Use separate `--mode profile` pairs for allocation, including collected objects.
+The lifetime gate is zero prompt serialization for default listeners, unchanged
+size values when requested, and reduced CPU/allocation per call under the
+campaign's absolute-delta and sample-count rules.
+
 ## Session tool surface
 
 `session-tool-surface-measure.ts` exercises the production tool pin owner with 50
