@@ -84,8 +84,8 @@ export function renderInto(container: HTMLElement, props: WorkboardRenderProps) 
     });
     const dispose = render(() => {
       // Prop-only renders must not re-subscribe during an owner notification.
-      const host = createMemo(() => current().host);
-      createEffect(host, (host) => subscribeWorkboard(host, publishPresentation));
+      const currentHost = createMemo(() => current().host);
+      createEffect(currentHost, (host) => subscribeWorkboard(host, publishPresentation));
       return createComponent(WorkboardView, reactiveProps);
     }, container);
     renderedViews.set(container, {
