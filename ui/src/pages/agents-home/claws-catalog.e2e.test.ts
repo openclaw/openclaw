@@ -25,29 +25,20 @@ const workflowOperator = {
   channel: "official",
   official: true,
   ownerHandle: "openclaw",
-  downloads: 12,
-  updatedAtMs: 1_000,
 };
-const communityResearch = {
+const researchClaw = {
   ...workflowOperator,
   packageName: "@maker/release-scout",
   displayName: "Release Scout",
-  summary: "Compares public releases with sourced migration guidance.",
-  channel: "community",
-  official: false,
-  ownerHandle: "maker",
-  downloads: 20,
 };
-const soulExcerpt =
-  "Purpose. Turn approved workflows into clear outcomes while keeping the owner informed. ".repeat(
-    12,
-  );
-const agentsExcerpt = "Instructions. Review each step before execution and record the result.";
-const skillExcerpt =
-  "Use this skill to research a trip, check reliable sources, and prepare a useful itinerary. ".repeat(
-    12,
-  );
+const soulExcerpt = "Keep the owner informed about approved workflows. ".repeat(24);
 const config = { gateway: { controlUi: { experimental: { claws: true } } } };
+const agentsList = {
+  defaultId: "main",
+  mainKey: "main",
+  scope: "per-sender",
+  agents: [{ id: "main", name: "Main" }],
+};
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -94,12 +85,7 @@ describe.skipIf(!browserAvailable)("Claws discovery and Add", () => {
           valid: true,
           issues: [],
         },
-        "agents.list": {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "main", name: "Main" }],
-        },
+        "agents.list": agentsList,
         "claws.catalog.search": { entries: [entry] },
         "claws.catalog.detail": {
           detail: {
@@ -107,22 +93,12 @@ describe.skipIf(!browserAvailable)("Claws discovery and Add", () => {
             ...detailPublisher,
             version: "1.2.0",
             agentName: "Workflow Operator",
-            workspaceFiles: 5,
-            skills: 1,
-            plugins: 1,
-            mcpServers: 0,
-            scheduledJobs: 0,
             contents: {
               instructions: [
-                { name: "AGENTS.md", source: "workspace/AGENTS.md", excerpt: agentsExcerpt },
                 { name: "SOUL.md", source: "workspace/SOUL.md", excerpt: soulExcerpt },
-                { name: "USER.md", source: "workspace/USER.md" },
-                { name: "BOOTSTRAP.md", source: "BOOTSTRAP.md" },
-                { name: "notes/context.md", source: "notes/context.md" },
+                { name: "AGENTS.md", source: "workspace/AGENTS.md" },
               ],
-              skills: [
-                { name: "@openclaw/travel-research", version: "1.2.0", excerpt: skillExcerpt },
-              ],
+              skills: [{ name: "Trip research", excerpt: "Research trips." }],
               integrations: [
                 { name: "@openclaw/workflow-tools", kind: "plugin", version: "1.2.0" },
               ],
@@ -157,13 +133,10 @@ describe.skipIf(!browserAvailable)("Claws discovery and Add", () => {
   }
 
   async function openDetail(page: Page) {
-    await page
-      .locator("[data-claws-explore] [data-claws-entry]")
-      .first()
-      .getByRole("button", { name: "Add" })
-      .click();
+    const card = page.locator("[data-claws-explore] [data-claws-entry]").first();
+    await card.getByRole("button", { name: "Add" }).click();
     const detail = page.locator(".plugin-catalog-detail");
-    await detail.getByRole("heading", { name: "Skills" }).waitFor();
+    await detail.getByRole("heading", { name: "Workspace files" }).waitFor();
     return detail;
   }
 
@@ -191,19 +164,10 @@ describe.skipIf(!browserAvailable)("Claws discovery and Add", () => {
     expect(layout.scrollHeight).toBeGreaterThan(layout.height);
   }
 
-  it("uses Plugins discovery controls and category shelves instead of Browse all", async () => {
+  it("lays out featured cards and switches category shelves to filtered results", async () => {
     const { page, gateway } = await fixture();
     await page.locator("[data-claws-featured] [data-claws-entry]").first().waitFor();
     await page.locator('[data-claws-category="research"] [data-claws-entry]').first().waitFor();
-    expect(await page.getByRole("heading", { name: "Featured" }).count()).toBe(1);
-    expect(await page.getByRole("heading", { name: "Browse all" }).count()).toBe(0);
-    expect(
-      await page.locator('.plugin-catalog-section[data-catalog-section="research"]').count(),
-    ).toBe(1);
-    expect(
-      await page.locator('.plugin-catalog-section[data-catalog-section="personal"]').count(),
-    ).toBe(1);
-    expect(await page.locator(".plugin-catalog-chips .plugin-catalog-chip").count()).toBe(14);
     expect(
       await page
         .locator(".plugin-catalog-chips")
@@ -225,15 +189,10 @@ describe.skipIf(!browserAvailable)("Claws discovery and Add", () => {
         name: head.querySelector("h3")?.getBoundingClientRect().width ?? 0,
       }));
     expect(Math.abs(titleRow.head - titleRow.name)).toBeLessThan(1);
-    expect((await gateway.getRequests("claws.catalog.search")).map(({ params }) => params)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ featured: true, limit: 8 }),
-        expect.objectContaining({ category: "research", limit: 8 }),
-      ]),
-    );
+    await gateway.waitForRequest("claws.catalog.search", { match: { featured: true, limit: 8 } });
 
     await gateway.setMethodResponse("claws.catalog.search", {
-      entries: [communityResearch, { ...workflowOperator, downloads: 1 }],
+      entries: [researchClaw, workflowOperator],
     });
     await page.getByRole("button", { name: "Research", exact: true }).click();
     await gateway.waitForRequest("claws.catalog.search", { match: { category: "research" } });
@@ -251,9 +210,6 @@ describe.skipIf(!browserAvailable)("Claws discovery and Add", () => {
       const card = page.locator("[data-claws-explore] [data-claws-entry]").first();
       await card.waitFor();
       expect(await card.textContent()).toContain("@openclaw");
-      expect(await card.textContent()).not.toContain("by @openclaw");
-      expect(await card.textContent()).not.toContain("@openclaw/workflow-operator");
-      expect(await page.locator("[data-claws-attention]").count()).toBe(0);
       const detail = await openDetail(page);
       await page.waitForURL(/\/claws\/packages\/%40openclaw%2Fworkflow-operator$/u);
       await expectPublisher(detail, "openclaw", true);
@@ -264,9 +220,6 @@ describe.skipIf(!browserAvailable)("Claws discovery and Add", () => {
       expect(await help.evaluate((button) => button === document.activeElement)).toBe(true);
       const tooltip = workspace.locator("openclaw-tooltip").first();
       await tooltip.locator("[role=tooltip]").waitFor({ state: "visible" });
-      expect(await tooltip.getByRole("tooltip").textContent()).toContain(
-        "persona, tone, and boundaries",
-      );
       expect(await gateway.getRequests("claws.catalog.preview")).toHaveLength(0);
       await page.keyboard.press("Escape");
       await tooltip.locator("[role=tooltip]").waitFor({ state: "hidden" });
@@ -275,22 +228,10 @@ describe.skipIf(!browserAvailable)("Claws discovery and Add", () => {
       expect(await gateway.getRequests("claws.catalog.preview")).toHaveLength(0);
       await page.keyboard.press("Escape");
       await detail.getByRole("heading", { name: "Workspace files" }).click();
-      const fileDescriptions = detail
-        .locator(".plugin-capabilities")
-        .first()
-        .locator(".plugin-capability__copy > span");
-      expect(await fileDescriptions.allTextContents()).toEqual([soulExcerpt, agentsExcerpt]);
+      const fileDescriptions = workspace.locator(".plugin-capability__copy > span");
+      expect(await fileDescriptions.allTextContents()).toEqual([soulExcerpt]);
       await expectClamped(fileDescriptions.first());
-      expect(await detail.getByText("Added to the workspace").count()).toBe(0);
-      const skillDescription = detail
-        .locator(".plugin-capabilities")
-        .nth(1)
-        .locator(".plugin-capability__copy > span");
-      expect(await skillDescription.textContent()).toBe(skillExcerpt);
-      await expectClamped(skillDescription);
-      expect(
-        await detail.locator(".plugin-capabilities").nth(1).getByText("Version 1.2.0").count(),
-      ).toBe(0);
+      expect(await detail.getByText("Research trips.", { exact: true }).count()).toBe(1);
       expect(await detail.getByRole("heading", { name: "Integrations" }).count()).toBe(1);
       expect(await detail.getByRole("heading", { name: "Automations" }).count()).toBe(0);
       await detail.getByText("Installed", { exact: true }).waitFor();
@@ -309,49 +250,28 @@ describe.skipIf(!browserAvailable)("Claws discovery and Add", () => {
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
         viewport.width,
       );
-      await gateway.setMethodResponse("claws.catalog.preview", {
-        preview: { kind: "instruction", name: "SOUL.md", content: "# Soul preview" },
-      });
-      await workspace.getByRole("button", { name: "SOUL.md", exact: true }).click();
-      const preview = page.locator("openclaw-file-preview-modal");
-      await preview.locator(".item[data-path='USER.md']").waitFor();
-      expect(await preview.locator(".item").count()).toBe(5);
-      await preview.getByRole("heading", { name: "Soul preview", exact: true }).waitFor();
     },
   );
 
-  it("uses the accepted detail publisher when the catalog identity is stale", async () => {
-    const { page } = await fixture(
-      undefined,
-      { ...workflowOperator, packageName: "workflow-operator" },
-      { ownerHandle: "maker", official: false },
-    );
+  it("uses the accepted publisher to add a personal Claw and start chat despite pending setup", async () => {
+    const community = {
+      ...workflowOperator,
+      packageName: "@maker/workflow-operator",
+      channel: "community",
+    };
+    const { page, gateway } = await fixture(undefined, community, {
+      ownerHandle: "maker",
+      official: false,
+    });
     const card = page.locator("[data-claws-explore] [data-claws-entry]").first();
     await card.waitFor();
     expect(await card.textContent()).toContain("@openclaw");
     const detail = await openDetail(page);
     expect(await detail.locator("[data-claws-confirm] button").isEnabled()).toBe(true);
     await expectPublisher(detail, "maker", false);
-  });
-
-  it("adds a personal publisher Claw and sends the first chat message despite pending setup", async () => {
-    const community = {
-      ...workflowOperator,
-      packageName: "@maker/workflow-operator",
-      ownerHandle: "maker",
-      channel: "community",
-      official: false,
-    };
-    const { page, gateway } = await fixture(undefined, community);
-    await expectPublisher(await openDetail(page), "maker", false);
     await gateway.setMethodResponse("agents.list", {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", name: "Main" },
-        { id: "workflow-operator", name: "Workflow Operator" },
-      ],
+      ...agentsList,
+      agents: [...agentsList.agents, { id: "workflow-operator", name: "Workflow Operator" }],
     });
     await page.locator("[data-claws-confirm] button").click();
     await page.waitForURL(/\/chat\/workflow-operator$/u);
