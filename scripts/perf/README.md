@@ -4575,3 +4575,34 @@ in milliseconds to the barrier to synchronize the start. Compare concurrent
 baseline/candidate pairs on interleaved CPUs and swap sides for the next pair,
 using the host's guard and resource limits. Run identical-source controls before
 attributing GC or pause differences. Never compare profiled and unprofiled runs.
+
+## Measure transcript replica size memoization
+
+Run the sizing owner on synthetic nested message/tool payloads, without loading a
+Gateway or database:
+
+```bash
+node --expose-gc scripts/perf/transcript-size-memo-measure.mjs \
+  /path/to/session-actor-replica.ts table
+node --expose-gc scripts/perf/transcript-size-memo-measure.mjs \
+  /path/to/session-actor-replica.ts cpu
+node --expose-gc scripts/perf/transcript-size-memo-measure.mjs \
+  /path/to/session-actor-replica.ts allocation
+```
+
+The harness extracts the source's estimator and `retainTranscript` accounting;
+`touch` is a no-op, so this is owner evidence, not LRU or whole-Gateway timing.
+`table` retains 16 transcripts of 64 rows (shared by tail and context), checks each
+estimate against an uncached walk, and forces GC before reading the WeakMap's
+backing-table size from a heap snapshot. Its counting WeakMap is used only in that
+pass. `cpu` prepares 100 independent append sequences (128 initial rows, then
+128 appends), warms the code on disjoint rows, and measures 12,900 retains with the
+native WeakMap. `allocation` repeats that workload with sampling that includes
+collected objects; its timing is not a CPU gate. Fixtures remain live during each
+pass. Table bytes exclude payloads, keys, and the WeakMap object itself.
+
+Use the same Node version and fixtures on both revisions. Run at least five
+alternating samples per side, counterbalance launch order and CPU placement, and
+keep CPU timing separate from heap inspection and allocation sampling. Compare
+absolute CPU per retain and table bytes; report the owner source hashes, total
+estimated residency, entry counts, and sample counts. Estimates must match exactly.
