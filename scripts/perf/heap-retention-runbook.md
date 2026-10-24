@@ -126,6 +126,8 @@ build. List each approved absolute path, file URL, or package-relative spelling
 explicitly. Matching is exact after removing the snapshot name's query/hash:
 there are no prefix, basename, URL-decoding, or realpath matches. Never derive
 this allowlist from snapshot strings. Without an allowlist, all names are redacted.
+List the release that produced the snapshot, not the current symlink: after a
+deploy, `current` resolves to a newer release directory and every name redacts.
 
 `topScripts` ranks retained bytes; `duplicateScripts` includes **every** complete
 normalized identity with multiple reachable V8 Script objects, regardless of
