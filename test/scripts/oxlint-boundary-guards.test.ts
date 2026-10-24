@@ -83,7 +83,7 @@ beforeAll(() => {
 
 it.each(cases)(
   "reports expected violations for %s in %s",
-  (rule, file, violations, lines = undefined) => {
+  (rule, file, violations, lines?: number[]) => {
     // A fixture can trigger sibling rules; match both its file and its owning rule.
     const matching = diagnostics.filter(
       (diagnostic) =>
