@@ -275,12 +275,23 @@ echo 123
       });
   expect(setup.command).not.toContain(nodeBootstrap.token);
   expect(setup.command).not.toContain(setupCode);
-  const timers = path.join(home, "bootstrap-test-timers.cjs");
-  fs.writeFileSync(timers, 'require("node:timers/promises").setTimeout = async () => {};\n');
+  const hooks = path.join(home, "bootstrap-test-hooks.cjs");
+  // Observe real npm launches even when Linux prepends Node's directory to PATH.
+  fs.writeFileSync(
+    hooks,
+    `require("node:timers/promises").setTimeout = async () => {};
+const childProcess = require("node:child_process");
+const spawn = childProcess.spawn;
+childProcess.spawn = (command, args, options) => {
+  if (command === "npm") require("node:fs").appendFileSync(${JSON.stringify(path.join(home, "npm-calls"))}, args[0] + "\\n");
+  return spawn(command, args, options);
+};
+`,
+  );
   const child = spawn("/bin/sh", [], {
     env: {
       HOME: home,
-      NODE_OPTIONS: `--require ${JSON.stringify(timers)}`,
+      NODE_OPTIONS: `--require ${JSON.stringify(hooks)}`,
       PATH: `${bin}:${process.env.PATH}`,
       ...(desktop ? loginEnvironment : {}),
       ...setup.forwardedEnv,
@@ -355,19 +366,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       // Two fresh machines consume the same prepared archive and project lock.
       for (let start = 0; start < (mode === "present" ? 2 : 1); start++) {
         const { home } = testHome();
-        const bin = path.join(home, "bin");
-        fs.mkdirSync(bin, { recursive: true });
         const calls = path.join(home, "npm-calls");
-        fs.writeFileSync(
-          path.join(bin, "npm"),
-          `#!${process.execPath}
-const fs = require("node:fs");
-fs.appendFileSync(${JSON.stringify(calls)}, process.argv[2] + "\\n");
-try { require("node:child_process").execFileSync(process.execPath, [${JSON.stringify(path.resolve("node_modules/npm/bin/npm-cli.js"))}, ...process.argv.slice(2)], { stdio: "inherit" }); }
-catch (error) { process.exit(error.status || 1); }
-`,
-          { mode: 0o700 },
-        );
         const worker = await serveArtifact(Buffer.from("worker archive"));
         const result = await enroll(
           home,

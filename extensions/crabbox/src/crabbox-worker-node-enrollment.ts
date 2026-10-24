@@ -81,6 +81,7 @@ const http = require("node:http");
 const https = require("node:https");
 const { spawn, spawnSync } = require("node:child_process");
 const { once } = require("node:events");
+const { performance } = require("node:perf_hooks");
 const { setTimeout: delay } = require("node:timers/promises");
 const bootstrap = ${JSON.stringify(nodeBootstrap)};
 const workerBundle = ${JSON.stringify(workerBundle)};

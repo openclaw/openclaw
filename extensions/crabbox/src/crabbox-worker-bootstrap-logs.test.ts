@@ -25,7 +25,7 @@ it("logs successful bootstrap durations and fallback warnings without forwarding
   await runProvisionSetup({
     binary: "crabbox",
     provider: "aws",
-    inspect: { id: "worker-test", ready: true },
+    inspect: { id: "worker-test", ready: true, state: "running", tailscaleEnabled: false },
     deadline: Date.now() + 10_000,
     profile: parseCrabboxProfile({ provider: "aws", ttl: "1h", idleTimeout: "10m" }),
     stopLease: async () => {},
