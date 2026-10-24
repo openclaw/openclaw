@@ -5,6 +5,7 @@ import type {
   ModelCatalogEntry,
   ProviderLoginOption,
 } from "../../api/types.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 
 type Capability = NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number];
 
@@ -70,4 +71,12 @@ export function expectContent(
   for (const text of excludes) {
     expect(element?.textContent).not.toContain(text);
   }
+}
+
+export async function waitForText(
+  root: Pick<ParentNode, "querySelector">,
+  selector: string,
+  text: string,
+) {
+  await waitForSolid(() => expectContent(root.querySelector(selector), [text]));
 }

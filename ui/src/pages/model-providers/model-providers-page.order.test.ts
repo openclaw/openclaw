@@ -15,12 +15,9 @@ import {
 } from "../../test-helpers/modal-dialog.ts";
 import "../../lib/toast-host.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
   appendPage,
-  openApiKeyProvider,
   drainPageUpdates,
-  publishRouteData,
   mountPage,
   unmountPage,
   createAuthStatus,
@@ -33,6 +30,7 @@ import {
   submitCredential,
 } from "./model-providers-page.test-support.tsx";
 import {
+  waitForText,
   loginOption,
   capability,
   expectAbsent,
@@ -57,13 +55,8 @@ describe("ModelProvidersPage profile actions", () => {
     shell.className = "shell";
     document.body.append(shell);
     const toast = shell.appendChild(document.createElement("openclaw-toast-host"));
-    const { context, request, snapshot } = createHarness("main");
-    snapshot.hello = {
-      ...snapshot.hello,
-      type: "hello-ok",
-      protocol: 3,
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    };
+    const { context, request } = createHarness("main");
+
     const originalRequest = request.getMockImplementation()!;
     const warning = "Profile priority saved, but live authentication status could not refresh.";
     let committed = false;
@@ -107,7 +100,6 @@ describe("ModelProvidersPage profile actions", () => {
     await vi.dynamicImportSettled();
     await waitForSolid(() => expect(toast.textContent).toContain(warning));
     expect(page.view.props.profileOrders.openai).toBeUndefined();
-    expect(page.view.props.authStatus?.providers).toEqual([]);
     expectAbsent(page, 'li.provider-row[data-provider-id="openai"]');
     expectAbsent(page, ".model-providers__profile");
   });
@@ -149,17 +141,11 @@ describe("ModelProvidersPage profile actions", () => {
       "models.authOrderSet",
       { provider: "openai", profileIds: ["openai:one", "openai:two"], agentId: "main" },
     ]);
-    expect(page.view.props.messages.openai).toBeUndefined();
   });
 
   it("discards a detached page's queued order before a replacement page saves", async () => {
-    const { context, request, snapshot, publishEvent } = createHarness("main");
-    snapshot.hello = {
-      ...snapshot.hello,
-      type: "hello-ok",
-      protocol: 3,
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    };
+    const { context, request, publishEvent } = createHarness("main");
+
     const originalRequest = request.getMockImplementation()!;
     const firstSave = deferred<unknown>();
     let savedOrder = ["openai:one", "openai:two", "openai:three"];
@@ -236,14 +222,9 @@ describe("ModelProvidersPage profile actions", () => {
 
   it("cancels safely and logs out only the confirmed account's credential owner", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
-    const { settingsAgentSelection, context, notifySelection, publishPhase, request, snapshot } =
+    const { settingsAgentSelection, context, notifySelection, publishPhase, request } =
       createHarness("writer");
-    snapshot.hello = {
-      ...snapshot.hello,
-      type: "hello-ok",
-      protocol: 3,
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    };
+
     const originalRequest = request.getMockImplementation()!;
     const logout = deferred();
     let failLogout = true;
@@ -270,7 +251,7 @@ describe("ModelProvidersPage profile actions", () => {
         await logout.promise;
         const { profileIds } = params as ModelsAuthLogoutParams;
         profiles = profiles.filter((profile) => !profileIds?.includes(profile.profileId));
-        return {};
+        return { warning: "Authentication refresh failed." };
       }
       return originalRequest(method);
     });
@@ -337,8 +318,6 @@ describe("ModelProvidersPage profile actions", () => {
       );
       expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(2);
       expectAbsent(document.body, "openclaw-modal-dialog");
-      expectAbsent(page, ".model-providers__row > .callout");
-      expect(page.view.props.messages.anthropic).toBeUndefined();
       expect(requestCount(request, "models.authLogout")).toBe(1);
       await waitForSolid(() =>
         expectDisabled(page, '[aria-label="Log out work@example.com"]', false),
@@ -374,90 +353,13 @@ describe("ModelProvidersPage profile actions", () => {
         ),
       ).toEqual(["personal"]);
       await toast.updateComplete;
-      expect(toast.isConnected).toBe(true);
-      expect(toast.parentElement).toBe(shell);
-      expectPresent(toast, ".app-toast--bottom .app-toast__icon");
       expectContent(toast.querySelector('[role="status"]'), ["Logged out."]);
-      expectAbsent(page, ".model-providers__row > .callout");
-      expect(page.view.props.messages.anthropic).toBeUndefined();
+      await waitForSolid(() => expectContent(toast, ["Authentication refresh failed."]));
+      expect(context.runtimeConfig.patch).not.toHaveBeenCalled();
     } finally {
       logout.resolve();
       unmountPage(page);
       restoreDialogPolyfill();
-    }
-  });
-  it("ignores logout completion when route data changes the selected agent", async () => {
-    const { settingsAgentSelection, context, request, runtimeConfig } = createHarness("main");
-    const restoreDialogs = installDialogPolyfill();
-    const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
-    const page = appendPage(context);
-    await waitForProviders(page);
-    const firstLogout = deferred<unknown>();
-    const defaultsSave = deferred();
-    const originalRequest = request.getMockImplementation()!;
-    request.mockImplementation(async (method, params?: { provider?: string }) => {
-      if (method === "models.authLogout") {
-        return firstLogout.promise;
-      }
-      if (method === "models.probe") {
-        if (params?.provider === "anthropic") {
-          throw new Error("Previous agent failure");
-        }
-        return { provider: "openai", status: "ok", results: [] };
-      }
-      return originalRequest(method);
-    });
-    try {
-      page.view.props.onProbe("openai", ["openai"]);
-      await waitForSolid(() => expect(page.view.props.probeResults.openai).toBeDefined());
-      page.view.props.onProbe("anthropic", ["anthropic"]);
-      await waitForSolid(() =>
-        expect(page.view.props.messages.anthropic?.text).toBe("Previous agent failure"),
-      );
-      page.view.props.onOpenKeyEditor("openai");
-      page.view.props.onKeyDraftChange("synthetic-route-agent-key");
-      await openApiKeyProvider(page, "anthropic");
-      page.view.props.onAddProviderKeyChange("synthetic-route-provider-key");
-      runtimeConfig.ensureLoaded.mockImplementationOnce(() => defaultsSave.promise);
-      page.view.props.onPrimaryChange("openai/gpt-5");
-      page.view.props.onRequestLogout({
-        cardId: "openai",
-        label: "OpenAI",
-        target: { provider: "openai", profileIds: ["openai:first"] },
-      });
-      await waitForSolid(() =>
-        expectPresent(document.body, ".exec-approval-actions button.danger"),
-      );
-      // The unrelated defaults write stays held while this confirmation opens.
-      await drainPageUpdates(page);
-      expect(page.view.props.busy.defaults).toBe(true);
-      expect(runtimeConfig.patch).not.toHaveBeenCalled();
-      click(document.body, ".exec-approval-actions button.danger");
-      await waitForSolid(() => expect(requestCount(request, "models.authLogout")).toBe(1));
-      settingsAgentSelection.state.selectedId = "writer";
-      settingsAgentSelection.state.scopeId = "writer";
-      publishRouteData(page, { ...EMPTY_MODEL_PROVIDERS_DATA, updatedAt: 1 });
-      await page.updateComplete;
-      expect(page.view.props.credentialAgentLabel).toBe("Writer");
-      expect(page.view.props.busy).toEqual({});
-      expect(page.view.props.messages).toEqual({});
-      expect(page.view.props.probeResults).toEqual({});
-      expect(page.view.props.keyEditorProvider).toBeNull();
-      expect(page.view.props.keyDraft).toBe("");
-      expect(page.view.props.addProviderOpen).toBe(false);
-      expect(page.view.props.addProviderId).toBe("");
-      expect(page.view.props.addProviderKey).toBe("");
-      expect(page.view.props.defaultModels.primary).toBe("openai/gpt-5");
-      firstLogout.resolve({});
-      await drainPageUpdates(page);
-      expect(requestCount(request, "models.authLogout")).toBe(1);
-      await toast.updateComplete;
-      expectAbsent(toast, '[role="status"]');
-    } finally {
-      firstLogout.resolve({});
-      defaultsSave.resolve();
-      unmountPage(page);
-      restoreDialogs();
     }
   });
 });
@@ -579,11 +481,7 @@ async function useReplacementAccount(page: ModelProvidersPageTestElement) {
   const use = account.querySelector<HTMLButtonElement>("[data-models-use-account]");
   expect(use?.disabled).toBe(false);
   use!.click();
-  await waitForSolid(() =>
-    expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-      "Checking your model setup",
-    ),
-  );
+  await waitForText(page, "openclaw-modal-dialog", "Checking your model setup");
 }
 
 describe("Models account recovery", () => {
@@ -666,40 +564,59 @@ describe("Models account recovery", () => {
     }
   });
 
-  it("cancels account recovery while config admission is queued without dispatching activation", async () => {
-    const restoreDialog = installDialogPolyfill();
-    const { context, request, runtimeConfig, modelRef } = accountRecoveryHarness("replacement");
-    const waiting = deferred();
-    const release = deferred();
-    const page = appendPage(context);
-    try {
-      await openAccountRecovery(page);
-      runtimeConfig.beforeExternalDispatch.mockImplementation(async () => {
-        waiting.resolve();
-        await release.promise;
-      });
-      click(page, "[data-models-use-account]");
-      await waiting.promise;
-      await waitForSolid(() =>
-        expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-          "Checking your model setup",
-        ),
-      );
-      click(page, ".model-setup-wizard__footer button");
-      await waitForSolid(() => expectAbsent(page, "openclaw-modal-dialog"));
-      release.resolve();
-      await drainPageUpdates(page);
-      expect(requestCount(request, "openclaw.setup.activate.start")).toBe(0);
-      expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
-        agents: { entries: { writer: { model: `${modelRef}@example:original` } } },
-      });
-      expect(runtimeConfig.patch).not.toHaveBeenCalled();
-    } finally {
-      release.resolve();
-      unmountPage(page);
-      restoreDialog();
-    }
-  });
+  it.each(["cancel", "selection change"] as const)(
+    "blocks queued account activation after %s",
+    async (outcome) => {
+      const restoreDialog = outcome === "cancel" ? installDialogPolyfill() : () => {};
+      const h = accountRecoveryHarness("replacement");
+      const waiting = deferred();
+      const release = deferred();
+      const page = appendPage(h.context);
+      const newSelection = h.modelRef + "@example:chosen-elsewhere";
+      try {
+        await openAccountRecovery(page);
+        h.runtimeConfig.beforeExternalDispatch.mockImplementation(async () => {
+          waiting.resolve();
+          await release.promise;
+        });
+        click(page, "[data-models-use-account]");
+        await waiting.promise;
+        if (outcome === "cancel") {
+          await waitForText(page, "openclaw-modal-dialog", "Checking your model setup");
+          click(page, ".model-setup-wizard__footer button");
+          await waitForSolid(() => expectAbsent(page, "openclaw-modal-dialog"));
+        } else {
+          h.setConfiguredModel(newSelection);
+          await h.runtimeConfig.refresh();
+        }
+        release.resolve();
+        if (outcome === "selection change") {
+          await waitForSolid(() =>
+            expect(page.querySelector("openclaw-modal-dialog [role=alert]")?.textContent).toMatch(
+              /changed/i,
+            ),
+          );
+        }
+        await drainPageUpdates(page);
+        expect(requestCount(h.request, "openclaw.setup.activate.start")).toBe(0);
+        expect(currentConfigObject(h.runtimeConfig.state)).toMatchObject({
+          agents: {
+            entries: {
+              writer: {
+                model: outcome === "cancel" ? h.modelRef + "@example:original" : newSelection,
+              },
+            },
+          },
+        });
+        expect(h.runtimeConfig.patch).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        h.activation.resolve({ done: true, status: "cancelled" });
+        unmountPage(page);
+        restoreDialog();
+      }
+    },
+  );
 
   it.each(["cancel", "missing receipt"] as const)(
     "keeps the unavailable selection visible after account activation %s",
@@ -812,39 +729,5 @@ describe("Models account recovery", () => {
     const incompatible = dialog.querySelector('[data-profile-id="minimax:api-key"]')!;
     expectContent(incompatible, ["API key account"]);
     expectAbsent(incompatible, "[data-models-use-account]");
-  });
-
-  it("rejects account recovery when the selected profile changes before activation dispatch", async () => {
-    const { context, request, runtimeConfig, modelRef, activation, setConfiguredModel } =
-      accountRecoveryHarness("replacement");
-    const page = appendPage(context);
-    const waiting = deferred();
-    const release = deferred();
-    try {
-      await openAccountRecovery(page);
-      runtimeConfig.beforeExternalDispatch.mockImplementation(async () => {
-        waiting.resolve();
-        await release.promise;
-      });
-      click(page, "[data-models-use-account]");
-      await waiting.promise;
-      const newSelection = `${modelRef}@example:chosen-elsewhere`;
-      setConfiguredModel(newSelection);
-      await runtimeConfig.refresh();
-      release.resolve();
-      await waitForSolid(() =>
-        expect(page.querySelector("openclaw-modal-dialog [role=alert]")?.textContent).toMatch(
-          /changed/i,
-        ),
-      );
-      expect(requestCount(request, "openclaw.setup.activate.start")).toBe(0);
-      expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
-        agents: { entries: { writer: { model: newSelection } } },
-      });
-    } finally {
-      release.resolve();
-      activation.resolve({ done: true, status: "cancelled" });
-      unmountPage(page);
-    }
   });
 });

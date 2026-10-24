@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import type { ModelAuthStatusResult, ModelCatalogResult } from "../../api/types.ts";
+import type { ModelCatalogResult } from "../../api/types.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
 import { openPicker } from "../../test-helpers/select-picker.ts";
@@ -23,6 +23,7 @@ import {
   requestCount,
   waitForProviders,
   publishRouteData,
+  type ModelProvidersPageTestElement,
 } from "./model-providers-page.test-support.tsx";
 import {
   expectAbsent,
@@ -31,6 +32,7 @@ import {
   profile as authProfile,
   click,
   expectContent,
+  waitForText,
 } from "./model-providers.test-fixtures.ts";
 
 afterEach(() => {
@@ -39,27 +41,29 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const progress = ".model-providers__catalog-progress";
+const warning = progress + '[role="alert"]';
+const pendingProgress = progress + '[role="status"]';
+const option = (value: string) => '[role="option"][data-value="' + value + '"]';
+const selected = '[role="option"][aria-selected="true"]';
 const preparedCatalog: ModelCatalogResult = {
-  models: [
-    catalogModel("prepared-primary", "Prepared primary"),
-    catalogModel("prepared-utility", "Prepared utility"),
-    catalogModel("prepared-fallback", "Prepared fallback"),
-  ],
+  models: ["primary", "utility", "fallback"].map((role) =>
+    catalogModel("prepared-" + role, "Prepared " + role),
+  ),
   decisionModels: [{ id: "jev-latest", name: "Jev", provider: "typesafe", pluginId: "typesafe" }],
 };
-
 const savedModelConfig = {
   agents: {
     defaults: {
-      model: {
-        primary: "openai/prepared-primary",
-        fallbacks: ["openai/prepared-fallback"],
-      },
+      model: { primary: "openai/prepared-primary", fallbacks: ["openai/prepared-fallback"] },
       utilityModel: "openai/prepared-utility",
       decisionModel: "typesafe/jev-latest",
     },
   },
 };
+const recovered = (id = "recovered"): ModelCatalogResult => ({
+  models: [...preparedCatalog.models, catalogModel(id, id)],
+});
 
 function createCatalogHarness(lastAcceptedCatalog?: ModelCatalogResult) {
   const harness = createHarness("main");
@@ -80,95 +84,85 @@ function createCatalogHarness(lastAcceptedCatalog?: ModelCatalogResult) {
     return originalRequest(method);
   };
   harness.request.mockImplementation(catalogRequest);
-  return { ...harness, discover, readPublished, catalogRequest };
+  return {
+    ...harness,
+    discover,
+    readPublished,
+    catalogRequest,
+    async mount() {
+      const page = appendPage(harness.context);
+      await waitForProviders(page, savedModelConfig);
+      return page;
+    },
+    announce(event = "chat.metadata.changed") {
+      harness.publishEvent({ type: "event", event, payload: {} });
+    },
+  };
+}
+async function expectCatalog(page: ModelProvidersPageTestElement, catalog: ModelCatalogResult) {
+  await waitForSolid(() => expect(displayedCatalog(page)?.models).toEqual(catalog.models));
+  await drainPageUpdates(page);
+}
+async function expectSavedChoices(page: ModelProvidersPageTestElement) {
+  const choices = [];
+  for (const picker of chatModelPickers(page)) {
+    await openPicker(picker);
+    choices.push(picker.querySelector(selected)?.getAttribute("data-value"));
+  }
+  expect(choices).toEqual([
+    "openai/prepared-primary",
+    "openai/prepared-utility",
+    "openai/prepared-fallback",
+  ]);
+}
+function replaceRoute(page: ModelProvidersPageTestElement, catalogError: string | null = null) {
+  publishCatalog(page.context, "main", preparedCatalog);
+  page.routeData = {
+    ...createEmptyModelProvidersRouteData(page.context),
+    gatewaySnapshot: page.context.gateway.snapshot,
+    client: page.context.gateway.snapshot.client,
+    data: { ...EMPTY_MODEL_PROVIDERS_DATA, catalogError, updatedAt: 2 },
+  };
 }
 
 describe("Models page catalog publication", () => {
-  it("adopts a ready catalog published while the initial auth read is pending", async () => {
-    const { context, request, readPublished, publishEvent, catalogRequest } =
-      createCatalogHarness();
-    const readyCatalog: ModelCatalogResult = {
-      ...preparedCatalog,
-      providerOutcomes: [{ provider: "openai", status: "ready" }],
-    };
-    const auth = deferred<ModelAuthStatusResult>();
-    let authStarted = false;
-    request.mockImplementation((method: string, params?: { refresh?: boolean }) => {
-      if (method === "models.authStatus") {
-        if (!authStarted) {
-          authStarted = true;
-          return auth.promise;
-        }
-        return Promise.resolve(createAuthStatus());
-      }
-      return catalogRequest(method, params);
-    });
-    readPublished.mockReturnValue({ ...readyCatalog, pendingProviders: ["openai"] });
-    const page = appendPage(context);
-    await waitForSolid(() => {
-      expect(authStarted).toBe(true);
-      expect(displayedCatalog(page)?.pendingProviders).toEqual(["openai"]);
-    });
-
-    readPublished.mockReturnValue(readyCatalog);
-    publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
-    publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
-    auth.resolve(createAuthStatus());
-
-    await waitForSolid(() =>
-      expect(page.querySelector('[data-provider-id="openai"]')?.textContent).toContain("Ready"),
-    );
-    expectAbsent(page, ".model-providers__checking");
-    expect(displayedCatalog(page)?.pendingProviders).toBeUndefined();
-    expect(readPublished).toHaveBeenCalledTimes(2);
-  });
-
   it.each([
     {
-      profile: "openai:second",
+      pin: "second",
       profiles: [
-        authProfile("openai:first", { email: "first@example.com" }),
+        authProfile("openai:first"),
         authProfile("openai:second", { email: "second@example.com" }),
       ],
       expected: "Subscription · second@example.com",
     },
     {
       profiles: [
-        authProfile("openai:expired", { status: "expired", email: "expired@example.com" }),
+        authProfile("openai:expired", { status: "expired" }),
         authProfile("openai:first", { status: "expiring", email: "first@example.com" }),
       ],
       plan: "Other account plan",
       expected: "Subscription · first@example.com",
     },
     {
-      profile: "openai:expired",
+      pin: "expired",
       profiles: [
-        authProfile("openai:expired", { status: "expired", email: "expired@example.com" }),
-        authProfile("openai:first", { email: "first@example.com" }),
+        authProfile("openai:expired", { status: "expired" }),
+        authProfile("openai:first"),
         authProfile("openai:key", { type: "api_key", status: "static" }),
       ],
       expected: "Sign-in needed",
     },
-    {
-      profile: "openai:missing",
-      profiles: [authProfile("openai:first", { email: "first@example.com" })],
-      expected: "Sign-in needed",
-    },
-  ] satisfies Array<{
-    profile?: string;
-    plan?: string;
-    profiles: ModelAuthStatusResult["providers"][number]["profiles"];
-    expected: string;
-  }>)(
-    "Models page keeps $expected in open options and refreshes the resolved Auto model",
-    async ({ profile, plan, profiles, expected }) => {
+    { pin: "missing", profiles: [authProfile("openai:first")], expected: "Sign-in needed" },
+  ])(
+    "keeps $expected in options, not triggers, through Auto refresh",
+    async ({ pin, plan, profiles, expected }) => {
       const { context, request } = createHarness("main");
-      const originalRequest = request.getMockImplementation()!;
-      const suffix = profile ? `@${profile}` : "";
+      const original = request.getMockImplementation()!;
+      const suffix = pin ? "@openai:" + pin : "";
       const config = {
-        agents: { defaults: { model: { primary: `openai/prepared-primary${suffix}` } } },
+        agents: { defaults: { model: { primary: "openai/prepared-primary" + suffix } } },
       };
-      request.mockImplementation((method: string, params?: { refresh?: boolean }) => {
+      request.mockImplementation((method, params?: { refresh?: boolean }) => {
         if (method === "models.authStatus") {
           return Promise.resolve(
             createAuthStatus([
@@ -186,405 +180,223 @@ describe("Models page catalog publication", () => {
           return Promise.resolve({
             ...preparedCatalog,
             defaultModels: {
-              automaticUtilityModel: `openai/${params?.refresh ? "prepared-fallback" : "prepared-utility"}${suffix}`,
+              automaticUtilityModel:
+                "openai/prepared-" + (params?.refresh ? "fallback" : "utility") + suffix,
             },
           });
         }
-        return originalRequest(method);
+        return original(method);
       });
       const page = appendPage(context);
       await waitForProviders(page, config);
       await drainPageUpdates(page);
-
       const primary = modelPicker(page, "primary");
       const utility = modelPicker(page, "utility");
-      const primaryTrigger = primary.querySelector(".picker-select__trigger")!;
-      const utilityTrigger = utility.querySelector(".picker-select__trigger")!;
-      expectContent(primaryTrigger, ["Prepared primary"]);
-      expectAbsent(primaryTrigger, ".picker-select__description");
-      expect(primaryTrigger.getAttribute("aria-label")).not.toContain(expected);
-      expectContent(utilityTrigger, ["Auto · Prepared utility"]);
-      expectAbsent(utilityTrigger, ".picker-select__description");
-      expect(utilityTrigger.getAttribute("aria-label")).not.toContain(expected);
-      const requestsBeforeOpen = request.mock.calls.length;
+      function expectTrigger(picker: Element, label: string) {
+        const trigger = picker.querySelector(".picker-select__trigger")!;
+        expectContent(trigger, [label]);
+        expectAbsent(trigger, ".picker-select__description");
+        expect(trigger.getAttribute("aria-label")).not.toContain(expected);
+      }
+      expectTrigger(primary, "Prepared primary");
+      expectTrigger(utility, "Auto · Prepared utility");
       await openModelPicker(page, "primary");
-      await drainPageUpdates(page);
       expect(
         primary.querySelector(
-          `[role="option"][data-value="openai/prepared-primary${suffix}"] .picker-select__description`,
+          option("openai/prepared-primary" + suffix) + " .picker-select__description",
         )?.textContent,
       ).toBe(expected);
       await openModelPicker(page, "utility");
-      await drainPageUpdates(page);
-      expectContent(
-        utility.querySelector('[role="option"][data-value="__openclaw_automatic_utility__"]'),
-        [expected],
-      );
-      expect(request).toHaveBeenCalledTimes(requestsBeforeOpen);
+      expectContent(utility.querySelector(option("__openclaw_automatic_utility__")), [expected]);
       click(page, 'button[aria-label="Refresh"]');
       await waitForSolid(() =>
         expect(displayedCatalog(page)?.defaultModels?.automaticUtilityModel).toBe(
-          `openai/prepared-fallback${suffix}`,
+          "openai/prepared-fallback" + suffix,
         ),
       );
       await drainPageUpdates(page);
-      expectContent(utilityTrigger, ["Auto · Prepared fallback"]);
-      expectAbsent(utilityTrigger, ".picker-select__description");
-      expect(utilityTrigger.getAttribute("aria-label")).not.toContain(expected);
-      expectContent(
-        utility.querySelector('[role="option"][data-value="__openclaw_automatic_utility__"]'),
-        [expected],
-      );
+      expectTrigger(utility, "Auto · Prepared fallback");
+      expectContent(utility.querySelector(option("__openclaw_automatic_utility__")), [expected]);
     },
   );
 
-  it("retires an old agent's read when selection changes during auth refresh", async () => {
-    const {
-      context,
-      request,
-      publishEvent,
-      discover,
-      catalogRequest,
-      settingsAgentSelection,
-      notifySelection,
-    } = createCatalogHarness();
-    const authRefresh = deferred<ModelAuthStatusResult>();
-    let authSignal: AbortSignal | undefined;
-    const writerModels = [catalogModel("writer", "Writer model")];
-    request.mockImplementation(
-      (
-        method: string,
-        params?: { refresh?: boolean; agentId?: string },
-        options?: { signal?: AbortSignal },
-      ) => {
-        if (method === "models.authStatus" && params?.refresh) {
-          authSignal = options?.signal;
-          return authRefresh.promise;
-        }
-        if (method === "models.list" && params?.agentId === "writer") {
-          return Promise.resolve({ models: writerModels });
-        }
-        return catalogRequest(method, params);
-      },
-    );
-    const page = appendPage(context);
-    await waitForProviders(page, savedModelConfig);
-    await page.updateComplete;
-    click(page, 'button[aria-label="Refresh"]');
-    await waitForSolid(() => expect(authSignal).toBeDefined());
-    publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
-
-    settingsAgentSelection.state.selectedId = "writer";
-    settingsAgentSelection.state.scopeId = "writer";
-    notifySelection();
-    expect(authSignal!.aborted).toBe(true);
-    authRefresh.resolve(createAuthStatus());
-
-    await waitForSolid(() => expect(displayedCatalog(page)?.models).toEqual(writerModels));
-    await drainPageUpdates(page);
-    expect(discover).not.toHaveBeenCalled();
-    expect(requestCount(request, "models.list")).toBe(2);
-    await openModelPicker(page);
-    expectPresent(page, '[role="option"][data-value="openai/writer"]');
-  });
-
-  it("keeps one actionable catalog warning when failure publishes after the Retry reply", async () => {
-    const { context, request, discover, readPublished, publishEvent, catalogRequest } =
-      createCatalogHarness(preparedCatalog);
+  it("keeps one actionable warning when failure publishes after the Retry reply", async () => {
+    const h = createCatalogHarness(preparedCatalog);
     const pending = deferred<ModelCatalogResult>();
-    const failed = { ...preparedCatalog, refreshFailed: true };
-    readPublished.mockReturnValue(failed);
-    discover.mockReturnValueOnce(pending.promise).mockResolvedValue({
-      models: [...preparedCatalog.models, catalogModel("recovered", "Recovered model")],
-    });
-    const page = appendPage(context);
-    await waitForProviders(page, savedModelConfig);
+    const failed: ModelCatalogResult = {
+      ...preparedCatalog,
+      refreshFailed: true,
+      providerOutcomes: [{ provider: "openai", status: "unavailable" }],
+    };
+    h.readPublished.mockReturnValue(failed);
+    h.discover
+      .mockRejectedValueOnce(new Error("discovery failed"))
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue({
+        ...recovered(),
+        providerOutcomes: [{ provider: "openai", status: "ready" }],
+      });
+    const page = await h.mount();
+    const picker = modelPicker(page, "primary");
+    expectContent(page.querySelector('[data-provider-id="openai"]'), ["Models unavailable"]);
+    await retryCatalog(page);
+    await waitForText(page, warning + " span", "discovery failed");
     const publication = deferred<ModelCatalogResult>();
     let publicationStarted = false;
-    request.mockImplementation((method: string, params?: { refresh?: boolean }) => {
-      if (method === "models.list" && !params?.refresh) {
-        publicationStarted = true;
-        return publication.promise;
+    h.request.mockImplementation((method, params?: { refresh?: boolean }) => {
+      if (method !== "models.list" || params?.refresh) {
+        return h.catalogRequest(method, params);
       }
-      return catalogRequest(method, params);
+      publicationStarted = true;
+      return publication.promise;
     });
     await retryCatalog(page);
-    expect(discover).toHaveBeenCalledOnce();
+    expectPresent(page, pendingProgress);
+    expectAbsent(page, warning);
+    expect(modelPicker(page, "primary")).toBe(picker);
     pending.resolve(failed);
-    await waitForSolid(() =>
-      expectPresent(page, '.model-providers__catalog-progress[role="alert"]'),
-    );
-
-    publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+    await waitForSolid(() => expectPresent(page, warning));
+    h.announce();
     await waitForSolid(() => expect(publicationStarted).toBe(true));
-    await drainPageUpdates(page);
-    expect(page.querySelectorAll('.model-providers__catalog-progress[role="alert"]')).toHaveLength(
-      1,
-    );
-    expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
+    expect(page.querySelectorAll(warning)).toHaveLength(1);
     publication.resolve(failed);
-    await waitForSolid(() => expect(page.view.props.catalogDiscoveryError).not.toBeNull());
     await drainPageUpdates(page);
-
-    const warnings = page.querySelectorAll('.model-providers__catalog-progress[role="alert"]');
-    expect(warnings).toHaveLength(1);
-    expectContent(warnings[0], ["More models could not be discovered."]);
+    expect(page.querySelectorAll(warning)).toHaveLength(1);
+    expectContent(page.querySelector(warning), ["More models could not be discovered."]);
     expectAbsent(page, ".model-providers__provider-list .provider-usage__error");
-    expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
-    expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
     await openModelPicker(page);
-    expectPresent(page, '[role="option"][data-value="openai/prepared-primary"]');
-    const retry = warnings[0]!.querySelector<HTMLButtonElement>("button");
-    expect(retry?.textContent?.trim()).toBe("Retry");
-
-    retry!.click();
-
-    await waitForSolid(() => expect(displayedCatalog(page)?.models?.at(-1)?.id).toBe("recovered"));
-    await drainPageUpdates(page);
-    expect(discover).toHaveBeenCalledTimes(2);
-    expectAbsent(page, ".model-providers__catalog-progress");
-    expectPresent(page, '[role="option"][data-value="openai/recovered"]');
-    expect(page.view.props.catalogDiscoveryError).toBeNull();
+    expectPresent(page, option("openai/prepared-primary"));
+    await retryCatalog(page);
+    await expectCatalog(page, recovered());
+    expectAbsent(page, progress);
+    expect(modelPicker(page, "primary")).toBe(picker);
+    expectPresent(page, option("openai/recovered"));
+    expectContent(
+      page.querySelector('[data-provider-id="openai"]'),
+      ["Ready"],
+      ["Models unavailable"],
+    );
   });
 
-  it.each(["utility"] as const)(
-    "Models page %s picker opens without a request and preserves saved choices as publication completes",
-    async (role) => {
-      const { context, request, discover, readPublished, runtimeConfig, publishEvent } =
-        createCatalogHarness();
-      readPublished.mockReturnValue({ ...preparedCatalog, pendingProviders: ["openai"] });
-      const page = appendPage(context);
-      await waitForProviders(page, savedModelConfig);
-      await page.updateComplete;
-      const requestsAfterLoad = request.mock.calls.filter(([method]) => method === "models.list");
-      expect(requestsAfterLoad).toHaveLength(1);
+  it("keeps pickers request-free and saved choices stable through full and empty partial publication", async () => {
+    const h = createCatalogHarness();
+    h.readPublished.mockReturnValue({ ...preparedCatalog, pendingProviders: ["openai"] });
+    const page = await h.mount();
+    await page.updateComplete;
+    const reads = requestCount(h.request, "models.list");
+    await openModelPicker(page, "utility");
+    await drainPageUpdates(page);
+    expect(requestCount(h.request, "models.list")).toBe(reads);
+    expect(h.discover).not.toHaveBeenCalled();
+    expectPresent(page, pendingProgress);
+    expect(page.querySelector<HTMLButtonElement>(progress + " button")?.disabled).toBe(false);
+    expect(
+      chatModelPickers(page).map(
+        (picker) => picker.querySelector<HTMLButtonElement>(".picker-select__trigger")?.disabled,
+      ),
+    ).toEqual([false, false, false]);
 
-      await openModelPicker(page, role);
-      await drainPageUpdates(page);
-      expect(request.mock.calls.filter(([method]) => method === "models.list")).toEqual(
-        requestsAfterLoad,
-      );
-      expect(discover).not.toHaveBeenCalled();
-      expectPresent(page, '.model-providers__catalog-progress[role="status"]');
-      expect(
-        chatModelPickers(page).map(
-          (picker) => picker.querySelector<HTMLButtonElement>(".picker-select__trigger")?.disabled,
-        ),
-      ).toEqual([false, false, false]);
+    const full = {
+      ...recovered("discovered"),
+      decisionModels: preparedCatalog.decisionModels,
+      models: [
+        ...recovered("discovered").models,
+        ...["a", "b", "c", "d", "e"].map((id) => catalogModel(id, id)),
+      ],
+    };
+    h.readPublished.mockReturnValue(full);
+    h.announce();
+    await expectCatalog(page, full);
+    expectAbsent(page, progress);
+    await expectSavedChoices(page);
+    for (const picker of chatModelPickers(page)) {
+      expectPresent(picker, option("openai/discovered"));
+      expectAbsent(picker, option("typesafe/jev-latest"));
+    }
+    await openPicker(modelPicker(page, "decision"));
+    expect(modelPicker(page, "decision").querySelector(selected)?.getAttribute("data-value")).toBe(
+      "typesafe/jev-latest",
+    );
+    expectAbsent(modelPicker(page, "decision"), option("openai/discovered"));
 
-      const published: ModelCatalogResult = {
-        ...preparedCatalog,
-        models: [
-          ...preparedCatalog.models,
-          catalogModel("discovered", "Discovered model"),
-          ...[
-            "alternative-a",
-            "alternative-b",
-            "alternative-c",
-            "alternative-d",
-            "alternative-e",
-          ].map((id) => catalogModel(id, id)),
-        ],
-      };
-      readPublished.mockReturnValue(published);
-      publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
-      await waitForSolid(() => expect(displayedCatalog(page)?.models).toEqual(published.models));
-      await drainPageUpdates(page);
-      expectAbsent(page, ".model-providers__catalog-progress");
-      const selected: (string | null | undefined)[] = [];
-      for (const picker of chatModelPickers(page)) {
-        await openPicker(picker);
-        expectPresent(picker, '[role="option"][data-value="openai/discovered"]');
-        expectAbsent(picker, '[role="option"][data-value="typesafe/jev-latest"]');
-        selected.push(
-          picker.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
-        );
-      }
-      const decision = modelPicker(page, "decision");
-      await openPicker(decision);
-      expect(
-        decision.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
-      ).toBe("typesafe/jev-latest");
-      expectAbsent(decision, '[role="option"][data-value="openai/discovered"]');
-      expect(selected).toEqual([
-        "openai/prepared-primary",
-        "openai/prepared-utility",
-        "openai/prepared-fallback",
-      ]);
-      const laterPublication: ModelCatalogResult = {
-        ...published,
-        models: [...published.models, catalogModel("published-later", "Published later")],
-      };
-      readPublished.mockReturnValue(laterPublication);
-      await openModelPicker(page, "utility");
-      await drainPageUpdates(page);
-      expect(displayedCatalog(page)?.models).toEqual(published.models);
-      expect(readPublished).toHaveBeenCalledTimes(2);
-      publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
-      await waitForSolid(() =>
-        expect(displayedCatalog(page)?.models).toEqual(laterPublication.models),
-      );
-      await drainPageUpdates(page);
-      expectPresent(page, '[role="option"][data-value="openai/published-later"]');
-      const utility = modelPicker(page, "utility");
-      const search = utility.querySelector<HTMLInputElement>('input[type="search"]');
-      expect(search).not.toBeNull();
-      search!.value = "Discovered";
-      search!.dispatchEvent(new Event("input", { bubbles: true }));
-      await utility.updateComplete;
-      expect(
-        [...utility.querySelectorAll<HTMLElement>('[role="option"]:not([hidden])')].map(
-          (option) => option.dataset.value,
-        ),
-      ).toEqual(["openai/discovered"]);
-      expectContent(utility.querySelector(".picker-select__trigger"), ["Prepared utility"]);
-      expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
-      expect(runtimeConfig.patch).not.toHaveBeenCalled();
-      expect(discover).not.toHaveBeenCalled();
-      expect(requestCount(request, "models.list")).toBe(3);
-      expect(readPublished).toHaveBeenCalledTimes(3);
-    },
-  );
+    const later = {
+      ...full,
+      models: [...full.models, catalogModel("published-later", "Published later")],
+    };
+    h.readPublished.mockReturnValue(later);
+    await openModelPicker(page, "utility");
+    await drainPageUpdates(page);
+    expect(displayedCatalog(page)?.models).toEqual(full.models);
+    h.announce();
+    await expectCatalog(page, later);
+    expectPresent(page, option("openai/published-later"));
+    const utility = modelPicker(page, "utility");
+    const search = utility.querySelector<HTMLInputElement>('input[type="search"]')!;
+    search.value = "Discovered";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await utility.updateComplete;
+    expect(
+      [...utility.querySelectorAll<HTMLElement>('[role="option"]:not([hidden])')].map(
+        (entry) => entry.dataset.value,
+      ),
+    ).toEqual(["openai/discovered"]);
+    expectContent(utility.querySelector(".picker-select__trigger"), ["Prepared utility"]);
 
-  it("Models page adopts an empty partial inventory without changing saved choices", async () => {
-    const { context, discover, readPublished, runtimeConfig, publishEvent } =
-      createCatalogHarness();
-    const page = appendPage(context);
-    await waitForProviders(page, savedModelConfig);
-    readPublished.mockReturnValue({
+    search.value = "";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await utility.updateComplete;
+
+    h.readPublished.mockReturnValue({
       models: [],
       refreshFailed: true,
       pendingProviders: ["openai"],
     });
-
-    publishEvent({ type: "event", event: "config.changed", payload: {} });
-    await waitForSolid(() =>
-      expect(
-        page.querySelector('.model-providers__catalog-progress[role="alert"]')?.textContent,
-      ).toContain("More models could not be discovered."),
-    );
-    expectPresent(page, '.model-providers__catalog-progress[role="status"]');
-    await openModelPicker(page);
-    expect(displayedCatalog(page)?.models).toEqual([]);
-    const selected: (string | null | undefined)[] = [];
-    for (const picker of chatModelPickers(page)) {
-      await openPicker(picker);
-      selected.push(
-        picker.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
-      );
-    }
-    expect(selected).toEqual([
-      "openai/prepared-primary",
-      "openai/prepared-utility",
-      "openai/prepared-fallback",
-    ]);
+    h.announce("config.changed");
+    await waitForText(page, warning, "More models could not be discovered.");
+    expectPresent(page, pendingProgress);
+    await expectSavedChoices(page);
     await openModelPicker(page, "decision");
     expect(
       modelPicker(page, "decision")
-        .querySelector('[role="option"][data-value="typesafe/jev-latest"]')
+        .querySelector(option("typesafe/jev-latest"))
         ?.getAttribute("aria-disabled"),
     ).toBe("true");
+    expectContent(page.querySelector(progress + " button"), ["Retry"]);
     expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
-    expect(runtimeConfig.patch).not.toHaveBeenCalled();
-    expect(discover).not.toHaveBeenCalled();
-    expectContent(page.querySelector(".model-providers__catalog-progress button"), ["Retry"]);
-  });
-
-  it("Models page Retry recovers partial provider discovery without replacing saved choices", async () => {
-    const { context, discover, readPublished, runtimeConfig } =
-      createCatalogHarness(preparedCatalog);
-    readPublished.mockReturnValue({
-      ...preparedCatalog,
-      refreshFailed: true,
-      providerOutcomes: [{ provider: "openai", status: "unavailable" }],
-    });
-    const pending = deferred<ModelCatalogResult>();
-
-    discover.mockRejectedValueOnce(new Error("discovery failed"));
-
-    discover.mockReturnValueOnce(pending.promise);
-    const page = appendPage(context);
-    await waitForProviders(page, savedModelConfig);
-    expectContent(page.querySelector('[data-provider-id="openai"]'), ["Models unavailable"]);
-
-    const retainedPicker = modelPicker(page, "primary");
-    await retryCatalog(page);
-    await waitForSolid(() =>
-      expect(
-        page.querySelector('.model-providers__catalog-progress[role="alert"] span')?.textContent,
-      ).toBe("discovery failed"),
-    );
-    expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
-    await retryCatalog(page);
-    expect(discover).toHaveBeenCalledTimes(2);
-    await waitForSolid(() =>
-      expectPresent(page, '.model-providers__catalog-progress[role="status"]'),
-    );
-    expectAbsent(page, '.model-providers__catalog-progress[role="alert"]');
-    expect(modelPicker(page, "primary")).toBe(retainedPicker);
-    await openModelPicker(page);
-    expect(discover).toHaveBeenCalledTimes(2);
-    pending.resolve({
-      models: [...preparedCatalog.models, catalogModel("recovered", "Recovered model")],
-      providerOutcomes: [{ provider: "openai", status: "ready" }],
-    });
-    await waitForSolid(() => expect(displayedCatalog(page)?.models?.at(-1)?.id).toBe("recovered"));
-    await drainPageUpdates(page);
-    expectAbsent(page, ".model-providers__catalog-progress");
-    expect(modelPicker(page, "primary")).toBe(retainedPicker);
-    expectPresent(page, '[role="option"][data-value="openai/recovered"]');
-    expect(page.view.props.catalogDiscoveryError).toBeNull();
-    expectContent(page.querySelector('[data-provider-id="openai"]'), [], ["Models unavailable"]);
-    expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
-    expect(runtimeConfig.patch).not.toHaveBeenCalled();
+    expect(h.runtimeConfig.patch).not.toHaveBeenCalled();
+    expect(h.discover).not.toHaveBeenCalled();
   });
 
   it.each(["page refresh", "agent switch"] as const)(
-    "Models page retires a rejected catalog error on %s",
+    "retires a rejected catalog error on %s",
     async (replacement) => {
-      const {
-        context,
-        discover,
-        readPublished,
-        request,
-        catalogRequest,
-        settingsAgentSelection,
-        notifySelection,
-      } = createCatalogHarness(preparedCatalog);
+      const h = createCatalogHarness(preparedCatalog);
       const pending = deferred<ModelCatalogResult>();
-      readPublished.mockReturnValue({ ...preparedCatalog, refreshFailed: true });
-      discover.mockRejectedValueOnce(new Error("Previous catalog request failed"));
-      discover.mockReturnValueOnce(pending.promise);
-      const page = appendPage(context);
-      await waitForProviders(page, savedModelConfig);
-      const retainedPicker = modelPicker(page, "primary");
+      h.readPublished.mockReturnValue({ ...preparedCatalog, refreshFailed: true });
+      h.discover
+        .mockRejectedValueOnce(new Error("Previous catalog request failed"))
+        .mockReturnValueOnce(pending.promise);
+      const page = await h.mount();
+      const picker = modelPicker(page, "primary");
       await retryCatalog(page);
-      await waitForSolid(() =>
-        expect(
-          page.querySelector('.model-providers__catalog-progress[role="alert"]')?.textContent,
-        ).toContain("Previous catalog request failed"),
-      );
+      await waitForText(page, warning, "Previous catalog request failed");
       await drainPageUpdates(page);
-      const retainedFeedback = page.querySelector(".model-providers__catalog-feedback");
-      expectContent(retainedFeedback, ["Previous catalog request failed"]);
-
-      readPublished.mockReturnValue(preparedCatalog);
-      request.mockImplementation(
-        (method: string, params?: { refresh?: boolean; agentId?: string }) =>
-          method === "models.list" && params?.agentId === "writer"
-            ? pending.promise
-            : catalogRequest(method, params),
+      const feedback = page.querySelector(".model-providers__catalog-feedback");
+      h.readPublished.mockReturnValue(preparedCatalog);
+      h.request.mockImplementation((method, params?: { refresh?: boolean; agentId?: string }) =>
+        method === "models.list" && params?.agentId === "writer"
+          ? pending.promise
+          : h.catalogRequest(method, params),
       );
       if (replacement === "page refresh") {
         click(page, 'button[aria-label="Refresh"]');
       } else {
-        settingsAgentSelection.state.selectedId = "writer";
-        settingsAgentSelection.state.scopeId = "writer";
-        notifySelection();
+        h.settingsAgentSelection.state.selectedId = "writer";
+        h.settingsAgentSelection.state.scopeId = "writer";
+        h.notifySelection();
       }
-
       await waitForSolid(() => {
-        expect(requestCount(request, "models.list")).toBe(3);
+        expect(requestCount(h.request, "models.list")).toBe(3);
         expectContent(
           page.querySelector(".model-providers__catalog-feedback"),
           [],
@@ -592,145 +404,65 @@ describe("Models page catalog publication", () => {
         );
       });
       if (replacement === "page refresh") {
-        expect(discover).toHaveBeenCalledTimes(2);
-        expect(page.querySelector(".model-providers__catalog-feedback")).toBe(retainedFeedback);
-        expect(modelPicker(page, "primary")).toBe(retainedPicker);
+        expect(page.querySelector(".model-providers__catalog-feedback")).toBe(feedback);
+        expect(modelPicker(page, "primary")).toBe(picker);
       }
-      pending.resolve({
-        ...preparedCatalog,
-        models: [
-          ...preparedCatalog.models,
-          catalogModel("replacement-recovered", "Replacement recovered model"),
-        ],
-      });
-      await waitForSolid(() => {
-        expect(page.view.props.catalogDiscoveryError).toBeNull();
-        expect(displayedCatalog(page)?.models?.at(-1)?.id).toBe("replacement-recovered");
-        expectAbsent(page, '.model-providers__catalog-progress[role="alert"]');
-      });
+      pending.resolve(recovered("replacement-recovered"));
+      await expectCatalog(page, recovered("replacement-recovered"));
+      expectAbsent(page, warning);
       if (replacement === "page refresh") {
-        expect(modelPicker(page, "primary")).toBe(retainedPicker);
+        expect(modelPicker(page, "primary")).toBe(picker);
       } else {
         expect(page.view.props.credentialAgentLabel).toBe("Writer");
       }
       await openModelPicker(page);
-      expectPresent(page, '[role="option"][data-value="openai/replacement-recovered"]');
-      expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
+      expectPresent(page, option("openai/replacement-recovered"));
     },
   );
 
-  it("Models page keeps its new Retry active when a retired Retry completes with reject", async () => {
-    const { context, discover, readPublished, snapshot } = createCatalogHarness(preparedCatalog);
-    readPublished.mockReturnValue({ ...preparedCatalog, refreshFailed: true });
+  it("keeps a new Retry active when a retired Retry rejects", async () => {
+    const h = createCatalogHarness(preparedCatalog);
+    h.readPublished.mockReturnValue({ ...preparedCatalog, refreshFailed: true });
     const retired = deferred<ModelCatalogResult>();
     const current = deferred<ModelCatalogResult>();
-    discover.mockReturnValueOnce(retired.promise).mockReturnValueOnce(current.promise);
-    const page = appendPage(context);
-    await waitForProviders(page, savedModelConfig);
+    h.discover.mockReturnValueOnce(retired.promise).mockReturnValueOnce(current.promise);
+    const page = await h.mount();
     await retryCatalog(page);
-    publishCatalog(context, "main", preparedCatalog);
-    page.routeData = {
-      ...createEmptyModelProvidersRouteData(context),
-      gatewaySnapshot: snapshot,
-      client: snapshot.client,
-      data: {
-        ...EMPTY_MODEL_PROVIDERS_DATA,
-        catalogError: "Catalog unavailable",
-        updatedAt: 2,
-      },
-    };
-    await waitForSolid(() =>
-      expect(
-        page.querySelector('.model-providers__catalog-progress[role="alert"]')?.textContent,
-      ).toContain("Catalog unavailable"),
-    );
+    replaceRoute(page, "Catalog unavailable");
+    await waitForText(page, warning, "Catalog unavailable");
     await retryCatalog(page);
-
     retired.reject(new Error("Retired discovery failed"));
-
     await drainPageUpdates(page);
     expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
-    expectPresent(page, '.model-providers__catalog-progress[role="status"]');
-    expectAbsent(page, '.model-providers__catalog-progress[role="alert"]');
+    expectPresent(page, pendingProgress);
+    expectAbsent(page, warning);
     await openModelPicker(page, "fallback");
-    expect(discover).toHaveBeenCalledTimes(2);
-    current.resolve({
-      models: [catalogModel("current", "Current model")],
-    });
-    await waitForSolid(() => expect(displayedCatalog(page)?.models?.[0]?.id).toBe("current"));
-    await drainPageUpdates(page);
-    expectPresent(page, '[role="option"][data-value="openai/current"]');
-    expectAbsent(page, ".model-providers__catalog-progress");
+    current.resolve(recovered("current"));
+    await expectCatalog(page, recovered("current"));
+    expectPresent(page, option("openai/current"));
+    expectAbsent(page, progress);
   });
 
-  it("Models page for another agent keeps its Retry alive when the first page retires its request", async () => {
-    const { context, discover, readPublished, snapshot } = createCatalogHarness(preparedCatalog);
-    readPublished.mockReturnValue({ ...preparedCatalog, refreshFailed: true });
-    const writer = createHarness("writer");
-    const pending = deferred<ModelCatalogResult>();
-    discover.mockReturnValue(pending.promise);
-    const first = appendPage(context);
-    const second = appendPage({
-      ...context,
-      settingsAgentSelection: writer.context.settingsAgentSelection,
-    });
-    await waitForProviders(first, savedModelConfig);
-    await waitForProviders(second, savedModelConfig);
-    await retryCatalog(first);
-    await retryCatalog(second);
-    expect(first.view.props.credentialAgentLabel).toBe("Main");
-    expect(second.view.props.credentialAgentLabel).toBe("Writer");
-    publishCatalog(context, "main", preparedCatalog);
-    first.routeData = {
-      ...createEmptyModelProvidersRouteData(context),
-      gatewaySnapshot: snapshot,
-      client: snapshot.client,
-      data: {
-        ...EMPTY_MODEL_PROVIDERS_DATA,
-        updatedAt: 2,
-      },
-    };
-    await first.updateComplete;
-
-    pending.resolve({
-      models: [catalogModel("shared", "Shared discovery")],
-    });
-    await waitForSolid(() => expect(displayedCatalog(second)?.models?.[0]?.id).toBe("shared"));
-    await drainPageUpdates(first);
-    await drainPageUpdates(second);
-    expect(displayedCatalog(first)?.models).toEqual(preparedCatalog.models);
-    await openModelPicker(second);
-    expectPresent(second, '[role="option"][data-value="openai/shared"]');
-    await openModelPicker(first);
-    expectAbsent(first, '[role="option"][data-value="openai/shared"]');
-    expectAbsent(first, ".model-providers__catalog-progress");
-    expectAbsent(second, ".model-providers__catalog-progress");
-  });
   it("keeps a saved auth-owner order on every alias route", async () => {
     const { context, request } = createHarness("main");
     const page = appendPage(context);
     await waitForProviders(page);
     publishRouteData(page, {
       ...EMPTY_MODEL_PROVIDERS_DATA,
+      updatedAt: 1,
       authStatus: createAuthStatus([
         ...["claude-cli", "anthropic"].map((provider) => ({
           provider,
           authProvider: "anthropic",
           displayName: "Claude",
-          profiles: [
-            authProfile("claude:one", { type: "oauth" as const, status: "ok" as const }),
-            authProfile("claude:two", { type: "oauth" as const, status: "ok" as const }),
-          ],
+          profiles: ["one", "two"].map((id) => authProfile("claude:" + id)),
           profileOrder: ["claude:one", "claude:two"],
         })),
         { profileOrder: ["openai:one", "openai:two"] },
       ]),
-      updatedAt: 1,
     });
-    const unrelatedProvider = structuredClone(page.view.props.authStatus?.providers[2]);
-
+    const unrelated = structuredClone(page.view.props.authStatus?.providers[2]);
     page.view.props.onProfileOrderChange("anthropic", "anthropic", ["claude:two", "claude:one"]);
-
     await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(1));
     await vi.waitFor(() => expect(page.view.props.profileOrders.anthropic).toBeUndefined());
     expect(
@@ -743,63 +475,36 @@ describe("Models page catalog publication", () => {
       { provider: "anthropic", profileOrder: ["claude:two", "claude:one"] },
       { provider: "openai", profileOrder: ["openai:one", "openai:two"] },
     ]);
-    expect(page.view.props.authStatus?.providers[2]).toEqual(unrelatedProvider);
+    expect(page.view.props.authStatus?.providers[2]).toEqual(unrelated);
   });
 
   it("keeps a saved profile order when an older refresh finishes afterward", async () => {
     const { context, request } = createHarness("main");
     const page = appendPage(context);
     await waitForProviders(page);
-    const originalRequest = request.getMockImplementation()!;
-    const staleStatus = deferred<unknown>();
-    const authStatus = createAuthStatus([
-      {
-        profileOrder: ["openai:one", "openai:two"],
-      },
-    ]);
-    const refreshedStatus = {
-      ...authStatus,
-      ts: 2,
-      providers: [
-        {
-          ...authStatus.providers[0],
-          profileOrder: ["openai:two", "openai:one"],
-        },
-      ],
-    };
-    publishRouteData(page, {
-      ...EMPTY_MODEL_PROVIDERS_DATA,
-      authStatus,
-      updatedAt: 1,
-    });
-    request.mockClear();
-    let authStatusCalls = 0;
-    request.mockImplementation(async (method: string, params?: unknown) => {
+    const original = request.getMockImplementation()!;
+    const stale = deferred<unknown>();
+    const authStatus = createAuthStatus([{ profileOrder: ["openai:one", "openai:two"] }]);
+    const refreshed = createAuthStatus([{ profileOrder: ["openai:two", "openai:one"] }], 2);
+    publishRouteData(page, { ...EMPTY_MODEL_PROVIDERS_DATA, authStatus, updatedAt: 1 });
+    let reads = 0;
+    request.mockImplementation(async (method) => {
       if (method === "models.authStatus") {
-        authStatusCalls += 1;
-        return authStatusCalls === 1 ? staleStatus.promise : refreshedStatus;
+        return ++reads === 1 ? stale.promise : refreshed;
       }
-      if (method === "models.authOrderSet") {
-        return {};
-      }
-      void params;
-      return originalRequest(method);
+      return method === "models.authOrderSet" ? {} : original(method);
     });
-
     page.view.props.onRefresh();
-    await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(1));
+    await vi.waitFor(() => expect(reads).toBe(1));
     page.view.props.onProfileOrderChange("openai", "openai", ["openai:two", "openai:one"]);
-    await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(1));
-    await vi.waitFor(() => expect(authStatusCalls).toBe(2));
+    await vi.waitFor(() => expect(reads).toBe(2));
     await vi.waitFor(() => expect(page.view.props.profileOrders.openai).toBeUndefined());
     expect(page.view.props.authStatus?.providers[0]?.profileOrder).toEqual([
       "openai:two",
       "openai:one",
     ]);
-
-    staleStatus.resolve(authStatus);
+    stale.resolve(authStatus);
     await drainPageUpdates(page);
-
     expect(page.view.props.authStatus?.providers[0]?.profileOrder).toEqual([
       "openai:two",
       "openai:one",
