@@ -515,6 +515,7 @@ async function collectSessionIngestionBatches(params: {
     const corpus = await listSessionTranscriptCorpusEntriesForAgent(agentId, {
       config: params.cfg,
       includeRetainedSqlite: true,
+      includeContentRevision: false,
     });
     const forgottenSessionIds = await findForgottenMemorySessionIds({
       agentId,
