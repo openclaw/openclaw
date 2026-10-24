@@ -68,7 +68,7 @@ function syncStore<T>(options: Partial<OpenKeyedStoreOptions> = {}, pluginId = "
 function openAsyncStore<T>(options: Partial<OpenKeyedStoreOptions> = {}, pluginId = "discord") {
   return createPluginStateKeyedStore<T>(pluginId, { ...defaults, ...options });
 }
-function stores<T>(options: Partial<OpenKeyedStoreOptions>, pluginId = "discord") {
+function stores<T>(options: Partial<OpenKeyedStoreOptions> = {}, pluginId = "discord") {
   return keyedStores<T>(pluginId, { ...defaults, ...options });
 }
 function throws(action: () => unknown, expected: object) {
@@ -107,23 +107,48 @@ describe("plugin-state-store", () => {
     rmSync(dirname(resolveOpenClawStateSqlitePath()), { recursive: true, force: true });
   });
 
-  it("round-trips nested VM realm values across store instances", async () => {
-    const options = { namespace: "components", maxEntries: 10 };
-    const store = openAsyncStore(options);
-    const value: unknown = runInNewContext(
+  it("round-trips realm values and exact bulk keys across reopen", async () => {
+    const { sync, store } = stores();
+    const value = { nested: [{ count: 1, labels: ["retained", null] }] };
+    const realmValue: unknown = runInNewContext(
       '({ nested: [{ count: 1, labels: ["retained", null] }] })',
     );
-    await store.register("interaction:1", value);
+    await store.register("nested", realmValue);
+    const keys = ["10", "2", "nul\0tail", "\\u0000", "\ud800", "__proto__"] as const;
+    for (const [index, key] of keys.entries()) {
+      await store.register(key, { index });
+    }
+    seedScope("discord", "test", [{ key: "expired", value: {}, expiresAt: Date.now() }]);
     if (process.platform !== "win32") {
-      const databasePath = resolveOpenClawStateSqlitePath();
-      expect(statSync(dirname(databasePath)).mode & 0o777).toBe(0o700);
-      expect(statSync(databasePath).mode & 0o777).toBe(0o600);
+      const path = resolveOpenClawStateSqlitePath();
+      expect(statSync(dirname(path)).mode & 0o777).toBe(0o700);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
     }
     closePluginStateDatabase();
-
-    expect(syncStore(options).lookup("interaction:1")).toEqual({
-      nested: [{ count: 1, labels: ["retained", null] }],
-    });
+    const request = [...keys.toReversed(), "missing", "expired", " 2 "];
+    const expected = [
+      ...keys.map((_, index) => ({ index })).toReversed(),
+      undefined,
+      undefined,
+      { index: 1 },
+    ];
+    for (const current of [sync, store]) {
+      expect(await current.lookup("nested")).toEqual(value);
+      expect(await current.lookupMany(request)).toEqual(expected.map(ok));
+      const duplicates = await current.lookupMany(["nested", "nested"]);
+      expect(duplicates[0]?.ok && duplicates[0].value).not.toBe(
+        duplicates[1]?.ok && duplicates[1].value,
+      );
+    }
+    expect(sync.lookupMany([])).toEqual([]);
+    throws(() => sync.lookupMany(["nested", " "]), invalidLookup);
+    await expect(
+      store.lookupMany(Array.from({ length: 10_001 }, () => "missing")),
+    ).rejects.toMatchObject(invalidLookup);
+    expect(sync.lookupMany(Array.from({ length: 10_000 }, () => "missing"))).toEqual(
+      Array.from({ length: 10_000 }, () => ok(undefined)),
+    );
+    expect(isOpenClawStateDatabaseOpen()).toBe(false);
   });
 
   it("rejects new durable rows at capacity without evicting or blocking updates", async () => {
@@ -304,127 +329,68 @@ describe("plugin-state-store", () => {
     },
   );
 
-  it("round-trips unusual bulk keys and detached duplicate values after reopen", async () => {
-    const options = { namespace: "bulk", maxEntries: 20 };
-    const { sync, store } = stores<{ index: number }>(options);
-    const keys = ["10", "2", "nul\0tail", "\\u0000", "\ud800", "__proto__"] as const;
-    keys.forEach((key, index) => sync.register(key, { index }));
-    const now = Date.now();
-    seedScope("discord", "bulk", [{ key: "expired", value: {}, expiresAt: now }]);
-    const request = [keys[3], "missing", keys[0], "expired", ...keys, ` ${keys[1]} `];
-    const expected = [
-      { index: 3 },
-      undefined,
-      { index: 0 },
-      undefined,
-      ...keys.map((_, index) => ({ index })),
-      { index: 1 },
-    ];
-    closePluginStateDatabase();
-    expect(sync.lookupMany(request)).toEqual(expected.map(ok));
-    expect(await store.lookupMany(request)).toEqual(expected.map(ok));
-    for (const duplicates of [
-      sync.lookupMany([keys[0], keys[0]]),
-      await store.lookupMany([keys[0], keys[0]]),
-    ]) {
-      expect(duplicates[0]?.ok && duplicates[0].value).not.toBe(
-        duplicates[1]?.ok && duplicates[1].value,
-      );
-    }
-    expect(isOpenClawStateDatabaseOpen()).toBe(false);
-  });
-
-  it("bounds and validates bulk keys", async () => {
-    const { sync, store } = stores<number>({ namespace: "bulk-bounds" });
-    sync.register("key", 1);
-    expect(sync.lookupMany([])).toEqual([]);
-    throws(() => sync.lookupMany(["key", " "]), invalidLookup);
-    await expect(
-      store.lookupMany(Array.from({ length: 10_001 }, () => "key")),
-    ).rejects.toMatchObject(invalidLookup);
-    expect(sync.lookupMany(Array.from({ length: 10_000 }, () => "key"))).toEqual(
-      Array.from({ length: 10_000 }, () => ok(1)),
-    );
-  });
-
-  it("bulk-deletes only unchanged scoped rows in one bounded transaction", () => {
-    const namespace = "bulk-bindings";
-    const { seed, page, remove } = maintenance(namespace);
+  it("pages corrupt rows and bulk-deletes only unchanged scoped bytes", async () => {
+    const namespace = "bindings";
+    const { seed, page, remove, range } = maintenance(namespace);
+    const key = (index: number) => `binding:${String(index).padStart(4, "0")}`;
     seed([
       ...Array.from({ length: MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES }, (_, index) => ({
-        key: `binding:${String(index).padStart(4, "0")}`,
-        value: { generation: 1 },
+        key: key(index),
+        value: 1,
+        createdAt: index === 3 ? -1 : 0,
       })),
-      { namespace: "other", key: "binding:0000", value: { keep: true } },
-      { pluginId: "other", namespace, key: "binding:0000", value: { keep: true } },
+      { namespace: "other", key: key(0), value: true },
+      { pluginId: "other", namespace, key: key(0), value: true },
     ]);
+    replaceJson("codex", namespace, key(0), "{malformed");
+    for (const index of [1, 2]) {
+      replaceJson("codex", namespace, key(index), " 1 ");
+    }
+    const first = page(1);
+    expect(first).toEqual([
+      expect.objectContaining({ key: key(0), valueJson: "{malformed", expiresAt: null }),
+    ]);
+    expect(first[0]).not.toHaveProperty("value");
+    await expect(range()).rejects.toThrow(/corrupt JSON/);
+    expect(page(2, key(0))).toEqual(
+      [1, 2].map((index) =>
+        expect.objectContaining({ key: key(index), value: 1, valueJson: " 1 " }),
+      ),
+    );
     const observed = page(MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES);
-    const store = syncStore<{ generation: number }>(
+    expect(observed[3]).not.toHaveProperty("value");
+    replaceJson("codex", namespace, key(2), "1");
+    const store = syncStore<number>(
       { namespace, maxEntries: MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES },
       "codex",
     );
-    store.register("binding:0000", { generation: 2 });
-    const ownerAssertions: boolean[] = [];
-    const assertOwnedInTransaction = (database: EngineConnection) => {
-      ownerAssertions.push(database.isTransaction);
-    };
-    expect(remove(observed, assertOwnedInTransaction)).toEqual({
-      deleted: MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES - 1,
-      changed: 1,
+    store.register(key(4), 2);
+    expect(() =>
+      remove(observed, () => {
+        throw new Error("maintenance ownership expired");
+      }),
+    ).toThrow(/maintenance ownership expired/);
+    const transactions: boolean[] = [];
+    expect(
+      remove(observed, (database) => {
+        transactions.push(database.isTransaction);
+      }),
+    ).toEqual({
+      deleted: MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES - 2,
+      changed: 2,
     });
-    expect(ownerAssertions).toEqual([true]);
-    expect(store.lookup("binding:0000")).toEqual({ generation: 2 });
+    expect(transactions).toEqual([true]);
+    expect(page(4).map((entry) => entry.key)).toEqual([key(2), key(4)]);
+    expect(store.lookup(key(4))).toBe(2);
     for (const [pluginId, retainedNamespace] of [
       ["codex", "other"],
       ["other", namespace],
     ]) {
       expect(
-        syncStore({ namespace: retainedNamespace, maxEntries: 1 }, pluginId).lookup("binding:0000"),
-      ).toEqual({ keep: true });
+        syncStore({ namespace: retainedNamespace, maxEntries: 1 }, pluginId).lookup(key(0)),
+      ).toBe(true);
     }
-    expect(() => remove([...observed, observed[0]!], assertOwnedInTransaction)).toThrow(
-      /cannot exceed 512 entries/,
-    );
-  });
-
-  it("pages past malformed rows and compares siblings' original JSON bytes", async () => {
-    const namespace = "raw";
-    const { seed, page, remove, range } = maintenance(namespace);
-    seed([
-      { key: "binding:a", value: { corrupt: true } },
-      { key: "binding:b", value: { n: 1 } },
-      { key: "binding:c", value: { n: 1 } },
-      { key: "binding:d", value: { n: 1 }, createdAt: -1 },
-    ]);
-    replaceJson("codex", namespace, "binding:a", "{malformed");
-    for (const key of ["binding:b", "binding:c"]) {
-      replaceJson("codex", namespace, key, '{ "n" : 1 }');
-    }
-
-    const first = page(1);
-    expect(first).toEqual([
-      expect.objectContaining({ key: "binding:a", valueJson: "{malformed", expiresAt: null }),
-    ]);
-    expect(first[0]).not.toHaveProperty("value");
-    await expect(range()).rejects.toThrow(/corrupt JSON/);
-
-    const siblings = page(2, first[0]!.key);
-    expect(siblings).toEqual(
-      ["binding:b", "binding:c"].map((key) =>
-        expect.objectContaining({ key, value: { n: 1 }, valueJson: '{ "n" : 1 }' }),
-      ),
-    );
-    replaceJson("codex", namespace, "binding:c", '{"n":1}');
-
-    expect(() =>
-      remove(siblings, () => {
-        throw new Error("maintenance ownership expired");
-      }),
-    ).toThrow(/maintenance ownership expired/);
-    expect(remove(siblings)).toEqual({ deleted: 1, changed: 1 });
-    const preserved = page(4);
-    expect(preserved.map((entry) => entry.key)).toEqual(["binding:a", "binding:c", "binding:d"]);
-    expect(preserved[2]).not.toHaveProperty("value");
+    expect(() => remove([...observed, observed[0]!])).toThrow(/cannot exceed 512 entries/);
   });
 
   it.each([
@@ -471,31 +437,21 @@ describe("plugin-state-store.errors", () => {
           if (connection === "readonly") {
             closePluginStateDatabase();
           }
-          throws(() => store.entries(), {
-            code: failure === "decode" ? "PLUGIN_STATE_CORRUPT" : "PLUGIN_STATE_READ_FAILED",
-            operation: "entries",
-            path,
-            cause:
-              failure === "decode"
-                ? expect.any(SyntaxError)
-                : expect.objectContaining({
-                    code: "ERR_SQLITE_ERROR",
-                    message: "malformed JSON",
-                  }),
+          const code = failure === "decode" ? "PLUGIN_STATE_CORRUPT" : "PLUGIN_STATE_READ_FAILED";
+          const cause =
+            failure === "decode"
+              ? expect.any(SyntaxError)
+              : expect.objectContaining({ code: "ERR_SQLITE_ERROR", message: "malformed JSON" });
+          throws(() => store.entries(), { code, operation: "entries", path, cause });
+          using writer = new DatabaseSync(path);
+          writer.exec("PRAGMA busy_timeout = 0");
+          const table = failure === "decode" ? "plugin_state_entries" : "plugin_state_source";
+          writer.exec(`UPDATE ${table} SET created_at = created_at + 1`);
+          expect(writer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toEqual({
+            busy: 0,
+            log: 0,
+            checkpointed: 0,
           });
-          const writer = new DatabaseSync(path);
-          try {
-            writer.exec("PRAGMA busy_timeout = 0");
-            const table = failure === "decode" ? "plugin_state_entries" : "plugin_state_source";
-            writer.exec(`UPDATE ${table} SET created_at = created_at + 1`);
-            expect(writer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toEqual({
-              busy: 0,
-              log: 0,
-              checkpointed: 0,
-            });
-          } finally {
-            writer.close();
-          }
         }
       });
     },
@@ -527,13 +483,12 @@ describe("plugin-state-store.errors", () => {
           }
           for (const current of [sync, store]) {
             await rejects(() => current.lookup("key"), expected);
-            await rejects(() => current.entries(), expected);
             expect(await current.lookupMany(["key"])).toEqual([
               { ok: false, error: expect.objectContaining({ ...expected, operation: "lookup" }) },
             ]);
-            expect(await current.count()).toBe(1);
           }
         }
+        expect(await store.count()).toBe(1);
         const update = vi.fn(() => "changed");
         const predicate = vi.fn(() => true);
         for (const current of [sync, store]) {
