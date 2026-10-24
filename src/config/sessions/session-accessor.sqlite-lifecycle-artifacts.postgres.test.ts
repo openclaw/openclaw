@@ -1,15 +1,18 @@
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { withEngineStoreAdmission as admit } from "../../infra/database-engine/admission-scope.js";
 import {
   mixedAgentConnection,
   useMixedAgentPair,
 } from "../../infra/database-engine/mixed-agent.conformance.test-support.js";
+import * as queries from "../../infra/kysely-sync.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionLifecycleArtifactsCore } from "./session-accessor.sqlite-artifact-cleanup.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { planSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-artifacts.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 
 describe.skipIf(!mixedAgentConnection)("PostgreSQL lifecycle artifact cleanup", () => {
@@ -19,7 +22,7 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL lifecycle artifact cleanup", 
     const agentId = "main";
     const now = Date.now();
     const old = now - 600_000;
-    const marker = "lifecycle-pg-marker";
+    const marker = "lifecycle%_pg-marker";
     const options = { agentId, env: process.env };
     const database = admit(() => openOpenClawAgentDatabase(options));
     admit(() =>
@@ -32,7 +35,7 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL lifecycle artifact cleanup", 
             {
               type: "metadata",
               timestamp: new Date(old).toISOString(),
-              marker: id === "unrelated" ? "unrelated" : marker,
+              marker: id === "unrelated" ? "lifecycleXXpg-marker" : marker,
             },
             ...(id === "fresh"
               ? [{ type: "metadata", timestamp: new Date(now).toISOString() }]
@@ -42,6 +45,30 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL lifecycle artifact cleanup", 
         }
       }, options),
     );
+
+    const markerReads = vi.spyOn(queries, "iterateSqliteQuerySync");
+    try {
+      const plan = admit(() =>
+        planSessionLifecycleArtifactCleanup(database, {
+          agentId,
+          sessionKeySegmentPrefix: "unused-",
+          transcriptContentMarker: marker,
+          orphanTranscriptMinAgeMs: 300_000,
+          archiveRemovedEntryTranscripts: false,
+          archiveDirectory: path.dirname(database.path),
+          nowMs: now,
+        }),
+      );
+      expect(plan.deletePlans.map((item) => item.sessionId)).toEqual(["marked"]);
+      const markerSql = markerReads.mock.calls
+        .map(([, query]) => query.compile().sql)
+        .find((sql) => sql.includes('group by "session_id"'));
+      // The PostgreSQL bridge buffers a statement's rows; payloads must stay in SQL.
+      expect(markerSql).toMatch(/^select distinct "session_id" from "transcript_events"/);
+      expect(markerSql).toContain("and strpos(");
+    } finally {
+      markerReads.mockRestore();
+    }
 
     await expect(
       cleanupSessionLifecycleArtifactsCore({

@@ -5,6 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -106,7 +107,8 @@ function readOrphanTranscriptMarkerSessionIds(params: {
       params.database.db,
       db
         .selectFrom("transcript_events")
-        .select(["session_id", transcriptEventJsonSql(params.database.db).as("event_json")])
+        .select("session_id")
+        .distinct()
         .where(
           "session_id",
           "in",
@@ -117,22 +119,25 @@ function readOrphanTranscriptMarkerSessionIds(params: {
             .groupBy("session_id")
             .having((eb) => eb(eb.fn.max("created_at"), "<=", params.updatedBefore)),
         )
-        .orderBy("session_id", "asc")
-        .orderBy("seq", "asc"),
+        .where((eb) =>
+          eb(
+            eb.fn<number>(isPostgresSqlConnection(params.database.db) ? "strpos" : "instr", [
+              transcriptEventJsonSql(params.database.db),
+              eb.val(params.transcriptContentMarker),
+            ]),
+            ">",
+            0,
+          ),
+        )
+        .orderBy("session_id", "asc"),
     );
     // Consume every row so late SQLite errors still abort cleanup planning.
-    let previousSessionId: string | undefined;
     for (const row of rows) {
       if (params.diagnostics) {
         params.diagnostics.markerRows = (params.diagnostics.markerRows ?? 0) + 1;
-        if (row.session_id !== previousSessionId) {
-          params.diagnostics.markerWindows = (params.diagnostics.markerWindows ?? 0) + 1;
-          previousSessionId = row.session_id;
-        }
+        params.diagnostics.markerWindows = (params.diagnostics.markerWindows ?? 0) + 1;
       }
-      if (!marked.has(row.session_id) && row.event_json.includes(params.transcriptContentMarker)) {
-        marked.add(row.session_id);
-      }
+      marked.add(row.session_id);
     }
     return marked;
   } finally {

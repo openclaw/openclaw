@@ -306,6 +306,8 @@ it("leaves a missing lifecycle store absent", async () => {
 
 it("pages orphan marker reads while protecting fresh and retained history", () => {
   const freshSessionId = "history-000";
+  const unrelatedSessionId = "history-001";
+  const marker = "artifact%_plan-marker";
   const ids = Array.from(
     { length: 129 },
     (_, index) => `history-${String(index).padStart(3, "0")}`,
@@ -320,7 +322,13 @@ it("pages orphan marker reads while protecting fresh and retained history", () =
     );
     for (const id of ids) {
       window.run(id, sessionKey);
-      transcript.run(id, JSON.stringify(event));
+      transcript.run(
+        id,
+        JSON.stringify({
+          ...event,
+          runId: id === unrelatedSessionId ? "artifactXXplan-marker" : marker,
+        }),
+      );
     }
   }, options);
   const reads = trackSqliteStatementExecutions(
@@ -336,6 +344,7 @@ it("pages orphan marker reads while protecting fresh and retained history", () =
   const plan = () =>
     artifactPlanning.planSessionLifecycleArtifactCleanup(database, {
       ...planInput(),
+      transcriptContentMarker: marker,
       sessionKeySegmentPrefix: "unrelated-",
       orphanTranscriptMinAgeMs: 300_000,
       nowMs,
@@ -345,7 +354,7 @@ it("pages orphan marker reads while protecting fresh and retained history", () =
     expect(database.db.isTransaction).toBe(false);
     expect(first.entries).toEqual([]);
     expect(first.deletePlans.map((item) => item.sessionId)).toEqual(
-      ids.filter((id) => id !== ids.at(-2)),
+      ids.filter((id) => id !== unrelatedSessionId && id !== ids.at(-2)),
     );
     expect(reads.counts.transcriptSelection).toBe(2);
 
@@ -358,7 +367,7 @@ it("pages orphan marker reads while protecting fresh and retained history", () =
         .run(freshSessionId, JSON.stringify({ type: "metadata" }), nowMs);
     }, options);
     expect(plan().deletePlans.map((item) => item.sessionId)).toEqual(
-      ids.filter((id) => id !== freshSessionId && id !== ids.at(-2)),
+      ids.filter((id) => id !== freshSessionId && id !== unrelatedSessionId && id !== ids.at(-2)),
     );
     expect(reads.counts.transcriptSelection).toBe(4);
   } finally {
