@@ -587,7 +587,7 @@ node --import ./scripts/tsx.mjs scripts/gateway-heap-rig.mjs \
 ```
 
 Run this on a dedicated host with enough memory for snapshots. It starts the
-dist Gateway and local mock model servers on loopback ports 19548–19550,
+dist Gateway and local mock model servers on loopback ports 41673–41675,
 seeds 2,000 sessions with 32 KiB histories across two agents, and drives ten
 reconnecting Control UI WebSocket clients. The workload polls session, history,
 model, and cron APIs and sends mock `chat.send` turns with 8 KiB replies, Code
