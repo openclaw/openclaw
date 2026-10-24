@@ -38,6 +38,8 @@ type SessionEventSource =
   | "session"
   | "device"
   | "plugin"
+  // A yielded tool's result resuming its own conversation; hidden from chat display.
+  | "tool_handoff"
   | "cron";
 export type SessionEventOutcome = {
   status: "completed" | "failed" | "cancelled";

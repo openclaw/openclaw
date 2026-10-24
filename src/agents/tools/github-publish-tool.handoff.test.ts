@@ -240,7 +240,11 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
         const enqueue = vi
           .spyOn(events, "enqueueSessionEventForHost")
           .mockImplementation((text, options) => {
-            expect(options).toMatchObject({ sessionKey, expectedTarget: { sessionId } });
+            expect(options).toMatchObject({
+              sessionKey,
+              source: "tool_handoff",
+              expectedTarget: { sessionId },
+            });
             const authority =
               options.expectedTarget &&
               readSessionEventTargetOperatorAuthority(options.expectedTarget);

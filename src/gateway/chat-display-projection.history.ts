@@ -394,9 +394,12 @@ function shouldHideProjectedHistoryMessage(
   if (
     roleContent.role === "user" &&
     provenance?.kind === "internal_system" &&
-    (provenance.sourceTool === "exec" || provenance.sourceTool === "cron_failure_repair")
+    (provenance.sourceTool === "exec" ||
+      provenance.sourceTool === "cron_failure_repair" ||
+      provenance.sourceTool === "tool_handoff")
   ) {
-    // Internal repair instructions belong to the model transcript, not the chat feed.
+    // Internal repair instructions and yielded tool results belong to the model transcript,
+    // not the chat feed.
     // Keep the agent's authored outcome visible, including requests for user help.
     return true;
   }
