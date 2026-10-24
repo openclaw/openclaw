@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
@@ -22,16 +23,6 @@ const emptyResult = () => ({ content: [], details: {} });
 
 function tool(execute: AnyAgentTool["execute"], name = "tool"): AnyAgentTool {
   return { ...stubTool(name), label: name, execute };
-}
-
-function deferred<T = void>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 async function flushMicrotasks() {

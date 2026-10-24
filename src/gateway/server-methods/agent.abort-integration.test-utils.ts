@@ -325,6 +325,8 @@ describe("gateway agent handler chat.abort integration", () => {
 
   it("preserves stop-command reason when /stop lands during the accepted ack yield", async () => {
     prime();
+    // Keep the ACK yield pending while Stop reads durable retry state.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     mocks.agentCommand.mockResolvedValueOnce({
       payloads: [{ text: "unexpected dispatch" }],
       meta: { durationMs: 1 },

@@ -12,6 +12,7 @@ import { requiresExecApproval } from "../infra/exec-approvals-policy.js";
 import type { ExecAllowlistEntry } from "../infra/exec-approvals.types.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
+import { captureProcessUnhandledRejections } from "./bash-tools.exec-runtime.test-support.js";
 
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
 type ExecAutoReviewDecision = Awaited<ReturnType<ExecAutoReviewer>>;
@@ -420,19 +421,6 @@ function buildAllowlistEvalResult(params?: {
         : [null],
     segmentSatisfiedBy: [params?.allowlistSatisfied ? "allowlist" : null],
   };
-}
-
-function captureProcessUnhandledRejections() {
-  const reasons: unknown[] = [];
-  const originalProcessEmit = process.emit.bind(process);
-  const processEmit = vi.spyOn(process, "emit").mockImplementation((event, ...args) => {
-    if (event === "unhandledRejection") {
-      reasons.push(args[0]);
-      return true;
-    }
-    return originalProcessEmit(event, ...args);
-  });
-  return { reasons, restore: () => processEmit.mockRestore() };
 }
 
 const fullNodePolicy: MockExecApprovalsResolved["agent"] = {

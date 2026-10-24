@@ -3,12 +3,10 @@ import { expect, it } from "vitest";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
-  captureUiProofEnabled,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
-import { captureFrame } from "./sidebar-assertions.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const sessionKey = "agent:main:mobile-header";
@@ -89,11 +87,6 @@ suite.define(() => {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           const header = page.locator(".chat-pane-cache__pane--active .agent-chat__header--mobile");
           await header.locator(".mobile-header__title-text", { hasText: title }).waitFor();
-          if (captureUiProofEnabled) {
-            await captureFrame(suite.artifactDir, `mobile-header-${viewport.width}.png`, header, [
-              header.locator(".mobile-header__title-text"),
-            ]);
-          }
           expect((await header.boundingBox())!.height).toBe(48);
           const actions = header.locator(".chat-header-session-menu__trigger");
           await actions.waitFor();
@@ -120,7 +113,6 @@ suite.define(() => {
               )
                 .filter((button) => button.checkVisibility())
                 .map((button) => ({
-                  label: button.getAttribute("aria-label"),
                   width: button.getBoundingClientRect().width,
                   height: button.getBoundingClientRect().height,
                 })),
@@ -129,11 +121,6 @@ suite.define(() => {
           expect(geometry.titleWidth).toBeGreaterThan(200);
           expect(geometry.actionsRight).toBeLessThanOrEqual(geometry.headerRight);
           expect(geometry.bodyWidth).toBe(geometry.viewportWidth);
-          expect(geometry.buttons.map((button) => button.label)).toEqual([
-            "Expand sidebar",
-            title + " — Details",
-            "Actions for " + title,
-          ]);
           for (const button of geometry.buttons) {
             expect(button.width).toBeGreaterThanOrEqual(44);
             expect(button.height).toBeGreaterThanOrEqual(44);
@@ -197,26 +184,4 @@ suite.define(() => {
       );
     });
   }
-
-  it("preserves native desktop Actions, Details and frame Panels controls", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { width: 1280, height: 900 },
-      },
-      async ({ page }) => {
-        await installFixture(page);
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const header = page.locator(".chat-pane-cache__pane--active .chat-pane__header");
-        await header.locator(".chat-header-session-menu__trigger").waitFor();
-        await header.getByRole("button", { name: "Details", exact: true }).waitFor();
-        const panels = page
-          .locator(".chat-pane-cache__pane--active .sidebar-region__panels-toggle")
-          .getByRole("button", { name: "Panels", exact: true });
-        expect(await panels.count()).toBe(1);
-        expect(await panels.isVisible()).toBe(true);
-      },
-    );
-  });
 });

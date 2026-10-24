@@ -1,50 +1,22 @@
 // Plugin transcript reads after branch rewrites: supersedes markers and reset-window cursors.
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import {
-  replaceSessionEntry,
-  resetSessionEntryLifecycle,
-} from "../../config/sessions/session-accessor.js";
+import { resetSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import {
   readSessionTranscriptVisibleMessageDelta,
   readVisibleSessionTranscriptMessageEntries,
 } from "../../plugin-sdk/session-transcript-runtime.js";
-import { useTranscriptRewriteTempDirs } from "./transcript-rewrite.test-support.js";
+import {
+  appendMessages as appendSessionMessages,
+  asAppendMessage,
+  createTextContent,
+  useTranscriptRewriteTargets,
+} from "./transcript-rewrite.test-support.js";
 
 let rewriteTranscriptEntriesInSessionManager: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionManager;
-const tempDirs = useTranscriptRewriteTempDirs(afterEach);
-
-type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
-
-function asAppendMessage(message: unknown): AppendMessage {
-  return message as AppendMessage;
-}
-
-function appendSessionMessages(
-  sessionManager: SessionManager,
-  messages: AppendMessage[],
-): string[] {
-  return messages.map((message) => sessionManager.appendMessage(message));
-}
-
-async function createPersistedRewriteTarget(sessionId: string) {
-  const directory = tempDirs.make(`openclaw-${sessionId}-`);
-  const target = {
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath: path.join(directory, "sessions.json"),
-  };
-  await replaceSessionEntry(target, { sessionId, updatedAt: 1 });
-  return { directory, target };
-}
-
-function createTextContent(text: string) {
-  return [{ type: "text", text }];
-}
+const createPersistedRewriteTarget = useTranscriptRewriteTargets(afterEach);
 
 function createToolResultReplacement(toolName: string, text: string, timestamp: number) {
   return asAppendMessage({

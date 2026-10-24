@@ -6,6 +6,21 @@ import type {
 
 type Tool = Pick<McpCatalogTool, "toolName"> & Partial<McpCatalogTool>;
 
+export function catalogTool(
+  serverName: string,
+  toolName: string,
+  overrides: Partial<McpCatalogTool> = {},
+): McpCatalogTool {
+  return {
+    serverName,
+    safeServerName: serverName,
+    toolName,
+    inputSchema: { type: "object", properties: {} },
+    fallbackDescription: toolName,
+    ...overrides,
+  };
+}
+
 export function fixtureCatalog(serverName: string, tools: Tool[], generatedAt = 0): McpToolCatalog {
   return {
     version: 1,

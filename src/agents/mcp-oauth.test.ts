@@ -27,7 +27,10 @@ import {
   resolveMcpOAuthAccessToken as resolveToken,
   startMcpOAuthAuthorization,
 } from "./mcp-oauth.js";
-import { requesterIdentity, withTempHome as withBaseTempHome } from "./mcp-oauth.test-harness.js";
+import {
+  requesterIdentity,
+  withMcpOAuthTempHome as withTempHome,
+} from "./mcp-oauth.test-harness.js";
 import {
   resolvedOAuthConfig,
   seedMcpOAuthStoreForTest,
@@ -171,14 +174,6 @@ vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@modelcontextprotocol/client")>()),
   auth: authMock,
 }));
-
-function withTempHome<T>(run: (home: string) => T | Promise<T>, prefix: string) {
-  return withBaseTempHome(run, {
-    prefix,
-    skipSessionCleanup: true,
-    env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
-  });
-}
 
 function makeTokens(access_token: string, refresh_token: string, expires_in = 3600) {
   return { access_token, refresh_token, token_type: "Bearer", expires_in };

@@ -9,6 +9,7 @@ import type {
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import {
   createClaudeParser,
+  createClaudeBackend,
   claudeBlockStart,
   claudeBlockStop,
   claudeInputJsonDelta,
@@ -16,7 +17,7 @@ import {
   claudeTextDelta,
   joinJsonlFrames,
   finishCliFrames,
-  localCliBackend as localBackend,
+  localCliBackend,
   createPluginParser,
   claudeMessageStop,
 } from "./cli-output.test-helpers.js";
@@ -449,20 +450,20 @@ describe("createCliJsonlStreamingParser events", () => {
     });
 
     parser.push(
-      [
-        JSON.stringify({
+      joinJsonlFrames(
+        {
           type: "error",
           timestamp: "2026-06-16T19:36:48.000Z",
           severity: "error",
           message: "Invalid stream payload",
-        }),
-        JSON.stringify({
+        },
+        {
           type: "result",
           timestamp: "2026-06-16T19:36:49.000Z",
           status: "error",
           stats: { total_tokens: 1 },
-        }),
-      ].join("\n") + "\n",
+        },
+      ) + "\n",
     );
     parser.finish();
 
@@ -484,22 +485,15 @@ describe("createCliJsonlStreamingParser events", () => {
     const starts: CliToolUseStartDelta[] = [];
     const results: Array<{ toolCallId: string; name: string; isError: boolean; result?: unknown }> =
       [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
-      onAssistantDelta: () => undefined,
+    const parser = createClaudeParser({
+      backend: createClaudeBackend(),
       onToolUseStart: (delta) => starts.push(delta),
       onToolResult: (delta) => results.push(delta),
     });
 
     parser.push(
-      [
-        JSON.stringify({
+      joinJsonlFrames(
+        {
           type: "assistant",
           message: {
             role: "assistant",
@@ -507,8 +501,8 @@ describe("createCliJsonlStreamingParser events", () => {
               { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls -la" } },
             ],
           },
-        }),
-        JSON.stringify({
+        },
+        {
           type: "user",
           message: {
             role: "user",
@@ -521,8 +515,8 @@ describe("createCliJsonlStreamingParser events", () => {
               },
             ],
           },
-        }),
-      ].join("\n") + "\n",
+        },
+      ) + "\n",
     );
     parser.finish();
 
@@ -536,15 +530,8 @@ describe("createCliJsonlStreamingParser events", () => {
 
   it.each(["server_tool_use", "mcp_tool_use"])("recognizes %s blocks", (type) => {
     const starts: CliToolUseStartDelta[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
-      onAssistantDelta: () => undefined,
+    const parser = createClaudeParser({
+      backend: createClaudeBackend(),
       onToolUseStart: (delta) => starts.push(delta),
     });
 
@@ -591,42 +578,33 @@ describe("createCliJsonlStreamingParser events", () => {
     const starts: CliToolUseStartDelta[] = [];
     const results: Array<{ toolCallId: string; name: string; isError: boolean; result?: unknown }> =
       [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
-      onAssistantDelta: () => undefined,
+    const parser = createClaudeParser({
+      backend: createClaudeBackend(),
       onToolUseStart: (delta) => starts.push(delta),
       onToolResult: (delta) => results.push(delta),
     });
 
     parser.push(
-      [
-        JSON.stringify({
-          type: "assistant",
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: fixture.useType,
-                id: fixture.toolCallId,
-                name: fixture.name,
-                input: fixture.input,
-              },
-              {
-                type: fixture.resultType,
-                tool_use_id: fixture.toolCallId,
-                content: fixture.result,
-                is_error: fixture.isError,
-              },
-            ],
-          },
-        }),
-      ].join("\n") + "\n",
+      joinJsonlFrames({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: fixture.useType,
+              id: fixture.toolCallId,
+              name: fixture.name,
+              input: fixture.input,
+            },
+            {
+              type: fixture.resultType,
+              tool_use_id: fixture.toolCallId,
+              content: fixture.result,
+              is_error: fixture.isError,
+            },
+          ],
+        },
+      }) + "\n",
     );
     parser.finish();
 
@@ -651,8 +629,7 @@ describe("createCliJsonlStreamingParser events", () => {
   it("emits streamed server tool result blocks", () => {
     const results: CliToolResultDelta[] = [];
     const parser = createClaudeParser({
-      backend: { ...localBackend },
-      onAssistantDelta: () => undefined,
+      backend: { ...localCliBackend },
       onToolUseStart: () => undefined,
       onToolResult: (delta) => results.push(delta),
     });
@@ -709,7 +686,7 @@ describe("createCliJsonlStreamingParser events", () => {
     const commentaryTexts: string[] = [];
     const deltas: Array<{ text: string; delta: string }> = [];
     const parser = createClaudeParser({
-      backend: { ...localBackend, command: "claude" },
+      backend: { ...localCliBackend, command: "claude" },
       onAssistantDelta: (delta) => deltas.push({ text: delta.text, delta: delta.delta }),
       onCommentaryText: (text) => commentaryTexts.push(text),
     });
