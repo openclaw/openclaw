@@ -254,7 +254,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateEnvironmentsListParams, "environments.list", respond)) {
       return;
     }
-    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+    const scopes = client?.connect.scopes ?? [];
     const includePreparedDetails =
       params.includePreparedDetails === true &&
       authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, scopes).allowed;
@@ -286,10 +286,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       authority.assertCurrent();
       const includeCurrentPreparedDetails =
         includePreparedDetails &&
-        authorizeOperatorScopesForRequiredScope(
-          ADMIN_SCOPE,
-          Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
-        ).allowed;
+        authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, client?.connect.scopes ?? []).allowed;
       const summarizedAtMs = Date.now();
       environments.push(
         ...workers.map((record) =>
@@ -354,10 +351,8 @@ export const environmentsHandlers: GatewayRequestHandlers = {
           ? summarizeWorkerEnvironment(worker, Date.now(), {
               includePreparedDetails:
                 params.includePreparedDetails === true &&
-                authorizeOperatorScopesForRequiredScope(
-                  ADMIN_SCOPE,
-                  Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
-                ).allowed,
+                authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, client?.connect.scopes ?? [])
+                  .allowed,
             })
           : undefined,
         worker ? undefined : errorShape(ErrorCodes.INVALID_REQUEST, "unknown environmentId"),

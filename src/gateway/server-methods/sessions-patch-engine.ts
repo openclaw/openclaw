@@ -95,8 +95,7 @@ export async function executeSessionPatchMutations(params: {
   const sandbox = resolveCreatorSandbox(cfg, operatorCreation);
   const creation = { ...operatorCreation, ...(sandbox ? { sandbox } : {}) };
   const archiveActor = gatewayClientSessionCreator(client);
-  const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  const callerIsAdmin = client === null || callerScopes.includes(ADMIN_SCOPE);
+  const callerIsAdmin = client === null || client.connect.scopes?.includes(ADMIN_SCOPE) === true;
   const pluginOwnerId = client?.internal?.pluginRuntimeOwnerId;
   const discovery = await discoverSessionPatchTargets(cfg, params.targets);
   if (!discovery.ok) {
