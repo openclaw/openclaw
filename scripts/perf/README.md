@@ -4913,3 +4913,22 @@ and launch order in the second pair. Compare allocation and CPU per fixed batch,
 apply the campaign's absolute-delta and sample-count rules, and use matched A/A
 controls before rejecting on noisy GC, promotion, or maximum pauses. A p99 needs
 1,000 samples, a p95 needs 200, and major-GC tails need 50 collections per side.
+
+## PTY session cleanup scans
+
+On Linux, `node scripts/perf/pty-session-scan-measure.mjs <kill-tree.ts> live 100`
+measures the real termination owner against a prepared synthetic session with a
+child in a separate job-control group. Use `exited` for the same session after
+verified teardown. An optional final epoch-millisecond argument synchronizes
+measurement after warmup. Compare unchanged and candidate owner files under the
+shared quiet-slot guard, with concurrent starts and swapped interleaved CPUs.
+
+The probe counts `ps` calls and returned bytes, checks every signal target, and
+reports main-thread CPU, synchronous call latency, natural GC events/maxima, and
+event-loop tails with counts. It suppresses signals during repeated scans to
+retain identical fixtures, then restores real signals and verifies both processes
+exit. Child-process CPU is excluded. This is owner-boundary evidence, not a full
+Gateway benchmark; 100 calls cannot qualify latency p95/p99 as gates. Apply the
+campaign's absolute-delta rules and matched A/A controls before attributing GC
+or pause regressions. Accept reduced process-table transfer/parse work with
+unchanged descendant cleanup and no material CPU or latency regression.
