@@ -430,20 +430,15 @@ test("capable and legacy sockets produce identical session payloads and consumer
   expect(patches).toBeGreaterThan(10);
   expect(reconnect).not.toHaveBeenCalled();
   expect(consumers[0]?.snapshot().chat.messages.length).toBeGreaterThan(0);
-  expect(
-    baseline.some(
-      (frame) => isRecord(frame.payload) && frame.payload.reason === "activity-summary",
-    ),
-  ).toBe(true);
-  expect(
-    baseline.some(
-      (frame) =>
-        frame.event === "session.message" &&
-        isRecord(frame.payload) &&
-        isRecord(frame.payload.message) &&
-        frame.payload.message.role === "custom",
-    ),
-  ).toBe(true);
+  expect(baseline).toContainEqual(
+    expect.objectContaining({ payload: expect.objectContaining({ reason: "activity-summary" }) }),
+  );
+  expect(baseline).toContainEqual(
+    expect.objectContaining({
+      event: "session.message",
+      payload: expect.objectContaining({ message: expect.objectContaining({ role: "custom" }) }),
+    }),
+  );
   expect(
     baseline.some(
       (frame) =>

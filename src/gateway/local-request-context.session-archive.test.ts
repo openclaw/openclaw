@@ -59,6 +59,16 @@ const TARGET = "agent:main:dashboard:assigned-archive";
 const TARGET_ID = "assigned-archive-id";
 const session = (sessionKey: string) => ({ agentId: "main", sessionKey });
 const entry = (sessionKey: string) => loadSessionEntry(session(sessionKey));
+const findTool = (tools: ReturnType<typeof createOpenClawCodingTools>, name = "sessions") =>
+  expectDefined(
+    tools.find((tool) => tool.name === name),
+    `${name} tool`,
+  );
+const assign = (profileId: string) =>
+  assignSessionOwner(session(TARGET), {
+    owner: { type: "human", id: profileId },
+    assignedBy: { type: "human", id: profileId },
+  });
 const requestScope = () => {
   const request = expectDefined(getPluginRuntimeGatewayRequestScope(), "local Gateway scope");
   return { ...request, context: expectDefined(request.context, "local Gateway context") };
@@ -134,10 +144,7 @@ describe("scoped session archive tools", () => {
             createOpenClawCodingTools({ ...options, swarmCollector: true }),
             (await resolveGatewayScopedTools({ ...options, cfg, surface: "loopback" })).tools,
           ]) {
-            const tool = expectDefined(
-              tools.find((candidate) => candidate.name === "sessions"),
-              "collector archive tool",
-            );
+            const tool = findTool(tools);
             expect(tool.parameters).toMatchObject({
               properties: {
                 action: { enum: expect.arrayContaining(["patch", "assign_owner"]) },
@@ -167,10 +174,7 @@ describe("scoped session archive tools", () => {
       await withSessionToolsFixture(async (cfg) => {
         const options = toolOptions(cfg, TARGET, TARGET_ID);
         const check = async () => {
-          const assignment = expectDefined(
-            createOpenClawCodingTools(options).find((tool) => tool.name === "sessions"),
-            "assignment-only tool",
-          );
+          const assignment = findTool(createOpenClawCodingTools(options));
           // The definition is the same for every caller; the archive call is refused.
           expect(assignment.parameters).toMatchObject({
             properties: { action: { enum: expect.arrayContaining(["patch", "assign_owner"]) } },
@@ -223,13 +227,7 @@ describe("scoped session archive tools", () => {
         if (relationship === "creator") {
           await seed(targetKey, TARGET_ID, profile.profileId);
         } else if (relationship !== "unrelated") {
-          assignSessionOwner(
-            { agentId: "main", sessionKey: TARGET },
-            {
-              owner: { type: "human", id: profile.profileId },
-              assignedBy: { type: "human", id: profile.profileId },
-            },
-          );
+          assign(profile.profileId);
         }
         const run = registerChatAbortController({
           target: captureSessionTarget({
@@ -247,11 +245,8 @@ describe("scoped session archive tools", () => {
         run.controller.signal.addEventListener("abort", () => run.cleanup(), { once: true });
         try {
           await withOperator(client, async () => {
-            const tool = expectDefined(
-              createOpenClawCodingTools(toolOptions(cfg, requesterKey, "stop-requester-id")).find(
-                (candidate) => candidate.name === "sessions",
-              ),
-              "session controls",
+            const tool = findTool(
+              createOpenClawCodingTools(toolOptions(cfg, requesterKey, "stop-requester-id")),
             );
             const stop = withGatewayToolCallerIdentity(
               {
@@ -358,12 +353,12 @@ describe("scoped session archive tools", () => {
             setActiveEmbeddedRun(TARGET_ID, handle, TARGET, prepared.sessionFile, "main");
             await withoutGatewayToolCallerIdentity(async () => {
               await withOperator(client, async () => {
-                const tool = expectDefined(
+                const tool = findTool(
                   createOpenClawCodingTools({
                     ...toolOptions(cfg, requesterKey, "steer-requester-id"),
                     requesterOrigin,
-                  }).find((candidate) => candidate.name === "sessions_send"),
-                  "session steering",
+                  }),
+                  "sessions_send",
                 );
                 const result = await tool.execute("steer-ordinary", {
                   mode: "steer",
@@ -399,13 +394,7 @@ describe("scoped session archive tools", () => {
       const sessionKey = "agent:main:dashboard:operator-archive";
       const sessionId = "operator-archive-id";
       await seed(sessionKey, sessionId, profile.profileId);
-      assignSessionOwner(
-        { agentId: "main", sessionKey: TARGET },
-        {
-          owner: { type: "human", id: profile.profileId },
-          assignedBy: { type: "human", id: profile.profileId },
-        },
-      );
+      assign(profile.profileId);
       const archived = createDeferredCore();
       const context = request.context;
       context.subscribeSessionEvents("operator-archive-proof");
@@ -436,10 +425,7 @@ describe("scoped session archive tools", () => {
             })
           ).tools;
           for (const surface of [tools, gatewayTools]) {
-            const tool = expectDefined(
-              surface.find((candidate) => candidate.name === "sessions"),
-              "session writer archive tool",
-            );
+            const tool = findTool(surface);
             expect(tool.parameters).toMatchObject({
               properties: {
                 action: { enum: expect.arrayContaining(["patch", "stop", "assign_owner"]) },
@@ -458,10 +444,7 @@ describe("scoped session archive tools", () => {
               }),
             ).rejects.toThrow(/archive|restore/i);
           }
-          const tool = expectDefined(
-            tools.find((candidate) => candidate.name === "sessions"),
-            "archive tool",
-          );
+          const tool = findTool(tools);
           retained = tool;
           const archiveAssigned = (value: boolean) =>
             tool.execute("archive-assigned", {

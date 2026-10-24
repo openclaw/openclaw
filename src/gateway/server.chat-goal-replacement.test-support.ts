@@ -21,6 +21,10 @@ import * as partials from "./server-methods/chat-transcript-persistence.js";
 import type { RespondFn, GatewayRequestContext, GatewayClient } from "./server-methods/types.js";
 import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
+function agentMeta(sessionId: string) {
+  return { sessionId, provider: "test", model: "test", usage: { input: 1, output: 1 } };
+}
+
 export function registerGoalReplacementCases(
   scope: () => { agentId: string; sessionKey: string; sessionId: string; storePath: string },
   runEmbeddedAgent: MockInstance<typeof executeEmbeddedAgent>,
@@ -223,12 +227,7 @@ export function registerGoalReplacementCases(
               durationMs: 0,
               aborted: true,
               stopReason: "aborted",
-              agentMeta: {
-                sessionId: params.sessionId,
-                provider: "test",
-                model: "test",
-                usage: { input: 1, output: 1 },
-              },
+              agentMeta: agentMeta(params.sessionId),
             },
           };
         }
@@ -241,15 +240,7 @@ export function registerGoalReplacementCases(
         }));
         return {
           payloads: [{ text: "The updated checklist is complete." }],
-          meta: {
-            durationMs: 0,
-            agentMeta: {
-              sessionId: params.sessionId,
-              provider: "test",
-              model: "test",
-              usage: { input: 1, output: 1 },
-            },
-          },
+          meta: { durationMs: 0, agentMeta: agentMeta(params.sessionId) },
         };
       });
       let replace: Promise<MockInstance<RespondFn>> | undefined;
@@ -258,16 +249,13 @@ export function registerGoalReplacementCases(
           setRuntimeConfigSnapshot(policy);
         }
         await patchSessionEntryCore(scope(), () => ({ totalTokens: 100, totalTokensFresh: true }));
-        expect(
-          (
-            await rpc(
-              "chat.send",
-              goalStart("Finish the original checklist"),
-              undefined,
-              mode === "allowed-principal" ? requester : originalRequester,
-            )
-          ).mock.calls[0]?.[0],
-        ).toBe(true);
+        const start = await rpc(
+          "chat.send",
+          goalStart("Finish the original checklist"),
+          undefined,
+          mode === "allowed-principal" ? requester : originalRequester,
+        );
+        expect(start.mock.calls[0]?.[0]).toBe(true);
         await started.promise;
         if (secured && mode !== "allowed-principal") {
           // The revoked replacement caller does not own the original turn. Role
@@ -443,8 +431,8 @@ export function registerGoalReplacementCases(
           status: "active",
           objective: request.objective,
           tokenStart: original.tokenStart,
+          tokenBudget: original.tokenBudget,
         });
-        expect(updated.tokenBudget).toBe(original.tokenBudget);
         expect(order.indexOf("settled")).toBeLessThan(order.indexOf("pause"));
         expect(order.indexOf("pause")).toBeLessThan(order.indexOf("edit"));
         expect(order.indexOf("edit")).toBeLessThan(order.indexOf("resumed"));

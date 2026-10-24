@@ -120,10 +120,6 @@ async function cleanGatewayCron({ cron, stateDir }: StartedGatewayCron): Promise
   }
 }
 
-async function finishPending(pending: unknown[], signal: AbortSignal) {
-  await withinTest(Promise.allSettled(pending), signal);
-}
-
 function observe(promise: Promise<unknown>) {
   let outcome: { ok: true } | { ok: false; error: unknown } | undefined;
   return {
@@ -139,32 +135,6 @@ function observe(promise: Promise<unknown>) {
       },
     ),
   };
-}
-
-async function enteredBeforeSettled(
-  entered: Promise<void>,
-  pending: Promise<unknown>,
-  signal: AbortSignal,
-  label: string,
-) {
-  await withinTest(awaitGateBeforeSettlement(entered, pending, label), signal);
-}
-
-async function withExitWatcher(
-  label: string,
-  run: (
-    original: StartedGatewayCron,
-    release: ReturnType<typeof createDeferred<void>>,
-  ) => Promise<void>,
-) {
-  const release = createDeferred();
-  cancelAllMock.mockReturnValue(release.promise);
-  const original = await startGatewayCron(label);
-  try {
-    await run(original, release);
-  } finally {
-    release.resolve();
-  }
 }
 
 async function addCommand(original: StartedGatewayCron, name: string, deleteAfterRun: boolean) {
@@ -245,11 +215,13 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     const tick = wake(cronState);
     let drain: Promise<void> | undefined;
     try {
-      await enteredBeforeSettled(
-        entered.promise,
-        Promise.resolve(tick),
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          Promise.resolve(tick),
+          "Worker maintenance gate",
+        ),
         signal,
-        "Worker maintenance gate",
       );
       const observed = observe(expectDefined(original.cron.stopAndDrain?.(), "cron drain"));
       drain = observed.settled;
@@ -268,7 +240,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
       original.cron.stop();
       original.scheduler.beginClose();
       sessionAgents.mockRestore();
-      await finishPending([tick, drain], signal);
+      await withinTest(Promise.allSettled([tick, drain]), signal);
     }
   });
 
@@ -367,7 +339,10 @@ describe("gateway cron stop-and-drain automation ownership", () => {
   it.each(["drain", "restart", "superseded restart"] as const)(
     "waits for cancelled exit watchers before completing %s",
     async (action) => {
-      await withExitWatcher(`exit-watcher-${action}`, async ({ cron, cfg }, release) => {
+      const release = createDeferred();
+      cancelAllMock.mockReturnValue(release.promise);
+      const { cron, cfg } = await startGatewayCron(`exit-watcher-${action}`);
+      try {
         if (action !== "drain") {
           cron.stop();
         }
@@ -386,7 +361,9 @@ describe("gateway cron stop-and-drain automation ownership", () => {
         if (action === "superseded restart") {
           expect(sessionHasAutomation("agent:main:main", cfg)).toBe(false);
         }
-      });
+      } finally {
+        release.resolve();
+      }
     },
   );
 
