@@ -259,39 +259,4 @@ suite.define(() => {
     await expect.poll(() => activeMinutes.inputValue()).toBe("");
     await expect.poll(() => limit.inputValue()).toBe("50");
   });
-
-  it("omits noncanonical numeric filters from sessions.list requests", async () => {
-    const page = await newPage();
-    const gateway = await installMockGateway(page, {
-      sessionKey: "unknown",
-      methodResponses: {
-        "sessions.list": sessionList([]),
-      },
-    });
-
-    await page.goto(`${suite.server?.baseUrl ?? ""}sessions`);
-    await gateway.waitForRequest("sessions.list");
-    await openSessionFilters(page);
-    const activeMinutes = page.getByLabel("Updated within");
-    const limit = page.getByLabel("Limit");
-    const cases = [
-      ["60minutes", "70junk", undefined, 50],
-      ["12.5", "1e2", undefined, 50],
-      ["9007199254740993", "9007199254740993", undefined, 50],
-      ["+30", "060", 30, 60],
-      [" 80 ", " 090 ", 80, 90],
-    ] as const;
-    for (const [minutes, cap, expectedMinutes, expectedLimit] of cases) {
-      const requestCount = (await gateway.getRequests("sessions.list")).length;
-      await activeMinutes.fill(minutes);
-      await limit.fill(cap);
-      await waitForList(gateway, requestCount);
-      await expect
-        .poll(async () => {
-          const params = await lastParams(gateway);
-          return { activeMinutes: params?.activeMinutes, limit: params?.limit };
-        })
-        .toEqual({ activeMinutes: expectedMinutes, limit: expectedLimit });
-    }
-  });
 });

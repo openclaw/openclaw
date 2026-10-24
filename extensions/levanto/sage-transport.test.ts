@@ -154,7 +154,9 @@ describe("Sage through the real guarded provider HTTP helper", () => {
     expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
     expect(init?.redirect).toBe("manual");
     expect(init).toHaveProperty("dispatcher");
-    expect(new Headers(context.model.headers).has("content-type")).toBe(false);
+    expect(new Headers(omitNullRequestHeaders(context.model.headers)).has("content-type")).toBe(
+      false,
+    );
     expect(vi.getTimerCount()).toBe(0);
   });
   it("uses a single native batch call and retains the envelope", async () => {
@@ -387,3 +389,4 @@ describe("Sage through the real guarded provider HTTP helper", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 });
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

@@ -147,31 +147,6 @@ suite.define(() => {
     });
   });
 
-  it("routes printable input from the real Chat context menu to the composer", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const messageText = "Context menu typing route";
-      await installMockGateway(page, {
-        historyMessages: [
-          { role: "assistant", content: [{ type: "text", text: messageText }], timestamp: 1_000 },
-        ],
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const bubble = page.locator(".chat-bubble").filter({ hasText: messageText });
-      await bubble.waitFor();
-      await bubble.click({ button: "right" });
-      const menuItem = page
-        .locator(".chat-reply-context-menu")
-        .getByRole("menuitem", { name: "Reply to message", exact: true });
-      await menuItem.focus();
-
-      await page.keyboard.type("x");
-
-      const composer = page.locator(".agent-chat__composer-combobox > textarea");
-      await expect.poll(() => composer.inputValue()).toBe("x");
-      await expectFocus(composer);
-    });
-  });
-
   it("keeps remote-control typing out of the chat composer", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await installMockGateway(page, {

@@ -15,7 +15,6 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import "../spawn/subagent-spawn-model.mocks.shared.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
-import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
 import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import {
   getSubagentRequesterSessionActivity,
@@ -246,7 +245,7 @@ async function advanceAndFlush(ms: number) {
   await flushAsync();
 }
 
-const { prepareChildSession } = createRequesterWakeSessionFixture({
+const { prepareChildSession, spawnVisibleChild } = createRequesterWakeSessionFixture({
   requesterSessionKey: REQUESTER,
   getSessionStore: () => sessionStore,
   getSessionStorePath: () => sessionStorePath,
@@ -428,34 +427,8 @@ it("delivers a yielded visible child exactly once", async () => {
   const requesterTurnRunId = "run-requester-visible-yield";
   const runId = "run-visible-yield";
   const childSessionKey = "agent:main:dashboard:visible-yield";
-  const sessionEntry = await prepareChildSession(childSessionKey, `sess-${runId}`);
-  const spawnResult = await maybeSpawnVisibleSession({
-    raw: { visible: true },
-    task: "finish visible dashboard work",
-    label: "Visible child",
-    runtime: "subagent",
-    sandbox: "inherit",
-    expectsCompletionMessage: true,
-    options: {
-      agentSessionKey: REQUESTER,
-      requesterTurnRunId,
-      requesterAgentIdOverride: "main",
-      config: {
-        agents: { entries: { main: {} } },
-        session: { mainKey: "main", scope: "per-sender" },
-      },
-      callGateway: vi.fn(async () => ({
-        key: childSessionKey,
-        sessionId: sessionEntry.sessionId,
-        entry: sessionEntry,
-        runStarted: true,
-        runId,
-      })) as never,
-      registerRun: mod.registerSubagentRun,
-      countActiveRuns: () => 0,
-    },
-  });
-  expect(spawnResult).toMatchObject({ status: "accepted", runId, childSessionKey });
+  await spawnVisibleChild({ runId, childSessionKey, requesterTurnRunId });
+  expect(findRun(runId)?.childSessionKey).toBe(childSessionKey);
   setAssistantOutput(childSessionKey, "visible dashboard child complete", runId);
 
   const onYield = vi.fn();
@@ -473,8 +446,7 @@ it("delivers a yielded visible child exactly once", async () => {
     message: "Wait for the visible dashboard child",
   });
   expect(yieldResult.details).toEqual({ status: "yielded" });
-  expect(onYield).toHaveBeenCalledOnce();
-  expect(onYield).toHaveBeenCalledWith(
+  expect(onYield).toHaveBeenCalledExactlyOnceWith(
     "Wait for the visible dashboard child",
     undefined,
     undefined,

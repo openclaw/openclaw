@@ -10,6 +10,7 @@ import type {
   sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
 } from "../provider-http.js";
+import { omitNullRequestHeaders } from "../provider-request-headers.js";
 
 type ResolveProviderHttpRequestConfigParams = Parameters<
   typeof resolveProviderHttpRequestConfig
@@ -52,9 +53,7 @@ interface ProviderHttpMocks {
   resolveProviderHttpRequestConfigMock: Mock<
     (params: ResolveProviderHttpRequestConfigParams) => ResolveProviderHttpRequestConfigResult
   >;
-  resolveProviderRequestHeadersMock: Mock<
-    (params: ResolveProviderRequestHeadersParams) => Record<string, string> | undefined
-  >;
+  resolveProviderRequestHeadersMock: Mock<typeof resolveProviderRequestHeaders>;
 }
 
 const providerHttpMocks = vi.hoisted(() => ({
@@ -79,7 +78,7 @@ const providerHttpMocks = vi.hoisted(() => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
     allowPrivateNetwork:
       (params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork) === true,
-    headers: new Headers(params.defaultHeaders),
+    headers: new Headers(omitNullRequestHeaders(params.defaultHeaders)),
     dispatcherPolicy: undefined,
   })),
   resolveProviderRequestHeadersMock: vi.fn((params: ResolveProviderRequestHeadersParams) => {

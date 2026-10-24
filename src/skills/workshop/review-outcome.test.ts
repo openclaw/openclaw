@@ -239,7 +239,7 @@ describe("postWorkshopChangeNotice", () => {
             presentation: { blocks: [{ type: "buttons", buttons: [button] }] },
           },
         ],
-        mirror: expect.objectContaining({ sessionKey }),
+        mirror: expect.objectContaining({ sessionKey, deliveryMirror: marker(true) }),
       }),
       undefined,
       undefined,

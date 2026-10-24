@@ -211,14 +211,21 @@ suite.define(() => {
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
   });
 
-  it("keeps the session header available while disabling Gateway actions on reconnect", async () => {
+  it("keeps offline session actions and layout controls available while reconnecting", async () => {
     const page = await newPage();
-    const sessionKey = "agent:main:main";
+    const mutations = await holdModuleResponse(
+      page,
+      controlUiE2eBuiltModuleRequest("ui/src/lib/sessions/session-mutation-operations.runtime.ts"),
+    );
+    const sessionKey = "agent:main:offline-actions";
     const gateway = await installMockGateway(page, { sessionKey });
 
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"), {
+      waitUntil: "commit",
+    });
     const header = page.locator(".chat-pane__header");
     await header.waitFor({ state: "visible" });
+    mutations.release();
     const actions = header.locator(".chat-header-session-menu__trigger");
     await actions.click();
     const split = page.getByRole("menuitem", { name: "Open split view", exact: true });
@@ -240,7 +247,20 @@ suite.define(() => {
     expect(await outlet.getAttribute("aria-disabled")).toBeNull();
     expect(await header.isVisible()).toBe(true);
 
-    expect(await actions.isVisible()).toBe(false);
+    expect(await actions.isVisible()).toBe(true);
+    await actions.click();
+    const archive = page.getByRole("menuitem", { name: "Archive session", exact: true });
+    await archive.waitFor({ state: "visible" });
+    expect(await archive.isEnabled()).toBe(true);
+    expect(
+      await page.getByRole("menuitem", { name: "Mark as unread", exact: true }).isDisabled(),
+    ).toBe(true);
+    await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
+    const deleteSession = page.getByRole("menuitem", { name: "Delete…", exact: true });
+    await deleteSession.waitFor({ state: "visible" });
+    expect(await deleteSession.isEnabled()).toBe(true);
+    await actions.click();
+    await deleteSession.waitFor({ state: "hidden" });
     expect(await header.getByRole("button", { name: "Details", exact: true }).isEnabled()).toBe(
       true,
     );
@@ -255,6 +275,9 @@ suite.define(() => {
     await panels.click();
     await sideHeader.waitFor({ state: "hidden" });
     await gateway.setOnline(true);
+    await expect
+      .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
+      .toBe("connected");
     await actions.waitFor();
     await actions.click();
     expect(await split.isEnabled()).toBe(true);

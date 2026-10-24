@@ -51,7 +51,7 @@ function payloadStream(payload: unknown) {
 it("preserves a single configured integration identity through completions streaming", () => {
   const captured: Headers[] = [];
   const baseStreamFn = vi.fn<StreamFn>((_model, _context, options) => {
-    captured.push(new Headers(options?.headers));
+    captured.push(new Headers(omitNullRequestHeaders(options?.headers)));
     return { async *[Symbol.asyncIterator]() {} } as never;
   });
   const wrapped = expectDefined(
@@ -389,3 +389,4 @@ describe("wrapCopilotAnthropicStream", () => {
     expect(wrapCopilotProviderStream({ streamFn: undefined } as never)).toBeUndefined();
   });
 });
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

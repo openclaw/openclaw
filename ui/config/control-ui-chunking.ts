@@ -67,6 +67,14 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/device-pair-setup.ts":
       // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
       return "device-pair-setup-runtime";
+    case "ui/src/lib/sessions/session-mutation-operations.runtime.ts":
+    case "ui/src/lib/sessions/session-mutation-refresh.ts":
+    case "ui/src/lib/sessions/create.ts":
+    case "ui/src/lib/sessions/session-patch-row-facts.ts":
+    case "src/shared/session-unread.ts":
+    case "ui/src/lib/sessions/session-delete-operation.ts":
+      // Session actions must not import whole route chunks through earlier boot captures.
+      return "session-mutation-runtime";
     case "ui/src/lib/chat/emoji.ts":
     case "node_modules/markdown-it-emoji/lib/data/full.mjs":
       // Shortcode input owns the catalog; earlier boot captures must not keep it eager.

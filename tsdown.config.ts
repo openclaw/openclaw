@@ -450,6 +450,9 @@ function shouldNeverBundleDeclarationDependency(id: string): boolean {
 
 function shouldAlwaysBundleDependency(id: string): boolean {
   return (
+    // Ship the repaired compression dependency to npm installs as well as source builds.
+    id === "tar" ||
+    id.startsWith("tar/") ||
     // Keep htmlparser2's decoder version intact instead of binding it to the root major.
     id === "entities/decode" ||
     id === "openclaw/plugin-sdk/ssrf-runtime-internal" ||

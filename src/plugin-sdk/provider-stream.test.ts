@@ -170,7 +170,7 @@ it("buildProviderStreamFamilyHooks: covers the stream family matrix", async () =
   let capturedPayload: Record<string, unknown> | undefined;
   let capturedModelId: string | undefined;
   let capturedModelReasoning: boolean | undefined;
-  let capturedHeaders: Record<string, string> | undefined;
+  let capturedHeaders: NonNullable<Parameters<StreamFn>[2]>["headers"];
   let capturedReasoning: string | undefined;
   let payloadSeed: Record<string, unknown> | undefined;
 

@@ -16,6 +16,7 @@ export function createSessionDeletionHarness(connectionBootstrap?: ConnectionBoo
   const beta = row("beta");
   const sibling = row("sibling");
   const responses = new Map<string, ReturnType<typeof createDeferred<SessionDeleteOutcome>>>();
+  let deleteDispatched = createDeferred();
   let serverRows = [alpha, beta, sibling];
   let listResponse: Promise<SessionsListResult> | undefined;
   const request = vi.fn(
@@ -23,6 +24,8 @@ export function createSessionDeletionHarness(connectionBootstrap?: ConnectionBoo
       if (method === "sessions.delete") {
         const response = createDeferred<SessionDeleteOutcome>();
         responses.set(params!.key!, response);
+        deleteDispatched.resolve();
+        deleteDispatched = createDeferred();
         return response.promise;
       }
       if (method === "sessions.list") {
@@ -57,6 +60,17 @@ export function createSessionDeletionHarness(connectionBootstrap?: ConnectionBoo
     sibling,
     responses,
     request,
+    waitForDeleteRequest: async (
+      key: string,
+      previous?: ReturnType<typeof createDeferred<SessionDeleteOutcome>>,
+    ) => {
+      let response = responses.get(key);
+      while (!response || response === previous) {
+        await deleteDispatched.promise;
+        response = responses.get(key);
+      }
+      return response;
+    },
     setRows: (rows: GatewaySessionRow[]) => {
       serverRows = rows;
     },

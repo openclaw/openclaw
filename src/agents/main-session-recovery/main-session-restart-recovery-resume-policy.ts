@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import {
   isMainSessionRestartRecoveryInputProvenance,
   type InputProvenance,
@@ -25,10 +26,22 @@ import { isAgentToolReplaySafe } from "../tool-replay-safety.js";
 export function requiresDelegatedRecoverySource(
   entry: SessionEntry,
   source: InputProvenance["kind"] | "completion" | "cron" | "harness_completion" | undefined,
+  sessionKey: string,
 ): boolean {
   // Cron owns retry admission through a fresh occurrence and current job policy.
   // An earlier operator turn cannot authorize a generic recovery dispatch.
   if (source === "cron") {
+    return true;
+  }
+  // Child lineage needs a retained requester or operator source; ingress alone
+  // cannot restore the parent that authorized the interrupted turn.
+  if (
+    !entry.restartRecoveryOperatorSource &&
+    (entry.spawnedBy ||
+      entry.subagentRole ||
+      (entry.spawnDepth ?? 0) > 0 ||
+      isSubagentSessionKey(sessionKey))
+  ) {
     return true;
   }
   // Steering is context, not a new admission. A non-browser operator can have

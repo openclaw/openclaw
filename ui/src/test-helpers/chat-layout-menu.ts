@@ -11,14 +11,6 @@ export async function openChatDashboardMenu(scope: Page | Locator): Promise<Loca
   return menu;
 }
 
-export async function closeChatDashboardMenu(scope: Page | Locator): Promise<void> {
-  const menu = nativePane(scope).locator(".chat-dashboard-menu").filter({ visible: true });
-  await menu.getByRole("button", { name: "Dashboard options", exact: true }).click();
-  await menu.getByRole("menu", { name: "Dashboard options", exact: true }).waitFor({
-    state: "hidden",
-  });
-}
-
 export async function selectChatLayoutAction(
   scope: Page | Locator,
   name: string | RegExp,

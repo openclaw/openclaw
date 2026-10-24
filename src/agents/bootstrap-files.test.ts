@@ -266,6 +266,31 @@ describe("resolveBootstrapFilesForRun", () => {
     testState = undefined;
   });
 
+  it("returns updated files when a hook mutates the context", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const soulPath = path.join(workspaceDir, "SOUL.md");
+    const extraPath = path.join(workspaceDir, "EXTRA.md");
+    await fs.writeFile(soulPath, "base", "utf8");
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as AgentBootstrapHookContext;
+      context.bootstrapFiles = [
+        ...context.bootstrapFiles,
+        { name: "AGENTS.md", path: extraPath, content: "extra", missing: false },
+      ];
+    });
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+
+    expect(
+      files
+        .filter((file) => file.path === soulPath || file.path === extraPath)
+        .map(({ path: filePath, content, missing }) => ({ path: filePath, content, missing })),
+    ).toStrictEqual([
+      { path: soulPath, content: "base", missing: false },
+      { path: extraPath, content: "extra", missing: false },
+    ]);
+  });
+
   it("drops malformed hook files with missing/invalid paths", async () => {
     registerMalformedBootstrapFileHook();
 

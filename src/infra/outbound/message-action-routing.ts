@@ -85,38 +85,6 @@ function inferPeerKindForAccountBinding(
   return undefined;
 }
 
-function resolveTargetBoundAccountId(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  channelPlugin?: ChannelPlugin;
-  args: Record<string, unknown>;
-  agentId?: string;
-}): string | undefined {
-  if (!params.agentId) {
-    return undefined;
-  }
-  const target = readTrimmedStringAlias(params.args, ["to", "channelId"]);
-  if (!target) {
-    return resolveFirstBoundAccountId({
-      cfg: params.cfg,
-      channelId: params.channel,
-      agentId: params.agentId,
-    });
-  }
-
-  const candidates = new Set<string>();
-  addTargetCandidates(candidates, target, params.channel);
-  const [peerId, ...exactPeerIdAliases] = Array.from(candidates);
-  return resolveFirstBoundAccountId({
-    cfg: params.cfg,
-    channelId: params.channel,
-    agentId: params.agentId,
-    peerId,
-    exactPeerIdAliases,
-    peerKind: inferPeerKindForAccountBinding(params.channel, target, params.channelPlugin),
-  });
-}
-
 function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
   return readTrimmedStringAlias(params, ["target", "to", "channelId"]) !== undefined;
 }
@@ -273,13 +241,26 @@ export async function prepareMessageRoute(params: {
   });
   let accountId = explicitAccountId ?? input.defaultAccountId;
   if (!accountId && agentId) {
-    accountId = resolveTargetBoundAccountId({
-      cfg,
-      channel,
-      channelPlugin,
-      args: actionParams,
-      agentId,
-    });
+    const target = readTrimmedStringAlias(actionParams, ["to", "channelId"]);
+    if (!target) {
+      accountId = resolveFirstBoundAccountId({
+        cfg,
+        channelId: channel,
+        agentId,
+      });
+    } else {
+      const candidates = new Set<string>();
+      addTargetCandidates(candidates, target, channel);
+      const [peerId, ...exactPeerIdAliases] = Array.from(candidates);
+      accountId = resolveFirstBoundAccountId({
+        cfg,
+        channelId: channel,
+        agentId,
+        peerId,
+        exactPeerIdAliases,
+        peerKind: inferPeerKindForAccountBinding(channel, target, channelPlugin),
+      });
+    }
   }
   const delegatesActionToGateway =
     Boolean(input.gateway) &&

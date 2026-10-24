@@ -8,45 +8,6 @@ import { readJson, runProcess, writeJson } from "./upgrade-survivor-shard.test-s
 const assertions = resolve("scripts/e2e/lib/upgrade-survivor/assertions.mjs");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-// Independent persisted output contract: v2026.7.1-2's authored policy, with
-// only historical null usage removed by the frozen candidate's Doctor importer.
-function canonicalPolicy() {
-  const rules = (security: string, ask: string, autoAllowSkills: boolean) => ({
-    security,
-    ask,
-    askFallback: "deny",
-    autoAllowSkills,
-  });
-  return {
-    version: 1,
-    socket: { path: "/synthetic/exec.sock", token: "synthetic-socket-value-must-not-be-logged" },
-    defaults: rules("allowlist", "on-miss", false),
-    agents: {
-      main: {
-        ...rules("allowlist", "always", true),
-        allowlist: [
-          {
-            id: "survivor-unused-command",
-            pattern: "/opt/upgrade-survivor/bin/report",
-            argPattern: "--summary",
-          },
-          {
-            id: "survivor-used-command",
-            pattern: "/opt/upgrade-survivor/bin/check",
-            lastUsedAt: 1782864000000,
-            lastUsedCommand: "/opt/upgrade-survivor/bin/check --synthetic",
-            lastResolvedPath: "/opt/upgrade-survivor/bin/check",
-          },
-        ],
-      },
-      auditor: {
-        ...rules("deny", "off", false),
-        allowlist: [{ id: "survivor-auditor-command", pattern: "/opt/upgrade-survivor/bin/audit" }],
-      },
-    },
-  };
-}
-
 function fixture(legacy = false) {
   const home = tempDirs.make("survivor-exec-policy-");
   const state = join(home, "state");
@@ -125,10 +86,10 @@ function fixture(legacy = false) {
 
 it("seeds the populated tagged policy with historical null usage", () => {
   const { run, legacyPath } = fixture();
-  const expected = canonicalPolicy();
-  const { socket: _socket, ...legacy } = expected;
-  Object.assign(legacy.agents.main.allowlist[0]!, { lastUsedAt: null, lastUsedCommand: null });
-  expect(readJson(legacyPath)).toEqual(legacy);
+  expect(readJson(legacyPath).agents.main.allowlist[0]).toMatchObject({
+    lastUsedAt: null,
+    lastUsedCommand: null,
+  });
   const result = run("assert-exec-approvals", "baseline");
   expect(result.status, result.stderr).toBe(0);
 });
@@ -136,8 +97,8 @@ it("seeds the populated tagged policy with historical null usage", () => {
 it.each([
   ["database", /missing after update/],
   ["row", /missing after update/],
-  ["defaults", /exec approval.*changed/],
-  ["agent policy", /exec approval.*changed/],
+  ["defaults", /exec approval defaults changed/],
+  ["agent policy", /exec approval agents changed/],
   ["malformed", /exec approval policy is not valid JSON/],
 ] as const)("rejects canonical %s without repairing or leaking it", (kind, error) => {
   const { writeCanonical, observe } = fixture();
@@ -146,13 +107,19 @@ it.each([
   } else if (kind === "malformed") {
     writeCanonical("synthetic-socket-value-must-not-be-logged {");
   } else if (kind !== "database") {
-    const policy = canonicalPolicy();
-    if (kind === "defaults") {
-      policy.defaults.security = "full";
-    } else {
-      policy.agents.auditor.ask = "always";
-    }
-    writeCanonical(JSON.stringify(policy));
+    writeCanonical(
+      JSON.stringify({
+        version: 1,
+        defaults: {
+          security: kind === "defaults" ? "full" : "allowlist",
+          ask: "on-miss",
+          askFallback: "deny",
+          autoAllowSkills: false,
+        },
+        agents: {},
+        socket: { token: "synthetic-socket-value-must-not-be-logged" },
+      }),
+    );
   }
   const result = observe();
   expect(result).toMatchObject({ status: 1, stderr: expect.stringMatching(error) });

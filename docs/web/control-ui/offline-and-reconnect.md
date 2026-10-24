@@ -33,31 +33,46 @@ can resume on the new connection.
 ## Queued session changes
 
 While the same Gateway connection is recovering, changes to a session's name,
-icon, color, or existing category and message reaction additions or removals
-appear immediately. The connection status in the sidebar footer counts these
+icon, color, or existing category, archive/unarchive and delete actions, and
+message reaction additions or removals appear immediately. Archived sessions move
+out of the active list, unarchived sessions return, and deleted sessions disappear.
+Archive and delete keep their confirmation dialogs while offline. Multi-select
+archive and delete queue one change per selected session.
+Deletion requires a known session identity. If it is unavailable, the UI shows an
+error and asks you to refresh after reconnecting; other selected sessions still queue.
+The connection status in the sidebar footer counts these
 changes together with queued chat messages. Repeated changes to the same fields
 or reaction replace the earlier queued change and move to the end of the queue,
 so overlapping edits finish with the latest choice.
+Archive, unarchive, and delete share one queued lifecycle change per session:
+the latest choice wins without changing its place in line. A queued delete also
+discards that session's unsent metadata and reaction changes and rolls back their
+optimistic values.
 
 These changes send in order after reconnecting with unchanged credentials and the
 same account recovery scope, including Retry and automatic socket replacement.
-New metadata and reaction edits join the queue until its final request settles,
+New eligible session changes join the queue until its final request settles,
 so older queued values cannot overwrite newer choices. The queued count includes
 unsent changes, not the request already in flight.
 The Gateway still checks current permissions and the
-session identity. Rejected changes roll back and show an error. A change already
+session identity. Rejected changes roll back and show an error; a delete whose
+target is already gone succeeds. A change already
 sent when the connection drops is not automatically replayed by this queue;
 its existing uncertain-outcome handling still applies.
 
-This metadata and reaction queue is memory-only. Closing the tab loses unsent
+This session-change queue is memory-only. Closing or reloading the tab loses unsent
 changes; the browser prompts before leaving, and automatic update reloads wait
 while changes are queued. Switching Gateway or account, signing out, or retiring
 offline access discards the queue and shows how many changes were discarded.
 Chat drafts and chat messages retain their separate storage and recovery rules.
 
-Other actions do not use this queue: creating categories, moving or deleting
-sessions, archiving, shared pins, approvals, settings or model changes, and
-terminal actions still need their existing live connection and authority.
+Other actions do not use this queue: creating categories, moving sessions between
+projects or workspaces, shared pins, sharing or visibility changes, approvals, settings
+or model changes, and terminal actions still need their existing live connection
+and authority. Discovering and archiving a complete nested subtree also requires
+a connection; offline archive targets only the selected rows. Workspace recovery
+and removal of preserved worktrees are not queued.
+Personal sidebar pins remain usable offline without this queue.
 
 ## Busy initial connection
 

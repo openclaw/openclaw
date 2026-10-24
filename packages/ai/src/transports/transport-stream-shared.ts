@@ -1,6 +1,7 @@
 import type {
   AssistantMessage,
   Model,
+  ModelRequestHeaders,
   ProviderResponse,
   StreamOptions,
   Usage,
@@ -193,9 +194,9 @@ export function finalizeTerminalToolCallArguments<T extends { arguments: Record<
 }
 
 export function mergeTransportHeaders(
-  ...headerSources: Array<Record<string, string> | undefined>
-): Record<string, string> | undefined {
-  const merged: Record<string, string> = {};
+  ...headerSources: Array<ModelRequestHeaders | undefined>
+): ModelRequestHeaders | undefined {
+  const merged: ModelRequestHeaders = {};
   const namesByLowercase = new Map<string, string>();
   for (const headers of headerSources) {
     for (const [name, value] of Object.entries(headers ?? {})) {
