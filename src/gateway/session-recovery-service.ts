@@ -302,7 +302,8 @@ export async function recoverGatewaySession(params: {
           initialSource.restartRecoveryDisableMessageTool !== true &&
           initialSource.restartRecoverySuppressTextDelivery !== true;
         const retainedSafeTools =
-          initialSource.restartRecoveryForceSafeTools === true && !fullAccess;
+          initialSource.mainRestartRecovery?.safeToolsRequired === true ||
+          (initialSource.restartRecoveryForceSafeTools === true && !fullAccess);
         const noticeKey = `main-session-restart-recovery:${initialSource.restartRecoveryDeliverySourceRunId ?? initialSource.restartRecoveryDeliveryRunId ?? initialSource.sessionId}:failed-notice`;
         const policy = resolveMainSessionResumePolicy(
           messages.filter((message) => readMessageIdempotencyKey(message) !== noticeKey),

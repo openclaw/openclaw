@@ -555,12 +555,15 @@ export async function recoverStore(params: {
           forceRestartSafeTools:
             pendingAction === "fail" ||
             (isTerminalSessionStatus(entry.status) && entry.status !== "interrupted") ||
+            entry.mainRestartRecovery?.safeToolsRequired === true ||
             entry.restartRecoveryForceSafeTools === true ||
             hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
         };
       } else {
         const retainedSafeTools =
-          replaySafeCheckpoint || (entry.restartRecoveryForceSafeTools === true && !fullAccess);
+          replaySafeCheckpoint ||
+          entry.mainRestartRecovery?.safeToolsRequired === true ||
+          (entry.restartRecoveryForceSafeTools === true && !fullAccess);
         const resumePolicy = resolveMainSessionResumePolicy(
           messages,
           retainedSafeTools,

@@ -485,6 +485,15 @@ describe("CLI attempt execution", () => {
     return createCliSession(sessionKey, sessionEntry);
   }
 
+  it("refuses restart-safe recovery on a CLI runtime", async () => {
+    const { runCli } = await createCliSession("agent:main:direct:restart-safe-cli");
+
+    await expect(runCli({ opts: { forceRestartSafeTools: true } })).rejects.toThrow(
+      "CLI runtimes cannot enforce restart-safe tool restrictions",
+    );
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+  });
+
   registerCommandCliAdmissionTests({
     runStoredAttempt,
     seedSessionStore,

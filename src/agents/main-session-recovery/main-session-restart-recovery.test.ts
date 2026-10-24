@@ -4783,7 +4783,7 @@ describe("main-session-restart-recovery", () => {
       ],
       safeTools: "required",
       promptIncludes: [
-        "interrupted by a gateway restart",
+        "after a Gateway restart or a tool execution timeout",
         "marked interrupted, missing, or aborted",
         "unknown outcome",
         "not proof of tool failure",
@@ -4934,11 +4934,30 @@ describe("main-session-restart-recovery", () => {
   );
 
   it.each([
-    { label: "inherited full access", mode: "full", permissionMode: undefined, restricted: false },
-    { label: "explicit guarded access", mode: "full", permissionMode: "guarded", restricted: true },
+    {
+      label: "inherited full access after a restart",
+      mode: "full",
+      permissionMode: undefined,
+      safeToolsRequired: false,
+      restricted: false,
+    },
+    {
+      label: "inherited full access after a tool timeout",
+      mode: "full",
+      permissionMode: undefined,
+      safeToolsRequired: true,
+      restricted: true,
+    },
+    {
+      label: "explicit guarded access",
+      mode: "full",
+      permissionMode: "guarded",
+      safeToolsRequired: false,
+      restricted: true,
+    },
   ] as const)(
     "continues interrupted work with $label",
-    async ({ mode, permissionMode, restricted }) => {
+    async ({ mode, permissionMode, safeToolsRequired, restricted }) => {
       const sessionsDir = await prepareTranscript(
         currentTurn(
           createAssistantToolCallMessage([
@@ -4946,7 +4965,16 @@ describe("main-session-restart-recovery", () => {
             toolCall("call-exec-1", "exec", { code: "await shell({command: 'true'})" }),
           ]),
         ),
-        { permissionMode, restartRecoveryForceSafeTools: true },
+        {
+          permissionMode,
+          restartRecoveryForceSafeTools: true,
+          mainRestartRecovery: {
+            cycleId: "interrupted-cycle",
+            revision: 1,
+            chargedAttempts: 0,
+            ...(safeToolsRequired ? { safeToolsRequired: true } : {}),
+          },
+        },
       );
 
       await expectRecovery({ started: 1 }, { tools: { exec: { mode } } });

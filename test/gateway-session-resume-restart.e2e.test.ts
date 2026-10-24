@@ -168,7 +168,9 @@ async function startProvider(
             return;
           }
           expect(name).not.toBe("cancel");
-          expect(input).toContain("interrupted by a gateway restart");
+          expect(input).toContain(
+            "This can happen after a Gateway restart or a tool execution timeout.",
+          );
           resumeInputs.push({ name, input });
           if (name === "revoked" || name === "restricted") {
             if (!revokeAttempted.has(name)) {

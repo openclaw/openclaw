@@ -240,7 +240,7 @@ describe("gateway WebSocket chat abort settlement", () => {
         expect(started.ok).toBe(true);
         expect(started.payload).toMatchObject({ runId, status: "started" });
         if (settlement === "accepted-injection") {
-          expect(injectionWork).toHaveLength(1);
+          await vi.waitFor(() => expect(injectionWork).toHaveLength(1));
           expect(injectionSignal?.aborted).toBe(false);
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         } else {

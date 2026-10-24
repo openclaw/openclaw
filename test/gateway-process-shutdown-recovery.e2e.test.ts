@@ -184,7 +184,9 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
             }
             return;
           }
-          expect(input).toContain("interrupted by a gateway restart");
+          expect(input).toContain(
+            "This can happen after a Gateway restart or a tool execution timeout.",
+          );
           activeRecoveryResponses.set(response, scenario);
           response.once("close", () => activeRecoveryResponses.delete(response));
           const activeRecoveries = new Set(activeRecoveryResponses.values()).size;

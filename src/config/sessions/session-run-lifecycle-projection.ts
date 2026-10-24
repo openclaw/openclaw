@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString as normalizeLifecycleRunId } from "@openclaw/normalization-core/string-coerce";
 import { isAgentLifecycleYieldedWaiting } from "../../agents/agent-lifecycle-parent-state.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
+  isAgentRunResumableToolTimeout,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import { projectMainSessionRecoveryLifecycle } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
@@ -172,12 +174,14 @@ export function resolveSessionLifecycleTerminal(event: LifecycleEventLike) {
   const terminal = resolveSettledLifecycleTerminalOutcome(event);
   const interruptedForRestart =
     terminal?.reason === "cancelled" && terminal.stopReason === "restart";
-  const status: SessionEntry["status"] = interruptedForRestart
+  const interruptedForToolTimeout = isAgentRunResumableToolTimeout(terminal);
+  const resumableInterruption = interruptedForRestart || interruptedForToolTimeout;
+  const status: SessionEntry["status"] = resumableInterruption
     ? "interrupted"
     : terminal
       ? SESSION_STATUS_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminal)]
       : undefined;
-  return { terminal, status, interruptedForRestart };
+  return { terminal, status, interruptedForRestart, interruptedForToolTimeout };
 }
 
 export function deriveSessionLifecycleSnapshot(params: {
@@ -214,13 +218,17 @@ export function deriveSessionLifecycleSnapshot(params: {
 
   const endedAt = resolveLifecycleTimestamp(params.event.data?.endedAt, params.event.ts);
   const updatedAt = endedAt ?? existing?.updatedAt;
-  const { terminal, status, interruptedForRestart } = resolveSessionLifecycleTerminal(params.event);
+  const { terminal, status, interruptedForRestart, interruptedForToolTimeout } =
+    resolveSessionLifecycleTerminal(params.event);
+  const resumableInterruption = interruptedForRestart || interruptedForToolTimeout;
   return {
     updatedAt,
     status,
     suppressErrorNotice: params.event.data?.suppressErrorNotice === true,
-    lastRunError: interruptedForRestart
-      ? "Run interrupted by a Gateway restart."
+    lastRunError: resumableInterruption
+      ? interruptedForRestart
+        ? "Run interrupted by a Gateway restart."
+        : "Tool execution timed out with an unknown outcome. Resume to verify state before repeating it."
       : terminal && status
         ? params.lastRunError
         : undefined,
@@ -228,12 +236,12 @@ export function deriveSessionLifecycleSnapshot(params: {
     endedAt,
     runtimeMs: resolveRuntimeMs({ startedAt, endedAt, existingRuntimeMs: existing?.runtimeMs }),
     ...(terminal &&
-    !interruptedForRestart &&
+    !resumableInterruption &&
     params.event.controlUiVisible === true &&
     endedAt !== undefined
       ? { lastActivityAt: Math.max(existing?.lastActivityAt ?? 0, endedAt) }
       : {}),
-    abortedLastRun: interruptedForRestart || status === "killed",
+    abortedLastRun: resumableInterruption || status === "killed",
   };
 }
 
@@ -404,6 +412,16 @@ export function projectSessionLifecyclePatch(
     // their async persistence can settle out of order.
     return { patch: null };
   }
+  if (
+    phase !== "start" &&
+    entry.lifecycleRunId === undefined &&
+    terminalRunId !== undefined &&
+    (eventRunId === terminalRunId || eventClientRunId === terminalRunId)
+  ) {
+    // A duplicate terminal event cannot recreate recovery after its original
+    // checkpoint was settled or explicitly cleared.
+    return { patch: null };
+  }
   const patch: Partial<PersistedLifecycleSessionShape> &
     Pick<SessionEntry, "providerReview" | "goal"> = derivePersistedSessionLifecyclePatch({
     entry,
@@ -422,6 +440,16 @@ export function projectSessionLifecyclePatch(
       runId: eventRunId,
       lifecycleGeneration: params.event.lifecycleGeneration ?? params.currentLifecycleGeneration,
     });
+    if (isAgentRunResumableToolTimeout(resolveSettledLifecycleTerminalOutcome(params.event))) {
+      patch.mainRestartRecovery = entry.mainRestartRecovery
+        ? { ...entry.mainRestartRecovery, safeToolsRequired: true }
+        : {
+            cycleId: randomUUID(),
+            revision: 1,
+            chargedAttempts: 0,
+            safeToolsRequired: true,
+          };
+    }
   }
   if (providerReview && Object.keys(patch).length > 0) {
     patch.providerReview = providerReview.review;

@@ -210,6 +210,9 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         sessionRuntimeOverride,
         pinnedHarnessId: resolveSessionPinnedHarnessId(params.sessionEntry),
       });
+  if (isCliExecutionProvider && params.opts.forceRestartSafeTools === true) {
+    throw new Error("CLI runtimes cannot enforce restart-safe tool restrictions");
+  }
   // Sandboxed delegated children never dispatch to host-executed CLI backends;
   // spawn admission checks once the child model is resolved, and this run-seam
   // guard owns the invariant for fallback candidates and post-spawn runtime

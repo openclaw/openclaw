@@ -34,7 +34,7 @@ import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js"
 import { createStartupRecoveryFixture } from "./server.startup-recovery.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
-const RESEND_MARKER = "Your previous turn was interrupted by a gateway restart";
+const RESEND_MARKER = "Your previous turn was interrupted while OpenClaw was waiting";
 
 type Fixture = {
   cfg: OpenClawConfig;

@@ -301,7 +301,9 @@ test.for([
     expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
     expect(dispatchInboundMessageMock.mock.calls[0]?.[0]).toMatchObject({
       ctx: { SessionKey: current.key },
-      replyOptions: { forceRestartSafeTools: scenario !== "cli-full" },
+      replyOptions: {
+        forceRestartSafeTools: scenario !== "cli-full",
+      },
     });
     expect(current.entry()).toMatchObject({ sessionId: current.sessionId, lifecycleRevision });
     expect(current.entry()?.mainRestartRecovery).toBeUndefined();

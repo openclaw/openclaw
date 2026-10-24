@@ -54,7 +54,7 @@ it(
     const readRecoveryPrompt = (payload: string) =>
       readPrompt(
         payload,
-        "Your previous turn was interrupted by a gateway restart",
+        "Your previous turn was interrupted while OpenClaw was waiting",
         "Unfinished child sessions to reconcile:",
       );
     const recoveryGate = createDeferred();

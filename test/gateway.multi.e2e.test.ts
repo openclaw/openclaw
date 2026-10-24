@@ -141,7 +141,10 @@ describe("gateway multi-instance e2e", () => {
           agents: {
             defaults: {
               model: { primary: model.modelRef },
-              models: { [model.modelRef]: { agentRuntime: { id: "openclaw" } } },
+              models: {
+                [model.modelRef]: { agentRuntime: { id: "openclaw" } },
+                "openai/gpt-4.1": {},
+              },
             },
           },
           models: {
