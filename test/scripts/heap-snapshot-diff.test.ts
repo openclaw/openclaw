@@ -52,19 +52,10 @@ function fixture(grown: boolean) {
 }
 
 function snapshot(nodes: FixtureNode[], unusedString = "") {
-  const entries = nodes.map(([id, name, size, edges = [], type = "object"]) => ({
-    id,
-    name,
-    size,
-    edges,
-    type,
-  }));
+  const edges = nodes.flatMap((node) => node[3] ?? []);
   const strings = [
     unusedString,
-    ...new Set([
-      ...entries.map(({ name }) => name),
-      ...entries.flatMap(({ edges }) => edges.map((edge) => edge[2] ?? "ref")),
-    ]),
+    ...new Set([...nodes.map((node) => node[1]), ...edges.map((edge) => edge[2] ?? "ref")]),
   ];
   return JSON.stringify({
     snapshot: {
@@ -75,37 +66,42 @@ function snapshot(nodes: FixtureNode[], unusedString = "") {
         edge_types: [edgeTypes, "string_or_number", "node"],
       },
       node_count: nodes.length,
-      edge_count: entries.reduce((sum, { edges }) => sum + edges.length, 0),
+      edge_count: edges.length,
     },
-    nodes: entries.flatMap(({ id, name, size, edges, type }) => [
+    nodes: nodes.flatMap(([id, name, size, outgoing = [], type = "object"]) => [
       nodeTypes.indexOf(type),
       strings.indexOf(name),
       id,
       size,
-      edges.length,
+      outgoing.length,
     ]),
-    edges: entries.flatMap(({ edges }) =>
-      edges.flatMap(([type, target, name]) => [type, strings.indexOf(name ?? "ref"), target * 5]),
-    ),
+    edges: edges.flatMap(([type, target, name]) => [
+      type,
+      strings.indexOf(name ?? "ref"),
+      target * 5,
+    ]),
     strings,
   });
 }
 
-function runJson(args: string[]) {
+function run(snapshots: string[], args: string[] = [], labels: string[] = []) {
+  const directory = tempDirs.make("heap-snapshot-diff-");
+  const files = snapshots.map((contents, index) => {
+    const file = path.join(directory, `${index}.heapsnapshot`);
+    writeFileSync(file, contents);
+    return file;
+  });
+  const mode = snapshots.length === 1 ? ["--summary"] : ["--json"];
+  if (snapshots.length === 1) {
+    const allowlist = path.join(directory, "source-labels.txt");
+    writeFileSync(allowlist, labels.join("\n"));
+    mode.push("--labels", allowlist);
+  }
   return JSON.parse(
-    execFileSync(process.execPath, ["scripts/heap-snapshot-diff.mjs", ...args], {
+    execFileSync(process.execPath, ["scripts/heap-snapshot-diff.mjs", ...mode, ...files, ...args], {
       encoding: "utf8",
     }),
   );
-}
-
-function runDiff(beforeSnapshot: string, afterSnapshot: string, args: string[]) {
-  const directory = tempDirs.make("heap-snapshot-diff-");
-  const before = path.join(directory, "before.heapsnapshot");
-  const after = path.join(directory, "after.heapsnapshot");
-  writeFileSync(before, beforeSnapshot);
-  writeFileSync(after, afterSnapshot);
-  return runJson([before, after, "--json", ...args]);
 }
 
 function retained(id: number, name: string, bytes: number, edge?: string) {
@@ -159,7 +155,7 @@ function duplicates(stringLimit = 1024, excludedGroups = 0, excludedBytes = 0) {
 }
 
 it("diffs exclusive retained sizes and named strong paths without double-counting shared or nested objects", () => {
-  const result = runDiff(fixture(false), fixture(true), ["--max-depth", "3", "--node", "15"]);
+  const result = run([fixture(false), fixture(true)], ["--max-depth", "3", "--node", "15"]);
 
   expect(result.before).toEqual({ nodes: 8, reachable: 6 });
   expect(result.after).toEqual({ nodes: 10, reachable: 8 });
@@ -211,7 +207,7 @@ it("compares standalone snapshots without treating reused or changed IDs as obje
   const before = independent(1, 3, 5, 7);
   const after = independent(101, 7, 3, 303);
   const args = ["--independent-ids", "--top", "2", "--node", "3", "--node", "303"];
-  const result = runDiff(before, after, args);
+  const result = run([before, after], args);
 
   expect(result.dominators).toBeUndefined();
   expect(result.classes).toEqual([]);
@@ -240,15 +236,6 @@ it("compares standalone snapshots without treating reused or changed IDs as obje
   ]);
 });
 
-function runSummary(contents: string, labels: string[] = [], args: string[] = []) {
-  const directory = tempDirs.make("heap-summary-");
-  const file = path.join(directory, "snapshot.heapsnapshot");
-  const allowlist = path.join(directory, "source-labels.txt");
-  writeFileSync(file, contents);
-  writeFileSync(allowlist, labels.join("\n"));
-  return runJson(["--summary", file, "--labels", allowlist, ...args]);
-}
-
 it("reports collections, duplicate flat strings and session scaling without emitting snapshot payloads", () => {
   const message = 'private message with "quotes", \\ and 🦞';
   const sessionA = "agent:private-agent:private-session-a";
@@ -271,7 +258,7 @@ it("reports collections, duplicate flat strings and session scaling without emit
     [27, message, 16, [], "sliced string"],
     [29, message, 16, [], "concatenated string"],
   ]);
-  const result = runSummary(contents, ["ApprovedOwner", "approvedProperty"]);
+  const result = run([contents], [], ["ApprovedOwner", "approvedProperty"]);
   expect(result).toMatchObject({ nodes: 15, reachable: 15, retainedBytes: 432 });
   expect(result.duplicateStrings).toEqual(duplicates());
   expect(result.collections).toEqual(
@@ -312,7 +299,7 @@ it("reports collections, duplicate flat strings and session scaling without emit
     type: "property",
     name: "approvedProperty",
   });
-  expect(JSON.stringify(runSummary(contents))).not.toContain("ApprovedOwner");
+  expect(JSON.stringify(run([contents]))).not.toContain("ApprovedOwner");
 });
 
 it.each([
@@ -331,9 +318,7 @@ it.each([
       [7, complete, 30, [], "string"],
       [9, complete, 34, [], "string"],
     ]);
-    expect(runSummary(contents, [], args).duplicateStrings).toEqual(
-      duplicates(stringLimit, 1, 2500),
-    );
+    expect(run([contents], args).duplicateStrings).toEqual(duplicates(stringLimit, 1, 2500));
   },
 );
 
@@ -365,7 +350,7 @@ it("attributes excess string nodes once, preserves unreachable accounting, and e
     [15, secret, 32, [], "string"],
     [17, "Object", 24, [[0, 7, "role"]]],
   ]);
-  const result = runSummary(contents, ["store", "role"], ["--node", "7"]);
+  const result = run([contents], ["--node", "7"], ["store", "role"]);
   expect(result.duplicateStrings.potentialSavingsBytes).toBe(104);
   expect(result.duplicateStringRetainers).toMatchObject({
     attributedBytes: 72,
