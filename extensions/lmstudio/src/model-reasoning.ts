@@ -51,6 +51,30 @@ export function normalizeLmstudioTransportReasoningCompat(
   return {
     ...compat,
     supportedReasoningEfforts: normalizedSupportedReasoningEfforts,
-    reasoningEffortMap: buildLmstudioReasoningEffortMap(normalizedSupportedReasoningEfforts),
+    // The catalog exposes the graded ladder, but the server only understands
+    // its binary on/off options; the wire map sends every enabled level as
+    // "on" and disabled levels as "off" so graded requests stop being rejected.
+    reasoningEffortMap: buildLmstudioBinaryReasoningEffortMap(hasDisabled),
   };
+}
+
+export function buildLmstudioBinaryReasoningEffortMap(
+  hasDisabled: boolean,
+): Record<string, string> {
+  const enabled = Object.fromEntries(
+    LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS.map((option) => [option, "on"]),
+  );
+  return {
+    ...enabled,
+    adaptive: "on",
+    max: "on",
+    ...(hasDisabled ? { off: "off", none: "off" } : {}),
+  };
+}
+
+/** Binary-thinking servers express their wire vocabulary through on/off map values. */
+export function isLmstudioBinaryReasoningEffortMap(
+  map: Record<string, string> | undefined,
+): boolean {
+  return map !== undefined && Object.values(map).some((value) => value === "on");
 }

@@ -21,6 +21,7 @@ import {
   LMSTUDIO_PROVIDER_ID,
 } from "./defaults.js";
 import {
+  buildLmstudioBinaryReasoningEffortMap,
   buildLmstudioReasoningEffortMap,
   LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS,
   LMSTUDIO_OPENAI_COMPAT_REASONING_EFFORTS,
@@ -86,10 +87,17 @@ export function resolveLmstudioReasoningCompat(
   if (!supportedReasoningEfforts.some((option) => option !== "none")) {
     return undefined;
   }
+  const isBinary = isLmstudioBinaryReasoningOptions(
+    normalizeReasoningOptions(entry.capabilities?.reasoning?.allowed_options),
+  );
   return {
     supportsReasoningEffort: true,
     supportedReasoningEfforts,
-    reasoningEffortMap: buildLmstudioReasoningEffortMap(supportedReasoningEfforts),
+    // Binary servers keep the graded ladder for the catalog but carry on/off
+    // wire tokens, so graded requests are not rejected at the endpoint.
+    reasoningEffortMap: isBinary
+      ? buildLmstudioBinaryReasoningEffortMap(supportedReasoningEfforts.includes("none"))
+      : buildLmstudioReasoningEffortMap(supportedReasoningEfforts),
   };
 }
 

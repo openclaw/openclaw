@@ -639,4 +639,64 @@ describe("lmstudio stream wrapper", () => {
     expectSingleDoneEvent(events);
     expect(payload.reasoning_effort).toBe("none");
   });
+
+  const BINARY_WIRE_COMPAT = {
+    supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+    reasoningEffortMap: {
+      off: "off",
+      none: "off",
+      minimal: "on",
+      low: "on",
+      medium: "on",
+      high: "on",
+      xhigh: "on",
+      adaptive: "on",
+      max: "on",
+    },
+  };
+
+  it("sends on for a graded effort on a binary-thinking model", async () => {
+    const payload: Record<string, unknown> = {
+      model: "gemma-4-12b",
+      reasoning_effort: "medium",
+    };
+    const wrapped = createWrappedLmstudioStream(buildPayloadStreamFn(payload), {
+      thinkingLevel: "medium",
+    });
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, { compat: BINARY_WIRE_COMPAT }),
+    );
+    expectSingleDoneEvent(events);
+    expect(payload.reasoning_effort).toBe("on");
+  });
+
+  it("sends off when thinking is disabled on a binary-thinking model", async () => {
+    const payload: Record<string, unknown> = {
+      model: "gemma-4-12b",
+      reasoning_effort: "high",
+    };
+    const wrapped = createWrappedLmstudioStream(buildPayloadStreamFn(payload), {
+      thinkingLevel: "off",
+    });
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, { compat: BINARY_WIRE_COMPAT }),
+    );
+    expectSingleDoneEvent(events);
+    expect(payload.reasoning_effort).toBe("off");
+  });
+
+  it("keeps graded efforts untouched on graded-native models", async () => {
+    const payload: Record<string, unknown> = {
+      model: "graded-native",
+      reasoning_effort: "medium",
+    };
+    const wrapped = createWrappedLmstudioStream(buildPayloadStreamFn(payload), {
+      thinkingLevel: "medium",
+    });
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, { compat: BINARY_REASONING_COMPAT }),
+    );
+    expectSingleDoneEvent(events);
+    expect(payload.reasoning_effort).toBe("medium");
+  });
 });

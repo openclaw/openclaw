@@ -467,7 +467,17 @@ describe("lmstudio plugin", () => {
           codeMode: "preferred",
           supportsReasoningEffort: true,
           supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
-          reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
+          reasoningEffortMap: {
+            off: "off",
+            none: "off",
+            minimal: "on",
+            low: "on",
+            medium: "on",
+            high: "on",
+            xhigh: "on",
+            adaptive: "on",
+            max: "on",
+          },
         },
       },
       ...["phi-4", "fractional-window"].map((id) => ({

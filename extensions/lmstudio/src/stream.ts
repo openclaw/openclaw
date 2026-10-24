@@ -11,6 +11,7 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import {
   createOpenAICompatibleCompletionsThinkingOffWrapper,
+  streamWithPayloadPatch,
   createPlainTextToolCallCompatWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
@@ -26,6 +27,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
+import { isLmstudioBinaryReasoningEffortMap } from "./model-reasoning.js";
 import {
   LmstudioModelLoadError,
   prepareLmstudioModelForInference,
@@ -83,6 +85,38 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
     createPlainTextToolCallCompatWrapper(underlying),
     ctx.thinkingLevel,
   );
+  const resolveBinaryReasoningEffortMap = (
+    model: Parameters<StreamFn>[0],
+  ): Record<string, string> | undefined => {
+    // SAFETY: model.compat carries the catalog's declared compat record.
+    const compat = asRecord(model as { compat?: unknown })?.compat;
+    // SAFETY: the effort map is declared as Record<string, string> in compat.
+    const map = asRecord(compat)?.reasoningEffortMap as Record<string, string> | undefined;
+    return isLmstudioBinaryReasoningEffortMap(map) ? map : undefined;
+  };
+  const streamWithBinaryReasoning = (
+    m: Parameters<StreamFn>[0],
+    c: Parameters<StreamFn>[1],
+    o: Parameters<StreamFn>[2],
+  ) => {
+    // Binary-thinking servers reject graded reasoning_effort values and fall
+    // back to their own default; their compat wire map carries on/off instead.
+    // Graded-native models stream through unpatched.
+    const binaryMap = resolveBinaryReasoningEffortMap(m);
+    if (!binaryMap) {
+      return streamWithThinkingLevel(withLmstudioUsageCompat(m), c, o);
+    }
+    return streamWithPayloadPatch(streamWithThinkingLevel, m, c, o, (payload) => {
+      const effort = payload.reasoning_effort;
+      if (typeof effort !== "string") {
+        return;
+      }
+      const mapped = binaryMap[effort];
+      if (typeof mapped === "string" && mapped !== effort) {
+        payload.reasoning_effort = mapped;
+      }
+    });
+  };
   return (model, context, options) => {
     if (model.provider !== LMSTUDIO_PROVIDER_ID) {
       return underlying(model, context, options);
@@ -95,7 +129,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
     options?.signal?.throwIfAborted();
     const providerConfig = ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
     if (asRecord(providerConfig?.params).preload === false) {
-      return streamWithThinkingLevel(withLmstudioUsageCompat(model), context, options);
+      return streamWithBinaryReasoning(model, context, options);
     }
     const resolvedBaseUrl = resolveLmstudioInferenceBase(model.baseUrl ?? providerConfig?.baseUrl);
     const requestedContextLength =
@@ -135,7 +169,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
       } catch (error) {
         options?.signal?.throwIfAborted();
         log.warn(`LM Studio inference preload failed for "${modelKey}": ${String(error)}`);
-        return streamWithThinkingLevel(withLmstudioUsageCompat(model), context, options);
+        return streamWithBinaryReasoning(model, context, options);
       }
       options?.signal?.throwIfAborted();
       // Hash effective wire auth, including header casing/ordering normalization;
@@ -238,7 +272,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
       const modelId = preparedModel?.modelKey;
       const streamModel = modelId && modelId !== model.id ? { ...model, id: modelId } : model;
       const instanceId = preparedModel?.instanceId;
-      const stream = streamWithThinkingLevel(
+      const stream = streamWithBinaryReasoning(
         withLmstudioUsageCompat(streamModel),
         context,
         instanceId
