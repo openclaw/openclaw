@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 // @vitest-environment node
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import {
@@ -23,7 +24,7 @@ import { chatProviderReviewRow, holdProviderReviewQueuedInputs } from "./chat-pr
 import { flushChatQueueForEvent, retryQueuedChatMessage } from "./chat-send-actions.ts";
 import { deliverChatQueueItem } from "./chat-send-delivery.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { listStoredChatOutboxes, restoreChatComposerState } from "./composer-persistence.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
@@ -359,7 +360,7 @@ it.each(["lost-ack", "accepted-unconsumed"] as const)(
       currentSessionId: row.sessionId,
       sessionsResult: sessionsResult([row], 11),
     });
-    expect(restoreChatComposerState(reloaded)).toBe(true);
+    expect(new ChatComposerPersistence(() => reloaded).restore()).toBe(true);
     expect(reloaded.chatQueue[0]).toMatchObject({
       sendState: "held",
       sendAttempts: 1,

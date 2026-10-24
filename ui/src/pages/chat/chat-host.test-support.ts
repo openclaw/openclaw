@@ -50,6 +50,12 @@ export function requestCalls<Call extends ReadonlyArray<unknown>>(
   return Array.from(source.mock.calls).filter(([calledMethod]) => calledMethod === method);
 }
 
+export function expectRequestCounts(request: MockCallSource, counts: Record<string, number>) {
+  for (const [method, count] of Object.entries(counts)) {
+    expect(requestCalls(request, method)).toHaveLength(count);
+  }
+}
+
 export function expectRpc(
   request: unknown,
   method: string,
@@ -152,6 +158,7 @@ export function createImmediateCommandHost(
 }
 
 type TestChatHost = ChatHost & {
+  selectedChatSessionIncognito: boolean;
   basePath: string;
   resourceBasePath: string;
   chatAvatarUrl: string | null;
@@ -253,6 +260,7 @@ export function makeChatHost(
   };
   const host = {
     ...composerDefaults(),
+    selectedChatSessionIncognito: false,
     chatSubmissions: createChatSubmissions(),
     client: request ? createTestGatewayClient(request) : null,
     chatDisplayedLeafEntryId: undefined,

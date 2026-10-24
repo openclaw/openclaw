@@ -1,7 +1,12 @@
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { addSession, appendOutput, markExited } from "../agents/bash-process-registry.js";
+import {
+  addSession,
+  appendOutput,
+  markExited,
+  prepareSessionPoll,
+} from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import {
@@ -114,7 +119,7 @@ it.each([true, false])(
       expect(await observe("stop", stop)).toMatchObject({ result: { requested: true } });
       expect(cancel).toHaveBeenCalledExactlyOnceWith(record.id, "manual-cancel");
       expect(runWorkerDescriptor).toHaveBeenCalledOnce();
-      expect(record.pendingOutput).toEqual([{ stream: "stdout", text: "Build is running\n" }]);
+      expect(prepareSessionPoll(record, undefined).output).toBe("Build is running\n");
       expect(record.terminalPollObserved).toBeUndefined();
       await expectChanges(1);
       expect(await observe("stopping", { action: "list" })).toMatchObject({

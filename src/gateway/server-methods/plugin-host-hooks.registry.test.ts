@@ -11,6 +11,7 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
+import * as profiles from "../../state/user-profile-list.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodRegistry,
@@ -21,7 +22,10 @@ import { pluginHostHookHandlers } from "./plugin-host-hooks.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 describe("plugin host hook registry ownership", () => {
-  afterEach(() => clearActivePluginRegistry());
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await clearActivePluginRegistry();
+  });
 
   it.each([
     ["plugins.uiDescriptors", WRITE_SCOPE],
@@ -31,6 +35,7 @@ describe("plugin host hook registry ownership", () => {
     "%s with %s selects the registry attached to the admitted request",
     async (method, scope) => {
       const pluginId = "local-host-hooks";
+      let shared = false;
       const fixture = (label: string, requiredScope: OperatorScope) => {
         const { config, registry } = createPluginRegistryFixture();
         registerTestPlugin({
@@ -42,7 +47,20 @@ describe("plugin host hook registry ownership", () => {
             api.session.controls.registerSessionAction({
               id: "describe",
               requiredScopes: [requiredScope],
-              handler: () => ({ result: { label } }),
+              // The roster changes while the action awaits; the live check sees it.
+              handler: async ({ client }) => {
+                const before = client?.isSharedGateway?.();
+                await Promise.resolve();
+                shared = true;
+                return {
+                  result: {
+                    label,
+                    sharedBefore: before ?? null,
+                    sharedAfter: client?.isSharedGateway?.() ?? null,
+                    allowsMain: client?.allowsAgent?.("main") ?? null,
+                  },
+                };
+              },
             });
           },
         });
@@ -57,6 +75,10 @@ describe("plugin host hook registry ownership", () => {
       const methodRegistry = createGatewayMethodRegistry(
         createCoreGatewayMethodDescriptors(pluginHostHookHandlers),
         local,
+      );
+      // Session actions receive live owner-policy checks, not dispatch-time snapshots.
+      vi.spyOn(profiles, "hasMultipleResidentSessionSharingIdentities").mockImplementation(
+        () => shared,
       );
       const respond = vi.fn();
       try {
@@ -80,7 +102,15 @@ describe("plugin host hook registry ownership", () => {
         expect(respond.mock.calls[0]?.slice(0, 2)).toMatchObject([
           true,
           method === "plugins.sessionAction"
-            ? { ok: true, result: { label: "Local registry" } }
+            ? {
+                ok: true,
+                result: {
+                  label: "Local registry",
+                  sharedBefore: false,
+                  sharedAfter: true,
+                  allowsMain: true,
+                },
+              }
             : {
                 ok: true,
                 generation: localGeneration,

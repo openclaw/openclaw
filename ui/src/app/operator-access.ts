@@ -69,6 +69,15 @@ export function hasOperatorApprovalsAccess(auth: OperatorAuth): boolean {
   return hasOperatorScope(auth, "operator.approvals", false);
 }
 
+/**
+ * Guests: session-only operators who can view, not write, other people's sessions.
+ * Matches the restricted role shape Visitor Access requires. Presentation defaults
+ * only; the Gateway still owns every authorization decision.
+ */
+export function isRestrictedSessionGuest(auth: OperatorAuth): boolean {
+  return auth?.sessionCap === "view" && !hasOperatorReadAccess(auth);
+}
+
 export function hasOperatorSelfReadAccess(auth: OperatorAuth): boolean {
   return hasOperatorReadAccess(auth) || hasOperatorScope(auth, "operator.sessions.read", true);
 }
@@ -76,16 +85,13 @@ export function hasOperatorSelfReadAccess(auth: OperatorAuth): boolean {
 export function canReactToSession(
   snapshot: Pick<ApplicationGatewaySnapshot, "hello" | "phase" | "client">,
   session: Pick<GatewaySessionRow, "sharingRole" | "visibility"> | undefined,
-  options: { archived: boolean; catalog: boolean; allowDeferred?: boolean },
+  options: { archived: boolean; catalog: boolean },
 ): boolean {
   const auth = snapshot.hello?.auth;
   const cap = auth?.sessionCap;
   const role = session?.sharingRole;
   const canDefer =
-    options.allowDeferred &&
-    snapshot.phase !== "stopped" &&
-    snapshot.client &&
-    !snapshot.client.offlineRecoveryRetired;
+    snapshot.phase !== "stopped" && snapshot.client && !snapshot.client.offlineRecoveryRetired;
   const actionAvailable = canDefer
     ? canPresentGatewayMethod(snapshot, "session.reactions.set", "operator.write")
     : canCallGatewayMethod(snapshot, "session.reactions.set", "operator.write");

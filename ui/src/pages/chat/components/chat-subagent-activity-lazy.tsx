@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
-import { lazy, Loading } from "solid-js";
-import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
+import { lazy } from "solid-js";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
 
 const Activity = lazy(() => import("./chat-subagent-activity-live.tsx"), {
   export: "ChatSubagentActivity",
@@ -8,8 +9,8 @@ const Activity = lazy(() => import("./chat-subagent-activity-live.tsx"), {
 
 export function ChatSubagentActivity(props: SubagentActivityProps & { fallback?: JSX.Element }) {
   return (
-    <Loading fallback={props.fallback}>
+    <ChatLazyBoundary fallback={props.fallback}>
       <Activity {...props} />
-    </Loading>
+    </ChatLazyBoundary>
   );
 }

@@ -25,6 +25,7 @@ import {
 } from "../gateway/node-command-policy.js";
 import { listEffectiveGroupRouteBindings } from "../routing/resolve-route.js";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
+import { listConfiguredOpenInboundPolicyPaths } from "./audit-open-inbound.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { GATEWAY_CONTROL_PLANE_TOOLS } from "./dangerous-tools.js";
 
@@ -186,48 +187,6 @@ function suggestKnownNodeCommands(needle: string, known: Set<string>): string[] 
     .map((r) => r.cmd);
 }
 
-function listOpenInboundPolicies(cfg: OpenClawConfig): string[] {
-  const out: string[] = [];
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  if (!channels || typeof channels !== "object") {
-    return out;
-  }
-
-  const inspectSection = (section: Record<string, unknown>, basePath: string) => {
-    if (section.groupPolicy === "open") {
-      out.push(`${basePath}.groupPolicy`);
-    }
-    const dm = section.dm;
-    const legacyDmPolicy =
-      dm && typeof dm === "object" ? (dm as Record<string, unknown>).policy : undefined;
-    const dmPolicy = section.dmPolicy ?? legacyDmPolicy;
-    if (dmPolicy === "open") {
-      out.push(`${basePath}.${section.dmPolicy == null ? "dm.policy" : "dmPolicy"}`);
-    }
-  };
-
-  for (const [channelId, value] of Object.entries(channels)) {
-    if (!value || typeof value !== "object") {
-      continue;
-    }
-    const section = value as Record<string, unknown>;
-    // Root policy can govern an implicit/default env-backed account. Named account overrides
-    // do not prove this scope is inactive, so audit it independently.
-    inspectSection(section, `channels.${channelId}`);
-    const accounts = section.accounts;
-    if (accounts && typeof accounts === "object") {
-      for (const [accountId, accountVal] of Object.entries(accounts)) {
-        if (!accountVal || typeof accountVal !== "object") {
-          continue;
-        }
-        const acc = accountVal as Record<string, unknown>;
-        inspectSection(acc, `channels.${channelId}.accounts.${accountId}`);
-      }
-    }
-  }
-  return out;
-}
-
 function hasConfiguredGroupTargets(section: Record<string, unknown>): boolean {
   const groupKeys = ["groups", "guilds", "channels", "rooms"];
   return groupKeys.some((key) => {
@@ -236,8 +195,11 @@ function hasConfiguredGroupTargets(section: Record<string, unknown>): boolean {
   });
 }
 
-export function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
-  const out = new Set<string>();
+export function listPotentialMultiUserSignals(
+  cfg: OpenClawConfig,
+  openInboundPolicies = listConfiguredOpenInboundPolicyPaths(cfg),
+): string[] {
+  const out = new Set(openInboundPolicies.map((policy) => `${policy}="open"`));
   const channels = cfg.channels as Record<string, unknown> | undefined;
   if (!channels || typeof channels !== "object") {
     return [];
@@ -245,15 +207,8 @@ export function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
 
   const inspectSection = (section: Record<string, unknown>, basePath: string) => {
     const groupPolicy = typeof section.groupPolicy === "string" ? section.groupPolicy : null;
-    if (groupPolicy === "open") {
-      out.add(`${basePath}.groupPolicy="open"`);
-    } else if (groupPolicy === "allowlist" && hasConfiguredGroupTargets(section)) {
+    if (groupPolicy === "allowlist" && hasConfiguredGroupTargets(section)) {
       out.add(`${basePath}.groupPolicy="allowlist" with configured group targets`);
-    }
-
-    const dmPolicy = typeof section.dmPolicy === "string" ? section.dmPolicy : null;
-    if (dmPolicy === "open") {
-      out.add(`${basePath}.dmPolicy="open"`);
     }
 
     const allowFrom = Array.isArray(section.allowFrom) ? section.allowFrom : [];
@@ -269,10 +224,6 @@ export function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
     const dm = section.dm;
     if (dm && typeof dm === "object") {
       const dmSection = dm as Record<string, unknown>;
-      const dmLegacyPolicy = typeof dmSection.policy === "string" ? dmSection.policy : null;
-      if (dmLegacyPolicy === "open") {
-        out.add(`${basePath}.dm.policy="open"`);
-      }
       const dmAllowFrom = Array.isArray(dmSection.allowFrom) ? dmSection.allowFrom : [];
       if (dmAllowFrom.some((entry) => isWildcardEntry(entry))) {
         out.add(`${basePath}.dm.allowFrom includes "*"`);
@@ -910,9 +861,11 @@ export function collectMinimalProfileOverrideFindings(cfg: OpenClawConfig): Secu
   return findings;
 }
 
-export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+export function collectExposureMatrixFindings(
+  cfg: OpenClawConfig,
+  openInboundPolicies = listConfiguredOpenInboundPolicyPaths(cfg),
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const openInboundPolicies = listOpenInboundPolicies(cfg);
   if (openInboundPolicies.length === 0) {
     return findings;
   }
@@ -963,7 +916,10 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
   return findings;
 }
 
-export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+export function collectLikelyMultiUserSetupFindings(
+  cfg: OpenClawConfig,
+  openInboundPolicies = listConfiguredOpenInboundPolicyPaths(cfg),
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const mainGroupScopes = listEffectiveGroupRouteBindings(cfg)
     .filter((binding) => binding.session?.groupScope === "main")
@@ -990,7 +946,7 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
     });
   }
 
-  const signals = listPotentialMultiUserSignals(cfg);
+  const signals = listPotentialMultiUserSignals(cfg, openInboundPolicies);
   if (signals.length === 0) {
     return findings;
   }

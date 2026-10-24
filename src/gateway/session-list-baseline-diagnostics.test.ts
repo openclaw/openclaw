@@ -40,7 +40,7 @@ async function publicationFixture(controlState = false) {
   });
   return {
     projection,
-    present: () => prepareSessionRowPublication(projection, 1)().presentation,
+    present: () => prepareSessionRowPublication(projection, 1)().getPresentation(),
     invalidate: (cause: "projection-revision" | "config" | "identity") => {
       if (cause === "identity") {
         state.rowContext.identityProjection?.invalidate();
@@ -64,30 +64,41 @@ async function publicationFixture(controlState = false) {
   };
 }
 
-it("accounts for conditional encodings after legacy reads and releases shared rows fully", async () => {
+it.each([1, 2])("accounts for %s promoted rows and releases all encodings", async (count) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     using fixture = await publicationFixture();
     const { projection, present, flush } = fixture;
     const publication = prepareSessionRowPublicationView(projection)();
     const opts = { rowMode: "compact" } as const;
-    const row: GatewaySessionRow = {
+    const rows: GatewaySessionRow[] = Array.from({ length: count }, (_, index) => ({
       ...baseRow,
+      key: `agent:main:${index}`,
       rowMode: "compact",
-      label: "synthetic ".repeat(256),
-    };
-    present().list([row], opts);
-    present().list([row], { ...opts, limit: 2 });
+      label: `${index} ${"synthetic ".repeat(256)}`,
+    }));
+    present().list(rows, opts);
+    present().list(rows, { ...opts, limit: 2 });
     const legacyBytes = await flush();
-    present().list([row], { ...opts, ifRowsRevision: "" });
-    const encoded = JSON.stringify(row);
-    const packedBytes = encoded.length * 2 + Buffer.byteLength(`[${encoded}]`);
-    const factBytes = JSON.stringify({ label: row.label }).length * 2;
+    present().list(rows, { ...opts, ifRowsRevision: "" });
+    const encoded = rows.map((row) => JSON.stringify(row));
+    const packedBytes =
+      encoded.reduce((bytes, row) => bytes + row.length * 2, 0) +
+      Buffer.byteLength(`[${encoded.join(",")}]`);
+    const factBytes =
+      count === 1
+        ? 0
+        : rows.reduce((bytes, row) => bytes + JSON.stringify({ label: row.label }).length * 2, 0);
     expect(await flush()).toBe(legacyBytes + packedBytes + factBytes);
     const promoted = [...publication.lists.values()].find((view) => view.conditional)!;
     expect(promoted.rowHistory).toBeUndefined();
-    present().list([{ ...row, updatedAt: 2 }], opts);
+    present().list(
+      rows.map((row) => ({ ...row, updatedAt: 2 })),
+      opts,
+    );
     expect(promoted.rowHistory).toHaveLength(1);
-    expect(promoted.encodedBytes).toBeGreaterThan(row.label!.length * 3);
+    expect(promoted.encodedBytes).toBeGreaterThan(
+      rows.reduce((bytes, row) => bytes + row.label!.length * 3, 0),
+    );
     publication.lists.retireRows(promoted);
     for (const view of publication.lists.values()) {
       publication.lists.retireRows(view);

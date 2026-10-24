@@ -1,10 +1,12 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore,
   GATEWAY_STORE_TEST_HELLO,
 } from "../app/gateway-store.test-support.ts";
+import { t } from "../i18n/index.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { ChatHistoryResponse } from "../pages/chat/chat-history-snapshot.ts";
 import "./control-ui-session-summary.tsx";
@@ -16,7 +18,10 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-function setup(identity?: () => AgentIdentityResult) {
+function setup(
+  identity?: () => AgentIdentityResult,
+  progressRead: () => Promise<unknown> = async () => ({ card: null }),
+) {
   const { gateway, current } = createGatewayStoreTestStore();
   onTestFinished(() => gateway.stop());
   gateway.start();
@@ -27,18 +32,19 @@ function setup(identity?: () => AgentIdentityResult) {
   const requests: Array<{
     params: unknown;
     resolve: (history: ChatHistoryResponse) => void;
+    reject: (error: unknown) => void;
   }> = [];
   current().request.mockImplementation((method, params) => {
     if (method === "chat.history") {
-      return new Promise<ChatHistoryResponse>((resolve) => {
-        requests.push({ params, resolve });
+      return new Promise<ChatHistoryResponse>((resolve, reject) => {
+        requests.push({ params, resolve, reject });
       });
     }
     if (method === "agent.identity.get" && identity) {
       return Promise.resolve(identity());
     }
     if (method === "progressCard.get") {
-      return Promise.resolve({ card: null });
+      return progressRead();
     }
     return Promise.reject(new Error(`Unexpected method: ${method}`));
   });
@@ -78,6 +84,32 @@ function useClock() {
   vi.spyOn(Math, "random").mockReturnValue(0);
 }
 const messages = (element: Element) => element.querySelectorAll(".plugin-session-summary__message");
+
+it("keeps history available while progress loads, fails, and retries", async () => {
+  const pending = createDeferred<{ card: null }>();
+  const retry = createDeferred<{ card: null }>();
+  const read = vi.fn().mockReturnValueOnce(pending.promise).mockReturnValueOnce(retry.promise);
+  const { element, reply } = setup(undefined, read);
+  await reply(0, "Independent history");
+  expect(element.textContent).toContain(t("sessionProgressCard.widgetLoading"));
+  pending.reject(new Error("Progress unavailable"));
+  await vi.waitFor(() =>
+    expect(element.querySelector(".plugin-session-summary__progress [role=alert]")).not.toBeNull(),
+  );
+  expect(element.textContent).toContain("Independent history");
+
+  element.querySelector<HTMLButtonElement>(".plugin-session-summary > button")!.click();
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() =>
+    expect(element.textContent).toContain(t("sessionProgressCard.widgetLoading")),
+  );
+  expect(element.textContent).toContain("Independent history");
+  retry.resolve({ card: null });
+  await vi.waitFor(() =>
+    expect(element.querySelector(".plugin-session-summary__progress")).toBeNull(),
+  );
+  expect(element.textContent).toContain("Independent history");
+});
 
 it("refreshes visible message avatars from identity and stops hydrating while hidden", async () => {
   let avatar = "data:image/png;base64,aWRlbnRpdHk=";
@@ -174,6 +206,36 @@ it("normalizes visible message text without reviving assistant commentary or too
   expect(messages(element)).toHaveLength(2);
   expect(element.querySelector(".sidebar-markdown strong")?.textContent).toBe("answer");
   expect(element.textContent).not.toMatch(/Hidden|hidden-envelope|openclaw:ctx|MEDIA:|proof\.png/);
+});
+
+it("retains its successful history and cursor when retrying a failed refresh", async () => {
+  useClock();
+  const { element, requests, emit, reply } = setup();
+  await reply(0, "Retained reply", {
+    ...history("Retained reply"),
+    deltaCursor: "last-successful",
+  });
+
+  emit("session.message");
+  await vi.advanceTimersByTimeAsync(5_000);
+  await vi.waitFor(() => expect(requests).toHaveLength(2));
+  requests[1]!.reject(new Error("History read unavailable"));
+  const error = () => element.querySelector(".plugin-session-summary__history [role=alert]");
+  await vi.waitFor(() => expect(error()).not.toBeNull());
+  expect(element.textContent).not.toContain("Retained reply");
+
+  const retry = element.querySelector<HTMLButtonElement>(".plugin-session-summary > button");
+  expect(retry).not.toBeNull();
+  retry!.click();
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.waitFor(() => expect(requests).toHaveLength(3));
+  expect(requests[2]!.params).toMatchObject({ cursor: "last-successful" });
+  await vi.waitFor(() => {
+    expect(element.textContent).toContain("Retained reply");
+    expect(error()).toBeNull();
+  });
+  await reply(2, "Recovered reply");
+  expect(element.textContent).not.toContain("Retained reply");
 });
 
 it("paces durable events and retains one catch-up during a pending load", async () => {

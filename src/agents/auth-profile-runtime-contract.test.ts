@@ -1,12 +1,6 @@
-/**
- * Runtime contract tests for auth profile forwarding.
- *
- * Attempt-execution composition is covered in command/attempt-execution.cli.test.ts.
- * This suite owns the provider-alias and runtime-plan matrix directly so each
- * case does not need to load the full agent-attempt graph.
- */
+// Attempt composition lives in command/attempt-execution.cli.test.ts; keep this matrix runtime-free.
 import {
-  AUTH_PROFILE_RUNTIME_CONTRACT,
+  AUTH_PROFILE_RUNTIME_CONTRACT as contract,
   createAuthAliasManifestRegistry,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,36 +28,6 @@ const authAliasMetadata = {
   plugins: createAuthAliasManifestRegistry().plugins,
 };
 
-function authAliasLookupParams(config: OpenClawConfig = {}) {
-  return {
-    config,
-    workspaceDir,
-  };
-}
-
-function resolveContractPlan(params: {
-  provider: string;
-  authProfileProvider: string;
-  authProfileId: string;
-  cfg?: OpenClawConfig;
-  harnessRuntime?: string;
-  authProfileSource?: "auto" | "user";
-}) {
-  const config = params.cfg ?? {};
-  const plan = buildAgentRuntimeAuthPlan({
-    provider: params.provider,
-    authProfileProvider: params.authProfileProvider,
-    sessionAuthProfileId: params.authProfileId,
-    sessionAuthProfileSource: params.authProfileSource,
-    config,
-    workspaceDir,
-    harnessRuntime: params.harnessRuntime,
-  });
-  return {
-    plan,
-  };
-}
-
 function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfig {
   return {
     models: {
@@ -86,118 +50,80 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
   });
 
   it.each([
-    [AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider],
-    [AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider, AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider],
-    [
-      AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider,
-      AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider,
-    ],
+    [contract.openAiProvider, contract.openAiProvider],
+    [contract.codexCliProvider, contract.openAiProvider],
+    [contract.codexHarnessProvider, contract.codexHarnessProvider],
   ] as const)(
     "resolves %s through the provider auth alias resolver using contract metadata",
     (provider, expectedAuthProvider) => {
-      expect(resolveProviderIdForAuth(provider, authAliasLookupParams())).toBe(
+      expect(resolveProviderIdForAuth(provider, { config: {}, workspaceDir })).toBe(
         expectedAuthProvider,
       );
     },
   );
 
-  it("forwards a legacy OpenAI Codex auth profile from the codex-cli auth alias", () => {
-    const { plan } = resolveContractPlan({
-      provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
-      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+  const {
+    openAiProvider: openai,
+    codexCliProvider: cli,
+    openAiCodexProvider: legacy,
+    codexHarnessProvider: harness,
+    openAiProfileId: profile,
+    openAiCodexProfileId: legacyProfile,
+  } = contract;
+  type PlanOptions = {
+    config?: OpenClawConfig;
+    runtime?: string;
+    source?: "user";
+    rejected?: boolean;
+  };
+  const codexConfig = providerRuntimeConfig(openai, "codex");
+  it.each<[string, string, string, string, PlanOptions?]>([
+    ["legacy profile via CLI alias", cli, cli, legacyProfile],
+    ["OpenAI profile via CLI", cli, openai, profile],
+    [
+      "unrelated CLI rejects Codex auth",
+      contract.claudeCliProvider,
+      legacy,
+      legacyProfile,
+      { config: codexConfig, rejected: true },
+    ],
+    ["embedded legacy profile", legacy, legacy, legacyProfile],
+    ["embedded CLI alias", legacy, cli, legacyProfile],
+    [
+      "explicit OpenClaw",
+      openai,
+      openai,
+      profile,
+      { config: providerRuntimeConfig(openai, "openclaw"), runtime: "openclaw" },
+    ],
+    ["default Codex harness", openai, legacy, legacyProfile, { runtime: "codex" }],
+    [
+      "codex/* harness",
+      harness,
+      legacy,
+      legacyProfile,
+      { config: providerRuntimeConfig(harness, "codex"), runtime: "codex" },
+    ],
+    [
+      "locked profile source",
+      openai,
+      legacy,
+      legacyProfile,
+      { config: codexConfig, runtime: "codex", source: "user" },
+    ],
+  ])("forwards auth: %s", (_name, provider, auth, profileId, options = {}) => {
+    const plan = buildAgentRuntimeAuthPlan({
+      provider,
+      authProfileProvider: auth,
+      sessionAuthProfileId: profileId,
+      sessionAuthProfileSource: options.source,
+      config: options.config ?? {},
+      workspaceDir,
+      harnessRuntime: options.runtime,
     });
-
-    expect(plan.forwardedAuthProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
-  });
-
-  it("forwards OpenAI auth profiles into the codex-cli runtime plan", () => {
-    const { plan } = resolveContractPlan({
-      provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
-      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
-    });
-
-    expect(plan.forwardedAuthProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId);
-  });
-
-  it("does not let a configured Codex harness leak OpenAI auth into unrelated CLI providers", () => {
-    const { plan } = resolveContractPlan({
-      provider: AUTH_PROFILE_RUNTIME_CONTRACT.claudeCliProvider,
-      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-      cfg: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "codex"),
-    });
-
-    expect(plan.forwardedAuthProfileId).toBeUndefined();
-  });
-
-  it("forwards a legacy OpenAI Codex auth profile through the embedded OpenClaw plan", () => {
-    const { plan } = resolveContractPlan({
-      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-    });
-
-    expect(plan.forwardedAuthProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
-  });
-
-  it("accepts the codex-cli auth-provider alias on the embedded OpenAI plan", () => {
-    const { plan } = resolveContractPlan({
-      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-    });
-
-    expect(plan.forwardedAuthProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
-  });
-
-  it("forwards an OpenAI auth profile through an explicit OpenClaw plan", () => {
-    const { plan } = resolveContractPlan({
-      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
-      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
-      cfg: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "openclaw"),
-      harnessRuntime: "openclaw",
-    });
-
-    expect(plan.forwardedAuthProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId);
-  });
-
-  it("forwards a legacy OpenAI Codex auth profile through the default Codex harness plan", () => {
-    const { plan } = resolveContractPlan({
-      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
-      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-      harnessRuntime: "codex",
-    });
-
-    expect(plan.forwardedAuthProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
-  });
-
-  it("preserves OpenAI Codex auth profiles through the codex/* harness plan", () => {
-    const { plan } = resolveContractPlan({
-      provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider,
-      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-      cfg: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider, "codex"),
-      harnessRuntime: "codex",
-    });
-
-    expect(plan.forwardedAuthProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
-  });
-
-  it("preserves the locked profile source after the session owner selects the Codex harness", () => {
-    const { plan } = resolveContractPlan({
-      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
-      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-      authProfileSource: "user",
-      cfg: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "codex"),
-      harnessRuntime: "codex",
-    });
-
-    expect(plan.forwardedAuthProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
-    expect(plan.forwardedAuthProfileSource).toBe("user");
+    expect(plan.forwardedAuthProfileId).toBe(options.rejected ? undefined : profileId);
+    if (options.source) {
+      expect(plan.forwardedAuthProfileSource).toBe(options.source);
+    }
   });
 });

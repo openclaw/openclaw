@@ -1,5 +1,3 @@
-// Control UI tests cover Worktrees mutation failures through the rendered settings page.
-import path from "node:path";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -8,8 +6,6 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({
   name: "Control UI Worktrees mocked Gateway E2E",
   startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) =>
-    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
 const restorableWorktree = {
@@ -24,51 +20,39 @@ const restorableWorktree = {
   removedAt: 3,
   repoFingerprint: "0123456789abcdef",
   repoRoot: "/tmp/repo",
-  snapshotRef: "refs/openclaw/worktree-snapshots/test",
 };
 
 suite.define(() => {
-  it.each([1440, 390])(
-    "keeps the Worktrees title above left-aligned hub tabs at %ipx",
-    async (width) => {
-      await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
-        await installMockGateway(page, {
-          methodResponses: { "worktrees.list": { worktrees: [] } },
-        });
-        await page.goto(`${suite.server.baseUrl}worktrees`);
-        await evaluateControlUiContext(page, (context) => context.theme.setMode("dark"));
-        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
-        const heading = page.getByRole("heading", { name: "Worktrees", level: 1 });
-        const tabs = page.getByRole("tablist", { name: "Session sections" });
-        expect(await heading.isVisible()).toBe(true);
-        expect(await tabs.isVisible()).toBe(true);
-        const titleBox = await heading.boundingBox();
-        const tabsBox = await tabs.boundingBox();
-        expect(titleBox).not.toBeNull();
-        expect(tabsBox).not.toBeNull();
-        expect(tabsBox!.y).toBeGreaterThan(titleBox!.y + titleBox!.height);
-        expect(Math.abs(tabsBox!.x - titleBox!.x)).toBeLessThan(12);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `worktrees-header-dark-${width}.png`),
-        });
-        await page.getByRole("tab", { name: "Sessions", exact: true }).click();
-        await page.getByRole("heading", { name: "Sessions", level: 1 }).waitFor();
-        expect(await page.locator(".page-subtitle").textContent()).toContain(
-          "Active sessions and defaults.",
-        );
-        await page.getByRole("tab", { name: "Worktrees", exact: true }).click();
-        await heading.waitFor();
-        expect(await page.locator(".page-subtitle").textContent()).toContain(
-          "Isolated agent task checkouts and recovery snapshots.",
-        );
+  it.each([1440, 390])("keeps the Worktrees title above left-aligned hub tabs at %ipx", (width) =>
+    suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
+      await installMockGateway(page, {
+        methodResponses: { "worktrees.list": { worktrees: [] } },
       });
-    },
+      await page.goto(`${suite.server.baseUrl}worktrees`);
+      await evaluateControlUiContext(page, (context) => context.theme.setMode("dark"));
+      await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
+      const title = await page.getByRole("heading", { name: "Worktrees", level: 1 }).boundingBox();
+      const tabs = await page.getByRole("tablist", { name: "Session sections" }).boundingBox();
+      expect(title).not.toBeNull();
+      expect(tabs).not.toBeNull();
+      expect(tabs!.y).toBeGreaterThan(title!.y + title!.height);
+      expect(Math.abs(tabs!.x - title!.x)).toBeLessThan(12);
+      for (const [name, subtitle] of [
+        ["Sessions", "Active sessions and defaults."],
+        ["Worktrees", "Isolated agent task checkouts and recovery snapshots."],
+      ]) {
+        await page.getByRole("tab", { name, exact: true }).click();
+        await page.getByRole("heading", { name, level: 1 }).waitFor();
+        expect(await page.locator(".page-subtitle").textContent()).toContain(subtitle);
+      }
+    }),
   );
 
-  it("uses the remote default until a base branch is explicitly selected", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+  it("uses the remote default until a base branch is explicitly selected", () =>
+    suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const repoRoot = "/synthetic/repo";
       const gateway = await installMockGateway(page, {
-        workspace: "/synthetic/repo",
+        workspace: repoRoot,
         workspaceGit: true,
         methodResponses: {
           "worktrees.list": { worktrees: [] },
@@ -81,65 +65,43 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}settings/worktrees`);
-      await page.getByRole("button", { name: "New worktree", exact: true }).click();
-      await gateway.waitForRequest("worktrees.branches");
       const base = page.getByLabel("Base branch", { exact: true });
-      await page
-        .locator('#worktrees-create-branches option[value="main"]')
-        .waitFor({ state: "attached" });
-      await page.screenshot({ path: path.join(suite.artifactDir, "default-base.png") });
-      expect(await base.inputValue()).toBe("");
-      await page.getByRole("button", { name: "Create", exact: true }).click();
-      expect((await gateway.waitForRequest("worktrees.create")).params).toEqual({
-        repoRoot: "/synthetic/repo",
-      });
+      const branches = page.locator("#worktrees-create-branches");
+      for (const value of [undefined, "main", ""]) {
+        await page.getByRole("button", { name: "New worktree", exact: true }).click();
+        if (value === undefined) {
+          await branches.locator('option[value="main"]').waitFor({ state: "attached" });
+          expect(await base.inputValue()).toBe("");
+        } else {
+          await base.fill(value);
+        }
+        await page.getByRole("button", { name: "Create", exact: true }).click();
+        await base.waitFor({ state: "hidden" });
+      }
+      const requests = await gateway.getRequests("worktrees.create");
+      const expected = [{ repoRoot }, { repoRoot, baseRef: "main" }, { repoRoot }];
+      expect(requests.map(({ params }) => params)).toEqual(expected);
+    }));
 
-      await page.getByRole("button", { name: "New worktree", exact: true }).click();
-      await base.fill("main");
-      await page.getByRole("button", { name: "Create", exact: true }).click();
-      await base.waitFor({ state: "hidden" });
-      expect(await gateway.getRequests("worktrees.create")).toHaveLength(2);
-      expect((await gateway.getRequests("worktrees.create"))[1]?.params).toEqual({
-        repoRoot: "/synthetic/repo",
-        baseRef: "main",
-      });
-
-      await page.getByRole("button", { name: "New worktree", exact: true }).click();
-      await base.fill("");
-      await page.getByRole("button", { name: "Create", exact: true }).click();
-      await base.waitFor({ state: "hidden" });
-      expect(await gateway.getRequests("worktrees.create")).toHaveLength(3);
-      expect((await gateway.getRequests("worktrees.create"))[2]?.params).toEqual({
-        repoRoot: "/synthetic/repo",
-      });
-    });
-  });
-
-  it("keeps a restore failure visible after the automatic list refresh succeeds", async () => {
-    await suite.withPage(undefined, async ({ page }) => {
+  it("keeps a restore failure visible after the automatic list refresh succeeds", () =>
+    suite.withPage(undefined, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         deferredMethods: ["worktrees.restore"],
         methodResponses: {
           "worktrees.list": { worktrees: [restorableWorktree] },
         },
       });
-
       const response = await page.goto(`${suite.server.baseUrl}settings/worktrees`);
       expect(response?.status()).toBe(200);
+      const error = { message: "source repository is unavailable" };
       await page.getByRole("button", { name: "Restore" }).click();
       await gateway.waitForRequest("worktrees.restore");
-      await gateway.rejectDeferred("worktrees.restore", {
-        message: "source repository is unavailable",
-      });
-
+      await gateway.rejectDeferred("worktrees.restore", error);
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.list")).length)
         .toBeGreaterThanOrEqual(2);
-      await expect(page.locator(".callout.danger").textContent()).resolves.toContain(
-        "source repository is unavailable",
-      );
+      await expect(page.locator(".callout.danger").textContent()).resolves.toContain(error.message);
       await expect(page.getByRole("alert").count()).resolves.toBe(1);
       await expect(page.getByRole("button", { name: "Restore" }).count()).resolves.toBe(1);
-    });
-  });
+    }));
 });

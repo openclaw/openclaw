@@ -91,7 +91,8 @@ function activate(admission: () => void, current: () => void = () => {}) {
 }
 
 it("restores within the native deadline when cold source observations cost two seconds", async () => {
-  const { admission, family, assertIsolation } = fixture();
+  using context = fixture();
+  const { admission, family } = context;
   const before = family();
   let elapsed = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsed);
@@ -108,19 +109,16 @@ it("restores within the native deadline when cold source observations cost two s
   } = snapshots;
   vi.spyOn(snapshots, "readSqliteSourceContentVersionSync").mockImplementation(slow(observe));
   vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync").mockImplementation(slow(prepare));
-  try {
-    await activate(admission);
-  } finally {
-    expect(family()).toEqual(before);
-    assertIsolation();
-  }
+  await activate(admission);
+  expect(family()).toEqual(before);
   expect([native.effects, native.closes]).toEqual([["ResetFailedUnit", "RestartUnit"], 1]);
 });
 
 it.each(["new update", "revoked custody"] as const)(
   "refuses %s after the final restart ownership reply",
   async (reason) => {
-    const { env, admission, family, assertIsolation } = fixture();
+    using context = fixture();
+    const { env, admission, family } = context;
     const runId = "2c45c690-8265-498b-8504-d608ee2cda01";
     const message = reason === "new update" ? runId : "original native custody revoked";
     let current = true;
@@ -133,19 +131,15 @@ it.each(["new update", "revoked custody"] as const)(
         current = false;
       }
     };
-    try {
-      await expect(
-        activate(admission, () => {
-          if (!current) {
-            throw new Error(message);
-          }
-        }),
-      ).rejects.toThrow(message);
-      if (reason === "new update") {
-        expect(family()).toEqual(committedFamily);
-      }
-    } finally {
-      assertIsolation();
+    await expect(
+      activate(admission, () => {
+        if (!current) {
+          throw new Error(message);
+        }
+      }),
+    ).rejects.toThrow(message);
+    if (reason === "new update") {
+      expect(family()).toEqual(committedFamily);
     }
     expect([native.effects, native.closes]).toEqual([["ResetFailedUnit"], 1]);
   },

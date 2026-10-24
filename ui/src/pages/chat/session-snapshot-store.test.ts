@@ -16,6 +16,7 @@ import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
   observeChatCache,
+  readChatSessionSnapshot,
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
@@ -418,6 +419,26 @@ describe("persistent chat session snapshots", () => {
     expect(await store.read(firstKey)).toBeNull();
     expect(await store.read(resolveChatSnapshotKey(other, target))).not.toBeNull();
     expect(await store.read(resolveChatSnapshotKey(second, target))).not.toBeNull();
+  });
+
+  it("isolates account-less snapshots by client or host identity", () => {
+    const memory: ChatMessageCache = new Map();
+    const target = { sessionKey: "agent:main:unowned" };
+    const client = { recoveryScope: "", recoveryScopeReady: false };
+    const host = { ...snapshotHost, client };
+    const clientSnapshot = snapshot("client-owned");
+    cacheChatSessionSnapshot(memory, host, target, clientSnapshot);
+    expect(readChatSessionSnapshot(memory, host, target)).toEqual(clientSnapshot);
+    expect(readChatSessionSnapshot(memory, { ...host }, target)).toEqual(clientSnapshot);
+    expect(readChatSessionSnapshot(memory, { ...host, client: { ...client } }, target)).toBeNull();
+
+    const noClientHost = { ...snapshotHost, client: undefined };
+    expect(readChatSessionSnapshot(memory, noClientHost, target)).toBeNull();
+    const hostSnapshot = snapshot("host-owned");
+    cacheChatSessionSnapshot(memory, noClientHost, target, hostSnapshot);
+    expect(readChatSessionSnapshot(memory, noClientHost, target)).toEqual(hostSnapshot);
+    expect(readChatSessionSnapshot(memory, { ...noClientHost }, target)).toBeNull();
+    expect(readChatSessionSnapshot(memory, host, target)).toEqual(clientSnapshot);
   });
 
   it("keeps Incognito history in memory without persisting snapshots or metadata", async () => {

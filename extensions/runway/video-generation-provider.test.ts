@@ -1,6 +1,7 @@
 import {
   capturePluginRegistration,
   createRuntimeEnv,
+  requireRegisteredProvider,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
@@ -28,8 +29,12 @@ installProviderHttpMockCleanup();
 afterEach(clearRuntimeConfigSnapshot);
 
 async function generateVideo(request: Request = {}) {
-  const { buildRunwayVideoGenerationProvider } = await import("./video-generation-provider.js");
-  return buildRunwayVideoGenerationProvider().generateVideo({ ...defaults, cfg: {}, ...request });
+  const { default: plugin } = await import("./index.js");
+  const provider = requireRegisteredProvider(
+    capturePluginRegistration(plugin).videoGenerationProviders,
+    "runway",
+  );
+  return provider.generateVideo({ ...defaults, cfg: {}, ...request });
 }
 
 function mockSubmission(reply = Response.json({ id: "task-1" })) {

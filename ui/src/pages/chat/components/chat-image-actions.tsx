@@ -1,9 +1,13 @@
+import { Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { beginClipboardCopy } from "../../../lib/clipboard.ts";
 import { downloadImageBlob } from "../../../lib/image-download.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 let nextMenuId = 0;
 
@@ -67,7 +71,11 @@ export async function copyImageToClipboard(readBlob: () => Promise<Blob>): Promi
   await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
 }
 
-export function ChatImageActions(props: { title: string; readOriginalBlob: () => Promise<Blob> }) {
+export function ChatImageActions(props: {
+  title: string;
+  readOriginalBlob: () => Promise<Blob>;
+  overlay?: boolean;
+}) {
   const download = async () => {
     try {
       const blob = await props.readOriginalBlob();
@@ -86,41 +94,67 @@ export function ChatImageActions(props: { title: string; readOriginalBlob: () =>
   };
   const id = `chat-image-actions-${++nextMenuId}`;
   return (
-    <Menu
-      id={id}
-      class="chat-image-actions"
-      triggerClass="chat-image-action"
-      placement="bottom-end"
-      label={t("chat.imageLightbox.actions")}
-      triggerAttributes={{ title: t("chat.imageLightbox.actions") }}
-      trigger={<Icon name="moreHorizontal" />}
-      items={[
-        {
-          id: "copy",
-          label: t("chat.imageLightbox.copy"),
-          class: "session-menu__item",
-          icon: (
-            <span class="session-menu__icon">
-              <Icon name="copy" />
-            </span>
-          ),
-          content: <span class="session-menu__text">{t("chat.imageLightbox.copy")}</span>,
-        },
-        {
-          id: "download",
-          label: t("chat.imageLightbox.download"),
-          class: "session-menu__item",
-          icon: (
-            <span class="session-menu__icon">
-              <Icon name="download" />
-            </span>
-          ),
-          content: <span class="session-menu__text">{t("chat.imageLightbox.download")}</span>,
-        },
-      ]}
-      onSelect={(item) => {
-        void (item.id === "copy" ? copy() : download());
-      }}
-    />
+    <Show
+      when={props.overlay}
+      fallback={
+        <Menu
+          id={id}
+          class="chat-image-actions"
+          triggerClass="chat-image-action"
+          placement="bottom-end"
+          label={t("chat.imageLightbox.actions")}
+          triggerAttributes={{ title: t("chat.imageLightbox.actions") }}
+          trigger={<Icon name="moreHorizontal" />}
+          items={[
+            {
+              id: "copy",
+              label: t("chat.imageLightbox.copy"),
+              class: "session-menu__item",
+              icon: (
+                <span class="session-menu__icon">
+                  <Icon name="copy" />
+                </span>
+              ),
+              content: <span class="session-menu__text">{t("chat.imageLightbox.copy")}</span>,
+            },
+            {
+              id: "download",
+              label: t("chat.imageLightbox.download"),
+              class: "session-menu__item",
+              icon: (
+                <span class="session-menu__icon">
+                  <Icon name="download" />
+                </span>
+              ),
+              content: <span class="session-menu__text">{t("chat.imageLightbox.download")}</span>,
+            },
+          ]}
+          onSelect={(item) => {
+            void (item.id === "copy" ? copy() : download());
+          }}
+        />
+      }
+    >
+      <span class="chat-image-actions chat-image-actions--overlay">
+        <button
+          type="button"
+          class="chat-image-action"
+          title={t("chat.imageLightbox.download")}
+          aria-label={t("chat.imageLightbox.download")}
+          onClick={() => void download()}
+        >
+          <Icon name="download" />
+        </button>
+        <button
+          type="button"
+          class="chat-image-action"
+          title={t("chat.imageLightbox.copy")}
+          aria-label={t("chat.imageLightbox.copy")}
+          onClick={() => void copy()}
+        >
+          <Icon name="copy" />
+        </button>
+      </span>
+    </Show>
   );
 }

@@ -2,6 +2,7 @@ import type { Request } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiChatHistoryMessage } from "../test-helpers/control-ui-session-fixtures.ts";
+import { exactButton } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI YouTube embeds" });
@@ -55,7 +56,7 @@ suite.define(() => {
         const frame = card.locator("iframe");
         const waitForPlayer = () =>
           frame.contentFrame().getByText("Player fixture loaded", { exact: true }).waitFor();
-        const play = card.getByRole("button", { name: "Play Synthetic trailer", exact: true });
+        const play = exactButton(card, "Play Synthetic trailer");
         await play.waitFor();
         await expect
           .poll(() => card.locator("img").evaluate((image: HTMLImageElement) => image.naturalWidth))
@@ -86,10 +87,7 @@ suite.define(() => {
         expect(await watch.isVisible()).toBe(true);
 
         const missing = page.locator("openclaw-youtube-video").filter({ hasText: "Missing cover" });
-        const missingPlay = missing.getByRole("button", {
-          name: "Play Missing cover",
-          exact: true,
-        });
+        const missingPlay = exactButton(missing, "Play Missing cover");
         const missingFrame = missing.locator("iframe");
         const missingWatch = missing.getByRole("link", { name: "Open on YouTube", exact: true });
         await missingPlay.click();
@@ -100,7 +98,7 @@ suite.define(() => {
         expect(await missingFrame.count()).toBe(0);
 
         const loadedFrame = await frame.elementHandle();
-        await card.getByRole("button", { name: "Close player", exact: true }).click();
+        await exactButton(card, "Close player").click();
         await play.waitFor();
         expect(await loadedFrame!.evaluate((element) => element.isConnected)).toBe(false);
         expect(await frame.count()).toBe(0);

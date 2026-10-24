@@ -1,7 +1,11 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
+import type { SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../test-support/streaming-error-response.js";
+import { buildXaiImageGenerationProvider } from "./image-generation-provider.js";
 import { XAI_BASE_URL } from "./model-definitions.js";
+import { buildXaiSpeechProvider } from "./speech-provider.js";
 import { listXaiTtsVoices, xaiTTS, xaiTTSStream } from "./tts.js";
 
 const ttsRequest = {
@@ -12,6 +16,20 @@ const ttsRequest = {
   timeoutMs: 5_000,
 };
 
+const resolveKey = vi.hoisted(() =>
+  vi.fn(async (): Promise<{ apiKey: string | undefined }> => ({ apiKey: undefined })),
+);
+// mock-isolation: OAuth fallback responses are fixtures and must not read host credentials.
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
+  resolveApiKeyForProvider: resolveKey,
+}));
+// mock-isolation: Requests supply credential availability independently of host auth storage.
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
+  isProviderAuthProfileConfigured: () => false,
+  isProviderAuthProfileConfiguredAsync: async () => false,
+}));
+
 const { FakeWebSocket } = await vi.hoisted(async () => {
   const { EventEmitter } = await import("node:events");
 
@@ -20,6 +38,7 @@ const { FakeWebSocket } = await vi.hoisted(async () => {
     static readonly CONNECTING = 0;
     static readonly CLOSED = 3;
     static instances: MockWebSocket[] = [];
+    static onCreate: ((socket: MockWebSocket) => void) | undefined;
 
     readyState = MockWebSocket.CONNECTING;
     sent: string[] = [];
@@ -30,6 +49,7 @@ const { FakeWebSocket } = await vi.hoisted(async () => {
     ) {
       super();
       MockWebSocket.instances.push(this);
+      MockWebSocket.onCreate?.(this);
     }
 
     send(payload: string): void {
@@ -52,10 +72,32 @@ const { FakeWebSocket } = await vi.hoisted(async () => {
 // mock-isolation: Drive WebSocket lifecycle synchronously without opening network connections.
 vi.mock("./ws-runtime.js", () => ({ WebSocket: FakeWebSocket }));
 
+const fetchMock = vi.fn<typeof fetch>();
 function mockFetch(response: Response) {
-  const fetchMock = vi.fn<typeof fetch>(async () => response);
+  fetchMock.mockResolvedValue(response);
   globalThis.fetch = fetchMock;
   return fetchMock;
+}
+
+function capturedRequest() {
+  const [input, init] = fetchMock.mock.calls[0] ?? [];
+  if (!input) {
+    throw new Error("Expected provider HTTP request");
+  }
+  return {
+    url: typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+    method: init?.method,
+    headers: Object.fromEntries(new Headers(init?.headers)),
+    body: init?.body,
+  };
+}
+
+function capturedJson(): unknown {
+  const body = capturedRequest().body;
+  if (typeof body !== "string") {
+    throw new Error("Expected a JSON request body");
+  }
+  return JSON.parse(body);
 }
 
 function synthesize(overrides: Partial<Parameters<typeof xaiTTS>[0]> = {}) {
@@ -84,6 +126,8 @@ describe("xai tts", () => {
 
   beforeEach(() => {
     ssrfMock = mockPinnedHostnameResolution();
+    vi.stubEnv("XAI_API_KEY", undefined);
+    vi.stubEnv("XAI_BASE_URL", undefined);
   });
 
   afterEach(() => {
@@ -91,14 +135,233 @@ describe("xai tts", () => {
     ssrfMock = undefined;
     globalThis.fetch = originalFetch;
     FakeWebSocket.instances = [];
+    FakeWebSocket.onCreate = undefined;
     vi.useRealTimers();
     vi.restoreAllMocks();
+    resolveKey.mockReset().mockResolvedValue({ apiKey: undefined });
+    fetchMock.mockReset();
+    vi.unstubAllEnvs();
+  });
+
+  describe("image generation", () => {
+    const provider = buildXaiImageGenerationProvider();
+    type Request = Parameters<typeof provider.generateImage>[0];
+    const config = (overrides: { apiKey?: string; baseUrl?: string }) => ({
+      models: { providers: { xai: { baseUrl: XAI_BASE_URL, models: [], ...overrides } } },
+    });
+    const inputImage = (value: string, mimeType = "image/png") => ({
+      buffer: Buffer.from(value),
+      mimeType,
+    });
+    function generate(overrides: Partial<Request> = {}) {
+      return provider.generateImage({
+        provider: "xai",
+        model: "grok-imagine-image",
+        prompt: "Combine the references",
+        cfg: {},
+        ...overrides,
+      });
+    }
+    function mockImage(mime_type?: string, b64_json = Buffer.from("testpng").toString("base64")) {
+      mockFetch(Response.json({ data: [{ b64_json, mime_type }] }));
+    }
+    beforeEach(() => {
+      vi.useFakeTimers();
+      resolveKey.mockResolvedValue({ apiKey: "xai-key" });
+      mockImage();
+    });
+
+    it("builds provider metadata and resolves configuration", async () => {
+      expect(provider).toMatchObject({
+        id: "xai",
+        label: "xAI",
+        defaultModel: "grok-imagine-image",
+        defaultTimeoutMs: 600_000,
+        models: ["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-quality"],
+        capabilities: {
+          generate: { maxCount: 4, supportsAspectRatio: true },
+          edit: { enabled: true, maxInputImages: 3 },
+        },
+      });
+      expect(provider.capabilities.geometry?.aspectRatios).toEqual(
+        "1:1 16:9 9:16 4:3 3:4 3:2 2:3 2:1 1:2 19.5:9 9:19.5 20:9 9:20".split(" "),
+      );
+      const configured = provider.isConfiguredAsync;
+      if (!configured) {
+        throw new Error("Expected image config predicate");
+      }
+      expect(await configured({})).toBe(false);
+      expect(await configured({ cfg: config({ apiKey: "xai-image-test-key" }) })).toBe(true);
+    });
+    it.each([
+      "grok-imagine-image",
+      "grok-imagine-image-2.0",
+      "grok-imagine-image-quality",
+      "grok-imagine-image-future",
+    ])("preserves model %s in the request and result", async (model) => {
+      const timers = vi.spyOn(globalThis, "setTimeout");
+      const result = await generate({
+        model,
+        aspectRatio: "20:9",
+        resolution: "2K",
+        cfg: config({ baseUrl: "https://custom.x.ai/v1" }),
+      });
+      expect(resolveKey).toHaveBeenCalledWith(expect.objectContaining({ provider: "xai" }));
+      expect(result.model).toBe(model);
+      expect(timers.mock.calls.map(([, delay]) => delay)).toContain(600_000);
+      expect(capturedRequest()).toMatchObject({
+        url: "https://custom.x.ai/v1/images/generations",
+        method: "POST",
+      });
+      expect(capturedJson()).toMatchObject({ model, aspect_ratio: "20:9", resolution: "2k" });
+    });
+    it.each(["grok-imagine-image-2.0", "grok-imagine-image-quality"])(
+      "sends %s edits as a singular image_url",
+      async (model) => {
+        mockImage(
+          "image/png",
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYGD4z0ABAAEfAG0B0xMAAAAASUVORK5CYII=",
+        );
+        await generate({ model, inputImages: [inputImage("fakeimage")] });
+        expect(capturedRequest().url).toContain("/images/edits");
+        expect(capturedJson()).toMatchObject({
+          model,
+          prompt: "Combine the references",
+          image: { url: expect.stringContaining("data:image/png;base64,"), type: "image_url" },
+          response_format: "b64_json",
+        });
+      },
+    );
+    it("uses a plural payload for multiple edit inputs", async () => {
+      mockImage("image/png", Buffer.from("edited").toString("base64"));
+      await generate({
+        inputImages: [
+          inputImage("first"),
+          inputImage("second", "image/jpeg"),
+          inputImage("third", "image/webp"),
+        ],
+      });
+      expect(capturedRequest().url).toContain("/images/edits");
+      expect(capturedJson()).toEqual(
+        expect.objectContaining({
+          images: ["png", "jpeg", "webp"].map((type) => ({
+            url: expect.stringContaining(`data:image/${type};base64,`),
+            type: "image_url",
+          })),
+        }),
+      );
+    });
+    it("rejects more than three references before HTTP", async () => {
+      await expect(
+        generate({
+          inputImages: Array.from({ length: 4 }, (_, index) => inputImage(`reference-${index}`)),
+        }),
+      ).rejects.toThrow("xAI image editing supports up to 3 reference images");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("speech provider", () => {
+    const provider = buildXaiSpeechProvider();
+    function request(overrides: Partial<SpeechSynthesisRequest> = {}): SpeechSynthesisRequest {
+      return {
+        text: "hello",
+        cfg: {},
+        providerConfig: { apiKey: "xai-key" },
+        target: "audio-file",
+        timeoutMs: 5_000,
+        ...overrides,
+      };
+    }
+    function audioResponse() {
+      return mockFetch(new Response("audio-bytes", { headers: { "content-type": "audio/mpeg" } }));
+    }
+
+    it("streams alaw when requested by a compatible caller", async () => {
+      const created = new Promise<InstanceType<typeof FakeWebSocket>>((resolve) => {
+        FakeWebSocket.onCreate = resolve;
+      });
+      const pending = provider.streamSynthesize?.(
+        request({ providerConfig: { apiKey: "xai-key", responseFormat: "alaw" } }),
+      );
+      const ws = await created;
+      expect(new URL(ws.url ?? "").searchParams.get("codec")).toBe("alaw");
+      ws.emit("open");
+      const result = await pending;
+      expect(result?.outputFormat).toBe("alaw");
+      await result?.release?.();
+    });
+
+    it("honors voice, language, and speed overrides for telephony output", async () => {
+      audioResponse();
+      const result = await provider.synthesizeTelephony?.(
+        request({
+          providerConfig: {
+            apiKey: "xai-key",
+            baseUrl: XAI_BASE_URL,
+            voiceId: "eve",
+            language: "en",
+            speed: 1,
+          },
+          providerOverrides: { voice: "aura", language: "es", speed: 1.2 },
+        }),
+      );
+      expect(result).toEqual({
+        audioBuffer: Buffer.from("audio-bytes"),
+        outputFormat: "pcm",
+        sampleRate: 24_000,
+      });
+      expect(capturedJson()).toMatchObject({
+        voice_id: "aura",
+        language: "es",
+        speed: 1.2,
+        output_format: { codec: "pcm" },
+      });
+    });
+
+    it("drops malformed speed values before synthesis", async () => {
+      audioResponse();
+      await provider.synthesize(
+        request({
+          providerConfig: { apiKey: "xai-key", speed: 2 },
+          providerOverrides: { speed: 0.5 },
+        }),
+      );
+      expect(capturedJson()).not.toHaveProperty("speed");
+    });
+
+    it("treats blank direct credentials as absent across readiness and requests", async () => {
+      vi.stubEnv("XAI_API_KEY", "   ");
+      audioResponse();
+      const providerConfig = { apiKey: "   " };
+      expect(
+        await provider.isConfiguredAsync?.({ cfg: {}, providerConfig, timeoutMs: 5_000 }),
+      ).toBe(false);
+      await expect(provider.listVoices?.({ apiKey: "   ", providerConfig })).resolves.toEqual(
+        ["ara", "eve", "leo", "rex", "sal"].map((voice) => ({ id: voice, name: voice })),
+      );
+      await expect(provider.synthesize(request({ providerConfig }))).rejects.toThrow(
+        "xAI credentials missing for TTS",
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("uses cfg-scoped profile auth for synthesis", async () => {
+      resolveKey.mockResolvedValue({ apiKey: "oauth-bearer" });
+      const cfg = { agents: { defaults: {} } };
+      audioResponse();
+      await provider.synthesize(request({ cfg, providerConfig: {}, target: "voice-note" }));
+      expect(resolveKey).toHaveBeenCalledWith({ provider: "xai", cfg });
+      expect(capturedRequest().headers.authorization).toBe("Bearer oauth-bearer");
+    });
   });
 
   describe("listXaiTtsVoices", () => {
     it("maps the authenticated catalog and sends the expected request", async () => {
       vi.stubEnv("OPENCLAW_VERSION", "2026.7.9");
-      const fetchMock = mockFetch(
+      resolveKey.mockResolvedValue({ apiKey: "oauth-bearer" });
+      const cfg = { agents: { defaults: {} } };
+      mockFetch(
         Response.json({
           voices: [
             { voice_id: "altair", name: "Altair", language: "en", gender: "male" },
@@ -110,8 +373,9 @@ describe("xai tts", () => {
         }),
       );
 
-      const voices = await listXaiTtsVoices({
-        apiKey: "xai-key",
+      const voices = await buildXaiSpeechProvider().listVoices({
+        cfg,
+        providerConfig: {},
         baseUrl: "https://api.x.ai/v1/",
       });
 
@@ -119,21 +383,12 @@ describe("xai tts", () => {
         { id: "altair", name: "Altair", locale: "en", gender: "male" },
         { id: "celeste", name: "Celeste", locale: undefined, gender: undefined },
       ]);
-      const call = fetchMock.mock.calls[0];
-      if (!call) {
-        throw new Error("expected voice catalog request");
-      }
-      const [input, init] = call;
-      const requestUrl =
-        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      expect(requestUrl).toBe("https://api.x.ai/v1/tts/voices");
-      expect(init?.method).toBe("GET");
-      const headers = new Headers(init?.headers);
-      expect(Object.fromEntries(headers)).toMatchObject({
-        authorization: "Bearer xai-key",
-        "user-agent": "openclaw/2026.7.9",
+      expect(capturedRequest()).toMatchObject({
+        url: "https://api.x.ai/v1/tts/voices",
+        method: "GET",
+        headers: { authorization: "Bearer oauth-bearer", "user-agent": "openclaw/2026.7.9" },
       });
-      vi.unstubAllEnvs();
+      expect(resolveKey).toHaveBeenCalledWith({ provider: "xai", cfg });
     });
 
     it("rejects malformed catalog payloads", async () => {

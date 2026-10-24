@@ -4,13 +4,8 @@ import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 
-type ChatRunFailureNoticeProps = {
-  summary: string;
-  onRetry?: () => void;
-};
-
 /** One terminal notice, separate from assistant prose and preserved partial output. */
-export function ChatRunFailureNotice(props: ChatRunFailureNoticeProps) {
+export function ChatRunFailureNotice(props: { summary: string; onRetry?: () => void }) {
   const detail = createMemo(() => formatWebUiIconErrorText(props.summary).trim());
   const concise = createMemo(() => {
     const firstLine = detail().split(/\r?\n/u)[0] ?? "";

@@ -87,35 +87,16 @@ describe("gateway tool", () => {
       action: "config.get",
       path: "tools.exec",
     });
-
-    expect(result.details).toEqual({
+    const expected = {
       ok: true,
       result: {
         hash: "hash-1",
         path: "tools.exec",
         config: { ask: "on-miss", security: "allowlist" },
       },
-    });
-    expect(result.content).toEqual([
-      {
-        type: "text",
-        text: JSON.stringify(
-          {
-            ok: true,
-            result: {
-              hash: "hash-1",
-              path: "tools.exec",
-              config: {
-                ask: "on-miss",
-                security: "allowlist",
-              },
-            },
-          },
-          null,
-          2,
-        ),
-      },
-    ]);
+    };
+    expect(result.details).toEqual(expected);
+    expect(result.content).toEqual([{ type: "text", text: JSON.stringify(expected, null, 2) }]);
   });
 
   it.each([
@@ -123,12 +104,7 @@ describe("gateway tool", () => {
     ["...", "config path not found: ..."],
     ["constructor.prototype", "config path not found: constructor.prototype"],
   ])("rejects invalid config.get path %s", async (path, message) => {
-    await expect(
-      createGatewayTool().execute("call-invalid-config-path", {
-        action: "config.get",
-        path,
-      }),
-    ).rejects.toThrow(message);
+    await expect(readConfig(path)).rejects.toThrow(message);
   });
 
   it("reads config.get paths with bracketed array indexes", async () => {
@@ -157,7 +133,7 @@ describe("gateway tool", () => {
   });
 
   it("returns a path-scoped schema lookup result", async () => {
-    callGatewayToolMock.mockResolvedValueOnce({
+    const schema = {
       path: "gateway.auth",
       hintPath: "gateway.auth",
       children: [
@@ -168,24 +144,11 @@ describe("gateway tool", () => {
           hintPath: "gateway.auth.token",
         },
       ],
-    });
+    };
+    callGatewayToolMock.mockResolvedValueOnce(structuredClone(schema));
     const result = await readSchema("gateway.auth");
     expectSchemaRequest("gateway.auth");
-    expect(result.details).toMatchObject({
-      ok: true,
-      result: {
-        path: "gateway.auth",
-        hintPath: "gateway.auth",
-        children: [
-          {
-            key: "token",
-            path: "gateway.auth.token",
-            required: true,
-            hintPath: "gateway.auth.token",
-          },
-        ],
-      },
-    });
+    expect(result.details).toMatchObject({ ok: true, result: schema });
   });
 
   it("returns an in-band schema lookup miss for unknown paths", async () => {

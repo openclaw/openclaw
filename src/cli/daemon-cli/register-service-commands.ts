@@ -4,7 +4,7 @@ import { isGatewayServiceEnv } from "../../daemon/constants.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { resolveGatewayRpcOptionsWithLocalPort } from "../gateway-rpc.js";
-import type { DaemonInstallOptions, DaemonLifecycleOptions } from "./types.js";
+import type { DaemonLifecycleOptions } from "./types.js";
 
 function updateExecutorOption(): Option {
   return new Option("--update-executor <mode>", "Private update executor")
@@ -28,40 +28,6 @@ async function runUpdateCommand(
 function resolveJsonOption(cmdOpts: { json?: boolean }, command?: Command): boolean {
   const parentJson = inheritOptionFromParent<boolean>(command, "json", "cli");
   return Boolean(cmdOpts.json || parentJson);
-}
-
-function resolveInstallOptions(
-  cmdOpts: DaemonInstallOptions,
-  command?: Command,
-): DaemonInstallOptions {
-  const parentForce = inheritOptionFromParent<boolean>(command, "force");
-  const parentPort = inheritOptionFromParent<string>(command, "port");
-  const parentToken = inheritOptionFromParent<string>(command, "token");
-  const parentAllowUnconfigured = inheritOptionFromParent<boolean>(command, "allowUnconfigured");
-  return {
-    ...cmdOpts,
-    force: Boolean(cmdOpts.force || parentForce),
-    port: cmdOpts.port ?? parentPort,
-    token: cmdOpts.token ?? parentToken,
-    allowUnconfigured: cmdOpts.allowUnconfigured ?? parentAllowUnconfigured,
-    json: resolveJsonOption(cmdOpts, command),
-  };
-}
-
-function resolveRestartOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) {
-  const options = resolveLifecycleOptions(cmdOpts, command);
-  const safeFromGateway =
-    process.platform === "win32" &&
-    isGatewayServiceEnv(process.env) &&
-    !isGatewayExternallySupervised() &&
-    !options.force &&
-    cmdOpts.wait === undefined &&
-    !cmdOpts.preserveDefinition &&
-    !cmdOpts.skipDeferral;
-  return {
-    ...options,
-    safe: cmdOpts.safe || safeFromGateway,
-  };
 }
 
 function resolveLifecycleOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) {
@@ -136,7 +102,21 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .action(async (cmdOpts, command) => {
       await runUpdateCommand(cmdOpts.updateExecutor, "install", async () => {
         const { runDaemonInstall } = await import("./install.js");
-        await runDaemonInstall(resolveInstallOptions(cmdOpts, command));
+        const parentForce = inheritOptionFromParent<boolean>(command, "force");
+        const parentPort = inheritOptionFromParent<string>(command, "port");
+        const parentToken = inheritOptionFromParent<string>(command, "token");
+        const parentAllowUnconfigured = inheritOptionFromParent<boolean>(
+          command,
+          "allowUnconfigured",
+        );
+        await runDaemonInstall({
+          ...cmdOpts,
+          force: Boolean(cmdOpts.force || parentForce),
+          port: cmdOpts.port ?? parentPort,
+          token: cmdOpts.token ?? parentToken,
+          allowUnconfigured: cmdOpts.allowUnconfigured ?? parentAllowUnconfigured,
+          json: resolveJsonOption(cmdOpts, command),
+        });
       });
     });
 
@@ -198,7 +178,19 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .action(async (cmdOpts, command) => {
       await runUpdateCommand(cmdOpts.updateExecutor, "restart", async () => {
         const { runDaemonRestart } = await import("./lifecycle.js");
-        await runDaemonRestart(resolveRestartOptions(cmdOpts, command));
+        const options = resolveLifecycleOptions(cmdOpts, command);
+        const safeFromGateway =
+          process.platform === "win32" &&
+          isGatewayServiceEnv(process.env) &&
+          !isGatewayExternallySupervised() &&
+          !options.force &&
+          cmdOpts.wait === undefined &&
+          !cmdOpts.preserveDefinition &&
+          !cmdOpts.skipDeferral;
+        await runDaemonRestart({
+          ...options,
+          safe: cmdOpts.safe || safeFromGateway,
+        });
       });
     });
 }

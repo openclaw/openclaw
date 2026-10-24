@@ -336,7 +336,7 @@ describe("transcript turn physical identity", () => {
           messages: [{ message }],
           updateMode: "none",
         }),
-      ).resolves.toMatchObject({ appendedCount: 1 });
+      ).resolves.toMatchObject({ messages: [{ appended: true }] });
       expect(keys()).toEqual([{ session_key: stored }]);
       expect(loadTranscriptEventsSync(scope(stored))).toContainEqual(
         expect.objectContaining({ type: "message", message }),
@@ -425,7 +425,7 @@ describe("transcript turn physical identity", () => {
       }
       await expect(pending).resolves.toMatchObject({
         rejectedReason: "session-rebound",
-        appendedCount: 0,
+        messages: [],
       });
       if (change === "revision") {
         expect(loadSessionEntryReadOnly(scope())?.lifecycleRevision).toBe("successor");

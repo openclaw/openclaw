@@ -146,7 +146,6 @@ export async function runBootOnce(params: {
           ownedSessionId = nextSessionId;
         },
       },
-      { boundary: "gateway.boot" },
       bootRuntime,
       params.deps,
     );

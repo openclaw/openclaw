@@ -114,15 +114,14 @@ os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
   });
 
   it("fails closed and cleans its resources on write, spawn and Git failures", () => {
-    const write = run(Buffer.alloc(4096), {}, true);
-    expect(write.status).toBe(1);
-    expect(write.stderr).toContain("EFBIG");
-    const spawnFailure = run(Buffer.from("spawn"), { OPENCLAW_PR_GIT: join(root, "missing-git") });
-    expect(spawnFailure.status).toBe(1);
-    expect(spawnFailure.stderr).toContain("ENOENT");
-    const hash = run(Buffer.from("git"), { FAIL_HASH: "1" });
-    expect(hash.status).toBe(1);
-    expect(hash.stderr).toContain("fixture Git hash failure");
+    for (const [result, message] of [
+      [run(Buffer.alloc(4096), {}, true), "EFBIG"],
+      [run(Buffer.from("spawn"), { OPENCLAW_PR_GIT: join(root, "missing-git") }), "ENOENT"],
+      [run(Buffer.from("git"), { FAIL_HASH: "1" }), "fixture Git hash failure"],
+    ] as const) {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(message);
+    }
   });
 
   it("leaves no snapshot pathname when native supervision cancels a hashing child", async () => {

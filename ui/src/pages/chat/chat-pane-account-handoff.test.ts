@@ -8,11 +8,9 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { restorePaneStagedAttachments } from "./chat-pane-attachment-handoff.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
-import {
-  admitStoredChatComposerQueueItem,
-  ChatComposerPersistence,
-  loadChatComposerState,
-} from "./composer-persistence.ts";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
+import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -56,12 +54,16 @@ it("keeps A offline input with A when a same-client B hello replaces the pane be
   ready = false;
   state.connected = false;
   expect(
-    admitStoredChatComposerQueueItem(state, captureChatOutboxAdmission(state, state.sessionKey), {
-      id: "a-queue",
-      text: "A queued work",
-      createdAt: 1,
-    }),
-  ).toBe(true);
+    admitStoredChatComposerQueueItemResult(
+      state,
+      captureChatOutboxAdmission(state, state.sessionKey),
+      {
+        id: "a-queue",
+        text: "A queued work",
+        createdAt: 1,
+      },
+    ),
+  ).toBe("admitted");
   const attachment: ChatAttachment = {
     id: "a-attachment",
     mimeType: "text/plain",

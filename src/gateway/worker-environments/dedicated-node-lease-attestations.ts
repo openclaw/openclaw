@@ -120,6 +120,7 @@ export function createDedicatedNodeLeaseAttestations(
       const inspection = await options
         .callProvider(
           record.environmentId,
+          "inspect",
           () => provider.inspect({ ...lease, signal: inspectionSignal }),
           undefined,
           inspectionSignal,

@@ -12,6 +12,7 @@ import * as registry from "./registry.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const oldId = "a".repeat(64);
 const newId = "b".repeat(64);
+const success = (stdout = "") => ({ code: 0, stdout, stderr: "" });
 const entry = {
   containerName: "retire-owned",
   backendId: "docker",
@@ -78,21 +79,19 @@ async function setup(
       if (!physical.has(target)) {
         return { code: 1, stdout: "", stderr: "no such container" };
       }
-      return {
-        code: 0,
-        stdout: args.includes("{{.Id}}")
+      return success(
+        args.includes("{{.Id}}")
           ? target
           : args.includes("{{.State.Paused}}")
             ? "false"
             : target + " " + running + " false",
-        stderr: "",
-      };
+      );
     }
     if (args[0] === "rm") {
       physical.delete(target);
       await hooks.afterRemove();
     }
-    return { code: 0, stdout: "", stderr: "" };
+    return success();
   });
   const authority = new AbortController();
   const selectedEnv = await prepareScope?.();
@@ -219,9 +218,7 @@ it.each(["container", "browser"] as const)(
     await h.custody.retire();
 
     expect(h.physical.size).toBe(0);
-    expect(
-      h.command.mock.calls.filter(([, args]) => args[0] === "rm").map(([, args]) => args.at(-1)),
-    ).toEqual([oldId]);
+    expect(h.removals()).toEqual([oldId]);
     expect(await read({ env: ambientEnv })).toEqual(ambientBefore);
     expect((await read({ env: selectedEnv })).entries).toEqual([]);
   },

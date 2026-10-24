@@ -324,12 +324,11 @@ it.each([
       scope: "per-sender",
       agents: [{ id: "main" }, { id: "worker" }],
     });
-    const query = buildSessionsListQuery(context, {
-      deepLinkSessionKey: child.key,
-      includeGlobal: true,
-      includeUnknown: true,
-      statusFilter: "active",
-    });
+    const query = buildSessionsListQuery(
+      context.agentSelection.state.scopeId,
+      { includeGlobal: true, includeUnknown: true, statusFilter: "active" },
+      child.key,
+    );
     const unsubscribe = sessions.subscribeList(query, () => {});
     let childLoad: Promise<void> | undefined;
     try {

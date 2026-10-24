@@ -1,14 +1,24 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import nodePath from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { tableHasColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { recordAuditEventInDatabase } from "./audit-event-store.js";
+import { input as runInput } from "./audit-event-writer.test-support.js";
+import { createUnattributedExecutionContext } from "./execution-decision-facts.test-support.js";
+import { presentExecutionDecisionReceiptsInDatabase } from "./execution-decision-receipts.js";
 import {
   createExecutionIdentityAdmissionToken,
   enqueueExecutionIdentityContextAtAdmission,
@@ -21,17 +31,20 @@ import {
 } from "./execution-identity-context.js";
 import {
   captureExecutionIdentityAdmissionEnvelope as captureEnvelope,
+  executionIdentityFacts as facts,
   persistExecutionIdentityAdmissionEnvelope as persistEnvelope,
   prepareExecutionIdentityContextAtAdmission as prepareContext,
   recordDeniedApprovalForRun,
 } from "./execution-identity.test-support.js";
+import { deleteExecutionOwnerLifecycleMetadata } from "./execution-owner-lifecycle-binding-store.js";
+import {
+  pageOwnerLifecycleReceiptsInDatabase,
+  summarizeOwnerLifecycleReceiptsInDatabase,
+} from "./execution-owner-lifecycle-receipts.js";
 
 const RETENTION_MS = 30 * 24 * 60 * 60_000;
 
 let store: ReturnType<typeof createStore>;
-beforeEach(() => {
-  store = createStore();
-});
 afterEach(restartDatabase);
 
 async function restartDatabase() {
@@ -58,19 +71,6 @@ function openIndependentStateDatabase(path: string): OpenClawStateDatabase {
   };
 }
 
-function facts(
-  runId: string,
-  overrides: Partial<ExecutionIdentityAdmissionFacts> = {},
-): ExecutionIdentityAdmissionFacts {
-  return {
-    runId,
-    agentId: "main",
-    ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-    runtime: { kind: "embedded" },
-    ...overrides,
-  };
-}
-
 function createStore() {
   const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-identity-") } };
   const open = () => openOpenClawStateDatabase(options);
@@ -92,42 +92,72 @@ function createStore() {
 }
 
 describe("execution identity context storage", () => {
-  it("replays one byte-identical canonical context idempotently across restart", async () => {
-    const envelope = captureEnvelope(facts("run-1"), identity("1", 100, "runtime-secret-1"));
+  beforeEach(() => {
+    store = createStore();
+  });
+  it.each([
+    ["absent", "unattributed"],
+    ["unknown", "unknown"],
+    ["present", "attribution-only"],
+  ] as const)("replays canonical %s attribution across restart", async (state, coverageState) => {
+    const attributed = state === "present";
+    const envelope = captureEnvelope(
+      facts(
+        `run-${state}`,
+        attributed
+          ? {
+              invoker: {
+                state,
+                kind: "local-account",
+                rawPrincipalRef: "private-local-account",
+                displayLabel: "Operator OPENAI_API_KEY=sk-1234567890abcdef",
+              },
+              applicableGrants: ["grant-z", "grant-a"].map((rawGrantRef) => ({
+                rawGrantRef,
+                state: "present" as const,
+              })),
+              assurance: [
+                {
+                  kind: "local-process",
+                  rawEvidenceRef: "private-process-evidence",
+                  strength: "boundary-verified",
+                },
+              ],
+            }
+          : state === "unknown"
+            ? { invoker: { state } }
+            : {},
+      ),
+      identity(state, 100, "private-runtime"),
+    );
     const first = persistEnvelope(envelope, { ...store.options, now: 100 });
-
     await restartDatabase();
     const second = persistEnvelope(structuredClone(envelope), { ...store.options, now: 999 });
-
     expect(second).toEqual(first);
-    expect(first.coverageState).toBe("unattributed");
-    expect(first.invoker).toEqual({ state: "absent" });
+    const missingEvidence = attributed ? [] : ["invoker.principal"];
+    expect(first).toMatchObject({ invoker: { state }, coverageState, missingEvidence });
+    if (!attributed) {
+      expect(first.invoker).toEqual({ state });
+    } else {
+      const grants = first.applicableGrants.map(({ grantRef }) => grantRef);
+      expect(grants).toEqual(grants.toSorted());
+      expect(first.invoker.principal?.principalRef).toMatch(/^hmac-sha256:v1:/u);
+    }
     expect(Object.isFrozen(first)).toBe(true);
     expect(Object.isFrozen(first.runtimeInstance)).toBe(true);
-    expect(JSON.stringify(first)).not.toContain("runtime-secret-1");
-
-    await restartDatabase();
-    const afterRestart = await store.inspect({ executionId: "execution-1" }, 999);
-    expect(afterRestart.identity).toEqual({ state: "present", context: first });
-  });
-
-  it.each([
-    ["unknown", "unknown", 100],
-    ["absent", "unattributed", 101],
-  ] as const)("preserves %s invoker evidence across restart", async (state, coverageState, now) => {
-    const context = store.prepare(
-      `run-${state}`,
-      identity(state, now, `runtime-${state}`),
-      state === "unknown" ? { invoker: { state } } : {},
-    );
-    const missingEvidence = ["invoker.principal"];
-    expect(context).toMatchObject({ invoker: { state }, coverageState, missingEvidence });
-    if (state === "unknown") {
-      expect(context.invoker).not.toHaveProperty("principal");
+    for (const secret of [
+      "private-local-account",
+      "private-process-evidence",
+      "private-runtime",
+      "grant-a",
+      "grant-z",
+      "sk-1234567890abcdef",
+    ]) {
+      expect(JSON.stringify(first)).not.toContain(secret);
     }
     await restartDatabase();
-    const result = await store.inspect({ executionId: `execution-${state}` }, 101);
-    expect(result.identity).toEqual({ state: "present", context });
+    const result = await store.inspect({ executionId: `execution-${state}` }, 999);
+    expect(result.identity).toEqual({ state: "present", context: first });
     if (state === "unknown") {
       expect(result.coverage).toEqual({ state: "unknown", missingEvidence });
       expect(result.decisions).toEqual([
@@ -206,6 +236,18 @@ describe("execution identity context storage", () => {
     expect(nextPage).not.toHaveProperty("nextExecutionCursor");
   });
 
+  it.each([
+    ["local-cli", "agent-command.local"],
+    ["system", "gateway.boot"],
+  ] as const)("projects authoritative %s ingress", async (kind, boundary) => {
+    const ingress = { kind, boundary, state: "present" as const };
+    store.prepare("run", {}, kind === "system" ? { ingress } : {});
+    expect((await store.inspect({ runId: "run" })).identity).toMatchObject({
+      state: "present",
+      context: { ingress },
+    });
+  });
+
   it("confirms durable retries without manufacturing lost evidence", async () => {
     const envelope = captureEnvelope(
       facts("run-recovery"),
@@ -228,18 +270,6 @@ describe("execution identity context storage", () => {
     });
   });
 
-  it.each([
-    ["local-cli", "agent-command.local"],
-    ["system", "gateway.boot"],
-  ] as const)("projects authoritative %s ingress", async (kind, boundary) => {
-    const ingress = { kind, boundary, state: "present" as const };
-    store.prepare("run", {}, kind === "system" ? { ingress } : {});
-    expect((await store.inspect({ runId: "run" })).identity).toMatchObject({
-      state: "present",
-      context: { ingress },
-    });
-  });
-
   it("keeps maintenance read-only until the first identity capture", () => {
     const table = () =>
       store
@@ -249,51 +279,6 @@ describe("execution identity context storage", () => {
     expect(table()).toBeUndefined();
     expect(store.prune()).toBe(0);
     expect(table()).toBeUndefined();
-  });
-
-  it("records attribution only when an invoker fact is actually present", () => {
-    const context = store.prepare(
-      "run-attributed",
-      { runtimeInstanceId: "private-runtime" },
-      {
-        invoker: {
-          state: "present",
-          kind: "local-account",
-          rawPrincipalRef: "private-local-account",
-          displayLabel: "Operator OPENAI_API_KEY=sk-1234567890abcdef",
-        },
-        applicableGrants: [
-          { rawGrantRef: "grant-z", state: "present" },
-          { rawGrantRef: "grant-a", state: "present" },
-        ],
-        assurance: [
-          {
-            kind: "local-process",
-            rawEvidenceRef: "private-process-evidence",
-            strength: "boundary-verified",
-          },
-        ],
-      },
-    );
-    const encoded = JSON.stringify(context);
-
-    expect(context.coverageState).toBe("attribution-only");
-    expect(context.invoker.state).toBe("present");
-    expect(context.missingEvidence).toEqual([]);
-    expect(context.applicableGrants.map((grant) => grant.grantRef)).toEqual(
-      context.applicableGrants.map((grant) => grant.grantRef).toSorted(),
-    );
-    for (const secret of [
-      "private-local-account",
-      "private-process-evidence",
-      "private-runtime",
-      "grant-a",
-      "grant-z",
-      "sk-1234567890abcdef",
-    ]) {
-      expect(encoded).not.toContain(secret);
-    }
-    expect(context.invoker.principal?.principalRef).toMatch(/^hmac-sha256:v1:/u);
   });
 
   it("keeps bounded retention maintenance available while collection is disabled", () => {
@@ -419,15 +404,8 @@ describe("execution identity context storage", () => {
     } else if (runId === "legacy") {
       recordAuditEventInDatabase(
         {
+          ...runInput(),
           sourceId: "legacy-run:1",
-          sourceSequence: 1,
-          occurredAt: Date.now(),
-          kind: "agent_run",
-          action: "agent.run.started",
-          status: "started",
-          actorType: "agent",
-          actorId: "main",
-          agentId: "main",
           runId,
         },
         { ...store.options, database: store.open() },
@@ -442,5 +420,252 @@ describe("execution identity context storage", () => {
       },
       ...(runId === "corrupt" ? { coverage: { state: "unknown" } } : {}),
     });
+  });
+});
+
+function addCron(
+  db: EngineConnection,
+  id: string,
+  startedAt = 60,
+  status = "running",
+  finishedAt: number | null = null,
+  runId = "run-1",
+) {
+  db.prepare(`INSERT INTO cron_run_receipts (
+    receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
+    status, owner_pid, started_at_ms, finished_at_ms, cursor_id
+  ) VALUES (?, 'default', ?, 'revision-1', 'main', ?, ?, 1, ?, ?,
+    (SELECT COALESCE(MAX(cursor_id), 0) + 1 FROM cron_run_receipts))`).run(
+    id,
+    id.replace("cron-", "job-"),
+    runId,
+    status,
+    startedAt,
+    finishedAt,
+  );
+}
+
+function bindCron(db: EngineConnection, id: string, executionId = "execution-1") {
+  db.prepare(`INSERT INTO execution_owner_lifecycle_bindings (
+    owner_kind, owner_id, context_id, execution_id
+  ) VALUES ('cron', ?, 'context-1', ?)`).run(id, executionId);
+}
+
+function present(db: EngineConnection, decisionCursor?: string, context = executionContext()) {
+  return presentExecutionDecisionReceiptsInDatabase(db, {
+    schema: retainedLifecycleSchema,
+    context,
+    decisionCursor,
+    decisionLimit: 1,
+    now: Date.now(),
+  });
+}
+
+function page(db: EngineConnection, schema = retainedLifecycleSchema) {
+  return pageOwnerLifecycleReceiptsInDatabase(db, {
+    schema,
+    context: executionContext(),
+    limit: 1,
+  });
+}
+
+function deleteAnchor(db: EngineConnection) {
+  db.prepare(
+    "DELETE FROM execution_owner_lifecycle_bindings WHERE owner_kind = 'cron' AND owner_id = 'cron-1'",
+  ).run();
+  db.prepare("DELETE FROM cron_run_receipts WHERE receipt_id = 'cron-1'").run();
+}
+
+function createCronDatabase(retainedBinding = true) {
+  const pathname = nodePath.join(tempDirs.make("owner-lifecycle-"), "openclaw.sqlite");
+  const oldReader = new DatabaseSync(pathname);
+  oldReader.exec(OPENCLAW_STATE_SCHEMA_SQL);
+  if (!retainedBinding) {
+    oldReader.exec("DROP TABLE execution_owner_lifecycle_bindings");
+  }
+  oldReader.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+  oldReader
+    .prepare(
+      `INSERT INTO schema_meta (
+         meta_key, role, schema_version, created_at, updated_at
+       ) VALUES ('primary', 'global', ?, 1, 1)`,
+    )
+    .run(OPENCLAW_STATE_SCHEMA_VERSION);
+  addCron(oldReader, "cron-1");
+  if (retainedBinding) {
+    // Released rows remain inspectable alongside newly bound scheduled runs.
+    bindCron(oldReader, "cron-1");
+  }
+  oldReader.close();
+  return { path: pathname };
+}
+
+function openCronDatabase() {
+  return openOpenClawStateDatabase(createCronDatabase()).db;
+}
+
+function executionContext(contextId = "context-1"): ExecutionIdentityContextV1 {
+  return {
+    ...createUnattributedExecutionContext(),
+    contextId,
+    invoker: { state: "unknown" },
+    ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
+  };
+}
+
+const retainedLifecycleSchema = { cronRunReceipts: true, executionOwnerLifecycleBindings: true };
+
+describe("owner-native execution lifecycle receipts", () => {
+  it("uses admitted absence without catalog probes or allocating opt-in storage", () => {
+    const db = new DatabaseSync(":memory:");
+    const prepare = vi.spyOn(db, "prepare");
+    const schema = { cronRunReceipts: false, executionOwnerLifecycleBindings: false };
+    try {
+      expect(page(db, schema)).toEqual({ entries: [] });
+      expect(
+        summarizeOwnerLifecycleReceiptsInDatabase(db, { schema, context: executionContext() }),
+      ).toEqual({ count: 0, missingEvidence: [] });
+      deleteExecutionOwnerLifecycleMetadata({
+        db,
+        ownerKind: "cron",
+        ownerIds: ["cron-1"],
+        executionOwnerLifecycleBindings: false,
+      });
+      expect(prepare).not.toHaveBeenCalled();
+      expect(() =>
+        pageOwnerLifecycleReceiptsInDatabase(db, {
+          schema,
+          context: executionContext(),
+          after: { occurredAt: 60, rowId: 1 },
+          limit: 1,
+        }),
+      ).toThrow("owner lifecycle cursor is no longer retained");
+      expect(prepare).not.toHaveBeenCalled();
+      // An admitted table disappearing is not absence; SQLite failure must reach the owner.
+      expect(() => page(db)).toThrow(/no such table/i);
+    } finally {
+      prepare.mockRestore();
+      db.close();
+    }
+  });
+
+  it("reads an unbound released cron receipt without allocating opt-in storage", () => {
+    const options = createCronDatabase(false);
+    const current = openOpenClawStateDatabase(options).db;
+    expect(tableExists(current, "execution_owner_lifecycle_bindings")).toBe(false);
+    expect(tableHasColumn(current, "cron_run_receipts", "context_id")).toBe(false);
+    expect(tableHasColumn(current, "cron_run_receipts", "execution_id")).toBe(false);
+    const unboundSchema = { cronRunReceipts: true, executionOwnerLifecycleBindings: false };
+    expect(page(current, unboundSchema).entries).toEqual([]);
+    expect(tableExists(current, "execution_owner_lifecycle_bindings")).toBe(false);
+  });
+
+  it("preserves released cron binding metadata and its terminal receipt on reopen", async () => {
+    const options = createCronDatabase();
+    const current = openOpenClawStateDatabase(options).db;
+    current.prepare("UPDATE cron_run_receipts SET status = 'ok', finished_at_ms = 70").run();
+
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    const reopened = openOpenClawStateDatabase(options).db;
+    expect(reopened.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
+    expect(
+      reopened
+        .prepare(
+          "SELECT owner_kind, owner_id, context_id, execution_id FROM execution_owner_lifecycle_bindings",
+        )
+        .all(),
+    ).toEqual([
+      {
+        owner_kind: "cron",
+        owner_id: "cron-1",
+        context_id: "context-1",
+        execution_id: "execution-1",
+      },
+    ]);
+    expect(page(reopened).entries[0]?.receipt.decision).toEqual({
+      outcome: "not-applicable",
+      reasonCode: "cron_run_ok",
+    });
+    expect(
+      reopened.prepare("SELECT COUNT(*) AS count FROM execution_decision_facts").get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("uses stable cron cursors and rejects a mismatched exact execution", async () => {
+    const db = openCronDatabase();
+    db.prepare("UPDATE cron_run_receipts SET status = 'ok', finished_at_ms = 70").run();
+    addCron(db, "cron-2", 60, "skipped", 70);
+    db.exec("UPDATE cron_run_receipts SET rowid = 100 WHERE receipt_id = 'cron-1'");
+    bindCron(db, "cron-2", "execution-other");
+    const first = present(db);
+    expect(first.nextDecisionCursor).toBe("a:0:0");
+    const cronPage = present(db, first.nextDecisionCursor);
+    expect(cronPage.decisions[0]?.source.owner).toBe("cron_run_receipts");
+    expect(cronPage.decisionDisplays[0]).toMatchObject({
+      decision: { outcome: "not-applicable", reasonCode: "cron_run_ok" },
+      provenance: { state: "verified", producer: "cron-lifecycle" },
+    });
+    expect(cronPage.nextDecisionCursor).toBe("c:60:1");
+    const mismatchPage = present(db, cronPage.nextDecisionCursor);
+    expect(mismatchPage.decisions[0]).toMatchObject({
+      decision: { outcome: "unknown", reasonCode: "cron_run_execution_link_mismatch" },
+      missingEvidence: ["decision.execution_link"],
+    });
+    expect(mismatchPage.nextDecisionCursor).toBeUndefined();
+    expect(JSON.stringify(cronPage.decisionDisplays)).not.toMatch(
+      /cron-1|private|cron_run_receipts/,
+    );
+
+    expect(present(db, "1").decisions[0]?.source.owner).toBe("cron_run_receipts");
+  });
+
+  it.each(["deleted", "other-context"] as const)("rejects the %s owner cursor", (invalid) => {
+    const db = openCronDatabase();
+    addCron(db, "cron-2", 61);
+    bindCron(db, "cron-2");
+    const firstPage = present(db, "c:0:0");
+    expect(firstPage.nextDecisionCursor).toMatch(/^c:[1-9]\d*:[1-9]\d*$/);
+    if (invalid === "deleted") {
+      deleteAnchor(db);
+    }
+    const context = invalid === "other-context" ? executionContext("context-other") : undefined;
+    expect(() => present(db, firstPage.nextDecisionCursor, context)).toThrow(
+      "decision cursor is no longer retained; restart inspection without --cursor",
+    );
+  });
+
+  it("rejects a reused owner cursor whose binding belongs to another execution", async () => {
+    const db = openCronDatabase();
+    db.prepare("DELETE FROM cron_run_receipts WHERE receipt_id = 'cron-1'").run();
+    addCron(db, "cron-2", 63);
+    addCron(db, "cron-1");
+    bindCron(db, "cron-2");
+    const firstPage = present(db, "c:0:0");
+    expect(firstPage.nextDecisionCursor).toMatch(/^c:60:[1-9]\d*$/);
+
+    deleteAnchor(db);
+    addCron(db, "cron-replacement", 60, "running", null, "run-2");
+    bindCron(db, "cron-replacement", "execution-other");
+
+    expect(() => present(db, firstPage.nextDecisionCursor)).toThrow(
+      "decision cursor is no longer retained; restart inspection without --cursor",
+    );
+  });
+
+  it("projects every cron terminal state without rederiving lifecycle precedence", async () => {
+    const db = openCronDatabase();
+
+    for (const status of ["ok", "error", "skipped", "interrupted", "superseded"]) {
+      db.prepare(
+        "UPDATE cron_run_receipts SET status = ?, finished_at_ms = 70 WHERE receipt_id = ?",
+      ).run(status, "cron-1");
+      expect(page(db).entries[0]?.receipt.decision).toEqual({
+        outcome: "not-applicable",
+        reasonCode: `cron_run_${status}`,
+      });
+    }
   });
 });

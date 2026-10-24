@@ -3,7 +3,7 @@ import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibili
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
+import { prepareChatStreamRender } from "./chat-message-markdown-view.tsx";
 
 type ChatPositionMarker = {
   id: string;
@@ -93,12 +93,7 @@ export function projectChatPositions(
         if (part.kind !== "stream") {
           continue;
         }
-        const message = {
-          role: "assistant",
-          content: [{ type: "text", text: part.text }],
-          timestamp: part.startedAt,
-        };
-        const { normalizedMessage, displayMarkdown } = prepareChatMessageRender(message);
+        const { message, normalizedMessage, displayMarkdown } = prepareChatStreamRender(part);
         if (
           resolveMessageVisibleContent(message, normalizedMessage) !== "non-text" &&
           !displayMarkdown.trim()

@@ -1,23 +1,14 @@
-import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   attachManagedOutgoingMediaToMessage,
   createManagedOutgoingMediaBlocks,
@@ -25,15 +16,15 @@ import {
 import { listManagedImageRecordEntries } from "../managed-image-record-store.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 
-const tempDirs = createTempDirTracker();
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 async function createFixture() {
-  const dir = tempDirs.make("openclaw-chat-inject-");
+  state = await createOpenClawTestState({ label: "chat-inject", scenario: "minimal" });
   const scope = {
-    dir,
+    dir: state.stateDir,
     agentId: "main",
     sessionKey: "main",
     sessionId: "inject-session",
-    storePath: path.join(dir, "sessions.json"),
+    storePath: state.statePath("sessions.json"),
   };
   setRuntimeConfigSnapshot({});
   await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
@@ -50,11 +41,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   unsubscribe();
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-  await closeStateDatabaseForTest();
-  clearRuntimeConfigSnapshot();
-  tempDirs.cleanup();
+  await state.cleanup();
 });
 
 async function readLastTranscriptRecord(): Promise<Record<string, unknown>> {

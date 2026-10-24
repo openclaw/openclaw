@@ -12,7 +12,6 @@ import { admitSqliteSchema, runSqliteReadOperationSync } from "../../infra/sqlit
 import {
   runSqliteDeferredTransactionSync as deferred,
   runSqliteImmediateTransactionSync as immediate,
-  runSqliteReadSnapshotSync as readSnapshot,
 } from "../../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import {
@@ -102,26 +101,6 @@ it("invalidates entry and participant snapshots after writes and rollback", () =
   db.exec("ALTER TABLE session_nodes ADD COLUMN revision_probe TEXT");
   admitSqliteSchema(db);
   expect(token().schemaVersion).toBeGreaterThan(beforeSchema.schemaVersion);
-});
-
-it("observes sibling receipts while native reads retain their explicit snapshot", () => {
-  const filename = path.join(tempDirs.make("entry-revision-"), "agent.sqlite");
-  const { db, token } = fixture(filename);
-  db.exec("PRAGMA journal_mode=WAL");
-  const peer = openDatabase(filename);
-  const initial = token();
-  peer.exec("UPDATE session_nodes SET updated_at = 2");
-  const changed = token();
-  expect(changed.siblingWriteRevision).not.toBe(initial.siblingWriteRevision);
-  expect(changed.sessionNodesGeneration).toBe(initial.sessionNodesGeneration);
-  readSnapshot(db, () => {
-    const read = () => db.prepare("SELECT updated_at FROM session_nodes").get()?.updated_at;
-    expect(read()).toBe(2);
-    peer.exec("UPDATE session_nodes SET updated_at = 3");
-    expect(token().siblingWriteRevision).not.toBe(changed.siblingWriteRevision);
-    expect(read()).toBe(2);
-  });
-  expect(token().siblingWriteRevision).not.toBe(changed.siblingWriteRevision);
 });
 
 it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(

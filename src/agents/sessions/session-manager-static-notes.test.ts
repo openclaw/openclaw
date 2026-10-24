@@ -107,7 +107,6 @@ function watchAdmission(onAdmission: (path: string | undefined, reentrant?: bool
 
 const cases: Array<Message | CustomMessage | BashExecutionMessage> = [
   makeUserMessage("SDK user message", 1),
-  { ...makeNote("SDK custom message", 2), customType: "sdk-note" },
   {
     role: "bashExecution",
     command: "echo synthetic",
@@ -144,11 +143,12 @@ it("awaits direct static writes while preserving keyed custom replay and admitte
       idempotencyKey: "static-parity:custom",
     };
     const first = Sdk.appendMessageToTranscript(target, custom);
+    expect(typeof first).toBe("string");
     const nextCustom = { ...custom, idempotencyKey: "static-parity:next" };
     const next = await Sdk.appendMessageToTranscriptAsync(target, nextCustom);
     const beforeReplay = await readEvents(target);
     expect(beforeReplay.slice(-2)).toMatchObject([
-      { id: first, parentId: null },
+      { type: "message", id: first, parentId: null, message: custom },
       { id: next, parentId: first },
     ]);
     await expect(Sdk.appendMessageToTranscriptAsync(target, custom)).resolves.toBe(first);

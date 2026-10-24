@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import * as agentEvents from "../infra/agent-events.js";
+import { createDeliveryHarness } from "./embedded-agent-subscribe.delivery.test-support.js";
 import {
   createSubscribedSessionHarness,
   emitAssistantLifecycleErrorAndEnd,
@@ -41,11 +42,7 @@ function emitUpdate(
 
 type SessionOptions = Parameters<typeof createSubscribedSessionHarness>[0];
 function blockReplyHarness(options: Omit<SessionOptions, "runId"> & { runId?: string } = {}) {
-  const onBlockReply = vi.fn<BlockReply>();
-  return {
-    ...createSubscribedSessionHarness({ runId: "run", onBlockReply, ...options }),
-    onBlockReply,
-  };
+  return createDeliveryHarness({ blockReplyBreak: undefined, ...options });
 }
 
 function emitResponsesText(

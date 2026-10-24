@@ -1,9 +1,13 @@
+import {
+  capturePluginRegistration,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type {
   pollProviderOperationJson,
   postJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import { afterEach, assert, expect, it, vi } from "vitest";
-import { buildTogetherVideoGenerationProvider } from "./video-generation-provider.js";
+import plugin from "./index.js";
 
 const { postMock, pollMock } = vi.hoisted(() => ({
   postMock: vi.fn<typeof postJsonResponse>(),
@@ -23,13 +27,18 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
 
 afterEach(() => vi.restoreAllMocks());
 
+const provider = requireRegisteredProvider(
+  capturePluginRegistration(plugin).videoGenerationProviders,
+  "together",
+);
+
 it("preserves configured task headers and proxy through submission and polling", async () => {
   const intercepted = new Error("synthetic polling intercepted");
   postMock.mockResolvedValue({ id: "synthetic-task" });
   pollMock.mockRejectedValue(intercepted);
 
   await expect(
-    buildTogetherVideoGenerationProvider().generateVideo({
+    provider.generateVideo({
       provider: "together",
       model: "Wan-AI/wan2.7-t2v",
       prompt: "a synthetic lobster",
@@ -84,7 +93,7 @@ it("denies private polling without needing a proxy override", async () => {
     .mockRejectedValue(new Error("unguarded synthetic poll reached fetch"));
 
   await expect(
-    buildTogetherVideoGenerationProvider().generateVideo({
+    provider.generateVideo({
       provider: "together",
       model: "Wan-AI/wan2.7-t2v",
       prompt: "a synthetic lobster",

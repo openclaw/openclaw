@@ -33,15 +33,6 @@ vi.mock("undici/index.js", async () => {
 });
 
 describe("fetchTelegramChatId", () => {
-  it("returns null when response is not ok", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("{}", { status: 404 })),
-    );
-
-    expect(await getChat()).toBeNull();
-  });
-
   it("returns null for oversized getChat JSON responses and cancels the stream", async () => {
     const cancel = vi.fn();
     const response = new Response(

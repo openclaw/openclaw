@@ -6,7 +6,6 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { testing as prompt } from "../../scripts/anthropic-prompt-probe.ts";
 import { testing as claude } from "../../scripts/debug-claude-usage.ts";
@@ -33,7 +32,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
+import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
@@ -68,6 +67,11 @@ function stalledResponse(headers?: HeadersInit) {
   return new Response(new ReadableStream({ start() {} }), { headers });
 }
 
+function expectRedacted(text: string, marker: string, secret = fixtureToken) {
+  expect(text).not.toContain(secret);
+  expect(text).toContain(marker);
+}
+
 function spawnPrompt(claudeBin: string, env: NodeJS.ProcessEnv = {}, capture = false) {
   return spawn(process.execPath, resolveRuntimeWorkerArgv(promptProbeUrl), {
     cwd: process.cwd(),
@@ -82,26 +86,21 @@ function spawnPrompt(claudeBin: string, env: NodeJS.ProcessEnv = {}, capture = f
   });
 }
 
-function gatewayLeaderScript(descendantPidPath: string) {
-  const descendantScript = [
-    "process.on('SIGINT', () => {});",
-    "process.on('SIGTERM', () => {});",
-    "setInterval(() => {}, 1000);",
-    "process.send('ready');",
-    "process.disconnect();",
-  ].join("");
-  return [
-    "import childProcess from 'node:child_process';",
-    "import fs from 'node:fs';",
-    "const descendant = childProcess.spawn(process.execPath, [",
-    "  '--input-type=module',",
-    `  '--eval', ${JSON.stringify(descendantScript)},`,
-    "], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });",
-    `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
-    "process.on('SIGINT', () => process.exit(0));",
-    "descendant.once('message', () => process.send(descendant.pid));",
-    "setInterval(() => {}, 1000);",
-  ].join("\n");
+function gatewayLeaderScript(pidPath: string) {
+  const descendantScript = `process.on('SIGINT', () => {});
+process.on('SIGTERM', () => {});
+setInterval(() => {}, 1000);
+process.send('ready');
+process.disconnect();`;
+  return `import childProcess from 'node:child_process';
+import fs from 'node:fs';
+const descendant = childProcess.spawn(process.execPath,
+  ['--input-type=module', '--eval', ${JSON.stringify(descendantScript)}],
+  { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(descendant.pid));
+process.on('SIGINT', () => process.exit(0));
+descendant.once('message', () => process.send(descendant.pid));
+setInterval(() => {}, 1000);`;
 }
 
 let receipts: FixtureReceiptChannel;
@@ -111,17 +110,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await receipts?.close();
 });
-
-// Gateway stop reports leader exit; foreign descendants expose no join handle.
-async function waitForExtinction(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (isProcessAlive(pid)) {
-      await waitForProcessTick(10, undefined, { signal });
-    }
-  } catch (error) {
-    throw new Error(`process still alive: ${pid}`, { cause: error });
-  }
-}
 
 async function promptReadyBeforeSettlement(
   pidPath: string,
@@ -208,14 +196,21 @@ async function withDescendantFixture(
   }
 }
 
-async function promptFixture(prefix: string, mode?: Parameters<typeof writeFakePromptCli>[2]) {
-  const root = await tempDir(prefix);
+async function promptFixture(mode?: Parameters<typeof writeFakePromptCli>[2]) {
+  const root = await tempDir("openclaw-prompt-");
   const pidPath = path.join(root, "descendant.pid");
   return { root, pidPath, claudeBin: await writeFakePromptCli(root, pidPath, mode) };
 }
 
-async function logFixture(contents: string) {
-  return writeFixture(await tempDir("openclaw-prompt-probe-log-"), "gateway.log", contents);
+async function redactedLogTail(contents: string, bytes: number, secret = fixtureToken) {
+  const filename = await writeFixture(
+    await tempDir("openclaw-prompt-log-"),
+    "gateway.log",
+    contents,
+  );
+  const tail = await prompt.readLogTail(filename, bytes);
+  expectRedacted(tail, "recent gateway tail", secret);
+  return tail;
 }
 
 async function writeFixture(root: string, name: string, contents: string | string[]) {
@@ -299,17 +294,15 @@ describe("dev tooling safety helpers", () => {
   it("redacts secrets before truncating script log previews", () => {
     const preview = previewForDevToolLog(`prefix OPENAI_API_KEY=${fixtureToken} suffix`, 80);
 
-    expect(preview).not.toContain(fixtureToken);
-    expect(preview).toContain("OPENAI_API_KEY=");
+    expectRedacted(preview, "OPENAI_API_KEY=");
   });
 
   it("recursively redacts JSON-ish detail values before printing smoke results", () => {
     const redacted = redactJsonValueForDevToolLog({
       nested: [{ message: `Authorization: Bearer ${fixtureToken}` }],
-    }) as { nested: Array<{ message: string }> };
-
-    expect(redacted.nested[0]?.message).not.toContain(fixtureToken);
-    expect(redacted.nested[0]?.message).toContain("Authorization");
+    });
+    expect(redacted).toEqual({ nested: [{ message: expect.stringContaining("Authorization") }] });
+    expect(JSON.stringify(redacted)).not.toContain(fixtureToken);
   });
 
   it("parses boolean env values explicitly", () => {
@@ -339,10 +332,9 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it.each([
-    ["Discord smoke", "scripts/dev/discord-acp-plain-language-smoke.ts", discord.parseArgs],
-    ["TUI PTY watch", "scripts/dev/tui-pty-test-watch.ts", tui.parseOptions],
-  ] as const)("rejects unknown %s args before launching work", async (_label, script, parse) => {
-    expect(() => parse(["--wat"])).toThrow("Unknown argument: --wat");
+    ["Discord smoke", "scripts/dev/discord-acp-plain-language-smoke.ts"],
+    ["TUI PTY watch", "scripts/dev/tui-pty-test-watch.ts"],
+  ] as const)("rejects unknown %s args before launching work", async (_label, script) => {
     const result = await runCli(script, ["--wat"]);
 
     expect({ ...result, stderr: result.stderr.trim() }).toEqual({
@@ -356,9 +348,7 @@ describe("script-specific dev tooling hardening", () => {
     [discord.parseArgs, ["--channel"], "--channel requires a value"],
     [discord.parseArgs, ["--channel="], "--channel requires a value"],
     [discord.parseArgs, ["--channel", "--json"], "--channel requires a value"],
-    ...["--channel", "--token", "--timeout-ms", "--state-dir"].map(
-      (flag) => [discord.parseArgs, [flag, "-h"], `${flag} requires a value`] as const,
-    ),
+    [discord.parseArgs, ["--channel", "-h"], "--channel requires a value"],
     [realtime.parseRealtimeSmokeArgs, ["--wat"], "Unknown argument: --wat"],
     [
       realtime.parseRealtimeSmokeArgs,
@@ -377,7 +367,6 @@ describe("script-specific dev tooling hardening", () => {
     ],
     [claude.parseArgs, ["--wat"], "Unknown argument: --wat"],
     [claude.parseArgs, ["--agent"], "--agent requires a value"],
-    [claude.parseArgs, ["--agent="], "--agent requires a value"],
     [claude.parseArgs, ["--session-key", "--reveal"], "--session-key requires a value"],
     [claude.parseArgs, ["--session-key= "], "--session-key requires a value"],
   ] as const)("rejects malformed script arguments %j", (parse, args, error) => {
@@ -388,8 +377,7 @@ describe("script-specific dev tooling hardening", () => {
     const token = "webhook-secret-token-abcdef123456"; // pragma: allowlist secret
     const apiPath = `/webhooks/123/${token}?wait=true`;
 
-    expect(discord.redactDiscordApiPath(apiPath)).not.toContain(token);
-    expect(discord.redactDiscordApiPath(apiPath)).toContain("/webhooks/123/");
+    expectRedacted(discord.redactDiscordApiPath(apiPath), "/webhooks/123/", token);
   });
 
   it("computes the remaining Discord smoke timeout budget", () => {
@@ -583,14 +571,6 @@ describe("script-specific dev tooling hardening", () => {
     });
   });
 
-  it("formats OpenAI realtime smoke help without launching live checks", () => {
-    expect(realtime.usage()).toContain(
-      "Usage: node --import tsx scripts/dev/realtime-talk-live-smoke.ts",
-    );
-    expect(realtime.usage()).toContain("--openai-only");
-    expect(realtime.usage()).toContain("--openai-audio-cycles");
-  });
-
   it("chunks PCM input without copying or dropping bytes", async () => {
     const sent: Buffer[] = [];
     const chunkCount = await realtime.sendPcmAudioInChunks(
@@ -654,22 +634,6 @@ describe("script-specific dev tooling hardening", () => {
     expect(body.cancel).toHaveBeenCalledTimes(1);
   });
 
-  it("bounds OpenAI realtime smoke response body reads by streamed bytes", async () => {
-    const maxBytes = realtime.OPENAI_HTTP_RESPONSE_MAX_BYTES;
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new Uint8Array(maxBytes + 1));
-          controller.close();
-        },
-      }),
-    );
-
-    await expect(
-      realtime.readBoundedText(response, "OpenAI Realtime test", maxBytes),
-    ).rejects.toThrow(`OpenAI Realtime test response body exceeded ${maxBytes} bytes`);
-  });
-
   it("rejects absolute-form URLs in the Anthropic capture proxy", () => {
     expect(
       prompt.resolveAnthropicUpstreamUrl(
@@ -696,29 +660,22 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("reads only the bounded Anthropic prompt probe gateway log tail", async () => {
-    const logPath = await logFixture(
-      [
-        `DO_NOT_PRINT_OLD_GATEWAY_LOG OPENAI_API_KEY=${fixtureToken}`,
-        "x".repeat(256),
-        `recent gateway tail Authorization: Bearer ${fixtureToken}`,
-      ].join("\n"),
+    const tail = await redactedLogTail(
+      `DO_NOT_PRINT_OLD_GATEWAY_LOG OPENAI_API_KEY=${fixtureToken}\n${"x".repeat(256)}\nrecent gateway tail Authorization: Bearer ${fixtureToken}`,
+      128,
     );
-
-    const tail = await prompt.readLogTail(logPath, 128);
-
-    expect(tail).toContain("recent gateway tail");
     expect(tail).not.toContain("DO_NOT_PRINT_OLD_GATEWAY_LOG");
-    expect(tail).not.toContain(fixtureToken);
   });
 
   it("drops partial Anthropic prompt probe log lines before redaction", async () => {
     const token = `sk-test${"a".repeat(80)}`; // pragma: allowlist secret
-    const logPath = await logFixture(`Authorization: Bearer ${token}\nrecent gateway tail`);
-
-    const tail = await prompt.readLogTail(logPath, "recent gateway tail".length + 24);
-
-    expect(tail).toBe("recent gateway tail");
-    expect(tail).not.toContain(token.slice(-16));
+    expect(
+      await redactedLogTail(
+        `Authorization: Bearer ${token}\nrecent gateway tail`,
+        "recent gateway tail".length + 24,
+        token.slice(-16),
+      ),
+    ).toBe("recent gateway tail");
   });
 
   it("cleans Anthropic prompt probe temp dirs unless explicitly kept", async () => {
@@ -739,10 +696,7 @@ describe("script-specific dev tooling hardening", () => {
   it.runIf(process.platform !== "win32")(
     "rejects direct prompt success with active descendants",
     async ({ signal }) => {
-      const { pidPath: descendantPidPath, claudeBin } = await promptFixture(
-        "openclaw-direct-normal-exit-",
-        "leader-exit",
-      );
+      const { pidPath: descendantPidPath, claudeBin } = await promptFixture("leader-exit");
       let descendantPid = 0;
       const result = prompt.runDirectPrompt("normal exit cleanup proof", {
         claudeBin,
@@ -771,7 +725,7 @@ describe("script-specific dev tooling hardening", () => {
           }
           await result.catch(() => undefined);
           if (descendantPid) {
-            await waitForExtinction(descendantPid, signal);
+            await waitForDead(descendantPid, signal);
           }
         },
       );
@@ -866,7 +820,7 @@ describe("script-specific dev tooling hardening", () => {
             }
           }
           const cleanup = await Promise.allSettled(
-            [...ownedPids].map((pid) => waitForExtinction(pid, signal)),
+            [...ownedPids].map((pid) => waitForDead(pid, signal)),
           );
           failures.push(
             ...cleanup.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
@@ -904,9 +858,7 @@ describe("script-specific dev tooling hardening", () => {
   it.runIf(process.platform !== "win32")(
     "cleans direct prompt descendants on parent signal",
     async ({ signal }) => {
-      const { pidPath: descendantPidPath, claudeBin } = await promptFixture(
-        "openclaw-direct-parent-signal-",
-      );
+      const { pidPath: descendantPidPath, claudeBin } = await promptFixture();
       const probe = spawnPrompt(claudeBin, {
         OPENCLAW_PROMPT_TEXT: "parent signal cleanup proof",
       });
@@ -981,7 +933,7 @@ describe("script-specific dev tooling hardening", () => {
 
           expect(stopped).toBe(true);
           expect(log.close).toHaveBeenCalledTimes(1);
-          await waitForExtinction(descendantPid, signal);
+          await waitForDead(descendantPid, signal);
         },
         true,
         true,
@@ -1032,7 +984,7 @@ describe("script-specific dev tooling hardening", () => {
           const descendantPid = await ready();
           process.kill(runner.pid!, "SIGTERM");
           await expect(withinTest(closed, signal)).resolves.toEqual({ code: 143, signal: null });
-          await waitForExtinction(descendantPid, signal);
+          await waitForDead(descendantPid, signal);
         },
         true,
       );

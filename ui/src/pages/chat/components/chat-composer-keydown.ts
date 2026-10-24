@@ -1,4 +1,5 @@
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
+import { keepMobileReturnNative } from "../../../lib/browser-platform.ts";
 import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
@@ -49,6 +50,9 @@ export function createComposerKeyDownHandler({
     // keeps the draft/selection reads below assertion-free.
     const target = event.target;
     if (!(target instanceof HTMLTextAreaElement)) {
+      return;
+    }
+    if (keepMobileReturnNative(event)) {
       return;
     }
     if (state.composerComposing || isComposingKeyboardEvent(event)) {
@@ -186,4 +190,24 @@ export function createComposerKeyDownHandler({
       submitDraft(target.value, event, followUpModeOverride);
     }
   };
+}
+
+export function handleQueueEditKeydown(
+  event: KeyboardEvent,
+  edit: ChatComposerProps["queuedEdit"],
+): void {
+  if (keepMobileReturnNative(event)) {
+    return;
+  }
+  if (isComposingKeyboardEvent(event)) {
+    return;
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    edit?.onCancel();
+  } else if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    edit?.onEditSubmit?.();
+  }
 }

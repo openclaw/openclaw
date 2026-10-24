@@ -8,10 +8,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeCommentFileType, type CommentFileType } from "./comment-target.js";
 import { captureFeishuSendAuthority } from "./send-context.js";
-import {
-  getFeishuSendRateLimitCode,
-  getFeishuSendRateLimitCodeFromResponse,
-} from "./send-rate-limit.js";
 
 export type FeishuDriveCommentReply = {
   reply_id?: string;
@@ -35,23 +31,13 @@ export type FeishuDriveCommentCard = {
 };
 
 export class FeishuReplyCommentError extends Error {
-  httpStatus?: number;
   feishuCode?: number | string;
-  feishuMsg?: string;
   feishuLogId?: string;
 
-  constructor(params: {
-    message: string;
-    httpStatus?: number;
-    feishuCode?: number | string;
-    feishuMsg?: string;
-    feishuLogId?: string;
-  }) {
+  constructor(params: { message: string; feishuCode?: number | string; feishuLogId?: string }) {
     super(params.message);
     this.name = "FeishuReplyCommentError";
-    this.httpStatus = params.httpStatus;
     this.feishuCode = params.feishuCode;
-    this.feishuMsg = params.feishuMsg;
     this.feishuLogId = params.feishuLogId;
   }
 }
@@ -118,6 +104,26 @@ export function formatFeishuApiError(
 
 const FEISHU_SEND_MAX_RETRIES = 2;
 const FEISHU_SEND_RETRY_BASE_MS = 500;
+const FEISHU_SEND_RATE_LIMIT_CODES = new Set([230020, 11232]);
+
+function getFeishuSendRateLimitCode(error: unknown): number | undefined {
+  if (!isRecord(error)) {
+    return undefined;
+  }
+  const response = isRecord(error.response) ? error.response : undefined;
+  if (response?.status === 429) {
+    return 429;
+  }
+  return getFeishuSendRateLimitCodeFromResponse(response?.data);
+}
+
+function getFeishuSendRateLimitCodeFromResponse(response: unknown): number | undefined {
+  if (!isRecord(response)) {
+    return undefined;
+  }
+  const code = response.code;
+  return typeof code === "number" && FEISHU_SEND_RATE_LIMIT_CODES.has(code) ? code : undefined;
+}
 
 export async function requestFeishuApi<T>(
   request: () => Promise<T>,
@@ -163,12 +169,6 @@ export async function requestFeishuApi<T>(
 type ParsedCommentDocumentRef = {
   fileType?: CommentFileType;
   fileToken?: string;
-};
-
-type ParsedCommentMention = {
-  userId: string;
-  displayText: string;
-  isBotMention: boolean;
 };
 
 type ParsedCommentLinkedDocumentKind =
@@ -318,7 +318,11 @@ export function parseCommentContentElements(params: {
   const elements = Array.isArray(params.elements) ? params.elements : [];
   const plainTextParts: string[] = [];
   const semanticTextParts: string[] = [];
-  const mentions: ParsedCommentMention[] = [];
+  const mentions: {
+    userId: string;
+    displayText: string;
+    isBotMention: boolean;
+  }[] = [];
   const linkedDocuments: ParsedCommentLinkedDocument[] = [];
   const botIds = new Set(normalizeTrimmedStringList(Array.from(params.botOpenIds ?? [])));
   const linkedDocumentKeys = new Set<string>();

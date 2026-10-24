@@ -125,11 +125,11 @@ export function expectedManagedRuntimeRecoverySteps(
   manager: "nvm" | "system",
   root: string,
 ): UpdateRecoveryStep[] {
-  const steps = expectedRuntimeRecoverySteps("24.16.0", root, "2026.5.20", clearedContext);
+  const steps = expectedRuntimeRecoverySteps("24.22.1", root, "2026.5.20", clearedContext);
   if (manager === "nvm") {
     steps[2] = {
       kind: "select-runtime",
-      command: expectedRuntimeSelectionCommand("nvm", "24.16.0"),
+      command: expectedRuntimeSelectionCommand("nvm", "24.22.1"),
     };
   }
   return steps;
@@ -177,7 +177,7 @@ export function currentGitCoreFixture(root: string, version: string) {
     runtimeRefusal: {
       status: "error",
       reason: "node-runtime-preflight",
-      failedStep: { recoverySteps: expectedRuntimeRecoverySteps("24.16.0", root) },
+      failedStep: { recoverySteps: expectedRuntimeRecoverySteps("24.22.1", root) },
     },
   };
 }

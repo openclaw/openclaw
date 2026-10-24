@@ -72,6 +72,13 @@ retain restart behavior under a broader no-op prefix.
 
 ## Reusable runtime utilities
 
+`runInDetachedAsyncContext` from `openclaw/plugin-sdk/concurrency-runtime` starts
+work in the host's context-free async root. Use it at an independently admitted
+service request boundary when a long-lived listener can retain its startup
+caller's settled work scope or binding lease. Keep the service's lifetime,
+request authentication, and current source authority checks explicit; detaching
+does not grant authority or make an expired caller capability usable again.
+
 For libraries that accept a Node HTTP agent, use `createNodeProxyAgent` from
 `openclaw/plugin-sdk/fetch-runtime`. With `mode: "env"`, supply `targetUrl` for
 a fixed destination, or omit it when the library selects destinations itself
@@ -420,9 +427,11 @@ the optional `includeTrusted` list further restricts only events marked trusted
 by the dispatcher. Omitting it preserves existing behavior, and an empty list
 accepts only untrusted events that pass `include`/`exclude`. Event payload fields
 cannot override the dispatcher's trust metadata. Accepted plain event payloads
-share one frozen snapshot across listeners in a dispatch. Payloads with mutable
-opaque values (such as Maps or Dates) and private listener data retain individual
-copies. Absent private data uses a shared frozen empty payload, including for
+share one frozen snapshot across listeners in a dispatch. Plain private listener
+data also shares a frozen snapshot among interested trusted listeners, with
+listener-specific host attribution in a frozen shallow copy. Payloads with mutable
+opaque values (such as Maps or Dates) retain individual copies. Absent private data
+uses a shared frozen empty payload, including for
 OTel listeners without host-plugin attribution. Listener mutations remain isolated
 from other listeners and producers; filtering does not change diagnostic collection
 or queue behavior.

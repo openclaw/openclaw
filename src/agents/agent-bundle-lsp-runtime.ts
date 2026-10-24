@@ -3,16 +3,26 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { toErrorObject } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "../plugin-sdk/windows-spawn.js";
 import { loadEnabledBundleLspConfig } from "../plugins/bundle-lsp.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   closeOwnedStdioProcess,
+  createOwnedStdioProcess,
   OwnedStdioCleanupError,
   type OwnedStdioProcess,
 } from "../process/owned-stdio.js";
 import { createPendingRequestRegistry } from "../shared/pending-request-registry.js";
-import { spawnLspServerProcess } from "./agent-bundle-lsp-process.js";
+import {
+  collectWithheldLspEnvNames,
+  formatWithheldLspEnvHints,
+  LSP_ENV_PASSTHROUGH_DOCS_URL,
+  resolveLspServerEnv,
+} from "./agent-bundle-lsp-env.js";
 import { normalizeReservedToolNames } from "./agent-bundle-mcp-names.js";
 import {
   resolveStdioMcpServerLaunchConfig,
@@ -62,6 +72,23 @@ type LspPositionParams = {
 const LSP_SHUTDOWN_GRACE_MS = 500;
 const LSP_PROCESS_TREE_KILL_GRACE_MS = 1_000;
 const activeBundleLspSessions = new Set<LspSession>();
+
+// Servers restart every turn; repeat a warning only when its server or names change.
+const warnedWithheldEnv = new Set<string>();
+
+function warnWithheldLspEnvOnce(serverName: string, childEnv: Record<string, string>): void {
+  const hints = formatWithheldLspEnvHints(
+    collectWithheldLspEnvNames({ parentEnv: process.env, childEnv }),
+  ).join(" ");
+  const key = `${serverName}\0${hints}`;
+  if (!hints || warnedWithheldEnv.has(key)) {
+    return;
+  }
+  warnedWithheldEnv.add(key);
+  logWarn(
+    `bundle-lsp: server "${serverName}" starts without these Gateway environment variables. ${hints} See ${LSP_ENV_PASSTHROUGH_DOCS_URL}`,
+  );
+}
 
 function failLspSession(session: LspSession, error: Error): void {
   session.failure ??= error;
@@ -532,8 +559,24 @@ export async function createBundleLspToolRuntime(params: {
       let session: LspSession | undefined;
 
       try {
-        const child = await spawnLspServerProcess(launchConfig, {
+        const mergedEnv = resolveLspServerEnv(launchConfig.env);
+        if (serverName !== undefined) {
+          warnWithheldLspEnvOnce(serverName, mergedEnv);
+        }
+        const program = resolveWindowsSpawnProgram({
+          command: launchConfig.command,
+          env: mergedEnv,
+          allowShellFallback: true,
+        });
+        const invocation = materializeWindowsSpawnProgram(program, launchConfig.args ?? []);
+        const child = await createOwnedStdioProcess({
+          argv: [invocation.command, ...invocation.argv],
+          env: mergedEnv,
+          exactEnv: true,
+          cwd: launchConfig.cwd,
           abortSignal: params.abortSignal,
+          // Stable LSP config permits unresolved Windows wrappers to use Node's shell parsing.
+          ...(invocation.shell === true ? { windowsShell: true } : {}),
         });
         session = {
           serverName,

@@ -12,12 +12,14 @@ const agentTools = (tools: AgentToolsConfig) => agent({ tools });
 const byProvider = (tools: NonNullable<AgentToolsConfig["byProvider"]>[string]) => ({
   byProvider: { openai: tools },
 });
-function withModel(config: OpenClawConfig): OpenClawConfig {
-  return {
-    ...config,
-    agents: { ...config.agents, defaults: { model: { primary: "openai/gpt-5.5" } } },
-  };
-}
+const withModel = (config: OpenClawConfig): OpenClawConfig => ({
+  ...config,
+  agents: { ...config.agents, defaults: { model: { primary: "openai/gpt-5.5" } } },
+});
+const agentPath = "agents.entries.main.tools";
+const providerPath = 'tools.byProvider["openai"]';
+const grant = (owner: string) => `Add ${owner}.alsoAllow: ["skill_workshop"].`;
+const allow = (owner: string) => `Add "skill_workshop" to ${owner}.allow.`;
 
 function detect(config: OpenClawConfig, workshopEnabled = true) {
   return detectSkillWorkshopToolPolicyDiagnostic({
@@ -75,36 +77,25 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
   });
 
   it.each([
+    [agentTools({ profile: "messaging" }), `${agentPath}.profile`, grant(agentPath)],
+    [agentTools({ allow: ["read"] }), `${agentPath}.allow`, allow(agentPath)],
     [
-      agentTools({ profile: "messaging" }),
-      "agents.entries.main.tools.profile",
-      'Add agents.entries.main.tools.alsoAllow: ["skill_workshop"].',
-    ],
-    [
-      agentTools({ allow: ["read"] }),
-      "agents.entries.main.tools.allow",
-      'Add "skill_workshop" to agents.entries.main.tools.allow.',
-    ],
-    [
-      {
-        tools: { profile: "messaging" },
-        ...agentTools({ alsoAllow: ["read"] }),
-      },
+      { tools: { profile: "messaging" }, ...agentTools({ alsoAllow: ["read"] }) },
       "tools.profile",
-      'Add agents.entries.main.tools.alsoAllow: ["skill_workshop"].',
+      grant(agentPath),
     ],
     [
       withModel({
         ...agentTools(byProvider({ alsoAllow: ["read"] })),
         tools: byProvider({ profile: "messaging" }),
       }),
-      'tools.byProvider["openai"].profile',
-      'Add agents.entries.main.tools.byProvider["openai"].alsoAllow: ["skill_workshop"].',
+      `${providerPath}.profile`,
+      grant(`agents.entries.main.${providerPath}`),
     ],
     [
       withModel(agentTools(byProvider({ allow: ["read"] }))),
-      'agents.entries.main.tools.byProvider["openai"].allow',
-      'Add "skill_workshop" to agents.entries.main.tools.byProvider["openai"].allow.',
+      `agents.entries.main.${providerPath}.allow`,
+      allow(`agents.entries.main.${providerPath}`),
     ],
   ] satisfies [OpenClawConfig, string, string][])(
     "targets %s with source %s",

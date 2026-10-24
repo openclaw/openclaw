@@ -26,8 +26,8 @@ it("reads a known skill with resource context before discovery through the worke
   const codeModeSkills = resolveCodeModeSkills({
     skillsPrompt: await resolveSkillsPrompt({ entries: [demo], workspaceDir: "/workspace" }),
     candidates: [demo.skill, hidden.skill],
-    reader,
   });
+  codeModeSkills[0]!.reader = reader;
   const h = createCodeModeHarness({ codeModeSkills });
   applyCodeModeCatalog({
     ...h.ctx,

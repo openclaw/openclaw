@@ -32,7 +32,7 @@ function installColdLoadProbes(
       method: string;
       bytes: number;
       at: number;
-      params: unknown;
+      params: Record<string, unknown>;
       stack: string | undefined;
     }
   >();
@@ -229,6 +229,7 @@ function installColdLoadProbes(
     },
   };
   let solidSidebarOwner: ProbeInit.SolidSidebarProbeOwner | undefined;
+  const sidebarHandoffs: Array<{ atMs: number; durationMs: number; frameMs?: number }> = [];
   let originalPublicationGate:
     | ProbeInit.SolidSidebarProbeOwner["shouldPublishSessionData"]
     | undefined;
@@ -282,8 +283,21 @@ function installColdLoadProbes(
       );
     },
     capture(host: WeakKey, owner: unknown) {
-      if (sidebarRegistration.matches(host, owner)) {
+      if (sidebarRegistration.matches(host, owner) && owner !== solidSidebarOwner) {
         solidSidebarOwner = owner;
+        const release = owner.releaseSidebarSnapshot.bind(owner);
+        owner.releaseSidebarSnapshot = () => {
+          const atMs = performance.now();
+          release();
+          const handoff: { atMs: number; durationMs: number; frameMs?: number } = {
+            atMs,
+            durationMs: performance.now() - atMs,
+          };
+          sidebarHandoffs.push(handoff);
+          requestAnimationFrame(() => {
+            handoff.frameMs = performance.now() - atMs;
+          });
+        };
       }
       if (host instanceof HTMLElement && chatProbe.matches(host, owner)) {
         chatOwners.set(host, {
@@ -360,17 +374,6 @@ function installColdLoadProbes(
         if (typeof data === "string") {
           const frame = JSON.parse(data);
           if (frame.type === "req") {
-            const connectDelay = (input.connectNotBeforeMs ?? 0) - performance.now();
-            if (frame.method === "connect" && connectDelay > 0) {
-              queued++;
-              window.setTimeout(() => {
-                queued--;
-                if (socket.readyState === WebSocket.OPEN) {
-                  socket.send(data);
-                }
-              }, connectDelay);
-              return;
-            }
             pending.set(frame.id, {
               socket,
               method: frame.method,
@@ -388,17 +391,52 @@ function installColdLoadProbes(
         if (!(event instanceof MessageEvent) || typeof event.data !== "string") {
           return dispatch(event);
         }
+        let deliveredEvent = event;
         const frame = JSON.parse(event.data);
         const responseBytes = new TextEncoder().encode(event.data).length;
         const liveEvent = eventStream.emitting;
         // A single wire delivers one message task at a time, including concurrent RPC replies.
         nextFrameAt = Math.max(performance.now() + input.latencyMs, nextFrameAt + input.frameGapMs);
         const queuedRequest = pending.get(frame.id);
+        if (input.omitHelloSelfPresence && queuedRequest?.method === "connect") {
+          const client = queuedRequest.params.client;
+          const instanceId =
+            client && typeof client === "object" && "instanceId" in client
+              ? client.instanceId
+              : undefined;
+          const presence = frame.payload?.snapshot?.presence;
+          if (Array.isArray(presence)) {
+            frame.payload.snapshot.presence = presence.filter(
+              (entry) => entry.instanceId !== instanceId,
+            );
+            deliveredEvent = new MessageEvent("message", { data: JSON.stringify(frame) });
+          }
+        }
+        const query = queuedRequest?.params;
+        const queryKind =
+          queuedRequest?.method !== "sessions.list"
+            ? undefined
+            : query?.ownerFirst
+              ? "ownerFirst"
+              : query?.involvingMe
+                ? "involvingMe"
+                : query?.includeOwnerSessionCounts
+                  ? "ownerCounts"
+                  : query?.spawnedBy
+                    ? "children"
+                    : undefined;
         // Per-method delay models a queued RPC without holding unrelated replies.
         const deliverAt = Math.max(
           nextFrameAt,
+          // Delay the challenge so initialConnectSent still means the request left.
+          frame.type === "event" && frame.event === "connect.challenge"
+            ? (input.connectNotBeforeMs ?? 0)
+            : 0,
           queuedRequest
-            ? queuedRequest.at + (input.methodLatencyMs?.[queuedRequest.method] ?? 0)
+            ? queuedRequest.at +
+                ((queryKind && input.sidebarQueryLatencyMs?.[queryKind]) ??
+                  input.methodLatencyMs?.[queuedRequest.method] ??
+                  0)
             : 0,
         );
         queued++;
@@ -431,7 +469,7 @@ function installColdLoadProbes(
             if (responseMark) {
               performance.mark(`${responseMark}:start`);
             }
-            frameProbe.withDelivery(delivery, () => dispatch(event));
+            frameProbe.withDelivery(delivery, () => dispatch(deliveredEvent));
             if (request) {
               rpcs[rpcIndex]!.dispatchMs = performance.now() - dispatchStarted;
               performance.mark(`${responseMark}:end`);
@@ -589,6 +627,7 @@ function installColdLoadProbes(
         idleMs: performance.now() - lastActivity,
         rpcs,
         longTasks,
+        sidebarHandoffs,
       };
     },
   });

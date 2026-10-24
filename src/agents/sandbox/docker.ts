@@ -49,13 +49,11 @@ import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig } from "./types.js";
 import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
+export { allocateSandboxContainer, buildSandboxCreateArgs } from "./container-allocation.js";
 export {
-  allocateSandboxContainer,
-  buildSandboxCreateArgs,
-  ensureContainerImage,
   formatDockerDaemonUnavailableError,
   isDockerDaemonUnavailable,
-} from "./container-allocation.js";
+} from "./container-image.js";
 
 export {
   DOCKER_SANDBOX_ENGINE,
@@ -73,11 +71,9 @@ export {
   resolvePodmanSandboxRuntimeInfo,
   validateSandboxContainerEngineTarget,
 } from "./podman-runtime.js";
-export type { PodmanSandboxRuntimeInfo } from "./podman-runtime.js";
 export {
   containerState,
   dockerContainerState,
-  readContainerLabel,
   readDockerContainerLabel,
   readDockerContainerEnvVar,
   readDockerPort,

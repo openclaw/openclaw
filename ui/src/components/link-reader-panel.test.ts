@@ -575,7 +575,7 @@ describe("Plugin link reader panel", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("copies and opens the current original from the mobile action menu without replacing the reader", async () => {
+  it("keeps the current original directly accessible while copying from the mobile menu", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     const previous = Object.getOwnPropertyDescriptor(navigator, "clipboard");
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
@@ -602,14 +602,17 @@ describe("Plugin link reader panel", () => {
     address.value = itemUrl(2);
     address.dispatchEvent(new Event("input", { bubbles: true }));
     await panel.updateComplete;
+    const original = panel.querySelector<HTMLAnchorElement>(".lr-actions > a.lr-external")!;
+    expect(original).not.toBeNull();
+    expect(original.href).toBe(itemUrl(1));
+    expect(original.getAttribute("aria-label")).toBe("Open on Forge");
+    expect(original.target).toBe("_blank");
+    expect(original.rel).toBe("noopener noreferrer");
+    expect(original.hasAttribute("data-link-reader-external")).toBe(true);
     const trigger = button(panel, "Link reader actions");
     trigger.click();
     await panel.updateComplete;
     const menu = document.getElementById(trigger.getAttribute("aria-controls")!)!;
-    const original = menu.querySelector<HTMLAnchorElement>('a[aria-label="Open in browser"]')!;
-    expect(original.href).toBe(itemUrl(1));
-    expect(original.target).toBe("_blank");
-    expect(original.hasAttribute("data-link-reader-external")).toBe(true);
     menu.querySelector<HTMLElement>('[aria-label="Copy link"]')!.click();
     await waitForFast(() => expect(writeText).toHaveBeenCalledExactlyOnceWith(itemUrl(1)));
     expect(panel.querySelector(".lr-content:not([hidden])")).toBe(content);

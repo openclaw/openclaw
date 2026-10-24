@@ -64,6 +64,9 @@ it("renders the full report in section order and trims table output", async () =
   expect(output).toContain(
     "# System events\ntable:Event:5\n… +1 more\n\n# Health\ntable:Item+Status+Detail:1\n\n# Usage\nusage line\n\nFAQ: https://docs.openclaw.ai/faq",
   );
+  expect(output).toContain(
+    "FAQ: https://docs.openclaw.ai/faq\nTroubleshooting: https://docs.openclaw.ai/troubleshooting\nSupport: https://community.openclaw.ai/",
+  );
   expect(output).not.toContain(" \n\t");
   expect(lines.at(-1)).toBe("  Need to test channels? openclaw status --deep");
 });

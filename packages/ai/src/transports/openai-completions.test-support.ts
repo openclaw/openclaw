@@ -171,6 +171,15 @@ export function createAssistantOutput(model: CompletionsModel): OpenAICompletion
   };
 }
 
+export function expectedRecoveredTool(name: string, args: Record<string, unknown>) {
+  return {
+    type: "toolCall",
+    id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
+    name,
+    arguments: args,
+  };
+}
+
 export async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<never> {
   for (const chunk of chunks) {
     yield chunk as never;

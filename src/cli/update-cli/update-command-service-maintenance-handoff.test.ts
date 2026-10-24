@@ -8,7 +8,6 @@ import * as schtasksExec from "../../daemon/schtasks-exec.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import * as serviceMembership from "../../daemon/service-process-membership.js";
 import type { GatewayService } from "../../daemon/service.js";
-import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as processAncestry from "../../infra/restart-stale-pids.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -30,16 +29,15 @@ vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
 }));
 
-const { mocks, withServiceHome } =
-  await import("./update-command-service-maintenance.test-support.js");
+const {
+  mocks,
+  withServiceHome,
+  mockMaintenanceService,
+  expectNoServiceCalls: expectNoCalls,
+} = await import("./update-command-service-maintenance.test-support.js");
 const nativeHost = process.platform === "linux" || process.platform === "darwin";
 const blockedTree = (pid: number) =>
   `This command is running inside the gateway process tree (gateway PID ${pid}).\nStopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.\nRun this command from a shell outside the gateway service.`;
-function expectNoCalls(...methods: GatewayService[keyof GatewayService][]) {
-  for (const method of methods) {
-    expect(method).not.toHaveBeenCalled();
-  }
-}
 
 function mockHandoffServicePlatform(platform: NodeJS.Platform) {
   const hostPlatform = process.platform;
@@ -53,7 +51,7 @@ function mockHandoffServicePlatform(platform: NodeJS.Platform) {
 }
 
 function handoffService(home: string, overrides: Partial<GatewayService> = {}, pid = process.ppid) {
-  const service = createMockGatewayService({
+  return mockMaintenanceService(home, {
     readCommand: async () => ({
       ...gatewayCommand(home),
       ...(process.platform === "win32" ? { sourcePath: mocks.taskScriptPath } : {}),
@@ -63,11 +61,8 @@ function handoffService(home: string, overrides: Partial<GatewayService> = {}, p
       pid,
       systemd: { managerUid: 2001, controlGroup: "/system.slice/openclaw-gateway.service" },
     }),
-    isLoaded: async () => true,
     ...overrides,
   });
-  mocks.service.mockReturnValue(service);
-  return service;
 }
 
 function replaceExecutorIdentity(home: string, root: string, identity: string) {

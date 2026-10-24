@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import "../chat-details-mobile-host-content.tsx";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
 import type { ChatMobileHost, MobileHostDestination } from "../chat-mobile-host.ts";
 import {
   ChatDetailsMobileContent,
@@ -63,12 +64,12 @@ it("shows a real worker without legacy fields and lets the environment owner dec
       runner: { kind: "device", status: "available" },
     },
   };
-  const [value, setValue] = createSignal(details({ selectedSession: active }));
   const [presented, setPresented] = createSignal(true);
   const request = vi.fn();
   const openMachine = vi.fn();
+  const environment = { onRequestUncommitted: request, onOpenMachine: openMachine };
+  const [value, setValue] = createSignal(details({ selectedSession: active, environment }));
   const content = rootContent();
-  content.environment = { onRequestUncommitted: request, onOpenMachine: openMachine };
   const view = mountSolid(() => (
     <ChatDetailsMobileContent
       details={value()}
@@ -82,12 +83,13 @@ it("shows a real worker without legacy fields and lets the environment owner dec
   setValue(
     details({
       selectedSession: { key: "agent:main:details", kind: "direct", execNode: "Local Gateway" },
+      environment,
     }),
   );
   flush();
   expect(view.queryByRole("region", { name: "Environment" })).toBeNull();
   expect(request).toHaveBeenCalledOnce();
-  setValue(details());
+  setValue(details({ environment }));
   flush();
   expect(view.queryByRole("region", { name: "Environment" })).toBeNull();
   expect(request).toHaveBeenCalledOnce();
@@ -103,7 +105,6 @@ it("retains Outputs demand across publications and returns navigation origins wi
   const retain = vi.fn(() => release);
   const output = {
     artifacts: [],
-    artifactsLoading: false,
     artifactsError: null,
     dashboard: null,
     dashboardError: null,
@@ -131,7 +132,7 @@ it("retains Outputs demand across publications and returns navigation origins wi
     { kind: "versions" },
     expect.objectContaining({ kind: "details-root" }),
   );
-  setValue((current) => ({ ...current, outputs: { ...output, artifactsLoading: true } }));
+  setValue((current) => ({ ...current, outputs: { ...output, artifacts: null } }));
   flush();
   expect(retain).toHaveBeenCalledOnce();
   expect(release).not.toHaveBeenCalled();
@@ -169,26 +170,13 @@ it("retains Outputs demand across publications and returns navigation origins wi
 
 async function mountMobileHost(value: ChatDetailsProps) {
   const navigate = vi.fn<(destination: MobileHostDestination) => void>();
-  const host: ChatMobileHost = {
-    scopeKey: "mobile-pr-session",
+  const host: ChatMobileHost = createChatMobileHostFixture("mobile-pr-session", {
     open: true,
-    suspended: false,
-    mode: "dock",
     height: 280,
     reservedHeight: 280,
     destination: { area: "details" },
-    detailsMount: null,
-    setDetailsMount() {},
     navigate,
-    reveal() {},
-    close() {},
-    back() {},
-    toggleExpanded() {},
-    resize() {},
-    keyboardVisible: false,
-    onComposerEditingChange() {},
-    onViewportChange() {},
-  };
+  });
   const element = document.createElement("openclaw-chat-details-mobile-host-content");
   element.details = value;
   element.host = host;

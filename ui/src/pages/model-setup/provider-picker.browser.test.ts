@@ -1,6 +1,6 @@
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentSelectElement } from "../../components/agent-select.ts";
+import type { AgentSelectElement } from "../../components/agent-select.tsx";
 import "../../components/agent-select-registration.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -76,12 +76,14 @@ describe.runIf("__vitest_browser__" in globalThis)("selected dropdown opening", 
       const shown = new Promise<void>((resolve) => {
         menu.addEventListener("overlay-after-show", () => resolve(), { once: true });
       });
+      const pageScroll = { x: scrollX, y: scrollY };
       const navigateDuringOpening = async () => {
         expect.soft(document.activeElement).toBe(items[28]);
         const selectedBounds = items[28]!.getBoundingClientRect();
         const menuBounds = menu.getBoundingClientRect();
         expect.soft(selectedBounds.top).toBeGreaterThanOrEqual(menuBounds.top);
         expect.soft(selectedBounds.bottom).toBeLessThanOrEqual(menuBounds.bottom);
+        expect({ x: scrollX, y: scrollY }).toEqual(pageScroll);
         await userEvent.keyboard("{End}");
         expect(document.activeElement).toBe(items[29]);
       };

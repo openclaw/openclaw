@@ -147,19 +147,43 @@ suite.define(() => {
       await expect.poll(() => trigger.textContent()).toBe("Check CI and comments");
       await trigger.hover();
       await flyout.waitFor({ state: "visible" });
+      if (captureUiProofEnabled) {
+        const frame = await takeControlUiScreenshotFrame(page, card, [trigger, flyout], {
+          animations: "disabled",
+          elements: [card, trigger],
+        });
+        await writeFile(path.join(suite.artifactDir, `hover-${width}.png`), frame.elements[0]!.png);
+        await writeFile(
+          path.join(suite.artifactDir, `hover-row-${width}.png`),
+          frame.elements[1]!.png,
+        );
+        await writeFile(path.join(suite.artifactDir, `hover-context-${width}.png`), frame.png);
+      }
+      expect(
+        await trigger.evaluate((element) => getComputedStyle(element).textDecorationLine),
+      ).toBe("none");
+      expect(
+        await trigger.evaluate((element) =>
+          Number.parseFloat(getComputedStyle(element).paddingTop),
+        ),
+      ).toBeGreaterThanOrEqual(4);
+      expect(
+        await trigger.evaluate((element) =>
+          Number.parseFloat(getComputedStyle(element).paddingBottom),
+        ),
+      ).toBeGreaterThanOrEqual(4);
       await flyout.hover();
       await expect.poll(() => flyout.isVisible()).toBe(true);
       expect(await flyout.textContent()).toContain("Last run succeeded");
       expect(await flyout.textContent()).toContain("Next");
       expect(await detail(flyout, "preview")).toBe(prompt);
-      if (captureUiProofEnabled) {
-        const frame = await takeControlUiScreenshotFrame(page, card, [trigger, flyout], {
-          animations: "disabled",
-          elements: [card],
-        });
-        await writeFile(path.join(suite.artifactDir, `after-${width}.png`), frame.elements[0]!.png);
-        await writeFile(path.join(suite.artifactDir, `after-context-${width}.png`), frame.png);
-      }
+      await page.keyboard.press("Tab");
+      await trigger.focus();
+      await page.mouse.move(width - 5, 10);
+      expect(await trigger.evaluate((element) => element.matches(":focus-visible"))).toBe(true);
+      expect(
+        await trigger.evaluate((element) => getComputedStyle(element).textDecorationLine),
+      ).toBe("none");
       await trigger.click();
       await page.mouse.move(width - 5, 10);
       await flyout.waitFor({ state: "visible" });

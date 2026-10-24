@@ -1,4 +1,4 @@
-import type { Component, OverlayHandle } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as safeCwd from "../infra/safe-cwd.js";
 import {
@@ -9,6 +9,7 @@ import {
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { SearchableSelectList } from "./components/searchable-select-list.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
+import { createOverlayHandle } from "./tui-overlay.test-support.js";
 
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: vi.fn(),
@@ -30,18 +31,6 @@ function createShellSupervisor(spawn = vi.fn<ProcessSupervisor["spawn"]>()) {
 }
 
 type ShellSupervisor = ReturnType<typeof createShellSupervisor>["supervisor"];
-
-function createOverlayHandle(): OverlayHandle {
-  return {
-    hide: vi.fn(),
-    setHidden: vi.fn(),
-    isHidden: vi.fn(() => false),
-    focus: vi.fn(),
-    unfocus: vi.fn(),
-    isFocused: vi.fn(() => true),
-    getBounds: () => undefined,
-  };
-}
 
 const harnesses: Array<{ shutdown: () => Promise<void>; runs: Promise<void>[] }> = [];
 

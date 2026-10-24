@@ -3,9 +3,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { assertLocalMediaAllowed } from "../../media/local-media-access.js";
 import { getMediaDir } from "../../media/store.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSandboxFsBridge } from "../sandbox/fs-bridge.js";
@@ -94,6 +96,26 @@ describe("resolveMediaToolLocalRoots", () => {
       }
     },
   );
+
+  it.each([
+    { name: "host reads allowed", fsPolicy: { workspaceOnly: false }, allowed: true },
+    { name: "workspace only", fsPolicy: { workspaceOnly: true }, allowed: false },
+    { name: "no policy", fsPolicy: undefined, allowed: false },
+  ])("admits host files read may open ($name)", async ({ fsPolicy, allowed }) => {
+    const hostDir = tempDirs.make("openclaw-host-image-");
+    const imagePath = path.join(hostDir, "screenshot.png");
+    await fs.writeFile(imagePath, "png");
+    const { resolvedPath, localRoots } = await resolveMediaToolReferenceAccess({
+      input: imagePath,
+      isDataUrl: false,
+      workspaceDir: path.join("/tmp", "openclaw-media-workspace"),
+      fsPolicy,
+    });
+    const access = assertLocalMediaAllowed(expectDefined(resolvedPath, "path"), localRoots);
+    await (allowed
+      ? expect(access).resolves.toBeUndefined()
+      : expect(access).rejects.toThrow(/not under an allowed directory/));
+  });
 
   it("admits only the declared attachment mount in workspace-only sandboxes", async () => {
     const root = path.join("/tmp", "openclaw-media-workspace");

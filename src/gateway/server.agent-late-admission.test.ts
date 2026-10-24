@@ -5,40 +5,17 @@ import { captureSessionWorkRunInterruptions } from "../sessions/session-controll
 import { isRpcSourceExecuting } from "../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import type { AgentTurnIo } from "./agent-turn/types.js";
-import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { installAuthorityProofKernel } from "./server.agent-runtime-authority-proof.test-support.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
-import {
-  agentCommandMock,
-  installGatewayTestHooks,
-  prepareGatewayReplyRuntimeForTest,
-} from "./test-helpers.js";
+import { agentCommandMock, prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
 
-let harness: GatewayServerHarness;
-let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
-let acquisition: Promise<GatewayServerHarness> | undefined;
-installGatewayTestHooks({
-  scope: "suite",
-  setup: async () => {
-    const kernelModule = await import("./server-kernel.js");
-    const createKernel = kernelModule.createGatewayKernel;
-    const capture = vi
-      .spyOn(kernelModule, "createGatewayKernel")
-      .mockImplementation(async (...args) => {
-        kernel = await createKernel(...args);
-        return kernel;
-      });
-    acquisition = startGatewayServerHarness();
-    harness = await acquisition.finally(() => capture.mockRestore());
-  },
-  cleanup: async () => {
-    const ready = await acquisition?.catch(() => undefined);
-    await ready?.close();
-  },
-});
+const gateway = installAuthorityProofKernel();
 
 it("refuses provider execution when close overtakes acquired WS work during preparation", async ({
   signal,
 }) => {
+  const harness = gateway.harness();
+  const kernel = gateway.kernel();
   await prepareGatewayReplyRuntimeForTest();
   const admissionHeld = createDeferred();
   const releaseAdmission = createDeferred();

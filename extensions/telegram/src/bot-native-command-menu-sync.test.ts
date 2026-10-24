@@ -5,10 +5,6 @@ import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
-function waitForTelegramMenu(assertion: () => void) {
-  return vi.waitFor(assertion, { interval: 1 });
-}
-
 const ledgerRows = new Map<string, unknown>();
 const ledgerRegisterCalls: Array<{ key: string; value: unknown }> = [];
 const ledgerDeleteCalls: string[] = [];
@@ -124,7 +120,7 @@ describe("bot-native-command-menu sync lifecycle", () => {
     ];
 
     await sync(commands);
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
+    expect(setMyCommands).toHaveBeenCalledTimes(4);
 
     expect(deleteMyCommands).toHaveBeenCalledTimes(2);
     expect(setMyCommandsPayload(setMyCommands, 0)).toEqual([
@@ -163,7 +159,7 @@ describe("bot-native-command-menu sync lifecycle", () => {
         descriptionLocalizations: { " FR ": " Français ", fr: "Duplicate" },
       },
     ]);
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
+    expect(setMyCommands).toHaveBeenCalledTimes(4);
 
     expect(setMyCommandsPayload(setMyCommands, 2)).toEqual([
       { command: "blank", description: "Neutral blank" },
@@ -195,7 +191,7 @@ describe("bot-native-command-menu sync lifecycle", () => {
       },
     ]);
 
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
+    expect(setMyCommands).toHaveBeenCalledTimes(4);
     for (const index of [2, 3]) {
       const localized = setMyCommandsPayload(setMyCommands, index);
       const names = localized.map(({ command }) => command);
@@ -213,9 +209,9 @@ describe("bot-native-command-menu sync lifecycle", () => {
       { command: "alpha", description: "A" },
     ];
     await sync(commands);
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
+    expect(setMyCommands).toHaveBeenCalledTimes(2);
     await sync(commands.toReversed());
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
+    expect(setMyCommands).toHaveBeenCalledTimes(4);
 
     expect(deleteMyCommands).toHaveBeenCalledTimes(4);
   });
@@ -226,9 +222,9 @@ describe("bot-native-command-menu sync lifecycle", () => {
       .mockRejectedValueOnce(new Error("transient failure"))
       .mockResolvedValue(undefined);
     await sync([]);
-    await waitForTelegramMenu(() => expect(deleteMyCommands).toHaveBeenCalledTimes(2));
+    expect(deleteMyCommands).toHaveBeenCalledTimes(2);
     await sync([]);
-    await waitForTelegramMenu(() => expect(deleteMyCommands).toHaveBeenCalledTimes(4));
+    expect(deleteMyCommands).toHaveBeenCalledTimes(4);
   });
 
   it("publishes both scopes after 100→80→64 refill without reporting a recovered error", async () => {
@@ -250,7 +246,7 @@ describe("bot-native-command-menu sync lifecycle", () => {
       ...commands("skill", "Skill", 20),
       ...commands("plugin", "Plugin", 20),
     ]);
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
+    expect(setMyCommands).toHaveBeenCalledTimes(4);
     expect(setMyCommandsPayload(setMyCommands, 0)).toHaveLength(100);
     const firstRetry = setMyCommandsPayload(setMyCommands, 1);
     expect(firstRetry).toHaveLength(80);
@@ -298,13 +294,13 @@ describe("bot-native-command-menu sync lifecycle", () => {
     deleteMyCommands.mockImplementation(async (options) => record("delete", options));
     setMyCommands.mockImplementation(async (_commands, options) => record("set", options));
     await sync([makeCommand({ fr: "Français", ko: "한국어" })]);
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(6));
+    expect(setMyCommands).toHaveBeenCalledTimes(6);
     events.length = 0;
     deleteMyCommands.mockClear();
     setMyCommands.mockClear();
 
     await sync([makeCommand({ ko: "한국어" })]);
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
+    expect(setMyCommands).toHaveBeenCalledTimes(4);
 
     expect(events).toEqual([
       "delete:neutral:default",
@@ -337,16 +333,16 @@ describe("bot-native-command-menu sync lifecycle", () => {
       },
     );
     await sync([makeCommand({ fr: "Français" })]);
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
+    expect(setMyCommands).toHaveBeenCalledTimes(4);
     deleteMyCommands.mockClear();
     setMyCommands.mockClear();
     failFrenchGroupClear = true;
 
     const neutralCommands = [makeCommand()];
     await sync(neutralCommands);
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
+    expect(setMyCommands).toHaveBeenCalledTimes(2);
     await sync(neutralCommands);
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
+    expect(setMyCommands).toHaveBeenCalledTimes(4);
 
     const frenchGroupClears = deleteMyCommands.mock.calls.filter(
       ([options]) => options?.language_code === "fr" && options?.scope?.type === "all_group_chats",
@@ -385,9 +381,9 @@ describe("bot-native-command-menu sync lifecycle", () => {
       `${botId}:test-token`,
     );
     await sync([makeCommand()]);
-    await waitForTelegramMenu(() => expect(runtimeError).toHaveBeenCalledTimes(1));
+    expect(runtimeError).toHaveBeenCalledTimes(1);
     await sync([makeCommand()]);
-    await waitForTelegramMenu(() => expect(runtimeError).toHaveBeenCalledTimes(2));
+    expect(runtimeError).toHaveBeenCalledTimes(2);
 
     expect(ledgerRows.get(botId)).toBe(futureLedger);
     expect(ledgerRows.get(botId)).toEqual(originalShape);

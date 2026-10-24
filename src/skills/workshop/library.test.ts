@@ -1,6 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { canonicalizePath } from "../../agents/utils/paths.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import { resolveCronJobsStorePath, saveCronJobsStore } from "../../cron/store.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import {
   createOpenClawTestState,
@@ -19,7 +25,9 @@ import {
   writeWorkshopSkillFile,
   type WorkshopMutationContext,
 } from "./library.js";
+import { registerSkillUsageTracking } from "./skill-usage.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
+import { archiveUnusedWorkshopSkills } from "./unused-archive.js";
 
 let state: OpenClawTestState;
 let ctx: WorkshopMutationContext;
@@ -56,8 +64,12 @@ const view = (filePath?: string, versionId?: string) =>
   viewWorkshopSkill({}, "main", "deploy", filePath, versionId);
 const versions = () => listWorkshopArchive({}, "main");
 const liveNames = async () => (await listWorkshopSkills({}, "main")).map(({ name }) => name);
+const skillPath = (...parts: string[]) => path.join(resolveWorkshopSkillsDir({}, "main"), ...parts);
+const restore = (context = ctx) => restoreWorkshopSkill(context, { name: "deploy" });
+const archive = (absorbedInto?: string) =>
+  archiveWorkshopSkill(ctx, { name: "deploy", absorbedInto });
 async function seed(name: string, content: string | Buffer) {
-  const dir = path.join(resolveWorkshopSkillsDir({}, "main"), name);
+  const dir = skillPath(name);
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, "SKILL.md"), content);
 }
@@ -85,8 +97,7 @@ it("reports unreadable skill files instead of returning an incomplete inventory"
 });
 
 it("skips directories without SKILL.md but still lists hand-edited broken frontmatter", async () => {
-  const skillsRoot = resolveWorkshopSkillsDir({}, "main");
-  await fs.mkdir(path.join(skillsRoot, "missing"), { recursive: true });
+  await fs.mkdir(skillPath("missing"), { recursive: true });
   await seed("broken", "---\nname: [\n---\n");
 
   expect(await listWorkshopSkills({}, "main")).toMatchObject([
@@ -122,11 +133,11 @@ it("versions every mutation so restore undoes it, and undoing the undo is possib
   expect(patched.versionId).toMatch(/^\d{8}T\d{9}Z-patch$/);
   expect(await readLive("deploy")).toContain("make deploy ENV=staging");
 
-  const undo = await restoreWorkshopSkill(ctx, { name: "deploy" });
+  const undo = await restore();
   expect(await readLive("deploy")).toContain("1. Run make deploy.\n");
   expect(undo.versionId).toMatch(/-restore$/);
 
-  await restoreWorkshopSkill(ctx, { name: "deploy" });
+  await restore();
   expect(await readLive("deploy")).toContain("make deploy ENV=staging");
 
   const changes = await listWorkshopChanges("main", { runId: "run-1" });
@@ -150,11 +161,8 @@ it("archives into a restorable version and hides the skill from the live list", 
   await create("1. Release.", "release");
   await write("references/hosts.md", "staging.example.test\n");
 
-  await refuses(
-    archiveWorkshopSkill(ctx, { name: "deploy", absorbedInto: "missing" }),
-    /absorbed_into must name another live workshop skill/,
-  );
-  const archived = await archiveWorkshopSkill(ctx, { name: "deploy", absorbedInto: "release" });
+  await refuses(archive("missing"), /absorbed_into must name another live workshop skill/);
+  const archived = await archive("release");
   expect(archived.summary).toBe("archived: merged into release");
   expect(await liveNames()).toEqual(["release"]);
   const [entry] = await versions();
@@ -162,7 +170,7 @@ it("archives into a restorable version and hides the skill from the live list", 
   expect(entry?.versions[0]?.action).toBe("archive");
   await refuses(view(), /is archived/);
 
-  await restoreWorkshopSkill(ctx, { name: "deploy" });
+  await restore();
   const restored = await view("references/hosts.md");
   expect(restored.content).toBe("staging.example.test\n");
   expect(restored.files).toEqual(["SKILL.md", "references/hosts.md"]);
@@ -170,7 +178,7 @@ it("archives into a restorable version and hides the skill from the live list", 
   // The merge target stays locked, so archiving it first refuses the merge instead of racing.
   const [target, merge] = await Promise.allSettled([
     archiveWorkshopSkill(ctx, { name: "release" }),
-    archiveWorkshopSkill(ctx, { name: "deploy", absorbedInto: "release" }),
+    archive("release"),
   ]);
   expect(target.status).toBe("fulfilled");
   expect(merge).toMatchObject({ status: "rejected", reason: expect.any(WorkshopWriteError) });
@@ -186,9 +194,7 @@ it("refuses invalid or unsafe writes with actionable errors and leaves files unt
   await refuses(create("x", "deploy", "d".repeat(1025)), /description" must be 1-1024 bytes/);
   const token = `ghp_${"A".repeat(30)}`;
   await refuses(create(`export TOKEN=${token}`), /literal-secret.*placeholder/);
-  await expect(
-    fs.stat(path.join(resolveWorkshopSkillsDir({}, "main"), "deploy")),
-  ).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(fs.stat(skillPath("deploy"))).rejects.toMatchObject({ code: "ENOENT" });
 
   await create("run it\nrun it");
   await refuses(patch("run it", "run"), /matches 2 places/);
@@ -213,7 +219,7 @@ it("never lists or reads a symlinked saved version", async () => {
   const outside = path.join(state.root, "outside");
   await fs.mkdir(outside, { recursive: true });
   await fs.writeFile(path.join(outside, "SKILL.md"), "secret host file\n");
-  const versionsDir = path.join(resolveWorkshopSkillsDir({}, "main"), ".archive", "deploy");
+  const versionsDir = skillPath(".archive", "deploy");
   await fs.mkdir(versionsDir, { recursive: true });
   const id = "20260101T000000000Z-patch";
   await fs.symlink(outside, path.join(versionsDir, id));
@@ -225,13 +231,7 @@ it("never lists or reads a symlinked saved version", async () => {
 it("refuses to restore a tampered saved version and leaves the live skill untouched", async () => {
   await create("step 1");
   const { versionId = "" } = await patch("step 1", "step 2");
-  const versionDir = path.join(
-    resolveWorkshopSkillsDir({}, "main"),
-    ".archive",
-    "deploy",
-    versionId,
-  );
-  const restore = () => restoreWorkshopSkill(ctx, { name: "deploy" });
+  const versionDir = skillPath(".archive", "deploy", versionId);
 
   await fs.writeFile(path.join(versionDir, "SKILL.md"), "no frontmatter\n");
   await refuses(restore(), /Cannot restore "deploy".*must contain "name: deploy"/);
@@ -279,13 +279,13 @@ it.each(["patch", "archive"] as const)(
 it("keeps the live skill when restore is revoked between the swap's two renames", async () => {
   await createPatched();
   // Lock time, snapshot publish and the first swap check pass; the final publish is refused.
-  await refuses(restoreWorkshopSkill(revokedAfter(3), { name: "deploy" }), "Learning is off.");
+  await refuses(restore(revokedAfter(3)), "Learning is off.");
   expect(await readLive("deploy")).toContain("step 1");
 });
 
 it("retains the original live copy when restore publication and rollback both fail", async () => {
   await createPatched();
-  const live = path.join(resolveWorkshopSkillsDir({}, "main"), "deploy");
+  const live = skillPath("deploy");
   let previous = "";
   const rename = fs.rename;
   vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
@@ -296,7 +296,7 @@ it("retains the original live copy when restore publication and rollback both fa
     }
     await rename(from, to);
   });
-  await refuses(restoreWorkshopSkill(ctx, { name: "deploy" }), "rollback blocked");
+  await refuses(restore(), "rollback blocked");
   expect(previous).toContain(".restore-previous-");
   expect(await fs.readFile(path.join(previous, "SKILL.md"), "utf8")).toBe(
     skill("deploy", "step 1"),
@@ -317,4 +317,106 @@ it("keeps a longer legacy skill manageable while new names stay within 63 charac
   expect(await readLive(legacy)).toContain("step 1");
 
   await refuses(create("x", `${legacy}-copy`), /use 1-63 lowercase letters/);
+});
+
+describe("archiveUnusedWorkshopSkills", () => {
+  const DAY_MS = 24 * 60 * 60_000;
+  function agentConfig(runtime = "openclaw", sandbox?: "non-main"): OpenClawConfig {
+    return {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-test",
+          models: { "anthropic/*": { agentRuntime: { id: runtime } } },
+          ...(sandbox ? { sandbox: { mode: sandbox } } : {}),
+        },
+      },
+    };
+  }
+  const config = agentConfig();
+  let stopTracking: (() => Promise<void>) | undefined;
+  const archiveUnused = (cfg = config, now = Date.now() + 31 * DAY_MS) =>
+    archiveUnusedWorkshopSkills(cfg, "main", now);
+  const createNamed = (name: string) => create("1. Do it.", name, `${name} steps`);
+  beforeEach(() => {
+    ctx = { config, agentId: "main", actor: "agent" };
+    setRuntimeConfigSnapshot(config);
+    stopTracking = registerSkillUsageTracking();
+  });
+  afterEach(async () => {
+    await stopTracking?.();
+    stopTracking = undefined;
+  });
+
+  it("archives only learned skills unused for 30 days, as an undoable change", async () => {
+    const createdAtMs = Date.now();
+    await createNamed("stale");
+    await createNamed("used");
+    expect(await archiveUnused(config, createdAtMs + 29 * DAY_MS)).toEqual([]);
+    await stateWorker.executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
+      type: "skills.usage.record",
+      input: {
+        skillFile: canonicalizePath(skillPath("used", "SKILL.md")),
+        skillKey: "used",
+        skillName: "used",
+        skillSource: "workspace",
+        agentId: "main",
+        ts: createdAtMs + 20 * DAY_MS,
+      },
+    });
+    expect(await archiveUnused(config, createdAtMs + 31 * DAY_MS)).toMatchObject([
+      {
+        skillName: "stale",
+        action: "archive",
+        actor: "curator",
+        summary: "archived: unused for 30 days",
+        versionId: expect.any(String),
+      },
+    ]);
+    expect(await liveNames()).toEqual(["used"]);
+    await restoreWorkshopSkill({ config, agentId: "main", actor: "user" }, { name: "stale" });
+    expect(await liveNames()).toEqual(["stale", "used"]);
+  });
+
+  it("keeps a skill that a cron job names, even a paused one", async () => {
+    await createNamed("quarterly-taxes");
+    await createNamed("quarterly-taxes-old");
+    await saveCronJobsStore(resolveCronJobsStorePath(), {
+      version: 1,
+      jobs: [
+        makeCronJob({
+          enabled: false,
+          payload: {
+            kind: "agentTurn",
+            message: "Use the quarterly-taxes skill to file.",
+          },
+        }),
+      ],
+    });
+    expect((await archiveUnused()).map((change) => change.skillName)).toEqual([
+      "quarterly-taxes-old",
+    ]);
+  });
+
+  it.each(["runtime", "sandbox", "tracking", "learning"] as const)(
+    "fails closed at the %s guard",
+    async (guard) => {
+      await createNamed("stale");
+      const cfg = agentConfig(
+        guard === "runtime" ? "codex" : "openclaw",
+        guard === "sandbox" ? "non-main" : undefined,
+      );
+      if (guard === "tracking") {
+        await stopTracking?.();
+        stopTracking = undefined;
+      }
+      if (guard === "learning") {
+        setRuntimeConfigSnapshot({
+          ...config,
+          skills: { workshop: { autonomous: { mode: "off" } } },
+        });
+      }
+      expect(await archiveUnused(cfg)).toEqual([]);
+      expect(await liveNames()).toEqual(["stale"]);
+    },
+  );
 });

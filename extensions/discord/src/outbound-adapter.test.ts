@@ -454,6 +454,32 @@ it("sends implicit all-mode video captions before media with replies", async () 
   expect(mediaOptions.reply).toEqual({ messageId: "reply-1", scope: "all" });
 });
 
+it.each([
+  ["plain local path", "/tmp/render.MP4?download=1", true],
+  ["encoded extension characters", "https://cdn.example/render%2Em%70%34", true],
+  ["malformed earlier segment", "https://cdn.example/bad%ZZ/render%2Emp4", true],
+  ["encoded suffix after extension", "https://cdn.example/render.mp4%2Fpreview", false],
+  ["double-encoded dot", "https://cdn.example/render%252Emp4", false],
+  ["non-video extension", "https://cdn.example/render%2Ejpg", false],
+])("separates video captions for %s", async (_name, mediaUrl, video) => {
+  await outbound.sendMedia?.({ ...sendContext(), text: "rendered clip", mediaUrl });
+
+  expect(
+    sendMessage.mock.calls.map((call, index) => [
+      call[0],
+      call[1],
+      mockObjectArg(sendMessage, index).mediaUrl,
+    ]),
+  ).toEqual(
+    video
+      ? [
+          ["channel:123456", "rendered clip", undefined],
+          ["channel:123456", "", mediaUrl],
+        ]
+      : [["channel:123456", "rendered clip", mediaUrl]],
+  );
+});
+
 it("keeps captioned video in the thread created by the forum starter", async () => {
   const media = trustedMedia("/tmp/agent-workspace", "trusted video");
   sendMessage

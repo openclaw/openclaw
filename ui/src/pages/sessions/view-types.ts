@@ -8,5 +8,13 @@ type OptionalFields =
   | "deleteArchivedDisabledReason"
   | "deleteSelectedDisabledReason";
 
-export type SessionsProps = Omit<View, OptionalFields | "sessionMenu"> &
-  Partial<Pick<View, OptionalFields>> & { sessionMenu: { key: string } | null };
+type Command = "onDeleteSelected" | "onDeleteAllArchived" | "onPatch" | "onAssignCategory";
+export type SessionsProps = Omit<
+  View,
+  OptionalFields | "sessionMenu" | "commandEpoch" | Command
+> & {
+  [Key in Command]: (...args: Parameters<View[Key]>) => Promise<unknown> | void;
+} & Partial<Pick<View, OptionalFields>> & {
+    sessionMenu: { key: string } | null;
+    commandPending?: boolean;
+  };

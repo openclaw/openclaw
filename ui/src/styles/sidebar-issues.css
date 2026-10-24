@@ -379,13 +379,6 @@ footer.sidebar-issues-panel__mentions-note {
   gap: 1px;
 }
 
-.sidebar-issues-panel__entity,
-.sidebar-issues-panel__state {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .sidebar-issues-panel__state-row {
   display: flex;
   min-width: 0;

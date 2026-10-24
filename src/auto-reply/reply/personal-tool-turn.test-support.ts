@@ -118,7 +118,7 @@ type Person = {
   senderId: string;
   name: string;
   operatorAuthority?: AdmittedRunOperatorAuthority;
-  readCurrentRoleAssignment?: () => string | null;
+  readCurrentRoleFacts?: AdmittedRunOperatorAuthority["readCurrentRoleFacts"];
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
 };
 type PreparedRun = Pick<EmbeddedAgentQueueHandle, "toolAuthorityFingerprint">;
@@ -164,7 +164,7 @@ export async function withPersonalToolTurn<T>(
       scopes,
       gatewayAccessGrant: null,
       modelPolicy,
-      readCurrentRoleAssignment: person.readCurrentRoleAssignment,
+      readCurrentRoleFacts: person.readCurrentRoleFacts,
       assertCurrent() {
         if (revoked.has(person.profileId)) {
           throw new Error("Profile access revoked");

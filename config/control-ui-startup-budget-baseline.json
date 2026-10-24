@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 324900,
-  "reason": "Enterprise MCP auth config adds 338 B to measured startup JS; retain 100 B below the committed baseline cap.",
-  "updatedAt": "2026-10-20"
+  "startupJsGzipBytes": 281233,
+  "reason": "Defer optional root English at consuming routes: matched bf93c438 startup 282747 to 281233 B gzip; 7 JS and 1 CSS request unchanged.",
+  "updatedAt": "2026-10-23"
 }

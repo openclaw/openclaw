@@ -1,9 +1,9 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { AsyncContext } from "../../shared/async-context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
 
-const context = new AsyncLocalStorage<SpawnBrokerHost | undefined>();
+const context = new AsyncContext<SpawnBrokerHost | undefined>(Symbol("spawnBroker"));
 let gatewayStartupDisabled = false;
 
 /** A failed startup optimization stays disabled across Gateway restarts in this process. */

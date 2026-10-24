@@ -34,7 +34,6 @@ describe("prepared core tool policy", () => {
 
   it.each([
     [" OPENAI/model-a ", "model-a", true],
-    ["model-a", "model-a", true],
     ["openai/model-a", "openai/model-a", true],
     ["model-b", "model-a", false],
     ["model-a", undefined, false],

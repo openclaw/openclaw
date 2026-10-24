@@ -44,7 +44,6 @@ export type RedactionMessage = {
     json: boolean;
     messageField: boolean;
     start: number;
-    primitiveLength?: number;
   }[];
 };
 
@@ -126,7 +125,7 @@ function projectMessageEdits(
         }
       } else {
         start = part.start + edit.start;
-        end = part.start + (part.primitiveLength ?? edit.end);
+        end = part.start + edit.end;
       }
       if (start < message.contentLength) {
         projected.push({

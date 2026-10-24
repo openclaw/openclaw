@@ -60,11 +60,39 @@ import {
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { markSubagentRunTerminated } from "./subagent-registry.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
 const { writeSession, register } = createControlRunFixture(() => fixture.stateDir);
 const executionJoinObservers = new Map<RpcSourceRef, () => void>();
+
+function interceptRegistryWrite(
+  runId: string,
+  before: (next: SubagentRunRecord | undefined) => (() => void | Promise<void>) | undefined,
+) {
+  fixture.worker.mockImplementation((stateContext, operation, options) =>
+    runSubagentStateWorkerOperation(
+      stateContext,
+      (scope) =>
+        operation({
+          execute: async (command, commandOptions) => {
+            const row = isSubagentRegistryWriteCommand(command)
+              ? command.input.values.find((candidate) => candidate.run_id === runId)
+              : undefined;
+            const after = before(row ? (rowToSubagentRunRecord(row) ?? undefined) : undefined);
+            const receipt = await scope.execute(command, commandOptions);
+            const pending = after?.();
+            if (pending) {
+              await pending;
+            }
+            return receipt;
+          },
+        }),
+      options,
+    ),
+  );
+}
 beforeEach(() => {
   executionJoinObservers.clear();
   const settleSources = subagentKillSettlement.settleSubagentKillSources;
@@ -536,29 +564,16 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
       getSupersededSessionId: () => undefined,
       setAdmittedSessionId: (value) => expect(value).toBe(sessionId),
     });
-    fixture.worker.mockImplementation((stateContext, operation, options) =>
-      runSubagentStateWorkerOperation(
-        stateContext,
-        (scope) =>
-          operation({
-            execute: async (command, commandOptions) => {
-              const row = isSubagentRegistryWriteCommand(command)
-                ? command.input.values.find((candidate) => candidate.run_id === runId)
-                : undefined;
-              const claim = row && rowToSubagentRunRecord(row)?.killIntent;
-              const holdClaim = Boolean(claim) && !heldClaim;
-              heldClaim ||= holdClaim;
-              const receipt = await scope.execute(command, commandOptions);
-              if (holdClaim) {
-                claimCommitted.resolve();
-                await releaseClaim.promise;
-              }
-              return receipt;
-            },
-          }),
-        options,
-      ),
-    );
+    interceptRegistryWrite(runId, (next) => {
+      if (!next?.killIntent || heldClaim) {
+        return undefined;
+      }
+      heldClaim = true;
+      return async () => {
+        claimCommitted.resolve();
+        await releaseClaim.promise;
+      };
+    });
     pending = killSubagentRunAdmin({
       cfg: getRuntimeConfig(),
       sessionKey,
@@ -692,22 +707,14 @@ it.each([
     const context = createDirectChatContext({ getRuntimeConfig });
     const resolver = () => context;
     bindGatewayContextResolver(root, resolver);
-    const registrationParams = {
-      target: captureSessionTarget({
-        storeScope: rootStorePath,
-        sessionKey: key("root"),
-        agentId: "main",
-        incarnation: "root-session",
-      }),
+    const registrationTarget = {
+      storePath: rootStorePath,
       runId: "root",
       sessionKey: key("root"),
       sessionId: "root-session",
-      kind: "agent" as const,
-      timeoutMs: 60_000,
+      resolveGatewayContext: resolver,
     };
-    const registration = withPluginRuntimeGatewayContextResolver(resolver, () =>
-      registerChatAbortController(registrationParams),
-    );
+    const registration = registerAbort(registrationTarget);
     expect(getGatewayContextResolver(registration.entry!.input)).toBe(resolver);
     const releaseTail = createDeferred();
     const tailSelected = createDeferred();
@@ -758,30 +765,15 @@ it.each([
             expect(selected.requesterSettleWake).toBeDefined();
           }
           if (registryBindingLoss) {
-            fixture.worker.mockImplementation((stateContext, operation, options) =>
-              runSubagentStateWorkerOperation(
-                stateContext,
-                (scope) =>
-                  operation({
-                    execute: async (command, commandOptions) => {
-                      const row = isSubagentRegistryWriteCommand(command)
-                        ? command.input.values.find((candidate) => candidate.run_id === root.runId)
-                        : undefined;
-                      const next = row && rowToSubagentRunRecord(row);
-                      const receipt = await scope.execute(command, commandOptions);
-                      if (next?.suppressCompletionDelivery && !next.requesterSettleWake) {
-                        const current = expectDefined(subagentRuns.get(root.runId), "wake owner");
-                        expect(getGatewayContextResolver(current)).toBe(resolver);
-                        // Retiring the registry projection does not revoke the controller input.
-                        clearGatewayContextResolver(current);
-                        bindingLost = true;
-                      }
-                      return receipt;
-                    },
-                  }),
-                options,
-              ),
-            );
+            interceptRegistryWrite(root.runId, (next) => () => {
+              if (next?.suppressCompletionDelivery && !next.requesterSettleWake) {
+                const current = expectDefined(subagentRuns.get(root.runId), "wake owner");
+                expect(getGatewayContextResolver(current)).toBe(resolver);
+                // Retiring the registry projection does not revoke the controller input.
+                clearGatewayContextResolver(current);
+                bindingLost = true;
+              }
+            });
           }
           pending = stop();
           const result = await pending;
@@ -858,9 +850,7 @@ it.each([
       expect(resolveSubagentSessionStatus(subagentRuns.get("child"))).toBe("running");
       if (mode === "controller replaced") {
         rpcSourceTesting.deleteExpected(root.runId, registration.entry!);
-        withPluginRuntimeGatewayContextResolver(resolver, () =>
-          registerChatAbortController(registrationParams),
-        );
+        registerAbort(registrationTarget);
         retireSubagentGatewayBinding(root);
         expect(captureRootExecution()?.execution).toBe(registration.entry);
       }

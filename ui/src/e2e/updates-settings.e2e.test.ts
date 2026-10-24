@@ -1,6 +1,10 @@
 // Control UI tests cover the routed Updates settings page through a mocked Gateway.
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -32,8 +36,7 @@ async function expectRadiosDisabled(page: Page) {
       .getByRole("radiogroup")
       .getByRole("radio")
       .evaluateAll(
-        (radios) =>
-          radios.length > 0 && radios.every((radio) => (radio as HTMLInputElement).disabled),
+        (radios) => radios.length > 0 && radios.every((radio) => radio.matches(":disabled")),
       ),
   ).toBe(true);
 }
@@ -270,7 +273,7 @@ suite.define(() => {
       expect(typeof raw).toBe("string");
       expect(JSON.parse(String(raw))).toMatchObject({ update: { channel: "beta" } });
 
-      await content.getByRole("button", { name: "Update now", exact: true }).click();
+      await content.getByRole("button", { name: "Update Gateway…", exact: true }).click();
       await page.getByRole("button", { name: "Update and restart", exact: true }).click();
       await gateway.waitForRequest("update.run");
     });
@@ -294,10 +297,27 @@ suite.define(() => {
       expect(await page.getByRole("note").textContent()).toContain(
         "Administrator access is required",
       );
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const radio = page.getByRole("radio", { name: "Beta", exact: true });
+        const section = page.locator(".settings-section").filter({ has: radio });
+        await radio.scrollIntoViewIfNeeded();
+        await radio.focus();
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          section,
+          [page.getByRole("radiogroup")],
+          {
+            animations: "disabled",
+            scrollTo: section,
+          },
+        );
+        const directory = createControlUiE2eArtifactDir("settings-unavailable-focus");
+        writeFileSync(path.join(directory, "unavailable.png"), frame.png);
+      }
       await expectRadiosDisabled(page);
       expect(await page.getByRole("switch", { name: "Automatic updates" }).isDisabled()).toBe(true);
       expect(await page.getByRole("switch", { name: "Check for updates" }).isDisabled()).toBe(true);
-      expect(await page.getByRole("button", { name: "Update now" }).isDisabled()).toBe(true);
+      expect(await page.getByRole("button", { name: "Update Gateway…" }).isDisabled()).toBe(true);
       expect(await gateway.getRequests("config.schema")).toHaveLength(0);
     });
   });

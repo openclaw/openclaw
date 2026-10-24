@@ -81,7 +81,7 @@ it.each(["frame", "batch"] as const)(
     try {
       // Two real worker replies put any incorrectly dispatched prune ahead of the metadata read.
       await owner.countCardsForDay(day);
-      expect(await owner.frameById(frameId)).not.toBeNull();
+      expect(await owner.framesInRange(1, 2)).toEqual([expect.objectContaining({ id: frameId })]);
       expect([pruned.mock.calls, closed.mock.calls]).toEqual([[], []]);
       release.resolve();
       if (kind === "frame") {
@@ -93,7 +93,7 @@ it.each(["frame", "batch"] as const)(
       }
       expect(await pruning).toBe(1);
       await closing;
-      expect(await owner.frameById(frameId)).toBeNull();
+      expect(await owner.framesInRange(1, 2)).toEqual([]);
       await expect(fs.stat(owner.frameFilePath(day, 1))).rejects.toMatchObject({
         code: "ENOENT",
       });

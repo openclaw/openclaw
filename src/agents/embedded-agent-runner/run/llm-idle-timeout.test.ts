@@ -275,7 +275,7 @@ describe("streamWithIdleTimeout", () => {
     await iterator.return?.();
   });
 
-  it("gives full idle budget to subsequent chunks after consuming the pre-stream tool timestamp", async () => {
+  it("preserves structural stream progress beyond two idle windows after pre-stream tool activity", async () => {
     // A stale pre-stream timestamp must not shorten later chunk budgets.
     vi.useFakeTimers();
     const timeoutMs = 50;
@@ -289,6 +289,12 @@ describe("streamWithIdleTimeout", () => {
       setTimeout(() => {
         stream.push({ type: "text_delta", contentIndex: 0, delta: "second" });
       }, 55);
+      for (const [delay, delta] of [
+        [100, "third"],
+        [145, "fourth"],
+      ] as const) {
+        setTimeout(() => stream.push({ type: "text_delta", contentIndex: 0, delta }), delay);
+      }
       return stream;
     });
     const wrapped = streamWithIdleTimeout(baseFn, timeoutMs, undefined, { runId: TEST_RUN });
@@ -321,6 +327,16 @@ describe("streamWithIdleTimeout", () => {
       value: { type: "text_delta", contentIndex: 0, delta: "second" },
     });
 
+    // Structural producers have no physical-activity notifier. Consuming real
+    // output remains their progress owner, even beyond the original 100ms limit.
+    for (const delta of ["third", "fourth"]) {
+      const next = iterator.next();
+      await vi.advanceTimersByTimeAsync(45);
+      await expect(next).resolves.toEqual({
+        done: false,
+        value: { type: "text_delta", contentIndex: 0, delta },
+      });
+    }
     await iterator.return?.();
   });
 

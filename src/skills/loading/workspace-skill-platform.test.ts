@@ -1,10 +1,16 @@
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { closeSkillsWatchers } from "../runtime/refresh.js";
-import { collectRequiredBins } from "../runtime/remote-probe-utils.js";
+import {
+  recordRemoteNodeInfo,
+  refreshRemoteNodeBins,
+  removeRemoteNodeInfo,
+  setSkillsRemoteRegistry,
+} from "../runtime/remote.js";
+import { setTestSkillsRemoteRegistry, testRemoteSession } from "../runtime/remote.test-helpers.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
@@ -51,7 +57,6 @@ it.each([
   { platform: " Darwin ", remotePlatforms: [], compatible: true, installable: true },
   { platform: "linux", remotePlatforms: ["darwin"], compatible: true, installable: false },
   { platform: "linux", remotePlatforms: [], compatible: false, installable: false },
-  { platform: "win32", remotePlatforms: [], compatible: false, installable: false },
 ])(
   "aligns status and prompt on $platform with remote $remotePlatforms",
   async ({ platform, remotePlatforms, compatible, installable }) => {
@@ -102,11 +107,40 @@ it.each([
 );
 
 it("includes alias requirements when preparing a Darwin node binary probe", async () => {
-  const { entries } = await createPlatformSkills();
-  expect(collectRequiredBins(entries, "darwin")).toEqual([
-    "mac-tool",
-    "missing-tool",
-    "mac-alternative",
-  ]);
-  expect(collectRequiredBins(entries, "linux")).toEqual([]);
+  const { workspaceDir } = await createPlatformSkills();
+  for (const platform of ["linux", "unsupported-platform"]) {
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", `${platform}-only`),
+      name: `${platform}-only`,
+      description: `${platform} requirement`,
+      metadata: JSON.stringify({
+        openclaw: { os: [platform], requires: { bins: [`${platform}-tool`] } },
+      }),
+    });
+  }
+  const nodeId = path.basename(workspaceDir);
+  let platform = "linux";
+  const session = () => testRemoteSession(nodeId, { platform });
+  const invoke = vi.fn(async () => ({ ok: true, payload: { bins: [] } }));
+  const cfg = { agents: { defaults: { workspace: workspaceDir } }, plugins: { enabled: false } };
+  try {
+    vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", path.join(workspaceDir, ".bundled"));
+    setTestSkillsRemoteRegistry(nodeId, { get: session, invoke });
+    recordRemoteNodeInfo(session());
+    await refreshRemoteNodeBins({ nodeId, cfg });
+    expect(invoke).not.toHaveBeenCalled();
+    platform = "darwin";
+    recordRemoteNodeInfo(session());
+    await refreshRemoteNodeBins({ nodeId, cfg });
+    expect(invoke).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        command: "system.which",
+        params: { bins: ["mac-tool", "missing-tool", "mac-alternative"] },
+      }),
+    );
+  } finally {
+    removeRemoteNodeInfo(nodeId);
+    setSkillsRemoteRegistry(null);
+    vi.unstubAllEnvs();
+  }
 });

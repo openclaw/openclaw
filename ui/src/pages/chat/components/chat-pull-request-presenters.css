@@ -24,7 +24,7 @@
   display: block;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -53,20 +53,38 @@
   height: var(--details-row-icon-size, 15px);
 }
 
-.chat-details[data-desktop] .chat-pr--unpublished .chat-pr__branch {
-  flex: 1;
-  color: var(--text);
-  text-overflow: clip;
-  mask-image: linear-gradient(to right, currentColor calc(100% - 8px), transparent);
+.chat-details .chat-pr__publication-actions {
+  display: flex;
+  align-items: center;
+  flex: none;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--muted) 10%, transparent);
 }
 
-.chat-details[data-desktop] .chat-pr--unpublished .chat-pr__diff {
-  flex: none;
+.chat-details .chat-pr__publication-actions > .chat-pr__create {
+  min-height: 26px;
+  justify-content: center;
+  padding: 0 7px;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  background: transparent;
   font-family: var(--font-body);
-  font-size: var(--details-meta-font-size);
   font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  gap: 6px;
+}
+
+.chat-details .chat-pr__publication-actions .chat-pr__actions-trigger {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.chat-details .chat-pr__publication-actions > .chat-pr__create:hover,
+.chat-details
+  .chat-pr__publication-actions
+  .chat-pr__actions-trigger:is(:hover, [aria-expanded="true"]) {
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
 .chat-pr-branch-menu .chat-pr__create {
@@ -85,11 +103,6 @@
 
 .chat-pr-branch-menu .chat-pr__create:hover {
   background: var(--bg-hover);
-}
-
-/* Legacy Details keeps its inline title and ellipsis outside the desktop host. */
-.chat-details:not([data-desktop]) .chat-pr__title > .hover-marquee__text {
-  display: contents;
 }
 
 .chat-details .chat-pr.chat-pr--summary .chat-pr__icon {
@@ -283,6 +296,12 @@
   gap: 16px;
   min-width: 0;
   color: var(--text);
+}
+
+.chat-pr-mobile--empty {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
 }
 
 .chat-pr-mobile__group {
@@ -562,12 +581,6 @@
   margin-bottom: 8px;
   color: var(--muted);
 }
-.chat-pr-mobile__empty {
-  padding: 24px 16px;
-  color: var(--muted);
-  text-align: center;
-}
-
 .chat-pr-mobile__actions > a {
   cursor: pointer;
 }
@@ -739,4 +752,34 @@
 /* The jobs container scrolls; keep its keyboard focus ring inside the visible row. */
 .chat-pr-menu--drill .chat-ci__job-summary:focus-visible {
   outline-offset: -2px;
+}
+
+.chat-details .chat-pr__publication-actions > .chat-pr__create:only-child {
+  border-radius: var(--radius-sm);
+}
+
+.chat-pr-account-choice {
+  display: grid;
+  gap: 2px;
+}
+
+.chat-pr-account-choice__login {
+  color: var(--muted);
+}
+
+.chat-pr-branch-menu .oc-menu-item__check {
+  order: 1;
+  margin-inline-start: auto;
+  color: var(--text);
+}
+
+.chat-pr__publication-warning {
+  width: 15px;
+  height: 15px;
+  color: var(--warn);
+}
+
+.chat-environment__branch-controls .chat-pr__diff,
+.chat-environment__branch-controls .chat-pr__diff:hover {
+  text-decoration: none;
 }

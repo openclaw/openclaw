@@ -26,6 +26,7 @@ const templates: Array<[string, Record<string, string>, string, boolean?]> = [
   ["$${FOO} ${FOO}", { FOO: "bar" }, "${FOO} bar"],
   ["${FOO} $${FOO}", { FOO: "bar" }, "bar ${FOO}"],
   ["$${A}:$${B}", {}, "${A}:${B}", false],
+  ["prefix-$${ESCAPED}-suffix", {}, "prefix-${ESCAPED}-suffix", false],
   ["${FOO}", { FOO: "$${BAR}" }, "$${BAR}"],
   ["${_UNDERSCORE_START}", { _UNDERSCORE_START: "valid" }, "valid"],
   ["${VAR_WITH_NUMBERS_123}", { VAR_WITH_NUMBERS_123: "valid" }, "valid"],
@@ -63,6 +64,8 @@ const templates: Array<[string, Record<string, string>, string, boolean?]> = [
     "${my-service} ${count+1} ${a=b}",
     '${A:-{"n":1}}',
     "${PRICE:-$5}",
+    "no-refs-here",
+    "",
   ].map((literal): [string, Record<string, string>, string, boolean] => [
     literal,
     { VAR: "value", lowercase: "value", MixedCase: "value" },
@@ -71,7 +74,7 @@ const templates: Array<[string, Record<string, string>, string, boolean?]> = [
   ]),
 ];
 it("resolves string templates, escapes and defaults without warnings", () => {
-  for (const [input, env, expected] of templates) {
+  for (const [input, env, expected, hasReference = true] of templates) {
     const warnings: EnvSubstitutionWarning[] = [];
     expect(
       resolveConfigEnvVars({ key: input }, env, {
@@ -80,6 +83,7 @@ it("resolves string templates, escapes and defaults without warnings", () => {
       input,
     ).toEqual({ key: expected });
     expect(warnings, input).toEqual([]);
+    expect(containsEnvVarReference(input), input).toBe(hasReference);
   }
 });
 
@@ -199,13 +203,4 @@ it("keeps pending and resolved SecretRef provenance distinct across config paths
   }
   expect(getAuthoredConfigSecretRef(config, "resolved")).toBeNull();
   expect(getResolvedConfigEnvSecretRef(config, "resolved")).toEqual(secretRef("RESOLVED_SECRET"));
-});
-
-it("detects only unescaped supported env references", () => {
-  for (const row of templates) {
-    expect(containsEnvVarReference(row[0]), row[0]).toBe(row[3] ?? true);
-  }
-  for (const input of ["no-refs-here", "", "prefix-$${ESCAPED}-suffix"]) {
-    expect(containsEnvVarReference(input), input).toBe(false);
-  }
 });

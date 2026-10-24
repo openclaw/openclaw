@@ -173,32 +173,26 @@ export async function pinMessageMSTeams(
   return { ok: true, pinnedMessageId: result.id };
 }
 
-type UnpinMessageMSTeamsParams = {
+export async function unpinMessageMSTeams(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   to: string;
   /** The pinned-message resource ID returned by pin or list-pins (not the message ID). */
   pinnedMessageId: string;
-};
-
-export async function unpinMessageMSTeams(
-  params: UnpinMessageMSTeamsParams,
-): Promise<{ ok: true }> {
+}): Promise<{ ok: true }> {
   const { token, basePath } = await resolveGraphPinContext(params, "modify");
   const path = `${basePath}/pinnedMessages/${encodeURIComponent(params.pinnedMessageId)}`;
   await deleteGraphRequest({ token, path });
   return { ok: true };
 }
 
-type ListPinsMSTeamsParams = {
+const LIST_PINS_MAX_PAGES = 10;
+
+export async function listPinsMSTeams(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   to: string;
-};
-
-const LIST_PINS_MAX_PAGES = 10;
-
-export async function listPinsMSTeams(params: ListPinsMSTeamsParams) {
+}) {
   const { token, basePath } = await resolveGraphPinContext(params, "list");
   const { items } = await fetchAllGraphPages<GraphPinnedMessage>({
     token,
@@ -306,15 +300,6 @@ export async function listReactionsMSTeams(params: MSTeamsMessageTarget) {
   return { reactions };
 }
 
-type SearchMessagesMSTeamsParams = {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  to: string;
-  query: string;
-  from?: string;
-  limit?: number;
-};
-
 const SEARCH_DEFAULT_LIMIT = 25;
 const SEARCH_MAX_LIMIT = 50;
 const SEARCH_PAGE_SIZE = 50;
@@ -343,7 +328,14 @@ function matchesSearchSender(message: GraphMessage, from: string | undefined): b
  * Graph does not support collection `$search` here, so filter bounded pages
  * locally without widening the read to the account's global message index.
  */
-export async function searchMessagesMSTeams(params: SearchMessagesMSTeamsParams) {
+export async function searchMessagesMSTeams(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  to: string;
+  query: string;
+  from?: string;
+  limit?: number;
+}) {
   const { token, basePath } = await resolveGraphMessageContext(params);
 
   const rawLimit = params.limit ?? SEARCH_DEFAULT_LIMIT;

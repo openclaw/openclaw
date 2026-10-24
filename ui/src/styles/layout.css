@@ -1,5 +1,41 @@
 @import "./session-menu.css";
 
+.context-usage__title,
+.context-usage__section-label,
+.palette-session-settings__title,
+.palette-session-settings__machine {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.usage-list-label {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-detail-meta,
+.model-setup__provider-copy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.device-entry__heading,
+.personal-instructions__actions,
+.active-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
 .shell {
   /* One fixed canvas shared by routes; panels keep their own reading surfaces. */
   background-color: var(--bg-content, var(--bg));
@@ -108,11 +144,6 @@
   /* The collapsed strip shows all three base controls, so unlike the expanded
      safe edge this keeps the complete collapsed width. */
   --shell-chrome-safe-area-left: calc(var(--shell-controls-width) + 18px);
-}
-
-/* Drawer shells keep the nav mounted offscreen; desktop collapse removes it. */
-.shell--nav-collapsed:not(.shell--mobile-nav) .shell-nav {
-  display: none;
 }
 
 /* The collapsed sidebar restores its controls in the content header. On
@@ -555,6 +586,13 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
   background: color-mix(in srgb, var(--card) 88%, transparent);
   box-shadow: var(--focus-ring);
+}
+
+/* Forced colors suppress the normal shadow-only focus indicator. */
+@media (forced-colors: active) {
+  .settings-sidebar__search-input:focus-visible {
+    outline: 2px solid Highlight;
+  }
 }
 
 .settings-sidebar__search-input::-webkit-search-cancel-button {
@@ -1026,7 +1064,7 @@ openclaw-settings-save-indicator:empty {
   min-height: 100%;
   overflow: visible;
   border-inline-end: var(--resize-handle-line-size) solid var(--resize-handle-rest-color);
-  transition: width var(--shell-focus-duration) var(--shell-focus-ease);
+  transition: clip-path var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
 .shell-nav-backdrop {
@@ -1041,10 +1079,6 @@ openclaw-settings-save-indicator:empty {
   align-self: stretch;
   justify-self: end;
   z-index: 20;
-}
-
-.shell.shell--nav-resizing {
-  transition: grid-template-rows var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
 .sidebar {
@@ -1067,6 +1101,7 @@ openclaw-settings-save-indicator:empty {
   --sidebar-lead: 20px;
   --sidebar-row-gap: 8px;
   --sidebar-text-offset: calc(var(--sidebar-inset) + var(--sidebar-lead) + var(--sidebar-row-gap));
+  --sidebar-session-row-inset: 2px;
   --sidebar-pad-x: 10px;
   --sidebar-session-link-padding-block: 4px;
   --sidebar-session-row-floor: 30px;
@@ -1187,6 +1222,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-sessions {
   position: relative;
+  margin-top: var(--sidebar-session-link-padding-block);
 }
 
 .sidebar-session-root-drop {
@@ -1317,35 +1353,40 @@ openclaw-settings-save-indicator:empty {
   cursor: var(--cursor-action);
 }
 
+/* Pinned renders in its own list container above the chip list or agent roster. */
+.sidebar-recent-sessions--pinned {
+  margin-block-end: var(--sidebar-group-gap);
+}
+
 .shell:not(.shell--mobile-nav) .sidebar-recent-sessions {
   margin-inline: -6px;
-}
-
-.sidebar-shell__body--scroll-top {
-  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-out));
-}
-
-.sidebar-shell__body--scroll-middle {
-  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-in), var(--sidebar-fade-out));
-}
-
-.sidebar-shell__body--scroll-bottom {
-  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-in));
 }
 
 .sidebar-shell__body--scroll-top,
 .sidebar-shell__body--scroll-middle,
 .sidebar-shell__body--scroll-bottom {
-  --sidebar-scroll-edge: right;
-
-  /* The second layer keeps the native scrollbar out of the content fade. */
+  /* Keep the scrollbar opaque; changing inherited mask tokens restyles every row. */
   mask:
-    var(--sidebar-body-mask),
-    linear-gradient(black, black) var(--sidebar-scroll-edge) / var(--scrollbar-size) 100% no-repeat;
+    none,
+    linear-gradient(black, black) right / var(--scrollbar-size) 100% no-repeat;
+}
+
+.sidebar-shell__body--scroll-top {
+  mask-image: linear-gradient(to bottom, var(--sidebar-fade-out)), linear-gradient(black, black);
+}
+
+.sidebar-shell__body--scroll-middle {
+  mask-image:
+    linear-gradient(to bottom, var(--sidebar-fade-in), var(--sidebar-fade-out)),
+    linear-gradient(black, black);
+}
+
+.sidebar-shell__body--scroll-bottom {
+  mask-image: linear-gradient(to bottom, var(--sidebar-fade-in)), linear-gradient(black, black);
 }
 
 :root[dir="rtl"] .sidebar-shell__body {
-  --sidebar-scroll-edge: left;
+  mask-position: 0% 50%;
 }
 
 .sidebar-recent-sessions__group {
@@ -1373,15 +1414,23 @@ openclaw-settings-save-indicator:empty {
   gap: 8px;
   min-height: 24px;
   padding: 0 10px 0 var(--sidebar-inset);
+  border-radius: var(--radius-md);
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
-  transition: color var(--duration-fast) ease;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
 }
 
 .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text {
   transition: color var(--duration-fast) ease;
 }
 
-/* Label lift only, no fill: section headers toggle rather than navigate. */
+/* Pointer hover shares the session-row fill so the whole header reads as one
+   grabbable row; keyboard focus keeps the label lift and its own focus ring. */
+.sidebar-recent-sessions__head:hover {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+}
+
 .sidebar-recent-sessions__head:where(:hover, :has(:focus-visible)),
 .sidebar-recent-sessions__head:where(:hover, :has(:focus-visible))
   .sidebar-recent-sessions__label-text {
@@ -1564,33 +1613,6 @@ openclaw-settings-save-indicator:empty {
   opacity: 0.55;
 }
 
-.sidebar-session-group-drag-handle {
-  position: absolute;
-  top: 50%;
-  left: 1px;
-  z-index: 1;
-  width: 4px;
-  height: 18px;
-  transform: translateY(-50%);
-  border-radius: 3px;
-  background-image: radial-gradient(circle, currentColor 1px, transparent 1.2px);
-  background-position: 0 0;
-  background-size: 4px 4px;
-  color: var(--muted);
-  opacity: 0;
-  cursor: grab;
-  transition: opacity var(--duration-fast) ease;
-}
-
-.sidebar-recent-sessions__head--draggable:hover .sidebar-session-group-drag-handle,
-.sidebar-recent-sessions__head--draggable:has(:focus-visible) .sidebar-session-group-drag-handle {
-  opacity: 0.55;
-}
-
-.sidebar-session-group-drag-handle:active {
-  cursor: grabbing;
-}
-
 .sidebar-session-sort {
   position: relative;
 }
@@ -1628,6 +1650,14 @@ openclaw-settings-save-indicator:empty {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
   opacity: 1;
+}
+
+/* Trailing header actions read as one cluster: 2px apart, not the 8px header gap.
+   The new-session link sits inside its tooltip host, so match that wrapper too. */
+.sidebar-recent-sessions__head
+  > :is(.sidebar-session-group-actions, openclaw-tooltip:has(> .sidebar-session-group-actions))
+  + :is(.sidebar-session-group-actions, openclaw-tooltip:has(> .sidebar-session-group-actions)) {
+  margin-inline-start: -6px;
 }
 
 @media (hover: none), (pointer: coarse) {
@@ -1688,7 +1718,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-session-tree__loading {
   min-height: var(--sidebar-session-row-min-height);
-  margin-inline: var(--sidebar-text-offset) 2px;
+  margin-inline: calc(var(--sidebar-text-offset) + var(--sidebar-session-row-inset)) 4px;
   clip-path: inset(calc((100% - 10px) / 2) 0 round var(--radius-sm));
 }
 
@@ -1731,6 +1761,22 @@ openclaw-settings-save-indicator:empty {
 .session-menu__text,
 .sidebar-session-catalog-project__label {
   flex: 1 1 auto;
+}
+
+.sidebar-session-catalog-host__label,
+.session-menu__text,
+.sidebar-session-catalog-project__label,
+.activity-feed__selected-person,
+.activity-feed__git-label,
+.activity-feed__session-headline,
+.activity-feed__session-owner,
+.agent-chat__goal-copy,
+.agent-chat__goal-label,
+.agent-chat__goal-objective,
+.cron-table__name-text,
+.cron-table__cell-value,
+.chat-queue__error-text,
+.multi-select__chip-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1884,13 +1930,13 @@ openclaw-settings-save-indicator:empty {
   align-items: center;
   min-width: 0;
   min-height: var(--sidebar-session-row-min-height);
-  padding-right: 2px;
+  padding: 0 calc(4px + var(--sidebar-session-state-reserve, 0px)) 0
+    var(--sidebar-session-row-inset);
   border-radius: var(--radius-md);
   color: var(--muted);
   cursor: var(--cursor-action);
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
+  /* Inherited color would restyle every row descendant on each animation frame. */
+  transition: background var(--duration-fast) ease;
 }
 
 /* Inset only the paint: adjacent fills need breathing room without shrinking
@@ -1985,13 +2031,34 @@ openclaw-settings-save-indicator:empty {
 
 /* A single selected owner's sessions sit directly under the owner picker:
    titles start at the picker's leading edge, so the link inset only offsets
-   the list's negative inline margin and an empty status slot takes no room.
-   Running and draft rows keep their leading indicator. */
+   the list's negative inline margin. Status moves to the trailing edge
+   instead of shifting titles, and an empty status slot takes no room. */
 .sidebar-recent-sessions__group--inline-owner
   .sidebar-recent-session:not(.sidebar-recent-session--child)
   > .sidebar-recent-session__link
-  > .sidebar-session-indicator:empty {
-  display: none;
+  > .sidebar-session-indicator {
+  position: absolute;
+  inset-inline-end: calc(6px + (24px - var(--sidebar-lead)) / 2);
+  top: 50%;
+  transform: translateY(-50%);
+
+  &:empty {
+    display: none;
+  }
+}
+
+/* Keep activity at the row edge, after hover actions and the child toggle.
+   Empty indicators leave the full title width available. */
+.sidebar-recent-sessions__group--inline-owner
+  .sidebar-recent-session:not(.sidebar-recent-session--child):has(
+    > .sidebar-recent-session__link > .sidebar-session-indicator:not(:empty)
+  ) {
+  --sidebar-session-state-reserve: 24px;
+}
+
+/* No section header separates the rows from the owner picker. */
+.sidebar-recent-sessions > .sidebar-recent-sessions__group--inline-owner:first-child {
+  margin-top: calc(4px - var(--sidebar-group-gap));
 }
 
 .shell:not(.shell--mobile-nav)
@@ -1999,6 +2066,25 @@ openclaw-settings-save-indicator:empty {
   .sidebar-recent-session:not(.sidebar-recent-session--child)
   > .sidebar-recent-session__link {
   padding-inline-start: 6px;
+}
+
+/* Row actions overlay the link's trailing edge (on hover, or always on the
+   mobile drawer); reserve that space on the link instead of the title so the
+   text and metadata stay clear of them. Status has its own fixed row slot. */
+.shell:not(.shell--mobile-nav)
+  .sidebar-recent-sessions__group--inline-owner
+  .sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within),
+.shell--mobile-nav
+  .sidebar-recent-sessions__group--inline-owner
+  .sidebar-recent-session:not(.sidebar-recent-session--child) {
+  > .sidebar-recent-session__link {
+    padding-inline-end: var(--session-row-actions-reserve);
+  }
+
+  .sidebar-recent-session__text,
+  .sidebar-recent-session__title-row {
+    padding-right: 0;
+  }
 }
 
 .sidebar-child-session-toggle {
@@ -2174,7 +2260,6 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-recent-session--active .sidebar-recent-session__name {
-  font-weight: 600;
   color: var(--text-strong);
 }
 
@@ -2184,7 +2269,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
   position: absolute;
-  inset: 50% 2px auto auto;
+  inset: 50% calc(4px + var(--sidebar-session-state-reserve, 0px)) auto auto;
   transform: translateY(-50%);
   pointer-events: none;
 }
@@ -2196,7 +2281,8 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
   > .sidebar-recent-session__aside {
-  inset: calc(1px + max(24px, var(--sidebar-title-line-height)) / 2) 2px auto auto;
+  inset: calc(1px + max(24px, var(--sidebar-title-line-height)) / 2)
+    calc(4px + var(--sidebar-session-state-reserve, 0px)) auto auto;
 }
 
 .sidebar-recent-session--child > .sidebar-recent-session__aside {
@@ -2213,7 +2299,9 @@ openclaw-settings-save-indicator:empty {
    same link-relative geometry as toggle-less rows, so one mask fits both. */
 .sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
-  right: calc(var(--sidebar-child-session-toggle-width) + 4px);
+  right: calc(
+    var(--sidebar-child-session-toggle-width) + 6px + var(--sidebar-session-state-reserve, 0px)
+  );
 }
 
 .sidebar-recent-session:not(
@@ -2622,7 +2710,10 @@ openclaw-session-menu[popover] {
   overflow-wrap: anywhere;
 }
 
-.session-menu__item--described:disabled {
+:is(.session-menu__item, .oc-menu-item).session-menu__item--described:is(
+    :disabled,
+    [aria-disabled="true"]
+  ) {
   opacity: 1;
   color: var(--muted);
 }
@@ -2783,8 +2874,7 @@ openclaw-session-menu[popover] {
 }
 
 .session-menu__icon-choice--custom svg,
-.session-menu__icon-choice--glyph svg,
-.sidebar-agent-menu__pin svg {
+.session-menu__icon-choice--glyph svg {
   width: 16px;
   height: 16px;
 }
@@ -3015,13 +3105,12 @@ a:is(
 
   position: relative;
   min-height: max(32px, var(--sidebar-session-row-min-height));
-  padding: 0 8px;
+  padding: 0 10px;
   border: 1px solid transparent;
   color: var(--muted);
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
     transform var(--duration-fast) ease;
 }
 
@@ -3046,7 +3135,7 @@ a:is(
 
   .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
     > .sidebar-recent-session__aside {
-    inset: 50% 2px auto auto;
+    inset: 50% calc(4px + var(--sidebar-session-state-reserve, 0px)) auto auto;
   }
 
   .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__text {
@@ -3311,7 +3400,7 @@ openclaw-sidebar-attention {
   background: var(--inbox-attention);
   color: var(--inbox-attention-foreground);
   font-size: calc(9px * var(--control-ui-text-scale));
-  font-weight: 700;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
@@ -3412,7 +3501,11 @@ openclaw-sidebar-attention {
 .sidebar-gateway-name,
 .gateway-status__label,
 .sidebar-identity-menu__name,
-.sidebar-identity-menu__email {
+.sidebar-identity-menu__email,
+.palette-session-settings__label,
+.palette-session-settings__secondary,
+.sidebar-issues-panel__entity,
+.sidebar-issues-panel__state {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3569,31 +3662,32 @@ openclaw-tooltip.sidebar-hover-tooltip {
 .gateway-status__retry {
   flex: none;
   padding: 3px 8px;
-  border: 1px solid currentColor;
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: transparent;
-  color: inherit;
+  color: var(--text);
   font: inherit;
   cursor: var(--cursor-action);
 }
 
-.gateway-status__retry:hover:not(:disabled) {
-  background: color-mix(in srgb, currentColor 12%, transparent);
+.gateway-status__retry:hover {
+  background: var(--bg-hover);
 }
 
-.gateway-status__retry:disabled {
-  cursor: default;
-}
-
-.gateway-status__spinner {
+.gateway-status__icon {
   display: inline-flex;
-  animation: btn-spinner-spin 1s linear infinite;
+  flex: none;
+  width: calc(12px * var(--control-ui-text-scale));
+  height: calc(12px * var(--control-ui-text-scale));
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .gateway-status__spinner {
-    animation: none;
-  }
+.gateway-status__icon > :is(svg, .session-run-spinner) {
+  width: 100%;
+  height: 100%;
+}
+
+.gateway-status__icon > .session-run-spinner {
+  --accent: currentColor;
 }
 
 .gateway-status__retry:focus-visible {
@@ -3603,9 +3697,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 
 .session-menu__color-swatch svg,
 .sidebar-gateway-check svg,
-.sidebar-build-hover-card__copy svg,
-.gateway-status__icon svg,
-.gateway-status__spinner svg {
+.sidebar-build-hover-card__copy svg {
   width: 12px;
   height: 12px;
 }
@@ -3664,9 +3756,10 @@ openclaw-tooltip.sidebar-hover-tooltip {
   margin-left: 4px;
 }
 
-.sidebar-agent-menu__agent-switch {
+.sidebar-agent-menu__agent-switch,
+.sidebar-agent-menu__create {
   flex: none;
-  min-height: 56px;
+  min-height: 44px;
   min-width: 0;
   padding: 0 !important;
   color: var(--muted) !important;
@@ -3689,10 +3782,10 @@ openclaw-tooltip.sidebar-hover-tooltip {
 .sidebar-agent-menu__agent-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
   min-width: 0;
-  min-height: 56px;
+  min-height: 44px;
   padding: 8px;
 }
 
@@ -3863,7 +3956,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
-  font-size: calc(15px * var(--control-ui-text-scale));
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 550;
 }
 
@@ -3875,54 +3968,10 @@ openclaw-tooltip.sidebar-hover-tooltip {
   gap: 6px;
 }
 
-.sidebar-agent-menu__pin {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  padding: 6px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  opacity: 0;
-  pointer-events: none;
-}
-
-.sidebar-agent-menu__pin[aria-pressed="true"] {
-  opacity: 0.75;
-  pointer-events: auto;
-}
-
-.sidebar-agent-menu__agent-switch:hover .sidebar-agent-menu__pin,
-.sidebar-agent-menu__agent-switch:focus-visible .sidebar-agent-menu__pin,
-.sidebar-agent-menu__pin:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.sidebar-agent-menu__pin:hover,
-.sidebar-agent-menu__pin:focus-visible {
-  background: var(--bg-hover);
-  color: var(--text-strong);
-}
-
-.sidebar-agent-menu__pin:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-@media (hover: none) {
-  .sidebar-agent-menu__pin {
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
-
 /* Only the switcher list shrinks and scrolls; the action rows stay visible. */
 .sidebar-agent-menu {
-  --agent-avatar-size: 40px;
-  --agent-avatar-glyph-size: 24px;
+  --agent-avatar-size: 28px;
+  --agent-avatar-glyph-size: 18px;
 }
 
 .oc-menu.sidebar-agent-menu {
@@ -3936,8 +3985,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-agent-menu > .sidebar-customize-menu__item,
-.sidebar-agent-menu > .sidebar-customize-menu__title,
-.sidebar-agent-menu > .sidebar-customize-menu__separator {
+.sidebar-agent-menu > .sidebar-customize-menu__title {
   flex: none;
 }
 
@@ -3951,10 +3999,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   overscroll-behavior: contain;
   scrollbar-color: color-mix(in srgb, var(--border) 72%, transparent) transparent;
   scrollbar-width: thin;
-}
-
-.sidebar-agent-menu > .sidebar-customize-menu__separator {
-  border-top-color: var(--border);
 }
 
 .sidebar-identity-menu {
@@ -4025,9 +4069,17 @@ openclaw-tooltip.sidebar-hover-tooltip {
   margin-block: 4px;
 }
 
-.sidebar-identity-menu .nav-item__icon {
+.sidebar-identity-menu .nav-item__icon,
+.sidebar-identity-menu .sidebar-gateway-health-slot {
   width: 20px;
   height: 20px;
+}
+
+.sidebar-gateway-health-slot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
 }
 
 .sidebar-identity-menu__help .oc-menu-item__submenu-icon {
@@ -4179,7 +4231,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
   outline: none;
 }
 
-.content > * + * {
+/* Child position preserves spacing without a universal sibling invalidation set. */
+.content > :where(:not(:first-child)) {
   margin-top: 20px;
 }
 
@@ -4198,8 +4251,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
   padding-bottom: 0;
 }
 
-.content--chat > * + *,
-.content--custodian > * + * {
+.content--chat > :where(:not(:first-child)),
+.content--custodian > :where(:not(:first-child)) {
   margin-top: 0;
 }
 
@@ -4221,7 +4274,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   padding-bottom: 0;
 }
 
-.content--workboard > * + * {
+.content--workboard > :where(:not(:first-child)) {
   margin-top: 14px;
 }
 
@@ -4542,7 +4595,8 @@ html.openclaw-native-web-chrome
   font-size: 6px;
 }
 
-.sidebar-session-tool {
+.sidebar-session-tool,
+.chat-tool-row__chevron {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4629,6 +4683,22 @@ html.openclaw-native-web-chrome
   margin-left: auto;
 }
 
+/* Trailing state shares the hover-action column: inset visible metadata so a
+   12px badge centers on the 24px archive action instead of crowding the
+   sidebar edge. Touch and drawer rows keep their always-visible actions beside
+   the text, and an empty endcap charges the title nothing. */
+@media (hover: hover) and (pointer: fine) {
+  .shell:not(.shell--mobile-nav)
+    .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--team)
+    .sidebar-recent-session__details-endcap:has(
+      .session-row-badges,
+      .viewer-facepile,
+      .session-row-trail
+    ) {
+    padding-inline-end: calc((24px - 12px) / 2);
+  }
+}
+
 .sidebar-session-attention-tooltip {
   display: grid;
   gap: 4px;
@@ -4690,4 +4760,54 @@ html.openclaw-native-web-chrome
   to {
     opacity: 1;
   }
+}
+
+.sidebar-agent-menu__settings {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+}
+
+.sidebar-agent-menu__agent-switch:hover .sidebar-agent-menu__settings,
+.sidebar-agent-menu__settings:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .sidebar-agent-menu__settings {
+    opacity: 1;
+  }
+}
+
+.sidebar-agent-menu__settings:hover,
+.sidebar-agent-menu__settings:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.sidebar-agent-menu__settings:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sidebar-agent-menu__create-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--agent-avatar-size);
+  height: var(--agent-avatar-size);
+}
+
+.sidebar-agent-menu__create-icon svg {
+  width: 100%;
+  height: 100%;
+  stroke-width: 1.5;
 }

@@ -44,9 +44,17 @@ export type TalkCatalogState =
     };
 
 type TalkViewProps = {
+  presentationRetired: () => Promise<void>;
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
   nativeDeviceSnapshot?: NativeDeviceSettingsSnapshot | null;
-  voiceWake?: { state: VoiceWakeEditorState; onInput: (text: string) => void; onRetry: () => void };
+  voiceWake?: {
+    readState: () => VoiceWakeEditorState;
+    scope?: object | null;
+    saving: boolean;
+    readWriteResult: () => void;
+    onInput: (text: string) => void;
+    onRetry: () => void;
+  };
   selection: TalkRealtimeSelection;
   catalog: TalkCatalogState;
   catalogScope?: object | null;
@@ -348,10 +356,17 @@ export function Talk(props: TalkViewProps) {
   return (
     <section class="talk-page">
       <SettingsPage>
-        <DeviceTalk capability={props.nativeDeviceSettings} snapshot={props.nativeDeviceSnapshot} />
+        <DeviceTalk
+          capability={props.nativeDeviceSettings}
+          snapshot={props.nativeDeviceSnapshot}
+          presentationRetired={props.presentationRetired}
+        />
         {props.voiceWake && (
           <VoiceWakeEditor
-            state={props.voiceWake.state}
+            readState={props.voiceWake.readState}
+            scope={props.voiceWake.scope}
+            saving={props.voiceWake.saving}
+            readWriteResult={props.voiceWake.readWriteResult}
             onInput={props.voiceWake.onInput}
             onRetry={props.voiceWake.onRetry}
           />

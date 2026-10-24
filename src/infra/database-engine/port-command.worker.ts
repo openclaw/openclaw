@@ -61,6 +61,7 @@ export type DatabasePortInspection = Partial<Identity> & {
   descriptorHash: string;
   targetVersion: number;
   migrationRequired: boolean;
+  notes?: readonly string[];
   verification?: PortVerification;
 };
 type ReplyMap = {
@@ -102,13 +103,20 @@ async function inspectSqliteImage(
   if (allowMigration && migrationRequired) {
     // Historical repairs use family admission; current first-use repairs still
     // need the port's complete layout before preparing a private copy.
-    if (!schemaMigrationRequired || !descriptor.migrateSqliteSource) {
-      inspectSqlitePortSchema(db, descriptor, pendingColumns);
-    }
-    return { version, migrationRequired };
+    const admitted =
+      !schemaMigrationRequired || !descriptor.migrateSqliteSource
+        ? inspectSqlitePortSchema(db, descriptor, pendingColumns)
+        : descriptor;
+    return { version, migrationRequired, notes: admitted.notes };
   }
-  const { tables, allocations } = await inspectDatabasePort({ engine: "sqlite", db }, descriptor);
-  return { version, migrationRequired, verification: { tables, allocations } };
+  const admitted = inspectSqlitePortSchema(db, descriptor);
+  const { tables, allocations } = await inspectDatabasePort({ engine: "sqlite", db }, admitted);
+  return {
+    version,
+    migrationRequired,
+    notes: admitted.notes,
+    verification: { tables, allocations },
+  };
 }
 async function inspectSqlite(sourcePath: string, descriptor: PortDescriptor) {
   const prepared = prepareSqliteReadOnlyLocationSync(sourcePath);
@@ -140,7 +148,7 @@ async function preflight(
   assertCurrent: () => void,
 ) {
   return withDatabasePortConnection(task.config, async (db) => {
-    const facts = await readPostgresPortCapabilities(db, {
+    await readPostgresPortCapabilities(db, {
       minimumPostgresVersion: Math.max(
         ...databasePortProviders.map((provider) => provider.minimumPostgresVersion),
       ),
@@ -161,7 +169,6 @@ async function preflight(
         await db.query("ROLLBACK");
       }
     }
-    return { ...facts, privilegesChecked: task.probe };
   });
 }
 async function stage(

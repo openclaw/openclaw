@@ -145,7 +145,9 @@ it("labels the current message after thread starter", async () => {
     { threadContextNote: threadNote, systemEventBlocks: ["System: reaction added"] },
   );
 
-  expect(currentPrompt(envelope)).toBe(
+  const prompt = currentPrompt(envelope);
+  expect(prompt).toContain("PR attribution: ⟦openclaw:ctx⟧");
+  expect(prompt.slice(prompt.indexOf("Conversation info:"))).toBe(
     [
       'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"chat_id":"123","is_group_chat":true}\n```',
       threadNote,

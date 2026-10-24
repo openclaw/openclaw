@@ -1,8 +1,10 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { WebSearchStatusParams } from "../../../packages/gateway-protocol/src/index.js";
+import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
+import { WebSearchStatusResultSchema } from "../../../packages/gateway-protocol/src/schema/web-search.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginWebSearchProviderEntry } from "../../plugins/web-provider-types.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   options: vi.fn(),
@@ -15,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   decisions: vi.fn(),
   native: vi.fn(),
   runtime: vi.fn(),
+  profile: vi.fn<() => string | undefined>(),
+  search: vi.fn(),
 }));
 vi.mock("../../agents/auth-profiles/store.js", () => ({
   getPreparedRuntimeAuthProfileStoreSnapshot: () => undefined,
@@ -26,7 +30,9 @@ vi.mock("../../agents/model-selection.js", () => ({
   resolveDefaultModelForAgent: () => ({ provider: "custom", model: "model" }),
 }));
 vi.mock("../../flows/search-setup.js", () => ({ listSearchProviderOptions: mocks.options }));
+// mock-isolation: Keep status inputs synthetic and detect accidental search effects.
 vi.mock("../../web-search/runtime.js", () => ({
+  runWebSearch: mocks.search,
   isWebSearchProviderConfigured: mocks.configured,
   listConfiguredWebSearchProviders: mocks.available,
   resolveWebSearchProviderId: mocks.selection,
@@ -59,7 +65,16 @@ vi.mock("../../agents/model-catalog-decisions.js", () => ({
   resolveCatalogDecisionRuntime: mocks.runtime,
 }));
 vi.mock("../../agents/native-web-search.js", () => ({ resolveNativeWebSearchRoute: mocks.native }));
-import { prepareWebSearchStatus } from "./web-search-status.js";
+// mock-isolation: Admit a synthetic requester without opening the live identity database.
+vi.mock("./users-profile-access.js", () => ({
+  prepareAuthenticatedProfile: async () => ({
+    profileId: mocks.profile(),
+    assertCurrent: () => {},
+  }),
+}));
+import { webSearchHandlers } from "./web-search.js";
+
+const validateStatus = lazyCompile(WebSearchStatusResultSchema);
 
 let config: OpenClawConfig;
 const secret = "synthetic-key-never-return";
@@ -89,7 +104,31 @@ function provider(
 }
 async function readStatus(params: WebSearchStatusParams = {}, profileId?: string) {
   const context = { getRuntimeConfig: () => config } as GatewayRequestContext;
-  return (await prepareWebSearchStatus(context, params, profileId)).status;
+  mocks.profile.mockReturnValue(profileId);
+  const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
+  await webSearchHandlers["webSearch.status"]!({
+    req: { type: "req", id: "search-status", method: "webSearch.status" },
+    params,
+    client: {
+      connect: {
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { id: "gateway-client", version: "test", platform: "test", mode: "backend" },
+        scopes: ["operator.read"],
+      },
+    },
+    context,
+    respond,
+    isWebchatConnect: () => false,
+  });
+  expect(respond).toHaveBeenCalledTimes(1);
+  const [ok, payload, error] = respond.mock.calls[0] ?? [];
+  expect([ok, error]).toEqual([true, undefined]);
+  if (!validateStatus(payload)) {
+    throw new Error(JSON.stringify(validateStatus.errors));
+  }
+  expect(mocks.search).not.toHaveBeenCalled();
+  return payload;
 }
 const nativeRoute = {
   kind: "native",

@@ -67,16 +67,13 @@ async function writeLegacyRecord(overrides: Partial<LegacyRecord> = {}, index = 
   return { sourcePath, originalPath, record, read: () => readManagedImageRecord(id, stateDir) };
 }
 
-function migrate(
-  overrides: Partial<Parameters<typeof migrateLegacyManagedOutgoingImages>[0]> = {},
-) {
+function migrate() {
   return migrateLegacyManagedOutgoingImages({
     detected: detectLegacyManagedOutgoingImages({
       stateDir,
       doctorOnlyStateMigrations: true,
     }),
     stateDir,
-    ...overrides,
   });
 }
 
@@ -89,6 +86,20 @@ describe("legacy managed outgoing image migration", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fsp.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("retains malformed UTF-8 without importing replacement characters", async () => {
+    const legacy = await writeLegacyRecord({ alt: "utf8-marker" });
+    const bytes = await fsp.readFile(legacy.sourcePath);
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    await fsp.writeFile(legacy.sourcePath, bytes);
+    const result = migrate();
+    expect(result.changes).toEqual([]);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+    expect(await fsp.readFile(legacy.sourcePath)).toEqual(bytes);
+    await expect(fsp.readFile(legacy.originalPath, "utf8")).resolves.toBe("image-bytes");
+    await expect(legacy.read()).resolves.toBeNull();
   });
 
   it("reports an invalid records directory instead of silently skipping migration", async () => {
@@ -146,7 +157,7 @@ describe("legacy managed outgoing image migration", () => {
 
   it("retries expired attachment cleanup without importing metadata", async () => {
     const legacy = await writeLegacyRecord({ messageId: null, retentionClass: "transient" });
-    const expire = () => migrate({ nowMs: Date.parse("2026-07-15T00:16:00.000Z") });
+    using _ = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-07-15T00:16:00.000Z"));
     const remove = fs.rmSync;
     let attachmentRemovalFailed = false;
     const rmSpy = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
@@ -159,7 +170,7 @@ describe("legacy managed outgoing image migration", () => {
 
     let result!: ReturnType<typeof migrate>;
     try {
-      result = expire();
+      result = migrate();
     } finally {
       rmSpy.mockRestore();
     }
@@ -169,7 +180,7 @@ describe("legacy managed outgoing image migration", () => {
     await fsp.access(legacy.sourcePath);
     await fsp.access(legacy.originalPath);
     expect(await legacy.read()).toBeNull();
-    const retried = expire();
+    const retried = migrate();
     expect(retried.warnings).toEqual([]);
     expect(retried.changes.join("\n")).toContain("Discarded 1 expired managed outgoing image");
     expect(await legacy.read()).toBeNull();

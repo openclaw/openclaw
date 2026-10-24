@@ -4,7 +4,6 @@ import { resolveTestGitCommits } from "../../.github/actions/git-owner/test-prer
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
-  createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
   resolveCanonicalNodeTestConfig,
   type NodeTestShardGroup,
@@ -13,6 +12,9 @@ import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mt
 import {
   createChangedNodeTestShards,
   selectedFiles,
+  fullOwnerPlan,
+  expectSameFields,
+  testConfig,
 } from "./ci-changed-node-test-plan.test-support.js";
 
 function pairedPlan<T extends { groups?: NodeTestShardGroup[] }>(input: T[] | null) {
@@ -48,16 +50,9 @@ it.each(["blacksmith", "github", "hybrid"])(
   (runnerBackend) => {
     const docker = "test/scripts/docker-build-helper.test.ts";
     const isolated = "test/plugins/bundled-provider-auth-literal-parity.test.ts";
-    const full = createNodeTestShardBundles({
-      compactMode: "pull-request",
-      runnerBackend,
-      includeReleaseOnlyPluginShards: false,
-    });
+    const full = fullOwnerPlan(runnerBackend);
     const { job: ownerJob, owner } = pairedPlan(full);
-    expect(owner.configs).toEqual([
-      "test/vitest/vitest.tooling-docker.config.ts",
-      "test/vitest/vitest.tooling-isolated.config.ts",
-    ]);
+    expect(owner.configs).toEqual([testConfig("tooling-docker"), testConfig("tooling-isolated")]);
     expect(owner.includePatterns).toBeUndefined();
     expect(owner.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
     expect(ownerJob.planConcurrency).toBe(1);
@@ -80,14 +75,13 @@ it.each(["blacksmith", "github", "hybrid"])(
         createChangedNodeTestShards(targets, { runnerBackend }),
       );
       expect(changedPairs).toEqual([owner]);
-      const metadata = (job: typeof ownerJob | typeof changedJob) => [
-        job.env,
-        job.runner,
-        job.planConcurrency,
-        job.pretestBuildMode,
-        job.timeoutMinutes,
-      ];
-      expect(metadata(changedJob)).toEqual(metadata(ownerJob));
+      expectSameFields(changedJob, ownerJob, [
+        "env",
+        "runner",
+        "planConcurrency",
+        "pretestBuildMode",
+        "timeoutMinutes",
+      ]);
       expect(selectedJob).toEqual({
         ...ownerJob,
         checkName: `checks-node-changed-${ownerJob.shardName}`,

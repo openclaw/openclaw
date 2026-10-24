@@ -97,7 +97,6 @@ describe("gateway suspend CLI", () => {
     await suspend({ requestId: "host-operation", waitSeconds: "2" });
 
     expect(sleep).toHaveBeenCalledExactlyOnceWith(200);
-    expect(callGateway).toHaveBeenCalledTimes(2);
     expect(callGateway.mock.calls.map((call) => call[2])).toEqual([
       { requestId: "host-operation" },
       { requestId: "host-operation" },

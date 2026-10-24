@@ -1,6 +1,8 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { BrowserContext, Page } from "playwright/test";
 import { assert, expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
@@ -14,8 +16,11 @@ import {
 } from "./chat-flow.test-support.ts";
 import {
   holdOutboxPreviewReads,
-  outboxPayloadFile as file,
   outboxPayloadHistory as history,
+  outboxAttachment as attachment,
+  expectOutboxPayload as expectPayload,
+  sendOutboxMessage as send,
+  outboxPageOptions as pageOptions,
   outboxPaneFor as paneFor,
   outboxComposerFor as composerFor,
   readOutboxQueue as readQueue,
@@ -24,6 +29,7 @@ import {
   stageOutboxAttachment as stage,
   outboxChatUrl as chatUrl,
 } from "./chat-outbox-payloads.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 
 const plainHttpHost = "plain-http.test";
 const suite = createChatFlowE2eSuite({
@@ -41,23 +47,12 @@ const installGateway = (page: Page, deferSend = false) =>
   });
 const expectAttachmentSend = (params: unknown, fields: Record<string, unknown>) =>
   expect(params).toEqual(expect.objectContaining({ ...fields, attachments: [attachment] }));
-const attachment = {
-  type: "file",
-  mimeType: file.mimeType,
-  fileName: file.name,
-  origin: "file",
-  content: file.buffer.toString("base64"),
-};
 const waitForHistory = (page: Page) =>
   paneFor(page).getByText("Mock Gateway: payload lifecycle proof.", { exact: true }).waitFor();
 const openChat = async (page: Page) => {
   await page.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
   await waitForHistory(page);
 };
-const send = (page: Page) =>
-  paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
-const expectPayload = async (page: Page, key: string) =>
-  expect(await readPayloadBytes(page, key)).toEqual([attachment.content]);
 async function queueAttachment(page: Page, message: string) {
   await stage(page, message);
   await send(page);
@@ -73,7 +68,6 @@ const duplicateTab = async (context: BrowserContext, page: Page) => {
   await page.evaluate(() => window.open("about:blank"));
   return popup;
 };
-const pageOptions = { serviceWorkers: "block" as const, viewport: { width: 1280, height: 900 } };
 
 suite.define(() => {
   it("sends and explicitly retries an attachment after a non-local plain HTTP reload", () =>
@@ -153,8 +147,18 @@ suite.define(() => {
       expect((await readQueue(page))[0]?.sendRunId).toBe(queued.sendRunId);
     }));
 
-  it("queues complete attachment bytes while the browser and Gateway are offline", () =>
+  it("retains offline attachment bytes through cold queue recovery and reconnect", () =>
     suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
+      const queueModule = controlUiE2eBuiltModuleRequest(
+        "ui/src/pages/chat/components/chat-composer-queue.tsx",
+      );
+      await page.addInitScript(() => {
+        window.addEventListener("vite:preloadError", (event) => {
+          console.debug(
+            "outbox-preload-error: " + String((event as Event & { payload?: unknown }).payload),
+          );
+        });
+      });
       const gateway = await installGateway(page, true);
       await openChat(page);
       await waitForControlUiGatewayReady(page);
@@ -162,7 +166,17 @@ suite.define(() => {
       await stage(page, message);
       await context.setOffline(true);
       await disconnect(page, gateway);
-      await send(page);
+      const [failedQueueRequest] = await Promise.all([
+        page.waitForEvent("requestfailed", (request) => queueModule.test(request.url())),
+        page.waitForEvent(
+          "console",
+          (consoleMessage) =>
+            consoleMessage.text().startsWith("outbox-preload-error: ") &&
+            queueModule.test(consoleMessage.text()),
+        ),
+        send(page),
+      ]);
+      expect(failedQueueRequest.failure()?.errorText).toBe("net::ERR_INTERNET_DISCONNECTED");
       await expect.poll(async () => (await readQueue(page)).length).toBe(1);
       const queued = (await readQueue(page))[0]!;
       expect(queued.attachmentPayload).toBeDefined();
@@ -170,9 +184,48 @@ suite.define(() => {
       await expect.poll(() => payloadCount(page)).toBe(1);
       await expect.poll(() => composerFor(page).inputValue()).toBe("");
       await expectRequestCountStable(gateway, "chat.send", 0);
+      const reloaded = page.waitForEvent("domcontentloaded");
       await context.setOffline(false);
+      await reloaded;
       await gateway.setOnline(true);
-      const sent = await gateway.waitForRequest("chat.send");
+      const recordReconnectFacts = (afterWait: boolean) =>
+        withTimeout(
+          Promise.all([
+            readQueue(page),
+            evaluateControlUiContext(page, (app) => ({
+              browserOnline: navigator.onLine,
+              gatewayConnected: app.gateway.snapshot.phase === "connected",
+              clientConnected: app.gateway.snapshot.client?.connected ?? false,
+              recoveryScopeReady: app.gateway.snapshot.client?.recoveryScopeReady ?? false,
+              identityResolved: app.gateway.snapshot.selfUser !== undefined,
+              foregroundReady: app.connectionBootstrap.foregroundReady,
+            })),
+          ]),
+          1_000,
+          "offline attachment reconnect facts",
+        )
+          .then(([queue, connection]) =>
+            recordControlUiE2eFailureFacts(page, {
+              ...connection,
+              reconnectFactsAfterWait: afterWait,
+              queueCount: queue.length,
+              sendAttempts: queue.reduce((count, item) => count + (item.sendAttempts ?? 0), 0),
+              payloadCount: queue.filter((item) => item.attachmentPayload).length,
+              waitingReconnect: queue.filter((item) => item.sendState === "waiting-reconnect")
+                .length,
+              waitingIdle: queue.filter((item) => item.sendState === "waiting-idle").length,
+              waitingModel: queue.filter((item) => item.sendState === "waiting-model").length,
+              unconfirmed: queue.filter((item) => item.sendState === "unconfirmed").length,
+              failed: queue.filter((item) => item.sendState === "failed").length,
+            }),
+          )
+          .catch(() => undefined);
+      await recordReconnectFacts(false);
+      const sent = await gateway.waitForRequest("chat.send").catch(async (error: unknown) => {
+        recordControlUiE2eFailureFacts(page, { reconnectSendWaitFailed: true });
+        await recordReconnectFacts(true);
+        throw error;
+      });
       expectAttachmentSend(sent.params, { message, idempotencyKey: queued.sendRunId });
       await expectRequestCountStable(gateway, "chat.send", 1);
     }));
@@ -279,151 +332,148 @@ suite.define(() => {
       }),
   );
   it("keeps source Blob bytes when a duplicate removes its row before lock-confirmed adoption", () =>
-    suite.withPage(
-      { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
-      async ({ context, page }) => {
-        const gateway = await installGateway(page, true);
-        await openChat(page);
-        await disconnect(page, gateway);
-        const message = "Mock Gateway: source keeps its pre-adoption bytes";
-        const original = await queueAttachment(page, message);
-        assert(
-          original?.attachmentPayload && original.sendRunId,
-          "Expected a durable source submission",
+    suite.withPage({ ...pageOptions, locale: "en-US" }, async ({ context, page }) => {
+      const gateway = await installGateway(page, true);
+      await openChat(page);
+      await disconnect(page, gateway);
+      const message = "Mock Gateway: source keeps its pre-adoption bytes";
+      const original = await queueAttachment(page, message);
+      assert(
+        original?.attachmentPayload && original.sendRunId,
+        "Expected a durable source submission",
+      );
+      const reference = original.attachmentPayload;
+      const runId = original.sendRunId;
+      const sourceLockName = `openclaw-outbox:${reference.tabId}`;
+      const sourceOwnsLock = () =>
+        page.evaluate(
+          async (name) =>
+            (await navigator.locks.query()).held?.some((lock) => lock.name === name) ?? false,
+          sourceLockName,
         );
-        const reference = original.attachmentPayload;
-        const runId = original.sendRunId;
-        const sourceLockName = `openclaw-outbox:${reference.tabId}`;
-        const sourceOwnsLock = () =>
-          page.evaluate(
-            async (name) =>
-              (await navigator.locks.query()).held?.some((lock) => lock.name === name) ?? false,
-            sourceLockName,
-          );
-        expect(await sourceOwnsLock()).toBe(true);
-        await expectPayload(page, reference.key);
-        await expectRequestCountStable(gateway, "chat.send", 0);
+      expect(await sourceOwnsLock()).toBe(true);
+      await expectPayload(page, reference.key);
+      await expectRequestCountStable(gateway, "chat.send", 0);
 
-        const duplicate = await duplicateTab(context, page);
-        const releaseEvent = "openclaw-test-release-outbox-claim";
-        await duplicate.addInitScript((eventName) => {
-          const manager = navigator.locks;
-          const nativeRequest = manager.request.bind(manager);
-          let release!: () => void;
-          let released = false;
-          const latch = new Promise<void>((resolve) => {
-            release = resolve;
-          });
-          window.addEventListener(
-            eventName,
-            () => {
-              released = true;
-              release();
-            },
-            { once: true },
-          );
-          function delay<T>(
-            name: string,
-            callback: LockGrantedCallback<T>,
-          ): LockGrantedCallback<T | Promise<T>> {
-            if (!name.startsWith("openclaw-outbox:")) {
-              return callback;
-            }
-            return (lock) => {
-              if (released) {
-                return callback(lock);
-              }
-              document.documentElement.dataset.outboxClaimName = name;
-              document.documentElement.dataset.outboxClaimGranted = String(lock !== null);
-              document.documentElement.dataset.outboxClaimState = "blocked";
-              // Native arbitration has already decided; delay only its callback delivery.
-              return latch.then(() => callback(lock));
-            };
+      const duplicate = await duplicateTab(context, page);
+      const releaseEvent = "openclaw-test-release-outbox-claim";
+      await duplicate.addInitScript((eventName) => {
+        const manager = navigator.locks;
+        const nativeRequest = manager.request.bind(manager);
+        let release!: () => void;
+        let released = false;
+        const latch = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        window.addEventListener(
+          eventName,
+          () => {
+            released = true;
+            release();
+          },
+          { once: true },
+        );
+        function delay<T>(
+          name: string,
+          callback: LockGrantedCallback<T>,
+        ): LockGrantedCallback<T | Promise<T>> {
+          if (!name.startsWith("openclaw-outbox:")) {
+            return callback;
           }
-          function delayedRequest<T>(
-            name: string,
-            optionsOrCallback: LockOptions | LockGrantedCallback<T>,
-            callback?: LockGrantedCallback<T>,
-          ): Promise<Awaited<T>> {
-            if (typeof optionsOrCallback === "function") {
-              return nativeRequest(name, delay(name, optionsOrCallback));
+          return (lock) => {
+            if (released) {
+              return callback(lock);
             }
-            if (!callback) {
-              throw new TypeError("A Web Lock request requires a callback");
-            }
-            return nativeRequest(name, optionsOrCallback, delay(name, callback));
-          }
-          // Only this duplicate's LockManager changes; source ownership stays native.
-          manager.request = delayedRequest;
-        }, releaseEvent);
-        const duplicateGateway = await installGateway(duplicate);
-        try {
-          await duplicate.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
-          await duplicateGateway.setOnline(true);
-          await waitForControlUiGatewayReady(duplicate);
-          await duplicate.waitForFunction(
-            () => document.documentElement.dataset.outboxClaimState === "blocked",
-          );
-          expect(
-            await duplicate.evaluate(() => ({
-              name: document.documentElement.dataset.outboxClaimName,
-              granted: document.documentElement.dataset.outboxClaimGranted,
-              marker: sessionStorage.getItem("openclaw.control.outboxTab.v1"),
-            })),
-          ).toEqual({ name: sourceLockName, granted: "false", marker: reference.tabId });
-          expect((await readQueue(duplicate))[0]?.attachmentPayload).toEqual(reference);
-          const row = paneFor(duplicate).locator(".chat-queue__item");
-          await expect.poll(() => row.count()).toBe(1);
-
-          await row.getByRole("button", { name: "Remove queued message", exact: true }).click();
-          await expect.poll(async () => (await readQueue(duplicate)).length).toBe(0);
-          await expect.poll(() => row.count()).toBe(0);
-          await duplicate.evaluate(
-            (eventName) => window.dispatchEvent(new Event(eventName)),
-            releaseEvent,
-          );
-          await expect
-            .poll(() =>
-              duplicate.evaluate(async (sourceTab) => {
-                const tab = sessionStorage.getItem("openclaw.control.outboxTab.v1");
-                return Boolean(
-                  tab &&
-                  tab !== sourceTab &&
-                  (await navigator.locks.query()).held?.some(
-                    (lock) => lock.name === `openclaw-outbox:${tab}`,
-                  ),
-                );
-              }, reference.tabId),
-            )
-            .toBe(true);
-          await expectRequestCountStable(duplicateGateway, "chat.send", 0);
-          expect(await sourceOwnsLock()).toBe(true);
-          expect((await readQueue(page))[0]).toMatchObject({
-            id: original.id,
-            sendRunId: runId,
-            sendAttempts: 0,
-            attachmentPayload: reference,
-          });
-          await page.bringToFront();
-
-          const sourceBytes = await readPayloadBytes(page, reference.key);
-          assert(
-            sourceBytes !== null,
-            "Removing an unclaimed duplicate must not delete the source Blob",
-          );
-          expect(sourceBytes).toEqual([attachment.content]);
-          await gateway.setOnline(true);
-          const sent = await gateway.waitForRequest("chat.send");
-          expectAttachmentSend(sent.params, { message, idempotencyKey: runId });
-          await expectRequestCountStable(gateway, "chat.send", 1);
-          await expectRequestCountStable(duplicateGateway, "chat.send", 0);
-        } finally {
-          await duplicate
-            .evaluate((eventName) => window.dispatchEvent(new Event(eventName)), releaseEvent)
-            .catch(() => undefined);
+            document.documentElement.dataset.outboxClaimName = name;
+            document.documentElement.dataset.outboxClaimGranted = String(lock !== null);
+            document.documentElement.dataset.outboxClaimState = "blocked";
+            // Native arbitration has already decided; delay only its callback delivery.
+            return latch.then(() => callback(lock));
+          };
         }
-      },
-    ));
+        function delayedRequest<T>(
+          name: string,
+          optionsOrCallback: LockOptions | LockGrantedCallback<T>,
+          callback?: LockGrantedCallback<T>,
+        ): Promise<Awaited<T>> {
+          if (typeof optionsOrCallback === "function") {
+            return nativeRequest(name, delay(name, optionsOrCallback));
+          }
+          if (!callback) {
+            throw new TypeError("A Web Lock request requires a callback");
+          }
+          return nativeRequest(name, optionsOrCallback, delay(name, callback));
+        }
+        // Only this duplicate's LockManager changes; source ownership stays native.
+        manager.request = delayedRequest;
+      }, releaseEvent);
+      const duplicateGateway = await installGateway(duplicate);
+      try {
+        await duplicate.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
+        await duplicateGateway.setOnline(true);
+        await waitForControlUiGatewayReady(duplicate);
+        await duplicate.waitForFunction(
+          () => document.documentElement.dataset.outboxClaimState === "blocked",
+        );
+        expect(
+          await duplicate.evaluate(() => ({
+            name: document.documentElement.dataset.outboxClaimName,
+            granted: document.documentElement.dataset.outboxClaimGranted,
+            marker: sessionStorage.getItem("openclaw.control.outboxTab.v1"),
+          })),
+        ).toEqual({ name: sourceLockName, granted: "false", marker: reference.tabId });
+        expect((await readQueue(duplicate))[0]?.attachmentPayload).toEqual(reference);
+        const row = paneFor(duplicate).locator(".chat-queue__item");
+        await expect.poll(() => row.count()).toBe(1);
+
+        await row.getByRole("button", { name: "Remove queued message", exact: true }).click();
+        await expect.poll(async () => (await readQueue(duplicate)).length).toBe(0);
+        await expect.poll(() => row.count()).toBe(0);
+        await duplicate.evaluate(
+          (eventName) => window.dispatchEvent(new Event(eventName)),
+          releaseEvent,
+        );
+        await expect
+          .poll(() =>
+            duplicate.evaluate(async (sourceTab) => {
+              const tab = sessionStorage.getItem("openclaw.control.outboxTab.v1");
+              return Boolean(
+                tab &&
+                tab !== sourceTab &&
+                (await navigator.locks.query()).held?.some(
+                  (lock) => lock.name === `openclaw-outbox:${tab}`,
+                ),
+              );
+            }, reference.tabId),
+          )
+          .toBe(true);
+        await expectRequestCountStable(duplicateGateway, "chat.send", 0);
+        expect(await sourceOwnsLock()).toBe(true);
+        expect((await readQueue(page))[0]).toMatchObject({
+          id: original.id,
+          sendRunId: runId,
+          sendAttempts: 0,
+          attachmentPayload: reference,
+        });
+        await page.bringToFront();
+
+        const sourceBytes = await readPayloadBytes(page, reference.key);
+        assert(
+          sourceBytes !== null,
+          "Removing an unclaimed duplicate must not delete the source Blob",
+        );
+        expect(sourceBytes).toEqual([attachment.content]);
+        await gateway.setOnline(true);
+        const sent = await gateway.waitForRequest("chat.send");
+        expectAttachmentSend(sent.params, { message, idempotencyKey: runId });
+        await expectRequestCountStable(gateway, "chat.send", 1);
+        await expectRequestCountStable(duplicateGateway, "chat.send", 0);
+      } finally {
+        await duplicate
+          .evaluate((eventName) => window.dispatchEvent(new Event(eventName)), releaseEvent)
+          .catch(() => undefined);
+      }
+    }));
 
   it("does not clear newer composer input while native Blob admission is waiting", () =>
     suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {

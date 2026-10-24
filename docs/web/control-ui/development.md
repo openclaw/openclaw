@@ -35,7 +35,13 @@ each asset once even when both preload lists reference it. Moving an existing
 boot import into the first request wave therefore remains visible in the byte
 accounting. Initial-entry JavaScript uses the committed gzip baseline plus the
 checker's growth and build-variance allowances; the baseline itself may not exceed
-325,000 B. Startup CSS is limited to one request. Complete boot JavaScript is capped
+325,000 B. Startup CSS is limited to one request. Each complete chat and New Session
+boot is limited to three CSS requests: the initial sheet, shared route styles,
+and the route's own sheet. Optional component styles stay with their lazy modules.
+CSS consolidation is bounded by the largest-sheet cap and at most 64 B total
+CSS raw and gzip growth against the merge base; splitting files is not a byte reduction.
+The boot manifest retains reachable CSS imports even when extraction removes their
+JavaScript source-map entries. Complete boot JavaScript is capped
 at 1,500,000 B gzip for chat and 1,035,000 B gzip for New Session, including the
 initial-entry assets.
 JSON5 remains in its own lazy chunk so snapshot validation cannot pull the raw
@@ -79,8 +85,21 @@ After a Gateway update, already-open tabs reload the current build when they enc
 
 Bundled public assets (themes, fonts, icons, and artwork) use `?v=<build-id>` URLs with a one-year immutable HTTP cache. The ID includes a digest of the public files, so rebuilding changed files at the same commit also changes their URLs. The Gateway snapshots this identity at startup; restart it after rebuilding an in-place installation. Unversioned requests, stale IDs, documents, `sw.js`, and custom `gateway.controlUi.root` installs keep `Cache-Control: no-cache`. The service worker caches matching current-build public URLs for offline reuse.
 
-The build precompresses bundled assets into Brotli and gzip sidecars. The Gateway
-reads and shares only the negotiated representation across browsers; a Brotli
+The build precompresses bundled assets of at least 4 KiB into Brotli and gzip
+sidecars, keeping each sidecar only when it is smaller than the original. CSS
+and the startup assets measured by the performance gate are compressed at any
+size. This limits file counts in installed packages while preserving startup
+transfer costs. Missing sidecars fall back to the
+original asset without on-the-fly compression; performance budgets count those
+identity bytes. Gzip uses
+the pinned, build-only libdeflate WebAssembly encoder at level 11 rather than a
+host-native library. Brotli remains at quality 10. Both encode the final emitted
+asset bytes; no decompressor is added to the browser bundle. Compare gzip size
+and encoder CPU/wall time on an existing build with
+`node ui/scripts/bench-gzip.mjs dist/control-ui 5`. This serial, interleaved
+comparison excludes file I/O and Brotli; it is not a full-build timing benchmark.
+
+The Gateway reads and shares only the negotiated representation across browsers; a Brotli
 request does not read the original and gzip bodies. Cold file admission and reads
 run in a worker so simultaneous page loads do not block chat delivery. Custom
 roots continue to read current files on each request. Rewritten index documents
@@ -147,19 +166,24 @@ node --import ./scripts/tsx.mjs scripts/bench-control-ui-cold-load.ts \
   --network-latency-ms 35 --download-kbps 10000 --cpu-throttle 4
 ```
 
-The report includes document TTFB, the asset waterfall and transfer sizes, and
-first visible transcript and enabled-composer timings. Visibility is sampled at
-animation frames; it is not a compositor-paint timestamp. Composer focus is
+The report includes document TTFB, the asset waterfall and transfer sizes, boot
+RPC request/response timings, and first visible transcript and enabled-composer
+timings. Visibility is sampled at animation frames; it is not a compositor-paint timestamp. Composer focus is
 recorded only if it occurs. HTTP uses the real Gateway; bootstrap, WebSocket
 replies and fixture media remain synthetic. The benchmark fetches the public
-`/chat` document, then selects the synthetic session before app imports; real
-session-entry authorization is outside this measurement. The fixture mirrors
+`/chat` document, then selects the synthetic session before app imports. Use
+`--boot-route new` to fetch `/new` and measure its composer instead; this preserves
+the Gateway's route-specific preload selection. Real session-entry authorization
+is outside this measurement. Each run also saves `run-N.requests.json`, including
+browser request initiators, to distinguish parser preloads from chained imports.
+Font loading completions are recorded separately from composer and transcript
+readiness. The fixture mirrors
 the Gateway's terminal policy to preserve the document's CSP contract.
 `--first-load` skips the benchmark's normal warm-up navigation. Restart the
 isolated Gateway before each sample to reset its asset and HTML compression
 caches, and interleave at
-least five baseline and candidate samples. Use the same bundle identity and
-fixture time for both sides. Run `--cpu-profile` separately for source-mapped CPU
+least ten baseline and candidate samples on a busy host. Use the same bundle
+identity and fixture time for both sides. Run `--cpu-profile` separately for source-mapped CPU
 diagnostics; profiled timings are not comparable with untraced samples.
 
 For a standalone preview with synthetic data, use:

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -213,13 +214,10 @@ type TrackedMirrorSession = {
 export function createBeamMirrorRunner(params: {
   runtime: { config: Pick<PluginRuntime["config"], "current"> };
   logger: { warn: (message: string) => void; info: (message: string) => void };
-  fetchFn?: typeof fetch;
   now?: () => number;
-  listCatalogs?: () => ActiveSessionCatalog[];
   signal: AbortSignal;
 }) {
   const now = params.now ?? Date.now;
-  const listCatalogs = params.listCatalogs ?? listActiveSessionCatalogs;
   const tracked = new Map<string, TrackedMirrorSession>();
   const { signal } = params;
   let lastWarnAt = 0;
@@ -242,14 +240,8 @@ export function createBeamMirrorRunner(params: {
   ) => {
     tracked.delete(key);
     tracked.set(key, { candidate, fingerprint, expiresAt: now() + BEAM_RETENTION_MS });
-    if (tracked.size <= MIRROR_RETRY_CAP) {
-      return;
-    }
     // At capacity, retry order is best effort; retain the just-acknowledged upload.
-    for (const oldest of tracked.keys()) {
-      tracked.delete(oldest);
-      break;
-    }
+    pruneMapToMaxSize(tracked, MIRROR_RETRY_CAP);
   };
 
   const warnThrottled = (message: string) => {
@@ -279,7 +271,6 @@ export function createBeamMirrorRunner(params: {
     try {
       guarded = await fetchWithSsrFGuard({
         url: endpoint,
-        fetchImpl: params.fetchFn,
         timeoutMs: MIRROR_UPLOAD_TIMEOUT_MS,
         signal,
         policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(endpoint),
@@ -394,7 +385,7 @@ export function createBeamMirrorRunner(params: {
         return;
       }
       const activeSinceMs = now() - mirror.activeWindowMinutes * 60_000;
-      const catalogs = listCatalogs().filter(
+      const catalogs = listActiveSessionCatalogs().filter(
         (catalog) =>
           // Never mirror the local beam receiver back out: a two-gateway pair
           // would otherwise re-mirror each other's rows forever.

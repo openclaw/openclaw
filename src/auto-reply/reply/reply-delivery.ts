@@ -20,8 +20,6 @@ import {
 } from "./reply-dispatch-outcome.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
-type ReplyDirectiveParseMode = "always" | "auto";
-
 export type DirectBlockDelivery = Awaited<ReturnType<typeof deliverBlockReply>> & {
   payload: ReplyPayload;
   /** Captured at settlement; later source-completeness changes do not rewrite this fact. */
@@ -47,7 +45,7 @@ export function normalizeReplyPayloadDirectives(params: {
   payload: ReplyPayload;
   currentMessageId?: string;
   trimLeadingWhitespace?: boolean;
-  parseMode?: ReplyDirectiveParseMode;
+  parseMode?: "always" | "auto";
   extractMarkdownImages?: boolean;
 }): { payload: ReplyPayload } {
   const parseMode = params.parseMode ?? "always";

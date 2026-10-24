@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { advanceCronActiveJobGeneration } from "./active-jobs.js";
 import { cronScriptFailureMetadata } from "./script-failure.js";
 import {
@@ -7,6 +6,7 @@ import {
   expectAlertTextContaining,
   setupFailureAlertSuite,
 } from "./service.failure-alert.test-helpers.js";
+import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./service/state.js";
 import { applyJobResult } from "./service/timer-outcomes.js";
 import type { CronJob } from "./types.js";
@@ -23,15 +23,15 @@ const owned = {
 };
 
 function withRepair(run: AlertParams[1], failureAlert?: AlertParams[0]["failureAlert"]) {
-  return withFailureAlertCron({ scheduler: createTestGatewayScheduler(), failureAlert }, run);
+  return withFailureAlertCron({ failureAlert }, run);
 }
 
 function expectNotifications(f: RepairFixture, repairs: number, alerts: number, notices?: number) {
   expect(f.runCronFailureRepair).toHaveBeenCalledTimes(repairs);
   expect(f.sendCronFailureAlert).toHaveBeenCalledTimes(alerts);
   if (notices !== undefined) {
-    expect(f.enqueueSystemEvent).toHaveBeenCalledTimes(notices);
-    expect(f.requestHeartbeat).toHaveBeenCalledTimes(notices);
+    expect(f.enqueueSessionEvent).toHaveBeenCalledTimes(notices);
+    expect(f.requestHeartbeat).not.toHaveBeenCalled();
   }
 }
 
@@ -70,21 +70,18 @@ function applyError(
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     },
   };
-  const job: CronJob = {
+  const job = cronTestJob({
     id: "owned-job",
     name: "owned job",
-    enabled: true,
     createdAtMs: runningAtMs,
     updatedAtMs: runningAtMs,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "sync" },
     owner: owned.owner,
     failureAlert: { ...owned.failureAlert, channel: "telegram", to: "19098680" },
     state: { consecutiveErrors: 2 },
     ...overrides,
-  };
+  });
   const deferredNotifications: DeferredCronNotifications = [];
   applyJobResult(
     state,
@@ -116,7 +113,7 @@ describe("CronService failure repair", () => {
         sessionKey: ownerSessionKey,
         repairId: expect.any(String),
       });
-      expect(f.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(f.enqueueSessionEvent).not.toHaveBeenCalled();
       expect(f.requestHeartbeat).not.toHaveBeenCalled();
       const brief = request?.message ?? "";
       expect(brief).toContain(`(id ${job.id}), created in this conversation, failed 2`);
@@ -398,7 +395,7 @@ describe("CronService failure repair", () => {
           expect(f.runScriptJob).toHaveBeenCalledOnce();
           expectNotifications(f, repairs, alerts, notices);
           if (notices) {
-            expect(f.enqueueSystemEvent).toHaveBeenCalledWith(
+            expect(f.enqueueSessionEvent).toHaveBeenCalledWith(
               expect.stringContaining("auto-disabled"),
               expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
             );

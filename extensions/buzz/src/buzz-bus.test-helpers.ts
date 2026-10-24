@@ -6,6 +6,14 @@ type Handlers = {
   oneose?: () => void;
   onclose: (reason: string) => void;
 };
+type PrepareSubscription = (
+  filters: Filter[],
+  handlers: Handlers,
+) => {
+  id: string;
+  close: ReturnType<typeof vi.fn>;
+  closed: boolean;
+};
 
 export const relayMocks = {
   connect: vi.fn<() => Promise<void>>(),
@@ -31,7 +39,7 @@ export const relayMocks = {
   }>,
 };
 
-export const mockBuzzRelay = () => ({
+export const mockBuzzRelay = (prepare?: PrepareSubscription) => ({
   Relay: class {
     onauth?: (template: unknown) => Promise<unknown>;
     idleSince: number | undefined;
@@ -47,6 +55,9 @@ export const mockBuzzRelay = () => ({
     scheduleIdleClose = vi.fn();
 
     prepareSubscription(filters: Filter[], handlers: Handlers) {
+      if (prepare) {
+        return prepare(filters, handlers);
+      }
       const state = relayMocks;
       const filter = filters[0] ?? {};
       const close = vi.fn();

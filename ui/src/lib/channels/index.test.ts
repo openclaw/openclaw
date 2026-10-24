@@ -4,6 +4,10 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayEventListener } from "../../api/gateway.ts";
 import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
 import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
+import {
   channelSnapshotEntryIsActive,
   channelSnapshotHasActiveChannel,
   createChannelCapability,
@@ -48,6 +52,15 @@ function createChannelsSnapshot(label: string): ChannelsStatusSnapshot {
     channelAccounts: {},
     channelDefaultAccountId: {},
   };
+}
+
+function createStaticChannelCapability(request: GatewayRequestHandler) {
+  const client = createTestGatewayClient(request);
+  const { gateway } = createChannelGatewayFixture(() => ({
+    client,
+    phase: "connected" as const,
+  }));
+  return createChannelCapability(gateway);
 }
 
 describe("channel readiness", () => {
@@ -231,13 +244,7 @@ describe("channels controller WhatsApp wait", () => {
       qrDataUrl: string;
     }>();
     const request = vi.fn(() => pending.promise);
-    const client = { request };
-    const gateway = {
-      snapshot: { client, phase: "connected" },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    };
-    const channels = createChannelCapability(gateway as never);
+    const channels = createStaticChannelCapability(request);
 
     const wait = channels.waitWhatsApp();
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
@@ -269,11 +276,7 @@ describe("channels controller WhatsApp provider selection", () => {
       }
       return createChannelsSnapshot("refreshed");
     });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    } as never);
+    const channels = createStaticChannelCapability(request);
 
     await channels.startWhatsApp(false);
     await channels.waitWhatsApp();
@@ -298,11 +301,7 @@ describe("channels controller WhatsApp logout", () => {
         ? { cleared: false, loggedOut: false }
         : createChannelsSnapshot("refreshed"),
     );
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    } as never);
+    const channels = createStaticChannelCapability(request);
     channels.state.whatsappLoginMessage = "Scan this QR.";
     channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,current-qr";
     channels.state.whatsappLoginConnected = true;
@@ -329,11 +328,7 @@ describe("channels controller WhatsApp logout", () => {
         ? { cleared: true, loggedOut: true }
         : createChannelsSnapshot("refreshed"),
     );
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    } as never);
+    const channels = createStaticChannelCapability(request);
     channels.state.whatsappLoginMessage = "Scan this QR.";
     channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,current-qr";
     channels.state.whatsappLoginConnected = true;
@@ -374,11 +369,7 @@ describe("channels controller WhatsApp mutation failures", () => {
         }
         return createChannelsSnapshot("unexpected refresh");
       });
-      const channels = createChannelCapability({
-        snapshot: { client: { request }, phase: "connected" },
-        subscribe: () => () => undefined,
-        subscribeEvents: () => () => undefined,
-      } as never);
+      const channels = createStaticChannelCapability(request);
       channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,current-qr";
       channels.state.whatsappLoginConnected = true;
       const updates: Array<{ busy: boolean; message: string | null }> = [];
@@ -443,11 +434,7 @@ describe("channels controller DM pairing", () => {
       }
       return {};
     });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    } as never);
+    const channels = createStaticChannelCapability(request);
 
     await channels.refreshPairing();
     expect(channels.state.pairingSnapshot?.requests).toHaveLength(1);
@@ -482,11 +469,7 @@ describe("channels controller DM pairing", () => {
       }
       return approvalResult.promise;
     });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    } as never);
+    const channels = createStaticChannelCapability(request);
     await channels.refreshPairing();
 
     const approval = channels.approvePairing({
@@ -530,11 +513,7 @@ describe("channels controller DM pairing", () => {
         commandOwnerBootstrap: "not-requested",
       };
     });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    } as never);
+    const channels = createStaticChannelCapability(request);
 
     const staleRefresh = channels.refreshPairing();
     const staleReceipt = channels.state.pairingRead!;
@@ -737,6 +716,7 @@ describe("channel refresh sequencing", () => {
       }));
       const channels = createChannelCapability(gateway);
       const refresh = channels.refresh();
+      const initialRead = channels.state.channelsRead!;
 
       emitEvent("config.changed");
       emitEvent("config.changed");
@@ -746,12 +726,16 @@ describe("channel refresh sequencing", () => {
         probeTiming === "pending"
           ? channels.refresh(true)
           : pending.promise.then(() => channels.refresh(true));
+      expect(channels.state.channelsRead).toBe(initialRead);
       try {
         pending.resolve(createChannelsSnapshot("before save"));
         await refresh;
 
         expect(channels.state.channelsSnapshot).toBe(configured);
         expect(channels.state.channelsLoading).toBe(false);
+        expect(channels.state.channelsRead).not.toBe(initialRead);
+        await expect(initialRead.completion).resolves.toBeNull();
+        await expect(channels.state.channelsRead!.completion).resolves.toBeNull();
         expect(request).toHaveBeenCalledTimes(2);
         expect(request).toHaveBeenLastCalledWith("channels.status", {
           probe: false,
@@ -779,6 +763,7 @@ describe("channel refresh sequencing", () => {
       const { gateway, publish, emitEvent } = createChannelGatewayFixture(() => snapshot);
       const channels = createChannelCapability(gateway);
       const refresh = channels.refresh();
+      const receipt = channels.state.channelsRead!;
       emitEvent("config.changed");
 
       if (transition === "reconnect") {
@@ -796,6 +781,8 @@ describe("channel refresh sequencing", () => {
         channels.dispose();
         emitEvent("config.changed");
       }
+      await expect(receipt.completion).resolves.toBeNull();
+      expect(channels.state.channelsRead).toBeNull();
       pending.resolve(createChannelsSnapshot("retired"));
       await refresh;
 
@@ -817,6 +804,7 @@ describe("channel refresh sequencing", () => {
 
     await channels.refresh();
     expect(channels.state.channelsError).toBe("status unavailable");
+    await expect(channels.state.channelsRead!.completion).resolves.toBe("status unavailable");
 
     snapshot = { client, phase: "reconnecting" };
     publish();
@@ -826,6 +814,7 @@ describe("channel refresh sequencing", () => {
     expect(channels.state.channelsError).toBeNull();
     await channels.refresh();
     expect(channels.state.channelsSnapshot?.channelLabels.test).toBe("recovered");
+    await expect(channels.state.channelsRead!.completion).resolves.toBeNull();
     channels.dispose();
   });
 
@@ -879,11 +868,18 @@ describe("channel refresh sequencing", () => {
     });
 
     const probeLoad = channels.refresh(true);
+    const probeReceipt = channels.state.channelsRead!;
+    await channels.refresh(true);
+    expect(channels.state.channelsRead).toBe(probeReceipt);
     emitEvent("config.changed");
     expect(request).toHaveBeenCalledTimes(2);
+    const runtimeReceipt = channels.state.channelsRead!;
+    expect(runtimeReceipt).not.toBe(probeReceipt);
+    await expect(probeReceipt.completion).resolves.toBeNull();
 
     fastRuntime.resolve(fresh);
     await runtimeLoaded.promise;
+    await expect(runtimeReceipt.completion).resolves.toBeNull();
     slowProbe.resolve(createChannelsSnapshot("stale"));
     await probeLoad;
 

@@ -32,6 +32,8 @@ type PendingChatCreate = Readonly<{
   canDisplay: () => boolean;
   composer?: CreationComposer;
   displayName?: string;
+  /** Custom group requested by the create; its admitted row lands in that section. */
+  category?: string;
 }>;
 
 export type ApplicationChatSubmissions = ReturnType<typeof createChatSubmissions>;

@@ -1,12 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { disposeOpenClawAgentDatabaseByPath } from "./openclaw-agent-db-disposal.js";
-import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
+import { useAgentDatabaseDirectories } from "./openclaw-agent-db-lifecycle.test-support.js";
 import {
   isOpenClawAgentDatabaseRegistryChange,
   listOpenClawRegisteredAgentDatabases,
@@ -15,15 +14,7 @@ import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
-
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    await closeOpenClawAgentDatabasesAsync();
-    await closeOpenClawStateDatabaseAsync();
-    cleanup();
-  }),
-);
+const tempDirs = useAgentDatabaseDirectories();
 
 function createTempStateDir(): string {
   return fs.realpathSync(tempDirs.make("agent-db-disposal-"));

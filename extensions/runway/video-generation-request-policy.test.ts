@@ -1,9 +1,13 @@
-import type { postJsonRequest } from "openclaw/plugin-sdk/provider-http";
+import {
+  capturePluginRegistration,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { postJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { afterEach, assert, expect, it, vi } from "vitest";
-import { buildRunwayVideoGenerationProvider } from "./video-generation-provider.js";
+import plugin from "./index.js";
 
-const { postJsonRequestMock } = vi.hoisted(() => ({
-  postJsonRequestMock: vi.fn<typeof postJsonRequest>(),
+const { postJsonResponseMock } = vi.hoisted(() => ({
+  postJsonResponseMock: vi.fn<typeof postJsonResponse>(),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
@@ -13,17 +17,22 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => (
 
 vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
-  postJsonRequest: postJsonRequestMock,
+  postJsonResponse: postJsonResponseMock,
 }));
 
 afterEach(() => vi.restoreAllMocks());
 
+const provider = requireRegisteredProvider(
+  capturePluginRegistration(plugin).videoGenerationProviders,
+  "runway",
+);
+
 it("applies configured request policy to the submitted Runway task", async () => {
   const intercepted = new Error("synthetic submission intercepted");
-  postJsonRequestMock.mockRejectedValue(intercepted);
+  postJsonResponseMock.mockRejectedValue(intercepted);
 
   await expect(
-    buildRunwayVideoGenerationProvider().generateVideo({
+    provider.generateVideo({
       provider: "runway",
       model: "gen4.5",
       prompt: "a synthetic lobster",
@@ -45,8 +54,8 @@ it("applies configured request policy to the submitted Runway task", async () =>
     }),
   ).rejects.toBe(intercepted);
 
-  expect(postJsonRequestMock).toHaveBeenCalledOnce();
-  const request = postJsonRequestMock.mock.calls[0]?.[0];
+  expect(postJsonResponseMock).toHaveBeenCalledOnce();
+  const request = postJsonResponseMock.mock.calls[0]?.[0];
   assert(request);
   expect(request.url).toBe("https://runway.example.test/v1/text_to_video");
   expect(Object.fromEntries(new Headers(request.headers))).toMatchObject({
@@ -63,18 +72,13 @@ it("applies configured request policy to the submitted Runway task", async () =>
 });
 
 it("denies private polling without needing a proxy override", async () => {
-  const release = vi.fn(async () => {});
-  postJsonRequestMock.mockResolvedValue({
-    response: Response.json({ id: "synthetic-task" }),
-    finalUrl: "http://127.0.0.1:9/v1/text_to_video",
-    release,
-  });
+  postJsonResponseMock.mockResolvedValue({ id: "synthetic-task" });
   const fetchMock = vi
     .spyOn(globalThis, "fetch")
     .mockRejectedValue(new Error("unguarded synthetic poll reached fetch"));
 
   await expect(
-    buildRunwayVideoGenerationProvider().generateVideo({
+    provider.generateVideo({
       provider: "runway",
       model: "gen4.5",
       prompt: "a synthetic lobster",
@@ -92,5 +96,4 @@ it("denies private polling without needing a proxy override", async () => {
     }),
   ).rejects.toMatchObject({ name: "SsrFBlockedError" });
   expect(fetchMock).not.toHaveBeenCalled();
-  expect(release).toHaveBeenCalledOnce();
 });

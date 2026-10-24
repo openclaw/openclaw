@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -13,14 +14,13 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { findChatSendPayload, makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import { enqueueChatMessage, enqueuePendingRunMessage } from "./chat-queue.ts";
+import { enqueueChatMessage, keepVolatileQueuedMessage } from "./chat-queue.ts";
 import {
   resumeStoredChatOutboxes,
   retryQueuedChatMessage,
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 import {
   adoptStartedChatRun,
@@ -121,7 +121,13 @@ it.each(
       if (reconcileChatRunAfterSessionStatePublication(host) && reentrantSuccessor) {
         successorStarted = true;
         adoptStartedChatRun(host, "reentrant-run", 3);
-        enqueuePendingRunMessage(host, "Command joined to the successor", "reentrant-run");
+        keepVolatileQueuedMessage(host, host.sessionKey, {
+          id: "successor-input",
+          text: "Input awaiting the successor",
+          createdAt: 3,
+          sendRunId: "reentrant-run",
+          pendingRunId: "reentrant-run",
+        });
       }
     });
     let draining: ReturnType<typeof resumeStoredChatOutboxes> | undefined;
@@ -134,7 +140,13 @@ it.each(
     try {
       await sessions.refresh({ agentId: "main", force: true });
       await handleSendChat(host, undefined, { followUpMode: "queue" });
-      enqueuePendingRunMessage(host, "Command joined to the current run", "finished-run");
+      keepVolatileQueuedMessage(host, host.sessionKey, {
+        id: "current-input",
+        text: "Input awaiting the current run",
+        createdAt: 1,
+        sendRunId: "finished-run",
+        pendingRunId: "finished-run",
+      });
       expect(host.chatQueue).toHaveLength(2);
       const capturedOutboxes = listStoredChatOutboxes(host);
       const queuedIds = host.chatQueue.map((item) => item.id);
@@ -228,7 +240,7 @@ it.each(
         expect(host.chatQueue).toHaveLength(2);
         expect(host.chatQueue).toContainEqual(
           expect.objectContaining({
-            text: "Command joined to the current run",
+            text: "Input awaiting the current run",
             pendingRunId: "finished-run",
           }),
         );
@@ -312,7 +324,13 @@ it.each(["new run", "new session", "different terminal", "still active"])(
     await handleSendChat(host, undefined, { followUpMode: "queue" });
     expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
     expect(host.chatQueue).toHaveLength(1);
-    enqueuePendingRunMessage(host, "Command joined to the previous run", "finished-run");
+    keepVolatileQueuedMessage(host, host.sessionKey, {
+      id: "previous-input",
+      text: "Input awaiting the previous run",
+      createdAt: 1,
+      sendRunId: "finished-run",
+      pendingRunId: "finished-run",
+    });
 
     const draining = resumeStoredChatOutboxes(host);
     await vi.waitFor(() =>

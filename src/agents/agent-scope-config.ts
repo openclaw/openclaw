@@ -15,6 +15,7 @@ import type {
 } from "../config/types.agent-defaults.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { getMainThreadTaskName, runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { resolveUserPath } from "../utils.js";
@@ -161,14 +162,20 @@ const agentRosterFacts = new WeakMap<
 
 /** Share roster reads synchronously; unbound mutable configs expire when the callback returns. */
 export function withAgentRosterFactsBatch<T>(config: OpenClawConfig, callback: () => T): T {
-  const parent = activeAgentRosterFactsBatch;
-  activeAgentRosterFactsBatch =
-    parent?.config === config ? parent : { config, facts: readAgentRosterFacts(config) ?? {} };
-  try {
-    return callback();
-  } finally {
-    activeAgentRosterFactsBatch = parent;
-  }
+  return runWithMainThreadTask(
+    getMainThreadTaskName() ?? "gateway",
+    () => {
+      const parent = activeAgentRosterFactsBatch;
+      activeAgentRosterFactsBatch =
+        parent?.config === config ? parent : { config, facts: readAgentRosterFacts(config) ?? {} };
+      try {
+        return callback();
+      } finally {
+        activeAgentRosterFactsBatch = parent;
+      }
+    },
+    "agent-roster",
+  );
 }
 
 function readAgentRosterFacts(cfg: OpenClawConfig): AgentRosterFacts | undefined {

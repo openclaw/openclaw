@@ -76,6 +76,14 @@ export function registerExecutorRootOwnershipTests(
       for (const admitted of [root, serviceRoot]) {
         expect(store.read(admitted)).toEqual({ kind: "absent" });
       }
+      const acquired = store.acquire(root, "independent-helper", { kind: "update" });
+      assert(acquired.kind === "acquired");
+      try {
+        await expect(executor.enter(root)).rejects.toThrow("closed or busy");
+        expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
+      } finally {
+        expect(store.release(acquired.lease)).toBe(true);
+      }
     });
   });
 

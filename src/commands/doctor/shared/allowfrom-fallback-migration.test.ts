@@ -11,14 +11,12 @@ vi.mock("../channel-capabilities.js", () => ({
   }),
 }));
 
-function config(channels: OpenClawConfig["channels"]): OpenClawConfig {
-  return { channels };
-}
-
 function expectUnchanged(channels: OpenClawConfig["channels"]) {
-  const cfg = config(channels);
-  const expected = { config: structuredClone(cfg), changes: [] };
-  expect(maybeRepairGroupAllowFromFallback(cfg)).toEqual(expected);
+  const cfg = { channels };
+  expect(maybeRepairGroupAllowFromFallback(cfg)).toEqual({
+    config: structuredClone(cfg),
+    changes: [],
+  });
 }
 
 describe("doctor group allowFrom fallback migration", () => {
@@ -59,15 +57,17 @@ describe("doctor group allowFrom fallback migration", () => {
   );
 
   it("migrates absent lists with explicit policy overrides", () => {
-    const cfg = config({
-      defaults: { groupPolicy: "disabled" },
-      telegram: { groupPolicy: "allowlist", allowFrom: ["123"] },
-      signal: {
-        groupPolicy: "disabled",
-        allowFrom: ["parent-user"],
-        accounts: { work: { groupPolicy: "allowlist", allowFrom: ["work-user"] } },
+    const cfg: OpenClawConfig = {
+      channels: {
+        defaults: { groupPolicy: "disabled" },
+        telegram: { groupPolicy: "allowlist", allowFrom: ["123"] },
+        signal: {
+          groupPolicy: "disabled",
+          allowFrom: ["parent-user"],
+          accounts: { work: { groupPolicy: "allowlist", allowFrom: ["work-user"] } },
+        },
       },
-    });
+    };
     const result = maybeRepairGroupAllowFromFallback(cfg);
 
     expect(result.config.channels?.telegram?.groupAllowFrom).toEqual(["123"]);
@@ -78,11 +78,11 @@ describe("doctor group allowFrom fallback migration", () => {
   });
 
   it("copies fallback allowFrom into explicit groupAllowFrom", () => {
-    const result = maybeRepairGroupAllowFromFallback(
-      config({
+    const result = maybeRepairGroupAllowFromFallback({
+      channels: {
         telegram: { allowFrom: [123, "accessGroup:ops", "123"], groupPolicy: "allowlist" },
-      }),
-    );
+      },
+    });
 
     expect(result.changes).toEqual([
       "channels.telegram.groupAllowFrom: copied 2 sender entries from allowFrom for explicit group allowlist.",
@@ -91,8 +91,8 @@ describe("doctor group allowFrom fallback migration", () => {
   });
 
   it("preserves account-scoped fallback without broadening to the channel", () => {
-    const result = maybeRepairGroupAllowFromFallback(
-      config({
+    const result = maybeRepairGroupAllowFromFallback({
+      channels: {
         signal: {
           allowFrom: ["parent"],
           accounts: {
@@ -100,8 +100,8 @@ describe("doctor group allowFrom fallback migration", () => {
             personal: { groupAllowFrom: ["personal-user"], allowFrom: ["ignored"] },
           },
         },
-      }),
-    );
+      },
+    });
 
     expect(result.changes).toEqual([
       "channels.signal.groupAllowFrom: copied 1 sender entry from allowFrom for explicit group allowlist.",
@@ -133,14 +133,8 @@ describe("doctor group allowFrom fallback migration", () => {
     });
   });
 
-  it("skips generated channel schemas that reject groupAllowFrom", () => {
-    expectUnchanged({
-      slack: { allowFrom: ["U123"], accounts: { workspace: { allowFrom: ["U456"] } } },
-    });
-  });
-
-  it("skips bundled-extension channels absent from generated metadata", () => {
-    // Missing metadata must not authorize writes that the extension's schema rejects.
-    expectUnchanged({ agentmail: { allowFrom: ["someone@example.com"] } });
-  });
+  it.each([
+    { slack: { allowFrom: ["U123"], accounts: { workspace: { allowFrom: ["U456"] } } } },
+    { agentmail: { allowFrom: ["someone@example.com"] } },
+  ])("requires generated schema permission before writing groupAllowFrom: %j", expectUnchanged);
 });

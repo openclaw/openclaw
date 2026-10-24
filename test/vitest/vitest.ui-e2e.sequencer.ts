@@ -119,6 +119,30 @@ function estimateFileSeconds(moduleId: string): number {
 }
 
 export class UiE2eSequencer extends BaseSequencer {
+  override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
+    // eslint-disable-next-line unicorn/no-array-sort -- BaseSequencer.sort is Vitest's ordering API.
+    const ordered = await super.sort(files);
+    const parallel = ordered.filter((file) => file.project.config.sequence.groupOrder === 0);
+    if (parallel.some((file) => this.ctx.cache.getTestSpecificationResult(file))) {
+      // Keep native failed-first and observed-duration ordering on warm reruns.
+      return ordered;
+    }
+    const seconds = new Map(parallel.map((file) => [file, estimateFileSeconds(file.moduleId)]));
+    return ordered.toSorted((left, right) => {
+      const groupOrder =
+        left.project.config.sequence.groupOrder - right.project.config.sequence.groupOrder;
+      if (groupOrder || left.project.config.sequence.groupOrder !== 0) {
+        return groupOrder;
+      }
+      // Bundled and private fixtures share this worker pool; do not queue builds last.
+      return (
+        seconds.get(right)! - seconds.get(left)! ||
+        left.moduleId.localeCompare(right.moduleId) ||
+        left.project.name.localeCompare(right.project.name)
+      );
+    });
+  }
+
   override async shard(files: TestSpecification[]): Promise<TestSpecification[]> {
     // Vitest invokes shard() only when config.shard is present.
     return selectWeightedShard(

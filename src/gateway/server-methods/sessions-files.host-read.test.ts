@@ -1,3 +1,4 @@
+import "./sessions-files.mocks.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -9,7 +10,6 @@ import {
   setRuntimeConfigSnapshot,
   clearRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import type { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
@@ -28,55 +28,8 @@ import {
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 import * as workspaceFs from "./workspace-fs.js";
 
-const hoisted = vi.hoisted(() => ({
-  execOpenPath: vi.fn(),
-  loadSessionEntry: vi.fn(),
-  resolveAgentWorkspaceDir: vi.fn(),
-  resolveDefaultAgentId: vi.fn(),
-  readDelta: vi.fn(),
-}));
-
-vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
-  resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
-  resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
-}));
-
-vi.mock("../session-utils.js", async (original) => ({
-  ...(await original<typeof import("../session-utils.js")>()),
-  loadIncognitoGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
-}));
-
-vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
-  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
-    hoisted.loadSessionEntry(params.key, { agentId: params.agentId }),
-}));
-
-vi.mock("../../config/sessions/session-entry-read-facts.js", async (importOriginal) => {
-  const { createRepositorySessionEntryReader } =
-    await import("./sessions-files.repository.test-support.js");
-  const actual =
-    await importOriginal<typeof import("../../config/sessions/session-entry-read-facts.js")>();
-  return {
-    ...actual,
-    readRetainedSessionEntryFacts: createRepositorySessionEntryReader(
-      actual.readRetainedSessionEntryFacts,
-      (key) => hoisted.loadSessionEntry(key),
-    ),
-  };
-});
-
-// mock-isolation: File-policy tests supply visible transcript pages without opening SQLite.
-vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
-  withSessionTranscriptDeltaReader: ((scope, consume) =>
-    consume({
-      visible: async (limits) => hoisted.readDelta(scope, limits),
-      raw: async () => {
-        throw new Error("File browsing must consume visible transcript pages");
-      },
-    })) satisfies typeof withSessionTranscriptDeltaReader,
-}));
+const { sessionFilesMocks } = await import("./sessions-files.mocks.test-support.js");
+const hoisted = { ...sessionFilesMocks, execOpenPath: vi.fn() };
 
 const sessionKey = "agent:main:main";
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);

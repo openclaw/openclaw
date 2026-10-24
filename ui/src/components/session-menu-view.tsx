@@ -148,7 +148,6 @@ export function useSessionMenuEntries(
         </>
       ),
       children: state.compact ? undefined : () => body(entry.view),
-      prewarm: entry.view === "assign-owner",
       closeOnSelect: false,
       onBeforeShow: entry.view === "icon" ? appearance.prepare : undefined,
     };
@@ -283,17 +282,7 @@ export function useSessionMenuEntries(
               ]
             : []),
           ...details.communication(),
-          ...(details.error() !== null
-            ? [
-                content(
-                  "settings-error",
-                  <div class="session-menu__info" role="alert">
-                    {details.error()}
-                  </div>,
-                ),
-                { id: "reload-settings", label: t("common.retry"), class: "session-menu__item" },
-              ]
-            : []),
+          details.readStatus,
           ...(!state.involvingMeContext ? involvement() : []),
           deleteDivider,
           deleteAction(),

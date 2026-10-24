@@ -1,14 +1,7 @@
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import {
-  chunkMarkdownTextWithMode,
-  resolveChunkMode,
-  resolveTextChunkLimit,
-} from "openclaw/plugin-sdk/reply-chunking";
-import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
+import { installReplyRuntime } from "./reply-dispatcher.test-support.js";
 
 const message = vi.hoisted(() => ({
   create: vi.fn(async () => ({ code: 0, data: { message_id: "om_model_wait" } })),
@@ -53,20 +46,7 @@ it.each(["", "Earlier answer."])(
         release: async () => {},
       };
     });
-    const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
-      pluginId: "feishu",
-      errorMessage: "Feishu runtime not initialized",
-    });
-    const previousRuntime = runtimeStore.tryGetRuntime();
-    const runtime = createPluginRuntimeMock();
-    Object.assign(runtime.channel.text, {
-      resolveTextChunkLimit,
-      resolveChunkMode,
-      chunkMarkdownTextWithMode,
-      convertMarkdownTables,
-      resolveMarkdownTableMode: () => "preserve",
-    });
-    runtimeStore.setRuntime(runtime);
+    const restoreRuntime = installReplyRuntime();
     const feishu = {
       appId: `owned-model-wait-${Boolean(previousText)}`,
       appSecret: "owned-fixture-secret",
@@ -121,11 +101,7 @@ it.each(["", "Earlier answer."])(
     } finally {
       await lifecycle.onIdle?.();
       lifecycle.onCleanup?.();
-      if (previousRuntime) {
-        runtimeStore.setRuntime(previousRuntime);
-      } else {
-        runtimeStore.clearRuntime();
-      }
+      restoreRuntime();
     }
   },
 );

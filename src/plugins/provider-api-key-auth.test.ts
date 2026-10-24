@@ -67,19 +67,12 @@ describe("createProviderApiKeyAuthMethod", () => {
     });
   });
 
-  it("applies a key-scoped default model during non-interactive auth", async () => {
-    const resolveDefaultModel = vi.fn(async () => "example/enabled-model");
-    const toApiKeyCredential = vi.fn(() => null);
-    const auth = discoveredMethod(resolveDefaultModel);
-
-    const config = await auth.runNonInteractive?.(context({ toApiKeyCredential }));
-
-    expect(toApiKeyCredential).not.toHaveBeenCalled();
-    expect(resolveDefaultModel).toHaveBeenCalledWith({ apiKey: "test-token", config: {} });
-    expect(config?.agents?.defaults?.model).toEqual({ primary: "example/enabled-model" });
-  });
-
   it.each([
+    {
+      name: "applies a key-scoped default model during non-interactive auth",
+      resolveDefaultModel: async () => "example/enabled-model",
+      expected: { primary: "example/enabled-model" },
+    },
     {
       name: "falls back to the static model when discovery fails",
       resolveDefaultModel: async () => {
@@ -93,10 +86,11 @@ describe("createProviderApiKeyAuthMethod", () => {
       expected: undefined,
     },
   ])("$name", async ({ resolveDefaultModel, expected }) => {
-    const auth = discoveredMethod(resolveDefaultModel);
-
-    const config = await auth.runNonInteractive?.(context());
-
+    const resolve = vi.fn(resolveDefaultModel);
+    const ctx = context();
+    const config = await discoveredMethod(resolve).runNonInteractive?.(ctx);
+    expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
+    expect(resolve).toHaveBeenCalledWith({ apiKey: "test-token", config: {} });
     expect(config?.agents?.defaults?.model).toEqual(expected);
   });
 

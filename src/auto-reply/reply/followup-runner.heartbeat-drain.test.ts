@@ -5,7 +5,6 @@ import { AgentDatabaseExecutionAdmissionClosedError } from "../../state/agent-da
 import { cleanupReplyAgentRun } from "./agent-runner-core.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
-  createFollowupTurnTestTypingController,
   createFollowupTurnTestTurn,
   getFollowupTurnTestState,
   resetFollowupTurnTestState,
@@ -20,6 +19,7 @@ import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { FollowupRun } from "./queue/types.js";
 import type { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const admissionState = vi.hoisted(() => ({
   beforeAdmission: vi.fn<(queued: FollowupRun) => Promise<void>>(),
@@ -59,7 +59,7 @@ vi.mock("./reply-turn-admission-lifecycle.js", async (importOriginal) => ({
 
 const { createFollowupRunner } = await import("./followup-runner.js");
 const state = getFollowupTurnTestState();
-const key = "followup-heartbeat-drain";
+const key = "followup-cleanup-drain";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -72,7 +72,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("keeps heartbeat cleanup options out of a deferred queued user turn", async ({ signal }) => {
+it("keeps cleanup runner options out of a deferred queued user turn", async ({ signal }) => {
   const firstStarted = createDeferred();
   const releaseFirst = createDeferred();
   const settled = createDeferred();
@@ -88,20 +88,16 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
     runId: "queued-user-run",
     outcome: { kind: "aborted", reason: "user" },
   });
-  const typing = createFollowupTurnTestTypingController();
+  const typing = createMockTypingController();
   const defaults = { typing, typingMode: "never" as const, defaultModel: "gpt-test" };
   const userRunner = createFollowupRunner({
     ...defaults,
     opts: {},
   });
-  const heartbeatRunner = createFollowupRunner({
+  const cleanupRunner = createFollowupRunner({
     ...defaults,
     opts: {
-      isHeartbeat: true,
-      useHeartbeatFailureCopy: true,
       cleanupBundleMcpOnRunEnd: true,
-      enableHeartbeatTool: true,
-      forceHeartbeatTool: true,
       sourceReplyDeliveryMode: "message_tool_only",
       bootstrapContextMode: "lightweight",
     },
@@ -113,12 +109,11 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
     onAdopted: () => {},
     onSettled: () => settled.resolve(),
   };
-  const heartbeatOperation = createReplyOperation({
+  const cleanupOperation = createReplyOperation({
     sessionKey: key,
     sessionId: run.run.sessionId,
     agentId: run.run.agentId,
     resetTriggered: false,
-    turnKind: "heartbeat",
   });
   try {
     expect(
@@ -131,18 +126,17 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
         false,
       ),
     ).toBe(true);
-    heartbeatOperation.complete();
-    await withinTest(heartbeatOperation.ownerSettlement, signal);
+    cleanupOperation.complete();
+    await withinTest(cleanupOperation.ownerSettlement, signal);
     scheduleFollowupDrain(key, userRunner);
     await withinTest(firstStarted.promise, signal);
     await cleanupReplyAgentRun({
       blockReplyPipeline: null,
       clearRestartRecoveryDeliveryClaim: async () => {},
-      isHeartbeat: true,
-      providedReplyOperation: heartbeatOperation,
+      providedReplyOperation: cleanupOperation,
       queueKey: key,
-      replyOperation: heartbeatOperation,
-      runFollowupTurn: heartbeatRunner,
+      replyOperation: cleanupOperation,
+      runFollowupTurn: cleanupRunner,
       sessionKey: key,
       shouldDrainQueuedFollowupsAfterClear: true,
       typing,
@@ -156,20 +150,16 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
     expect(state.execute).toHaveBeenCalledOnce();
     const retriedExecution: AgentTurnParams = state.execute.mock.calls[0]![0];
     expect(retriedExecution).toMatchObject({
-      isHeartbeat: false,
-      opts: { isHeartbeat: false },
+      opts: {},
     });
     expect([
-      retriedExecution.opts?.enableHeartbeatTool,
-      retriedExecution.opts?.forceHeartbeatTool,
-      retriedExecution.opts?.useHeartbeatFailureCopy,
       retriedExecution.opts?.cleanupBundleMcpOnRunEnd,
       retriedExecution.opts?.bootstrapContextMode,
       retriedExecution.opts?.sourceReplyDeliveryMode,
-    ]).toEqual(Array(6).fill(undefined));
+    ]).toEqual(Array(3).fill(undefined));
   } finally {
     releaseFirst.resolve();
-    heartbeatOperation.complete();
-    await heartbeatOperation.ownerSettlement;
+    cleanupOperation.complete();
+    await cleanupOperation.ownerSettlement;
   }
 });

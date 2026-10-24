@@ -302,6 +302,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           unqualifiedModelExecution: modelSource && !configurationQualification ? true : undefined,
           onUnqualifiedModelCancelled: connection.abortExplicitly,
           requesterSessionKey: params.sessionKey,
+          requesterStorePath: parent?.entryCurrent?.source.path ?? storePath,
           requesterTurnRunId: params.runId,
           requestCustody,
           completionScope: params.agentHarnessCompletionScope,
@@ -642,6 +643,15 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           nativePreToolUseFailures.record(failure);
         }
       },
+      onNativeSubagentSubmission: runtime.nativeToolSurfaceEnabled
+        ? async (receipt, assertCurrent) => {
+            const monitor = state.nativeSubagentMonitor;
+            if (!monitor) {
+              throw new Error("Native submission monitor is unavailable");
+            }
+            await monitor.observeSubmissionAcknowledgement(receipt, assertCurrent);
+          }
+        : undefined,
     });
     await state.nativeHookRelay?.prepareInvocation();
     connection.assertCurrent();

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
+import { runWithAsyncStore } from "../../shared/async-store.js";
 import type { SessionAdmissionTransition } from "./session-admission-transition.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
@@ -233,7 +234,7 @@ export async function runWithSessionSourceScope<T>(
   scopes.set(assertion, prepared);
   const errors: unknown[] = [];
   try {
-    return await sessionSourceScopes.run(scopes, async () => {
+    return await runWithAsyncStore(sessionSourceScopes, scopes, async () => {
       (prepared.assertPreparedCurrent ?? prepared.assertCurrent)();
       const result = await run();
       if (options.checkAfter !== false) {

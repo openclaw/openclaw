@@ -645,7 +645,7 @@ describe("chat page retained sessions", () => {
     const commit = vi.fn(() => true);
     try {
       // The router advances history before a cold route replaces the visible Chat page.
-      window.history.pushState(null, "", "/agents");
+      window.history.pushState(null, "", "/sessions");
       expect(page.presented).toBe(true);
       runSessionNavigationIntent(paneB, {
         commit,
@@ -697,10 +697,8 @@ describe("chat page retained sessions", () => {
       });
 
       expect(returnToA).toHaveBeenCalledOnce();
-      expect(paneA.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
-      expect(paneA.hasAttribute("inert")).toBe(false);
-      expect(paneB.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
-      expect(paneB.hasAttribute("inert")).toBe(true);
+      expectPresentation(paneA, { visible: true, inert: false });
+      expectPresentation(paneB, { visible: false, inert: true });
     } finally {
       page.remove();
       history.replaceState(null, "", originalHref);

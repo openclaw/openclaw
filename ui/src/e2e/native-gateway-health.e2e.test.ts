@@ -134,9 +134,7 @@ suite.define(() => {
             expect(await identity.locator(".sidebar-gateway-health").count()).toBe(0);
             await footer.waitFor({ state: "detached" });
           } else {
-            await footer
-              .getByRole("button", { name: "Reconnecting… — Retry now", exact: true })
-              .waitFor();
+            await footer.getByText("Reconnecting…", { exact: true }).waitFor();
           }
           await assertSelectionUnchanged(page);
         }

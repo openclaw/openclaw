@@ -5,9 +5,9 @@ import type {
 } from "../../lib/chat/composer-draft-store.runtime.ts";
 import { nextDraftRevision } from "../../lib/chat/outbox-store-draft-state.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
+import { chatAttachmentDraftSignature } from "../chat/composer-draft.ts";
 import {
   captureDurableChatAttachments,
-  chatAttachmentDraftSignature,
   durableComposerScopeIdentity,
   hydrateDurableComposerAttachments,
   reportDurableComposerStorageError,
@@ -47,7 +47,11 @@ const createMutation = (): DraftMutation => ({
   writes: new Set(),
 });
 
-const durableComposerStore = import("../../lib/chat/composer-draft-store.runtime.ts");
+// Reuse the settled promise so later persistence operations retain their existing ordering.
+let durableComposerStore: Promise<typeof import("../../lib/chat/composer-draft-store.runtime.ts")>;
+const loadDurableComposerStore = () =>
+  (durableComposerStore ??= import("../../lib/chat/composer-draft-store.runtime.ts"));
+
 const NEW_SESSION_DRAFT_PERSIST_DELAY_MS = 200;
 
 export class NewSessionDraftPersistence {
@@ -292,7 +296,7 @@ export class NewSessionDraftPersistence {
     // Revoke delayed writes immediately, including older edits of this route.
     lineage.localWriteIds.clear();
     lineage.retirement = (async () => {
-      const { retireDurableComposerDraft } = await durableComposerStore;
+      const { retireDurableComposerDraft } = await loadDurableComposerStore();
       const minimumRevision = Math.max(requestedRevision, lineage.revision);
       const result = await retireDurableComposerDraft(scope, minimumRevision);
       if (result.status === "storage-failed") {
@@ -367,7 +371,7 @@ export class NewSessionDraftPersistence {
     if (!scope) {
       return;
     }
-    const { readDurableComposerDraft } = await durableComposerStore;
+    const { readDurableComposerDraft } = await loadDurableComposerStore();
     // Retire captured writes, including the store's text-only oversized-file
     // projection. A newer edit has a different write ID even when its text matches.
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -549,7 +553,7 @@ export class NewSessionDraftPersistence {
     mutationGeneration: number,
     isCurrent: () => boolean,
   ): Promise<boolean> {
-    const { readDurableComposerDraft } = await durableComposerStore;
+    const { readDurableComposerDraft } = await loadDurableComposerStore();
     const result = await readDurableComposerDraft(scope);
     if (result.status === "storage-failed") {
       reportDurableComposerStorageError(scope, this.onStorageError);

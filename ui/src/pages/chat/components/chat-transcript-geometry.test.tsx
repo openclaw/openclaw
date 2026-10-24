@@ -181,6 +181,14 @@ it.each([false, true])(
       for (let index = 0; index < 4; index++) {
         renderRows(rows);
       }
+      flushFrames();
+      expect(readHeight).not.toHaveBeenCalled();
+
+      const row = requireElement(container, ".chat-virtual-row");
+      for (let index = 0; index < 4; index++) {
+        emitTranscriptResize(row, 800, 240 + index);
+        renderRows(rows);
+      }
       expect(readHeight).not.toHaveBeenCalled();
       if (disconnect) {
         transcript.dispose();

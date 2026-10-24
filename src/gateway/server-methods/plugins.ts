@@ -21,12 +21,11 @@ import {
 import { fetchClawHubPluginSkill } from "../../infra/clawhub-plugin-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  encodePluginDiscoveryId,
-  encodeLocalPluginDiscoveryId,
   findLocalPluginByIdentity,
   joinClawHubPluginCatalog,
   joinClawHubPluginDetail,
   joinLocalPluginDetail,
+  pluginCatalogId,
   resolvePluginDiscoveryIdentity,
 } from "../../plugins/catalog-discovery.js";
 import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
@@ -131,9 +130,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
             const error = failure ? `${failure.serviceId}: ${failure.error}` : record?.error;
             return Object.assign({}, plugin, {
               compatibilityNotices: buildPluginSdkDeprecationNotices(plugin.id),
-              catalogId: plugin.clawhubPackage
-                ? encodePluginDiscoveryId(plugin.clawhubPackage)
-                : encodeLocalPluginDiscoveryId(plugin.id),
+              catalogId: pluginCatalogId(plugin),
               runtime: {
                 state:
                   record?.status === "loaded"

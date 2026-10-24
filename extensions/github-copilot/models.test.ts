@@ -192,7 +192,7 @@ describe("github-copilot runtime auth", () => {
       await expect(authenticate(fetchImpl)).rejects.toMatchObject({
         name: "CopilotRuntimeAuthError",
         reason: "timeout",
-        timeoutMs: 30_000,
+        message: "Copilot authentication failed: timed out after 30000ms",
       });
     } finally {
       timeoutSpy.mockRestore();
@@ -384,6 +384,8 @@ describe("fetchCopilotModelCatalog", () => {
       {
         id: "gpt-5.5",
         name: "GPT-5.5",
+        // No vendor in this fixture: the bundled row for this exact id declares the family.
+        family: "openai",
         api: "openai-responses",
         reasoning: true,
         input: ["text", "image"],
@@ -502,6 +504,33 @@ describe("fetchCopilotModelCatalog", () => {
       supportsUsageInStreaming: false,
       maxTokensField: "max_tokens",
       supportedReasoningEfforts: ["low", "high", "max"],
+    });
+  });
+
+  it("names a listed model's family from its vendor, else from the catalog row", async () => {
+    const listed = (id: string, vendor?: string) => ({
+      id,
+      ...(vendor ? { vendor } : {}),
+      capabilities: { type: "chat" },
+    });
+    const models = await fetchSelectionFixture([
+      listed("claude-opus-5.5", "Anthropic"),
+      listed("gpt-5-mini", "Azure OpenAI"),
+      listed("kimi-k3", "Moonshot AI"),
+      // No vendor: the bundled catalog row for this exact id declares its family.
+      listed("gemini-3.1-pro-preview"),
+      // An unknown vendor and an id OpenClaw has no row for: never inferred from the name.
+      listed("claude-lookalike-9", "Acme Labs"),
+      listed("gpt-unlisted"),
+    ]);
+
+    expect(Object.fromEntries(models.map(({ id, family }) => [id, family]))).toEqual({
+      "claude-opus-5.5": "anthropic",
+      "gpt-5-mini": "openai",
+      "kimi-k3": "moonshot",
+      "gemini-3.1-pro-preview": "google",
+      "claude-lookalike-9": undefined,
+      "gpt-unlisted": undefined,
     });
   });
 

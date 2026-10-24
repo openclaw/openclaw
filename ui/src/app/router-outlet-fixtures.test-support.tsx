@@ -1,6 +1,6 @@
 import { createRouter, definePage, type PageDefinition, type RouteMatch } from "@openclaw/uirouter";
 import type { JSX } from "@solidjs/web";
-import type { SolidRouteProps } from "../app-route-types.ts";
+import type { SolidRouteProps } from "../app-route-types.tsx";
 
 export type OutletModule<Data> = {
   renderSolid: (props: SolidRouteProps<Data>) => JSX.Element;
@@ -20,6 +20,7 @@ export function routeFixtures<Id extends string, Context, Data extends object>()
   ): value is NonNullable<Page["loader"]> => typeof value === "function";
   return {
     page(
+      this: void,
       id: Id,
       component: Page["component"] | Module | Promise<Module>,
       loader?: Page["loader"] | Data | Promise<Data>,
@@ -33,12 +34,12 @@ export function routeFixtures<Id extends string, Context, Data extends object>()
         loaderDeps,
       });
     },
-    router(...routes: Page[]) {
+    router(this: void, ...routes: Page[]) {
       const router = createRouter<Id, Context, Module, Data>({ routes });
       routers.add(router);
       return router;
     },
-    dispose() {
+    dispose(this: void) {
       for (const router of routers) {
         router.stop();
       }

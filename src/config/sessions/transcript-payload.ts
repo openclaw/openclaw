@@ -68,6 +68,23 @@ export type TranscriptEventInsertRow = {
 // Fourteen bound columns per row use at most 7,168 parameters on either engine.
 export const TRANSCRIPT_INSERT_BATCH_SIZE = 512;
 
+export const TRANSCRIPT_PAYLOAD_COLUMNS = [
+  "session_id",
+  "seq",
+  "event_json",
+  "event_zstd",
+  "event_utf8_bytes",
+  "navigation_json",
+  "navigation_type",
+  "navigation_custom_type",
+  "navigation_display",
+  "message_role",
+  "navigation_last_type",
+  "navigation_last_custom_type",
+  "navigation_valid",
+  "created_at",
+] as const;
+
 /** Physical payload writes participate in the transcript owner's admitted transaction. */
 export function createTranscriptEventInserter(database: EngineConnection, sessionId: string) {
   const kysely =
@@ -83,22 +100,6 @@ export function createTranscriptEventInserter(database: EngineConnection, sessio
     return { session_id: sessionId, seq: row.seq, ...payload, created_at: row.createdAt };
   };
   type StoredRow = ReturnType<typeof prepareRow>;
-  const columns = [
-    "session_id",
-    "seq",
-    "event_json",
-    "event_zstd",
-    "event_utf8_bytes",
-    "navigation_json",
-    "navigation_type",
-    "navigation_custom_type",
-    "navigation_display",
-    "message_role",
-    "navigation_last_type",
-    "navigation_last_custom_type",
-    "navigation_valid",
-    "created_at",
-  ] as const;
   // Each executor is used only with the chunk length that defines its bound indexes.
   const createBatchInsert = (count: number) =>
     prepareSqliteQuerySync<readonly StoredRow[]>(database, (parameter) =>
@@ -147,10 +148,14 @@ export function createTranscriptEventInserter(database: EngineConnection, sessio
     prepareSqliteQueryTakeFirstSync<SingleRow, { seq: number }>(database, (parameter) => {
       const event = kysely
         .insertInto("transcript_events")
-        .columns(columns)
+        .columns(TRANSCRIPT_PAYLOAD_COLUMNS)
         .expression(
           kysely
-            .selectNoFrom(columns.map((column) => parameter((row) => row[column]).as(column)))
+            .selectNoFrom(
+              TRANSCRIPT_PAYLOAD_COLUMNS.map((column) =>
+                parameter((row) => row[column]).as(column),
+              ),
+            )
             .$if(checkEventId, (query) =>
               query.where((eb) =>
                 eb.not(
@@ -574,15 +579,14 @@ export function transcriptEventModelNavigationSql(
 export function transcriptEventModelBytesSql(
   database: EngineConnection,
   omitCheckpoint: Expression<number>,
-  alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<number> {
   const metadata =
     /* kysely-allow-raw: closed transcript aliases select native projection accounting. */ sql.ref(
-      `${alias}.navigation_json`,
+      "transcript_events.navigation_json",
     );
   const identity =
     /* kysely-allow-raw: closed transcript aliases select the native identity fallback. */ sql.ref<string>(
-      `${alias}.event_json`,
+      "transcript_events.event_json",
     );
   return /* kysely-allow-raw: native fallback preserves UTF-16 byte units; metadata excludes the JSONL separator. */ sql<number>`CASE WHEN ${metadata} IS NULL
     THEN octet_length(${projectModelContextEventSql(database, identity, omitCheckpoint)})

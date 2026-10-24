@@ -448,6 +448,11 @@ describe("Codex app-server binding store", () => {
           marketplaceName: "company-tools",
           pluginName: "security-review",
           allowDestructiveActions: true,
+          readOnlyTools: {
+            read: { enabled: true, approval_mode: "prompt" as const },
+            write: { enabled: false },
+            stale: { enabled: false },
+          },
           destructiveApprovalMode: "ask" as const,
           mcpServerNames: ["github"],
         },
@@ -639,7 +644,7 @@ describe("Codex app-server binding store", () => {
           reclaimGeneration({
             bindingStore: store,
             identity: current,
-            storePath,
+            config: { session: { store: storePath } },
           }),
         ).resolves.toBe(true);
         expect(store.read(current)).toEqual(binding);
@@ -696,7 +701,7 @@ describe("Codex app-server binding store", () => {
         reclaimGeneration({
           bindingStore: store,
           identity: current,
-          storePath,
+          config: { session: { store: storePath } },
         }),
       ).resolves.toBe(mismatch !== "two generations behind" || !supervision);
       expect(store.read(current)).toBeUndefined();

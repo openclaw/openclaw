@@ -118,23 +118,13 @@ describe("captured evidence source identity", () => {
 });
 
 describe("resolveQaEvidenceEnvironment", () => {
-  it("falls back to GITHUB_SHA when the git probe times out", () => {
+  it.each([
+    [{ GITHUB_SHA: "fallbacksha" }, "fallbacksha"],
+    [{}, null],
+  ] as const)("falls back to environment %j when git fails", (env, ref) => {
     execFileSyncMock.mockImplementation(() => {
       throw Object.assign(new Error("Command timed out"), { code: "ETIMEDOUT" });
     });
-
-    const environment = resolveQaEvidenceEnvironment({ env: { GITHUB_SHA: "fallbacksha" } });
-
-    expect(environment.ref).toBe("fallbacksha");
-  });
-
-  it("returns a null ref when the probe fails and no env fallback exists", () => {
-    execFileSyncMock.mockImplementation(() => {
-      throw new Error("git unavailable");
-    });
-
-    const environment = resolveQaEvidenceEnvironment({ env: {} });
-
-    expect(environment.ref).toBeNull();
+    expect(resolveQaEvidenceEnvironment({ env }).ref).toBe(ref);
   });
 });

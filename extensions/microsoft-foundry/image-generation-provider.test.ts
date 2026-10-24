@@ -1,15 +1,15 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { ImageGenerationRequest } from "openclaw/plugin-sdk/image-generation";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import type {
+  ImageGenerationProvider,
+  ImageGenerationRequest,
+} from "openclaw/plugin-sdk/image-generation";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildMicrosoftFoundryImageGenerationProvider } from "./image-generation-provider.js";
+import plugin from "./index.js";
 import { PROVIDER_ID } from "./shared.js";
 
-const {
-  http,
-  isProviderApiKeyConfiguredAsyncMock,
-  prepareFoundryRuntimeAuthMock,
-  resolveApiKeyForProviderMock,
-} = vi.hoisted(() => ({
+const { http, isConfigured, refreshAuth, resolveAuth } = vi.hoisted(() => ({
   http: {
     assertOkOrThrowHttpError: vi.fn(async () => {}),
     createProviderOperationDeadline: vi.fn((params: Record<string, unknown>) => params),
@@ -27,9 +27,9 @@ const {
     ),
     sanitizeConfiguredModelProviderRequest: vi.fn((request) => request),
   },
-  isProviderApiKeyConfiguredAsyncMock: vi.fn(async () => true),
-  prepareFoundryRuntimeAuthMock: vi.fn(),
-  resolveApiKeyForProviderMock: vi.fn(async () => ({
+  isConfigured: vi.fn(async () => true),
+  refreshAuth: vi.fn(),
+  resolveAuth: vi.fn(async () => ({
     apiKey: "foundry-key",
     mode: "api-key" as const,
     profileId: undefined as string | undefined,
@@ -39,25 +39,24 @@ const {
 
 // mock-isolation: Image request tests control credential availability independently of host auth storage.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  isProviderApiKeyConfiguredAsync: isProviderApiKeyConfiguredAsyncMock,
+  isProviderApiKeyConfiguredAsync: isConfigured,
 }));
 
+// mock-isolation: Credential resolution is fixture-controlled without reading the host auth store.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+  resolveApiKeyForProvider: resolveAuth,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
     "openclaw/plugin-sdk/provider-http",
   );
-  return {
-    ...actual,
-    ...http,
-  };
+  return { ...actual, ...http };
 });
 
+// mock-isolation: Token refresh is fixture-controlled without invoking Azure CLI or host credentials.
 vi.mock("./runtime.js", () => ({
-  prepareFoundryRuntimeAuth: prepareFoundryRuntimeAuthMock,
+  prepareFoundryRuntimeAuth: refreshAuth,
 }));
 
 function buildConfig({
@@ -73,31 +72,21 @@ function buildConfig({
   includeModel?: boolean;
   mediaMaxMb?: number;
 } = {}): OpenClawConfig {
+  const model = {
+    id: modelId,
+    name: modelName,
+    api: "openai-completions" as const,
+    baseUrl,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 32_000,
+    maxTokens: 0,
+  };
+  const provider = { baseUrl, api: model.api, models: includeModel ? [model] : [] };
   return {
     ...(mediaMaxMb !== undefined ? { agents: { defaults: { mediaMaxMb } } } : {}),
-    models: {
-      providers: {
-        [PROVIDER_ID]: {
-          baseUrl,
-          api: "openai-completions",
-          models: !includeModel
-            ? []
-            : [
-                {
-                  id: modelId,
-                  name: modelName,
-                  api: "openai-completions",
-                  baseUrl,
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 32_000,
-                  maxTokens: 0,
-                },
-              ],
-        },
-      },
-    },
+    models: { providers: { [PROVIDER_ID]: provider } },
   };
 }
 
@@ -108,8 +97,14 @@ function imageResponse(base64 = Buffer.from("png").toString("base64")) {
   };
 }
 
+function registerImageProvider() {
+  const register = vi.fn<(provider: ImageGenerationProvider) => void>();
+  plugin.register(createTestPluginApi({ registerImageGenerationProvider: register }));
+  return expectDefined(register.mock.calls[0]?.[0], "Microsoft Foundry image provider");
+}
+
 function generateImage(overrides: Partial<ImageGenerationRequest> = {}) {
-  return buildMicrosoftFoundryImageGenerationProvider().generateImage({
+  return registerImageProvider().generateImage({
     provider: PROVIDER_ID,
     model: "image-deployment",
     prompt: "draw it",
@@ -126,49 +121,53 @@ function requireRequest(mock = http.postJsonRequest): Record<string, unknown> {
   return request as Record<string, unknown>;
 }
 
-function requireHeaders(value: unknown): Headers {
-  expect(value).toBeInstanceOf(Headers);
-  if (!(value instanceof Headers)) {
+function expectHeaders(request: Record<string, unknown>, expected: Record<string, string>) {
+  const { headers } = request;
+  if (!(headers instanceof Headers)) {
     throw new Error("expected request headers");
   }
-  return value;
+  expect(Object.fromEntries(headers.entries())).toEqual(expected);
 }
 
-const inputImages = [{ buffer: Buffer.from("input"), mimeType: "image/png" }];
+const inputImage = { buffer: Buffer.from("input"), mimeType: "image/png" };
+const inputImages = [inputImage];
 async function expectRejectedBeforeAuth(
   request: Partial<ImageGenerationRequest>,
   error: string,
   transport = http.postJsonRequest,
 ) {
   await expect(generateImage(request)).rejects.toThrow(error);
-  expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
+  expect(resolveAuth).not.toHaveBeenCalled();
   expect(transport).not.toHaveBeenCalled();
 }
 
 describe("microsoft foundry image generation provider", () => {
   afterEach(() => {
     Object.values(http).forEach((mock) => mock.mockClear());
-    isProviderApiKeyConfiguredAsyncMock.mockClear();
+    isConfigured.mockClear();
     http.postJsonRequest.mockReset();
     http.postMultipartRequest.mockReset();
-    prepareFoundryRuntimeAuthMock.mockReset();
-    resolveApiKeyForProviderMock.mockClear();
+    refreshAuth.mockReset();
+    resolveAuth.mockClear();
     vi.unstubAllEnvs();
   });
 
   it("exposes MAI image provider metadata and capabilities", async () => {
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
+    const provider = registerImageProvider();
     const cfg = buildConfig();
-    expect(provider.id).toBe(PROVIDER_ID);
+    expect(provider).toMatchObject({
+      id: PROVIDER_ID,
+      models: [],
+      capabilities: {
+        generate: { maxCount: 1 },
+        edit: { enabled: true, maxInputImages: 1 },
+        output: { formats: ["png"] },
+      },
+    });
     expect(provider.defaultModel).toBeUndefined();
-    expect(provider.models).toEqual([]);
-    expect(provider.capabilities.generate.maxCount).toBe(1);
-    expect(provider.capabilities.edit.enabled).toBe(true);
-    expect(provider.capabilities.edit.maxInputImages).toBe(1);
     expect(provider.capabilities.geometry?.sizes).toBeUndefined();
-    expect(provider.capabilities.output?.formats).toEqual(["png"]);
     expect(await provider.isConfiguredAsync?.({ agentDir: "/agent", cfg })).toBe(true);
-    expect(isProviderApiKeyConfiguredAsyncMock).toHaveBeenCalledWith({
+    expect(isConfigured).toHaveBeenCalledWith({
       provider: PROVIDER_ID,
       agentDir: "/agent",
       cfg,
@@ -185,7 +184,7 @@ describe("microsoft foundry image generation provider", () => {
       ssrfPolicy: { allowPrivateNetwork: true },
     });
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({
+    expect(resolveAuth).toHaveBeenCalledWith({
       provider: PROVIDER_ID,
       cfg: buildConfig(),
       agentDir: undefined,
@@ -198,6 +197,7 @@ describe("microsoft foundry image generation provider", () => {
       timeoutMs: 12_345,
       allowPrivateNetwork: false,
     });
+    expectHeaders(request, { "api-key": "foundry-key", "content-type": "application/json" });
     expect(request.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
     expect(request.body).toEqual({
       model: "image-deployment",
@@ -205,13 +205,9 @@ describe("microsoft foundry image generation provider", () => {
       width: 768,
       height: 1365,
     });
-    expect(Object.fromEntries(requireHeaders(request.headers).entries())).toEqual({
-      "api-key": "foundry-key",
-      "content-type": "application/json",
-    });
-    expect(result.model).toBe("image-deployment");
-    expect(result.images[0]?.buffer.toString()).toBe("png");
-    expect(result.images[0]?.mimeType).toBe("image/png");
+    expect([result.model, result.images[0]?.buffer.toString(), result.images[0]?.mimeType]).toEqual(
+      ["image-deployment", "png", "image/png"],
+    );
   });
 
   it("honors configured generated media caps above the default image limit", async () => {
@@ -242,20 +238,20 @@ describe("microsoft foundry image generation provider", () => {
       cfg: buildConfig({ baseUrl: "" }),
     });
 
-    expect(requireRequest().url).toBe(
-      "https://env.services.ai.azure.com/mai/v1/images/generations",
-    );
-    expect(requireRequest().timeoutMs).toBe(600_000);
+    expect(requireRequest()).toMatchObject({
+      url: "https://env.services.ai.azure.com/mai/v1/images/generations",
+      timeoutMs: 600_000,
+    });
   });
 
   it("refreshes Entra ID auth and sends MAI image edits as multipart form data", async () => {
-    resolveApiKeyForProviderMock.mockResolvedValueOnce({
+    resolveAuth.mockResolvedValueOnce({
       apiKey: "__entra_id_dynamic__",
       mode: "api-key",
       profileId: "microsoft-foundry:entra",
       source: "profile:microsoft-foundry:entra",
     });
-    prepareFoundryRuntimeAuthMock.mockResolvedValueOnce({
+    refreshAuth.mockResolvedValueOnce({
       apiKey: "entra-token",
       baseUrl: "https://example.services.ai.azure.com/openai/v1",
       expiresAt: Date.now() + 60_000,
@@ -278,16 +274,10 @@ describe("microsoft foundry image generation provider", () => {
     const result = await generateImage({
       prompt: "make it brighter",
       agentDir: "/agent",
-      inputImages: [
-        {
-          buffer: Buffer.from("input"),
-          mimeType: "image/png",
-          fileName: "input.png",
-        },
-      ],
+      inputImages: [{ ...inputImage, fileName: "input.png" }],
     });
 
-    expect(prepareFoundryRuntimeAuthMock).toHaveBeenCalledWith(
+    expect(refreshAuth).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: "/agent",
         provider: PROVIDER_ID,
@@ -300,107 +290,57 @@ describe("microsoft foundry image generation provider", () => {
     expect(http.postMultipartRequest).toHaveBeenCalledOnce();
     const request = requireRequest(http.postMultipartRequest);
     expect(request.url).toBe("https://example.services.ai.azure.com/mai/v1/images/edits");
-    expect(Object.fromEntries(requireHeaders(request.headers).entries())).toEqual({
-      authorization: "Bearer entra-token",
-    });
+    expectHeaders(request, { authorization: "Bearer entra-token" });
     const form = request.body as FormData;
-    expect(form.get("model")).toBe("image-deployment");
-    expect(form.get("prompt")).toBe("make it brighter");
+    expect([form.get("model"), form.get("prompt")]).toEqual([
+      "image-deployment",
+      "make it brighter",
+    ]);
     const image = form.get("image");
     expect(image).toBeInstanceOf(Blob);
-    expect((image as File).name).toBe("input.png");
-    expect((image as File).type).toBe("image/png");
+    expect(image).toMatchObject({ name: "input.png", type: "image/png" });
     expect(result.images[0]?.buffer.toString()).toBe("edited");
   });
 
-  it("rejects image edits for MAI text-to-image-only deployments", async () => {
-    await expectRejectedBeforeAuth(
-      { cfg: buildConfig({ modelName: "MAI-Image-2e" }), inputImages },
+  it.each([
+    ["prod-image", false, "800x1000", 800, 1000],
+    ["mai-image-2-live", false, undefined, 1024, 1024],
+    ["prod-image", true, undefined, 1024, 1024],
+  ] as const)(
+    "allows custom deployment %s with metadata=%s",
+    async (model, includeModel, size, width, height) => {
+      http.postJsonRequest.mockResolvedValue(imageResponse());
+      await generateImage({
+        model,
+        cfg: buildConfig({ modelId: model, modelName: model, includeModel }),
+        size,
+      });
+      expect(http.postJsonRequest).toHaveBeenCalledOnce();
+      expect(requireRequest().body).toEqual({ model, prompt: "draw it", width, height });
+    },
+  );
+
+  it.each([
+    ["", "MAI-Image-2.5", false, "requires a deployment name"],
+    [
+      "image-deployment",
+      "MAI-Image-2e",
+      true,
       "MAI-Image-2e does not support Microsoft Foundry MAI image edits.",
-      http.postMultipartRequest,
-    );
-  });
-
-  it("requires an explicit deployment name before making requests", async () => {
-    await expectRejectedBeforeAuth({ model: "" }, "requires a deployment name");
-  });
-
-  it("allows custom MAI deployment names for generation when model metadata is absent", async () => {
-    http.postJsonRequest.mockResolvedValue(imageResponse());
-
-    await generateImage({
-      model: "prod-image",
-      cfg: buildConfig({ includeModel: false }),
-      size: "800x1000",
-    });
-
-    expect(http.postJsonRequest).toHaveBeenCalledOnce();
-    expect(requireRequest().body).toEqual({
-      model: "prod-image",
-      prompt: "draw it",
-      width: 800,
-      height: 1000,
-    });
-  });
-
-  it("allows custom mai-image deployment names for generation without model metadata", async () => {
-    http.postJsonRequest.mockResolvedValue(imageResponse());
-
-    await generateImage({
-      model: "mai-image-2-live",
-      cfg: buildConfig({ modelId: "mai-image-2-live", includeModel: false }),
-    });
-
-    expect(http.postJsonRequest).toHaveBeenCalledOnce();
-    expect(requireRequest().body).toMatchObject({
-      model: "mai-image-2-live",
-    });
-  });
-
-  it("allows manual custom deployment names when configured name only repeats the id", async () => {
-    http.postJsonRequest.mockResolvedValue(imageResponse());
-
-    await generateImage({
-      model: "prod-image",
-      cfg: buildConfig({ modelId: "prod-image", modelName: "prod-image" }),
-    });
-
-    expect(http.postJsonRequest).toHaveBeenCalledOnce();
-    expect(requireRequest().body).toEqual({
-      model: "prod-image",
-      prompt: "draw it",
-      width: 1024,
-      height: 1024,
-    });
-  });
-
-  it("requires MAI-Image-2.5 metadata before editing custom deployment names", async () => {
-    await expectRejectedBeforeAuth(
-      { model: "prod-image", cfg: buildConfig({ includeModel: false }), inputImages },
-      "edits require MAI-Image-2.5 model metadata",
-      http.postMultipartRequest,
-    );
-  });
-
-  it("rejects non-MAI image deployments before making requests", async () => {
+    ],
+    ["prod-image", undefined, true, "edits require MAI-Image-2.5 model metadata"],
+    ["gpt-deployment", "gpt-5.4", false, 'supports MAI image deployments only, got "gpt-5.4"'],
+    ["MAI-DS-R1", undefined, false, 'supports MAI image deployments only, got "MAI-DS-R1"'],
+  ] as const)("rejects %s / %s before auth (edit=%s)", async (model, modelName, edit, error) => {
     await expectRejectedBeforeAuth(
       {
-        model: "gpt-deployment",
-        cfg: buildConfig({ modelId: "gpt-deployment", modelName: "gpt-5.4" }),
+        model,
+        cfg: buildConfig({ modelId: model, modelName, includeModel: modelName !== undefined }),
+        ...(edit ? { inputImages } : {}),
       },
-      'supports MAI image deployments only, got "gpt-5.4"',
+      error,
+      edit ? http.postMultipartRequest : http.postJsonRequest,
     );
-  });
-
-  it("rejects literal non-image MAI model names before making requests", async () => {
-    await expect(
-      generateImage({
-        model: "MAI-DS-R1",
-        cfg: buildConfig({ includeModel: false }),
-      }),
-    ).rejects.toThrow('supports MAI image deployments only, got "MAI-DS-R1"');
-    expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
-    expect(http.postJsonRequest).not.toHaveBeenCalled();
   });
 
   it("rejects MAI image sizes outside Microsoft Foundry limits", async () => {

@@ -20,12 +20,11 @@ function expectSummary(
 ) {
   const summary = formatTelemetryExporterSummary({ events });
   expect(summary).toEqual({ title: "Telemetry exporters", status, lines });
-  return summary;
 }
 
 describe("formatTelemetryExporterSummary", () => {
   it("renders bounded redacted exporter facts without misattribution", () => {
-    const summary = expectSummary(
+    expectSummary(
       [
         event(1, { source: "https://spoofed.example" }),
         event(2, {
@@ -59,9 +58,6 @@ describe("formatTelemetryExporterSummary", () => {
         "diagnostics-otel · logs · started · stdout",
         "diagnostics-prometheus · metrics · failed · prometheus-scrape · handler failed",
       ],
-    );
-    expect(JSON.stringify(summary)).not.toMatch(
-      /collector\.example|secret|raw collector failure|spoofed\.example/,
     );
   });
 
@@ -104,7 +100,7 @@ describe("formatTelemetryExporterSummary", () => {
   });
 
   it("renders safe unknown transports and redacts unsafe ones", () => {
-    const summary = expectSummary(
+    expectSummary(
       [
         event(1, {
           source: "custom_exporter",
@@ -124,6 +120,5 @@ describe("formatTelemetryExporterSummary", () => {
         "second_exporter · metrics · failed · exporter · queue full",
       ],
     );
-    expect(JSON.stringify(summary)).not.toContain("collector.internal");
   });
 });

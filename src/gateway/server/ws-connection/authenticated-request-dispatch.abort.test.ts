@@ -9,9 +9,12 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { NodeRegistry } from "../../node-registry.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
 import type { GatewayWsClient } from "../ws-types.js";
+import { createRequestGate } from "./authenticated-request-dispatch.fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
+  dispatchProfile,
+  requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 
 const handleGatewayRequest = vi.hoisted(() => vi.fn());
@@ -69,14 +72,10 @@ function createPairedNode(withError = false) {
       timeoutMs: 10_000,
       signal: options.signal,
     });
-    if (!withError) {
-      options.respond(result.ok, result.payload);
-      return;
-    }
     options.respond(
       result.ok,
       result.payload,
-      result.error
+      withError && result.error
         ? {
             code: result.error.code ?? "UNAVAILABLE",
             message: result.error.message ?? "node invocation failed",
@@ -94,14 +93,8 @@ function createPairedNode(withError = false) {
   return { registry, frames, waitForFrameCount, complete };
 }
 
-function nodeRequest(id: string) {
-  return {
-    type: "req",
-    id,
-    method: "node.invoke",
-    params: { ...nodeParams, idempotencyKey: id },
-  };
-}
+const nodeRequest = (id: string) =>
+  requestFrame(id, "node.invoke", { ...nodeParams, idempotencyKey: id });
 
 function createDispatcher(
   clientInfo: Pick<GatewayWsClient["connect"]["client"], "id" | "mode"> = cli,
@@ -126,30 +119,21 @@ describe("authenticated WebSocket request cancellation", () => {
     "binds request-owned %s work to disconnect (%j, cancelled=%s)",
     async (method, params, cancelled) => {
       const { socket, client, dispatcher } = createDispatcher(controlUi);
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const gate = createRequestGate();
       let signal: AbortSignal | undefined;
       handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
         signal = options.signal;
-        entered.resolve();
-        await release.promise;
+        await gate.wait();
       });
-      const dispatch = dispatcher.dispatch(
-        { type: "req", id: "disconnect-work", method, params },
-        client,
-      );
-      try {
-        await entered.promise;
+      const dispatch = dispatcher.dispatch(requestFrame("disconnect-work", method, params), client);
+      await gate.during(dispatch, () => {
         socket.emit("close", 1000, Buffer.alloc(0));
         if (cancelled) {
           expect(signal?.aborted).toBe(true);
         } else {
           expect(signal).toBeUndefined();
         }
-      } finally {
-        release.resolve();
-        await dispatch;
-      }
+      });
       expect(socket.listenerCount("close")).toBe(0);
     },
   );
@@ -158,13 +142,7 @@ describe("authenticated WebSocket request cancellation", () => {
     const { registry, frames, waitForFrameCount, complete } = createPairedNode();
     const guest = createDispatcher(controlUi);
     const staff = createDispatcher(controlUi);
-    const profile = {
-      profileId: "same-person",
-      displayName: null,
-      avatarRevision: "1",
-      hasAvatar: false,
-      updatedAt: 1,
-    };
+    const profile = dispatchProfile("same-person");
     guest.client.authenticatedUserProfile = profile;
     staff.client.authenticatedUserProfile = profile;
     const grant = new AbortController();
@@ -174,12 +152,8 @@ describe("authenticated WebSocket request cancellation", () => {
         assertCurrent: () => grant.signal.throwIfAborted(),
       },
     };
-    const request = (id: string) => ({
-      type: "req",
-      id,
-      method: "test.access-lifetime",
-      params: { sessionKey: "agent:main:shared" },
-    });
+    const request = (id: string) =>
+      requestFrame(id, "test.access-lifetime", { sessionKey: "agent:main:shared" });
     const guestDispatch = guest.dispatcher.dispatch(request("guest"), guest.client);
     await waitForFrameCount(1);
     const staffDispatch = staff.dispatcher.dispatch(request("staff"), staff.client);

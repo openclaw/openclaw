@@ -3,11 +3,20 @@ import {
   normalizeWorkboardSessionsBoardSpec,
   type WorkboardSessionsBoardSpec,
 } from "@openclaw/workboard-contract";
-import { For, createEffect, onCleanup } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  For,
+  Loading,
+  onCleanup,
+} from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { AppearancePicker, Dialog } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
-import { WorkboardErrorToast, updateWorkboardToastOutcome } from "../../components/toast.tsx";
+import { WorkboardErrorToast, WorkboardToast } from "../../components/toast.tsx";
 import { WorkboardBoardGlyph } from "../../components/workboard-board-glyph.tsx";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -22,8 +31,6 @@ export type BoardDraft = {
   kind: "cards" | "sessions";
   create?: boolean;
   sessions?: WorkboardSessionsBoardSpec;
-  saving: boolean;
-  error: string | null;
 };
 const originals = new WeakMap<
   BoardDraft,
@@ -37,8 +44,6 @@ export function createBoardDraft(board: WorkboardBoardSummary): BoardDraft {
     ...fields,
     kind: board.kind ?? "cards",
     ...(board.sessions ? { sessions: structuredClone(board.sessions) } : {}),
-    saving: false,
-    error: null,
   };
   originals.set(draft, { ...fields, sessions: structuredClone(draft.sessions) });
   return draft;
@@ -52,8 +57,6 @@ export function createNewBoardDraft(): BoardDraft {
     color: "",
     kind: "cards",
     create: true,
-    saving: false,
-    error: null,
   };
   originals.set(draft, { name: "", icon: "", color: "" });
   return draft;
@@ -75,57 +78,44 @@ export function BoardModal(props: {
     return props.draft;
   };
   let disposed = false;
+  let busy = false;
+  const [saving, setSaving] = createOptimistic(false);
+  const [completion, setCompletion] = createSignal<Promise<void>>();
+  const completed = createMemo(() => completion()?.then(() => null) ?? null);
+  const presentSaving = action(function* (pending: Promise<void>) {
+    setSaving(true);
+    yield pending;
+  });
   onCleanup(() => {
     disposed = true;
   });
   const nameValue = liveInputValue(() => draft().name);
-  const visibleError = () => draft().error ?? props.pageError;
-  createEffect(
-    () => ({ owner: draft(), error: draft().error }),
-    ({ owner, error }) => {
-      updateWorkboardToastOutcome(owner, { message: error ?? "", key: error, tone: "error" });
-    },
-  );
-  const save = async () => {
-    if (!props.client || !props.canWrite || draft().saving || !draft().name.trim()) {
-      return;
-    }
-    const initialDraft = draft();
-    const client = props.client;
+  const persist = async (initialDraft: BoardDraft, client: GatewayBrowserClient) => {
+    busy = true;
     const isCurrent = () => !disposed && props.client === client;
-    let sessions: WorkboardSessionsBoardSpec | undefined;
     try {
-      sessions = initialDraft.sessions
+      const sessions = initialDraft.sessions
         ? normalizeWorkboardSessionsBoardSpec(initialDraft.sessions)
         : undefined;
-    } catch (error) {
-      initialDraft.error = formatUiError(error);
-      props.requestUpdate();
-      return;
-    }
-    const input: Record<string, string | string[]> = { id: initialDraft.id };
-    if (initialDraft.create && initialDraft.kind === "sessions") {
-      input.kind = "sessions";
-    }
-    const clearAppearance: string[] = [];
-    const original = originals.get(initialDraft);
-    for (const field of ["name", "icon", "color"] as const) {
-      const value = initialDraft[field].trim();
-      if (value !== original?.[field]) {
-        if (!value && field !== "name") {
-          clearAppearance.push(field);
-        } else {
-          input[field] = value;
+      const input: Record<string, string | string[]> = { id: initialDraft.id };
+      if (initialDraft.create && initialDraft.kind === "sessions") {
+        input.kind = "sessions";
+      }
+      const clearAppearance: string[] = [];
+      const original = originals.get(initialDraft);
+      for (const field of ["name", "icon", "color"] as const) {
+        const value = initialDraft[field].trim();
+        if (value !== original?.[field]) {
+          if (!value && field !== "name") {
+            clearAppearance.push(field);
+          } else {
+            input[field] = value;
+          }
         }
       }
-    }
-    if (clearAppearance.length > 0) {
-      input.clearAppearance = clearAppearance;
-    }
-    initialDraft.saving = true;
-    initialDraft.error = null;
-    props.requestUpdate();
-    try {
+      if (clearAppearance.length > 0) {
+        input.clearAppearance = clearAppearance;
+      }
       const { board } = await client.request<{ board: WorkboardBoardMetadata }>(
         "workboard.boards.upsert",
         input,
@@ -151,13 +141,24 @@ export function BoardModal(props: {
       }
     } catch (error) {
       if (isCurrent()) {
-        initialDraft.error = formatUiError(error);
+        throw error;
       }
     } finally {
-      initialDraft.saving = false;
-      if (!disposed) {
-        props.requestUpdate();
-      }
+      busy = false;
+    }
+  };
+  const save = async () => {
+    if (!props.client || !props.canWrite || busy || !draft().name.trim()) {
+      return;
+    }
+    const pending = persist(draft(), props.client);
+    // A disconnected or disposed view must still consume its admitted write.
+    void pending.catch(() => undefined);
+    void setCompletion(pending);
+    // Publish the new outcome before the saving transition can hold it.
+    await Promise.resolve();
+    if (!disposed) {
+      await presentSaving(pending).catch(() => undefined);
     }
   };
   return (
@@ -166,7 +167,7 @@ export function BoardModal(props: {
         label: t(draft().create ? "workboard.newBoard" : "workboard.editBoard"),
         style: `--openclaw-modal-width: ${draft().sessions ? "640px" : "420px"}; --openclaw-modal-backdrop-filter: blur(1px);`,
         onCancel: () => {
-          if (draft().saving) {
+          if (busy) {
             return false;
           }
           props.onCancel();
@@ -188,14 +189,14 @@ export function BoardModal(props: {
               class="btn btn--icon workboard-modal__close"
               type="button"
               aria-label={t("common.close")}
-              disabled={draft().saving}
+              disabled={saving()}
               onClick={() => props.onCancel()}
             >
               {icons.x}
             </button>
           </div>
           {draft().create ? (
-            <fieldset class="workboard-board-kind" disabled={draft().saving || !props.canWrite}>
+            <fieldset class="workboard-board-kind" disabled={saving() || !props.canWrite}>
               <legend>{t("workboard.boardKind")}</legend>
               <For each={["cards", "sessions"] as const} keyed={(kind) => kind}>
                 {(kind) => (
@@ -230,7 +231,7 @@ export function BoardModal(props: {
                 required
                 maxlength="120"
                 ref={nameValue}
-                disabled={draft().saving || !props.canWrite}
+                disabled={saving() || !props.canWrite}
                 onInput={(event) => {
                   draft().name = event.currentTarget.value;
                   props.requestUpdate();
@@ -246,7 +247,6 @@ export function BoardModal(props: {
               {...{
                 icon: draft().icon || null,
                 color: draft().color || null,
-                disabled: draft().saving || !props.canWrite,
                 clearable: true,
                 onChange: ({ icon, color }) => {
                   draft().icon = icon ?? "";
@@ -254,43 +254,77 @@ export function BoardModal(props: {
                   props.requestUpdate();
                 },
               }}
+              disabled={saving() || !props.canWrite}
             />
           </section>
           {draft().sessions ? (
             <SessionsEditor
               draft={draft()}
               canWrite={props.canWrite}
+              saving={saving()}
               requestUpdate={props.requestUpdate}
               revision={props.revision}
             />
           ) : undefined}
-          {draft().sessions && visibleError() ? (
-            <div class="workboard-sessions__warning" role="alert">
-              {visibleError()}
-            </div>
+          {draft().sessions ? (
+            <Loading
+              on={completion()}
+              fallback={
+                props.pageError && (
+                  <div class="workboard-sessions__warning" role="alert">
+                    {props.pageError}
+                  </div>
+                )
+              }
+            >
+              <Errored
+                fallback={(error) => (
+                  <div class="workboard-sessions__warning" role="alert">
+                    {formatUiError(error())}
+                  </div>
+                )}
+              >
+                {completed()}
+                {props.pageError && (
+                  <div class="workboard-sessions__warning" role="alert">
+                    {props.pageError}
+                  </div>
+                )}
+              </Errored>
+            </Loading>
           ) : undefined}
           <openclaw-modal-actions class="workboard-modal__actions">
-            <button
-              class="btn"
-              type="button"
-              disabled={draft().saving}
-              onClick={() => props.onCancel()}
-            >
+            <button class="btn" type="button" disabled={saving()} onClick={() => props.onCancel()}>
               {t("common.cancel")}
             </button>
             <button
               class="btn primary"
               type="submit"
-              disabled={draft().saving || !props.client || !props.canWrite || !draft().name.trim()}
+              disabled={saving() || !props.client || !props.canWrite || !draft().name.trim()}
             >
               {t(draft().create ? "common.create" : "common.save")}
             </button>
           </openclaw-modal-actions>
         </form>
-        <WorkboardErrorToast
-          owner={draft().error ? draft() : props.toastOwner}
-          error={visibleError()}
-        />
+        <Loading
+          on={completion()}
+          fallback={<WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />}
+        >
+          <Errored
+            fallback={(error) => (
+              <WorkboardToast
+                owner={draft()}
+                message={formatUiError(error())}
+                key={completion()}
+                tone="error"
+                outcomeSource
+              />
+            )}
+          >
+            {completed()}
+            <WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />
+          </Errored>
+        </Loading>
       </>
     </Dialog>
   );
@@ -299,6 +333,7 @@ export function BoardModal(props: {
 function SessionsEditor(props: {
   draft: BoardDraft;
   canWrite: boolean;
+  saving: boolean;
   requestUpdate: () => void;
   revision?: number;
 }) {
@@ -308,7 +343,7 @@ function SessionsEditor(props: {
   };
   const disabled = () => {
     void props.revision;
-    return props.draft.saving || !props.canWrite;
+    return props.saving || !props.canWrite;
   };
   return (
     <fieldset class="workboard-sessions-editor" disabled={disabled()}>

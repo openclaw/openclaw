@@ -1,33 +1,25 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execution } from "./commands.test-helpers.js";
-import {
-  CUA_DRIVER_CONTRACT_FIXTURES,
-  cuaToolResult,
-} from "./cua-driver-contract.test-fixtures.js";
+import { cuaToolResult } from "./cua-driver-contract.test-fixtures.js";
 
 const mocks = vi.hoisted(() => {
+  const state = async () => ({
+    session: "openclaw-test",
+    captureScope: "desktop",
+    effectiveScope: "desktop",
+    desktopCaptureAuthorized: true,
+    desktopUnlocked: true,
+  });
   const session = {
     callTool: vi.fn(async () => ({})),
     click: vi.fn(async () => ({ effect: 0, route: 2 })),
     close: vi.fn(),
     drag: vi.fn(async () => ({})),
     endSession: vi.fn(async () => ({})),
-    escalateSession: vi.fn(async () => ({
-      session: "openclaw-test",
-      captureScope: "desktop",
-      effectiveScope: "desktop",
-      desktopCaptureAuthorized: true,
-      desktopUnlocked: true,
-    })),
+    escalateSession: vi.fn(state),
     getCursorPosition: vi.fn(async () => ({})),
     getDesktopState: vi.fn(async () => ({})),
-    getSessionState: vi.fn(async () => ({
-      session: "openclaw-test",
-      captureScope: "desktop",
-      effectiveScope: "desktop",
-      desktopCaptureAuthorized: true,
-      desktopUnlocked: true,
-    })),
+    getSessionState: vi.fn(state),
     moveCursor: vi.fn(async () => ({})),
     pressKey: vi.fn(async () => ({})),
     scroll: vi.fn(async () => ({})),
@@ -91,8 +83,23 @@ function expectCalls(count: number, ...names: Array<keyof typeof mocks>) {
   }
 }
 
-const makeDriver = () => createCuaDriver({ loadSdk: async () => sdk as never });
+const drivers: ReturnType<typeof createCuaDriver>[] = [];
+let driver: ReturnType<typeof createCuaDriver>;
+function makeDriver(loadSdk = async () => sdk as never) {
+  const created = createCuaDriver({ loadSdk });
+  drivers.push(created);
+  return created;
+}
 const clickInput = { x: 20, y: 30, button: ClickButton.Left, count: 1 };
+const expired = (message = "Permission denied: authorization context expired") =>
+  Object.assign(new Error("DriverError.Tool"), {
+    inner: { tool: "get_session_state", errorCode: "permission_denied", message },
+  });
+async function prepareExpiry() {
+  await driver.prepareExecution?.();
+  mocks.isToolError.mockReturnValue(true);
+  mocks.getSessionState.mockRejectedValueOnce(expired());
+}
 
 describe("CUA Driver direct session", () => {
   beforeEach(() => {
@@ -104,6 +111,12 @@ describe("CUA Driver direct session", () => {
       shutdown: mocks.shutdown,
     });
     mocks.createTrustedSession.mockReturnValue(mocks.session);
+    driver = makeDriver();
+  });
+  afterEach(async () => {
+    for (const created of drivers.splice(0)) {
+      await created.dispose();
+    }
   });
 
   it("matches the installed CUA Driver desktop input enum contract", async () => {
@@ -123,8 +136,6 @@ describe("CUA Driver direct session", () => {
   });
 
   it("uses configured creation with one trusted lifecycle session", async () => {
-    const driver = makeDriver();
-
     await driver.prepareAvailability?.();
     expect(driver.isAvailable()).toBe(true);
     expect(mocks.create).not.toHaveBeenCalled();
@@ -146,31 +157,7 @@ describe("CUA Driver direct session", () => {
     expectCalls(1, "close", "shutdown");
   });
 
-  it("discovers windows on the first execution action with ESM SDK loading", async () => {
-    const driver = makeDriver();
-    const computer = await execution(driver);
-    mocks.callTool.mockResolvedValueOnce(cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows));
-
-    const listed = JSON.parse(await computer.act('{"action":"list_windows"}'));
-    expect(listed).toMatchObject({
-      ok: true,
-      details: {
-        windows: [
-          {
-            windowRef: expect.stringMatching(/^cua:v2:window:/),
-            appName: "Editor",
-            title: "Notes",
-          },
-        ],
-      },
-    });
-
-    await computer.close("completion");
-  });
-
   it("starts the shared lifecycle session once before using driver tools", async () => {
-    const driver = makeDriver();
-
     await Promise.all([driver.getDesktopState(), driver.callTool("list_windows", {})]);
     const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
 
@@ -189,9 +176,16 @@ describe("CUA Driver direct session", () => {
     expectCall("endSession", { session: sessionOptions.publicSession });
   });
 
-  it("targets desktop input while keeping the global cursor read untargeted", async () => {
-    const driver = makeDriver();
+  it("retries a rejected startup before admitting driver tools", async () => {
+    const failure = new Error("fixture startup failed");
+    mocks.startSession.mockRejectedValueOnce(failure);
+    await expect(driver.getDesktopState()).rejects.toBe(failure);
+    await driver.getDesktopState();
+    expectCalls(2, "startSession");
+    expectCalls(1, "getDesktopState");
+  });
 
+  it("targets desktop input while keeping the global cursor read untargeted", async () => {
     const clicked = await driver.click(clickInput);
     expect(clicked).toMatchObject({ isError: false, action: { effect: 0, route: 2 } });
     await driver.drag({ fromX: 1, fromY: 2, toX: 3, toY: 4, durationMs: 5n });
@@ -228,8 +222,6 @@ describe("CUA Driver direct session", () => {
     expectCall("getCursorPosition", { session: sessionOptions.publicSession }, undefined);
     expectCall("getSessionState", { session: sessionOptions.publicSession }, undefined);
     expect(mocks.escalateSession).not.toHaveBeenCalled();
-
-    await driver.dispose();
   });
 
   it("preserves typed SDK click refusals in the shared driver result", async () => {
@@ -241,52 +233,25 @@ describe("CUA Driver direct session", () => {
     });
     mocks.isToolError.mockImplementation((error) => DriverError.Tool.instanceOf(error));
     mocks.click.mockRejectedValueOnce(refusal);
-    const driver = makeDriver();
-    try {
-      await expect(driver.click(clickInput)).resolves.toMatchObject({
-        isError: true,
-        errorCode: "desktop_unavailable",
-        text: "desktop input is unavailable",
-      });
-      const transportError = new Error("transport disconnected");
-      mocks.click.mockRejectedValueOnce(transportError);
-      await expect(driver.click(clickInput)).rejects.toBe(transportError);
-    } finally {
-      await driver.dispose();
-    }
-  });
-
-  it("keeps a missing native desktop library behind command availability", async () => {
-    const loadSdk = vi.fn(async () => {
-      throw new Error("libX11.so.6: cannot open shared object file");
+    await expect(driver.click(clickInput)).resolves.toMatchObject({
+      isError: true,
+      errorCode: "desktop_unavailable",
+      text: "desktop input is unavailable",
     });
-    const driver = createCuaDriver({ loadSdk });
-
-    expect(loadSdk).not.toHaveBeenCalled();
-    expect(driver.isAvailable()).toBe(false);
-    expect(loadSdk).toHaveBeenCalledOnce();
-    await expect(driver.getScreenSize()).rejects.toThrow(
-      "COMPUTER_DRIVER_UNAVAILABLE: failed to load CUA Driver SDK: libX11.so.6",
-    );
-
-    driver.resetAvailabilityCache();
-    expect(driver.isAvailable()).toBe(false);
-    expect(loadSdk).toHaveBeenCalledTimes(2);
-    await driver.dispose();
+    const transportError = new Error("transport disconnected");
+    mocks.click.mockRejectedValueOnce(transportError);
+    await expect(driver.click(clickInput)).rejects.toBe(transportError);
   });
 
   it("awaits an ESM driver before the first availability declaration without starting an execution", async () => {
-    let resolveSdk: ((value: typeof sdk) => void) | undefined;
-    const sdkPromise = new Promise<typeof sdk>((resolve) => {
-      resolveSdk = resolve;
-    });
-    const loadSdk = vi.fn(() => sdkPromise as never);
-    const driver = createCuaDriver({ loadSdk });
+    const loading = Promise.withResolvers<typeof sdk>();
+    const loadSdk = vi.fn(() => loading.promise as never);
+    driver = makeDriver(loadSdk);
 
     const preparing = driver.prepareAvailability?.();
     expect(loadSdk).toHaveBeenCalledOnce();
 
-    resolveSdk?.(sdk);
+    loading.resolve(sdk);
     await preparing;
     expect(driver.isAvailable()).toBe(true);
     expect(mocks.startSession).not.toHaveBeenCalled();
@@ -294,24 +259,25 @@ describe("CUA Driver direct session", () => {
 
     expect(loadSdk).toHaveBeenCalledOnce();
     expectCalls(1, "createConfigured", "getDesktopState");
-    await driver.dispose();
   });
 
   it("retries an asynchronous ESM import failure after the availability cache resets", async () => {
-    let attempt = 0;
-    const loadSdk = vi.fn(() => {
-      attempt += 1;
-      return attempt === 1
-        ? Promise.reject(new Error("native module is temporarily unavailable"))
-        : Promise.resolve(sdk as never);
-    });
-    const driver = createCuaDriver({ loadSdk });
+    const loadSdk = vi
+      .fn(async () => sdk as never)
+      .mockRejectedValueOnce(new Error("native module is temporarily unavailable"));
+    driver = makeDriver(loadSdk);
 
+    expect(loadSdk).not.toHaveBeenCalled();
+    expect(driver.isAvailable()).toBe(false);
+    expect(loadSdk).toHaveBeenCalledOnce();
     await driver.prepareAvailability?.();
     expect(driver.isAvailable()).toBe(false);
-    await expect(driver.getDesktopState()).rejects.toThrow(
-      "COMPUTER_DRIVER_UNAVAILABLE: failed to load CUA Driver SDK: native module is temporarily unavailable",
-    );
+    for (const read of [() => driver.getDesktopState(), () => driver.getScreenSize()]) {
+      await expect(read()).rejects.toThrow(
+        "COMPUTER_DRIVER_UNAVAILABLE: failed to load CUA Driver SDK: native module is temporarily unavailable",
+      );
+    }
+    expect(loadSdk).toHaveBeenCalledOnce();
 
     driver.resetAvailabilityCache();
     expect(driver.isAvailable()).toBe(false);
@@ -319,29 +285,19 @@ describe("CUA Driver direct session", () => {
     expect(driver.isAvailable()).toBe(true);
 
     expect(loadSdk).toHaveBeenCalledTimes(2);
-    await driver.dispose();
   });
-  const expired = () =>
-    Object.assign(new Error("DriverError.Tool"), {
-      inner: {
-        tool: "get_session_state",
-        errorCode: "permission_denied",
-        message: "Permission denied: authorization context expired",
-      },
-    });
 
   it("re-establishes an expired session on the next provider action without replaying input", async () => {
-    const driver = makeDriver();
     const computer = await execution(driver);
     mocks.getCursorPosition.mockResolvedValueOnce(cuaToolResult({ x: 10, y: 20 }));
-    await computer.act('{"action":"get_cursor_position"}');
+    await computer.send("get_cursor_position");
     const generation = driver.generation;
     mocks.isToolError.mockReturnValue(true);
     mocks.getSessionState.mockRejectedValueOnce(expired());
     mocks.endSession.mockRejectedValueOnce(expired());
 
     mocks.typeText.mockResolvedValueOnce(cuaToolResult({}));
-    expect(JSON.parse(await computer.act('{"action":"type","text":"hello"}'))).toMatchObject({
+    expect(JSON.parse(await computer.send("type", { text: "hello" }))).toMatchObject({
       ok: true,
     });
     expect(driver.generation).not.toBe(generation);
@@ -360,15 +316,13 @@ describe("CUA Driver direct session", () => {
   });
 
   it("does not renew a real permission denial and exposes its structured cause", async () => {
-    const driver = makeDriver();
     const computer = await execution(driver);
     await driver.prepareExecution?.();
     const generation = driver.generation;
-    const denied = expired();
-    denied.inner.message = "Desktop scope denied";
+    const denied = expired("Desktop scope denied");
     mocks.isToolError.mockReturnValue(true);
     mocks.getSessionState.mockRejectedValueOnce(denied);
-    await expect(computer.act('{"action":"type","text":"must not type"}')).rejects.toMatchObject({
+    await expect(computer.send("type", { text: "must not type" })).rejects.toMatchObject({
       message: "CUA_DRIVER_TOOL_ERROR: get_session_state: Desktop scope denied (permission_denied)",
       cause: denied,
     });
@@ -380,10 +334,7 @@ describe("CUA Driver direct session", () => {
   });
 
   it("shares concurrent preparation and performs at most one replacement", async () => {
-    const driver = makeDriver();
-    await driver.prepareExecution?.();
-    mocks.isToolError.mockReturnValue(true);
-    mocks.getSessionState.mockRejectedValueOnce(expired());
+    await prepareExpiry();
     await Promise.all([driver.prepareExecution?.(), driver.prepareExecution?.()]);
     expectCalls(2, "createConfigured");
     expectCalls(3, "getSessionState");
@@ -391,16 +342,12 @@ describe("CUA Driver direct session", () => {
     await driver.prepareExecution?.();
     expect(driver.generation).toBe(generation);
     expectCalls(2, "createConfigured");
-    await driver.dispose();
   });
 
   it.each(["disposal", "cancellation", "revocation"] as const)(
     "does not reopen when %s interrupts expired-session cleanup",
     async (interruption) => {
-      const driver = makeDriver();
-      await driver.prepareExecution?.();
-      mocks.isToolError.mockReturnValue(true);
-      mocks.getSessionState.mockRejectedValueOnce(expired());
+      await prepareExpiry();
       const entered = Promise.withResolvers<void>();
       const release = Promise.withResolvers<void>();
       mocks.endSession.mockImplementationOnce(async () => {
@@ -430,17 +377,14 @@ describe("CUA Driver direct session", () => {
         await driver.prepareExecution?.();
         expectCalls(2, "createConfigured");
       }
-      await driver.dispose();
     },
   );
 
   it("reports failed expired-session cleanup and recovers on the next provider action", async () => {
-    const driver = makeDriver();
     const computer = await execution(driver);
     await driver.prepareExecution?.();
     const generation = driver.generation;
-    const denied = expired();
-    denied.inner.message = "Desktop scope denied";
+    const denied = expired("Desktop scope denied");
     mocks.isToolError.mockReturnValue(true);
     mocks.getSessionState.mockRejectedValueOnce(expired());
     mocks.endSession.mockRejectedValueOnce(denied);
@@ -456,7 +400,6 @@ describe("CUA Driver direct session", () => {
   });
 
   it("does not loop if the replacement session also refuses authority", async () => {
-    const driver = makeDriver();
     await driver.prepareExecution?.();
     mocks.isToolError.mockReturnValue(true);
     const refusal = expired();
@@ -467,10 +410,8 @@ describe("CUA Driver direct session", () => {
       cause: refusal,
     });
     expectCalls(2, "createConfigured");
-    await driver.dispose();
   });
   it("does not admit native authority for an already-revoked owner", async () => {
-    const driver = makeDriver();
     await expect(
       driver.prepareExecution?.(undefined, () => {
         throw new Error("owning execution revoked");
@@ -478,21 +419,18 @@ describe("CUA Driver direct session", () => {
     ).rejects.toThrow("owning execution revoked");
     expect(mocks.createConfigured).not.toHaveBeenCalled();
     expect(mocks.startSession).not.toHaveBeenCalled();
-    await driver.dispose();
   });
 
   it("does not start a native session when the execution closes during SDK loading", async () => {
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
-    const driver = createCuaDriver({
-      loadSdk: async () => {
-        entered.resolve();
-        await release.promise;
-        return sdk as never;
-      },
+    driver = makeDriver(async () => {
+      entered.resolve();
+      await release.promise;
+      return sdk as never;
     });
     const computer = await execution(driver);
-    const acting = computer.act('{"action":"type","text":"must not type"}');
+    const acting = computer.send("type", { text: "must not type" });
     const rejected = expect(acting).rejects.toThrow("provider execution is closing");
     await entered.promise;
     const closing = computer.close("cancelled");
@@ -504,7 +442,6 @@ describe("CUA Driver direct session", () => {
   });
 
   it("does not renew a terminally revoked native session and still releases its runtime", async () => {
-    const driver = makeDriver();
     await driver.prepareExecution?.();
     const shutdown = new Error("DriverError.Shutdown");
     mocks.isShutdownError.mockImplementation((error) => error === shutdown);

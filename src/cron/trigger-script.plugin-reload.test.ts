@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../agents/tools/common.js";
+import { ensureGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { addTestHook } from "../plugins/hooks.test-helpers.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { markPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
@@ -63,6 +65,46 @@ describe("automation plugin reload recovery", () => {
     });
     expect(prepareRuntime).toHaveBeenCalledTimes(2);
     expect(disposed).toEqual([1]);
+  });
+
+  it("refreshes a cached runtime whose hook plugin was replaced without retiring the registry", async () => {
+    // Per-plugin replacement disposes the replaced instance while the cached
+    // registry is still retained, so it is never marked retired.
+    ensureGlobalHookRunner();
+    let generation = 0;
+    const guarded: number[] = [];
+    const guards: PluginInstance[] = [];
+    const prepareRuntime = vi.fn(async () => {
+      const current = ++generation;
+      const { prepared, registry } = preparePluginRuntime(current);
+      const record = createPluginRecord({ id: "guard" });
+      registry.plugins.push(record);
+      const guard = new PluginInstance("guard", { record, registry });
+      guards.push(guard);
+      addTestHook({
+        registry,
+        pluginId: "guard",
+        hookName: "before_tool_call",
+        handler: guard.wrap(async () => {
+          guarded.push(current);
+          return undefined;
+        }),
+      });
+      return prepared;
+    });
+    const runtime = createCronScriptRuntime({ config: {}, prepareRuntime });
+    await expect(runtime.executePayload(request)).resolves.toMatchObject({
+      kind: "completed",
+      state: { generation: 1 },
+    });
+    await guards[0]?.dispose();
+    expect(guards).toHaveLength(1);
+    await expect(runtime.executePayload(request)).resolves.toMatchObject({
+      kind: "completed",
+      state: { generation: 2 },
+    });
+    expect(prepareRuntime).toHaveBeenCalledTimes(2);
+    expect(guarded).toEqual([1, 2]);
   });
 
   it("never replays a script that fails after a tool effect and plugin retirement", async () => {

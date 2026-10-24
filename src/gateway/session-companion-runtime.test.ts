@@ -55,11 +55,18 @@ describe("Side chat with a published Gateway runtime", () => {
       });
       const cfg: OpenClawConfig = {
         agents: {
-          entries: { main: { workspace: state.workspaceDir } },
+          entries: {
+            main: {
+              workspace: state.workspaceDir,
+              models: { "test-provider/utility-model": { codeMode: true } },
+              tools: { codeMode: true },
+            },
+          },
           defaults: {
             workspace: state.workspaceDir,
             model: "test-provider/test-model",
             utilityModel: "test-provider/utility-model",
+            models: { "test-provider/utility-model": { codeMode: true } },
           },
         },
         models: {

@@ -172,6 +172,17 @@ describe("Gateway startup SecretRef owner isolation", () => {
     await expect(ready.json()).resolves.toMatchObject({ ready: true });
   }
 
+  async function withAdminClient(
+    run: (ws: Awaited<ReturnType<typeof connectWebchatClient>>) => Promise<void>,
+  ) {
+    const ws = await connectWebchatClient({ port: await start(), scopes: ["operator.admin"] });
+    try {
+      await run(ws);
+    } finally {
+      ws.close();
+    }
+  }
+
   afterEach(async () => {
     await server?.close();
     server = undefined;
@@ -193,8 +204,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
         tts: elevenlabs(envRef("SYSTEM_OWNER_SECRET")),
       });
 
-      const ws = await connectWebchatClient({ port: await start(), scopes: ["operator.admin"] });
-      try {
+      await withAdminClient(async (ws) => {
         deleteTestEnvValue("SYSTEM_OWNER_SECRET");
         const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {});
 
@@ -205,9 +215,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
         ]);
         expect(peekSystemEventEntries("agent:ops:global")).toHaveLength(1);
         expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
-      } finally {
-        ws.close();
-      }
+      });
     });
   });
 
@@ -282,8 +290,19 @@ describe("Gateway startup SecretRef owner isolation", () => {
         const configPath = process.env.OPENCLAW_CONFIG_PATH;
         assert(configPath, "Gateway test did not configure a config file path");
         const originalConfig = readFileSync(configPath);
-        const ws = await connectWebchatClient({ port: await start(), scopes: ["operator.admin"] });
-        try {
+        await withAdminClient(async (ws) => {
+          const accountAction = async (action: "start" | "stop", accountId: string) => {
+            const reply = await rpcReq(ws, `channels.${action}`, {
+              channel: "telegram",
+              accountId,
+            });
+            expect(reply, JSON.stringify(reply)).toMatchObject({
+              ok: true,
+              payload: { accountId, [action === "start" ? "started" : "stopped"]: true },
+            });
+          };
+          const expectStarts = (...ids: string[]) =>
+            expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual(ids);
           const status = async (expected: Record<string, Partial<ChannelAccountSnapshot>>) => {
             const reply = await rpcReq<{
               channelAccounts: Record<string, ChannelAccountSnapshot[]>;
@@ -311,18 +330,11 @@ describe("Gateway startup SecretRef owner isolation", () => {
           for (const accountId of ["healthy", "stopped"]) {
             const pluginStarted = createDeferred();
             accountStarted.set(accountId, pluginStarted.resolve);
-            const started = await rpcReq(ws, "channels.start", { channel: "telegram", accountId });
-            expect(started, JSON.stringify(started)).toMatchObject({
-              ok: true,
-              payload: { accountId, started: true },
-            });
+            await accountAction("start", accountId);
             // The RPC acknowledges handoff; traced startup invokes the plugin on a later turn.
             await pluginStarted.promise;
           }
-          expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual([
-            "healthy",
-            "stopped",
-          ]);
+          expectStarts("healthy", "stopped");
           const healthyLifetime = startAccount.mock.calls[0]?.[0].abortSignal;
           const stoppedLifetime = startAccount.mock.calls[1]?.[0].abortSignal;
           expect(healthyLifetime?.aborted).toBe(false);
@@ -343,14 +355,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
           expect(brokenStart.error).toMatchObject({ code: "UNAVAILABLE" });
           expectPrivate({ error: brokenStart.error, accounts: before?.channelAccounts.telegram });
 
-          const stopped = await rpcReq(ws, "channels.stop", {
-            channel: "telegram",
-            accountId: "stopped",
-          });
-          expect(stopped, JSON.stringify(stopped)).toMatchObject({
-            ok: true,
-            payload: { accountId: "stopped", stopped: true },
-          });
+          await accountAction("stop", "stopped");
           expect(stoppedLifetime?.aborted).toBe(true);
           expect(healthyLifetime?.aborted).toBe(false);
 
@@ -365,11 +370,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
             payload: { warningCount: 0 },
           });
           await repairedStarted.promise;
-          expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual([
-            "healthy",
-            "stopped",
-            "broken",
-          ]);
+          expectStarts("healthy", "stopped", "broken");
           expect(startAccount.mock.calls[2]?.[0].account.token).toBe(repairedToken);
           expect(healthyLifetime?.aborted).toBe(false);
           expect(stoppedLifetime?.aborted).toBe(true);
@@ -385,9 +386,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
             }),
           );
           expect(readFileSync(configPath)).toEqual(originalConfig);
-        } finally {
-          ws.close();
-        }
+        });
       },
     );
   });

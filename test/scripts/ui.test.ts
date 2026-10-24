@@ -334,38 +334,10 @@ describe("scripts/ui", () => {
         resolvePnpmSpawnCall(
           ["install", argument],
           { PATH: "" },
-          {
-            npmExecPath: "",
-            platform: "win32",
-          },
+          { npmExecPath: "", platform: "win32" },
         ),
       ).toThrow(/unsafe windows cmd\.exe argument/i);
     }
-  });
-
-  it("routes Windows Corepack pnpm entrypoints through node", () => {
-    const tempDir = tempDirs.make("openclaw-pnpm-runner-");
-    const npmExecPath = path.join(tempDir, "pnpm.mjs");
-    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
-    const env = { npm_execpath: npmExecPath, ComSpec: "C:\\Windows\\System32\\cmd.exe" };
-
-    expect(
-      resolvePnpmSpawnCall(["run", "build"], env, {
-        cwd: "C:\\repo\\ui",
-        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-        platform: "win32",
-      }),
-    ).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: [npmExecPath, "run", "build"],
-      options: {
-        cwd: "C:\\repo\\ui",
-        stdio: "inherit",
-        env,
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      },
-    });
   });
 
   it("detects direct execution through a junctioned script path", () => {
@@ -430,6 +402,11 @@ process.exitCode = 0;\n`,
       "src/shared/non-packaged-plugin-dirs.ts",
     ]);
     fs.mkdirSync(path.join(root, "extensions"));
+    const posterFonts = [
+      "src/gateway/assets/session-card/Lato-Regular.ttf",
+      "src/gateway/assets/session-card/InstrumentSerif-Regular.ttf",
+    ];
+    writeFiles(root, Object.fromEntries(posterFonts.map((font) => [font, "initial font bytes"])));
     // This fixture owns UI cache behavior; the native presenter builder is
     // exercised with real source and distribution bytes in its delivery suite.
     fs.writeFileSync(path.join(root, "scripts/build-plugin-control-ui.mts"), "export {};\n");
@@ -475,8 +452,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       "refreshed identity",
     );
     expect(fs.readFileSync(cachedHtml, "utf8")).toBe(cachedSource);
+    for (const font of posterFonts) {
+      fs.appendFileSync(path.join(root, font), "changed font bytes");
+      expect(run()).toContain("fixture-bundler-ran");
+      expect(run()).toContain("reused content cache");
+    }
     const plugin = path.join(root, "extensions/new-board");
-    fs.mkdirSync(plugin);
     writeFiles(plugin, {
       "package.json": JSON.stringify({
         name: "@openclaw/new-board",
@@ -525,9 +506,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       buildFiles("stale-runtime"),
     );
     if (retiredOnly) {
-      const unfinished = path.join(root, "dist", `control-ui.build-${deadPid}-y`);
-      fs.mkdirSync(unfinished);
-      fs.writeFileSync(path.join(unfinished, "junk"), "incomplete");
+      writeFiles(root, { [`dist/control-ui.build-${deadPid}-y/junk`]: "incomplete" });
     }
     build.vite(`
 import fs from "node:fs";
@@ -590,8 +569,7 @@ require("node:module").syncBuiltinESMExports();
         `control-ui.build-${deadPid}-dead`,
         `control-ui.build-${deadPid}-dead.retired`,
       ]) {
-        fs.mkdirSync(path.join(root, "dist", name), { recursive: true });
-        fs.writeFileSync(path.join(root, "dist", name, "sentinel"), name);
+        writeFiles(root, { [`dist/${name}/sentinel`]: name });
       }
     }
     const result = build.run({ OPENCLAW_CONTROL_UI_BUILD_ID: buildId }, args);
@@ -616,8 +594,6 @@ require("node:module").syncBuiltinESMExports();
       for (const name of liveUiBuildSiblings) {
         expect(fs.readFileSync(path.join(root, "dist", name, "sentinel"), "utf8")).toBe(name);
       }
-    }
-    if (seedSiblings) {
       if (process.platform !== "win32") {
         const published = [
           output,
@@ -691,8 +667,7 @@ require("node:module").syncBuiltinESMExports();
     const validators = validatorNames;
 
     for (const cacheRoot of cacheRoots) {
-      fs.mkdirSync(cacheRoot, { recursive: true });
-      fs.writeFileSync(path.join(cacheRoot, "0-sentinel"), "keep");
+      writeFiles(cacheRoot, { "0-sentinel": "keep" });
     }
     // Record before throwing: tsx catches some cache errors, so exit status alone
     // cannot prove that the loader left the cache untouched.

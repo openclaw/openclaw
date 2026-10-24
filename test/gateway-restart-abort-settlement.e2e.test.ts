@@ -346,7 +346,6 @@ it(
                     params: { transport: "sse", openaiWsWarmup: false },
                   },
                 },
-                heartbeat: { every: "0m" },
                 maxConcurrent: 16,
                 timeoutSeconds: 120,
                 skipBootstrap: true,

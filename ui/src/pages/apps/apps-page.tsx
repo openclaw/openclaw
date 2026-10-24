@@ -1,6 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
-import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
+import { createMemo, Errored, lazy, Loading, Show } from "solid-js";
 import { isNativeWebChromeHost } from "../../app/native-web-chrome.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { McpAppCatalog } from "../../components/mcp-app-catalog.tsx";
@@ -19,10 +18,11 @@ import { Apps } from "./view.tsx";
 
 registerEnglishCatalog(registerMcpAppEnglish);
 
-type AppsPageProps = { appSearch?: string };
+const AppsConversation = lazy(() => import("./apps-conversation.tsx"));
+
 type AppLaunch = { key: string; detail?: McpAppOpenDetail };
 
-export function AppsPage(props: AppsPageProps) {
+export function AppsPage(props: { appSearch?: string }) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const selection = projectAgentSelection(context.agentSelection);
@@ -36,32 +36,6 @@ export function AppsPage(props: AppsPageProps) {
     }),
     () => true,
   );
-  const [conversationError, setConversationError] = createSignal<string | null>(null, {
-    ownedWrite: true,
-  });
-  const [retry, setRetry] = createSignal(0);
-  // Load the lazy chat custom element for this route; retire import-error feedback on replacement.
-  createEffect(
-    () => [appRoute(), retry()] as const,
-    ([route]) => {
-      if (!route) {
-        return undefined;
-      }
-      let current = true;
-      setConversationError(null);
-      void ensureCustomElementDefined(
-        "openclaw-chat-pane",
-        () => import("../chat/route-entry.ts"),
-      ).catch((error: unknown) => {
-        if (current) {
-          setConversationError(formatUiError(error));
-        }
-      });
-      return () => {
-        current = false;
-      };
-    },
-  );
   const launch = createMemo((previous: AppLaunch | undefined): AppLaunch => {
     const state = gateway.read();
     const agentId = selection.read().state.selectedId ?? undefined;
@@ -72,7 +46,7 @@ export function AppsPage(props: AppsPageProps) {
       state.connectionRevision,
     ]);
     const route = appRoute();
-    const discovered = catalog();
+    const discovered = catalog.snapshot();
     if (
       previous?.key === key &&
       previous.detail &&
@@ -118,10 +92,6 @@ export function AppsPage(props: AppsPageProps) {
           : undefined,
     };
   });
-  const paneKey = () =>
-    launch().detail
-      ? JSON.stringify([launch().detail?.sessionKey, gateway.read().connectionRevision])
-      : "";
   const canPairDevice = () =>
     gateway.read().snapshot.phase === "connected" &&
     hasOperatorAdminAccess(gateway.read().snapshot.hello?.auth ?? null);
@@ -153,41 +123,24 @@ export function AppsPage(props: AppsPageProps) {
         <button class="btn" onClick={() => context.navigate("apps")}>
           {t("mcpApp.close")}
         </button>
-        <Show
-          when={conversationError()}
-          fallback={
-            <Show
-              when={paneKey()}
-              keyed
-              fallback={
-                <Show
-                  when={catalog().loading}
-                  fallback={<p role="alert">{catalog().error ?? t("mcpApp.invalidLink")}</p>}
-                >
-                  <p role="status">{t("mcpApp.loading")}</p>
-                </Show>
-              }
-            >
-              <openclaw-chat-pane
-                class="mcp-app-conversation"
-                prop:sessionKey={launch().detail!.sessionKey}
-                prop:agentId={launch().detail!.agentId}
-                prop:paneId="plugin-app"
-                prop:presentationId={`plugin-app:${launch().detail!.sessionKey}`}
-                prop:mcpAppLaunch={launch().detail}
-              />
-            </Show>
-          }
-        >
-          {(error) => (
+        <Errored
+          fallback={(error, reset) => (
             <>
-              <p role="alert">{error()}</p>
-              <button class="btn" onClick={() => setRetry((value) => value + 1)}>
+              <p role="alert">{formatUiError(error())}</p>
+              <button class="btn" onClick={() => reset()}>
                 {t("mcpApp.retry")}
               </button>
             </>
           )}
-        </Show>
+        >
+          <Loading on={appRoute()} fallback={<p role="status">{t("mcpApp.loading")}</p>}>
+            <AppsConversation
+              launch={launch().detail}
+              connectionRevision={gateway.read().connectionRevision}
+              request={catalog.request()}
+            />
+          </Loading>
+        </Errored>
       </Show>
     </openclaw-apps-page>
   );

@@ -408,8 +408,8 @@ describe("V2 decision admission", () => {
   it("enforces finite JSON, question and list resource bounds", () => {
     const questions = (n: number) =>
       Object.fromEntries(Array.from({ length: n }, (_, i) => [String(i), { type: "boolean" }]));
-    expect(validateDecisionBatchV2({ ...batch, questions: questions(256) })).toBe(true);
-    expect(validateDecisionBatchV2({ ...batch, questions: questions(257) })).toBe(false);
+    expect(validateDecisionBatchV2({ ...batch, questions: questions(400) })).toBe(true);
+    expect(validateDecisionBatchV2({ ...batch, questions: questions(401) })).toBe(false);
     const list = (n: number) => ({
       type: "list",
       items: Array.from({ length: n }, (_, i) => ({ id: String(i), content: null })),

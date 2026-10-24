@@ -38,28 +38,23 @@ describe("applyModelDefaults", () => {
     model: Partial<ModelDefinitionConfig> = {},
     defaults: { maxTokens?: number } = {},
   ) {
-    return {
-      models: {
-        providers: {
-          [provider]: {
-            baseUrl: "https://proxy.example/v1",
-            apiKey: "sk-test",
-            api: "openai-completions",
-            ...defaults,
-            models: [
-              {
-                id: "gpt-5.4",
-                name: "GPT-5.4",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                ...model,
-              },
-            ],
-          },
+    const config = {
+      baseUrl: "https://proxy.example/v1",
+      apiKey: "sk-test",
+      api: "openai-completions",
+      ...defaults,
+      models: [
+        {
+          id: "gpt-5.4",
+          name: "GPT-5.4",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          ...model,
         },
-      },
-    } as never;
+      ],
+    };
+    return { models: { providers: { [provider]: config } } } as never;
   }
 
   function mistralModel(model: Partial<ModelDefinitionConfig> = {}) {
@@ -114,15 +109,11 @@ describe("applyModelDefaults", () => {
   }
 
   it("preserves an authored Sonnet alias when the new default target is also present", () => {
-    expect(
-      defaultModels({
-        "anthropic/claude-sonnet-5": { alias: "Sonnet" },
-        "anthropic/claude-sonnet-5-5": {},
-      }),
-    ).toEqual({
+    const models = {
       "anthropic/claude-sonnet-5": { alias: "Sonnet" },
       "anthropic/claude-sonnet-5-5": {},
-    });
+    };
+    expect(defaultModels(structuredClone(models))).toEqual(models);
   });
 
   it.each([
@@ -142,35 +133,20 @@ describe("applyModelDefaults", () => {
     });
   });
 
-  it("normalizes the retired Together default primary and fallback refs", () => {
+  it.each([
+    ["defaults", "together/moonshotai/Kimi-K2.5", "together/moonshotai/Kimi-K2.6"],
+    ["agent", "google/gemini-3-pro-preview", "google/gemini-3.1-pro-preview"],
+  ])("normalizes retired %s model refs", (scope, old, current) => {
+    const extra = scope === "defaults" ? ["openai/gpt-5.5"] : [];
+    const refs = modelRefs(old, [old, ...extra]);
     const next = applyModelDefaults({
-      agents: {
-        defaults: modelRefs("together/moonshotai/Kimi-K2.5", [
-          "together/moonshotai/Kimi-K2.5",
-          "openai/gpt-5.5",
-        ]),
-      },
+      agents: scope === "defaults" ? { defaults: refs } : { entries: { ops: refs } },
     });
-    expect(next.agents?.defaults?.model).toEqual({
-      primary: "together/moonshotai/Kimi-K2.6",
-      fallbacks: ["together/moonshotai/Kimi-K2.6", "openai/gpt-5.5"],
-    });
-    expect(next.agents?.defaults?.models).toEqual({
-      "together/moonshotai/Kimi-K2.6": {},
-    });
-  });
-
-  it("normalizes retired Gemini per-agent model refs", () => {
-    const next = applyModelDefaults({
-      agents: { entries: { ops: modelRefs("google/gemini-3-pro-preview") } },
-    });
-    expect(next.agents?.entries?.ops?.model).toEqual({
-      primary: "google/gemini-3.1-pro-preview",
-      fallbacks: ["google/gemini-3.1-pro-preview"],
-    });
-    expect(next.agents?.entries?.ops?.models).toEqual({
-      "google/gemini-3.1-pro-preview": {},
-    });
+    const actual = scope === "defaults" ? next.agents?.defaults : next.agents?.entries?.ops;
+    expect([actual?.model, actual?.models]).toEqual([
+      { primary: current, fallbacks: [current, ...extra] },
+      { [current]: {} },
+    ]);
   });
 
   it("normalizes configured provider rows with explicit manifest registry policies", () => {
@@ -211,23 +187,14 @@ describe("applyModelDefaults", () => {
     ]);
   });
 
-  it("normalizes stale mistral maxTokens that matched the full context window", () => {
-    expect(mistralModel()).toMatchObject({ contextWindow: 262144, maxTokens: 16384 });
-  });
-
-  it("preserves explicit maxTokens for custom mistral model constructor", () => {
-    expect(
-      mistralModel({ id: "constructor", contextWindow: 128_000, maxTokens: 32_000 })?.maxTokens,
-    ).toBe(32_000);
-  });
-
-  it("keeps the safe fallback for context-sized custom mistral maxTokens", () => {
-    expect(
-      mistralModel({
-        id: "custom-mistral-model",
-        contextWindow: 128_000,
-        maxTokens: 128_000,
-      })?.maxTokens,
-    ).toBe(8192);
+  it.each([
+    { id: "mistral-large-latest", contextWindow: 262_144, maxTokens: 262_144, expected: 16384 },
+    { id: "constructor", contextWindow: 128_000, maxTokens: 32_000, expected: 32_000 },
+    { id: "custom-mistral-model", contextWindow: 128_000, maxTokens: 128_000, expected: 8192 },
+  ])("normalizes Mistral output limits for $id", ({ expected, ...model }) => {
+    expect(mistralModel(model)).toMatchObject({
+      contextWindow: model.contextWindow,
+      maxTokens: expected,
+    });
   });
 });

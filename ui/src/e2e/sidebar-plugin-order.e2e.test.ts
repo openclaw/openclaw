@@ -70,21 +70,22 @@ async function checkPluginOrder({ page }: { page: Page }) {
   await page.getByRole("menuitem", { name: "Move down", exact: true }).click();
   await expect.poll(keys).toEqual(expected);
 
-  const reorderBeta = sidebar.getByRole("button", { name: "Reorder Beta", exact: true });
-  await reorderBeta.focus();
-  await page.keyboard.press("Enter");
-  await page.getByRole("menuitem", { name: "Move up", exact: true }).press("Enter");
   const sectionOrder = () =>
     sidebar
       .locator('[data-session-section^="category:"]')
       .evaluateAll((sections) =>
         sections.map((section) => section.getAttribute("data-session-section")),
       );
-  await expect.poll(sectionOrder).toEqual(["category:Beta", "category:Alpha"]);
-  expect((await gateway.waitForRequest("sessions.groups.put")).params).toMatchObject({
-    names: ["Beta", "Alpha"],
+  const beta = sidebar.locator('[data-session-section="category:Beta"]');
+  const alpha = sidebar.locator('[data-session-section="category:Alpha"]');
+  await beta.locator(".sidebar-session-group-toggle").dragTo(alpha, {
+    targetPosition: { x: 4, y: 2 },
   });
-  await expect.poll(() => isFocused(reorderBeta)).toBe(true);
+  await expect.poll(sectionOrder).toEqual(["category:Beta", "category:Alpha"]);
+  expect((await gateway.waitForRequest("sessions.groups.put")).params).toEqual({
+    names: ["Beta", "Alpha"],
+    sectionOrder: ["category:Beta", "category:Alpha", "ungrouped", "groups", "work"],
+  });
   // This profileless fixture owns personal navigation in the Gateway-scoped browser mirror.
   const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
   await expect

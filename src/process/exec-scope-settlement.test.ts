@@ -137,13 +137,11 @@ describe("command scope physical settlement", () => {
         expect(reserve).toHaveBeenCalledExactlyOnceWith(["fixture"]);
         return spawn(...args);
       });
-      let finished = false;
+      const finished = vi.fn();
       const failure = new Error("transport failed");
       const scope = ownScope(() => ownScope(async () => void (await spawnFixture())), {
         reserve,
-      }).finally(() => {
-        finished = true;
-      });
+      }).finally(finished);
       const outcome = scope.catch((error: unknown) => error);
       expect(reservation.spawned).not.toHaveBeenCalled();
       fixture.open();
@@ -157,7 +155,7 @@ describe("command scope physical settlement", () => {
         fixture.finish(false);
       }
       await setImmediate();
-      expect(finished).toBe(false);
+      expect(finished).not.toHaveBeenCalled();
       expect(reservation.settled).not.toHaveBeenCalled();
       fixture.closed.resolve();
       if (result === "rejected") {
@@ -239,7 +237,7 @@ describe("command scope physical settlement", () => {
       const fixture = commandFixture();
       const controller = new AbortController();
       const resultSeen = createDeferredCore();
-      let scopeFinished = false;
+      const scopeFinished = vi.fn();
       const scope = ownScope(async () => {
         const pending = runCommandWithTimeout(["fixture"], {
           signal: controller.signal,
@@ -248,24 +246,22 @@ describe("command scope physical settlement", () => {
         controller.abort();
         expect(await pending).toMatchObject({ termination: "signal", cleanup: "uncertain" });
         resultSeen.resolve();
-      }).finally(() => {
-        scopeFinished = true;
-      });
+      }).finally(scopeFinished);
       const outcome = scope.catch((error: unknown) => error);
       await resultSeen.promise;
       await setImmediate();
-      expect(scopeFinished).toBe(false);
+      expect(scopeFinished).not.toHaveBeenCalled();
       fixture.open();
       fixture.finish();
       await setImmediate();
-      expect(scopeFinished).toBe(false);
+      expect(scopeFinished).not.toHaveBeenCalled();
       fixture.cleanup.resolve(cleanup);
       if (cleanup === "uncertain") {
         expect(await outcome).toMatchObject(uncertainCleanup);
       } else {
         await scope;
       }
-      expect(scopeFinished).toBe(true);
+      expect(scopeFinished).toHaveBeenCalledOnce();
     },
   );
 
@@ -274,18 +270,16 @@ describe("command scope physical settlement", () => {
     async (api) => {
       const fixture = commandFixture();
       const failure = new Error("caller stopped");
-      let scopeFinished = false;
+      const scopeFinished = vi.fn();
       const scope = ownScope(async () => {
         const pending =
           api === "exec" ? runExec("fixture", [], { logOutput: false }) : spawnFixture();
         void pending.catch(() => {});
         throw failure;
-      }).finally(() => {
-        scopeFinished = true;
-      });
+      }).finally(scopeFinished);
       const outcome = scope.catch((error: unknown) => error);
       await setImmediate();
-      expect(scopeFinished).toBe(false);
+      expect(scopeFinished).not.toHaveBeenCalled();
       fixture.open();
       fixture.finish();
       expect(await outcome).toBe(failure);
@@ -301,9 +295,7 @@ it.skipIf(process.platform === "win32")(
       vi.useFakeTimers();
       vi.spyOn(process, "kill").mockReturnValue(true);
       const fixture = commandFixture();
-      const scope = ownScope(async () => {
-        await spawnFixture();
-      });
+      const scope = ownScope(async () => void (await spawnFixture()));
       const outcome = scope.catch((error: unknown) => error);
       fixture.open();
       fixture.finish();
@@ -329,12 +321,7 @@ it.skipIf(process.platform === "win32")(
     });
     const fixture = commandFixture();
     const reservation = { spawned: vi.fn(), settled: vi.fn() };
-    const scope = ownScope(
-      async () => {
-        await spawnFixture();
-      },
-      { reserve: () => reservation },
-    );
+    const scope = ownScope(async () => void (await spawnFixture()), { reserve: () => reservation });
     fixture.open();
     fixture.finish();
     try {
@@ -371,7 +358,7 @@ it.each(["forced", "uncertain"] as const)(
     const logical = createDeferredCore();
     const finishLogical = createDeferredCore();
     const original = new Error("nested operation cancelled");
-    let outerFinished = false;
+    const outerFinished = vi.fn();
     const outer = ownScope(async () => {
       void ownScope(async () => {
         const controller = new AbortController();
@@ -386,21 +373,19 @@ it.each(["forced", "uncertain"] as const)(
         throw original;
       }).catch(() => {});
       return "parent finished its callback";
-    }).finally(() => {
-      outerFinished = true;
-    });
+    }).finally(outerFinished);
     const outcome = outer.catch((error: unknown) => error);
     try {
       await logical.promise;
       await setImmediate();
-      expect(outerFinished).toBe(false);
+      expect(outerFinished).not.toHaveBeenCalled();
       fixture.open();
       fixture.finish();
       await setImmediate();
-      expect(outerFinished).toBe(false);
+      expect(outerFinished).not.toHaveBeenCalled();
       fixture.cleanup.resolve(cleanupResult);
       await setImmediate();
-      expect(outerFinished).toBe(true);
+      expect(outerFinished).toHaveBeenCalledOnce();
       const result = await outcome;
       if (cleanupResult === "uncertain") {
         expect(hasCommandProcessCleanupError(result)).toBe(true);
@@ -417,19 +402,17 @@ it.each(["forced", "uncertain"] as const)(
 it("closes nested native admission without waiting for its logical callback", async () => {
   const finishLogical = createDeferredCore();
   let nested: Promise<unknown> | undefined;
-  let outerFinished = false;
+  const outerFinished = vi.fn();
   const outer = ownScope(async () => {
     nested = ownScope(async () => {
       await finishLogical.promise;
       return await spawnCommand(["fixture"]);
     }).catch((error: unknown) => error);
     return "parent finished";
-  }).finally(() => {
-    outerFinished = true;
-  });
+  }).finally(outerFinished);
   try {
     await setImmediate();
-    expect(outerFinished).toBe(true);
+    expect(outerFinished).toHaveBeenCalledOnce();
     expect(await outer).toBe("parent finished");
   } finally {
     finishLogical.resolve();

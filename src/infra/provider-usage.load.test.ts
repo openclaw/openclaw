@@ -25,15 +25,14 @@ describe("provider-usage.load", () => {
   afterEach(() => vi.useRealTimers());
 
   it("does not dispatch auth or fetch for an exhausted budget", async () => {
-    const fetch = vi.fn(async () => new Response("{}"));
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+    vi.spyOn(Date, "now").mockReturnValue(usageNow);
     resolveProviderUsageAuthWithPluginMock.mockResolvedValue({ token: "fixture-token" });
     const result = await loadProviderUsageSummary({
       providers: ["anthropic"],
       config: {},
       env: { ANTHROPIC_API_KEY: "fixture-token" },
-      now: usageNow,
       timeoutMs: 0,
-      fetch,
     });
     expect(result).toEqual({
       updatedAt: usageNow,
@@ -70,6 +69,7 @@ describe("provider-usage.load", () => {
         started.resolve();
         return response.promise;
       });
+      vi.spyOn(globalThis, "fetch").mockImplementation(fetch);
       resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ context }) => {
         await (signalSource === "init"
           ? context.fetchFn("https://usage.example.test", { signal: caller.signal })
@@ -82,7 +82,6 @@ describe("provider-usage.load", () => {
           config: {},
           env: {},
           timeoutMs: 1,
-          fetch,
         }),
       );
       try {
@@ -337,7 +336,6 @@ describe("provider-usage.load", () => {
     vi.stubGlobal("fetch", undefined);
     try {
       const summary = await loadProviderUsageSummary({
-        now: usageNow,
         auth: [{ provider: "xiaomi", token: "token-x" }],
         env: {},
       });

@@ -29,8 +29,7 @@ function audit(config: ResolvedTelegramAccount["config"], commands?: OpenClawCon
 
 describe("Telegram security audit findings", () => {
   beforeEach(() => {
-    readChannelAllowFromStoreMock.mockReset();
-    readChannelAllowFromStoreMock.mockResolvedValue([]);
+    readChannelAllowFromStoreMock.mockReset().mockResolvedValue([]);
   });
 
   it.each<[ResolvedTelegramAccount["config"], string, string]>([

@@ -19,7 +19,7 @@ vi.mock("mailauth", async (importOriginal) => {
   return { ...actual, authenticate: vi.fn(actual.authenticate) };
 });
 
-type MailFixture = { uid: number; raw: string };
+type MailFixture = { uid: number; raw: string; reportedSize?: number };
 
 export class ScriptedImapServer {
   readonly sockets = new Set<Socket>();
@@ -173,7 +173,7 @@ export class ScriptedImapServer {
                 .replace(" GMT", " +0000");
               socket.write(
                 wantsBody
-                  ? `* ${mail.sequence} FETCH (UID ${mail.uid} INTERNALDATE "${date}" RFC822.SIZE ${Buffer.byteLength(mail.raw)} BODY[]<0> {${Buffer.byteLength(mail.raw)}}\r\n${mail.raw})\r\n`
+                  ? `* ${mail.sequence} FETCH (UID ${mail.uid} INTERNALDATE "${date}" RFC822.SIZE ${mail.reportedSize ?? Buffer.byteLength(mail.raw)} BODY[]<0> {${Buffer.byteLength(mail.raw)}}\r\n${mail.raw})\r\n`
                   : `* ${mail.sequence} FETCH (UID ${!usesUid && this.sequenceUidOverride !== undefined ? this.sequenceUidOverride : mail.uid})\r\n`,
               );
             }

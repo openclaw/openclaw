@@ -6,6 +6,7 @@ import {
   connectMcpClientWithPairingReconnect,
   connectMcpWithTimeout,
   createMcpClientTempState,
+  maybeApprovePendingBridgePairing,
   type McpClientTempState,
 } from "./mcp-client-temp-state.fixture.ts";
 
@@ -15,6 +16,21 @@ function createHandle() {
     client: { close: vi.fn(async () => undefined) },
     transport: { close: vi.fn(async () => undefined) },
   };
+}
+function reconnectFixture() {
+  const tempState = createMcpClientTempState({ gatewayToken: "pairing-token" });
+  const first = createHandle();
+  const second = createHandle();
+  const connect = vi
+    .fn<(state: McpClientTempState) => Promise<ReturnType<typeof createHandle>>>()
+    .mockResolvedValueOnce(first)
+    .mockResolvedValueOnce(second);
+  return { tempState, first, second, connect };
+}
+function expectClosed(handle: ReturnType<typeof createHandle>) {
+  for (const close of [handle.client.close, handle.transport.close, handle.cleanup]) {
+    expect(close).toHaveBeenCalledOnce();
+  }
 }
 afterEach(() => vi.useRealTimers());
 
@@ -36,43 +52,78 @@ it("creates unique client temp state and removes token files on cleanup", () => 
   }
 });
 
-it.each([true, false])(
-  "cleans the first MCP client on pairing approval (succeeds=%s)",
-  async (approved) => {
-    const tempState = createMcpClientTempState({ gatewayToken: "pairing-token" });
-    const first = createHandle();
-    const second = createHandle();
-    const failure = new Error("pairing approval failed");
-    const connect = vi
-      .fn<(state: McpClientTempState) => Promise<ReturnType<typeof createHandle>>>()
-      .mockResolvedValueOnce(first)
-      .mockResolvedValueOnce(second);
-    try {
-      const result = connectMcpClientWithPairingReconnect({
-        connect,
-        tempState,
-        maybeApprovePairing: async () => {
-          if (!approved) {
-            throw failure;
-          }
-          return true;
-        },
+it.each([false, true])(
+  "reuses one MCP temp state after pairing (auto-approved: %s)",
+  async (autoApproved) => {
+    const { tempState, first, second, connect } = reconnectFixture();
+    const request = vi
+      .fn<Parameters<typeof maybeApprovePendingBridgePairing>[0]["request"]>()
+      .mockResolvedValueOnce({
+        pending: [{ requestId: "pair-request", deviceId: "bridge-device", role: "operator" }],
       });
-      if (approved) {
-        await expect(result).resolves.toBe(second);
-        expect(connect.mock.calls).toEqual([[tempState], [tempState]]);
-        expect(second.cleanup).not.toHaveBeenCalled();
-      } else {
-        await expect(result).rejects.toBe(failure);
-      }
-      for (const close of [first.client.close, first.transport.close, first.cleanup]) {
-        expect(close).toHaveBeenCalledOnce();
-      }
+    if (autoApproved) {
+      request
+        .mockRejectedValueOnce(new Error("unknown requestId"))
+        .mockResolvedValueOnce({ paired: [{ deviceId: "bridge-device", roles: ["operator"] }] });
+    } else {
+      request.mockResolvedValueOnce({});
+    }
+    try {
+      await expect(
+        connectMcpClientWithPairingReconnect({
+          connect,
+          maybeApprovePairing: () => maybeApprovePendingBridgePairing({ request }),
+          tempState,
+        }),
+      ).resolves.toBe(second);
+      expect(connect.mock.calls).toEqual([[tempState], [tempState]]);
+      expectClosed(first);
+      expect(second.cleanup).not.toHaveBeenCalled();
     } finally {
       tempState.cleanup();
     }
   },
 );
+
+it.each([
+  { label: "missing device", paired: [] },
+  {
+    label: "other approval failure",
+    message: "approval forbidden",
+    paired: [{ deviceId: "bridge-device", roles: ["operator"] }],
+  },
+  { label: "different device", paired: [{ deviceId: "other-device", roles: ["operator"] }] },
+  { label: "wrong role", paired: [{ deviceId: "bridge-device", roles: ["node"] }] },
+])("preserves stale-approval failure for $label", async ({ paired, message }) => {
+  const failure = new Error(message ?? "unknown requestId");
+  const request = vi
+    .fn<Parameters<typeof maybeApprovePendingBridgePairing>[0]["request"]>()
+    .mockResolvedValueOnce({
+      pending: [{ requestId: "pair-request", deviceId: "bridge-device", role: "operator" }],
+    })
+    .mockRejectedValueOnce(failure)
+    .mockResolvedValueOnce({ paired });
+  await expect(maybeApprovePendingBridgePairing({ request })).rejects.toBe(failure);
+});
+
+it("cleans the first MCP client when pairing approval fails", async () => {
+  const { tempState, first, connect } = reconnectFixture();
+  const failure = new Error("pairing approval failed");
+  try {
+    await expect(
+      connectMcpClientWithPairingReconnect({
+        connect,
+        tempState,
+        maybeApprovePairing: async () => {
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+    expectClosed(first);
+  } finally {
+    tempState.cleanup();
+  }
+});
 
 it.each([false, true])(
   "preserves the timeout after transport cleanup (rejects=%s)",

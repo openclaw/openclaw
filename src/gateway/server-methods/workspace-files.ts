@@ -51,9 +51,8 @@ const DETECTED_TEXT_MIME_TYPES = new Set([
   "application/x-ms-regedit",
   "model/stl",
 ]);
-const SEARCH_SKIP_DIRS = new Set([
-  ".git",
-  ".hg",
+const SEARCH_IGNORED_DIRS = new Set([".git", ".hg"]);
+const SEARCH_INCOMPLETE_DIRS = new Set([
   ".next",
   ".turbo",
   ".yarn",
@@ -325,8 +324,15 @@ export async function listSessionWorkspaceFiles(
               entries.push(entry);
             }
           }
-          if (dirent.isDirectory && !SEARCH_SKIP_DIRS.has(dirent.name)) {
-            await visit(browserPath);
+          if (dirent.isDirectory) {
+            if (SEARCH_INCOMPLETE_DIRS.has(dirent.name)) {
+              // The public result only has a boolean completeness signal. A skipped
+              // directory can contain another filename match, so searches that saw
+              // one must not be presented as workspace-wide unique.
+              truncated = true;
+            } else if (!SEARCH_IGNORED_DIRS.has(dirent.name)) {
+              await visit(browserPath);
+            }
           }
         }
       };

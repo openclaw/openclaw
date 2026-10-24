@@ -58,6 +58,24 @@ const thinkingBlock = (thinking: string, thinkingSignature: string) => ({
 });
 const providerMessages = (messages: AgentMessage[]) =>
   messages.filter((m) => m.role === "user" || m.role === "assistant" || m.role === "toolResult");
+const call = (id = "call_1", name = "read", args: Record<string, unknown> = {}) =>
+  ({ type: "toolCall", id, name, arguments: args }) as const;
+function convertReplay(
+  model: ReturnType<typeof completionsModel>,
+  messages: AgentMessage[],
+  withTools = false,
+) {
+  return convertMessages(
+    model,
+    {
+      ...(withTools
+        ? { tools: [{ name: "read", description: "Read", parameters: { type: "object" } }] }
+        : {}),
+      messages: providerMessages(normalize(messages)),
+    },
+    resolveOpenAICompletionsCompat(model),
+  );
+}
 function hiddenAssistant(
   model: ReturnType<typeof completionsModel>,
   content: NonNullable<Parameters<typeof makeAssistantMessageFixture>[0]>["content"],
@@ -75,11 +93,11 @@ function hiddenAssistant(
     }),
   });
 }
-function toolResult(call: { id: string; name: string }, timestamp: number): AgentMessage {
+function toolResult(tool: { id: string; name: string }, timestamp: number): AgentMessage {
   return {
     role: "toolResult",
-    toolCallId: call.id,
-    toolName: call.name,
+    toolCallId: tool.id,
+    toolName: tool.name,
     content: [textBlock("file contents")],
     isError: false,
     timestamp,
@@ -128,7 +146,7 @@ function transcriptArtifact(model: "delivery-mirror" | "gateway-injected"): Agen
 describe("normalizeAssistantReplayContent", () => {
   it("reconstructs hidden tool calls, results, and internal answers in the provider request", () => {
     const model = completionsModel();
-    const toolCall = { type: "toolCall" as const, id: "call_hidden", name: "read", arguments: {} };
+    const toolCall = call("call_hidden");
     const hiddenCall = hiddenAssistant(model, [toolCall], "toolUse");
     const hiddenAnswer = hiddenAssistant(
       model,
@@ -142,14 +160,7 @@ describe("normalizeAssistantReplayContent", () => {
       hiddenAnswer,
       user("What did the file contain?"),
     ];
-    const converted = convertMessages(
-      model,
-      {
-        tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
-        messages: providerMessages(normalize(messages)),
-      },
-      resolveOpenAICompletionsCompat(model),
-    );
+    const converted = convertReplay(model, messages, true);
 
     expect(converted).toMatchObject([
       { role: "user" },
@@ -178,7 +189,7 @@ describe("normalizeAssistantReplayContent", () => {
         reasoning: true,
       });
       const thinking = thinkingBlock("tool planning", "signed-tool-planning");
-      const completed = { type: "toolCall" as const, id: "done", name: "read", arguments: {} };
+      const completed = call("done");
       const unfinished = { ...completed, id: "unfinished" };
       const source: Extract<AgentMessage, { role: "assistant" }> = {
         role: "assistant",
@@ -223,14 +234,7 @@ describe("normalizeAssistantReplayContent", () => {
       });
       const storedContent = structuredClone(speech.content);
 
-      const normalized = normalize([user("send it"), speech, user("heartbeat")]);
-      const converted = convertMessages(
-        model,
-        {
-          messages: providerMessages(normalized),
-        },
-        resolveOpenAICompletionsCompat(model),
-      );
+      const converted = convertReplay(model, [user("send it"), speech, user("heartbeat")]);
 
       expect(converted.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
       expect(converted[1]?.content).toBe("Done, it is sent.");
@@ -425,32 +429,16 @@ describe("normalizeAssistantReplayContent", () => {
       [thinkingBlock("partial reasoning", "sig_visible"), textBlock("partial visible answer")],
       "length",
     );
-    const toolCall = assistant(
-      [
-        thinkingBlock("partial reasoning", "sig_tool"),
-        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-      ],
-      "length",
-    );
+    const toolCall = assistant([thinkingBlock("partial reasoning", "sig_tool"), call()], "length");
     const messages = [user("before"), visible, toolCall, user("continue")];
     expect(normalize(messages)).toBe(messages);
   });
 
   it.each([
-    {
-      shape: "string",
-      content: "plain string content",
-      expected: [textBlock("plain string content")],
-      stop: "error",
-    },
-    {
-      shape: "object",
-      content: textBlock("plain object content"),
-      expected: [textBlock("plain object content")],
-      stop: "stop",
-    },
-    { shape: "null", content: null, expected: [], stop: "toolUse" },
-  ] as const)("normalizes legacy $shape assistant content", ({ content, expected, stop }) => {
+    ["string", "plain string content", [textBlock("plain string content")], "error"],
+    ["object", textBlock("plain object content"), [textBlock("plain object content")], "stop"],
+    ["null", null, [], "toolUse"],
+  ] as const)("normalizes legacy %s assistant content", (_shape, content, expected, stop) => {
     const out = normalize([user("hi"), assistant(content, stop)]);
     expect(out[1]).toHaveProperty("content", expected);
   });
@@ -467,22 +455,17 @@ describe("normalizeAssistantReplayContent", () => {
     },
   );
 
-  it.each([
-    ["directly", "NO_REPLY", thinkingBlock("yield reasoning", "sig_yield")],
-    ["with redacted reasoning", "NO_REPLY", { type: "redacted_thinking", data: "redacted-yield" }],
-  ])("drops thinking-only silent replies %s (#99620)", (_label, text, reasoning) => {
+  it("drops silent replies with redacted reasoning (#99620)", () => {
     const kept = user("hi");
-    expect(normalize([kept, assistant([reasoning, { type: "text", text }], "stop")])).toStrictEqual(
-      [kept],
-    );
+    const reasoning = { type: "redacted_thinking", data: "redacted-yield" };
+    expect(normalize([kept, assistant([reasoning, textBlock("NO_REPLY")], "stop")])).toStrictEqual([
+      kept,
+    ]);
   });
 
   it("drops silent thinking residue before a follow-up tool turn (#99620)", () => {
     const nextToolTurn = assistant(
-      [
-        thinkingBlock("next reasoning", "sig_next"),
-        { type: "toolCall", id: "call_1", name: "exec", arguments: {} },
-      ],
+      [thinkingBlock("next reasoning", "sig_next"), call("call_1", "exec")],
       "toolUse",
     );
     const messages = [
@@ -496,7 +479,7 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it("preserves silent-reply turns with tool calls", () => {
-    const companion = { type: "toolCall", id: "call_1", name: "exec", arguments: {} };
+    const companion = call("call_1", "exec");
     const messages = [
       user("hi"),
       assistant(
@@ -552,7 +535,7 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it("drops metadata-only assistant text blocks without fabricating placeholder output", () => {
-    const toolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
+    const toolCall = call();
     const messages = [
       user("hi"),
       assistant(
@@ -627,10 +610,7 @@ describe("normalizeAssistantReplayContent", () => {
 
   it.each([false, true])("preserves identical turns with tools=%s", (tools) => {
     const content = tools
-      ? [
-          textBlock("checking"),
-          { type: "toolCall", id: "call_1", name: "read", arguments: { path: "file.txt" } },
-        ]
+      ? [textBlock("checking"), call("call_1", "read", { path: "file.txt" })]
       : [textBlock("intentional repeat")];
     const usage: Record<string, number> = tools ? {} : { output: 1, totalTokens: 1 };
     const messages = [

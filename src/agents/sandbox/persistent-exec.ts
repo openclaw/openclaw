@@ -228,13 +228,9 @@ export async function settleSandboxPersistentExecsForRetirement(params: {
 }
 
 /** One owner holds container custody, current authority, and workspace finalization per attempt. */
-export function createSandboxPersistentExecOwner(params: {
-  scheduler: GatewayScheduler;
-  assertCurrent?: () => void;
-}) {
+export function createSandboxPersistentExecOwner(params: { scheduler: GatewayScheduler }) {
   let retainedStore: Store | undefined;
-  const storeForOwner = () =>
-    (retainedStore ??= createSandboxPersistentExecStore({ assertCurrent: params.assertCurrent }));
+  const storeForOwner = () => (retainedStore ??= createSandboxPersistentExecStore());
 
   return {
     async recover(this: void) {
@@ -287,7 +283,6 @@ export function createSandboxPersistentExecOwner(params: {
       const cancellation = new AbortController();
       let outputAttached = true;
       const assertCurrent = () => {
-        params.assertCurrent?.();
         input.signal.throwIfAborted();
         input.assertCurrent();
         if (cancellation.signal.aborted) {

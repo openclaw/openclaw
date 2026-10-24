@@ -25,7 +25,6 @@ import {
   CodexNativeSubagentMonitor,
   createClient,
   createRuntime,
-  createCompletionScope,
   registerParent,
   notifyChildStarted,
   nativeCompletionNotification,
@@ -33,19 +32,12 @@ import {
   deliveredNativeCompletion,
   childTurnCompletedNotification,
   threadRead,
-  closeAgentNotification,
   directSpawnItem,
   observeCompletionAttempts,
+  parentRegistration as parentParams,
 } from "./native-subagent-monitor.test-support.js";
 import { prepareCodexServerNotification } from "./protocol-validators.js";
 import { createClientHarness } from "./test-support.js";
-
-const parentParams = () => ({
-  parentThreadId: "parent-thread",
-  requesterSessionKey: "agent:main:discord:channel:C123",
-  completionScope: createCompletionScope(),
-  agentId: "main",
-});
 
 async function runtimeFixture(client = createClient(), runtime = createRuntime()) {
   ensureCodexAppServerClientRuntime(client.client, { agentDir: "/tmp/agent" });
@@ -119,9 +111,7 @@ describe("native completion delivery ownership", () => {
     const { client, runtime, monitor, owner: parent } = await monitorFixture();
     await startChild(client, parent);
     await client.item(waitReceipt("wait-call", "shutdown", null));
-    await client.notify(
-      nativeCompletionNotification({ statusLabel: "shutdown", turnId: "parent-turn" }),
-    );
+    await client.completeNative({ statusLabel: "shutdown", turnId: "parent-turn" });
     await parent.unregister();
     expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
     await monitor.dispose();
@@ -243,7 +233,6 @@ describe("native completion delivery ownership", () => {
       await client.client.request("thread/unsubscribe", { threadId });
     });
     const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
-      recoveryPollDelaysMs: [],
       claimChildThread,
       releaseChildThread,
     });
@@ -317,9 +306,7 @@ describe("native completion delivery ownership", () => {
   );
 
   it("applies a native receipt immediately when active recovery learns its agent path", async () => {
-    const { client, runtime, monitor, owner } = await monitorFixture({
-      recoveryPollDelaysMs: [],
-    });
+    const { client, runtime, monitor, owner } = await monitorFixture();
     await startChild(client, owner);
     await client.notify(completedChild());
     await client.startTurn("next-turn", { error: null });
@@ -385,10 +372,10 @@ describe("native follow-up receipt custody", () => {
       consumed.resolve();
       return true;
     });
-    const { client, runtime, owner } = await monitorFixture(
-      { recoveryPollDelaysMs: [] },
-      { submissionStore: store, agentId: undefined },
-    );
+    const { client, runtime, owner } = await monitorFixture(undefined, {
+      submissionStore: store,
+      agentId: undefined,
+    });
     await startChild(client, owner, "/root/worker");
     await client.startTurn("child-turn", { error: null });
     await client.notify(completedChild("child-turn", "The build passed.", "first-result"));
@@ -449,16 +436,12 @@ describe("Codex native close admission", () => {
       runtime,
       monitor,
       owner: parent,
-    } = await monitorFixture(
-      { recoveryPollDelaysMs: [], captureChildThreadForget: async () => forget },
-      {},
-      client,
-    );
+    } = await monitorFixture({ captureChildThreadForget: async () => forget }, {}, client);
     try {
       await startChild(client, parent);
       await client.item(directSpawnItem("v1", "parent-thread", "child-thread"));
       await client.startTurn("child-turn");
-      await client.notify(closeAgentNotification({ method: "item/started" }));
+      await client.closeAgent({ method: "item/started" });
       await client.completeTurn({
         status: "completed",
         items: [agentMessage("final", "Accepted result", "final_answer")],
@@ -466,9 +449,7 @@ describe("Codex native close admission", () => {
       await completions.settle();
       expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
       // Native close reports the child's previous status, not the close outcome.
-      await client.notify(
-        closeAgentNotification({ method: "item/completed", previousStatus: "running" }),
-      );
+      await client.closeAgent({ method: "item/completed", previousStatus: "running" });
       expect(forget).toHaveBeenCalledOnce();
       await parent.unregister();
       await completions.settle();
@@ -498,7 +479,7 @@ describe("Codex native close admission", () => {
     };
     class ObservedMonitor extends CodexNativeSubagentMonitor {
       constructor(...params: ConstructorParameters<typeof CodexNativeSubagentMonitor>) {
-        super(params[0], params[1], { ...params[2], recoveryPollDelaysMs: [] });
+        super(...params);
         if (params[2]?.captureChildThreadForget) {
           settleOwnership = params[2].captureChildThreadForget;
         }
@@ -648,15 +629,15 @@ describe("Codex native close admission", () => {
     );
     await notifyChildStarted(client);
 
-    await client.notify(closeAgentNotification({ method: "item/started" }));
-    await client.notify(closeAgentNotification({ method: "item/completed" }));
+    await client.closeAgent({ method: "item/started" });
+    await client.closeAgent({ method: "item/completed" });
     expect(forget).not.toHaveBeenCalled();
     parent.bindTurn("parent-turn");
     await vi.waitFor(() => expect(forget).toHaveBeenCalledOnce());
 
     expect(captureChildThreadForget).toHaveBeenCalledExactlyOnceWith("child-thread");
     expect(releaseParentThread).toHaveBeenCalledOnce();
-    await client.notify(nativeCompletionNotification());
+    await client.completeNative();
     expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
   });
 });

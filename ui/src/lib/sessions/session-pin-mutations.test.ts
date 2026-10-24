@@ -6,6 +6,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
 import { ownRoster } from "./session-roster-refresh.test-support.ts";
+import { sessionRpc, patchReceipt } from "./session-rpc.test-support.ts";
 
 function pinRow(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   return {
@@ -20,9 +21,8 @@ function pinRow(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySe
     ...fields,
   };
 }
-function ack(key: string, entry: Partial<GatewaySessionRow>, path = "(multiple)") {
-  return { ok: true, path, key, entry };
-}
+const ack = (key: string, entry: Partial<GatewaySessionRow>, path = "(multiple)") =>
+  patchReceipt(key, entry, path);
 function pinFields(sessionId: string | undefined) {
   return { sessionId, updatedAt: 20, pinnedAt: 20, lastReadAt: 20, lastActivityAt: 10 };
 }
@@ -81,20 +81,14 @@ function pinFixture(patchResponse: (call: number) => Promise<unknown>, fakeTimer
   const server = { pinned: false };
   let patchCalls = 0;
   let listTs = 0;
-  const request = vi.fn(async (method: string) => {
-    if (method === "sessions.patch") {
-      return await patchResponse(++patchCalls);
-    }
-    if (method === "sessions.list") {
-      return sessionsResult(
+  const request = sessionRpc({
+    "sessions.patch": () => patchResponse(++patchCalls),
+    "sessions.list": () =>
+      sessionsResult(
         [{ key, sessionId: `${key}:session`, kind: "direct", updatedAt: 1, pinned: server.pinned }],
         ++listTs,
-      );
-    }
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
-    }
-    throw new Error(`Unexpected request: ${method}`);
+      ),
+    "sessions.subscribe": () => ({ subscribed: true }),
   });
   const harness = fixture({ request } as unknown as GatewayBrowserClient, fakeTimers);
   return {

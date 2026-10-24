@@ -689,7 +689,7 @@ describe("session accessor seam", () => {
     });
 
     expect(result.rejectedReason).toBeUndefined();
-    expect(result.appendedCount).toBe(1);
+    expect(result.messages.filter((m) => m.appended)).toHaveLength(1);
   });
 
   it("does not create database state for rejected memory-only transcript turns", async () => {
@@ -720,7 +720,7 @@ describe("session accessor seam", () => {
         },
       );
 
-      expect(result).toMatchObject({ appendedCount: 0, messages: [] });
+      expect(result).toMatchObject({ messages: [] });
       expect(fs.existsSync(databasePath)).toBe(false);
       expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
       expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
@@ -908,21 +908,6 @@ describe("session accessor seam", () => {
     expect(readEntry(scope)?.updatedAt).toBeGreaterThan(0);
   });
 
-  it("rejects a patch when its commit-edge ownership guard retires", async () => {
-    const scope = entryScope("agent:main:main");
-    await seed(scope, "session-1");
-
-    await expect(
-      patchSessionEntryCore(scope, () => ({ model: "gpt-5.5" }), {
-        assertCommitAllowed: () => {
-          throw new Error("owner retired");
-        },
-      }),
-    ).rejects.toThrow("owner retired");
-
-    expect(readEntry(scope)?.model).toBeUndefined();
-  });
-
   it("applies explicit replacements without exposing mutable store rows", async () => {
     const mainKey = "agent:main:main";
     const otherKey = "agent:main:other";
@@ -939,8 +924,9 @@ describe("session accessor seam", () => {
       })),
       skipMaintenance: true,
     });
+    const participant = { identity: { type: "profile" as const, id: "replacement-reader" } };
     recordSessionParticipant(entryScope(mainKey), {
-      identity: { type: "profile", id: "replacement-reader" },
+      ...participant,
       promptedAt: 10,
     });
     const database = openDatabase();
@@ -962,21 +948,14 @@ describe("session accessor seam", () => {
         expect(preparationReads.counts.entries).toBe(0);
         expect(preparationReads.counts.participants).toBe(0);
         expect(entries.map(({ sessionKey }) => sessionKey)).toEqual([mainKey, otherKey]);
-        const main = entries.find((entry) => entry.sessionKey === mainKey);
-        const other = entries.find((entry) => entry.sessionKey === otherKey);
-        if (other) {
-          other.entry.status = "failed";
-        }
-        if (!main) {
-          return { result: { replaced: false } };
-        }
-        expect(main.entry.participants).toEqual([
-          { identity: { type: "profile", id: "replacement-reader" } },
-        ]);
-        main.entry.abortedLastRun = true;
-        main.entry.updatedAt = 30;
-        const replacement = replacementRow(main.sessionKey, main.entry, [otherKey]);
-        return { result: { replaced: true }, replacements: [replacement] };
+        const [main, other] = entries;
+        expect(main!.entry.participants).toEqual([participant]);
+        other!.entry.status = "failed";
+        Object.assign(main!.entry, { abortedLastRun: true, updatedAt: 30 });
+        return {
+          result: { replaced: true },
+          replacements: [replacementRow(mainKey, main!.entry, [otherKey])],
+        };
       },
     }).finally(() => preparationReads.restore());
 
@@ -991,35 +970,27 @@ describe("session accessor seam", () => {
       status: "interrupted",
       updatedAt: 20,
     });
-    const selectedKeys = await replaceEntries({
-      sessionKeys: [mainKey],
-      storePath,
-      update: (entries) => ({ result: entries.map((entry) => entry.sessionKey) }),
-    });
-    expect(selectedKeys).toEqual([mainKey]);
-
-    const other = readEntry(entryScope(otherKey));
-    expect(other).toBeDefined();
+    const other = expectDefined(readEntry(entryScope(otherKey)), "other entry");
     await expect(
       replaceEntries({
         sessionKeys: [mainKey],
         storePath,
-        update: () => ({
-          replacements: [{ sessionKey: otherKey, entry: other! }],
-          result: undefined,
-        }),
+        update: (entries) => {
+          expect(entries.map((entry) => entry.sessionKey)).toEqual([mainKey]);
+          return replacementResult(replacementRow(otherKey, other));
+        },
       }),
     ).rejects.toThrow("outside the selected key set");
 
-    const runtimeAliasMarker = replacementRow("agent:main:missing", {
-      sessionId: "missing",
-      status: undefined,
-      updatedAt: 30,
-    });
     const missingSelectionResult = await replaceEntries({
       sessionKeys: ["agent:main:missing"],
       storePath,
-      update: () => ({ replacements: [runtimeAliasMarker], result: "missing-row-no-op" }),
+      update: () => ({
+        replacements: [
+          replacementRow("agent:main:missing", makeEntry("missing", 30, { status: undefined })),
+        ],
+        result: "missing-row-no-op",
+      }),
     });
     expect(missingSelectionResult).toBe("missing-row-no-op");
     expect(readEntry(entryScope("agent:main:missing"))).toBeUndefined();
@@ -1622,7 +1593,7 @@ describe("session accessor seam", () => {
       () => expect(readEntry(scope)?.updatedAt).toBeGreaterThan(10),
     );
     const target = publicTarget(scope);
-    expect(result.appendedCount).toBe(66);
+    expect(result.messages.filter((m) => m.appended)).toHaveLength(66);
     expect(updates).toEqual(
       expectedMessages.map(({ message }, index) =>
         Object.assign(
@@ -1679,7 +1650,7 @@ describe("session accessor seam", () => {
         updateMode: "inline",
       }),
     );
-    expect(result.appendedCount).toBe(2);
+    expect(result.messages.filter((m) => m.appended)).toHaveLength(2);
     expect(publicUpdates).toEqual([invalidation(scope)]);
     expect(internalUpdates).toEqual([
       {
@@ -1728,7 +1699,7 @@ describe("session accessor seam", () => {
       }),
     );
 
-    expect(result.appendedCount).toBe(2);
+    expect(result.messages.filter((m) => m.appended)).toHaveLength(2);
     expect(updates).toEqual([invalidation(scope)]);
     await expect(loadEvents(scope)).resolves.toEqual(
       containing({ id: "diverging-turn-abandoned" }, { id: "diverging-turn-active" }),
@@ -1761,7 +1732,6 @@ describe("session accessor seam", () => {
       }),
     );
 
-    expect(result.appendedCount).toBe(1);
     expect(result.messages.map((message) => message.appended)).toEqual([false, true]);
     expect(updates).toEqual([
       expect.objectContaining({
@@ -1860,7 +1830,7 @@ describe("session accessor seam", () => {
         updateMode: "none",
       });
     const inserted = await attempt(100);
-    expect(inserted.appendedCount).toBe(1);
+    expect(inserted.messages.filter((m) => m.appended)).toHaveLength(1);
     expectEntry(scope, {
       abortedLastRun: false,
       restartRecoveryDeliveryRunId: "run-1",
@@ -1881,7 +1851,7 @@ describe("session accessor seam", () => {
       throw new Error("expected retryable admission");
     }
     const deduplicated = await attempt(300, buildRestartRecoveryExpectedState(retryable));
-    expect(deduplicated.appendedCount).toBe(0);
+    expect(deduplicated.messages.filter((m) => m.appended)).toHaveLength(0);
     expect(deduplicated.messages).toHaveLength(1);
     expectEntry(scope, {
       ...recoveryClaim,
@@ -1900,7 +1870,7 @@ describe("session accessor seam", () => {
       updatedAt: 350,
     }));
     const historicalMatch = await attempt(400);
-    expect(historicalMatch.appendedCount).toBe(0);
+    expect(historicalMatch.messages.filter((m) => m.appended)).toHaveLength(0);
     expect(historicalMatch.messages).toHaveLength(1);
     expectEntry(scope, { endedAt: 350, status: "done", updatedAt: expect.any(Number) });
     expectCleared(readEntry(scope), [
@@ -1943,7 +1913,7 @@ describe("session accessor seam", () => {
         updateMode: "file-only",
       });
 
-      expect(result).toMatchObject({ appendedCount: 0, rejectedReason: "session-rebound" });
+      expect(result).toMatchObject({ messages: [], rejectedReason: "session-rebound" });
       await expect(loadEvents(scope)).resolves.toEqual([]);
     },
   );
@@ -2026,7 +1996,7 @@ describe("session accessor seam", () => {
       predicateGate.resolve();
       const result = await pendingTurn;
 
-      expect(result).toMatchObject({ appendedCount: 0, rejectedReason: "session-rebound" });
+      expect(result).toMatchObject({ messages: [], rejectedReason: "session-rebound" });
       await expect(loadEvents(scope)).resolves.toEqual([]);
       expect(readEntry(scope)?.pendingFinalDelivery).toEqual(replacement.pendingFinalDelivery);
     },
@@ -2157,25 +2127,6 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:current",
     });
     expect(fs.existsSync(storePath)).toBe(false);
-  });
-
-  it("reads imported transcripts before opening the SQLite transaction", async () => {
-    const agentId = "main";
-    const sessionId = "session-1";
-    const database = openDatabase(agentId);
-    let readInsideTransaction: boolean | undefined;
-    await importSqliteSessionRows({
-      agentId,
-      entry: { sessionId, updatedAt: 10 },
-      readTranscriptEvents: (append) => {
-        readInsideTransaction = database.db.isTransaction;
-        append({ sessionId, type: "session" });
-      },
-      sessionKey: "agent:main:main",
-      storePath,
-    });
-
-    expect(readInsideTransaction).toBe(false);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

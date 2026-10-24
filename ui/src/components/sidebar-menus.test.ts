@@ -27,6 +27,7 @@ import {
 import { menuItemLabels, openSubmenu } from "../test-helpers/session-menu.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
+import { createSidebarMenus } from "./sidebar-menus.tsx";
 setupSidebarTest();
 afterEach(clearNativeGatewayTestState);
 
@@ -201,6 +202,43 @@ it.each(["provider replacement", "client replacement", "native disconnect and re
     } finally {
       retired.resolve({ worktrees: [] });
       current.resolve({ worktrees: [] });
+    }
+  },
+);
+
+it.each(["close", "disconnect"] as const)(
+  "does not load session work when the menu closes before its renderer loads (%s)",
+  async (action) => {
+    setNativeGatewayTestState("local");
+    const request = createGatewayRequestMock(async () => ({ worktrees: [] }));
+    const { sidebar } = await mountConnected(createGateway(createTestGatewayClient(request)));
+    const host = getAppSidebarOwner(sidebar.hostElement)!;
+    const menus = createSidebarMenus({
+      host,
+      element: sidebar.hostElement,
+      commit: async () => true,
+    });
+    const session = {
+      ...host.findSidebarMenuSessionByKey("agent:main:main")!,
+      worktreeId: "wt-1",
+    };
+    try {
+      menus.connect();
+      menus.openSessionMenu(session, 0, 0);
+      if (action === "close") {
+        menus.closeSessionMenu();
+      } else {
+        menus.disconnect();
+      }
+      await menus.preloadMenuRenderer();
+      expect(request).not.toHaveBeenCalledWith("worktrees.list", expect.anything());
+      menus.closeSessionMenu();
+      menus.connect();
+      menus.openSessionMenu(session, 0, 0);
+      await vi.dynamicImportSettled();
+      expect(request).toHaveBeenCalledWith("worktrees.list", {});
+    } finally {
+      menus.dispose();
     }
   },
 );

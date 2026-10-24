@@ -18,6 +18,10 @@ import {
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import {
+  captureSessionTarget,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
@@ -181,6 +185,17 @@ async function handleSessionGoalMutation(
     if (!actorFacts) {
       assertCurrent();
     }
+    if (request.action === "replace") {
+      const { replaceExecutingSessionGoal } = await import("./sessions-goal-replace.js");
+      await replaceExecutingSessionGoal({
+        options,
+        request,
+        target,
+        source,
+        requestFingerprint: identity.requestFingerprint,
+      });
+      return;
+    }
     if (request.action === "resume") {
       const { handleSessionGoalResumeChat } = await import("./chat-send-handler.js");
       await handleSessionGoalResumeChat(
@@ -214,13 +229,25 @@ async function handleSessionGoalMutation(
             ...("note" in request && request.note ? { note: request.note } : {}),
           }
     ) satisfies SessionGoalOperation;
-    const committed = await mutateSessionGoal({
-      agentId: target.agentId,
-      sessionKey: target.storeKey,
-      storePath: target.storePath,
-      expectedSessionId: target.entry.sessionId,
-      operation,
+    const committed = await runSessionMutation({
+      target: captureSessionTarget({
+        storeScope: target.storePath,
+        sessionKey: target.storeKey,
+        agentId: target.agentId,
+        incarnation: target.entry.sessionId,
+      }),
+      requiredSessionId: target.entry.sessionId,
+      policy: "allow-live",
       assertCurrent: source,
+      run: () =>
+        mutateSessionGoal({
+          agentId: target.agentId,
+          sessionKey: target.storeKey,
+          storePath: target.storePath,
+          expectedSessionId: target.entry.sessionId,
+          operation,
+          assertCurrent: source,
+        }),
     });
     if (!committed.replayed && committed.sessionEntry) {
       await publishCommittedSessionGoalChange(context, {

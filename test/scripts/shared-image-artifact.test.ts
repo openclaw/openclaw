@@ -81,6 +81,27 @@ function verifyApiFailure(
   });
 }
 
+function expectApiResult(
+  result: ReturnType<typeof verifyUploadedArtifact>,
+  fixture: ReturnType<typeof createFixture>,
+  expected: {
+    success: boolean;
+    sleeps: string;
+    artifacts: number;
+    attempts: number;
+    messages: string[];
+  },
+) {
+  expect(result.status === 0, `${result.stdout}\n${result.stderr}`).toBe(expected.success);
+  expect(readFileSync(fixture.sleepLog, "utf8")).toBe(expected.sleeps);
+  const calls = readFileSync(fixture.ghLog, "utf8");
+  expect(calls.match(/actions\/artifacts/g) ?? []).toHaveLength(expected.artifacts);
+  expect(calls.match(/actions\/runs/g) ?? []).toHaveLength(expected.attempts);
+  for (const message of expected.messages) {
+    expect(result.stderr).toContain(message);
+  }
+}
+
 function expectRejectedUpload(
   fixture: ReturnType<typeof createFixture>,
   options: Parameters<typeof verifyUploadedArtifact>[1],
@@ -261,70 +282,35 @@ describe("shared Docker image artifacts", () => {
     );
   });
 
-  it("retries a fresh artifact metadata 404 and then succeeds", () => {
-    const fixture = createFixture();
-    const verified = verifyApiFailure(fixture, "gh: Not Found (HTTP 404)", "1");
-    expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
-    expect(verified.stderr).toContain(
-      "artifact metadata GitHub API GET failed transiently on attempt 1/3; retrying in 2s",
-    );
-    expect(readFileSync(fixture.sleepLog, "utf8")).toBe("2\n");
-    const calls = readFileSync(fixture.ghLog, "utf8");
-    expect(calls.match(/actions\/artifacts/g)).toHaveLength(2);
-    expect(calls.match(/actions\/runs/g)).toHaveLength(1);
-  });
+  it.each([
+    ["gh: Not Found (HTTP 404)", "1", "ARTIFACT", true, "2\n", 2, 1],
+    ["gh: Not Found (HTTP 404)", "3", "ATTEMPT", false, "", 1, 1],
+    ["gh: upstream unavailable (HTTP 503)", "2", "ARTIFACT", true, "2\n4\n", 3, 1],
+    ["Get https://api.github.com: dial tcp: i/o timeout", "3", "ARTIFACT", false, "2\n4\n", 3, 0],
+    ["gh: API rate limit exceeded (HTTP 429)", "1", "ARTIFACT", true, "2\n", 2, 1],
+  ] as const)(
+    "handles %s after %s failures in %s",
+    (error, failures, target, success, sleeps, artifacts, attempts) => {
+      const fixture = createFixture();
+      const result = verifyApiFailure(fixture, error, failures, target);
+      const messages =
+        success && error.includes("404")
+          ? ["artifact metadata GitHub API GET failed transiently on attempt 1/3; retrying in 2s"]
+          : success
+            ? []
+            : [`GitHub API GET failed after ${artifacts === 3 ? 3 : 1} attempt(s)`];
+      expectApiResult(result, fixture, { success, sleeps, artifacts, attempts, messages });
+      if (!sleeps) {
+        expect(result.stderr).not.toContain("retrying");
+      }
+      if (!attempts) {
+        expect(result.stdout).not.toContain("partial artifact response");
+        expect(result.stderr).toContain("i/o timeout");
+      }
+    },
+  );
 
-  it("fails immediately when producer run-attempt metadata returns 404", () => {
-    const fixture = createFixture();
-    const failed = verifyApiFailure(fixture, "gh: Not Found (HTTP 404)", "3", "ATTEMPT");
-    expect(failed.status).not.toBe(0);
-    expect(failed.stderr).toContain("GitHub API GET failed after 1 attempt(s)");
-    expect(failed.stderr).not.toContain("retrying");
-    expect(readFileSync(fixture.sleepLog, "utf8")).toBe("");
-    const calls = readFileSync(fixture.ghLog, "utf8");
-    expect(calls.match(/actions\/artifacts/g)).toHaveLength(1);
-    expect(calls.match(/actions\/runs/g)).toHaveLength(1);
-  });
-
-  it("recovers on the third attempt and fails cleanly when all attempts are exhausted", () => {
-    const recoveredFixture = createFixture();
-    const recovered = verifyApiFailure(
-      recoveredFixture,
-      "gh: upstream unavailable (HTTP 503)",
-      "2",
-    );
-    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
-    expect(readFileSync(recoveredFixture.sleepLog, "utf8")).toBe("2\n4\n");
-    expect(readFileSync(recoveredFixture.ghLog, "utf8").match(/actions\/artifacts/g)).toHaveLength(
-      3,
-    );
-
-    const exhaustedFixture = createFixture();
-    const exhausted = verifyApiFailure(
-      exhaustedFixture,
-      "Get https://api.github.com: dial tcp: i/o timeout",
-      "3",
-    );
-    expect(exhausted.status).not.toBe(0);
-    expect(exhausted.stdout).not.toContain("partial artifact response");
-    expect(exhausted.stderr).toContain("i/o timeout");
-    expect(exhausted.stderr).toContain("GitHub API GET failed after 3 attempt(s)");
-    expect(readFileSync(exhaustedFixture.sleepLog, "utf8")).toBe("2\n4\n");
-    const calls = readFileSync(exhaustedFixture.ghLog, "utf8");
-    expect(calls.match(/actions\/artifacts/g)).toHaveLength(3);
-    expect(calls).not.toContain("actions/runs");
-  });
-
-  it("retries explicit rate limiting but fails fast on permanent HTTP and credential errors", () => {
-    const rateLimitFixture = createFixture();
-    const rateLimited = verifyApiFailure(
-      rateLimitFixture,
-      "gh: API rate limit exceeded (HTTP 429)",
-      "1",
-    );
-    expect(rateLimited.status, `${rateLimited.stdout}\n${rateLimited.stderr}`).toBe(0);
-    expect(readFileSync(rateLimitFixture.sleepLog, "utf8")).toBe("2\n");
-
+  it("fails fast on permanent HTTP and credential errors", () => {
     for (const error of [
       "gh: Unauthorized (HTTP 401)",
       "gh: Forbidden (HTTP 403)",
@@ -385,35 +371,16 @@ describe("shared Docker image artifacts", () => {
 
   it("fails before loading when provenance or archive bytes differ", () => {
     const fixture = createPackedFixture();
-
-    for (const variant of [
-      {
-        env: {
-          ...expectedArchiveEnv(fixture),
-          OPENCLAW_SHARED_IMAGE_RUN_ID: "654321",
-        },
-        imageRefs: IMAGE_REFS,
-        expected: "run ID",
-      },
-      {
-        env: expectedArchiveEnv(fixture),
-        imageRefs: [
-          expectDefined(IMAGE_REFS[0], "first shared Docker image reference"),
-          "openclaw-docker-e2e-functional:wrong",
-        ],
-        expected: "image ref 1",
-      },
-      {
-        env: {
-          ...expectedArchiveEnv(fixture),
-          OPENCLAW_SHARED_IMAGE_PACKAGE_SHA256: "d".repeat(64),
-        },
-        imageRefs: IMAGE_REFS,
-        expected: "package SHA-256",
-      },
-    ]) {
-      expectRejectedLoad(fixture, variant.env, variant.expected, variant.imageRefs);
+    for (const [key, value, message] of [
+      ["OPENCLAW_SHARED_IMAGE_RUN_ID", "654321", "run ID"],
+      ["OPENCLAW_SHARED_IMAGE_PACKAGE_SHA256", "d".repeat(64), "package SHA-256"],
+    ] as const) {
+      expectRejectedLoad(fixture, { ...expectedArchiveEnv(fixture), [key]: value }, message);
     }
+    expectRejectedLoad(fixture, expectedArchiveEnv(fixture), "image ref 1", [
+      expectDefined(IMAGE_REFS[0], "first shared Docker image reference"),
+      "openclaw-docker-e2e-functional:wrong",
+    ]);
 
     const archivePath = join(fixture.artifactDir, "shared-images.tar.zst");
     writeFileSync(archivePath, `${readFileSync(archivePath, "utf8")}tampered`);
@@ -447,23 +414,19 @@ describe("shared Docker image artifacts", () => {
     delete missingRunEnv.OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT;
     expectRejectedLoad(fixture, missingRunEnv, "OPENCLAW_SHARED_IMAGE_RUN_ID");
 
-    expectRejectedLoad(
-      fixture,
-      {
-        ...fixture.env,
-        OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: "2",
-        OPENCLAW_SHARED_IMAGE_RUN_ID: "123456",
-      },
-      "expected shared image archive SHA-256",
-    );
-
-    expectRejectedLoad(
-      fixture,
-      {
-        ...expectedArchiveEnv(fixture),
-        OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256: "d".repeat(64),
-      },
-      "expected archive sha256",
-    );
+    const expectedEnv = expectedArchiveEnv(fixture);
+    for (const [digest, message] of [
+      [undefined, "expected shared image archive SHA-256"],
+      ["d".repeat(64), "expected archive sha256"],
+    ] as const) {
+      expectRejectedLoad(
+        fixture,
+        {
+          ...expectedEnv,
+          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256: digest,
+        },
+        message,
+      );
+    }
   });
 });

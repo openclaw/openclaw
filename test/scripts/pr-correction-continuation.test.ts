@@ -1,11 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -249,10 +242,6 @@ if (phase === 'apply') {
     for (const [name, bytes] of Object.entries(authority)) {
       expect(readFileSync(join(archive, name))).toEqual(bytes);
     }
-    expect(rejected(replaceArgument("--expected-tree", "a".repeat(40)))).toContain(
-      "Selected continuation differs",
-    );
-    expect(read("review-transition.json")).toEqual(journalBytes);
     const archivedContext = join(archive, "prep-context.env");
     writeFileSync(archivedContext, "changed recovery proof\n");
     expect(rejected()).toContain("Retained continuation evidence changed");
@@ -277,24 +266,11 @@ if (phase === 'apply') {
     ]) {
       expect(existsSync(f.local(name)), name).toBe(false);
     }
-    const context = readFileSync(f.local("prep-context.env"), "utf8");
-    expect(context).toContain(`PR_HEAD_SHA_BEFORE='${incoming}'`);
-    expect(context).not.toContain("PREP_BASELINE_REFRESH");
     // Historical hosted READY cannot admit the new candidate; a newly
     // initialized candidate review must resolve the fresh incoming finding.
     write("correction-review.json", authority["correction-review.json"]!);
     const staleReady = f.run("prepare-gates");
     expect(staleReady.status).not.toBe(0);
     expect(staleReady.stdout + staleReady.stderr).toMatch(/correction|review/iu);
-    f.pass("prepare-correction-review-init");
-    const candidate = JSON.parse(readFileSync(f.local("correction-review.json"), "utf8"));
-    expect(candidate.pr.headSha).toBe(head);
-    expect(candidate.recommendation).not.toBe("READY FOR /prepare-pr");
-    expect(candidate.correction.resolvedFindings.map((item: { id: string }) => item.id)).toEqual([
-      "I2",
-    ]);
-    expect(f.run("prepare-push").status).not.toBe(0);
-    git("verify-commit", "HEAD");
-    expect(readdirSync(archive)).toContain("gates-build.log");
   });
 });

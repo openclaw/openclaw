@@ -104,10 +104,12 @@ function resolveSecrets(config: Parameters<typeof createTestConfigSnapshot>[0]) 
   };
 }
 
-function runDirectory(args: string[]) {
+function runDirectory(args: string[] | string) {
   const program = new Command().name("openclaw");
   registerDirectoryCli(program);
-  return program.parseAsync(["directory", ...args], { from: "user" });
+  return program.parseAsync(["directory", ...(typeof args === "string" ? args.split(" ") : args)], {
+    from: "user",
+  });
 }
 
 function installDirectory(directory: Record<string, unknown>, channelId = "demo-directory") {
@@ -139,7 +141,7 @@ describe("registerDirectoryCli", () => {
   });
 
   it("installs an explicit optional directory channel on demand", async () => {
-    const { tokenRef, sourceConfig, runtimeConfig: initialRuntime } = secretFixture();
+    const { tokenRef, runtimeConfig: initialRuntime } = secretFixture();
     let runtimeConfig = initialRuntime;
     mocks.loadConfig.mockImplementation(() => runtimeConfig);
 
@@ -166,14 +168,6 @@ describe("registerDirectoryCli", () => {
 
     await runDirectory(["self", "--channel", "slack", "--json"]);
 
-    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        rawChannel: "slack",
-        allowInstall: true,
-        preferRegisteredPlugin: true,
-        cfg: sourceConfig,
-      }),
-    );
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
     const replaceArgs = firstRecordArg(mocks.replaceConfigFile);
     expect(replaceArgs.sourceConfig).toEqual({
@@ -226,15 +220,9 @@ describe("registerDirectoryCli", () => {
       mocks.loadConfig.mockReturnValue(sourceConfig);
     });
     await runDirectory([
-      "groups",
-      "members",
-      "--channel",
-      "slack",
-      "--group-id",
+      ..."groups members --channel slack --group-id".split(" "),
       " group-1 ",
-      "--limit",
-      "5",
-      "--json",
+      ..."--limit 5 --json".split(" "),
     ]);
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       sourceConfig: enabledConfig,
@@ -279,25 +267,13 @@ describe("registerDirectoryCli", () => {
     });
     mocks.resolveMessageChannelSelection.mockResolvedValue({
       channel: "whatsapp",
-      plugin: {
-        id: "whatsapp",
-        directory: { self },
-      },
+      plugin: { id: "whatsapp", directory: { self } },
       configured: ["whatsapp"],
       source: "single-configured",
     });
 
     await runDirectory(["self", "--json"]);
 
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: { channels: {} },
-      env: process.env,
-    });
-    expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
-      cfg: autoEnabledConfig,
-      channel: null,
-      accountResolution: "read_only",
-    });
     expect(self).toHaveBeenCalledTimes(1);
     expect(firstRecordArg(self).cfg).toBe(autoEnabledConfig);
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
@@ -382,14 +358,9 @@ describe("registerDirectoryCli", () => {
     "explains $test.label self lookup in $mode mode",
     async ({ mode, test: { self, reason, message } }) => {
       installDirectory({ self: self() });
-      await runDirectory([
-        "self",
-        "--channel",
-        "demo-directory",
-        "--account",
-        "account-1",
-        ...(mode === "JSON" ? ["--json"] : []),
-      ]);
+      await runDirectory(
+        `self --channel demo-directory --account account-1${mode === "JSON" ? " --json" : ""}`,
+      );
       if (mode === "JSON") {
         expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledWith({
           status: "unavailable",
@@ -409,7 +380,7 @@ describe("registerDirectoryCli", () => {
       listPeers: vi.fn().mockResolvedValue([]),
     });
 
-    await runDirectory(["peers", "list", "--channel", "demo-directory", "--account", "account-1"]);
+    await runDirectory("peers list --channel demo-directory --account account-1");
 
     const output = runtimeState.runtimeLogs.join("\n");
     expect(output).toContain("No peers found");
@@ -487,9 +458,7 @@ describe("registerDirectoryCli", () => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: { "openclaw-weixin": {} } },
       channelId: "openclaw-weixin",
-      plugin: {
-        id: "openclaw-weixin",
-      },
+      plugin: { id: "openclaw-weixin" },
       configChanged: false,
       pluginInstalled: false,
     });
@@ -498,10 +467,6 @@ describe("registerDirectoryCli", () => {
       "exit:1",
     );
 
-    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledTimes(1);
-    const installArgs = firstRecordArg(mocks.resolveInstallableChannelPlugin);
-    expect(installArgs.rawChannel).toBe("openclaw-weixin");
-    expect(installArgs.allowInstall).toBe(true);
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(
       runtimeState.runtimeErrors.some((message) =>

@@ -26,7 +26,9 @@ import { meetingStatus } from "../../test-helpers/transcripts.test-support.ts";
 import { mountAppearanceCatalogPage as mount } from "./config-page-catalog.test-support.ts";
 import {
   completeConfigContext,
+  createConfigRouteContext as routeContext,
   mountConfigPage,
+  mountConfigPageState,
   publishConfigSource,
 } from "./config-page.test-support.ts";
 import type { ConfigPageRouteData } from "./config-page.tsx";
@@ -85,61 +87,6 @@ describe("ConfigPage navigation", () => {
       );
     });
   });
-
-  function routeContext(): ApplicationContext {
-    const config = { messages: { ackReaction: "!" }, tts: { provider: "synthetic" } };
-    const subscribe = () => () => undefined;
-    const { gateway } = createApplicationGateway({
-      client: null,
-      phase: "offline",
-      offlineStable: true,
-      hello: null,
-      canvasPluginSurfaceUrl: null,
-      assistantAgentId: "main",
-      sessionKey: "main",
-      lastError: null,
-      lastErrorCode: null,
-    });
-    return {
-      basePath: "",
-      gateway,
-      settingsAgentSelection: { state: { selectedId: "main" }, subscribe },
-      agentSelection: { state: { selectedId: "main" }, subscribe },
-      agents: { state: { agentsList: null }, subscribe },
-      config: {
-        current: { assistantIdentity: { name: "OpenClaw" }, serverVersion: "test" },
-        subscribe,
-      },
-      runtimeConfig: {
-        state: {
-          connected: false,
-          configLoading: false,
-          configSchemaLoading: false,
-          configSnapshot: { config, runtimeConfig: config, hash: "settings-defaults" },
-          configSchema: {
-            type: "object",
-            properties: {
-              messages: { type: "object", properties: { ackReaction: { type: "string" } } },
-              tts: { type: "object", properties: { provider: { type: "string" } } },
-            },
-          },
-          configUiHints: {},
-          configForm: config,
-          configFormOriginal: config,
-          configRaw: JSON.stringify(config),
-          configRawOriginal: JSON.stringify(config),
-          configValid: true,
-          configIssues: [],
-        },
-        ensureLoaded: async () => undefined,
-        ensureSchemaLoaded: async () => undefined,
-        subscribe,
-      },
-      theme: { branding: resolveThemeBranding(undefined), subscribe },
-      overlays: { snapshot: {}, subscribe },
-      webPush: { snapshot: undefined, subscribe },
-    } as unknown as ApplicationContext;
-  }
 
   describe("ConfigPage route selections", () => {
     it.each([
@@ -382,6 +329,75 @@ describe("ConfigPage navigation", () => {
     } finally {
       releaseAdvanced.resolve(undefined);
       mounted.dispose();
+      router.stop();
+    }
+  });
+
+  it.each([false, true])(
+    "keeps Open pending when Raw is reselected (retained draft: %s)",
+    async (retainedDraft) => {
+      const context = routeContext();
+      if (retainedDraft) {
+        Object.assign(context.runtimeConfig.state, {
+          configFormMode: "raw",
+          configFormDirty: true,
+        });
+      }
+      const pending = deferred();
+      const openFile = vi.fn(() => pending.promise);
+      Object.assign(context.runtimeConfig, { openFile, canOpenFile: true });
+      const view = mountConfigPage(context);
+      const button = (label: string) =>
+        expectDefined(
+          [...view.container.querySelectorAll("button")].find(
+            (candidate) => candidate.textContent?.trim() === label,
+          ),
+          label,
+        );
+      try {
+        if (!retainedDraft) {
+          button("Raw").click();
+        }
+        await waitForSolid(() => expect(button("Raw").getAttribute("aria-pressed")).toBe("true"));
+        const open = button("Open");
+        open.click();
+        await waitForSolid(() => expect(open.disabled, "Open is pending").toBe(true));
+        button("Raw").click();
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+        await waitForSolid(() =>
+          expect(open.disabled, "Raw reselection keeps Open pending").toBe(true),
+        );
+        open.click();
+        expect(openFile).toHaveBeenCalledOnce();
+        pending.resolve();
+        await waitForSolid(() => expect(open.disabled).toBe(false));
+      } finally {
+        pending.resolve();
+        view.dispose();
+      }
+    },
+  );
+
+  it("retires command presentation synchronously when the router changes location", async () => {
+    const context = completeConfigContext(routeContext());
+    const router = createRouter({
+      routes: [{ id: "destination", path: "/destination", component: () => ({}) }],
+    });
+    Object.assign(context, { router });
+    const view = mountConfigPageState(context);
+    const original = view.state.configProps().presentationRetired();
+    const retired = vi.fn();
+    void original.then(retired);
+    try {
+      const navigation = router.navigate("destination", context);
+      await original;
+      expect(retired).toHaveBeenCalledOnce();
+      expect(view.state.configProps().presentationRetired()).not.toBe(original);
+      await navigation;
+    } finally {
+      view.dispose();
       router.stop();
     }
   });
@@ -913,9 +929,11 @@ describe("ConfigPage meeting capture", () => {
       const tabs = captureTab.closest(".hub-tabs")!;
       expect(tabs.querySelector("[active]")?.getAttribute("data-tab-value")).toBe("messages");
       captureTab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      flush();
-      const capture = container.querySelector("openclaw-meeting-capture-settings") as HTMLElement;
-      expect(container.querySelector("#config-section-panel")?.contains(capture)).toBe(true);
+      const capture = await waitForSolid(() => {
+        const element = container.querySelector("openclaw-meeting-capture-settings") as HTMLElement;
+        expect(container.querySelector("#config-section-panel")?.contains(element)).toBe(true);
+        return element;
+      });
       flush();
       const advanced = capture.querySelector<HTMLDetailsElement>("details")!;
       expect(advanced).not.toBeNull();

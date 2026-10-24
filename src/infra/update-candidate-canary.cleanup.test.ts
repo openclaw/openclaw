@@ -12,12 +12,13 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import {
-  completeCanaryCommand,
   createCanarySnapshotResult,
+  holdCanaryProgress,
   FakeChild,
   stubHealthyGateway,
   canaryOutcomeStep,
 } from "./update-candidate-canary.test-support.js";
+import { createCanaryHarness } from "./update-candidate-harness.test-support.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
@@ -54,54 +55,16 @@ vi.mock("./ports-probe.js", async (importOriginal) => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
-let nextPid = 41_000;
-const children = new Map<number, FakeChild>();
-
-function canaryStateOptions(timeoutMs: number) {
-  return { root, stateDir: root, config: {}, env: {}, timeoutMs };
-}
+const harness = createCanaryHarness(mocks, {
+  isGateway: (args) => args.includes("--update-canary"),
+});
+const { children, options: canaryStateOptions } = harness;
 
 beforeEach(async () => {
-  vi.clearAllMocks();
-  root = path.join(await fs.realpath(tempDirs.make("canary-cleanup-")), "candidate");
-  await fs.mkdir(path.join(root, "dist", "infra"), { recursive: true });
-  await fs.writeFile(path.join(root, "dist", "index.js"), "");
-  await fs.writeFile(path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"), "");
-  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.1" }));
-  mocks.snapshot.mockImplementation(async (_command, options: { input: string }) =>
-    createCanarySnapshotResult(options.input),
-  );
-  mocks.spawn.mockImplementation((_command: string, args: string[]) => {
-    const child = new FakeChild(nextPid++);
-    children.set(child.pid, child);
-    if (args.includes("--update-canary")) {
-      return child;
-    }
-    completeCanaryCommand(child, args, () => ({
-      pluginInventory: undefined,
-      pluginErrors: false,
-      runtimeContract: { state: 2, agent: 3 },
-      runtimeError: false,
-      lintReport: { ok: true, checksRun: 1, findings: [], warnings: [] },
-    }));
-    return child;
-  });
-  mocks.signal.mockImplementation(
-    (pid: number, _signal: string, options: { onComplete?: () => void }) => {
-      children.get(pid)?.emit("close", 0);
-      options.onComplete?.();
-    },
-  );
+  root = await harness.reset(tempDirs.make("canary-cleanup-"));
 });
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-  for (const child of children.values()) {
-    child.stdout.destroy();
-    child.stderr.destroy();
-  }
-  children.clear();
-});
+afterEach(() => harness.dispose());
 
 describe("canary teardown evidence", () => {
   beforeEach(() => {
@@ -198,23 +161,18 @@ describe("canary teardown evidence", () => {
   it.each(["candidate-doctor", "candidate-gateway-startup"])(
     "awaits the %s start receipt before launching its process",
     async (name) => {
-      const entered = createDeferredCore();
-      const receipt = createDeferredCore();
+      const { entered, receipt, onProgress } = holdCanaryProgress(
+        (step) => step.step === name && step.status === "in_progress",
+      );
       const refusal = new Error("check start receipt was refused");
       const onStep = vi.fn();
       const pending = validateUpdateCandidateCanary({
         ...canaryStateOptions(3_000),
         onStep,
-        onProgress: (step) => {
-          if (step.step === name && step.status === "in_progress") {
-            entered.resolve();
-            return receipt.promise;
-          }
-          return undefined;
-        },
+        onProgress,
       });
       try {
-        await Promise.race([entered.promise, pending]);
+        await Promise.race([entered, pending]);
         expect(mocks.spawn).toHaveBeenCalledTimes(name === "candidate-doctor" ? 0 : 5);
         receipt.reject(refusal);
         await expect(pending).rejects.toBe(refusal);
@@ -233,8 +191,7 @@ describe("canary teardown evidence", () => {
     const progress =
       "SQLite integrity check still running: agent database (400 MiB, 10s elapsed, phase=checking).";
     mocks.spawn.mockImplementationOnce(() => {
-      const child = new FakeChild(nextPid++);
-      children.set(child.pid, child);
+      const child = harness.child(true);
       queueMicrotask(() => {
         child.stderr.write(`[state/sqlite] ${progress}\n`);
         waiting.resolve();
@@ -285,8 +242,9 @@ describe("canary teardown evidence", () => {
       const directory = path.join(root, "owned-cleanup-copy");
       await fs.mkdir(directory);
       vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-      const entered = createDeferredCore();
-      const receipt = createDeferredCore();
+      const { entered, receipt, onProgress } = holdCanaryProgress(
+        (step) => step.detail?.includes("waiting for filesystem removal") ?? false,
+      );
       const uncertain = new CommandProcessCleanupError();
       const remove = vi.spyOn(fs, "rm");
       const onWarning = vi.fn();
@@ -295,18 +253,12 @@ describe("canary teardown evidence", () => {
         directory,
         name: "candidate-state-cleanup",
         canRemove: async () => true,
-        onProgress: (step) => {
-          if (step.detail?.includes("waiting for filesystem removal")) {
-            entered.resolve();
-            return receipt.promise;
-          }
-          return undefined;
-        },
+        onProgress,
         onWarning,
       });
       const rejected = expect(pending).rejects.toBe(uncertain);
       try {
-        await entered.promise;
+        await entered;
         if (timing === "after-deadline") {
           await vi.advanceTimersByTimeAsync(300_000);
         }
@@ -355,18 +307,12 @@ describe("canary teardown evidence", () => {
     const cleanupFailure = new Error("cleanup warning ledger unavailable");
     let gateway: FakeChild | undefined;
     let retained: string | undefined;
-    const spawnNormally = mocks.spawn.getMockImplementation()!;
     const signalNormally = mocks.signal.getMockImplementation()!;
-    mocks.spawn.mockImplementation(
-      (command, args: string[], options: { env: NodeJS.ProcessEnv }) => {
-        const child = spawnNormally(command, args, options);
-        if (args.includes("--update-canary")) {
-          gateway = child;
-          retained = options.env.OPENCLAW_STATE_DIR;
-        }
-        return child;
-      },
-    );
+    harness.overrideSpawn("--update-canary", (_args, options) => {
+      gateway = harness.child(true);
+      retained = options.env.OPENCLAW_STATE_DIR;
+      return gateway;
+    });
     mocks.signal.mockImplementation((pid, signal, options) => {
       if (!gateway || pid !== gateway.pid) {
         signalNormally(pid, signal, options);
@@ -574,16 +520,11 @@ describe("canary teardown evidence", () => {
     async (report) => {
       let now = 2_000_000;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-      const spawnNormally = mocks.spawn.getMockImplementation()!;
       const signalNormally = mocks.signal.getMockImplementation()!;
       let lintChild: FakeChild | undefined;
-      mocks.spawn.mockImplementation((command, args: string[], options) => {
-        if (!args.includes("--lint")) {
-          return spawnNormally(command, args, options);
-        }
-        const child = new FakeChild(nextPid++);
+      harness.overrideSpawn("--lint", () => {
+        const child = harness.child(true);
         lintChild = child;
-        children.set(child.pid, child);
         queueMicrotask(() => {
           child.stderr.write("└  Doctor complete.\n");
           child.stdout.write(
@@ -662,38 +603,31 @@ describe("canary teardown evidence", () => {
     async (missing) => {
       let now = 2_000_000;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-      const spawnNormally = mocks.spawn.getMockImplementation()!;
       const signalNormally = mocks.signal.getMockImplementation()!;
       const controller = new AbortController();
       const duringDoctor = missing === "error" || missing === "cancelled";
       let controlled: FakeChild | undefined;
-      mocks.spawn.mockImplementation(
-        (command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
-          if (!(duringDoctor ? args.includes("--fix") : args.includes("--update-canary"))) {
-            return spawnNormally(command, args, options);
-          }
-          controlled = new FakeChild(nextPid++);
-          children.set(controlled.pid, controlled);
-          if (missing === "error") {
-            const child = controlled;
-            queueMicrotask(() =>
-              child.emit("error", new Error("synthetic validation process error")),
-            );
-          }
-          if (missing === "cancelled") {
-            controller.abort();
-          }
-          if (missing === "startup-error") {
-            const child = controlled;
-            queueMicrotask(() => {
-              child.stderr.write("plugin load failed: discord: synthetic failure\n");
-              child.exitCode = 1;
-              child.emit("exit", 1, null);
-            });
-          }
-          return controlled;
-        },
-      );
+      harness.overrideSpawn(duringDoctor ? "--fix" : "--update-canary", () => {
+        controlled = harness.child(true);
+        if (missing === "error") {
+          const child = controlled;
+          queueMicrotask(() =>
+            child.emit("error", new Error("synthetic validation process error")),
+          );
+        }
+        if (missing === "cancelled") {
+          controller.abort();
+        }
+        if (missing === "startup-error") {
+          const child = controlled;
+          queueMicrotask(() => {
+            child.stderr.write("plugin load failed: discord: synthetic failure\n");
+            child.exitCode = 1;
+            child.emit("exit", 1, null);
+          });
+        }
+        return controlled;
+      });
       mocks.signal.mockImplementation(
         (pid: number, signal: string, options: { onComplete?: () => void }) => {
           if (pid !== controlled?.pid) {
@@ -784,19 +718,12 @@ describe("canary teardown evidence", () => {
   it("joins close and both signal callbacks after recording readiness", async () => {
     const term = createDeferredCore<() => void>();
     const kill = createDeferredCore<() => void>();
-    const spawnNormally = mocks.spawn.getMockImplementation()!;
     const signalNormally = mocks.signal.getMockImplementation()!;
     let gateway: FakeChild | undefined;
-    mocks.spawn.mockImplementation(
-      (command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
-        if (!args.includes("--update-canary")) {
-          return spawnNormally(command, args, options);
-        }
-        gateway = new FakeChild(nextPid++);
-        children.set(gateway.pid, gateway);
-        return gateway;
-      },
-    );
+    harness.overrideSpawn("--update-canary", () => {
+      gateway = harness.child(true);
+      return gateway;
+    });
     mocks.signal.mockImplementation(
       (pid: number, signal: string, options: { onComplete: () => void }) => {
         if (pid !== gateway?.pid) {

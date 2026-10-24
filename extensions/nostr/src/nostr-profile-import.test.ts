@@ -46,112 +46,81 @@ function respondWithEvents(...events: Event[]): void {
   });
 }
 
-const importDefaultProfile = () => importProfileFromRelays({ pubkey, relays: [relay] });
+const importProfile = (relays = [relay]) => importProfileFromRelays({ pubkey, relays });
 
 describe("nostr-profile-import", () => {
-  beforeEach(() => {
-    mockState.close.mockReset();
-    mockState.closeSubscription.mockReset();
-    mockState.subscribeMany.mockReset();
-  });
+  beforeEach(() => vi.resetAllMocks());
 
-  describe("importProfileFromRelays", () => {
-    it("uses the lowest event id when profile timestamps match", async () => {
-      const relays = ["wss://first.example", "wss://second.example"];
-      respondWithEvents(
-        createProfileEvent({ name: "arrived-first" }, "f", 20),
-        createProfileEvent({ name: "canonical" }, "0", 20),
-      );
+  it("uses the lowest event id when profile timestamps match", async () => {
+    const relays = ["wss://first.example", "wss://second.example"];
+    respondWithEvents(
+      createProfileEvent({ name: "arrived-first" }, "f", 20),
+      createProfileEvent({ name: "canonical" }, "0", 20),
+    );
 
-      const result = await importProfileFromRelays({ pubkey, relays });
-
-      expect(result).toMatchObject({
-        ok: true,
-        profile: { name: "canonical" },
-        event: { id: "0".repeat(64), created_at: 20 },
-        sourceRelay: relays[1],
-      });
-    });
-
-    it("bounds the whole query while the native relay subscription is pending", async () => {
-      vi.useFakeTimers();
-      try {
-        const resultPromise = importProfileFromRelays({
-          pubkey,
-          relays: ["wss://slow.example"],
-          timeoutMs: 25,
-        });
-
-        await vi.advanceTimersByTimeAsync(25);
-
-        await expect(resultPromise).resolves.toMatchObject({
-          ok: false,
-          error: "No profile found on any relay",
-        });
-        expect(mockState.closeSubscription).toHaveBeenCalledOnce();
-        expect(mockState.close).toHaveBeenCalledWith(["wss://slow.example"]);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("rejects profile content that is not a JSON object", async () => {
-      respondWithEvents(createProfileEvent(null));
-
-      await expect(importDefaultProfile()).resolves.toMatchObject({
-        ok: false,
-        error: "Profile event content must be a JSON object",
-        sourceRelay: "wss://relay.example",
-      });
-    });
-
-    it("rejects a wrong field type alongside an unsafe URL", async () => {
-      respondWithEvents(
-        createProfileEvent({
-          name: "valid",
-          about: 123,
-          picture: "https://127.0.0.1/avatar.png",
-        }),
-      );
-
-      await expect(importDefaultProfile()).resolves.toMatchObject({
-        ok: false,
-        error: "Profile event content has invalid fields",
-        sourceRelay: "wss://relay.example",
-      });
-    });
-
-    it("drops unknown fields and unsafe URLs from an otherwise valid profile", async () => {
-      respondWithEvents(
-        createProfileEvent({
-          name: "valid",
-          picture: "https://127.0.0.1/avatar.png",
-          website: "https://example.com",
-          custom: "ignored",
-        }),
-      );
-
-      const result = await importDefaultProfile();
-
-      expect(result).toMatchObject({ ok: true, sourceRelay: "wss://relay.example" });
-      expect(result.profile).toStrictEqual({ name: "valid", website: "https://example.com" });
+    await expect(importProfile(relays)).resolves.toMatchObject({
+      ok: true,
+      profile: { name: "canonical" },
+      event: { id: "0".repeat(64), created_at: 20 },
+      sourceRelay: relays[1],
     });
   });
 
-  describe("mergeProfiles", () => {
-    it("returns empty object when both are undefined", () => {
-      expect(mergeProfiles(undefined, undefined)).toStrictEqual({});
-    });
-
-    it("returns imported when local is undefined", () => {
-      expect(mergeProfiles(undefined, imported)).toEqual(imported);
-    });
-
-    it("handles null values in local (prefers imported)", () => {
-      expect(mergeProfiles({ name: undefined, displayName: undefined }, imported)).toMatchObject({
-        name: imported.name,
-        displayName: imported.displayName,
+  it("bounds the whole query while the native relay subscription is pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const resultPromise = importProfile(["wss://slow.example"]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(resultPromise).resolves.toMatchObject({
+        ok: false,
+        error: "No profile found on any relay",
       });
+      expect(mockState.closeSubscription).toHaveBeenCalledOnce();
+      expect(mockState.close).toHaveBeenCalledWith(["wss://slow.example"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    [null, "Profile event content must be a JSON object"],
+    [
+      { name: "valid", about: 123, picture: "https://127.0.0.1/avatar.png" },
+      "Profile event content has invalid fields",
+    ],
+  ])("rejects invalid profile content: %j", async (content, error) => {
+    respondWithEvents(createProfileEvent(content));
+    await expect(importProfile()).resolves.toMatchObject({
+      ok: false,
+      error,
+      sourceRelay: relay,
+    });
+  });
+
+  it("drops unknown fields and unsafe URLs from an otherwise valid profile", async () => {
+    respondWithEvents(
+      createProfileEvent({
+        name: "valid",
+        picture: "https://127.0.0.1/avatar.png",
+        website: "https://example.com",
+        custom: "ignored",
+      }),
+    );
+
+    const result = await importProfile();
+    expect(result).toMatchObject({ ok: true, sourceRelay: relay });
+    expect(result.profile).toStrictEqual({ name: "valid", website: "https://example.com" });
+  });
+  it.each([
+    [undefined, undefined, {}],
+    [undefined, imported, imported],
+  ])("mergeProfiles fills missing local fields: %j, %j", (local, remote, expected) => {
+    expect(mergeProfiles(local, remote)).toStrictEqual(expected);
+  });
+  it("mergeProfiles fills undefined local fields from the imported profile", () => {
+    expect(mergeProfiles({ name: undefined, displayName: undefined }, imported)).toMatchObject({
+      name: imported.name,
+      displayName: imported.displayName,
     });
   });
 });

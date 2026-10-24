@@ -188,6 +188,20 @@ type SubagentKillIntent = {
 };
 
 export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "collectorCompletion"> & {
+  /** Host-captured SDK spawn provenance; absence never establishes plugin ownership. */
+  nativePluginOwner?: {
+    version: 1;
+    pluginId: string;
+    requesterProfileId: string;
+    requestId: string;
+  };
+  /** Exact package instructions used at child creation; not runtime authority. */
+  subagentProfile?: {
+    pluginId: string;
+    id: string;
+    instructionsFile: string;
+    instructionsSha256: string;
+  };
   /** Admission evidence only; restart continuation revalidates the live operator grant. */
   operatorRecoverySource?: RestartRecoveryOperatorSource;
   /** Child identity stays fixed when recovery redirects transcript writes. */

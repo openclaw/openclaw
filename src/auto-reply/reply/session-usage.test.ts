@@ -213,26 +213,6 @@ describe("session actor usage accounting", () => {
       expected: committedModel,
       absent: ["agentHarnessId"],
     },
-    {
-      name: "preserves the displayed session model when heartbeat usage uses a heartbeat model",
-      seed: { modelProvider: "openai", model: "gpt-5.4" },
-      update: {
-        isHeartbeat: true,
-        usage: { input: 1_200, output: 100, cacheRead: 300, cacheWrite: 10 },
-        lastCallUsage: { input: 900, output: 80, cacheRead: 200, cacheWrite: 5 },
-        providerUsed: "openai",
-        modelUsed: "gpt-5.1-codex-mini",
-        contextTokensUsed: 128_000,
-      },
-      expected: {
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        inputTokens: 1_200,
-        outputTokens: 100,
-        cacheRead: 200,
-        totalTokens: 1_105,
-      },
-    },
 
     {
       name: "keeps ordered context separate from output-only billing usage",

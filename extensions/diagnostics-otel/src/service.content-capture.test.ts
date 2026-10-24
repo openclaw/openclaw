@@ -1,54 +1,15 @@
-import { trace } from "@opentelemetry/api";
-import {
-  BasicTracerProvider,
-  InMemorySpanExporter,
-  SimpleSpanProcessor,
-} from "@opentelemetry/sdk-trace-base";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
-  resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { afterEach, beforeEach, expect, test } from "vitest";
-import {
-  CHILD_SPAN_ID,
-  createTestTrace,
-  registeredOtelGlobals,
-  snapshotOtelEnv,
-  startOtelService,
-  stopStartedOtelServices,
-} from "./service.test-helpers.js";
+import { expect, test } from "vitest";
+import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
+import { CHILD_SPAN_ID, createTestTrace, startOtelService } from "./service.test-helpers.js";
 
-const PRELOAD_ENV = "OPENCLAW_OTEL_PRELOADED";
-let exporter: InMemorySpanExporter;
-let provider: BasicTracerProvider;
-let restoreEnv: () => void;
-let originalTraceProvider: NonNullable<ReturnType<typeof registeredOtelGlobals>>["trace"];
-beforeEach(() => {
-  restoreEnv = snapshotOtelEnv([PRELOAD_ENV]);
-  originalTraceProvider = registeredOtelGlobals()?.trace;
-  if (originalTraceProvider) {
-    trace.disable();
-  }
-  process.env[PRELOAD_ENV] = "1";
-  exporter = new InMemorySpanExporter();
-  provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
-  trace.setGlobalTracerProvider(provider);
-});
-
-afterEach(async () => {
-  await stopStartedOtelServices();
-  await provider.shutdown();
-  trace.disable();
-  if (originalTraceProvider) {
-    trace.setGlobalTracerProvider(originalTraceProvider);
-  }
-  restoreEnv();
-  resetDiagnosticEventsForTest();
-});
+const sdk = installRealOtelSdkTestHarness({ replaceTraceProvider: true });
 
 const finishedSpanAttributes = (name: string) =>
-  exporter.getFinishedSpans().find((span) => span.name === name)?.attributes;
+  sdk.exporter.getFinishedSpans().find((span) => span.name === name)?.attributes;
 
 const content = { userPrompt: "run the task", finalResponse: "task complete" };
 const run = {

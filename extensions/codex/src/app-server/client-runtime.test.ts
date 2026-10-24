@@ -5,6 +5,7 @@ import {
   recordCodexTurnForkSettings,
   requireCodexThreadForkSettings,
 } from "./client-fork-settings.js";
+import { wasCodexAppServerThreadClosed } from "./client-thread-closure.js";
 import type { CodexAppServerClient } from "./client.js";
 import { createClientHarness } from "./test-support.js";
 
@@ -181,9 +182,9 @@ it("installs shared handlers once per physical client", async () => {
   ensureCodexAppServerClientRuntime(client, context);
   ensureCodexAppServerClientRuntime(client, updatedContext);
 
-  expect(addNotificationHandler).toHaveBeenCalledTimes(1);
+  expect(addNotificationHandler).toHaveBeenCalledTimes(2);
   expect(addRequestHandler).toHaveBeenCalledTimes(1);
-  expect(addCloseHandler).toHaveBeenCalledTimes(1);
+  expect(addCloseHandler).toHaveBeenCalledTimes(2);
   send({
     method: "account/rateLimits/updated",
     params: { rateLimits: { primary: { usedPercent: 12 } } },
@@ -679,8 +680,11 @@ it("discards only the exact thread after thread/closed", async () => {
   send({ method, params: { threadId: "thread-a" } });
   await notificationObserved;
   expect(invalidated).toHaveBeenCalledOnce();
+  expect(wasCodexAppServerThreadClosed(client, "thread-a")).toBe(true);
   await expect(thread.consume()).resolves.toBeUndefined();
   await expect(consumeCodexAppServerLiveThread(client, "thread-b")).resolves.toEqual(liveOwnership);
+  await expect(retainCodexAppServerLiveThread(client, "thread-a")).resolves.toBe(true);
+  expect(wasCodexAppServerThreadClosed(client, "thread-a")).toBe(false);
 });
 
 it("keeps the exact retained owner when a same-build plugin module copy resumes the client", async () => {
@@ -695,7 +699,7 @@ it("keeps the exact retained owner when a same-build plugin module copy resumes 
   vi.resetModules();
   const nextCopy = await import("./client-runtime.js");
   nextCopy.ensureCodexAppServerClientRuntime(client, { agentDir: "/tmp/agent" });
-  expect(addCloseHandler).toHaveBeenCalledTimes(1);
+  expect(addCloseHandler).toHaveBeenCalledTimes(2);
   expect(nextCopy.isCodexAppServerClientRuntimeLive(client)).toBe(true);
   expect(nextCopy.hasCodexAppServerLiveThread(client, "copy-retained")).toBe(true);
   const claimed = await nextCopy.claimCodexAppServerLiveThread(client, "copy-retained");

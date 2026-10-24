@@ -1,9 +1,12 @@
+import { runAgentHarnessGatewayQuestion } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerCodexSteeringConfirmationCases } from "./attempt-steering.confirmation.test-support.js";
 import {
   CodexSteeringAcceptedUnconfirmedError,
   createCodexSteeringQueue,
+  createCodexQuestionInputHandlers,
 } from "./attempt-steering.js";
 import { createClientHarness } from "./test-support.js";
 import { buildCodexUserInput } from "./user-input.js";
@@ -426,6 +429,8 @@ describe("Codex app-server steering queue", () => {
     harness.client.close();
   });
 
+  registerCodexSteeringConfirmationCases({ createQueue, createReplyHarness });
+
   it("batches ordered text and images under one correlated user-message id", async () => {
     const request = vi.fn(async () => turn);
     const queue = createQueue({ request });
@@ -621,4 +626,37 @@ describe("Codex app-server steering queue", () => {
     expect(onQueueAccepted).toHaveBeenCalledWith(false);
     expect(request).not.toHaveBeenCalled();
   });
+});
+
+it("keeps a Codex question pending for a human who cannot answer that question", async () => {
+  const sessionKey = "agent:main:codex-question-permission";
+  const abort = new AbortController();
+  const pending = runAgentHarnessGatewayQuestion({
+    questions: [
+      { id: "answer", header: "Answer", question: "Continue?", isSecret: true, options: [] },
+    ],
+    sessionKey,
+    timeoutMs: 60_000,
+    signal: abort.signal,
+    delivery: { onBlockReply: vi.fn(async () => undefined) },
+  });
+  const input = createCodexQuestionInputHandlers(sessionKey, () => {});
+  try {
+    await expect(
+      input.claimPendingUserInputAnswer("status control", {
+        isInboundUserMessage: true,
+        allowPendingUserInputAnswer: false,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      input.claimPendingUserInputAnswer("Continue", { isInboundUserMessage: true }),
+    ).resolves.toBe(true);
+    await expect(pending).resolves.toMatchObject({
+      status: "answered",
+      answers: { answers: { answer: ["Continue"] } },
+    });
+  } finally {
+    abort.abort();
+    await pending;
+  }
 });

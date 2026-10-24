@@ -10,7 +10,6 @@ import {
   renderPluginPublisher,
 } from "./overview.tsx";
 import { createDiscoveryDetail } from "./plugins-page.test-support.ts";
-import { renderPluginSecurityAudit } from "./security-audit.tsx";
 
 const views = new WeakMap<Element, { unmount: () => void }>();
 function render(content: () => JSX.Element, container = document.createElement("div")) {
@@ -131,7 +130,9 @@ it.each([
   ["unknown", 0],
 ] as const)("shows %s audit with %i bars and the exact ClawHub link", (verdict, count) => {
   const url = "https://clawhub.ai/acme/plugins/demo/security-audit?version=1.0";
-  const container = render(() => renderPluginSecurityAudit(verdict, url));
+  const result = createDiscoveryDetail();
+  result.detail.security = { status: verdict, verdict, auditUrl: url };
+  const container = render(() => renderPluginMetadata(result));
   expect(container.querySelectorAll(".is-filled")).toHaveLength(count);
   expect(container.querySelector("a")?.getAttribute("href")).toBe(url);
 });

@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import { observeAgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import { runBridgeRequest } from "./code-mode-bridge.js";
@@ -112,6 +113,7 @@ export function createCodeModeRunOwner(
   let continuation: CodeModeExecutorContinuation | undefined;
   let closing: Promise<void> | undefined;
   const executions = new Set<Promise<CodeModeWorkerResult>>();
+  const trackExecution = createPendingPromiseTracker(executions);
   const disposals = new Map<CodeModeExecutorContinuation, Promise<void>>();
   const cleanupFailures = new Map<CodeModeExecutorContinuation, unknown>();
   const disposeContinuation = (value: CodeModeExecutorContinuation): Promise<void> => {
@@ -236,12 +238,7 @@ export function createCodeModeRunOwner(
           await retainContinuation(result.status === "waiting" ? result.continuation : undefined);
           return result;
         });
-      executions.add(execution);
-      void execution.then(
-        () => executions.delete(execution),
-        () => executions.delete(execution),
-      );
-      return execution;
+      return trackExecution(execution);
     },
     approvalWait,
     releaseCall() {

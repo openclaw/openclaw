@@ -21,6 +21,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import { makeClient as makeBroadcastClient } from "./server-broadcast.test-helpers.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -33,6 +34,20 @@ import type { GatewaySessionRow } from "./session-utils.types.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 type ConnectionIdReads = { count: number };
+
+function humanEntry(
+  sessionId: string,
+  visibility: "suggest" | "draft" | "shared",
+  id: string,
+  updatedAt = 1,
+) {
+  return {
+    sessionId,
+    updatedAt,
+    visibility,
+    createdActor: { type: "human" as const, source: "profile" as const, id },
+  };
+}
 
 function makeState(
   bootId: string,
@@ -104,27 +119,18 @@ function withoutSql(run: () => void) {
 }
 
 function makeClient(connId: string, reads: ConnectionIdReads = { count: 0 }, sendOrder?: string[]) {
+  const peer = makeBroadcastClient(connId, "operator", ["operator.read"]);
   const send: ReturnType<typeof vi.fn> = vi.fn(() => sendOrder?.push(connId));
-  const readyState: number = WebSocket.OPEN;
-  const socket = {
-    readyState,
-    bufferedAmount: 0,
-    close: vi.fn(),
-    send,
-  };
-  const client = {
-    socket: socket as unknown as GatewayWsClient["socket"],
-    connect: {
-      role: "operator",
-      scopes: ["operator.read"],
-    } as GatewayWsClient["connect"],
-    usesSharedGatewayAuth: false,
-    get connId() {
+  peer.socket.send = send;
+  Object.defineProperty(peer.client, "connId", {
+    configurable: true,
+    enumerable: true,
+    get() {
       reads.count += 1;
       return connId;
     },
-  } as GatewayWsClient;
-  return { client, socket, send };
+  });
+  return { ...peer, send };
 }
 
 describe("gateway connection state", () => {
@@ -247,12 +253,7 @@ describe("gateway connection state", () => {
       ] as const) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
-          {
-            sessionId: sessionKey,
-            updatedAt: 1,
-            visibility: "shared",
-            createdActor: { type: "human", source: "profile", id: profileId },
-          },
+          humanEntry(sessionKey, "shared", profileId),
         );
       }
       await using state = makeState("committed-event-policy", restricted, () => runtimeConfig);
@@ -440,12 +441,7 @@ describe("gateway connection state", () => {
       const cfg: OpenClawConfig = {};
       setRuntimeConfigSnapshot(cfg);
       const scope = { agentId: "main", sessionKey: "agent:main:broadcast-members" };
-      await upsertSessionEntryCore(scope, {
-        sessionId: "broadcast-members",
-        updatedAt: 1,
-        visibility: "suggest",
-        createdActor: { type: "human", source: "profile", id: "owner" },
-      });
+      await upsertSessionEntryCore(scope, humanEntry("broadcast-members", "suggest", "owner"));
       addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 1 });
       let broadcastDuringPublication: (() => void) | undefined;
       const stopPublication = sessionChanges.subscribe((change) => {
@@ -493,12 +489,10 @@ describe("gateway connection state", () => {
         broadcast();
         expect(peers.every((peer) => peer.send.mock.calls.length === 2)).toBe(true);
         const replace = (visibility: "suggest" | "draft" | "shared", updatedAt: number) =>
-          replaceSessionEntrySync(scope, {
-            sessionId: "broadcast-replacement",
-            updatedAt,
-            visibility,
-            createdActor: { type: "human", source: "profile", id: "owner" },
-          });
+          replaceSessionEntrySync(
+            scope,
+            humanEntry("broadcast-replacement", visibility, "owner", updatedAt),
+          );
         replace("suggest", 2);
         expectDeliveryWithoutSql(2);
         await projection.ensureMaterialized();
@@ -561,10 +555,7 @@ describe("gateway connection state", () => {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
           {
-            sessionId: sessionKey,
-            updatedAt: 1,
-            visibility,
-            createdActor: { type: "human", source: "profile", id: "other-owner" },
+            ...humanEntry(sessionKey, visibility, "other-owner"),
             ...(sessionKey === incognitoKey ? { incognito: true } : {}),
           },
         );
@@ -638,12 +629,7 @@ describe("gateway connection state", () => {
           }
         };
         verify(true);
-        replaceSessionEntrySync(scope, {
-          sessionId: sharedKey,
-          updatedAt: 2,
-          visibility: "draft",
-          createdActor: { type: "human", source: "profile", id: "other-owner" },
-        });
+        replaceSessionEntrySync(scope, humanEntry(sharedKey, "draft", "other-owner", 2));
         verify(false);
         replaceSessionEntrySync(scope, {
           sessionId: sharedKey,
@@ -673,17 +659,20 @@ describe("gateway connection state", () => {
     });
   });
 
-  it("bounds targeted delivery and connection lookups to the requested connection", () => {
+  it("bounds ordered targeted delivery and connection lookups to requested connections", () => {
     const state = makeState("targeted-delivery");
     onTestFinished(() => state.mentionInbox.dispose());
     const reads = { count: 0 };
+    const sendOrder: string[] = [];
+    state.clients.add(makeClient("first", reads, sendOrder).client);
     for (let index = 0; index < 256; index += 1) {
       state.clients.add(makeClient(`other-${index}`, reads).client);
     }
-    const target = makeClient("target", reads);
+    const target = makeClient("target", reads, sendOrder);
     state.clients.add(target.client);
     reads.count = 0;
-    state.broadcastToConnIds("tick", { ts: 1 }, new Set(["target"]));
+    state.broadcastToConnIds("tick", { ts: 1 }, new Set(["target", "first"]));
+    expect(sendOrder).toEqual(["first", "target"]);
     expect(target.send).toHaveBeenCalledTimes(1);
     expect([state.getBufferedAmount("target"), reads.count]).toEqual([0, 0]);
 
@@ -723,19 +712,5 @@ describe("gateway connection state", () => {
     reads.count = 0;
 
     expectConnection(false);
-  });
-
-  it("preserves connection insertion order for targeted fanout", () => {
-    const state = makeState("ordered-delivery");
-    onTestFinished(() => state.mentionInbox.dispose());
-    const reads = { count: 0 };
-    const sendOrder: string[] = [];
-    state.clients.add(makeClient("first", reads, sendOrder).client);
-    state.clients.add(makeClient("unrelated", reads, sendOrder).client);
-    state.clients.add(makeClient("last", reads, sendOrder).client);
-
-    state.broadcastToConnIds("tick", { ts: 1 }, new Set(["last", "first"]));
-
-    expect(sendOrder).toEqual(["first", "last"]);
   });
 });

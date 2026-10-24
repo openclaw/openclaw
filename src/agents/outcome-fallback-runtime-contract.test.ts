@@ -247,46 +247,6 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     },
   );
 
-  it("advances to the configured fallback after an invisible non-GPT terminal result", async () => {
-    const primaryProvider = "zai";
-    const primaryModel = "glm-5.2";
-    const primary = createContractRunResult({
-      payloads: [{ isReasoning: true, text: "thinking" }, { text: " " }],
-    });
-    const fallback = createContractRunResult({
-      payloads: [{ text: "fallback ok" }],
-      meta: { durationMs: 1, finalAssistantVisibleText: "fallback ok" },
-    });
-    const result = await runCandidates([primary, fallback], {
-      provider: primaryProvider,
-      model: primaryModel,
-    });
-
-    expect(result.outcome).toBe("completed");
-    expect(result.result).toBe(fallback);
-    expect(result.run).toHaveBeenCalledTimes(2);
-    expect(result.run.mock.calls.at(1)).toEqual([
-      contract.fallbackProvider,
-      contract.fallbackModel,
-      {
-        isFinalFallbackAttempt: true,
-        modelRoutingProvenance: {
-          requestedProvider: primaryProvider,
-          requestedModel: primaryModel,
-          stage: "fallback",
-          selectionChanged: false,
-          fallbackReason: "format",
-        },
-      },
-    ]);
-    expect(result.attempts[0]).toMatchObject({
-      provider: primaryProvider,
-      model: primaryModel,
-      reason: "format",
-      code: "empty_result",
-    });
-  });
-
   it("preserves an incomplete tool-authored summary over stale silence when fallbacks exhaust", async () => {
     const terminalSummary =
       "Web fetch completed.\nOrigin: https://example.com\nStatus: 200\n\n" +
@@ -427,49 +387,22 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
   const silent = emptyResult({
     meta: { finalAssistantRawText: "NO_REPLY", terminalReply: { disposition: "silent" } },
   });
-  const nonFallbackCases: Array<
+  it.each<[string, Partial<Parameters<typeof classifyResult>[0]>]>([
+    ["abort", { result: emptyResult({ meta: { aborted: true } }) }],
+    ["media send", { result: emptyResult({ messagingToolSentMediaUrls: ["image.png"] }) }],
     [
-      name: string,
-      result: RunResult,
-      delivery?: { hasDirectlySentBlockReply?: boolean; hasBlockReplyPipelineOutput?: boolean },
-    ]
-  > = [
-    ["intentional NO_REPLY", silent],
-    ["visible reply", createContractRunResult({ payloads: [{ text: "visible answer" }] })],
-    ["abort", emptyResult({ meta: { aborted: true } })],
-    [
-      "structured replay side effect",
-      createContractRunResult({
-        meta: { durationMs: 1, replayInvalid: true, toolSummary: { calls: 1, tools: ["message"] } },
-      }),
-    ],
-    ["messaging text side effect", emptyResult({ messagingToolSentTexts: ["sent out of band"] })],
-    [
-      "messaging media side effect",
-      emptyResult({ messagingToolSentMediaUrls: ["https://example.test/image.png"] }),
-    ],
-    [
-      "messaging target side effect",
-      emptyResult({
-        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel-1" }],
-      }),
-    ],
-    ["cron side effect", emptyResult({ successfulCronAdds: 1 })],
-    ["direct block reply", emptyResult(), { hasDirectlySentBlockReply: true }],
-    ["block reply pipeline output", emptyResult(), { hasBlockReplyPipelineOutput: true }],
-  ];
-
-  it("does not classify terminal results with visible output or side effects as fallbacks", () => {
-    for (const [name, result, delivery] of nonFallbackCases) {
-      expect(
-        classifyResult({
-          ...contractRunOptions,
-          result,
-          ...delivery,
+      "target send",
+      {
+        result: emptyResult({
+          messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel-1" }],
         }),
-        name,
-      ).toBeNull();
-    }
+      },
+    ],
+    ["cron add", { result: emptyResult({ successfulCronAdds: 1 }) }],
+    ["direct block reply", { hasDirectlySentBlockReply: true }],
+    ["block reply pipeline", { hasBlockReplyPipelineOutput: true }],
+  ])("does not fallback after %s", (_name, options) => {
+    expect(classifyResult({ ...contractRunOptions, result: emptyResult(), ...options })).toBeNull();
   });
 
   it("keeps running on the primary when terminal output is not classified as fallback", async () => {

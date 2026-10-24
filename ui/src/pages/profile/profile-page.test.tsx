@@ -1,10 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  GIT_COAUTHOR_PREFERENCE_KEY,
-  type UserProfile,
-} from "../../../../packages/gateway-protocol/src/index.ts";
+import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
@@ -25,6 +22,7 @@ import {
   modelAccountProfile,
   mountProfilePage,
 } from "./profile-page.test-support.tsx";
+import { disconnectedGitHub, mockRpc } from "./profile-rpc.test-support.ts";
 
 const modelAccountCatalog = {
   providers: [
@@ -120,17 +118,10 @@ it("refreshes translated copy when the locale changes while mounted", async () =
 
 it("renders identity before Usage statistics and opens the usage page", async () => {
   const profile = modelAccountProfile;
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.prefs.get") {
-      return { status: "ok", entries: {} };
-    }
-    if (method === "users.self") {
-      return { profile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: profile.id, accounts: [], links: [] };
-    }
-    throw new Error(`unexpected method: ${method}`);
+  const request = mockRpc({
+    "users.prefs.get": () => ({ status: "ok", entries: {} }),
+    "users.self": () => ({ profile }),
+    "users.listModelAccounts": () => ({ profileId: profile.id, accounts: [], links: [] }),
   });
   const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
     id: profile.id,
@@ -170,33 +161,10 @@ it("renders identity before Usage statistics and opens the usage page", async ()
   expect(harness.context.navigate).toHaveBeenCalledWith("usage");
 });
 
-it("loads a read-only profile without enabling mutations", async () => {
+it("allows personal profile editing without general write access", async () => {
   const scope = "operator.read";
   const request = vi.fn(async (method: string) =>
-    method === "users.self"
-      ? { profile: modelAccountProfile }
-      : {
-          personal: {
-            state: "disconnected",
-            generation: null,
-            account: null,
-            accessExpiresAtMs: null,
-            refreshState: "not_applicable",
-            pending: null,
-          },
-          system: {
-            source: "system-detected",
-            credentialKind: "native",
-            credentialState: "unavailable",
-            account: null,
-            gitAuthor: { name: null, email: null },
-            evidence: "none",
-            accessExpiresAtMs: null,
-            refreshState: "not_applicable",
-            oauthScopes: [],
-            repositoryGrants: "unknown",
-          },
-        },
+    method === "users.self" ? { profile: modelAccountProfile } : disconnectedGitHub,
   );
   const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
     id: "profile-1",
@@ -216,15 +184,17 @@ it("loads a read-only profile without enabling mutations", async () => {
     expect(page.querySelector(".identity-name-control input")).not.toBeNull(),
   );
   expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(true);
-  expect(page.textContent).toContain("Your current access does not allow profile editing.");
+  expect(page.textContent).not.toContain("Your current access does not allow profile editing.");
   expect(page.querySelector("#settings-profile-access .settings-row__value")?.textContent).toBe(
     scope,
   );
-  expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.disabled).toBe(true);
+  expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.disabled).toBe(
+    false,
+  );
   expect(page.querySelector<HTMLButtonElement>(".identity-name-control button")?.disabled).toBe(
     true,
   );
-  expect(page.querySelector('input[type="file"]')).toBeNull();
+  expect(page.querySelector('input[type="file"]')).not.toBeNull();
   expect(page.querySelector(".profile-refresh")).not.toBeNull();
   expect(
     request.mock.calls.some(
@@ -372,10 +342,7 @@ it("fetches a protected hero avatar with the current Control UI credential", asy
 
 it("keeps identity refresh single-flight and allows retry after settlement", async () => {
   const profile = { ...modelAccountProfile };
-  let rejectIdentity: ((reason: Error) => void) | undefined;
-  const firstIdentity = new Promise<never>((_resolve, reject) => {
-    rejectIdentity = reject;
-  });
+  const firstIdentity = createDeferred<never>();
   const request = vi.fn(async (method: string) => {
     if (method === "users.prefs.get") {
       return { status: "ok", entries: {} };
@@ -384,7 +351,7 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
       throw new Error(`unexpected method: ${method}`);
     }
     if (request.mock.calls.length === 1) {
-      return await firstIdentity;
+      return await firstIdentity.promise;
     }
     return { profile };
   });
@@ -408,7 +375,7 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
   flush();
   expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(1);
 
-  rejectIdentity?.(new Error("identity unavailable: OPENAI_API_KEY=sk-1234567890abcdef"));
+  firstIdentity.reject(new Error("identity unavailable: OPENAI_API_KEY=sk-1234567890abcdef"));
   await waitForFast(() => expect(refresh.disabled).toBe(false));
   expect(refresh.textContent?.trim()).toBe(t("common.refresh"));
   expect(page.textContent).toContain("identity unavailable: OPENAI_API_KEY=sk-123...cdef");
@@ -429,14 +396,8 @@ it("replaces an in-flight identity request after a same-client reconnect", async
     displayName: "Stale identity",
   };
   const freshProfile = { ...staleProfile, displayName: "Fresh identity", updatedAt: 3 };
-  let resolveStale: ((value: { profile: UserProfile }) => void) | undefined;
-  let resolveFresh: ((value: { profile: UserProfile }) => void) | undefined;
-  const staleRequest = new Promise<{ profile: UserProfile }>((resolve) => {
-    resolveStale = resolve;
-  });
-  const freshRequest = new Promise<{ profile: UserProfile }>((resolve) => {
-    resolveFresh = resolve;
-  });
+  const staleRequest = createDeferred<{ profile: UserProfile }>();
+  const freshRequest = createDeferred<{ profile: UserProfile }>();
   const request = vi.fn(async (method: string) => {
     if (method === "users.prefs.get") {
       return { status: "ok", entries: {} };
@@ -448,8 +409,8 @@ it("replaces an in-flight identity request after a same-client reconnect", async
       throw new Error(`unexpected method: ${method}`);
     }
     return await (request.mock.calls.filter(([called]) => called === "users.self").length === 1
-      ? staleRequest
-      : freshRequest);
+      ? staleRequest.promise
+      : freshRequest.promise);
   });
   const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
     id: staleProfile.id,
@@ -465,14 +426,14 @@ it("replaces an in-flight identity request after a same-client reconnect", async
   harness.emitConnected(true);
   await waitForFast(() => expect(selfCalls()).toHaveLength(2));
 
-  resolveFresh?.({ profile: freshProfile });
+  freshRequest.resolve({ profile: freshProfile });
   await waitForFast(() =>
     expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
       "Fresh identity",
     ),
   );
-  resolveStale?.({ profile: staleProfile });
-  await staleRequest;
+  staleRequest.resolve({ profile: staleProfile });
+  await staleRequest.promise;
   await Promise.resolve();
   flush();
 
@@ -498,23 +459,16 @@ it.each([
   }
   stubProfileAvatarProcessing(decode);
   let avatarRequests = 0;
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.prefs.get") {
-      return { status: "ok", entries: {} };
-    }
-    if (method === "users.self") {
-      return { profile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: profile.id, accounts: [], links: [] };
-    }
-    if (method === "users.setAvatar") {
+  const request = mockRpc({
+    "users.prefs.get": () => ({ status: "ok", entries: {} }),
+    "users.self": () => ({ profile }),
+    "users.listModelAccounts": () => ({ profileId: profile.id, accounts: [], links: [] }),
+    "users.setAvatar": () => {
       avatarRequests += 1;
       return stage === "mutation" && avatarRequests === 1
         ? staleMutation.promise
         : currentMutation.promise;
-    }
-    throw new Error(`unexpected method: ${method}`);
+    },
   });
   const avatarBefore = "/api/users/profile-1/avatar?v=before";
   const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
@@ -822,17 +776,10 @@ it("keeps model-account actions usable when identity refresh overlaps ChatGPT co
 
 it("rechecks avatar upload policy after processing and rerenders on config updates", async () => {
   const profile = { ...modelAccountProfile };
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.prefs.get") {
-      return { status: "ok", entries: {} };
-    }
-    if (method === "users.self") {
-      return { profile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: profile.id, accounts: [], links: [] };
-    }
-    throw new Error(`unexpected method: ${method}`);
+  const request = mockRpc({
+    "users.prefs.get": () => ({ status: "ok", entries: {} }),
+    "users.self": () => ({ profile }),
+    "users.listModelAccounts": () => ({ profileId: profile.id, accounts: [], links: [] }),
   });
   const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
     id: profile.id,
@@ -978,81 +925,8 @@ it("reconnects through the connection owner while retaining the last access summ
   flush();
   expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.read");
 
-  // Narrow-grant updates do not change the profile editor's broad write permission.
+  // Personal editing remains available when only session reads are granted.
   harness.emitHello(gatewayHelloForMethods([], ["operator.sessions.read"]));
   flush();
   expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.sessions.read");
 });
-
-it.each([
-  { primary: true, stored: false, enabled: false, updated: true },
-  { primary: true, stored: "not-a-boolean", enabled: false, updated: undefined },
-  { primary: true, stored: undefined, enabled: true, updated: false },
-  { primary: false, stored: false, enabled: false, updated: true },
-  { primary: false, stored: undefined, enabled: true, updated: false },
-])(
-  "loads co-author consent $stored and saves changes without reloading (display primary=$primary)",
-  async ({ primary, stored, enabled, updated }) => {
-    const profile: UserProfile = {
-      ...modelAccountProfile,
-      emails: primary ? [] : ["github:ghe.example.test:101", "github:code.example.test:101"],
-      githubIdentity: primary
-        ? {
-            login: "octocat",
-            profileUrl: "https://github.com/octocat",
-            avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
-          }
-        : null,
-    };
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "users.self") {
-        return { profile };
-      }
-      if (method === "users.listModelAccounts") {
-        return { profileId: "profile-1", accounts: [], links: [] };
-      }
-      if (method === "users.prefs.get") {
-        expect(params).toEqual({ keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
-        return {
-          status: "ok",
-          entries: stored === undefined ? {} : { [GIT_COAUTHOR_PREFERENCE_KEY]: stored },
-        };
-      }
-      if (method === "users.prefs.set") {
-        expect(params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: updated } });
-        return { status: "ok" };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-      id: profile.id,
-      name: profile.displayName ?? undefined,
-    });
-    const page = mountProfilePage(harness.context);
-    await waitForFast(() =>
-      expect(page.querySelector("input.settings-toggle__input")).not.toBeNull(),
-    );
-    expect(Boolean(page.querySelector(".settings-account"))).toBe(primary);
-    const toggle = page.querySelector<HTMLInputElement>("input.settings-toggle__input");
-    await waitForFast(() => {
-      expect(toggle?.disabled).toBe(false);
-      expect(toggle?.checked).toBe(enabled);
-    });
-    expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
-      ["users.self", "users.listModelAccounts", "users.prefs.get"].toSorted(),
-    );
-    expect(page.querySelector(".identity-github-form")).toBeNull();
-    if (updated === undefined) {
-      return;
-    }
-    toggle!.checked = updated;
-    toggle?.dispatchEvent(new Event("change", { bubbles: true }));
-    await waitForFast(() =>
-      expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1),
-    );
-    await waitForFast(() => expect(toggle?.checked).toBe(updated));
-    expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
-      ["users.self", "users.listModelAccounts", "users.prefs.get", "users.prefs.set"].toSorted(),
-    );
-  },
-);

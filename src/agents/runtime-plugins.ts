@@ -150,6 +150,7 @@ function resolveAgentRuntimePluginRegistryLoad(
     onlyPluginIds: startupPluginIds === undefined ? undefined : plan.pluginIds,
     channelPluginLoadIntent: startupPluginIds === undefined ? undefined : "full",
     borrowRegistry: params.borrowRegistry,
+    previousRegistry: params.purpose === "model-catalog" ? params.reusableRegistry : undefined,
   };
 }
 

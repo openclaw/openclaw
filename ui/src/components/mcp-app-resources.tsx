@@ -1,5 +1,16 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  Errored,
+  For,
+  isPending,
+  lazy,
+  latest,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type {
   McpAppMentionResult,
   McpAppResourceLink,
@@ -11,18 +22,15 @@ import { createMcpAppCatalog } from "../lib/mcp-app-catalog.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import {
+  MCP_APP_RESOURCE_MENTION_EVENT,
+  type McpAppResourceMentionDetail,
+} from "./mcp-app-resource-mention.ts";
 import { Icon } from "./solid/icon.tsx";
 import "../styles/mcp-app-extensions.css";
 
 registerMcpAppEnglish();
 
-export const MCP_APP_RESOURCE_MENTION_EVENT = "openclaw-mcp-app-resource-mention";
-export type McpAppResourceMentionDetail = {
-  sessionKey: string;
-  agentId: string;
-  serverName: string;
-  resource: McpAppResourceLink;
-};
 type McpAppResourcesProps = { sessionKey: string; agentId: string };
 
 export function McpAppResources(props: McpAppResourcesProps) {
@@ -30,7 +38,6 @@ export function McpAppResources(props: McpAppResourcesProps) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   let generation = 0;
-  let mounted = true;
   // Native inputs expose same-turn edits before their presentation signals settle.
   let queryInput: HTMLInputElement | undefined;
   let serverSelect: HTMLSelectElement | undefined;
@@ -39,7 +46,6 @@ export function McpAppResources(props: McpAppResourcesProps) {
     agentId: props.agentId,
   }));
   onSettled(() => () => {
-    mounted = false;
     generation++;
   });
   const identity = createMemo(() => {
@@ -52,29 +58,20 @@ export function McpAppResources(props: McpAppResourcesProps) {
   });
   // Keep each committed identity distinct even while the picker has no visible consumers.
   const requestScope = createMemo(() => ({ identity: identity() }));
-  type ResourceView = {
-    expanded: boolean;
-    query: string;
-    generation: number;
-    resources: McpAppResourceLink[];
-    busy: boolean;
-    searched: boolean;
-    error: string | null;
-  };
-  // A new scope retires results while preserving the user's disclosure and query.
-  const [view, setView] = createSignal<ResourceView>((previous) => {
+  const [expanded, setExpanded] = createSignal(false);
+  const [query, setQuery] = createSignal("");
+  // Draft preferences persist; changing identity retires request feedback.
+  const [visibleGeneration, setVisibleGeneration] = createSignal(() => {
     requestScope();
-    return {
-      expanded: previous?.expanded ?? false,
-      query: previous?.query ?? "",
-      generation,
-      resources: [],
-      busy: false,
-      searched: false,
-      error: null,
-    };
+    return generation;
   });
-  const servers = createMemo(() => catalog().servers.filter((server) => server.mentionTool));
+  const [attachmentError, setAttachmentError] = createSignal<string | null>(() => {
+    requestScope();
+    return null;
+  });
+  const servers = createMemo(() =>
+    catalog.snapshot().servers.filter((server) => server.mentionTool),
+  );
   const [serverName, setServerName] = createSignal<string>((previous = "") => {
     const available = servers();
     return available.length && !available.some((server) => server.serverName === previous)
@@ -82,61 +79,67 @@ export function McpAppResources(props: McpAppResourcesProps) {
       : previous;
   });
 
-  async function search() {
+  type SearchRequest = {
+    generation: number;
+    current: () => boolean;
+    promise: Promise<McpAppMentionResult | undefined>;
+  };
+  // Changing identity releases the old admitted promise and its plain result snapshots.
+  const [request, setRequest] = createSignal<SearchRequest | undefined>(() => {
+    requestScope();
+    return undefined;
+  });
+  // The controls observe the same admitted promise without owning the answer's error boundary.
+  const completion = createMemo(() => request()?.promise);
+  const busy = () =>
+    latest(request)?.generation === latest(visibleGeneration) && isPending(completion);
+
+  // Empty result frames retain the existing margin while awaiting or reporting a search.
+  function EmptyResults() {
+    return (
+      <Show when={expanded()}>
+        <div class="mcp-app-resources__results" />
+      </Show>
+    );
+  }
+
+  function search() {
     const client = context.gateway.snapshot.client;
     const selectedServer = serverSelect?.value ?? serverName();
-    if (!client || !catalog().available || !selectedServer) {
+    if (!client || !catalog.available() || !selectedServer) {
       return;
     }
     const searchGeneration = ++generation;
     const searchScope = requestScope();
-    const sessionKey = props.sessionKey;
-    const agentId = props.agentId;
     const current = () =>
-      mounted &&
       host.isConnected &&
       generation === searchGeneration &&
       context.gateway.snapshot.client === client &&
       requestScope() === searchScope;
-    setView((previous) => ({
-      ...previous,
-      generation: searchGeneration,
-      busy: true,
-      error: null,
-      resources: [],
-    }));
-    try {
-      const { resources } = await client.request<McpAppMentionResult>("mcp.app.mention", {
-        sessionKey,
-        agentId,
+    // Admit from native inputs now; the memo only observes this request's answer.
+    const promise = client
+      .request<McpAppMentionResult>("mcp.app.mention", {
+        sessionKey: props.sessionKey,
+        agentId: props.agentId,
         serverName: selectedServer,
-        query: queryInput?.value ?? view().query,
-      });
-      if (current()) {
-        setView((previous) => ({ ...previous, resources, searched: true, busy: false }));
-      }
-    } catch (error) {
-      if (current()) {
-        setView((previous) => ({
-          ...previous,
-          busy: false,
-          error:
-            asOptionalRecord(asOptionalRecord(error)?.details)?.code ===
-            "MCP_APP_UNSUPPORTED_MENTION_RESULT"
-              ? t("mcpApp.errors.unsupportedResources")
-              : formatUiError(error),
-        }));
-      }
-    }
+        query: queryInput?.value ?? query(),
+      })
+      .then(
+        (value) => (current() ? value : undefined),
+        (error: unknown) => {
+          if (current()) {
+            throw error;
+          }
+          return undefined;
+        },
+      );
+    setRequest({ generation: searchGeneration, current, promise });
+    setVisibleGeneration(searchGeneration);
+    setAttachmentError(null);
   }
-  function attach(resource: McpAppResourceLink) {
-    const current = view();
+  function attach(resource: McpAppResourceLink, admitted: SearchRequest) {
     // Input changes retire retained result buttons before the next DOM commit.
-    if (
-      context.gateway.snapshot.phase !== "connected" ||
-      current.generation !== generation ||
-      !current.resources.includes(resource)
-    ) {
+    if (context.gateway.snapshot.phase !== "connected" || !admitted.current()) {
       return;
     }
     const claimed = !host.dispatchEvent(
@@ -152,11 +155,11 @@ export function McpAppResources(props: McpAppResourcesProps) {
         },
       }),
     );
-    setView((previous) =>
-      claimed
-        ? { ...previous, expanded: false }
-        : { ...previous, error: t("mcpApp.errors.mountUnavailable") },
-    );
+    if (claimed) {
+      setExpanded(false);
+    } else {
+      setAttachmentError(t("mcpApp.errors.mountUnavailable"));
+    }
   }
   return (
     <openclaw-mcp-app-resources ref={(element) => (host = element)}>
@@ -165,31 +168,28 @@ export function McpAppResources(props: McpAppResourcesProps) {
           <button
             type="button"
             class="btn btn--sm"
-            aria-expanded={view().expanded ? "true" : "false"}
-            onClick={() => {
-              setView((previous) => ({ ...previous, expanded: !previous.expanded }));
-            }}
+            aria-expanded={expanded() ? "true" : "false"}
+            onClick={() => setExpanded((value) => !value)}
           >
             <Icon name="link" /> {t("mcpApp.resources")}
           </button>
-          <Show when={view().expanded}>
+          <Show when={expanded()}>
             <p class="muted">{t("mcpApp.resourceDescription")}</p>
             <form
               class="mcp-app-resources__search"
               onSubmit={(event) => {
                 event.preventDefault();
-                void search();
+                search();
               }}
             >
               <select
                 ref={(element) => (serverSelect = element)}
                 aria-label={t("mcpApp.title")}
                 value={serverName()}
-                disabled={view().busy}
+                disabled={busy()}
                 onChange={(event) => {
                   setServerName(event.currentTarget.value);
-                  generation++;
-                  setView((previous) => ({ ...previous, resources: [], searched: false }));
+                  setVisibleGeneration(++generation);
                 }}
               >
                 <For each={servers()} keyed={(server) => server.serverName}>
@@ -201,44 +201,62 @@ export function McpAppResources(props: McpAppResourcesProps) {
                 type="search"
                 aria-label={t("mcpApp.resourceSearch")}
                 placeholder={t("mcpApp.resourceQuery")}
-                value={view().query}
+                value={query()}
                 onInput={(event) => {
-                  const query = event.currentTarget.value;
-                  generation++;
-                  setView((previous) => ({
-                    ...previous,
-                    query,
-                    busy: false,
-                    resources: [],
-                    searched: false,
-                  }));
+                  setQuery(event.currentTarget.value);
+                  setVisibleGeneration(++generation);
                 }}
               />
-              <button class="btn" type="submit" disabled={view().busy || !catalog().available}>
+              <button class="btn" type="submit" disabled={busy() || !catalog.available()}>
                 {t("mcpApp.resourceSearch")}
               </button>
             </form>
-            <div class="mcp-app-resources__results">
-              <For each={view().resources}>
-                {(resource) => (
-                  <button
-                    type="button"
-                    class="btn mcp-app-resources__result"
-                    disabled={view().busy || !catalog().available}
-                    onClick={() => attach(resource)}
-                  >
-                    <span>{resource.title || resource.name}</span>
-                    <small>{resource.description || resource.uri}</small>
-                  </button>
-                )}
-              </For>
-            </div>
-            <Show when={view().searched && !view().resources.length}>
-              <p role="status">{t("mcpApp.noResources")}</p>
-            </Show>
           </Show>
-          <Show when={view().error}>
-            <p role="alert">{view().error}</p>
+          <Show when={latest(request)} keyed fallback={<EmptyResults />}>
+            {(admitted) => {
+              // Each search owns a fresh async read, so retries suspend instead of retaining errors.
+              const answer = createMemo(() => admitted.promise);
+              const Results = lazy(() => import("./mcp-app-resource-results.tsx"), {
+                export: "McpAppResourceResults",
+              });
+              return (
+                <Errored
+                  fallback={(error) => (
+                    <>
+                      <EmptyResults />
+                      <p role="alert">
+                        {asOptionalRecord(asOptionalRecord(error())?.details)?.code ===
+                        "MCP_APP_UNSUPPORTED_MENTION_RESULT"
+                          ? t("mcpApp.errors.unsupportedResources")
+                          : formatUiError(error())}
+                      </p>
+                    </>
+                  )}
+                >
+                  <Loading fallback={<EmptyResults />}>
+                    <Show when={answer()} keyed fallback={<EmptyResults />}>
+                      {(result) => (
+                        <Show when={expanded()}>
+                          <Show
+                            when={admitted.generation === visibleGeneration()}
+                            fallback={<EmptyResults />}
+                          >
+                            <Results
+                              resources={result.resources}
+                              disabled={busy() || !catalog.available()}
+                              onAttach={(resource) => attach(resource, admitted)}
+                            />
+                          </Show>
+                        </Show>
+                      )}
+                    </Show>
+                  </Loading>
+                </Errored>
+              );
+            }}
+          </Show>
+          <Show when={attachmentError()}>
+            <p role="alert">{attachmentError()}</p>
           </Show>
         </section>
       </Show>

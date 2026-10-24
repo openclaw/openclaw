@@ -57,6 +57,37 @@ function harness(routes: Record<string, (params?: unknown) => unknown>) {
   return { ...gateway, request, sessions: createTestSessionCapability(gateway.gateway) };
 }
 
+it.each(["current", "key-only", "cancelled", "replaced"])(
+  "keeps creation failure attached to its request (%s)",
+  async (outcome) => {
+    const creation = createDeferred<unknown>();
+    const error = new Error("synthetic creation refused");
+    const controller = new AbortController();
+    const { sessions, publish, request } = harness({
+      "sessions.create": () => creation.promise,
+    });
+    const operation =
+      outcome === "key-only"
+        ? sessions.create({ agentId: "main" }, { signal: controller.signal })
+        : sessions.createResult({ agentId: "main" }, { signal: controller.signal });
+    if (outcome === "cancelled") {
+      controller.abort();
+    } else if (outcome === "replaced") {
+      publish(false);
+    }
+    creation.reject(error);
+    if (outcome === "current") {
+      await expect(operation).rejects.toBe(error);
+    } else {
+      await expect(operation).resolves.toBeNull();
+    }
+    expect(sessions.state.error).toBe(
+      outcome === "current" || outcome === "key-only" ? error.message : null,
+    );
+    expect(request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
+  },
+);
+
 it.each(["newer", "failed-before-list", "failed-after-list"])(
   "reconciles created placement without retiring a newer model claim (%s)",
   async (claim) => {

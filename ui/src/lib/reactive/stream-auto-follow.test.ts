@@ -14,12 +14,13 @@ it("preserves reader position until a new stream resets following, then cancels 
     clientHeight: { value: 100 },
   });
   document.body.append(container);
+  let identity = "stream";
   let follow!: ReturnType<typeof useStreamAutoFollow>;
   const dispose = createRoot((stop) => {
     follow = useStreamAutoFollow({
       container: () => container,
       enabled: () => true,
-      identity: () => "stream",
+      identity: () => identity,
     });
     return stop;
   });
@@ -36,6 +37,11 @@ it("preserves reader position until a new stream resets following, then cancels 
     expect(container.scrollTop).toBe(1_000);
 
     container.scrollTop = 0;
+    follow.schedule();
+    identity = "replacement";
+    vi.advanceTimersByTime(20);
+    expect(container.scrollTop).toBe(0);
+
     follow.schedule();
     dispose();
     vi.advanceTimersByTime(20);

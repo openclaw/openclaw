@@ -57,7 +57,6 @@ import {
 } from "./realtime-transcript-text.js";
 import type { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
 import { StreamFrameAdapter } from "./stream-frame-adapter.js";
-import { appendRecentTalkEventMetadata } from "./talk-event-metadata.js";
 
 type ToolHandlerFn = (
   args: unknown,
@@ -738,15 +737,6 @@ export class RealtimeCallHandler {
         outputAudioStarted: () => ({ callId, providerCallId: callSid }),
         outputAudioDelta: (audio) => ({ byteLength: audio.byteLength }),
         outputAudioDone: (reason) => ({ callId, providerCallId: callSid, reason }),
-      },
-      onTalkEvent: (event) => {
-        void this.manager
-          .updateCallMetadata(callRecord, (metadata) =>
-            appendRecentTalkEventMetadata(metadata, event, "realtime"),
-          )
-          .catch((error: unknown) => {
-            console.warn("[voice-call] Failed to update realtime call metadata:", error);
-          });
       },
     });
     const providerHandlesInputAudioBargeIn =

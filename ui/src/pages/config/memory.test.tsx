@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { ConfigForm } from "../../components/config-form.render.tsx";
@@ -16,7 +17,6 @@ const addonLabels = [
   ["memory-wiki", "Memory wiki", "Wiki pages", "disabled"],
 ] as const;
 const emptyOutcomes = () => ({
-  busy: {},
   errors: {},
   notices: {},
   refreshWarnings: {},
@@ -57,8 +57,11 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
       ],
     },
     addonOutcomes: emptyOutcomes(),
+    readAddonExpected: () => undefined,
+    readAddonBusy: () => false,
     engineSelection: { kind: "default", pluginId: "memory-core" },
-    engineBusy: false,
+    engineDisabled: false,
+    engineSaving: false,
     engineOutcome: null,
     onEngineChange: vi.fn(),
     canToggleAddons: true,
@@ -86,6 +89,13 @@ function renderInto(overrides: Partial<MemoryViewProps> = {}): HTMLElement {
   flush();
   return container;
 }
+
+it("names the page with a level-one heading", () => {
+  const container = renderInto();
+  expect(getQueriesForElement(container).getByRole("heading", { level: 1 }).textContent).toBe(
+    "Memory",
+  );
+});
 
 function addonRows(container: HTMLElement) {
   const section = [...container.querySelectorAll(".settings-section")].find(

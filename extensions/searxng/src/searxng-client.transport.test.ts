@@ -30,10 +30,13 @@ afterEach(async () => {
   await promisify(server.close.bind(server))();
 });
 
-function createTool(cacheTtlMinutes = 15) {
+function createTool(
+  cacheTtlMinutes = 15,
+  defaults: { maxResults?: number; timeoutSeconds?: number } = {},
+) {
   const provider = createSearxngWebSearchProvider();
   const config = {
-    tools: { web: { search: { cacheTtlMinutes } } },
+    tools: { web: { search: { cacheTtlMinutes, ...defaults } } },
     plugins: { entries: { searxng: { config: { webSearch: { baseUrl } } } } },
   };
   return expectDefined(provider.createTool({ config }), "SearXNG search tool");
@@ -87,4 +90,55 @@ it("aborts a provider's stalled response body and closes the request", async () 
   controller.abort();
   await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   await expect(clientClosed.promise).resolves.toBeUndefined();
+});
+
+it("keeps configured and explicit result counts separate in the cache", async () => {
+  respond = (_request, response) => {
+    response.setHeader("Content-Type", "application/json");
+    response.end(
+      JSON.stringify({
+        results: [1, 2, 3, 4].map((id) => ({
+          title: `Result ${id}`,
+          url: `https://example.com/${id}`,
+        })),
+      }),
+    );
+  };
+  const args = { query: "configured count" };
+  const one = await createTool(15, { maxResults: 1 }).execute(args);
+  expect(one.results).toHaveLength(1);
+  expect(await createTool(15, { maxResults: 1 }).execute(args)).toEqual({ ...one, cached: true });
+  expect(requests).toBe(1);
+  const three = await createTool(15, { maxResults: 3 }).execute(args);
+  expect(three.results).toHaveLength(3);
+  expect(three.cached).toBeUndefined();
+  expect(requests).toBe(2);
+  const explicit = await createTool(15, { maxResults: 1 }).execute({ ...args, count: 2 });
+  expect(explicit.results).toHaveLength(2);
+  expect(requests).toBe(3);
+});
+
+it("aborts at the configured deadline but permits a longer configured timeout", async () => {
+  const closed = Promise.withResolvers<void>();
+  respond = (_request, response) => {
+    // Exercise the native HTTP/AbortSignal deadline; fake timers do not drive socket I/O.
+    const timer = setTimeout(() => {
+      response.setHeader("Content-Type", "application/json");
+      response.end(
+        JSON.stringify({ results: [{ title: "Result", url: "https://example.com/ok" }] }),
+      );
+    }, 2_000);
+    response.once("close", () => {
+      clearTimeout(timer);
+      closed.resolve();
+    });
+  };
+  const tool = createTool(0, { timeoutSeconds: 1 });
+  await expect(tool.execute({ query: "short deadline" })).rejects.toMatchObject({
+    name: "TimeoutError",
+  });
+  await closed.promise;
+  const allowed = await createTool(0, { timeoutSeconds: 3 }).execute({ query: "longer budget" });
+  expect(allowed.results).toHaveLength(1);
+  expect(requests).toBe(2);
 });

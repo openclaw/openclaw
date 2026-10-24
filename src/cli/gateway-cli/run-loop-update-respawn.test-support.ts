@@ -10,6 +10,7 @@ import {
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { getFreePort } from "../../test-utils/ports.js";
+import { expectCallCount } from "./run-loop-cleanup.test-support.js";
 import { registerPackageLifecycleStopTests } from "./run-loop-package-lifecycle.test-support.js";
 import { registerForegroundUpdateStopTests } from "./run-loop-stop.test-support.js";
 import {
@@ -130,9 +131,7 @@ export function registerUpdateRespawnTests(f: UpdateRespawnFixtures): void {
         async ({ captureSignal, close, start, runtime, exited }) => {
           captureSignal("SIGUSR2")();
           await waitForCalls(completeUpdate);
-          expect(close).toHaveBeenCalledOnce();
-          expect(lockRelease).toHaveBeenCalledOnce();
-          expect(f.stopManagedProviderLocalServices).toHaveBeenCalledOnce();
+          expectCallCount(1, close, lockRelease, f.stopManagedProviderLocalServices);
           expectUncalled(respawn, runtime.exit);
           const consumedIntents = f.consumeGatewayRestartIntentPayload.mock.calls.length;
           captureSignal("SIGUSR2")();
@@ -154,11 +153,9 @@ export function registerUpdateRespawnTests(f: UpdateRespawnFixtures): void {
             child.emit("close", 1, null);
           }
           await expect(withTimeout(exited, lateExit ? 5_000 : 4_000)).resolves.toBe(1);
-          expect(start).toHaveBeenCalledOnce();
-          expect(f.acquireGatewayLock).toHaveBeenCalledOnce();
+          expectCallCount(1, start, f.acquireGatewayLock, respawn);
           expect(f.stopManagedProviderLocalServices).toHaveBeenCalledOnce();
           expectUncalled(cancelUpdate, commitUpdate, markFailure, f.writeGatewayRestartHandoff);
-          expect(respawn).toHaveBeenCalledOnce();
           if (readinessRejected) {
             expect(child.kill).toHaveBeenCalledOnce();
           } else if (lateExit) {
@@ -225,9 +222,7 @@ process.send("parked");`;
             outcome: "planned_restart",
             reason: "restart (SIGUSR2: update.run)",
           });
-          expect(start).toHaveBeenCalledOnce();
-          expect(close).toHaveBeenCalledOnce();
-          expect(f.acquireGatewayLock).toHaveBeenCalledOnce();
+          expectCallCount(1, start, close, f.acquireGatewayLock);
           expectUncalled(cancelUpdate, commitUpdate, markFailure, f.writeGatewayRestartHandoff);
 
           const listening = once(child, "message");
@@ -251,36 +246,53 @@ process.send("parked");`;
     }
   });
 
-  it.each([true, false])("falls back from unavailable handoff (launchd=%s)", async (launchd) => {
-    f.peekGatewayRestartReason.mockReturnValue("update.run");
-    f.restartGatewayProcessWithFreshPid.mockReturnValueOnce({
-      mode: "supervised",
-      ...(launchd ? { handoffSpawned: Promise.resolve(false) } : {}),
-    });
-    if (!launchd) {
-      f.writeGatewayRestartHandoff.mockResolvedValueOnce(null);
-    }
-    if (launchd) {
-      f.setPlatform("darwin");
-      process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
-    } else {
-      process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    }
-    await f.withRunningGateway(async ({ captureSignal, start, runtime, exited }) => {
-      if (launchd) {
-        vi.useFakeTimers();
+  it.each(["launchd", "external-update", "external"] as const)(
+    "recovers an unavailable %s handoff",
+    async (mode) => {
+      const launchd = mode === "launchd";
+      const update = mode !== "external";
+      if (update) {
+        f.peekGatewayRestartReason.mockReturnValue("update.run");
       }
-      captureSignal("SIGUSR2")();
+      f.restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+        mode: "supervised",
+        ...(launchd ? { handoffSpawned: Promise.resolve(false) } : {}),
+      });
+      if (!launchd) {
+        f.writeGatewayRestartHandoff.mockResolvedValueOnce(null);
+      }
       if (launchd) {
-        await vi.advanceTimersByTimeAsync(1500);
+        f.setPlatform("darwin");
+        process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
       } else {
-        await waitForCalls(start, 2);
+        process.env.OPENCLAW_SUPERVISOR_MODE = "external";
       }
-      expect(start).toHaveBeenCalledTimes(2);
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expect(markFailure).toHaveBeenCalledWith("restart-handoff-unavailable");
-      captureSignal("SIGINT")();
-      await expect(exited).resolves.toBe(0);
-    });
-  });
+      await f.withRunningGateway(async ({ captureSignal, start, runtime, exited }) => {
+        if (launchd) {
+          vi.useFakeTimers();
+        }
+        captureSignal("SIGUSR2")();
+        if (launchd) {
+          await vi.advanceTimersByTimeAsync(1500);
+        } else {
+          await waitForCalls(start, 2);
+        }
+        expect(start).toHaveBeenCalledTimes(2);
+        expect(runtime.exit).not.toHaveBeenCalled();
+        if (update) {
+          expect(markFailure).toHaveBeenCalledWith("restart-handoff-unavailable");
+        } else {
+          expectUncalled(markFailure);
+        }
+        if (!launchd) {
+          expect(f.acquireGatewayLock).toHaveBeenCalledTimes(2);
+          expect(f.gatewayLog.warn).toHaveBeenCalledWith(
+            "external supervisor restart handoff could not be persisted; falling back to in-process restart",
+          );
+        }
+        captureSignal("SIGINT")();
+        await expect(exited).resolves.toBe(0);
+      });
+    },
+  );
 }

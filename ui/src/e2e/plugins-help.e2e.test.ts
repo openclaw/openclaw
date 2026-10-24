@@ -285,7 +285,7 @@ suite.define(() => {
     });
   });
 
-  it("opens installed help once, preserves the draft, redacts setting values, and clears departed context", async () => {
+  it("opens installed help on request, preserves the draft, redacts setting values, and clears departed context", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods,
@@ -307,6 +307,10 @@ suite.define(() => {
           })
           .toBe(true);
       };
+      await page
+        .locator(".plugin-catalog-detail__actions")
+        .getByRole("button", { name: "Ask OpenClaw", exact: true })
+        .click();
       await panel.getByText("Existing conversation.", { exact: true }).waitFor();
       await expect.poll(() => composer.isEnabled()).toBe(true);
       const userRequests = async () =>
@@ -315,47 +319,20 @@ suite.define(() => {
         );
       expect(await userRequests()).toHaveLength(0);
       await composer.fill("Keep my existing draft.");
-      const pageErrors: Array<{ name: string; message: string }> = [];
-      const capturePageError = (error: Error) => {
-        if (pageErrors.length < 5) {
-          pageErrors.push({ name: error.name, message: error.message.slice(0, 500) });
-        }
-      };
-      page.on("pageerror", capturePageError);
-      try {
-        await panel.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
-        await page
-          .locator(".plugin-catalog-detail__actions")
-          .getByRole("link", { name: "Settings", exact: true })
-          .click();
-        await page
-          .locator(".plugin-editor")
-          .getByRole("searchbox", { name: "Search settings", exact: true })
-          .waitFor();
-      } catch (error) {
-        const snapshot = await page
-          .evaluate(() => {
-            const editors = Array.from(document.querySelectorAll(".plugin-editor"));
-            return {
-              pathname: location.pathname,
-              search: location.search,
-              settingsLinkHref: document
-                .querySelector('.plugin-catalog-detail__actions a[aria-label="Settings"]')
-                ?.getAttribute("href"),
-              editorCount: editors.length,
-              editors: editors.slice(0, 4).map((editor) => ({
-                visible: editor.checkVisibility({ visibilityProperty: true }),
-              })),
-            };
-          })
-          .catch((snapshotError: unknown) => ({
-            snapshotError: String(snapshotError).slice(0, 500),
-          }));
-        console.warn("plugin-help-settings-navigation", JSON.stringify({ snapshot, pageErrors }));
-        throw error;
-      } finally {
-        page.off("pageerror", capturePageError);
-      }
+      await panel.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
+      await panel.waitFor({ state: "hidden" });
+      // Closing the dock moves Settings while the content's right margin transitions.
+      await page.locator(".content").evaluate(async (content) => {
+        await Promise.all(content.getAnimations().map((animation) => animation.finished));
+      });
+      await page
+        .locator(".plugin-catalog-detail__actions")
+        .getByRole("link", { name: "Settings", exact: true })
+        .click();
+      await page
+        .locator(".plugin-editor")
+        .getByRole("searchbox", { name: "Search settings", exact: true })
+        .waitFor();
       expect(await panel.isVisible()).toBe(false);
       await page
         .getByRole("button", { name: "Actions for Refresh interval (minutes)", exact: true })
@@ -452,6 +429,7 @@ suite.define(() => {
 
   it.each([
     { width: 900, catalog: false },
+    { width: 1440, catalog: false },
     { width: 1440, catalog: true },
   ])(
     "opens help only explicitly for $width pixels and catalog=$catalog",

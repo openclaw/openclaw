@@ -212,7 +212,7 @@ describe("doctorCommand", () => {
     await expect(doctorCommand(runtime, { postUpgrade: true })).rejects.toThrow("exit:0");
 
     expect(mocks.readSourceConfigBestEffort).toHaveBeenCalledOnce();
-    expect(mocks.runPostUpgradeProbes).toHaveBeenCalledWith({ updateChannel: undefined });
+    expect(mocks.runPostUpgradeProbes).toHaveBeenCalledWith(undefined);
     expect(runtime.log).toHaveBeenCalledWith("post-upgrade: no findings");
   });
 

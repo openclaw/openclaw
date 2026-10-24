@@ -8,6 +8,7 @@ import {
   runDeliveryTraceScenario,
   type DeliveryTraceInStep,
   type DeliveryTraceStep,
+  type TraceEvent,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -257,6 +258,12 @@ function createRecordingSlackClient(): Record<string, unknown> {
   const unexpected = (method: string) => async () => {
     throw new Error(`unexpected Slack wire call: ${method}`);
   };
+  const acknowledge =
+    (method: string, includeChannel = false) =>
+    async (args: Record<string, unknown>) => {
+      record(method, args, args.ts, { ok: true });
+      return { ok: true, ts: args.ts, ...(includeChannel ? { channel: args.channel } : {}) };
+    };
   const client: Record<string, unknown> = {
     chat: {
       postMessage: async (args: Record<string, unknown>) => {
@@ -269,10 +276,7 @@ function createRecordingSlackClient(): Record<string, unknown> {
           message: { ts, ...(args.thread_ts ? { thread_ts: args.thread_ts } : {}) },
         };
       },
-      update: async (args: Record<string, unknown>) => {
-        record("chat.update", args, args.ts, { ok: true });
-        return { ok: true, channel: args.channel, ts: args.ts };
-      },
+      update: acknowledge("chat.update", true),
       delete: async (args: Record<string, unknown>) => {
         record("chat.delete", args, args.ts, { ok: true });
         return { ok: true };
@@ -290,14 +294,8 @@ function createRecordingSlackClient(): Record<string, unknown> {
         record("chat.startStream", args, args.channel, { ts });
         return { ok: true, ts };
       },
-      appendStream: async (args: Record<string, unknown>) => {
-        record("chat.appendStream", args, args.ts, { ok: true });
-        return { ok: true, ts: args.ts };
-      },
-      stopStream: async (args: Record<string, unknown>) => {
-        record("chat.stopStream", args, args.ts, { ok: true });
-        return { ok: true, ts: args.ts };
-      },
+      appendStream: acknowledge("chat.appendStream"),
+      stopStream: acknowledge("chat.stopStream"),
     },
     users: {
       info: async (args: Record<string, unknown>) => {
@@ -592,6 +590,12 @@ function runSlackTrace(
   });
 }
 
+function wirePayloads(events: readonly TraceEvent[], method: string) {
+  return events
+    .filter((event) => event.kind === method)
+    .map((event) => (event.data as { payload?: unknown } | undefined)?.payload);
+}
+
 describe("slack delivery trace goldens", () => {
   it.each(["compact", "inferred-compact", "partial", "card"] as const)(
     "keeps native mention policy through serialized %s posts and edits",
@@ -708,15 +712,12 @@ describe("slack delivery trace goldens", () => {
           };
         },
       });
-      const posts = events.filter((event) => event.kind === "chat.postMessage");
-      expect(posts.map((event) => event.data)).toMatchObject([
-        { payload: { text: `${label ? `${label}\n\n` : ""}Read — running\n\n1 tool · 2s` } },
-        { payload: { text: "The answer." } },
+      expect(wirePayloads(events, "chat.postMessage")).toMatchObject([
+        { text: `${label ? `${label}\n\n` : ""}Read — running\n\n1 tool · 2s` },
+        { text: "The answer." },
       ]);
-      expect(events.findLast((event) => event.kind === "chat.update")?.data).toMatchObject({
-        payload: {
-          text: `${title ? `${title}\n\n` : ""}Read — running\n\nOpen in OpenClaw`,
-        },
+      expect(wirePayloads(events, "chat.update").at(-1)).toMatchObject({
+        text: `${title ? `${title}\n\n` : ""}Read — running\n\nOpen in OpenClaw`,
       });
       expect(
         events.some((event) => event.kind === "chat.delete" || event.kind.startsWith("reactions.")),
@@ -746,25 +747,21 @@ describe("slack delivery trace goldens", () => {
       if (surface === "native") {
         expect(out.some((event) => event.kind === "chat.postMessage")).toBe(false);
         expect(out.filter((event) => event.kind === "chat.startStream")).toHaveLength(1);
-        expect(out.find((event) => event.kind === "chat.startStream")?.data).toMatchObject({
-          payload: { thread_ts: INBOUND_TS, task_display_mode: "plan" },
+        expect(wirePayloads(out, "chat.startStream")[0]).toMatchObject({
+          thread_ts: INBOUND_TS,
+          task_display_mode: "plan",
         });
-        expect(out).toContainEqual(
+        expect(wirePayloads(out, "chat.appendStream")).toContainEqual(
           expect.objectContaining({
-            kind: "chat.appendStream",
-            data: expect.objectContaining({
-              payload: expect.objectContaining({
-                chunks: expect.arrayContaining([
-                  expect.objectContaining({
-                    type: "task_update",
-                    id: "openclaw_summary",
-                    title: "Completed",
-                    status: "complete",
-                    sources: [{ type: "url_source", url, text: "Open in OpenClaw" }],
-                  }),
-                ]),
+            chunks: expect.arrayContaining([
+              expect.objectContaining({
+                type: "task_update",
+                id: "openclaw_summary",
+                title: "Completed",
+                status: "complete",
+                sources: [{ type: "url_source", url, text: "Open in OpenClaw" }],
               }),
-            }),
+            ]),
           }),
         );
         expect(
@@ -773,16 +770,13 @@ describe("slack delivery trace goldens", () => {
           ),
         ).toHaveLength(1);
       } else {
-        const terminal = out.findLast((event) => event.kind === "chat.update");
-        expect(terminal?.data).toMatchObject({
-          payload: {
-            blocks: expect.arrayContaining([
-              expect.objectContaining({
-                type: "actions",
-                elements: [expect.objectContaining({ type: "button", url })],
-              }),
-            ]),
-          },
+        expect(wirePayloads(out, "chat.update").at(-1)).toMatchObject({
+          blocks: expect.arrayContaining([
+            expect.objectContaining({
+              type: "actions",
+              elements: [expect.objectContaining({ type: "button", url })],
+            }),
+          ]),
         });
       }
     },

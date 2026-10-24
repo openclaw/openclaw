@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, it } from "vitest";
-import { resolveBoardWidgetContentKindResourceUrls } from "./board-widget-content-kinds.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   loadOpenClawPlugins,
@@ -29,29 +28,6 @@ function loadFixture(...plugins: [TempPlugin, ...TempPlugin[]]) {
   });
 }
 
-function writeWidgetPlugin(params: {
-  id: string;
-  resourcePath: string;
-  kind?: string;
-  surface?: string;
-  publicReader?: boolean;
-}): TempPlugin {
-  return writePlugin({
-    id: params.id,
-    registration: `api.registerBoardWidgetContentKind({
-      kind: ${JSON.stringify(params.kind ?? "diagram")},
-      label: "Diagram",
-      resources: {
-        surface: ${JSON.stringify(params.surface ?? "diagram")},
-        paths: [${JSON.stringify(params.resourcePath)}],
-        ${params.publicReader ? "async readPublicResource() { return undefined; }," : ""}
-      },
-      validateSource(source) { if (!source.trim()) throw new Error("source required"); },
-      composeDocument({ source }) { return "<main>" + source + "</main>"; },
-    });`,
-  });
-}
-
 type Capability = readonly [
   kind: "dataBindings" | "actionVerbs",
   id: string,
@@ -59,7 +35,6 @@ type Capability = readonly [
   options?: {
     scope?: "operator.read" | "operator.write";
     registeredMethod?: string;
-    paramShape?: object;
   },
 ];
 
@@ -70,7 +45,6 @@ function writeDashboardPlugin(id: string, ...capabilities: Capability[]): TempPl
       id: capabilityId,
       method,
       description: "Fixture capability",
-      ...(options.paramShape && { paramShape: options.paramShape }),
     });
     const scope = options.scope ?? (kind === "dataBindings" ? "operator.read" : "operator.write");
     return `api.registerGatewayMethod(${JSON.stringify(options.registeredMethod ?? method)},
@@ -90,7 +64,7 @@ function writeDashboardPlugin(id: string, ...capabilities: Capability[]): TempPl
 function expectRejected(
   plugin: TempPlugin,
   message: string,
-  surface: "boardWidgetContentKinds" | "dashboardDataBindings" | "dashboardActionVerbs",
+  surface: "dashboardDataBindings" | "dashboardActionVerbs",
   diagnostic = true,
 ) {
   const registry = loadFixture(plugin);
@@ -106,88 +80,6 @@ function expectRejected(
     );
   }
 }
-
-it("publishes encoded private renderer paths through their capability", () => {
-  const resourcePath = "/renderer/app.js?v=1#asset";
-  const resolvedPath = "/renderer/app.js%3Fv=1%23asset";
-  const plugin = writeWidgetPlugin({ id: "diagram", resourcePath });
-
-  const registry = loadFixture(plugin);
-
-  expect(registry.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
-  expect(registry.boardWidgetContentKinds.get("diagram")).toMatchObject({
-    pluginId: "diagram",
-    pluginKind: "diagram:diagram",
-    definition: { kind: "diagram", label: "Diagram" },
-  });
-  const registration = registry.boardWidgetContentKinds.get("diagram");
-  expect(
-    registration &&
-      resolveBoardWidgetContentKindResourceUrls(
-        registration,
-        "https://gateway.test/__openclaw__/cap/token",
-      ),
-  ).toEqual({ [resourcePath]: `https://gateway.test/__openclaw__/cap/token${resolvedPath}` });
-});
-
-it("fails plugin load atomically for invalid board widget content kinds", () => {
-  const plugin = writeWidgetPlugin({
-    id: "invalid-widget-kind",
-    kind: "html",
-    surface: "canvas",
-    resourcePath: "/__openclaw__/invalid/app.js",
-  });
-
-  expectRejected(plugin, 'kind "html" is invalid or reserved', "boardWidgetContentKinds");
-});
-
-it.each(["/mcp-app-sandbox", "/renderer/../app.js"])(
-  "rejects an unservable public resource path %s",
-  (resourcePath) => {
-    const plugin = writeWidgetPlugin({
-      id: "invalid-renderer-path",
-      surface: "renderer",
-      resourcePath,
-      publicReader: true,
-    });
-
-    expectRejected(plugin, "resource path", "boardWidgetContentKinds", false);
-  },
-);
-
-it.each([
-  { firstPublic: false, secondPublic: true, sharedPath: true },
-  { firstPublic: true, secondPublic: false, sharedPath: true },
-  { firstPublic: false, secondPublic: false, sharedPath: true },
-  { firstPublic: true, secondPublic: true, sharedPath: false },
-])(
-  "enforces resource path ownership (firstPublic=$firstPublic, secondPublic=$secondPublic, sharedPath=$sharedPath)",
-  ({ firstPublic, secondPublic, sharedPath }) => {
-    const createRenderer = (isPublic: boolean, kind: "first" | "second") => {
-      const resourceName = kind === "first" || sharedPath ? "shared" : "other";
-      return writeWidgetPlugin({
-        id: `renderer-${kind}`,
-        kind,
-        surface: kind,
-        resourcePath: `/__openclaw__/renderer/${resourceName}.js`,
-        publicReader: isPublic,
-      });
-    };
-    const firstPlugin = createRenderer(firstPublic, "first");
-    const secondPlugin = createRenderer(secondPublic, "second");
-    const registry = loadFixture(firstPlugin, secondPlugin);
-    expect(registry.plugins.find((entry) => entry.id === firstPlugin.id)?.status).toBe("loaded");
-    const second = registry.plugins.find((entry) => entry.id === secondPlugin.id);
-    if (sharedPath && (firstPublic || secondPublic)) {
-      expect(second).toMatchObject({ status: "error", failurePhase: "register" });
-      expect(second?.error).toContain("public resource paths must be unique");
-      expect([...registry.boardWidgetContentKinds.keys()]).toEqual(["first"]);
-    } else {
-      expect(second?.status).toBe("loaded");
-      expect([...registry.boardWidgetContentKinds.keys()]).toEqual(["first", "second"]);
-    }
-  },
-);
 
 it.each([
   [
@@ -224,31 +116,13 @@ it("keeps dotted plugin owners and literal escape markers distinct", () => {
   const registry = loadFixture(dataPlugin, actionPlugin, literalEscapePlugin);
 
   expect(registry.plugins.filter((entry) => entry.status === "loaded")).toHaveLength(3);
-  expect(registry.dashboardDataBindings.has("a.b.c")).toBe(true);
-  expect(registry.dashboardActionVerbs.has("a%2Eb.c")).toBe(true);
+  expect(registry.dashboardDataBindings.get("a.b.c")).toMatchObject({
+    pluginId: "a",
+    method: "a.read",
+  });
+  expect(registry.dashboardActionVerbs.get("a%2Eb.c")).toMatchObject({
+    pluginId: "a.b",
+    method: "b.write",
+  });
   expect(registry.dashboardDataBindings.has("a%252Eb.c")).toBe(true);
-});
-
-it("publishes validated dashboard bindings and action verbs", () => {
-  const plugin = writeDashboardPlugin(
-    "valid",
-    ["dataBindings", "items", "valid.items"],
-    [
-      "actionVerbs",
-      "refresh",
-      "valid.refresh",
-      { paramShape: { type: "object", additionalProperties: false } },
-    ],
-  );
-
-  const registry = loadFixture(plugin);
-  expect(registry.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
-  expect(registry.dashboardDataBindings.get("valid.items")).toMatchObject({
-    pluginId: plugin.id,
-    method: "valid.items",
-  });
-  expect(registry.dashboardActionVerbs.get("valid.refresh")).toMatchObject({
-    pluginId: plugin.id,
-    method: "valid.refresh",
-  });
 });

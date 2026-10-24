@@ -127,40 +127,6 @@ function normalizeMatrixQaAllowlist(entries?: string[]) {
   return uniqueStrings(normalizeStringEntries(entries ?? []));
 }
 
-function resolveMatrixQaDmAllowFrom(params: {
-  driverUserId: string;
-  overrides?: MatrixQaConfigOverrides;
-  sutUserId: string;
-  topology: MatrixQaProvisionedTopology;
-}) {
-  if (params.overrides?.dm?.allowFrom) {
-    return normalizeMatrixQaAllowlist(params.overrides.dm.allowFrom);
-  }
-  const dmParticipantUserIds = params.topology.rooms
-    .filter((room) => room.kind === "dm")
-    .flatMap((room) => room.memberUserIds.filter((userId) => userId !== params.sutUserId));
-  const dmAllowFrom = uniqueStrings(dmParticipantUserIds);
-  return dmAllowFrom.length > 0 ? dmAllowFrom : [params.driverUserId];
-}
-
-function resolveMatrixQaDmConfigSnapshot(params: {
-  driverUserId: string;
-  overrides?: MatrixQaConfigOverrides;
-  sutUserId: string;
-  topology: MatrixQaProvisionedTopology;
-}) {
-  const hasDmRooms = params.topology.rooms.some((room) => room.kind === "dm");
-  const dmOverrides = params.overrides?.dm;
-  const enabled = dmOverrides?.enabled ?? hasDmRooms;
-  return {
-    allowFrom: enabled ? resolveMatrixQaDmAllowFrom(params) : [],
-    enabled,
-    policy: dmOverrides?.policy ?? "allowlist",
-    sessionScope: dmOverrides?.sessionScope ?? "per-user",
-    threadReplies: dmOverrides?.threadReplies ?? params.overrides?.threadReplies ?? "inbound",
-  };
-}
-
 function resolveMatrixQaStreamingMode(
   value: MatrixQaConfigOverrides["streaming"],
 ): MatrixQaStreamingMode {
@@ -174,22 +140,6 @@ function resolveMatrixQaStreamingMode(
     return value.mode;
   }
   return "off";
-}
-
-function resolveMatrixQaGroupAllowFrom(params: {
-  driverUserId: string;
-  observerUserId: string;
-  overrides?: MatrixQaConfigOverrides;
-  sutUserId: string;
-}) {
-  const explicitAllowFrom = params.overrides?.groupAllowFrom;
-  const roleAllowFrom = (params.overrides?.groupAllowRoles ?? []).map(
-    (role) => params[`${role}UserId`],
-  );
-  if (explicitAllowFrom !== undefined || params.overrides?.groupAllowRoles !== undefined) {
-    return normalizeMatrixQaAllowlist([...(explicitAllowFrom ?? []), ...roleAllowFrom]);
-  }
-  return [params.driverUserId];
 }
 
 const MATRIX_QA_BOT_SOURCE_ACCOUNT_IDS = {
@@ -368,8 +318,40 @@ export function buildMatrixQaConfig(
   }
   groupChat.visibleReplies = "automatic";
   const { overrides } = params;
-  const dmSnapshot = resolveMatrixQaDmConfigSnapshot(params);
-  const groupAllowFrom = resolveMatrixQaGroupAllowFrom(params);
+  function resolveMatrixQaDmConfigSnapshot() {
+    function resolveMatrixQaDmAllowFrom() {
+      if (params.overrides?.dm?.allowFrom) {
+        return normalizeMatrixQaAllowlist(params.overrides.dm.allowFrom);
+      }
+      const dmParticipantUserIds = params.topology.rooms
+        .filter((room) => room.kind === "dm")
+        .flatMap((room) => room.memberUserIds.filter((userId) => userId !== params.sutUserId));
+      const dmAllowFrom = uniqueStrings(dmParticipantUserIds);
+      return dmAllowFrom.length > 0 ? dmAllowFrom : [params.driverUserId];
+    }
+    const hasDmRooms = params.topology.rooms.some((room) => room.kind === "dm");
+    const dmOverrides = params.overrides?.dm;
+    const enabled = dmOverrides?.enabled ?? hasDmRooms;
+    return {
+      allowFrom: enabled ? resolveMatrixQaDmAllowFrom() : [],
+      enabled,
+      policy: dmOverrides?.policy ?? "allowlist",
+      sessionScope: dmOverrides?.sessionScope ?? "per-user",
+      threadReplies: dmOverrides?.threadReplies ?? params.overrides?.threadReplies ?? "inbound",
+    };
+  }
+  const dmSnapshot = resolveMatrixQaDmConfigSnapshot();
+  function resolveMatrixQaGroupAllowFrom() {
+    const explicitAllowFrom = params.overrides?.groupAllowFrom;
+    const roleAllowFrom = (params.overrides?.groupAllowRoles ?? []).map(
+      (role) => params[`${role}UserId`],
+    );
+    if (explicitAllowFrom !== undefined || params.overrides?.groupAllowRoles !== undefined) {
+      return normalizeMatrixQaAllowlist([...(explicitAllowFrom ?? []), ...roleAllowFrom]);
+    }
+    return [params.driverUserId];
+  }
+  const groupAllowFrom = resolveMatrixQaGroupAllowFrom();
   const streamingOverride = isRecord(overrides?.streaming) ? overrides.streaming : undefined;
   const account = restoreOwnedFields(
     currentAccount,

@@ -1,10 +1,10 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import { createDeliveryHarness } from "./embedded-agent-subscribe.delivery.test-support.js";
 import {
   createSubscribedSessionHarness,
   emitAssistantTextDelta,
   emitAssistantTextEnd,
-  extractTextPayloads,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
@@ -21,21 +21,12 @@ function assistant(texts: readonly string[]): NativeMessage {
   };
 }
 function setup(options: Options = {}, startNative = true) {
-  const onBlockReply = vi.fn();
   const onAgentEvent = vi.fn();
-  const harness = createSubscribedSessionHarness({
-    runId: "run",
-    onBlockReply,
-    onAgentEvent,
-    blockReplyBreak: "text_end",
-    ...options,
-  });
-  onTestFinished(() => harness.subscription.unsubscribe());
+  const harness = createDeliveryHarness({ onAgentEvent, ...options });
   const { emit } = harness;
   if (startNative) {
     emit({ type: "message_start", message: assistant([]) });
   }
-  const readTexts = () => extractTextPayloads(onBlockReply.mock.calls);
   function nativeEvent(
     type: "text_delta" | "text_end",
     message: NativeMessage,
@@ -55,18 +46,6 @@ function setup(options: Options = {}, startNative = true) {
   }
   return {
     ...harness,
-    onBlockReply,
-    texts: readTexts,
-    flush: async (expected: readonly string[], history = false, calls?: number) => {
-      await harness.subscription.waitForPendingEvents();
-      expect(readTexts()).toEqual(expected);
-      if (history) {
-        expect(harness.subscription.assistantTexts).toEqual(expected);
-      }
-      if (calls !== undefined) {
-        expect(onBlockReply).toHaveBeenCalledTimes(calls);
-      }
-    },
     finish: (texts: readonly string[]) => emit({ type: "message_end", message: assistant(texts) }),
     plainStart: () => emit({ type: "message_start", message: { role: "assistant" } }),
     plainEnd: (content: string) => emitAssistantTextEnd({ emit, content }),

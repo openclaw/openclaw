@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import {
   readSqliteDatabasePendingScopedWriteToken as pendingToken,
@@ -60,6 +61,31 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     // Closing a live transaction must roll it back and discard that backend.
     close(writer);
     expect(get(reader, "SELECT count(*)::int AS count FROM entries")).toEqual({ count: 0 });
+  });
+
+  it("expires quiet backends while preserving burst reuse and checked-out connections", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const first = open();
+      const firstPid = pid(first);
+      close(first);
+      vi.advanceTimersByTime(2 * 60_000);
+      const borrowed = open();
+      expect(pid(borrowed)).toBe(firstPid);
+      // Its previous idle deadline must not retire a checked-out connection.
+      vi.advanceTimersByTime(2 * 60_000);
+      expect(get(borrowed, "SELECT 7::int AS value")).toEqual({ value: 7 });
+      close(borrowed);
+      vi.advanceTimersByTime(3 * 60_000);
+      const backend = await admin.query("SELECT pid FROM pg_stat_activity WHERE pid = $1", [
+        firstPid,
+      ]);
+      expect(backend.rows).toEqual([]);
+      const reopened = open();
+      expect(pid(reopened)).not.toBe(firstPid);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retains unrelated replicas and predicts only the written scope across commits", () => {
@@ -154,6 +180,34 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     expect(token(db, "first")).not.toBe(afterQuoted);
   });
 
+  it("releases evicted idle backends and their session locks", async () => {
+    const dsn = new URL(connection!);
+    const independent = () => {
+      dsn.searchParams.set("application_name", randomUUID());
+      return open(dsn.href);
+    };
+    const first = independent();
+    const firstPid = pid(first);
+    const lockKey = Number.parseInt(randomUUID().replaceAll("-", "").slice(0, 12), 16);
+    run(() => first.prepare("SELECT pg_advisory_lock(?)").get(lockKey));
+    close(first);
+    for (let index = 0; index < 4; index++) {
+      const next = independent();
+      close(next);
+    }
+
+    await admin.query("BEGIN");
+    try {
+      await admin.query("SET LOCAL lock_timeout = '5s'");
+      await admin.query("SELECT pg_advisory_xact_lock($1)", [lockKey]);
+      expect(
+        (await admin.query("SELECT pid FROM pg_stat_activity WHERE pid = $1", [firstPid])).rows,
+      ).toEqual([]);
+    } finally {
+      await admin.query("ROLLBACK");
+    }
+  });
+
   it("reconnects after an idle backend is terminated, without reusing the broken backend", async () => {
     const first = open();
     const killedPid = pid(first);
@@ -202,10 +256,13 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     expect(pid(differentSettings)).not.toBe(originalPid);
   });
 
-  it("applies all session settings with a quoted, comma-containing schema name", async () => {
+  it("inherits commit durability while applying settings with a quoted, comma-containing schema name", async () => {
     const namespace = `${schema}_"first,second`;
     const quoted = `"${namespace.replaceAll('"', '""')}"`;
     await admin.query(`CREATE SCHEMA ${quoted}`);
+    const defaults = await admin.query<{ synchronous_commit: string }>(
+      "SELECT current_setting('synchronous_commit') AS synchronous_commit",
+    );
     const db = open(connection!, namespace, { lockTimeoutMs: 321, statementTimeoutMs: 654 });
     const settings = query(
       db,
@@ -217,7 +274,7 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     );
     expect(settings).toEqual([
       {
-        synchronous_commit: "off",
+        synchronous_commit: defaults.rows[0]?.synchronous_commit,
         lock_timeout: "321ms",
         statement_timeout: "654ms",
         search_path: quoted,

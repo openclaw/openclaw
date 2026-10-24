@@ -157,7 +157,7 @@ it.each(["shadow", "rejected"])("keeps repair targets from excluded %s rows", (p
     providerTarget({ providerIds: [], env: env("MODEL") }),
     hasContract({ contract: embedding, providerIds: [`${prefix}-embedding`] }),
     channelTarget({ config: {}, env: env("CHANNEL") }),
-    webEnvTarget({ contract: "webFetchProviders", env: env("WEB") }),
+    webEnvTarget({ env: env("WEB") }),
     webTarget({ providerId: `${prefix}-web`, env: {} }),
   ]).toEqual([true, true, true, true, true, true]);
 });

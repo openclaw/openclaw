@@ -10,6 +10,7 @@ import {
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeApplicationContext } from "../../test-helpers/application-context-fixtures.ts";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidComponent } from "../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -35,6 +36,7 @@ export async function renderChatModelControls(
   props: ChatModelControlsProps,
   container: HTMLDivElement,
 ) {
+  installModelPickerLayout();
   const renderProps: ChatModelControlsProps = {
     ...props,
     modelPickerOpen: props.modelPickerOpen ?? true,
@@ -164,6 +166,14 @@ export function stubAnimationFrames() {
     for (const callback of callbacks.splice(0)) {
       callback(0);
     }
+  };
+}
+
+export function stubSettledAnimationFrames() {
+  const frame = stubAnimationFrames();
+  return () => {
+    frame();
+    flush();
   };
 }
 

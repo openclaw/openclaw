@@ -3,7 +3,7 @@ import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../no
 import { TRIAGE_EXTERNAL_AGENTS } from "../../commands/triage-handoff.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { formatErrorMessage as formatError, runCommandWithRuntime } from "../cli-utils.js";
-import { hasExplicitOptions } from "../command-options.js";
+import { listExplicitOptionFlagsExcept } from "../command-options.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
 import { formatCliJsonFailure } from "../failure-output.js";
 import { formatDocsHelp } from "../help-format.js";
@@ -14,52 +14,14 @@ import type { ProgramContext } from "./context.js";
 import { collectOption } from "./helpers.js";
 import { setCommandJsonMode } from "./json-mode.js";
 
-const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
-  "workspaceSuggestions",
-  "yes",
+const STATE_SQLITE_ALLOWED_OPTION_NAMES = new Set(["stateSqlite", "json"]);
+const CLIENT_CREDENTIALS_ALLOWED_OPTION_NAMES = new Set([
+  "clientCredentials",
   "repair",
   "fix",
-  "force",
   "nonInteractive",
-  "generateGatewayToken",
-  "allowExec",
-  "deep",
-  "fullIntegrityCheck",
-  "lint",
-  "postUpgrade",
-  "clientCredentials",
-  "sessionSqlite",
-  "sessionSqliteStore",
-  "sessionSqliteAgent",
-  "sessionSqliteAllAgents",
-  "githubIssue",
-  "severityMin",
-  "all",
-  "skip",
-  "only",
-] as const;
-
-const CLIENT_CREDENTIALS_CONFLICTING_OPTION_NAMES = [
-  "workspaceSuggestions",
-  "yes",
-  "force",
-  "generateGatewayToken",
-  "allowExec",
-  "deep",
-  "fullIntegrityCheck",
-  "lint",
-  "postUpgrade",
-  "stateSqlite",
-  "sessionSqlite",
-  "sessionSqliteStore",
-  "sessionSqliteAgent",
-  "sessionSqliteAllAgents",
-  "githubIssue",
-  "severityMin",
-  "all",
-  "skip",
-  "only",
-] as const;
+  "json",
+]);
 
 function exitDoctorError(error: unknown, json: boolean): never {
   if (json) {
@@ -80,7 +42,7 @@ export function registerMaintenanceCommands(
     .addHelpText("after", () => formatDocsHelp("/cli/doctor"))
     .option("--no-workspace-suggestions", "Disable workspace memory system suggestions", true)
     .option("--yes", "Accept defaults without prompting", false)
-    .option("--repair", "Apply recommended repairs without prompting", false)
+    .option("--repair", "Apply recommended repairs", false)
     .option("--fix", "Apply recommended repairs (alias for --repair)", false)
     .option(
       "--force",
@@ -143,7 +105,7 @@ export function registerMaintenanceCommands(
       }
       if (
         typeof opts.stateSqlite === "string" &&
-        hasExplicitOptions(command, STATE_SQLITE_CONFLICTING_OPTION_NAMES)
+        listExplicitOptionFlagsExcept(command, STATE_SQLITE_ALLOWED_OPTION_NAMES).length > 0
       ) {
         return exitDoctorError(
           "doctor shared-state SQLite maintenance can only be combined with --json.",
@@ -161,7 +123,7 @@ export function registerMaintenanceCommands(
       }
       if (
         opts.clientCredentials === true &&
-        hasExplicitOptions(command, CLIENT_CREDENTIALS_CONFLICTING_OPTION_NAMES)
+        listExplicitOptionFlagsExcept(command, CLIENT_CREDENTIALS_ALLOWED_OPTION_NAMES).length > 0
       ) {
         return exitDoctorError(
           "doctor --client-credentials can only be combined with --repair (or --fix), --non-interactive, and --json.",
@@ -250,7 +212,10 @@ export function registerMaintenanceCommands(
         if (opts.clientCredentials === true) {
           const { prepareStartupClientCredentials } =
             await import("../../commands/startup-client-credentials.js");
-          await prepareStartupClientCredentials({ env: process.env, runtime: defaultRuntime });
+          await prepareStartupClientCredentials({
+            env: process.env,
+            runtime: defaultRuntime,
+          });
           if (opts.json === true) {
             defaultRuntime.writeJson({ ok: true });
           }

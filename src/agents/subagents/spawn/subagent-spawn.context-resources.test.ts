@@ -128,6 +128,13 @@ describe("spawn context-engine resource custody", () => {
   const requester = { agentSessionKey: "main" };
   const spawnChild = (groupId?: string) =>
     spawn({ task: "synthetic child", ...(groupId ? { collect: true, groupId } : {}) }, requester);
+  const closeScheduler = () =>
+    scheduler.closeSwarmScheduler().catch((error: unknown) => {
+      expectedCloseFailure = error;
+      throw error;
+    });
+  const expectCloseFailure = (closing = closeScheduler()) =>
+    expect(closing).rejects.toThrow("Swarm launch cleanup failed");
 
   beforeEach(async () => {
     expectedCloseFailure = undefined;
@@ -360,18 +367,8 @@ describe("spawn context-engine resource custody", () => {
           expect(callGateway.mock.calls.map(([request]) => request.method)).toEqual(["agent"]);
           expect(scheduler.releaseSwarmRun(result.runId!)).toBe(true);
         }
-        await expect(
-          scheduler.closeSwarmScheduler().catch((error: unknown) => {
-            expectedCloseFailure = error;
-            throw error;
-          }),
-        ).rejects.toThrow("Swarm launch cleanup failed");
-        await expect(
-          scheduler.closeSwarmScheduler().catch((error: unknown) => {
-            expectedCloseFailure = error;
-            throw error;
-          }),
-        ).rejects.toThrow("Swarm launch cleanup failed");
+        await expectCloseFailure();
+        await expectCloseFailure();
       } finally {
         nativeCleanup.release();
         await scheduler.closeSwarmScheduler().catch(() => {});
@@ -448,13 +445,8 @@ describe("spawn context-engine resource custody", () => {
         disposal.release();
         await release;
       } else if (mode === "shutdown-disposal-failure") {
-        closing = scheduler.closeSwarmScheduler();
-        await expect(
-          closing.catch((error: unknown) => {
-            expectedCloseFailure = error;
-            throw error;
-          }),
-        ).rejects.toThrow("Swarm launch cleanup failed");
+        closing = closeScheduler();
+        await expectCloseFailure(closing);
         expect(launches).toBe(0);
         expect(settleLaunchFailure).not.toHaveBeenCalled();
       } else {

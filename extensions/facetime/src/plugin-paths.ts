@@ -34,12 +34,7 @@ async function resolveNativeInstall(): Promise<{ buildId: string; capture: strin
     const buildIdFile = resolve(directory, "FaceTimeHelper.build-id");
     const protocolFile = resolve(directory, "native-protocol.env");
     try {
-      await Promise.all([
-        access(capture, constants.X_OK),
-        access(helper, constants.R_OK),
-        access(buildIdFile, constants.R_OK),
-        access(protocolFile, constants.R_OK),
-      ]);
+      await Promise.all([access(capture, constants.X_OK), access(helper, constants.R_OK)]);
       const [buildId, protocol] = await Promise.all([
         readFile(buildIdFile, "utf8").then((value) => value.trim()),
         readFile(protocolFile, "utf8").then((value) => value.trim()),

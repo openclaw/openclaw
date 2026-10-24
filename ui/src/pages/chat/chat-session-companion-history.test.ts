@@ -423,6 +423,19 @@ describe("Side chat turn history", () => {
     await threads.hydrate("one", async () => ({ exchanges: [] }));
     expect(questions(threads)).toEqual(["Original question", "New question"]);
     expect(threads.view("one").draft).toBe("Unsent draft");
+    await threads.submit("one", "Answered before Clear", answered("Ready to clear", 2));
+    threads.setDraft("one", "Unsent draft");
+    await expect(
+      threads.reset("one", async () => {
+        throw new Error("offline");
+      }),
+    ).rejects.toThrow("offline");
+    expect(questions(threads)).toEqual([
+      "Original question",
+      "New question",
+      "Answered before Clear",
+    ]);
+    expect(threads.view("one").draft).toBe("Unsent draft");
     const stale = threads.view("one").turns[0]!;
     await threads.reset("one", async () => ({ ok: true }));
     const ask = vi.fn(answered("Must not be sent", 2));

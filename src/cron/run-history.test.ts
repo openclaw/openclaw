@@ -13,6 +13,7 @@ import {
   selectCronRunHistoryPage,
   type ReadCronRunHistoryPageOptions,
 } from "./run-history.js";
+import type { CronRunLogEntry } from "./run-log-types.js";
 import { findCronRunRecoveryInDatabase } from "./service/run-history-recovery.js";
 import { cronStoreKey } from "./store/key.js";
 import { readCronRunHistoryCandidates, readCronRunHistoryRecords } from "./store/read-only.js";
@@ -38,6 +39,14 @@ import {
 } from "./store/run-receipt-write-admission.js";
 
 const DAY = 24 * 60 * 60_000;
+const runIds = (rows: readonly { runId?: string }[]) => rows.map((row) => row.runId);
+const taskIds = (rows: readonly { id: string }[]) => rows.map((row) => row.id);
+function outcomeDetail(storeKey: string, fields: Partial<CronRunLogEntry>) {
+  return cronRunLogEntryToDetail(
+    { jobId: "job", action: "finished", ts: 20, status: "ok", ...fields },
+    { storeKey },
+  );
+}
 function withHistoryState(fn: (storeKey: string) => Promise<void>) {
   return withOpenClawTestState({ layout: "state-only", prefix: "cron-history-" }, (state) =>
     fn(cronStoreKey(state.statePath("cron/jobs.json"))),
@@ -129,19 +138,12 @@ function outcome(storeKey: string, receipt: string): CronRunHistoryWrite {
     endedAt: 20,
     sessionKey: "agent:main:cron:job",
     status: "succeeded",
-    detail: cronRunLogEntryToDetail(
-      {
-        jobId: "job",
-        action: "finished",
-        ts: 20,
-        runAtMs: 10,
-        status: "ok",
-        completionStatus: "succeeded",
-        sessionId: "recorded-generation",
-        runId: receipt,
-      },
-      { storeKey },
-    ),
+    detail: outcomeDetail(storeKey, {
+      runAtMs: 10,
+      completionStatus: "succeeded",
+      sessionId: "recorded-generation",
+      runId: receipt,
+    }),
   };
 }
 
@@ -157,9 +159,7 @@ it.each(["asc", "desc"] as const)("orders history timestamps and ties %s", (sort
 
   const page = projectCronRunHistoryPage(records, { storeKey: "store", sortDir });
 
-  expect(page.entries.map((entry) => entry.runId)).toEqual(
-    sortDir === "desc" ? newestFirst : newestFirst.toReversed(),
-  );
+  expect(runIds(page.entries)).toEqual(sortDir === "desc" ? newestFirst : newestFirst.toReversed());
 });
 
 it("seeks linked runs before pagination without confusing public ids or ambiguous aliases", () => {
@@ -177,38 +177,36 @@ it("seeks linked runs before pagination without confusing public ids or ambiguou
   ];
   const seek = (
     runId: string,
-    rows = records,
+    extra: CronRunRecord[] = [],
     entryFilter?: ReadCronRunHistoryPageOptions["entryFilter"],
   ) =>
-    projectCronRunHistoryPage(rows, {
-      storeKey: "store",
-      jobId: "job",
-      runId,
-      limit: 1,
-      entryFilter,
-    }).entries.map((entry) => entry.runId);
+    runIds(
+      projectCronRunHistoryPage([...records, ...extra], {
+        storeKey: "store",
+        jobId: "job",
+        runId,
+        limit: 1,
+        entryFilter,
+      }).entries,
+    );
   for (const alias of ["target", "target-session", "cron:job:10"]) {
     expect(seek(alias)).toEqual(["target"]);
   }
   expect(seek("cron:other:10")).toEqual([]);
-  expect(seek("target-session", [...records, record("collision", "target-session", 20)])).toEqual(
-    [],
-  );
-  expect(seek("cron:job:10", [...records, record("same-start", "another-session", 10)])).toEqual(
-    [],
-  );
+  expect(seek("target-session", [record("collision", "target-session", 20)])).toEqual([]);
+  expect(seek("cron:job:10", [record("same-start", "another-session", 10)])).toEqual([]);
   expect(
     seek(
       "target-session",
-      [...records, record("hidden", "target-session", 20)],
+      [record("hidden", "target-session", 20)],
       (entry) => entry.runId === "target",
     ),
   ).toEqual([]);
-  expect(seek("target", [...records, record("alias-collision", "target", 20)])).toEqual(["target"]);
-  expect(
-    seek("target-session", [...records, record("other-job", "target-session", 20, "other")]),
-  ).toEqual(["target"]);
-  expect(seek("target", records, () => false)).toEqual([]);
+  expect(seek("target", [record("alias-collision", "target", 20)])).toEqual(["target"]);
+  expect(seek("target-session", [record("other-job", "target-session", 20, "other")])).toEqual([
+    "target",
+  ]);
+  expect(seek("target", [], () => false)).toEqual([]);
 });
 
 it("retains history across worker reads, isolates stores, and recovers only an exact receipt", () =>
@@ -255,24 +253,16 @@ it("retains history across worker reads, isolates stores, and recovers only an e
     await recordCronRun(outcome(storeKey, "third"));
     const refreshed = await readCronRunHistoryPage({ storeKey, jobId: "job" });
     expect(refreshed.total).toBe(3);
-    expect(refreshed.entries.map((entry) => entry.runId)).toEqual(
-      expect.arrayContaining(["first", "second", "third"]),
-    );
+    expect(runIds(refreshed.entries)).toEqual(expect.arrayContaining(["first", "second", "third"]));
     const updated = outcome(storeKey, "third");
     await recordCronRun({
       ...updated,
-      detail: cronRunLogEntryToDetail(
-        {
-          jobId: "job",
-          action: "finished",
-          ts: updated.endedAt,
-          status: "ok",
-          runId: "third",
-          summary: "Fresh delivery result",
-          deliveryStatus: "delivered",
-        },
-        { storeKey },
-      ),
+      detail: outcomeDetail(storeKey, {
+        ts: updated.endedAt,
+        runId: "third",
+        summary: "Fresh delivery result",
+        deliveryStatus: "delivered",
+      }),
     });
     const delivered = await readCronRunHistoryPage({
       storeKey,
@@ -350,7 +340,7 @@ it("pages large history without reading off-page payloads or changing completion
           expect(reads.counts.history - beforeCandidateReads).toBe(1);
           expect(reads.textBytes.history - beforeCandidates).toBeLessThan(256 * 1024);
           const selected = selectCronRunHistoryPage(candidates.records, options);
-          expect(selected.page.entries.map((entry) => entry.runId)).toEqual(expected);
+          expect(runIds(selected.page.entries)).toEqual(expected);
           expect(selected.page).toMatchObject({
             total,
             offset: options.offset ?? 0,
@@ -361,7 +351,7 @@ it("pages large history without reading off-page payloads or changing completion
           const records = readCronRunHistoryRecordsInDatabase(
             db,
             storeKey,
-            selected.records.map((record) => record.id),
+            taskIds(selected.records),
             options.view,
           );
           expect(reads.rowCounts.history - beforeRows).toBe(2);
@@ -370,7 +360,7 @@ it("pages large history without reading off-page payloads or changing completion
           );
           expect(JSON.stringify(records)).not.toContain("recovery-only:");
           const page = projectCronRunHistoryPage(records, { ...options, offset: 0 });
-          expect(page.entries.map((entry) => entry.runId)).toEqual(expected);
+          expect(runIds(page.entries)).toEqual(expected);
           if (options.view === "summary") {
             expect(JSON.stringify(records)).not.toContain("diagnostic-payload:");
             expect(page.entries.every((entry) => !entry.diagnostics && !entry.delivery)).toBe(true);
@@ -424,7 +414,7 @@ it("bounds quiet evaluations separately without evicting payload history or acti
         );
       }
       pruneHistory(db, now, schema);
-      const remaining = new Set(readCronRunRecordsInDatabase(db).map((row) => row.id));
+      const remaining = new Set(taskIds(readCronRunRecordsInDatabase(db)));
       return new Set(records.filter((row) => !remaining.has(row.id)).map((row) => row.id));
     };
     const records = Array.from({ length: 2001 }, (_, index) =>
@@ -600,9 +590,9 @@ it("normalizes released lifecycle rows before history, recovery, and retention",
     ).toEqual([200, 200, 200, 200, 200]);
     const schema = prepareCronRunReceiptWriteSchema(db);
     expect(pruneHistory(db, 200 + DAY, schema)).toBe(1);
-    expect(readCronRunRecordsInDatabase(db).map((row) => row.id)).not.toContain("lost");
+    expect(taskIds(readCronRunRecordsInDatabase(db))).not.toContain("lost");
     expect(pruneHistory(db, 200 + 7 * DAY, schema)).toBe(5);
-    expect(readCronRunRecordsInDatabase(db).map((row) => row.id)).toEqual(["running"]);
+    expect(taskIds(readCronRunRecordsInDatabase(db))).toEqual(["running"]);
   }));
 
 it("rejects corrupt released enums before reading or pruning history", () =>

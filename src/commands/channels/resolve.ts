@@ -74,12 +74,6 @@ function detectAutoKindForPlugin(input: string, plugin: ChannelPlugin): ChannelR
   return "group";
 }
 
-function formatResolveResult(result: ChannelResolveResult): string {
-  const name = result.name ? ` (${result.name})` : "";
-  const note = result.note ? ` [${result.note}]` : "";
-  return `${result.input} -> ${result.id}${name}${note}`;
-}
-
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
   const entries = normalizeStringEntries(opts.entries);
   if (entries.length === 0) {
@@ -177,7 +171,9 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
 
   for (const result of results) {
     if (result.resolved && result.id) {
-      runtime.log(formatResolveResult(result));
+      const name = result.name ? ` (${result.name})` : "";
+      const note = result.note ? ` [${result.note}]` : "";
+      runtime.log(`${result.input} -> ${result.id}${name}${note}`);
     } else {
       runtime.error(
         danger(`${result.input} -> unresolved${result.note ? ` (${result.note})` : ""}`),

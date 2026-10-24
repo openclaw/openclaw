@@ -6,9 +6,9 @@ import knipConfig from "../../config/knip.config.ts";
 import scriptExportsKnipConfig from "../../config/knip.scripts-exports.config.ts";
 import {
   checkExportScan,
-  parseKnipCompactUnusedExports,
   parseKnipCompactUnusedExportsResult,
 } from "../../scripts/check-deadcode-exports.mts";
+import { readUpdateCompatibilityInventory } from "../../scripts/lib/update-compat-chunks.mts";
 import { vitestWorkerBuildEntries } from "../../scripts/lib/vitest-worker-build-entries.mts";
 import { vitestWorkerDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
 
@@ -178,7 +178,63 @@ const catalog = module.loadControlUiSourceCatalog();`;
     );
   });
 
-  it("parses all compact export sections and expands symbol lists", () => {
+  it("models retained updater named exports without fabricating private imports", () => {
+    const manifest = fs.readFileSync("package.json", "utf8");
+    const compile = knipConfig.compilers.json;
+    const compiled = compile(manifest, "package.json");
+    expect(compiled).toMatch(
+      /import \{ isPackageManagerUpdateMode as __updateCompatibilityConsumer\d+ \} from "\.\/src\/cli\/update-cli\/update-command-service-recovery\.ts";/u,
+    );
+    for (const [module, symbol] of [
+      ["src/cli/update-cli/update-command-package.ts", "readPackageUpdateIdentity"],
+      [
+        "src/infra/update-managed-service-handoff.ts",
+        "isCurrentManagedServiceUpdateHandoffProcess",
+      ],
+      ["src/infra/update-runner-git-target.ts", "readGitTargetSchemaVersions"],
+    ]) {
+      expect(
+        compiled
+          .split("\n")
+          .some(
+            (line) =>
+              line.startsWith(`import { ${symbol} as `) && line.endsWith(` from "./${module}";`),
+          ),
+      ).toBe(false);
+      expect(compiled).toContain(`from "./${module}";`);
+    }
+    const finishAliases = [
+      ...compiled.matchAll(
+        /import \{ finishUpdateRun as (__updateCompatibilityConsumer\d+) \} from "\.\/src\/infra\/update-run-(?:ledger|write)\.ts";/gu,
+      ),
+    ].map((match) => match[1]);
+    expect(finishAliases).toHaveLength(2);
+    expect(new Set(finishAliases).size).toBe(2);
+  });
+
+  it("rejects retained updater bindings that are neither exports nor real imports", () => {
+    const manifest = fs.readFileSync("package.json", "utf8");
+    const inventoryPath = path.resolve("scripts/lib/update-compat-inventory.json");
+    const inventory = structuredClone(readUpdateCompatibilityInventory(inventoryPath));
+    inventory.releases[0]!.chunks[0]!.exports.push({
+      exported: "missingUpdaterConsumer",
+      origin: {
+        module: "src/cli/update-cli/update-command-service-recovery.ts",
+        symbol: "missingUpdaterConsumer",
+      },
+    });
+    const readFileSync = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      return path.resolve(String(file)) === inventoryPath
+        ? JSON.stringify(inventory)
+        : readFileSync(file, options);
+    });
+    expect(() => knipConfig.compilers.json(manifest, "package.json")).toThrow(
+      "Recorded updater binding src/cli/update-cli/update-command-service-recovery.ts:missingUpdaterConsumer is neither a named export nor an imported named binding",
+    );
+  });
+
+  it("rejects findings from every compact export section and expands symbol lists", () => {
     const output = [
       "Unused exports (2)\nsrc/b.ts: beta, alpha\n/tmp/outside.ts: noise\nC:\\tmp\\outside.ts: noise\nC:outside.ts: noise\n\\\\server\\share\\outside.ts: noise",
       "Unused exported types (1)\nextensions/example/src/types.ts: ExampleType",
@@ -188,7 +244,7 @@ const catalog = module.loadControlUiSourceCatalog();`;
       "Unused exported namespace members (1)\nsrc/protocol.ts: Result (v2)",
       "Unused files (1)\nsrc/noise.ts: src/noise.ts",
     ].join("\n\n");
-    expect(parseKnipCompactUnusedExports(`\n${output}\n`)).toEqual([
+    const entries = [
       "extensions/example/src/types.ts: ExampleType",
       "packages/example/src/state.ts: Ready",
       "src/b.ts: alpha",
@@ -196,7 +252,12 @@ const catalog = module.loadControlUiSourceCatalog();`;
       "src/namespace.ts: runtimeHelper",
       "src/namespace.ts: RuntimeType",
       "src/protocol.ts: Result (v2)",
-    ]);
+    ];
+    expect(checkExportScan("finding scan", `\n${output}\n`)).toEqual({
+      entries,
+      message: `finding scan:\nUnused exports are not allowed:\n${entries.map((entry) => `  ${entry}`).join("\n")}\nDelete the exports or model their real production consumers in Knip.`,
+      ok: false,
+    });
   });
 
   it.each([
@@ -230,18 +291,5 @@ Install workspace dependencies in-tree (pnpm install) — on delegated boxes the
 
   it("accepts clean export scan output unchanged", () => {
     expect(checkExportScan("clean scan", "")).toEqual({ entries: [], message: "", ok: true });
-  });
-
-  it("reports genuine export findings unchanged", () => {
-    expect(
-      checkExportScan("finding scan", "Unused exports (1)\nsrc/config/types.ts: TelegramConfig\n"),
-    ).toEqual({
-      entries: ["src/config/types.ts: TelegramConfig"],
-      message: `finding scan:
-Unused exports are not allowed:
-  src/config/types.ts: TelegramConfig
-Delete the exports or model their real production consumers in Knip.`,
-      ok: false,
-    });
   });
 });

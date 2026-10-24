@@ -4,6 +4,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  AgentDatabaseSchemaAdmissionChangedError,
+  AgentDatabaseSchemaAdmissionInvalidError,
+} from "./agent-database-admission-error.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal.read.js";
 
@@ -58,7 +62,13 @@ afterEach(() => vi.useRealTimers());
 
 async function prepareAgents(
   count: number,
-  options: { isCurrent?: () => boolean; afterActivation?: () => Promise<void> } = {},
+  options: {
+    isCurrent?: () => boolean;
+    openAgent?: () => Promise<AsyncDisposable | void>;
+    migrateAgent?: () => Promise<void>;
+    publishAgent?: () => Promise<void>;
+    afterActivation?: () => Promise<void>;
+  } = {},
 ) {
   const env = { OPENCLAW_STATE_DIR: tempDirTracker.make("journal-bound-") };
   const pathname = path.join(env.OPENCLAW_STATE_DIR, "openclaw-agent.sqlite");
@@ -78,9 +88,9 @@ async function prepareAgents(
       admission.activate({
         isCurrent: options.isCurrent ?? (() => true),
         preparationReady: Promise.resolve(),
-        openAgent: async () => {},
-        migrateAgent: async () => {},
-        publishAgent: async () => {},
+        openAgent: options.openAgent ?? (async () => {}),
+        migrateAgent: options.migrateAgent ?? (async () => {}),
+        publishAgent: options.publishAgent ?? (async () => {}),
       });
       await options.afterActivation?.();
       // Four attempts, including jitter, finish before the progress interval fires.
@@ -92,6 +102,37 @@ async function prepareAgents(
   });
   return agentIds;
 }
+
+it.each([undefined, "migration", "publication"] as const)(
+  "retains the prepared resource until startup settles (%s)",
+  async (failure) => {
+    const events: string[] = [];
+    let released = false;
+    const step = async (phase: string) => {
+      expect(released).toBe(false);
+      events.push(phase);
+      if (phase === failure) {
+        throw new Error("startup fixture refusal");
+      }
+    };
+    await prepareAgents(1, {
+      openAgent: async () => ({
+        async [Symbol.asyncDispose]() {
+          released = true;
+          events.push("released");
+        },
+      }),
+      migrateAgent: () => step("migration"),
+      publishAgent: () => step("publication"),
+    });
+    expect(events).toEqual(
+      failure === "migration"
+        ? ["migration", "released"]
+        : ["migration", "publication", "released"],
+    );
+    expect(admissionState.failed).toEqual(failure ? ["agent-0"] : []);
+  },
+);
 
 it("prepares more than 128 agents without overflowing state-read admission", async () => {
   let active = 0;
@@ -121,6 +162,24 @@ it("retries shared-pool capacity rejections and prepares the agent", async () =>
   readJournal.mockRejectedValueOnce(overload()).mockRejectedValueOnce(overload());
   await prepareAgents(1);
   expectAdmission(["agent-0"], [], 4);
+});
+
+it.each([
+  [new AgentDatabaseSchemaAdmissionChangedError(), 4],
+  [new AgentDatabaseSchemaAdmissionInvalidError(), 1],
+] as const)("fails publication for %s after %i attempts", async (error, attempts) => {
+  const publish = vi.fn().mockRejectedValue(error);
+  await prepareAgents(1, { publishAgent: publish });
+  expect(publish).toHaveBeenCalledTimes(attempts);
+  expect(admissionState).toEqual({ prepared: [], failed: ["agent-0"] });
+});
+
+it("does not republish after the agent is deleted during an admission retry", async () => {
+  readJournal.mockResolvedValueOnce("absent").mockResolvedValue("pending");
+  const publish = vi.fn().mockRejectedValue(new AgentDatabaseSchemaAdmissionChangedError());
+  await prepareAgents(1, { publishAgent: publish });
+  expect(publish).toHaveBeenCalledOnce();
+  expect(admissionState).toEqual({ prepared: [], failed: ["agent-0"] });
 });
 
 it.each([

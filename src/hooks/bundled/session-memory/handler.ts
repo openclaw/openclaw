@@ -1,20 +1,30 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   normalizeOptionalString,
+  normalizeLowercaseStringOrEmpty,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { prepareSystemAgentRunAdmission } from "../../../agents/admitted-run-context.js";
 import {
   resolveAgentIdByWorkspacePath,
+  resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
 import { resolveUserTimezone } from "../../../agents/date-time.js";
+import { runEmbeddedAgent } from "../../../agents/embedded-agent.js";
 import { createMemoryWriteProvenanceObserver } from "../../../agents/memory-write-provenance.js";
+import { SessionManager } from "../../../agents/sessions/index.js";
+import { resolveAgentTimeoutMs } from "../../../agents/timeout.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
+import { withFileLock } from "../../../infra/file-lock.js";
 import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
@@ -23,15 +33,54 @@ import {
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../../../routing/session-key.js";
+import {
+  extractLeadingHttpStatus,
+  parseApiErrorPayload,
+} from "../../../shared/assistant-error-format.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
-import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import { isSessionAutoResetReason } from "../../session-auto-reset.js";
 import { captureSessionMemoryTranscript, type SessionMemoryTranscript } from "./capture.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
+const slugGeneratorLog = createSubsystemLogger("llm-slug-generator");
+const PROVIDER_ERROR_PREFIX_RE =
+  /^(?:provider\s+)?(?:api|llm|model|openai|anthropic|codex|gateway)\s+(?:request\s+)?(?:error|failed|failure)\b/i;
+const PROVIDER_ERROR_DETAIL_RE =
+  /\b(?:insufficient[_ -]?quota|quota (?:exceeded|exhausted)|exceeded your current quota|payment required|insufficient credits|credit balance|insufficient[_ -]?(?:balance|funds)|rate[_ -]?limit(?:ed)?|too many requests|invalid[_ -]?api[_ -]?key|incorrect api key|authentication failed|oauth token refresh failed|missing (?:token|projectid|credentials)|google cloud credentials|re-?authenticate|unauthorized|forbidden|permission_error|billing hard limit|spend(?:ing)? limit)\b/i;
+
+function isErrorSlugPayload(payload: { text?: string; isError?: boolean } | undefined): boolean {
+  if (!payload) {
+    return false;
+  }
+  if (payload.isError === true) {
+    return true;
+  }
+  const text = payload.text?.trim();
+  if (!text) {
+    return false;
+  }
+  if (parseApiErrorPayload(text)) {
+    return true;
+  }
+  const leadingStatus = extractLeadingHttpStatus(text);
+  if (leadingStatus) {
+    if ([401, 402, 403, 429].includes(leadingStatus.code)) {
+      return true;
+    }
+    if (
+      leadingStatus.code === 400 &&
+      (parseApiErrorPayload(leadingStatus.rest) ||
+        PROVIDER_ERROR_PREFIX_RE.test(leadingStatus.rest) ||
+        PROVIDER_ERROR_DETAIL_RE.test(leadingStatus.rest))
+    ) {
+      return true;
+    }
+  }
+  return PROVIDER_ERROR_PREFIX_RE.test(text) || PROVIDER_ERROR_DETAIL_RE.test(text);
+}
 
 function pickDateTimePart(
   parts: Intl.DateTimeFormatPart[],
@@ -178,22 +227,75 @@ async function saveSessionMemoryNow(
       const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
 
       if (transcript.status === "available" && transcript.content && cfg && allowLlmSlug) {
-        const slugModel = typeof hookConfig?.model === "string" ? hookConfig.model : undefined;
-        slug = await generateSlugViaLLM({
-          sessionContent: transcript.content,
-          cfg,
-          agentId,
-          model: slugModel,
-        });
+        try {
+          const helperWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const agentDir = resolveAgentDir(cfg, agentId);
+          const sessionId = `slug-generator-${randomUUID()}`;
+          const sessionKey = `agent:${agentId}:helper:incognito-${sessionId}`;
+          const prompt = `Based on this conversation, generate a short 1-2 word filename slug (lowercase, hyphen-separated, no file extension).
+
+Conversation summary:
+${truncateUtf16Safe(transcript.content, 2000)}
+
+Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
+          const timeoutMs =
+            cfg.agents?.defaults?.timeoutSeconds === undefined
+              ? 15_000
+              : resolveAgentTimeoutMs({ cfg });
+          const runId = `slug-gen-${Date.now()}`;
+          const preparedRunAdmission = prepareSystemAgentRunAdmission(
+            cfg,
+            runId,
+            agentId,
+            "hooks.slug-generator",
+          );
+          try {
+            const result = await runEmbeddedAgent({
+              preparedRunAdmission,
+              sessionId,
+              sessionKey,
+              sessionManager: SessionManager.inMemory(helperWorkspaceDir),
+              agentId,
+              workspaceDir: helperWorkspaceDir,
+              agentDir,
+              config: cfg,
+              prompt,
+              model: typeof hookConfig?.model === "string" ? hookConfig.model : undefined,
+              timeoutMs,
+              runId,
+              // Conversation-derived utility input must never regain caller-denied capabilities.
+              disableTools: true,
+              toolsAllow: [],
+              disableTrajectory: true,
+              cleanupBundleMcpOnRunEnd: true,
+              // Internal helper run: route failures lane-local so an upstream 400/billing
+              // here cannot poison the shared profile (#71709).
+              authProfileFailurePolicy: "local",
+            });
+            const payload = result.payloads?.[0];
+            const text = payload?.text;
+            if (text && !isErrorSlugPayload(payload)) {
+              slug =
+                normalizeLowercaseStringOrEmpty(text)
+                  .replace(/[^a-z0-9-]/g, "-")
+                  .replace(/-+/g, "-")
+                  .replace(/^-+|-+$/g, "")
+                  .slice(0, 30)
+                  .replace(/^-+|-+$/g, "") || null;
+            }
+          } finally {
+            preparedRunAdmission.close();
+          }
+        } catch (err) {
+          const message = err instanceof Error ? formatErrorStackWithMessage(err) : String(err);
+          slugGeneratorLog.error(`Failed to generate slug: ${message}`);
+        }
       }
     }
 
     if (!slug) {
       slug = localTimestamp.timeSlug;
     }
-
-    const filename = await resolveAvailableMemoryFilename({ memoryDir, dateStr, slug });
-    const memoryFilePath = path.join(memoryDir, filename);
 
     const timeStr = localTimestamp.time;
 
@@ -237,13 +339,28 @@ async function saveSessionMemoryNow(
       sessionKey: event.sessionKey,
       now: () => now.getTime(),
     });
-    const commit = () => memoryRoot.write(filename, entry, { encoding: "utf-8" });
-    await provenanceObserver.write({
-      absolutePath: memoryFilePath,
-      contentBefore: "",
-      contentAfter: entry,
-      commit,
-    });
+    // Allocation and provenance publication share one workspace lock: different
+    // slugs can also collide with another capture's numeric suffix. The existing
+    // lock owner recovers dead writers without making provenance rows reserve names.
+    const memoryFilePath = await withFileLock(
+      path.join(memoryDir, ".session-memory"),
+      {
+        retries: { retries: 1_200, factor: 1, minTimeout: 25, maxTimeout: 25 },
+        stale: 30_000,
+        staleRecovery: "remove-if-definitely-stale",
+      },
+      async () => {
+        const filename = await resolveAvailableMemoryFilename({ memoryDir, dateStr, slug });
+        const allocatedPath = path.join(memoryDir, filename);
+        await provenanceObserver.write({
+          absolutePath: allocatedPath,
+          contentBefore: "",
+          contentAfter: entry,
+          commit: () => memoryRoot.create(filename, entry, { encoding: "utf-8", atomic: true }),
+        });
+        return allocatedPath;
+      },
+    );
 
     const relPath = shortenHomePath(memoryFilePath);
     log.info(`Session context saved to ${relPath}`);

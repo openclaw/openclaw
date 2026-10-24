@@ -117,7 +117,13 @@ function createFixture(
     database = openEngineStore({
       anchor,
       input: { connection: dsn, schemaPrefix: "memory_search_test" },
-      schema: { id: "memory_search", version: 1, sqlite: "", postgres: schema },
+      schema: {
+        id: "memory_search",
+        version: 1,
+        sqlite: "",
+        postgres: schema,
+        postgresVectorSearchVersion: 2,
+      },
       openSqlite: () => {
         throw new Error("Unexpected SQLite memory search fixture");
       },
@@ -270,7 +276,16 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
   );
 
   it("applies model, source and candidate eligibility before exact nearest limit", async () => {
-    const nearest = await regular.vector(vectorQuery({ limit: 1 }));
+    const queried = vi.spyOn(regular.pg(), "query");
+    let nearest;
+    try {
+      nearest = await regular.vector(vectorQuery({ limit: 1 }));
+      expect(queried).toHaveBeenCalledTimes(1);
+      // A separately bound ORDER BY expression makes PostgreSQL evaluate cosine twice per row.
+      expect(queried.mock.calls[0]![0].match(/<=>/g)).toHaveLength(1);
+    } finally {
+      queried.mockRestore();
+    }
     expect(nearest.rows.map((row) => row.path)).toEqual(["memory/semantic.md"]);
     expect(nearest.rows[0]!.score).toBeCloseTo(0.8, 6);
     const alias = await regular.vector(
@@ -278,17 +293,40 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
     );
     expect(alias.rows.map((row) => row.path)).toEqual(["memory/alias.md"]);
     expect(alias.rows[0]!.score).toBe(1);
-    const id = admitted(() =>
-      String(
-        regular
+    const scoped = admitted(() => createFixture(root, "candidate-eligibility", connection!));
+    try {
+      const candidateIds = admitted(() => {
+        expect(scoped.ensureVector()).toMatchObject({ ok: true });
+        scoped.publish("negative", "all negative", [-1, -1, -1]);
+        scoped.publish("zero", "no cosine direction", [0, 0, 0]);
+        scoped.publish("orthogonal", "orthogonal", [0, 1, 0]);
+        scoped.publish("outside", "excluded perfect match", [-1, 0, 0]);
+        return scoped
           .pg()
-          .prepare("SELECT id FROM memory_index_chunks WHERE path = ?")
-          .get("memory/orthogonal.md")!.id,
-      ),
-    );
-    const candidate = await regular.vector(vectorQuery({ limit: 1, candidateIds: [id] }));
-    expect(candidate.rows.map((row) => row.path)).toEqual(["memory/orthogonal.md"]);
-    expect(candidate.rows[0]!.score).toBe(0);
+          .prepare("SELECT id FROM memory_index_chunks WHERE path != ? ORDER BY id")
+          .all("memory/outside.md")
+          .map((row) => String(row.id));
+      });
+      const captured = vi.spyOn(scoped.pg(), "query");
+      try {
+        const candidate = await scoped.vector(
+          vectorQuery({ limit: 3, queryVec: [-1, 0, 0], candidateIds }),
+        );
+        expect(candidate.rows.map((row) => row.path)).toEqual([
+          "memory/negative.md",
+          "memory/orthogonal.md",
+        ]);
+        expect(candidate.rows[0]!.score).toBeCloseTo(1 / Math.sqrt(3), 6);
+        expect(candidate.rows[1]!.score).toBe(0);
+        expect(captured).toHaveBeenCalledTimes(1);
+        // Even a small scope can choose a full scan; eligibility must not read every vector.
+        expect(captured.mock.calls[0]![0]).not.toMatch(/\bvector_norm\s*\(/i);
+      } finally {
+        captured.mockRestore();
+      }
+    } finally {
+      admitted(() => scoped.close());
+    }
     expect((await regular.vector(vectorQuery({ candidateIds: [] }))).rows).toEqual([]);
   });
 

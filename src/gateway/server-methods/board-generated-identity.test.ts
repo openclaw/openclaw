@@ -2,43 +2,28 @@ import { afterEach, expect, it } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  boardFixture,
+  closeBoardDatabases,
+} from "../../boards/board-store.fixtures.test-support.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../../state/openclaw-state-db.js";
 import { createBoardHarness } from "./board.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function closeDatabases() {
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-}
 afterEach(async () => {
   resetPluginRuntimeStateForTest();
-  await closeDatabases();
+  await closeBoardDatabases();
 });
 
 it("serializes in-flight generated-name collisions and reuses both names after reload", async () => {
   resetPluginRuntimeStateForTest();
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-board-generated-race-") };
-  const sessionKey = "agent:main:generated-race";
-  const database = openOpenClawAgentDatabase({ agentId: "main", env });
-  replaceSessionEntrySync(
-    { agentId: "main", sessionKey, storePath: database.path },
-    { sessionId: "generated-race", updatedAt: Date.now() },
-  );
-  const options = { resolveSession: () => ({ agentId: "main", sessionKey }), env };
+  const {
+    sessionKey,
+    storeOptions: options,
+    store,
+  } = boardFixture(tempDirs.make("openclaw-board-generated-race-"), "agent:main:generated-race");
   let arrivals = 0;
   const { promise: readersReady, resolve: releaseReaders } = createDeferred();
   const readCanvasDocument = async (docId: string) => {
@@ -49,11 +34,7 @@ it("serializes in-flight generated-name collisions and reuses both names after r
     await readersReady;
     return { html: `<p>${docId}</p>`, cspSandbox: "scripts" as const };
   };
-  const { invoke, broadcast } = createBoardHarness(
-    readCanvasDocument,
-    {},
-    new SqliteBoardStore(options),
-  );
+  const { invoke, broadcast } = createBoardHarness(readCanvasDocument, {}, store);
   const widgets = [
     { title: "売上レポート 2024", docId: "sales", key: "a" },
     { title: "在庫レポート 2024", docId: "inventory", key: "b" },
@@ -87,7 +68,7 @@ it("serializes in-flight generated-name collisions and reuses both names after r
     ).toEqual(expect.arrayContaining(committedNames));
   expectBroadcast(broadcast);
 
-  await closeDatabases();
+  await closeBoardDatabases();
   const reloaded = createBoardHarness(undefined, {}, new SqliteBoardStore(options));
   const snapshot = (await reloaded.invoke("board.get", { sessionKey })).mock
     .calls[0]?.[1] as BoardSnapshot;

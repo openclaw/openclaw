@@ -18,7 +18,10 @@ import {
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { parseUpdateRecoveryBackupManifest } from "./backup-verify-manifest.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
-import { setupDoctorAdmissionFixture } from "./doctor-maintenance.admission.test-support.js";
+import {
+  beginDoctorRepair,
+  setupDoctorAdmissionFixture,
+} from "./doctor-maintenance.admission.test-support.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
 const prepareService = vi.hoisted(() => vi.fn<typeof maybeStopManagedServiceBeforeMutableUpdate>());
@@ -111,10 +114,8 @@ it.each([true, false])(
           port: 1,
           allowInTests: true,
         });
-        maintenance = await beginDoctorMaintenance({
+        maintenance = await beginDoctorRepair({
           root: install,
-          options: { repair: true, nonInteractive: true },
-          runtime: { log() {}, error() {}, exit() {} },
           beforeStateMutation: async () => {
             const original = family();
             listUpdateRuns({}, { env }, openDoctorStateSchemaReadAdmission);

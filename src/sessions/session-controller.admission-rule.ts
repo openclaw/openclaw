@@ -24,7 +24,6 @@ export type TurnAdmissionDecision =
 
 const waitsForFollowupBarrier = {
   visible: false,
-  heartbeat: true,
   queued_followup: true,
   direct: false,
 } as const satisfies Record<SessionControllerTurnKind, boolean>;

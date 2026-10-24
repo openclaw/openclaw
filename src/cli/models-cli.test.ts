@@ -1,6 +1,5 @@
 import "../commands/models/accounts.js";
 import "../commands/models/auth-order.js";
-import "../commands/models/fallbacks-shared.js";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime, ExitError } from "../runtime.js";
@@ -14,9 +13,6 @@ const mocks = vi.hoisted(() => ({
   modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetCommand: vi.fn().mockResolvedValue(undefined),
   modelsRefreshCommand: vi.fn().mockResolvedValue(undefined),
-  noopAsync: vi.fn(async () => undefined),
-  changeFallbacksCommand: vi.fn().mockResolvedValue(undefined),
-  clearFallbacksCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesRemoveCommand: vi.fn().mockResolvedValue(undefined),
@@ -73,12 +69,6 @@ vi.mock("../commands/models/aliases.js", () => ({
   modelsAliasesAddCommand: mocks.modelsAliasesAddCommand,
   modelsAliasesListCommand: mocks.modelsAliasesListCommand,
   modelsAliasesRemoveCommand: mocks.modelsAliasesRemoveCommand,
-}));
-vi.mock("../commands/models/fallbacks-shared.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../commands/models/fallbacks-shared.js")>()),
-  changeFallbacksCommand: mocks.changeFallbacksCommand,
-  clearFallbacksCommand: mocks.clearFallbacksCommand,
-  listFallbacksCommand: mocks.noopAsync,
 }));
 // mock-isolation: Observe CLI routing without scanning live providers.
 vi.mock("../commands/models/scan.js", () => ({ modelsScanCommand: mocks.modelsScanCommand }));
@@ -171,10 +161,6 @@ describe("models cli", () => {
     expectCommandOptions(mocks.modelsAuthListCommand, { provider, json });
   });
 
-  it("declares parent --status-plain as plain machine output owning stdout", () => {
-    expect(isModelsPlainMachineOutput(["node", "openclaw", "models", "--status-plain"])).toBe(true);
-  });
-
   it("does not declare plain after argv terminator as plain machine output", () => {
     expect(
       isModelsPlainMachineOutput(["node", "openclaw", "models", "list", "--", "--plain"]),
@@ -243,8 +229,6 @@ describe("models cli", () => {
     globalCase("set-image openai/gpt-image-1", mocks.modelsSetCommand, "imageModel"),
     globalCase("aliases add zzz soraka/grok-4.6", mocks.modelsAliasesAddCommand),
     globalCase("aliases remove zzz", mocks.modelsAliasesRemoveCommand),
-    globalCase("image-fallbacks remove openai/gpt-5.5", mocks.changeFallbacksCommand),
-    globalCase("image-fallbacks clear", mocks.clearFallbacksCommand),
     globalCase("scan --no-probe --no-input", mocks.modelsScanCommand),
     globalCase("refresh", mocks.modelsRefreshCommand),
   ];

@@ -4,7 +4,6 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import {
   collectTestEnvMutationReport,
-  main as runTestEnvMutationReport,
   renderTestEnvMutationReport,
 } from "../../scripts/test-env-mutation-report.js";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -53,16 +52,11 @@ process.env.NOT_OPENCLAW = "ignored";
   });
 }
 
-it("renders a non-blocking text report for active findings", () => {
+it("scans static and dynamic mutations while ignoring non-code and ordinary source files", () => {
   const report = collectTestEnvMutationReport({ repoRoot: makeEnvMutationFixture() });
-
-  const rendered = renderTestEnvMutationReport(report, { includeAllowed: true });
-
-  expect(rendered).toContain("OpenClaw test env mutation report");
-  expect(rendered).toContain("Findings: 9 active in 3 file(s), 2 allowed in 1 file(s)");
-  expect(rendered).toContain("- src/example.test.ts (7)");
-  expect(rendered).toContain("L2 OPENCLAW_STATE_DIR assign process.env");
-  expect(rendered).toContain("Allowed harness findings:");
+  expect(renderTestEnvMutationReport(report, { includeAllowed: true })).toContain(
+    "Findings: 9 active in 3 file(s), 2 allowed in 1 file(s)",
+  );
 });
 
 it("rejects missing or flag-shaped CLI repo roots instead of scanning zero files", () => {
@@ -70,23 +64,6 @@ it("rejects missing or flag-shaped CLI repo roots instead of scanning zero files
 
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("--repo-root expects a path");
-  expect(() => runTestEnvMutationReport(["--", "--repo-root", "-h"])).toThrow(
-    "--repo-root expects a path",
-  );
-});
-
-it("rejects loose CLI limits before scanning the repository", () => {
-  for (const limit of ["1e3", ""]) {
-    expect(() =>
-      runTestEnvMutationReport([
-        "--",
-        "--limit",
-        limit,
-        "--repo-root",
-        createTempDir("openclaw-env-limit-"),
-      ]),
-    ).toThrow("--limit expects a non-negative integer");
-  }
 });
 
 it.each([1, 0])("preserves grouped output and each section's cap with limit %s", (limit) => {

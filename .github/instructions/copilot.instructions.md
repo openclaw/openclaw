@@ -4,7 +4,7 @@
 
 ## Tech Stack
 
-- **Runtime**: Node 24.16+ or 26.1+ (Bun also supported for dev/scripts)
+- **Runtime**: Node 24.22.1+ or 26.12.1+ (Bun also supported for dev/scripts)
 - **Language**: TypeScript (ESM, strict mode)
 - **Package Manager**: pnpm (keep `pnpm-lock.yaml` in sync)
 - **Lint/Format**: Oxlint, Oxfmt (`pnpm check`)

@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { runWithAsyncStore } from "./async-store.js";
 import { createDeferredCore } from "./deferred.js";
 import { runInDetachedAsyncContext } from "./detached-async-context.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
@@ -135,7 +136,7 @@ async function runActiveStoreWriter<T>(
     timing.startedAt = performance.now();
   }
   try {
-    return await activeStoreWriters.run(writer, fn);
+    return await runWithAsyncStore(activeStoreWriters, writer, fn);
   } finally {
     if (timing) {
       timing.finishedAt = performance.now();

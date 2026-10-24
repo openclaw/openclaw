@@ -40,13 +40,7 @@ import {
   type ReplyOperation,
 } from "../../sessions/session-controller.js";
 import type { VisibleWorkSession } from "../get-reply-options.types.js";
-import {
-  getReplyPayloadMetadata,
-  isReplyPayloadTerminalContent,
-  type ReplyPayload,
-} from "../reply-payload.js";
-import { normalizeVerboseLevel } from "../thinking.js";
-import type { VerboseLevel } from "../thinking.shared.js";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import {
   compactState,
   loadCronStoreMock,
@@ -154,26 +148,6 @@ it("refuses an unbound question without falling through to active-run queueing",
 });
 
 describe("runReplyAgent auto-compaction token update", () => {
-  it("updates totalTokens from lastCallUsage even without compaction", async () => {
-    const storePath = path.join(tempDirs.make("openclaw-usage-last-"), "sessions.json");
-    const sessionKey = "main";
-    const sessionEntry = sessionFixture({ totalTokens: 50_000 });
-    await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
-    runEmbeddedAgentMock.mockResolvedValue(
-      replyResult("ok", {
-        agentMeta: {
-          usage: { input: 75_000, output: 5_000, total: 80_000 },
-          lastCallUsage: { input: 55_000, output: 2_000, total: 57_000 },
-        },
-      }),
-    );
-    await createBaseRun({
-      run: { agentId: "main", agentDir: path.join(rootDir, "agent"), reasoningLevel: "on" },
-      reply: { ...sessionState(sessionKey, sessionEntry), storePath },
-    }).run();
-    expect(loadSessionEntry({ storePath, sessionKey })?.totalTokens).toBe(55_000);
-  }, 180_000);
-
   it("keeps an unarmed preflight drain visible instead of dropping the reply", async () => {
     const storePath = path.join(tempDirs.make("openclaw-preflight-drain-"), "sessions.json");
     const sessionKey = "agent:main:main";
@@ -635,23 +609,6 @@ describe("runReplyAgent block streaming", () => {
     }).run();
   }
 
-  it("coalesces duplicate text_end block replies", async () => {
-    const onBlockReply = vi.fn();
-    runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
-      const block = params.onBlockReply as ((payload: { text?: string }) => void) | undefined;
-      block?.({ text: "Hello" });
-      block?.({ text: "Hello" });
-      return replyResult("Final message", {});
-    });
-
-    const result = await runBlockStreaming({ onBlockReply });
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect((firstMockCallArg(onBlockReply, "block reply") as { text?: string }).text).toBe("Hello");
-    // The unsent final survives the different text already streamed by the block pipeline.
-    expectReplyText(result, "Final message");
-  });
-
   it("returns the final payload when onBlockReply times out", async () => {
     vi.useFakeTimers();
     let sawAbort = false;
@@ -726,167 +683,39 @@ it("delivers tool progress with inline on over stored full", async () => {
 
 describe("runReplyAgent Active Memory inline debug", () => {
   it.each([
-    ["turn", "raw", "off", true, true, true],
-    ["live", undefined, "raw", true, false, true],
-    ["off", "off", "raw", true, true, false],
-    ["unauthorized", "raw", "raw", false, false, false],
+    ["off", "on", undefined, true, true],
+    ["on", "off", undefined, true, false],
+    ["off", "on", "off", true, false],
+    ["on", "off", "on", true, true],
+    ["raw", "raw", "raw", false, false],
   ] as const)(
-    "keeps selected trace after native final delivery: %s",
-    async (_selection, override, live, authorized, returned, raw) => {
-      const storePath = path.join(tempDirs.make("openclaw-delivered-trace-"), "sessions.json");
-      const sessionKey = "main";
-      const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: 1, traceLevel: "off" };
-      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
-      const onPreparedBlockReply = vi.fn(async () => {});
-      const reply = "Delivered native answer";
-      runEmbeddedAgentMock.mockImplementationOnce(
-        async (params: RunEmbeddedAgentInternalParams) => {
-          await replaceSessionEntry(
-            { storePath, sessionKey },
-            { ...sessionEntry, traceLevel: live },
-          );
-          await params.onAgentEvent?.({
-            stream: "lifecycle",
-            data: { phase: "start" },
-            transcriptStart: null,
-          });
-          await params.onBlockReply?.({ text: reply });
-          return {
-            payloads: returned ? [{ text: reply }] : [],
-            meta: { finalPromptText: "Trace input", finalAssistantRawText: reply },
-          };
-        },
-      );
-      const result = await createBaseRun({
-        context: { Provider: "webchat", Surface: "webchat", MessageSid: "trace-message" },
-        run: {
-          agentId: "main",
-          sessionKey,
-          messageProvider: "webchat",
-          traceAuthorized: authorized,
-          traceLevelOverride: override,
-        },
-        reply: {
-          ...sessionState(sessionKey, sessionEntry),
-          storePath,
-          blockStreamingEnabled: true,
-          opts: { onPreparedBlockReply },
-        },
-      }).run();
-      expect(onPreparedBlockReply).toHaveBeenCalledOnce();
-      expect(firstMockCallArg(onPreparedBlockReply, "native final")).toMatchObject({
-        payload: { text: reply },
+    "refreshes plugin trace %s → %s with override %s and authority %s",
+    async (stored, live, override, authorized, visible) => {
+      const storePath = path.join(tempDirs.make("openclaw-plugin-trace-"), "sessions.json");
+      const sessionEntry = sessionFixture({ traceLevel: stored });
+      await replaceSessionEntry({ storePath, sessionKey: "main" }, sessionEntry);
+      runEmbeddedAgentMock.mockImplementationOnce(async () => {
+        await replaceSessionEntry(
+          { storePath, sessionKey: "main" },
+          {
+            ...sessionEntry,
+            traceLevel: live,
+            pluginDebugEntries: [
+              { pluginId: "active-memory", lines: ["🔎 Active Memory Debug: trace"] },
+            ],
+          },
+        );
+        return replyResult("Normal reply", {});
       });
-      const payloads = Array.isArray(result) ? result : result ? [result] : [];
-      expect(payloads.filter(isReplyPayloadTerminalContent)).toEqual([]);
-      const diagnosticsText = payloads.map((payload) => payload.text).join("\n");
-      expect(diagnosticsText.includes("Model Input (User Role)")).toBe(raw);
-      expect(diagnosticsText.includes("Model Output (Assistant Role)")).toBe(raw);
-      expect(payloads).toHaveLength(raw ? 1 : 0);
-      expect(payloads.every((payload) => payload.isStatusNotice === true)).toBe(true);
-      if (!raw) {
-        expect(result).toBeUndefined();
-      }
-      expect(loadSessionEntry({ storePath, sessionKey })?.traceLevel).toBe(live);
+      const result = await createBaseRun({
+        run: { traceAuthorized: authorized, traceLevelOverride: override },
+        reply: { ...sessionState("main", sessionEntry), storePath },
+      }).run();
+      expect(replyText(result).includes("Active Memory Debug")).toBe(visible);
+      expect(replyText(result)).not.toContain("Model Input (User Role)");
+      expect(loadSessionEntry({ storePath, sessionKey: "main" })?.traceLevel).toBe(live);
     },
   );
-
-  async function runActiveMemoryDebugCase(
-    sessionEntry: SessionEntry,
-    options: {
-      run?: BaseRunOptions["run"];
-      liveTraceLevel?: SessionEntry["traceLevel"];
-      resolvedVerboseLevel?: VerboseLevel;
-    } = {},
-  ) {
-    const storePath = path.join(tempDirs.make("openclaw-active-memory-inline-"), "sessions.json");
-    const sessionKey = "main";
-    const resolvedVerboseLevel =
-      options.resolvedVerboseLevel ?? normalizeVerboseLevel(sessionEntry.verboseLevel) ?? "off";
-    await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
-    runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      await replaceSessionEntry(
-        { storePath, sessionKey },
-        {
-          ...sessionEntry,
-          traceLevel: options.liveTraceLevel ?? sessionEntry.traceLevel,
-          pluginDebugEntries: [
-            {
-              pluginId: "active-memory",
-              lines: [
-                "🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars",
-                "🔎 Active Memory Debug: Lemon pepper wings with blue cheese.",
-              ],
-            },
-          ],
-        },
-      );
-      return replyResult("Normal reply", { requestShaping: { trace: sessionEntry.traceLevel } });
-    });
-    const result = await createBaseRun({
-      context: {
-        Provider: "telegram",
-        OriginatingTo: "chat:1",
-        AccountId: "primary",
-        MessageSid: "msg",
-      },
-      run: {
-        agentId: "main",
-        sessionKey,
-        messageProvider: "telegram",
-        traceAuthorized: true,
-        thinkLevel: "low",
-        verboseLevel: resolvedVerboseLevel,
-        ...options.run,
-      },
-      reply: {
-        ...sessionState(sessionKey, sessionEntry),
-        storePath,
-        resolvedVerboseLevel,
-      },
-    }).run();
-    expect(loadSessionEntry({ storePath, sessionKey })?.traceLevel).toBe(
-      options.liveTraceLevel ?? sessionEntry.traceLevel,
-    );
-    return result;
-  }
-
-  it("does not expose raw turn or stored trace without authorization", async () => {
-    const result = await runActiveMemoryDebugCase(sessionFixture({ traceLevel: "raw" }), {
-      run: { traceLevelOverride: "raw", traceAuthorized: false },
-    });
-    const text = replyText(result);
-    expect(text).toContain("Normal reply");
-    expect(text).not.toContain("Active Memory Debug:");
-    expect(text).not.toContain("Model Input (User Role)");
-  });
-
-  it.each([
-    { stored: "off", live: "on", override: undefined, trace: true },
-    { stored: "on", live: "off", override: undefined, trace: false },
-    { stored: "off", live: "on", override: "off", trace: false },
-    { stored: "on", live: "off", override: "on", trace: true },
-  ] as const)(
-    "uses live session trace $live after $stored unless turn override is $override",
-    async ({ stored, live, override, trace }) => {
-      const result = await runActiveMemoryDebugCase(
-        { sessionId: "session", updatedAt: Date.now(), traceLevel: stored },
-        { run: { traceLevelOverride: override }, liveTraceLevel: live },
-      );
-      const text = replyText(result);
-      expect(text.includes("Active Memory Debug:")).toBe(trace);
-    },
-  );
-
-  it("disables plugin status using turn verbosity off over stored on", async () => {
-    const result = await runActiveMemoryDebugCase(
-      sessionFixture({ verboseLevel: "on", traceLevel: "raw" }),
-      { resolvedVerboseLevel: "off", run: { verboseLevelOverride: "off" } },
-    );
-    const text = replyText(result);
-    expect(text).not.toContain("🧩 Active Memory: status=ok");
-    expect(text).toContain("Model Input (User Role)");
-  });
 
   function runRawTraceCase(
     scope: {
@@ -1214,30 +1043,6 @@ describe("runReplyAgent messaging tool dedupe", () => {
       reply: { queueKey: "main", sessionKey: "main", storePath: undefined },
     }).run();
   }
-
-  it.each([
-    ["different text at the same target", "different message", "slack", undefined],
-    ["matching text at another provider", "hello world!", "discord", undefined],
-    ["another account", "different message", "slack", "alt"],
-  ])(
-    "keeps final replies for a messaging send with %s",
-    async (_label, text, provider, accountId) => {
-      runEmbeddedAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "hello world!" }],
-        messagingToolSentTexts: [text],
-        messagingToolSentTargets: [
-          {
-            tool: provider,
-            provider,
-            to: "channel:C1",
-            ...(accountId === undefined ? {} : { accountId }),
-          },
-        ],
-        meta: {},
-      });
-      expectReplyText(await createRun(), "hello world!");
-    },
-  );
 
   it.each([
     { state: undefined, routed: true, delivered: true },

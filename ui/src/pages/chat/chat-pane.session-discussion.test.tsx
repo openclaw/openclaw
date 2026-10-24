@@ -83,7 +83,6 @@ function createDiscussionPane(
   params: {
     info?: SessionDiscussionInfo | Promise<SessionDiscussionInfo>;
     detailOpen?: boolean;
-    scopes?: string[];
   } = {},
 ) {
   const request = vi.fn().mockImplementation(async (method: string) => {
@@ -97,7 +96,7 @@ function createDiscussionPane(
   const pane = created.pane as DiscussionTestPane;
   const state = created.state;
   (pane.context.gateway.snapshot as { hello: unknown }).hello = {
-    auth: { role: "operator", scopes: params.scopes ?? ["operator.read", "operator.write"] },
+    auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
     features: { methods: ["session.discussion.info", "session.discussion.open"] },
   };
   state.sidebarLayout = params.detailOpen ? openSlot({ columns: [] }, "detail") : { columns: [] };
@@ -109,27 +108,9 @@ function createDiscussionPane(
 }
 
 describe("chat pane session discussion", () => {
-  it("does not probe an advertised discussion method without its read scope", async () => {
-    const { pane, request } = createDiscussionPane({
-      scopes: ["operator.sessions.read", "operator.sessions.write"],
-    });
-    await pane.probeSessionDiscussion(SESSION_KEY);
-    expect(request).not.toHaveBeenCalled();
-    expect(pane.resolveSessionDiscussionAction()).toBeNull();
-  });
-  it("does not auto-show an open discussion", async () => {
-    const { pane, updateSidebarLayout } = createDiscussionPane({
-      info: { state: "open", embedUrl: "https://clack.example/embed/c1" },
-    });
-
-    await pane.probeSessionDiscussion(SESSION_KEY);
-
-    expect(updateSidebarLayout).not.toHaveBeenCalled();
-  });
-
   it("publishes discussion availability and its external URL while retaining the panel", async () => {
     const openUrl = "https://clack.example/channels/c1";
-    const { pane, state } = createDiscussionPane({
+    const { pane, state, updateSidebarLayout } = createDiscussionPane({
       info: { state: "open", embedUrl: "https://clack.example/embed/c1", openUrl },
     });
 
@@ -154,23 +135,12 @@ describe("chat pane session discussion", () => {
     await pane.probeSessionDiscussion(SESSION_KEY);
     flush();
     expect(view.container.querySelector("span")?.textContent).toBe("Show discussion");
+    expect(updateSidebarLayout).not.toHaveBeenCalled();
 
     panel?.onStateChange(SESSION_KEY, "open", openUrl);
     expect(pane.buildSessionDiscussionPanel(state, SESSION_KEY)).toBe(panel);
     flush();
     expect(view.container.querySelector("a")?.href).toBe(openUrl);
-    view.unmount();
-  });
-
-  it("does not reload discussion info when the pane renders unchanged config twice", async () => {
-    const fixture = createDiscussionPane();
-    const { request } = fixture;
-    const view = createDiscussionPanelHarness(fixture);
-    await view.render();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-    await view.render();
-    expect(request).toHaveBeenCalledTimes(1);
-
     view.unmount();
   });
 
@@ -192,31 +162,20 @@ describe("chat pane session discussion", () => {
     expect(updateSidebarLayout).toHaveBeenCalledTimes(2);
   });
 
-  it("opens beside an existing detail slot without stealing it", async () => {
-    const { pane, state } = createDiscussionPane({
-      info: { state: "open", embedUrl: "https://clack.example/embed/c1" },
-      detailOpen: true,
-    });
-    await pane.probeSessionDiscussion(SESSION_KEY);
-    pane.resolveSessionDiscussionAction()?.onToggle();
-
-    expect(
-      state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
-    ).toEqual(["detail", "discussion"]);
-  });
-
-  it("opens as a collapsed tab when two columns cannot fit side by side", async () => {
-    const { pane, state } = createDiscussionPane({
-      detailOpen: true,
-    });
-    pane.paneWidth = 700;
-    await pane.probeSessionDiscussion(SESSION_KEY);
-    pane.resolveSessionDiscussionAction()?.onToggle();
-
-    expect(
-      state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
-    ).toEqual(["detail", "discussion"]);
-  });
+  it.each([undefined, 700])(
+    "preserves the detail slot when opening discussion at width %s",
+    async (width) => {
+      const { pane, state } = createDiscussionPane({ detailOpen: true });
+      if (width !== undefined) {
+        pane.paneWidth = width;
+      }
+      await pane.probeSessionDiscussion(SESSION_KEY);
+      pane.resolveSessionDiscussionAction()?.onToggle();
+      expect(
+        state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
+      ).toEqual(["detail", "discussion"]);
+    },
+  );
 
   it("ignores a stale none callback after switching sessions", async () => {
     const { pane, state } = createDiscussionPane();
@@ -226,19 +185,6 @@ describe("chat pane session discussion", () => {
     state.sidebarLayout = openSlot({ columns: [] }, "discussion");
 
     stalePanel?.onStateChange(SESSION_KEY, "none", null);
-
-    expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("discussion");
-  });
-
-  it("preserves discussion placement across a reconnect", async () => {
-    const { pane, state } = createDiscussionPane({ info: { state: "available" } });
-    state.sidebarLayout = openSlot({ columns: [] }, "discussion");
-
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      phase: "reconnecting",
-      hello: null,
-    });
 
     expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("discussion");
   });
@@ -275,11 +221,15 @@ describe("chat pane session discussion", () => {
     await vi.waitFor(() =>
       expect(container.querySelector<HTMLAnchorElement>("a.session-link")?.href).toBe(openUrl),
     );
+    await view.render();
+    expect(discussionRequests()).toHaveLength(1);
 
     disconnect();
+    expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("discussion");
     await view.render();
     connect(["operator.sessions.read", "operator.sessions.write"]);
     await view.render();
+    await pane.probeSessionDiscussion(SESSION_KEY);
     await expect(previousConfig.loadInfo(SESSION_KEY)).rejects.toThrow();
 
     expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("discussion");

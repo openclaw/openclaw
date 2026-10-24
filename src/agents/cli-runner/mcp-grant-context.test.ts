@@ -33,6 +33,28 @@ function buildGrant(
 }
 
 describe("buildCliMcpGrantContext", () => {
+  it("snapshots only elevated policy fields and preserves false availability", () => {
+    const elevated = {
+      enabled: false,
+      allowed: false,
+      defaultLevel: "off" as const,
+      fullAccessAvailable: false,
+      privateMetadata: "must not enter the grant",
+    };
+    const grant = buildGrant({ bashElevated: elevated });
+    elevated.enabled = true;
+    expect(grant.bashElevated).toEqual({
+      enabled: false,
+      allowed: false,
+      defaultLevel: "off",
+      fullAccessAvailable: false,
+    });
+    expect(buildGrant()).not.toHaveProperty("bashElevated");
+    expect(
+      buildGrant({ bashElevated: { ...elevated, fullAccessAvailable: undefined } }).bashElevated,
+    ).not.toHaveProperty("fullAccessAvailable");
+  });
+
   it("snapshots only the resolved logical model into the loopback grant", () => {
     const selected = {
       provider: "selected-provider",
@@ -93,6 +115,22 @@ describe("buildCliMcpGrantContext", () => {
   it.each(["report_only", "host_only"] as const)("retains %s in the minted grant", (capability) => {
     expect(buildGrant({}, capability)).toMatchObject({ delegationCapability: capability });
   });
+
+  it.each([
+    [{ kind: "internal_system", sourceTool: "exec", runId: "owner-run" }, true],
+    [{ kind: "external_user" }, false],
+    [{ kind: "inter_session", sourceTool: "sessions_send" }, false],
+  ] as const)(
+    "carries policy-neutral internal provenance %j for plugin tools",
+    (input, carried) => {
+      const grant = buildGrant({ inputProvenance: input });
+      if (carried) {
+        expect(grant.inputProvenance).toEqual(input);
+      } else {
+        expect(grant).not.toHaveProperty("inputProvenance");
+      }
+    },
+  );
 
   it("leaves the grant shape untouched for ordinary runs", () => {
     // Full authority must not add a key to ordinary grant contexts.

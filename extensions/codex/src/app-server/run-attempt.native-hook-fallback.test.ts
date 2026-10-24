@@ -343,7 +343,8 @@ describe("Codex native hook Gateway fallback", () => {
       params.abortSignal = abort.signal;
       const run = runCodexAppServerAttempt(params, {
         bindingStore: createCodexTestBindingStore(),
-        nativeHookRelay: hooks === "disabled" ? { enabled: false } : undefined,
+        nativeHookRelay:
+          hooks === "disabled" ? { enabled: false } : { events: ["post_tool_use"], enabled: true },
       });
       try {
         await Promise.race([
@@ -354,7 +355,10 @@ describe("Codex native hook Gateway fallback", () => {
         ]);
         expect(harness.requests.some(({ method }) => method === "thread/start")).toBe(false);
         expect(preflight).toHaveBeenCalledWith(
-          expect.objectContaining({ nativeHookRelayRequired: false }),
+          expect.objectContaining({
+            nativeHookRelayRequired: false,
+            nativeCodeModeEnabled: true,
+          }),
         );
         ready.resolve();
         await run.waitForTurnAccepted();

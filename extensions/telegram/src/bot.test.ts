@@ -57,6 +57,13 @@ import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.j
 import { createDirectDispatchContext } from "./bot.direct-dispatch.test-support.js";
 import { registerTelegramModelPickerCases } from "./bot.model-picker.test-support.js";
 import {
+  ada,
+  botIdentity,
+  groupCallbackConfig,
+  inboundMessage,
+  openDirect,
+  photoReply,
+  questionCallbackConfig,
   createReplyPhotoMessage,
   createTelegramCallbackContext,
   makeTelegramKeyedStoreTestMock,
@@ -141,25 +148,7 @@ let createTelegramBot: (
 const loadConfig = getLoadConfigMock();
 const INFO_EMOJI = "\u{2139}\u{FE0F}";
 const emptyKeyboard = { reply_markup: { inline_keyboard: [] } };
-const openDirect = (): TelegramChannelConfig => ({ dmPolicy: "open", allowFrom: ["*"] });
 const groupChat = { id: -100999, type: "supergroup", title: "Test Group" };
-
-function groupCallbackConfig(): TelegramChannelConfig {
-  return {
-    dmPolicy: "open",
-    capabilities: { inlineButtons: "group" },
-    groupPolicy: "open",
-    groups: { "*": { requireMention: false } },
-  };
-}
-function questionCallbackConfig(): TelegramChannelConfig {
-  return {
-    ...groupCallbackConfig(),
-    allowFrom: ["9"],
-    capabilities: { inlineButtons: "all" },
-    groups: { "*": { requireMention: false, allowFrom: ["9"] } },
-  };
-}
 
 function messageContext(message: Record<string, unknown>) {
   return { message, me: { username: "openclaw_bot" }, getFile: getEmptyTelegramFile };
@@ -793,7 +782,7 @@ describe("createTelegramBot", () => {
         }),
         updateId: 9001,
         senderId: 9,
-        botInfo: { id: 999, username: "openclaw_bot" },
+        botInfo: botIdentity,
         sessionKey: "agent:forum-agent:telegram:group:-1001234567890:topic:99",
       },
       {
@@ -806,7 +795,7 @@ describe("createTelegramBot", () => {
         config: undefined,
         updateId: 9002,
         senderId: 9876,
-        botInfo: { id: 999, username: "openclaw_bot", has_topics_enabled: false },
+        botInfo: { ...botIdentity, has_topics_enabled: false },
         sessionKey: "agent:main:main:thread:9876:42",
       },
     ])(
@@ -941,7 +930,7 @@ describe("createTelegramBot", () => {
       const replay = await runWithTelegramSpooledReplayUpdate(update, async () => {
         await getTelegramPollAnswerHandlerForTests()({
           update,
-          me: { id: 999, username: "openclaw_bot" },
+          me: botIdentity,
           getFile: getEmptyTelegramFile,
           pollAnswer: update.poll_answer,
         });
@@ -1187,7 +1176,7 @@ describe("createTelegramBot", () => {
     const config = makeTelegramConfig(questionCallbackConfig());
     loadConfig.mockReturnValue(config);
     const callbackHandler = await createCallbackHandler({ config });
-    const from = { id: 9, is_bot: false, first_name: "Ada", username: "ada_bot" };
+    const from = ada;
 
     await callbackHandler(
       makeCallbackContext(
@@ -1208,105 +1197,64 @@ describe("createTelegramBot", () => {
   });
 
   it.each([
-    {
-      name: "renders canonical truth on a losing typed surface",
-      approvalId: "plugin:id-owned-by-exec",
-      callbackId: "cbq-typed-approval-loser",
-      messageId: 24,
-      applied: false,
-      outcome: { status: "allowed", decision: "allow-once" },
-      commandText: "echo canonical",
-      telegram: { capabilities: ["vision"] },
-      terminalTitle: "ℹ️ Approval already resolved",
-      terminalResult: "Recorded result: Allowed once",
-      editFails: false,
-    },
-    {
-      name: "sends a canonical receipt when the clicked message cannot be edited",
-      approvalId: "fallback-receipt-id",
-      callbackId: "cbq-terminal-edit-fallback",
-      messageId: 25,
-      applied: true,
-      outcome: { status: "denied", decision: "deny" },
-      commandText: "echo denied",
-      telegram: {},
-      terminalTitle: "✅ Approval resolved here",
-      terminalResult: "Recorded result: Denied",
-      editFails: true,
-    },
-  ] satisfies Array<{
-    name: string;
-    approvalId: string;
-    callbackId: string;
-    messageId: number;
-    applied: boolean;
-    outcome: { status: "allowed"; decision: "allow-once" } | { status: "denied"; decision: "deny" };
-    commandText: string;
-    telegram: TelegramChannelConfig;
-    terminalTitle: string;
-    terminalResult: string;
-    editFails: boolean;
-  }>)(
-    "$name",
-    async ({
+    ["renders canonical truth on a losing typed surface", false],
+    ["sends a canonical receipt when the clicked message cannot be edited", true],
+  ] as const)("%s", async (_name, editFails) => {
+    const approvalId = editFails ? "fallback-receipt-id" : "plugin:id-owned-by-exec";
+    const callbackId = editFails ? "cbq-terminal-edit-fallback" : "cbq-typed-approval-loser";
+    const messageId = editFails ? 25 : 24;
+    const commandText = editFails ? "echo denied" : "echo canonical";
+    const outcome = editFails
+      ? ({ status: "denied", decision: "deny" } as const)
+      : ({ status: "allowed", decision: "allow-once" } as const);
+    if (editFails) {
+      editMessageTextSpy.mockRejectedValueOnce(new Error("Bad Request: message can't be edited"));
+    }
+    resolveExecApprovalSpy.mockResolvedValueOnce(
+      approvalResolution(approvalId, editFails, outcome, commandText),
+    );
+    mockTelegramConfig(
+      makeExecApprovalTelegramConfig(editFails ? {} : { capabilities: ["vision"] }),
+    );
+    const callbackHandler = await createCallbackHandler();
+    const callbackData = buildTelegramApprovalCallbackData({
+      type: "approval",
       approvalId,
-      callbackId,
-      messageId,
-      applied,
-      outcome,
+      approvalKind: "exec",
+      decision: "deny",
+    });
+    if (!callbackData) {
+      throw new Error("Expected typed approval callback data");
+    }
+    await callbackHandler(
+      makeCallbackContext(callbackId, callbackData, {
+        message_id: messageId,
+        text: "Approval required.",
+      }),
+    );
+    expect(execApprovalCall()).toMatchObject({
+      approvalId,
+      approvalKind: "exec",
+      decision: "deny",
+      senderId: "9",
+    });
+    const terminalText = [
+      editFails ? "✅ Approval resolved here" : "ℹ️ Approval already resolved",
+      `Recorded result: ${editFails ? "Denied" : "Allowed once"}`,
+      `ID: ${approvalId}`,
+      "",
+      "Command:",
       commandText,
-      telegram,
-      terminalTitle,
-      terminalResult,
-      editFails,
-    }) => {
-      if (editFails) {
-        editMessageTextSpy.mockRejectedValueOnce(new Error("Bad Request: message can't be edited"));
-      }
-      resolveExecApprovalSpy.mockResolvedValueOnce(
-        approvalResolution(approvalId, applied, outcome, commandText),
-      );
-      mockTelegramConfig(makeExecApprovalTelegramConfig(telegram));
-      const callbackHandler = await createCallbackHandler();
-      const callbackData = buildTelegramApprovalCallbackData({
-        type: "approval",
-        approvalId,
-        approvalKind: "exec",
-        decision: "deny",
-      });
-      if (!callbackData) {
-        throw new Error("Expected typed approval callback data");
-      }
-      await callbackHandler(
-        makeCallbackContext(callbackId, callbackData, {
-          message_id: messageId,
-          text: "Approval required.",
-        }),
-      );
-      expect(execApprovalCall()).toMatchObject({
-        approvalId,
-        approvalKind: "exec",
-        decision: "deny",
-        senderId: "9",
-      });
-      const terminalText = [
-        terminalTitle,
-        terminalResult,
-        `ID: ${approvalId}`,
-        "",
-        "Command:",
-        commandText,
-      ].join("\n");
-      expect(editMessageTextSpy).toHaveBeenCalledWith(1234, messageId, terminalText, emptyKeyboard);
-      if (editFails) {
-        expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, messageId, emptyKeyboard);
-        expect(sendMessageSpy).toHaveBeenCalledWith(1234, terminalText, undefined);
-      } else {
-        expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
-      }
-      expect(answerCallbackQuerySpy).toHaveBeenCalledWith(callbackId);
-    },
-  );
+    ].join("\n");
+    expect(editMessageTextSpy).toHaveBeenCalledWith(1234, messageId, terminalText, emptyKeyboard);
+    if (editFails) {
+      expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, messageId, emptyKeyboard);
+      expect(sendMessageSpy).toHaveBeenCalledWith(1234, terminalText, undefined);
+    } else {
+      expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    }
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith(callbackId);
+  });
 
   it("consumes malformed callbacks in the reserved approval namespace", async () => {
     const pluginHandler = vi.fn(async () => ({ handled: true }));
@@ -1346,9 +1294,7 @@ describe("createTelegramBot", () => {
     {
       name: "terminalizes stale legacy clicks from canonical records without retrying owners",
       approvalId: "stale-legacy-id",
-      callbackId: "cbq-stale-legacy",
       decision: "allow-once",
-      messageId: 25,
       firstError: "resolved",
       secondOutcome: "canonical",
       expectedCalls: 2,
@@ -1358,9 +1304,7 @@ describe("createTelegramBot", () => {
     {
       name: "renders neutral terminal copy when a stale record cannot be fetched",
       approvalId: "stale-neutral-id",
-      callbackId: "cbq-stale-legacy-neutral",
       decision: "deny",
-      messageId: 26,
       firstError: "resolved",
       secondOutcome: "missing",
       expectedCalls: 2,
@@ -1370,23 +1314,16 @@ describe("createTelegramBot", () => {
     {
       name: "resolves opaque plugin ids without inferring kind from spelling",
       approvalId: "opaque-plugin-approval-id",
-      callbackId: "cbq-plugin-approve",
       decision: "allow-once",
-      messageId: 24,
-      messageText: "Plugin approval required.",
       firstError: "missing",
       expectedCalls: 2,
       expectedTerminal: "✅ Approval resolved here",
       secondOwner: "plugin",
-      checkTelegramConfig: true,
     },
     {
       name: "preserves ambiguous target-only stale callbacks for another approver",
       approvalId: "plugin:misleading-exec-id",
-      callbackId: "cbq-legacy-plugin-fallback-blocked",
       decision: "allow-once",
-      messageId: 25,
-      messageText: "Legacy plugin approval required.",
       targetOnly: true,
       firstError: "missing",
       expectedCalls: 1,
@@ -1395,9 +1332,7 @@ describe("createTelegramBot", () => {
     {
       name: "renders a no-longer-pending receipt for expired legacy callbacks",
       approvalId: "138e9b8c",
-      callbackId: "cbq-expired-approval",
       decision: "allow-once",
-      messageId: 26,
       firstError: "missing",
       secondOutcome: "missing",
       expectedCalls: 2,
@@ -1408,33 +1343,25 @@ describe("createTelegramBot", () => {
   ] satisfies Array<{
     name: string;
     approvalId: string;
-    callbackId: string;
     decision: "allow-once" | "deny";
-    messageId: number;
-    messageText?: string;
     targetOnly?: boolean;
     firstError?: "resolved" | "missing";
     secondOutcome?: "canonical" | "missing";
     expectedCalls: number;
     expectedTerminal?: string;
     secondOwner?: "canonical-exec" | "plugin";
-    checkTelegramConfig?: boolean;
     expectNoChatReply?: boolean;
   }>)(
     "$name",
     async ({
       approvalId,
-      callbackId,
       decision,
-      messageId,
-      messageText,
       targetOnly,
       firstError,
       secondOutcome,
       expectedCalls,
       expectedTerminal,
       secondOwner,
-      checkTelegramConfig,
       expectNoChatReply,
     }) => {
       if (firstError) {
@@ -1468,9 +1395,9 @@ describe("createTelegramBot", () => {
       }
       const callbackHandler = await createCallbackHandler();
       await callbackHandler(
-        makeCallbackContext(callbackId, `/approve ${approvalId} ${decision}`, {
-          message_id: messageId,
-          text: messageText ?? "Approval required.",
+        makeCallbackContext("legacy-approval", `/approve ${approvalId} ${decision}`, {
+          message_id: 25,
+          text: "Approval required.",
         }),
       );
       const approvalCall = execApprovalCall();
@@ -1480,24 +1407,15 @@ describe("createTelegramBot", () => {
         decision,
         senderId: "9",
       });
-      if (targetOnly) {
-        expect(approvalCall.cfg).toMatchObject({
-          approvals: { exec: { enabled: true, mode: "targets" } },
-        });
-      }
-      if (checkTelegramConfig) {
-        expect(approvalCall.cfg).toMatchObject({
-          channels: {
-            telegram: {
-              execApprovals: expect.objectContaining({
-                enabled: true,
-                approvers: ["9"],
-                target: "dm",
-              }),
+      expect(approvalCall.cfg).toMatchObject(
+        targetOnly
+          ? { approvals: { exec: { enabled: true, mode: "targets" } } }
+          : {
+              channels: {
+                telegram: { execApprovals: { enabled: true, approvers: ["9"], target: "dm" } },
+              },
             },
-          },
-        });
-      }
+      );
       expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(expectedCalls);
       if (secondOwner) {
         expect(execApprovalCall(1)).toMatchObject({
@@ -1510,7 +1428,7 @@ describe("createTelegramBot", () => {
       if (expectedTerminal) {
         expect(editMessageTextSpy).toHaveBeenCalledWith(
           1234,
-          messageId,
+          25,
           expect.stringContaining(expectedTerminal),
           emptyKeyboard,
         );
@@ -1522,32 +1440,24 @@ describe("createTelegramBot", () => {
         expect(replySpy).not.toHaveBeenCalled();
         expect(sendMessageSpy).not.toHaveBeenCalled();
       }
-      expect(answerCallbackQuerySpy).toHaveBeenCalledWith(callbackId);
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("legacy-approval");
     },
   );
 
   it.each([
-    {
-      name: "stale canonical convergence",
-      approvalId: "stale-retry-id",
-      decision: "deny",
-      callbackId: "cbq-stale-legacy-retry",
-      messageId: 27,
-      errorMessage: "gateway unavailable",
-      stale: true,
-    },
-    {
-      name: "legacy resolution without exposing error details",
-      approvalId: "138e9b8c",
-      decision: "allow-once",
-      callbackId: "cbq-approve-error",
-      messageId: 25,
-      errorMessage: "gateway secret detail",
-      stale: false,
-    },
-  ])(
-    "retries failed $name",
-    async ({ approvalId, decision, callbackId, messageId, errorMessage, stale }) => {
+    ["stale canonical convergence", "stale-retry-id", "deny", 27, "gateway unavailable", true],
+    [
+      "legacy resolution without exposing error details",
+      "138e9b8c",
+      "allow-once",
+      25,
+      "gateway secret detail",
+      false,
+    ],
+  ] as const)(
+    "retries failed %s",
+    async (_name, approvalId, decision, messageId, errorMessage, stale) => {
+      const callbackId = stale ? "cbq-stale-legacy-retry" : "cbq-approve-error";
       if (stale) {
         resolveExecApprovalSpy.mockRejectedValueOnce(resolvedApprovalError());
       }
@@ -1761,15 +1671,14 @@ describe("createTelegramBot", () => {
     try {
       const replyDelivered = waitForReplyCalls(1);
       await messageHandler({
-        me: { id: 999, username: "openclaw_bot" },
+        me: botIdentity,
         getFile: getEmptyTelegramFile,
-        message: {
+        message: inboundMessage({
           chat: { id: 1234, type: "private" },
           text: "use the selected model",
           date: 1_736_380_802,
           message_id: 22,
-          from: { id: 9, is_bot: false, first_name: "Ada", username: "ada_bot" },
-        },
+        }),
       });
 
       expect(loadConfig).toHaveBeenCalledTimes(1);
@@ -1939,14 +1848,13 @@ describe("createTelegramBot", () => {
     });
     const update = {
       update_id: 98083,
-      message: {
-        chat: { id: 7, type: "private" },
+      message: inboundMessage({
         message_id: 9002,
         caption: "inspect this image",
         date: 1_736_380_800,
         from: { id: 42, first_name: "Ada" },
         photo: [{ file_id: "primary-photo-1" }],
-      },
+      }),
     };
 
     const { result } = await runWithTelegramUpdateProcessingFrame(() =>
@@ -1997,36 +1905,19 @@ describe("createTelegramBot", () => {
     const handler = await createMessageHandler({
       telegramTransport: makeTelegramTransport(mediaFetch as typeof fetch),
     });
-    const baseCtx = {
-      me: { id: 999, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
-      getFile: getEmptyTelegramFile,
-    };
+    const baseCtx = { me: botIdentity, getFile: getEmptyTelegramFile };
     const chat = { id: chatId, type: "group", title: "Ops" };
 
     await handler({
       ...baseCtx,
-      message: {
+      message: inboundMessage({
         chat,
         message_id: 102,
         text: "Why is there a 4th person?",
         date: 1736380750,
         from: { id: 2, is_bot: false, first_name: "UserB" },
-        reply_to_message: {
-          chat,
-          message_id: 101,
-          text: "Done, here is the image",
-          date: 1736380700,
-          from: { id: 999, is_bot: true, first_name: "OpenClaw" },
-          photo: [
-            {
-              file_id: "generated-photo-1",
-              file_unique_id: "generated-photo-u1",
-              width: 1,
-              height: 1,
-            },
-          ],
-        },
-      },
+        reply_to_message: photoReply(chat),
+      }),
     });
 
     expect(getFileSpy).toHaveBeenCalledWith("generated-photo-1", expect.any(AbortSignal));
@@ -2038,11 +1929,9 @@ describe("createTelegramBot", () => {
 
     await handler({
       ...baseCtx,
-      message: {
+      message: inboundMessage({
         chat,
-        message_id: 103,
         text: "@openclaw_bot explain what went wrong",
-        date: 1736380800,
         from: { id: 1, is_bot: false, first_name: "UserA" },
         reply_to_message: {
           chat,
@@ -2051,37 +1940,37 @@ describe("createTelegramBot", () => {
           date: 1736380750,
           from: { id: 2, is_bot: false, first_name: "UserB" },
         },
-      },
+      }),
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replyContext();
     expect(payload.ReplyChain?.map((entry) => entry.messageId)).toEqual(["102", "101"]);
-    expect(payload.ReplyChain?.[1]).toMatchObject({
+    const ancestor = payload.ReplyChain?.[1];
+    expect({
+      ...ancestor,
+      mediaPath: ancestor?.mediaPath,
+      mediaRef: ancestor?.mediaRef,
+    }).toMatchObject({
       sender: "OpenClaw (you)",
       body: "Done, here is the image",
+      mediaPath: expectHydrated ? expect.any(String) : undefined,
+      mediaRef: expectHydrated ? undefined : "telegram:file/generated-photo-1",
     });
-    if (expectHydrated) {
-      expect(payload.ReplyChain?.[1]?.mediaPath).toBeTypeOf("string");
-      expect(payload.ReplyChain?.[1]?.mediaRef).toBeUndefined();
-    } else {
-      expect(payload.ReplyChain?.[1]?.mediaPath).toBeUndefined();
-      expect(payload.ReplyChain?.[1]?.mediaRef).toBe("telegram:file/generated-photo-1");
-    }
     const messages = latestConversationContextMessages();
     const messagesById = new Map(messages.map((message) => [message.message_id, message]));
-    expect(messagesById.get("101")).toMatchObject({
+    const ancestorContext = messagesById.get("101");
+    expect({
+      ...ancestorContext,
+      media_path: ancestorContext?.media_path,
+      media_ref: ancestorContext?.media_ref,
+    }).toMatchObject({
       sender: "OpenClaw (you)",
       body: "Done, here is the image",
       is_reply_target: true,
+      media_path: expectHydrated ? expect.stringMatching(/^media:\/\/inbound\//) : undefined,
+      media_ref: expectHydrated ? undefined : "telegram:file/generated-photo-1",
     });
-    if (expectHydrated) {
-      expect(messagesById.get("101")?.media_path).toMatch(/^media:\/\/inbound\//);
-      expect(messagesById.get("101")?.media_ref).toBeUndefined();
-    } else {
-      expect(messagesById.get("101")?.media_path).toBeUndefined();
-      expect(messagesById.get("101")?.media_ref).toBe("telegram:file/generated-photo-1");
-    }
     expect(messagesById.get("102")).toMatchObject({
       sender: "UserB",
       body: "Why is there a 4th person?",
@@ -2174,7 +2063,7 @@ describe("createTelegramBot", () => {
           telegramTransport: makeTelegramTransport(mediaFetch as typeof fetch),
         });
         await handler({
-          me: { id: 999, username: "openclaw_bot" },
+          me: botIdentity,
           getFile: getEmptyTelegramFile,
           message: {
             chat,
@@ -2270,18 +2159,41 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it.each([
-    {
-      name: "quote-only replies without reply metadata",
-      message: { text: "Sure, see below", quote: { text: "summarize this" } },
-      expectedContext: { ReplyToBody: "summarize this", ReplyToSender: "unknown sender" },
-      bodyFragments: ["[Reply chain - nearest first]", "[1. unknown sender", '"summarize this"'],
-      expectNoReplyId: true,
-      resetMocks: false,
-    },
-    {
-      name: "forwarded origin from external reply targets",
-      message: {
+  it("preserves quote-only replies without reply metadata", async () => {
+    const handler = await createMessageHandler();
+    await handler(
+      messageContext({
+        chat: { id: 7, type: "private" },
+        date: 1736380800,
+        text: "Sure, see below",
+        quote: { text: "summarize this" },
+      }),
+    );
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replyContext();
+    expect(payload).toMatchObject({
+      ReplyToBody: "summarize this",
+      ReplyToSender: "unknown sender",
+    });
+    expect(payload.ReplyToId).toBeUndefined();
+    for (const fragment of [
+      "[Reply chain - nearest first]",
+      "[1. unknown sender",
+      '"summarize this"',
+    ]) {
+      expect(payload.Body).toContain(fragment);
+    }
+  });
+
+  it("preserves forwarded origin from external reply targets", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    replySpy.mockReset();
+    const handler = await createMessageHandler();
+    await handler(
+      messageContext({
+        chat: { id: 7, type: "private" },
+        date: 1736380800,
         text: "Thoughts?",
         external_reply: {
           message_id: 9003,
@@ -2300,49 +2212,22 @@ describe("createTelegramBot", () => {
             date: 500,
           },
         },
-      },
-      expectedContext: {
-        ReplyToForwardedFrom: "Bob Smith (@bobsmith)",
-        ReplyToForwardedFromType: "user",
-        ReplyToForwardedFromId: "999",
-        ReplyToForwardedFromUsername: "bobsmith",
-        ReplyToForwardedFromTitle: "Bob Smith",
-        ReplyToForwardedDate: 500000,
-      },
-      bodyFragments: ["[Forwarded from Bob Smith (@bobsmith) at 1970-01-01T00:08:20.000Z]"],
-      expectNoReplyId: false,
-      resetMocks: true,
-    },
-  ] satisfies Array<{
-    name: string;
-    message: Record<string, unknown>;
-    expectedContext: Partial<MsgContext>;
-    bodyFragments: string[];
-    expectNoReplyId: boolean;
-    resetMocks: boolean;
-  }>)(
-    "preserves $name",
-    async ({ message, expectedContext, bodyFragments, expectNoReplyId, resetMocks }) => {
-      if (resetMocks) {
-        onSpy.mockReset();
-        sendMessageSpy.mockReset();
-        replySpy.mockReset();
-      }
-      const handler = await createMessageHandler();
-      await handler(
-        messageContext({ chat: { id: 7, type: "private" }, date: 1736380800, ...message }),
-      );
-      expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = replyContext();
-      expect(payload).toMatchObject(expectedContext);
-      for (const fragment of bodyFragments) {
-        expect(payload.Body).toContain(fragment);
-      }
-      if (expectNoReplyId) {
-        expect(payload.ReplyToId).toBeUndefined();
-      }
-    },
-  );
+      }),
+    );
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replyContext();
+    expect(payload).toMatchObject({
+      ReplyToForwardedFrom: "Bob Smith (@bobsmith)",
+      ReplyToForwardedFromType: "user",
+      ReplyToForwardedFromId: "999",
+      ReplyToForwardedFromUsername: "bobsmith",
+      ReplyToForwardedFromTitle: "Bob Smith",
+      ReplyToForwardedDate: 500000,
+    });
+    expect(payload.Body).toContain(
+      "[Forwarded from Bob Smith (@bobsmith) at 1970-01-01T00:08:20.000Z]",
+    );
+  });
 
   it("keeps fetched media for uncached external replies", async () => {
     const mediaFetch = vi.fn(async () => pngResponse());

@@ -1,4 +1,10 @@
-import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import {
+  execFileSync,
+  spawn,
+  spawnSync,
+  type ChildProcess,
+  type SpawnSyncReturns,
+} from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -66,7 +72,15 @@ function observeChild(child: ChildProcess) {
   return { child, closed };
 }
 
-function startNodeFixture(script: string, args: string[]) {
+async function withNodeFixture(
+  signal: AbortSignal,
+  source: string,
+  args: string[],
+  run: (fixture: ReturnType<typeof observeChild>, startedAt: number) => void,
+) {
+  const script = path.join(tempDir, "listener.cjs");
+  fs.writeFileSync(script, source);
+  const startedAt = Date.now();
   const fixture = observeChild(
     spawn(process.execPath, [script, ...args], {
       stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -75,14 +89,20 @@ function startNodeFixture(script: string, args: string[]) {
   const ready = new Promise<void>((resolve) => {
     fixture.child.once("message", () => resolve());
   });
-  return {
-    ...fixture,
-    ready: awaitGateBeforeSettlement(
-      ready,
-      fixture.closed,
-      "fixture exited before publishing readiness",
-    ),
-  };
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        ready,
+        fixture.closed,
+        "fixture exited before publishing readiness",
+      ),
+      signal,
+    );
+    run(fixture, startedAt);
+  } finally {
+    fixture.child.kill("SIGKILL");
+    await fixture.closed;
+  }
 }
 
 function startBash(script: string, env: Record<string, string | undefined> = {}) {
@@ -173,11 +193,13 @@ function runBash(
   env?: Record<string, string | undefined>,
   timeout?: number,
   separator = "\n",
-): ReturnType<typeof spawnSync> {
+  input?: string,
+): SpawnSyncReturns<string> {
   return spawnSync("/bin/bash", ["-c", Array.isArray(script) ? script.join(separator) : script], {
     encoding: "utf8",
     env: env === undefined ? undefined : shellTestEnv(env),
     timeout,
+    input,
   });
 }
 
@@ -186,19 +208,21 @@ function runBashWithHelper(
   env?: Record<string, string | undefined>,
   timeout?: number,
   separator = "\n",
-): ReturnType<typeof spawnSync> {
+  input?: string,
+): SpawnSyncReturns<string> {
   return runBash(
     ["set -euo pipefail", `source ${shellQuote(helperPath)}`, ...lines],
     env,
     timeout,
     separator,
+    input,
   );
 }
 
 function runSourcedHelper(
   script: string,
   overrides: Record<string, string | undefined> | null = {},
-): ReturnType<typeof spawnSync> {
+): SpawnSyncReturns<string> {
   return spawnSync(
     "bash",
     ["-lc", ["set -euo pipefail", `source ${shellQuote(helperPath)}`, script].join("; ")],
@@ -272,7 +296,7 @@ function createPackageInstallFixture(
 function runPackageInstall(
   fixture: ReturnType<typeof createPackageInstallFixture>,
   env: Record<string, string | undefined> = {},
-): ReturnType<typeof spawnSync> {
+): SpawnSyncReturns<string> {
   return runBashWithHelper(
     [
       `openclaw_e2e_install_package ${shellQuote(fixture.logPath)} ${shellQuote("fixture package")} ${shellQuote(fixture.prefixPath)}`,
@@ -292,6 +316,17 @@ function writeNodeShim(binDir: string): void {
 function writeBashExecutable(filePath: string, lines: string[]): void {
   fs.writeFileSync(filePath, ["#!/bin/bash", "set -euo pipefail", ...lines, ""].join("\n"));
   fs.chmodSync(filePath, 0o755);
+}
+
+function runWatchdog(command: string, timeout = 5_000, input?: string) {
+  writeNodeShim(tempDir);
+  return runBashWithHelper(
+    [`openclaw_e2e_maybe_timeout ${command}`],
+    { PATH: tempDir },
+    timeout,
+    "\n",
+    input,
+  );
 }
 
 function writeFakeTimeout(filePath: string, supportsKillAfter: boolean): void {
@@ -382,26 +417,23 @@ it.each([
   expect(result.stderr).toContain(error);
 });
 
-it("reads positive integer env values without treating decimal input as durations", () => {
-  const fallback = runSourcedHelper(
-    'printf "%s" "$(openclaw_e2e_read_positive_int_env OPENCLAW_E2E_SAMPLE_SECONDS 180)"',
-  );
-  const leadingZero = runSourcedHelper(
-    'printf "%s" "$(openclaw_e2e_read_positive_int_env OPENCLAW_E2E_SAMPLE_SECONDS 180)"',
-    { OPENCLAW_E2E_SAMPLE_SECONDS: "008" },
-  );
-  const duration = runSourcedHelper(
-    "openclaw_e2e_read_positive_int_env OPENCLAW_E2E_SAMPLE_SECONDS 180",
-    { OPENCLAW_E2E_SAMPLE_SECONDS: "30s" },
-  );
-
-  expectShellSuccess(fallback);
-  expect(fallback.stdout).toBe("180");
-  expectShellSuccess(leadingZero);
-  expect(leadingZero.stdout).toBe("008");
-  expect(duration.status).toBe(2);
-  expect(duration.stderr).toContain("invalid OPENCLAW_E2E_SAMPLE_SECONDS: 30s");
-});
+it.each([
+  [undefined, "180\n", 0],
+  ["008", "008\n", 0],
+  ["30s", "", 2],
+] as const)(
+  "reads positive integer env %s with fallback, not duration parsing",
+  (value, stdout, status) => {
+    const result = runSourcedHelper(
+      "openclaw_e2e_read_positive_int_env OPENCLAW_E2E_SAMPLE_SECONDS 180",
+      { OPENCLAW_E2E_SAMPLE_SECONDS: value },
+    );
+    expect(result).toMatchObject({ status, stdout });
+    if (status !== 0) {
+      expect(result.stderr).toContain(`invalid OPENCLAW_E2E_SAMPLE_SECONDS: ${value}`);
+    }
+  },
+);
 
 it("probes default and explicit mock OpenAI base URLs", () => {
   const probePath = path.join(tempDir, "probe-url.txt");
@@ -485,60 +517,46 @@ it.for([
   const logPath = path.join(tempDir, "gateway.log");
   const portPath = path.join(tempDir, "port.txt");
   const resultPath = path.join(tempDir, "readiness-status.txt");
-  const serverPath = path.join(tempDir, "gateway.cjs");
-  fs.writeFileSync(
-    serverPath,
-    [
-      "const fs = require('node:fs');",
-      "const http = require('node:http');",
-      "const [logPath, portPath, marker, listening, statusCode, body] = process.argv.slice(2);",
-      "const server = http.createServer((_request, response) => {",
-      "  response.writeHead(Number(statusCode));",
-      "  response.end(body);",
-      "});",
-      "server.listen(0, '127.0.0.1', () => {",
-      "  const port = server.address().port;",
-      "  const publish = () => {",
-      "    fs.writeFileSync(logPath, `[gateway] ${marker} ws://127.0.0.1:${port} (PID ${process.pid})\\n`);",
-      "    fs.writeFileSync(portPath, String(port));",
-      "    process.send('ready');",
-      "  };",
-      "  if (listening === 'true') publish(); else server.close(publish);",
-      "});",
-      "setInterval(() => {}, 1000);",
-      "process.on('SIGTERM', () => process.exit(0));",
-      "",
-    ].join("\n"),
+  await withNodeFixture(
+    signal,
+    `const fs = require('node:fs');
+const http = require('node:http');
+const [logPath, portPath, marker, listening, statusCode, body] = process.argv.slice(2);
+const server = http.createServer((_request, response) => {
+  response.writeHead(Number(statusCode));
+  response.end(body);
+});
+server.listen(0, '127.0.0.1', () => {
+  const port = server.address().port;
+  const publish = () => {
+    fs.writeFileSync(logPath, \`[gateway] \${marker} ws://127.0.0.1:\${port} (PID \${process.pid})\\n\`);
+    fs.writeFileSync(portPath, String(port));
+    process.send('ready');
+  };
+  if (listening === 'true') publish(); else server.close(publish);
+});
+setInterval(() => {}, 1000);
+process.on('SIGTERM', () => process.exit(0));
+`,
+    [logPath, portPath, marker, String(listening), String(statusCode), body],
+    (fixture) => {
+      const result = runBashWithHelper(
+        [
+          "sleep() { :; }",
+          `port="$(cat ${shellQuote(portPath)})"`,
+          `if openclaw_e2e_wait_gateway_ready "${fixture.child.pid}" ${shellQuote(logPath)} 2 "$port" ${shellQuote(mode)}; then`,
+          `  printf '0' >${shellQuote(resultPath)}`,
+          "else",
+          `  printf '%s' "$?" >${shellQuote(resultPath)}`,
+          "fi",
+        ],
+        {},
+        5_000,
+      );
+      expectShellSuccess(result);
+      expect(fs.readFileSync(resultPath, "utf8")).toBe(String(expectedStatus));
+    },
   );
-  const fixture = startNodeFixture(serverPath, [
-    logPath,
-    portPath,
-    marker,
-    String(listening),
-    String(statusCode),
-    body,
-  ]);
-  try {
-    await withinTest(fixture.ready, signal);
-    const result = runBashWithHelper(
-      [
-        "sleep() { :; }",
-        `port="$(cat ${shellQuote(portPath)})"`,
-        `if openclaw_e2e_wait_gateway_ready "${fixture.child.pid}" ${shellQuote(logPath)} 2 "$port" ${shellQuote(mode)}; then`,
-        `  printf '0' >${shellQuote(resultPath)}`,
-        "else",
-        `  printf '%s' "$?" >${shellQuote(resultPath)}`,
-        "fi",
-      ],
-      {},
-      5_000,
-    );
-    expectShellSuccess(result);
-    expect(fs.readFileSync(resultPath, "utf8")).toBe(String(expectedStatus));
-  } finally {
-    fixture.child.kill("SIGKILL");
-    await fixture.closed;
-  }
 });
 
 it.each([
@@ -616,15 +634,9 @@ it.each([
 });
 
 it("bounds commands with the Node watchdog when timeout is unavailable", () => {
-  writeNodeShim(tempDir);
   const startedAt = Date.now();
-  const result = runBashWithHelper(
-    [
-      `openclaw_e2e_maybe_timeout 200ms ${shellQuote(process.execPath)} -e ${shellQuote("setInterval(() => {}, 1000)")}`,
-    ],
-    { PATH: tempDir },
-    5_000,
-    "; ",
+  const result = runWatchdog(
+    `200ms ${shellQuote(process.execPath)} -e ${shellQuote("setInterval(() => {}, 1000)")}`,
   );
   const elapsedMs = Date.now() - startedAt;
 
@@ -635,27 +647,14 @@ it("bounds commands with the Node watchdog when timeout is unavailable", () => {
 });
 
 it("preserves child stdin, arguments, and exit status through the Node watchdog", () => {
-  writeNodeShim(tempDir);
   const payload = "harmless watchdog stdin\nsecond line\n";
   const args = ["two words", "--literal", "quote'arg"];
   const child =
     'const fs = require("node:fs"); process.stdout.write(JSON.stringify({ stdin: fs.readFileSync(0, "utf8"), args: process.argv.slice(1) })); process.exit(37);';
-  const result = spawnSync(
-    "/bin/bash",
-    [
-      "-c",
-      [
-        "set -euo pipefail",
-        `source ${shellQuote(helperPath)}`,
-        `openclaw_e2e_maybe_timeout 5s node -e ${shellQuote(child)} -- ${args.map(shellQuote).join(" ")}`,
-      ].join("\n"),
-    ],
-    {
-      encoding: "utf8",
-      env: shellTestEnv({ PATH: tempDir }),
-      input: payload,
-      timeout: 10_000,
-    },
+  const result = runWatchdog(
+    `5s node -e ${shellQuote(child)} -- ${args.map(shellQuote).join(" ")}`,
+    10_000,
+    payload,
   );
 
   expect(result.status).toBe(37);
@@ -664,12 +663,7 @@ it("preserves child stdin, arguments, and exit status through the Node watchdog"
 });
 
 it("treats Node-watchdog timeout values as data, not Node options", () => {
-  writeNodeShim(tempDir);
-  const result = runBashWithHelper(
-    ["openclaw_e2e_maybe_timeout --version node --version"],
-    { PATH: tempDir },
-    5_000,
-  );
+  const result = runWatchdog("--version node --version");
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("unsupported timeout value: --version");
   expect(result.stdout).toBe("");
@@ -724,14 +718,12 @@ openclaw_e2e_maybe_timeout 30s node ${shellQuote(childPath)} ${shellQuote(pidPat
 it("terminates only the tracked gateway process", () => {
   const forbiddenToolLog = path.join(tempDir, "process-tools.log");
   fs.writeFileSync(forbiddenToolLog, "");
-  writeBashExecutable(path.join(tempDir, "pkill"), [
-    'printf "pkill %s\\n" "$*" >>"$OPENCLAW_TEST_FORBIDDEN_PROCESS_TOOL_LOG"',
-    "exit 42",
-  ]);
-  writeBashExecutable(path.join(tempDir, "pgrep"), [
-    'printf "pgrep %s\\n" "$*" >>"$OPENCLAW_TEST_FORBIDDEN_PROCESS_TOOL_LOG"',
-    "exit 42",
-  ]);
+  for (const tool of ["pkill", "pgrep"]) {
+    writeBashExecutable(path.join(tempDir, tool), [
+      `printf "${tool} %s\\n" "$*" >>"$OPENCLAW_TEST_FORBIDDEN_PROCESS_TOOL_LOG"`,
+      "exit 42",
+    ]);
+  }
 
   const script = `
 set -euo pipefail
@@ -847,45 +839,34 @@ it("bounds HTTP readiness probes when a server accepts connections but never res
   signal,
 }) => {
   const portPath = path.join(tempDir, "port.txt");
-  const serverPath = path.join(tempDir, "stalling-server.cjs");
-  fs.writeFileSync(
-    serverPath,
-    [
-      "const fs = require('node:fs');",
-      "const net = require('node:net');",
-      "const server = net.createServer((socket) => socket.on('data', () => {}));",
-      "server.listen(0, '127.0.0.1', () => {",
-      "  fs.writeFileSync(process.argv[2], String(server.address().port));",
-      "  process.send('ready');",
-      "});",
-      "process.on('SIGTERM', () => server.close(() => process.exit(0)));",
-      "",
-    ].join("\n"),
+  await withNodeFixture(
+    signal,
+    `const fs = require('node:fs');
+const net = require('node:net');
+const server = net.createServer((socket) => socket.on('data', () => {}));
+server.listen(0, '127.0.0.1', () => {
+  fs.writeFileSync(process.argv[2], String(server.address().port));
+  process.send('ready');
+});
+process.on('SIGTERM', () => server.close(() => process.exit(0)));
+`,
+    [portPath],
+    (_fixture, startedAt) => {
+      const result = runBashWithHelper(
+        [
+          `port="$(cat ${shellQuote(portPath)})"`,
+          'openclaw_e2e_probe_http_status "http://127.0.0.1:${port}/health" 200 100',
+        ],
+        undefined,
+        3_000,
+        "; ",
+      );
+      const elapsedMs = Date.now() - startedAt;
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(elapsedMs).toBeLessThan(2_500);
+    },
   );
-
-  const startedAt = Date.now();
-  const fixture = startNodeFixture(serverPath, [portPath]);
-  try {
-    await withinTest(fixture.ready, signal);
-    const result = runBash(
-      [
-        "set -euo pipefail",
-        `port="$(cat ${shellQuote(portPath)})"`,
-        `source ${shellQuote(helperPath)}`,
-        'openclaw_e2e_probe_http_status "http://127.0.0.1:${port}/health" 200 100',
-      ],
-      undefined,
-      3_000,
-      "; ",
-    );
-    const elapsedMs = Date.now() - startedAt;
-    expect(result.error).toBeUndefined();
-    expect(result.status).not.toBe(0);
-    expect(elapsedMs).toBeLessThan(2_500);
-  } finally {
-    fixture.child.kill("SIGKILL");
-    await fixture.closed;
-  }
 });
 
 it("cancels HTTP readiness probe response bodies", () => {

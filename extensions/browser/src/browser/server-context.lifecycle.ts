@@ -43,7 +43,6 @@ type ProfileTransitionOptions = {
   reason: string;
   terminal?: ProfileLifecycleTerminal;
   closeRelay?: boolean;
-  captureProfileResources?: boolean;
   /** Bridge runtimes must not retire process-global adapters shared by another runtime. */
   closeSharedAdapters?: boolean;
   managedChrome?: "stop" | "release-profile-data";
@@ -185,11 +184,9 @@ export function getOrCreateProfileRuntime(
   assertRuntimeAdmission(state);
   const current = state.profiles.get(profile.name);
   if (current) {
-    getProfileLifecycle(current);
     return current;
   }
   const created: ProfileRuntimeState = { profile, running: null, lastTargetId: null };
-  getProfileLifecycle(created);
   state.profiles.set(profile.name, created);
   return created;
 }
@@ -377,8 +374,7 @@ export function beginProfileTransition(
   if (closeSharedAdapters && usesChromeMcp) {
     actor.cleanupChromeMcp = ownerProfile.name;
   }
-  const shouldClosePlaywright =
-    closeSharedAdapters && params.captureProfileResources !== false && !usesChromeMcp;
+  const shouldClosePlaywright = closeSharedAdapters && !usesChromeMcp;
   const eagerPlaywrightRetirement = shouldClosePlaywright
     ? capturePlaywrightRetirement(actor, ownerProfile.cdpUrl)
     : null;

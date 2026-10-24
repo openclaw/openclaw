@@ -15,6 +15,8 @@ import { VERSION } from "../version.js";
 import {
   AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
+  AGENT_VECTOR_DECODER_SCHEMA_VERSION,
+  AGENT_VECTOR_SEARCH_SCHEMA_VERSION,
   AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
   AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -38,6 +40,8 @@ import {
   AGENT_TRAJECTORY_STORAGE_POSTGRES_MIGRATION_SQL,
   withLegacyAgentPostgresTrajectoryStorage,
 } from "./openclaw-agent-trajectory-storage-migration.js";
+import { AGENT_VECTOR_DECODER_POSTGRES_SQL } from "./openclaw-agent-vector-decoder-migration.js";
+import { AGENT_VECTOR_SEARCH_POSTGRES_SQL } from "./openclaw-agent-vector-search-migration.js";
 import {
   AGENT_WRITE_LAYOUT_POSTGRES_MIGRATION_SQL,
   withLegacyAgentPostgresWriteLayout,
@@ -84,6 +88,8 @@ export const agentEngineSchema: StoreSchema = {
   version: OPENCLAW_AGENT_SCHEMA_VERSION,
   sqlite: "",
   postgres: agentPostgresSql,
+  postgresVectorDecoderVersion: 2,
+  postgresVectorSearchVersion: 2,
   search: agentTranscriptSearchSchema,
   postgresMigrations: [
     {
@@ -128,6 +134,32 @@ export const agentEngineSchema: StoreSchema = {
       sql: `${AGENT_MEMORY_REVISION_POSTGRES_SQL}
         UPDATE schema_meta
         SET schema_version = ${AGENT_MEMORY_REVISION_SCHEMA_VERSION},
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';`,
+    },
+    {
+      version: AGENT_VECTOR_DECODER_SCHEMA_VERSION,
+      fromSchema: { postgres: agentPostgresSql },
+      schema: { postgres: agentPostgresSql, postgresVectorDecoderVersion: 2 },
+      sql: `${AGENT_VECTOR_DECODER_POSTGRES_SQL}
+        UPDATE schema_meta
+        SET schema_version = ${AGENT_VECTOR_DECODER_SCHEMA_VERSION},
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';`,
+    },
+    {
+      version: AGENT_VECTOR_SEARCH_SCHEMA_VERSION,
+      fromSchema: { postgres: agentPostgresSql, postgresVectorDecoderVersion: 2 },
+      schema: {
+        postgres: agentPostgresSql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+      },
+      sql: `${AGENT_VECTOR_SEARCH_POSTGRES_SQL}
+        UPDATE schema_meta
+        SET schema_version = ${AGENT_VECTOR_SEARCH_SCHEMA_VERSION},
           app_version = '${VERSION.replaceAll("'", "''")}',
           updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
         WHERE meta_key = 'primary';`,

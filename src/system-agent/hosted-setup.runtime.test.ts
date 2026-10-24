@@ -59,6 +59,10 @@ function useConfigWriter() {
   );
 }
 
+function installAudit() {
+  return vi.spyOn(audit, "appendSystemAgentAuditEntry").mockResolvedValue("state/openclaw.sqlite");
+}
+
 function setupSnapshot(config: OpenClawConfig, hash: string) {
   return { exists: true, valid: true, hash, config, sourceConfig: config };
 }
@@ -102,10 +106,7 @@ describe("SystemAgentChatEngine runtime", () => {
     async (ending) => {
       let retainedOptions: SetupChannelsOptions | undefined;
       const prepare = vi.fn(async () => {});
-      mocks.readSetupConfigFileSnapshot.mockResolvedValue({
-        ...setupSnapshot({}, "channel-lifetime-hash"),
-        sourceConfig: {},
-      });
+      useSetupConfig({}, "channel-lifetime-hash");
       useConfigWriter();
       useChannelSetup(async (config, prompter, options) => {
         retainedOptions = options;
@@ -113,7 +114,7 @@ describe("SystemAgentChatEngine runtime", () => {
         await prompter.text({ message: "Waiting for channel login" });
         return config;
       });
-      vi.spyOn(audit, "appendSystemAgentAuditEntry").mockResolvedValue("state/openclaw.sqlite");
+      installAudit();
       const host = new ChatWizardHost({
         surface: "gateway",
         beforePersistentApply: prepare,
@@ -145,15 +146,13 @@ describe("SystemAgentChatEngine runtime", () => {
       agents: { defaults: { workspace: "/tmp/skills-workspace" } },
     };
     const beforeEffects: Array<() => Promise<void>> = [];
-    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    const appendAuditEntry = installAudit();
     useSetupConfig(baseConfig, "skills-base-hash");
     mocks.setupSkills.mockImplementation(
       async (
-        config: OpenClawConfig,
-        workspaceDir: string,
-        _runtime: unknown,
-        prompter: WizardPrompter,
-        options: { beforePersistentEffect?: () => Promise<void> },
+        ...[config, workspaceDir, , prompter, options = {}]: Parameters<
+          typeof import("../commands/onboard-skills.js").setupSkills
+        >
       ) => {
         expect(workspaceDir).toBe("/tmp/skills-workspace");
         expect(options.beforePersistentEffect).toBeTypeOf("function");
@@ -164,7 +163,6 @@ describe("SystemAgentChatEngine runtime", () => {
       },
     );
     useConfigWriter();
-    vi.spyOn(audit, "appendSystemAgentAuditEntry").mockImplementation(appendAuditEntry);
     const engine = createEngine({ surface: "gateway" });
 
     const reply = await engine.handle("configure skills");
@@ -182,18 +180,14 @@ describe("SystemAgentChatEngine runtime", () => {
 
   it("hosts search setup as question cards and keeps gateway credentials out of model history", async () => {
     const baseConfig: OpenClawConfig = {};
-    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    const appendAuditEntry = installAudit();
     const beforePersistentEffects: Array<() => Promise<void>> = [];
     useSetupConfig(baseConfig, "search-base-hash");
     mocks.runSearchSetupFlow.mockImplementation(
       async (
-        config: OpenClawConfig,
-        _runtime: unknown,
-        prompter: WizardPrompter,
-        options: {
-          preserveDisabledSearchState?: boolean;
-          beforePersistentEffect?: () => Promise<void>;
-        },
+        ...[config, , prompter, options = {}]: Parameters<
+          typeof import("../flows/search-setup.js").runSearchSetupFlow
+        >
       ) => {
         expect(options.preserveDisabledSearchState).toBe(false);
         beforePersistentEffects.push(options.beforePersistentEffect!);
@@ -218,7 +212,6 @@ describe("SystemAgentChatEngine runtime", () => {
       },
     );
     useConfigWriter();
-    vi.spyOn(audit, "appendSystemAgentAuditEntry").mockImplementation(appendAuditEntry);
     const engine = createEngine({ surface: "gateway" });
 
     const providerStep = await engine.handle("configure search");
@@ -246,8 +239,7 @@ describe("SystemAgentChatEngine runtime", () => {
 
   it("hosts full Gateway setup with a lockout warning, audited config write, and no restart", async () => {
     useGatewayConfig();
-    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
-    vi.spyOn(audit, "appendSystemAgentAuditEntry").mockImplementation(appendAuditEntry);
+    const appendAuditEntry = installAudit();
     const engine = createEngine({ surface: "gateway" });
 
     const { portStep, storageStep } = await advanceGatewayWizardToSecretStorage(engine);
@@ -387,7 +379,7 @@ describe("SystemAgentChatEngine runtime", () => {
 
   it("reports a failed hosted search-provider install without writing or auditing", async () => {
     const baseConfig: OpenClawConfig = {};
-    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    const appendAuditEntry = installAudit();
     useSetupConfig(baseConfig, "search-base-hash");
     mocks.runSearchSetupFlow.mockResolvedValue({
       outcome: "install-failed",
@@ -395,7 +387,6 @@ describe("SystemAgentChatEngine runtime", () => {
       providerId: "brave",
       reason: "failed",
     });
-    vi.spyOn(audit, "appendSystemAgentAuditEntry").mockImplementation(appendAuditEntry);
     const engine = createEngine({ surface: "gateway" });
 
     const reply = await engine.handle("configure search");
@@ -429,10 +420,9 @@ describe("SystemAgentChatEngine runtime", () => {
   });
 
   it("reports hosted channel setup success when audit persistence fails", async () => {
-    const appendAuditEntry = vi.fn(async () => {
-      throw new Error("audit store is read-only");
-    });
-    vi.spyOn(audit, "appendSystemAgentAuditEntry").mockImplementation(appendAuditEntry);
+    const appendAuditEntry = installAudit().mockRejectedValue(
+      new Error("audit store is read-only"),
+    );
     vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(async (channel) => {
       expect(channel).toBe("telegram");
       return "applied";

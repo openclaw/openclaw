@@ -380,9 +380,6 @@ async function run(
           if (!inlineHost || !isRecord(value) || value.status !== "boundary") {
             throw new Error("invalid code mode worker boundary");
           }
-          if (!Number.isFinite(admittedTimeoutMs) || admittedTimeoutMs <= 0) {
-            throw new Error("invalid code mode worker admission budget");
-          }
           if (value.networkContentObserved === true) {
             inlineHost?.onNetworkContent?.();
           }

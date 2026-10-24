@@ -32,6 +32,11 @@ const { GatewayChatClient } = await import("./gateway-chat.js");
 const { GatewayClient, GatewayClientRequestError } = await import("../gateway/client.js");
 const connection = { url: "ws://127.0.0.1:18789", token: "test-token" };
 const model = (id: string, name = id) => ({ provider: "fixture", id, name });
+const writeOptions = {
+  timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+  signal: expect.any(AbortSignal),
+  retainSentResultOnAbort: true,
+};
 
 function createClient() {
   return new GatewayChatClient(connection);
@@ -407,11 +412,7 @@ describe("GatewayChatClient", () => {
           timeoutMs: undefined,
           idempotencyKey: runId,
         },
-        {
-          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
-          signal: expect.any(AbortSignal),
-          retainSentResultOnAbort: true,
-        },
+        writeOptions,
       ],
       ["chat.history", { ...scope, limit: 50 }],
       ["chat.abort", { ...scope, runId }],
@@ -450,30 +451,16 @@ describe("GatewayChatClient", () => {
         succeedsParent,
       };
       await expect(client.createSession(opts)).resolves.toEqual(result);
-      expect(request).toHaveBeenNthCalledWith(
-        1,
-        "sessions.create",
-        {
-          ...opts,
-          emitCommandHooks: true,
-        },
-        {
-          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
-          signal: expect.any(AbortSignal),
-          retainSentResultOnAbort: true,
-        },
-      );
-      expect(request).toHaveBeenNthCalledWith(
-        2,
-        "sessions.create",
-        succeedsParent
-          ? { key: "tui-next", parentSessionKey: "agent:main:main", emitCommandHooks: true }
-          : { key: "tui-next", agentId: "main" },
-        {
-          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
-          signal: expect.any(AbortSignal),
-          retainSentResultOnAbort: true,
-        },
+      expectRequests(
+        request,
+        ["sessions.create", { ...opts, emitCommandHooks: true }, writeOptions],
+        [
+          "sessions.create",
+          succeedsParent
+            ? { key: "tui-next", parentSessionKey: "agent:main:main", emitCommandHooks: true }
+            : { key: "tui-next", agentId: "main" },
+          writeOptions,
+        ],
       );
     },
   );

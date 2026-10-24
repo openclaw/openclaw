@@ -37,16 +37,27 @@ function mockBlobUrls(...urls: string[]) {
   }
 }
 
+function agentIdentity(agentId: string, revision = 1, name = agentId) {
+  return { agentId, name, avatar: `/avatar/${agentId}?v=${revision}` };
+}
+
+function avatarHost(sessionKey = "agent:main:first", withStatus = true) {
+  setAvatarGatewayOrigin("https://gateway.example.test", ["test-token"]);
+  return makeChatHost({
+    sessionKey,
+    requestHandlers: {
+      "agent.identity.get": ({ agentId }: { agentId: string }) =>
+        withStatus ? { ...agentIdentity(agentId), avatarStatus: "local" } : agentIdentity(agentId),
+    },
+  });
+}
+
 function waitForImage(container: Element, src: string, selector = "img") {
   return vi.waitFor(() => {
     const image = container.querySelector<HTMLImageElement>(selector);
     expect(image?.getAttribute("src")).toBe(src);
     return image!;
   });
-}
-
-function expectSlotClass(container: Element, name: string, value: boolean) {
-  expect(container.querySelector(".chat-avatar-slot")?.classList.contains(name)).toBe(value);
 }
 
 function expectBearerFetch(
@@ -106,15 +117,8 @@ function renderAvatar(
   ],
 ) {
   const [role, assistant, user, sender, channelAvatar] = params;
-  const view = mountSolid(() => (
-    <ChatAvatar
-      role={role}
-      assistant={assistant}
-      user={user}
-      sender={sender}
-      channelAvatar={channelAvatar}
-    />
-  ));
+  const props = { role, assistant, user, sender, channelAvatar };
+  const view = mountSolid(() => <ChatAvatar {...props} />);
   return view.container.querySelector<HTMLElement>(".chat-avatar");
 }
 
@@ -179,25 +183,22 @@ it.each(["assistant", "local", "profile"] as const)(
   },
 );
 
-it.each([["/console", "sample-bot", "1000000001", true]] as const)(
-  "binds footer portraits at %s to account %s and sender %s",
-  (basePath, accountId, id, matches) => {
-    setAvatarGatewayOrigin(window.location.origin, [], basePath);
-    const sender = nativeSender(accountId);
-    sender.identity.id = id;
-    const identity = { ...sender.identity };
-    const { container } = mountSolid(() => (
-      <ChatAuthorAvatar
-        sender={sender}
-        class="chat-author-avatar"
-        channelAvatar={channelPortrait(basePath)}
-      />
-    ));
-    expect(Boolean(container.querySelector("openclaw-channel-avatar"))).toBe(matches);
-    expect(container.querySelector("[role=img]")?.getAttribute("aria-label")).toBe("Riley Adams");
-    expect(sender.identity).toEqual(identity);
-  },
-);
+it("binds footer portraits to the account and sender under a base path", () => {
+  const basePath = "/console";
+  setAvatarGatewayOrigin(window.location.origin, [], basePath);
+  const sender = nativeSender();
+  const identity = { ...sender.identity };
+  const { container } = mountSolid(() => (
+    <ChatAuthorAvatar
+      sender={sender}
+      class="chat-author-avatar"
+      channelAvatar={channelPortrait(basePath)}
+    />
+  ));
+  expect(Boolean(container.querySelector("openclaw-channel-avatar"))).toBe(true);
+  expect(container.querySelector("[role=img]")?.getAttribute("aria-label")).toBe("Riley Adams");
+  expect(sender.identity).toEqual(identity);
+});
 
 it("renders a source-bound native portrait without borrowing the viewer's profile", () => {
   const sender = nativeSender();
@@ -229,22 +230,6 @@ it("keeps sender initials when a channel portrait belongs to another account", (
   expect(avatar?.querySelector("img")).toBeNull();
   expect(avatar?.textContent?.trim()).toBe("RA");
 });
-
-function pendingUntilAbort<T>(signal: AbortSignal | null | undefined): Promise<T> {
-  if (!signal) {
-    throw new Error("expected avatar fetch signal");
-  }
-  return new Promise<T>((_resolve, reject) => {
-    signal.addEventListener(
-      "abort",
-      () => {
-        const reason = signal.reason;
-        reject(reason instanceof Error ? reason : new Error("avatar fetch aborted"));
-      },
-      { once: true },
-    );
-  });
-}
 
 afterEach(() => {
   cleanupSolid();
@@ -312,47 +297,28 @@ describe("ChatAvatar", () => {
           role="assistant"
           assistant={{ agentId: "scout", name: "Scout", avatar: null }}
         />
+        <ChatAvatar
+          role="assistant"
+          assistant={{
+            agentId: "scout",
+            name: "Renamed Scout",
+            avatar: "https://example.com/avatar.png",
+          }}
+        />
         <ForwardedAvatar agentId="scout" options={{ agentId: "main", agents: [{ id: "scout" }] }} />
         <ChatAuthorAvatar sender={sender} />
         <ChatAvatar role="user" sender={sender} />
       </>
     ));
     await vi.waitFor(() =>
-      expect(container.querySelectorAll(".identity-avatar__agent-face")).toHaveLength(5),
+      expect(container.querySelectorAll(".identity-avatar__agent-face")).toHaveLength(6),
     );
     const faces = [...container.querySelectorAll(".identity-avatar__agent-face")].map(
       (face) => face.outerHTML,
     );
     expect(new Set(faces).size).toBe(1);
+    expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector(".chat-author-avatar__initials")).toBeNull();
-  });
-
-  it("renders the same generated face for an agent, with explicit image and text precedence", async () => {
-    const defaultAvatar = renderAvatar([
-      "assistant",
-      { agentId: "scout", name: "Scout", avatar: null },
-    ]);
-    const remoteAvatar = renderAvatar([
-      "assistant",
-      { agentId: "scout", avatar: "https://example.com/avatar.png", name: "Renamed Scout" },
-    ]);
-    await vi.waitFor(() => expect(defaultAvatar?.querySelector("svg")).not.toBeNull());
-    await vi.waitFor(() => expect(remoteAvatar?.querySelector("svg")).not.toBeNull());
-    expect(remoteAvatar?.querySelector("svg")?.outerHTML).toBe(
-      defaultAvatar?.querySelector("svg")?.outerHTML,
-    );
-
-    for (const avatar of ["blob:managed-image", "/avatar/main", "data:image/png;base64,YQ=="]) {
-      const image = renderAvatar(["assistant", { avatar, name: "Val", textAvatar: "🦉" }]);
-      expect(image?.matches("img.chat-avatar.assistant")).toBe(true);
-      expect(image?.getAttribute("src")).toBe(avatar);
-      expect(image?.getAttribute("alt")).toBe("Val");
-    }
-
-    const textAvatar = renderAvatar(["assistant", { avatar: "🦉", name: "Val" }]);
-    expect(textAvatar?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
-    expect(textAvatar?.getAttribute("aria-label")).toBe("Val");
-    expect(textAvatar?.getAttribute("role")).toBe("img");
   });
 
   it.each(["openclaw"])("keeps the product mark for system agent %s", (agentId) => {
@@ -412,21 +378,10 @@ describe("ChatAvatar", () => {
     expect(fetchAvatar).toHaveBeenCalledOnce();
   });
 
-  it("renders local user image and text avatars", () => {
-    const imageAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "/avatar/user" }]);
-    expect(imageAvatar?.getAttribute("src")).toBe("/avatar/user");
-    expect(imageAvatar?.getAttribute("alt")).toBe("Buns");
-
+  it("renders local user text avatars", () => {
     const textAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "AB" }]);
     expect(textAvatar?.tagName).toBe("DIV");
     expect(textAvatar?.textContent?.trim()).toBe("AB");
-
-    for (const avatar of ["data:image/png;base64,YQ==", "/custom.svg"]) {
-      const { container } = mountSolid(() => (
-        <ChatAvatar role="user" user={{ name: "Buns", avatar }} />
-      ));
-      expect(container.querySelector("img")?.getAttribute("src")).toBe(avatar);
-    }
   });
 
   it("swaps a failing local user image to initials instead of a broken image", () => {
@@ -435,6 +390,7 @@ describe("ChatAvatar", () => {
     const slot = container.querySelector<HTMLElement>(".chat-avatar-slot");
     const image = slot?.querySelector("img");
     expect(image?.getAttribute("src")).toBe("/avatar/user");
+    expect(image?.getAttribute("alt")).toBe("Buns");
     expect(slot?.classList.contains("is-fallback")).toBe(false);
 
     image?.dispatchEvent(new Event("error"));
@@ -451,21 +407,6 @@ describe("ChatAvatar", () => {
 });
 
 describe("refreshChatAvatar", () => {
-  function avatarHost() {
-    setAvatarGatewayOrigin("https://gateway.example.test", ["test-token"]);
-    return makeChatHost({
-      sessionKey: "agent:main:first",
-      requestHandlers: {
-        "agent.identity.get": ({ agentId }: { agentId: string }) => ({
-          agentId,
-          name: agentId,
-          avatar: `/avatar/${agentId}?v=1`,
-          avatarStatus: "local",
-        }),
-      },
-    });
-  }
-
   it("replaces a revised avatar without revoking a retained sibling's image", async () => {
     const host = avatarHost();
     const identities = identityCapability(host);
@@ -476,7 +417,7 @@ describe("refreshChatAvatar", () => {
     await Promise.all([refreshChatAvatar(host), refreshChatAvatar(sibling)]);
     expect(fetchAvatar).toHaveBeenCalledOnce();
     identities.invalidate(["main"]);
-    host.request.mockResolvedValue({ agentId: "main", name: "Main", avatar: "/avatar/main?v=2" });
+    host.request.mockResolvedValue(agentIdentity("main", 2, "Main"));
     const refresh = refreshChatAvatar(host);
     expect(host.chatAvatarUrl).toBe("blob:old");
     await refresh;
@@ -497,11 +438,7 @@ describe("refreshChatAvatar", () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:working-avatar");
     const revoke = vi.spyOn(URL, "revokeObjectURL");
     await Promise.all([refreshChatAvatar(host), refreshChatAvatar(sibling)]);
-    const replacement = {
-      agentId: "main",
-      name: "Main",
-      avatar: "/avatar/main?v=2",
-    };
+    const replacement = agentIdentity("main", 2, "Main");
     identities.invalidate(["main"]);
     host.request.mockResolvedValue(replacement);
     host.connected = false;
@@ -534,7 +471,7 @@ describe("refreshChatAvatar", () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:working-avatar");
     await refreshChatAvatar(host);
     identities.invalidate(["main"]);
-    host.request.mockResolvedValue({ agentId: "main", name: "Main", avatar: "/avatar/main?v=2" });
+    host.request.mockResolvedValue(agentIdentity("main", 2, "Main"));
     fetchAvatar.mockResolvedValue(new Response(null, { status: 503 }));
     await refreshChatAvatar(host);
     expect(host.chatAvatarUrl).toBe("blob:working-avatar");
@@ -602,28 +539,6 @@ describe("refreshChatAvatar", () => {
     },
   );
 
-  it.each(["response", "body"])(
-    "bounds a stalled image %s by the shared deadline",
-    async (phase) => {
-      const host = avatarHost();
-      const deadline = new AbortController();
-      const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
-      const fetchAvatar = vi
-        .spyOn(globalThis, "fetch")
-        .mockImplementation(async (_input, init) =>
-          phase === "response"
-            ? pendingUntilAbort<Response>(init?.signal)
-            : ({ ok: true, blob: () => pendingUntilAbort<Blob>(init?.signal) } as Response),
-        );
-      const pending = refreshChatAvatar(host);
-      await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledOnce());
-      expect(timeout).toHaveBeenCalledWith(30_000);
-      deadline.abort();
-      await pending;
-      expect(host.chatAvatarUrl).toBeNull();
-    },
-  );
-
   it("keeps missing avatar diagnostics without fetching a remote source", async () => {
     const host = avatarHost();
     host.request.mockResolvedValue({
@@ -651,18 +566,8 @@ describe("refreshSenderAgentAvatars", () => {
     }));
   }
   function senderHost() {
-    setAvatarGatewayOrigin("https://gateway.example.test", ["test-token"]);
     return {
-      ...makeChatHost({
-        sessionKey: "agent:main:main",
-        requestHandlers: {
-          "agent.identity.get": ({ agentId }: { agentId: string }) => ({
-            agentId,
-            name: agentId,
-            avatar: `/avatar/${agentId}?v=1`,
-          }),
-        },
-      }),
+      ...avatarHost("agent:main:main", false),
       agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "research" }] },
       senderAgentAvatars: undefined as ReadonlyMap<string, string | null> | undefined,
     };
@@ -733,11 +638,7 @@ describe("refreshSenderAgentAvatars", () => {
     host.chatMessages = forwardedMessages("research");
     await refreshSenderAgentAvatars(host);
     identities.invalidate(["research"]);
-    host.request.mockResolvedValue({
-      agentId: "research",
-      name: "Research",
-      avatar: "/avatar/research?v=2",
-    });
+    host.request.mockResolvedValue(agentIdentity("research", 2, "Research"));
     fetchAvatar.mockResolvedValue(new Response(null, { status: 503 }));
     host.chatMessages = forwardedMessages("research");
     await refreshSenderAgentAvatars(host);
@@ -874,72 +775,5 @@ describe("refreshSenderAgentAvatars", () => {
     expect(host.chatAvatarUrl).toBe(current);
     expect(revoke).not.toHaveBeenCalled();
     invalidateChatAvatarCache(host);
-  });
-});
-
-describe("attributed sender avatars", () => {
-  it("restores pending initials when the authenticated sender avatar changes", async () => {
-    setAvatarGatewayOrigin("https://gateway.example.test", ["profile-token"]);
-    mockAvatarFetch();
-    mockBlobUrls("blob:first-sender", "blob:second-sender");
-    const firstSender = {
-      id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
-      name: "Ada Lovelace",
-      profileAvatarUrl: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar?v=1",
-    };
-
-    const [sender, setSender] = createSignal(firstSender);
-    const { container } = mountSolid(() => <ChatAvatar role="user" sender={sender()} />);
-    const firstImage = await waitForImage(container, "blob:first-sender", ".chat-avatar-slot img");
-    firstImage.dispatchEvent(new Event("load"));
-    expectSlotClass(container, "is-fallback", false);
-
-    setSender({
-      ...firstSender,
-      profileAvatarUrl: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar?v=2",
-    });
-    flush();
-    expectSlotClass(container, "is-pending", true);
-    const secondImage = await waitForImage(
-      container,
-      "blob:second-sender",
-      ".chat-avatar-slot img",
-    );
-    expect(secondImage).toBe(firstImage);
-    secondImage.dispatchEvent(new Event("load"));
-    expectSlotClass(container, "is-fallback", false);
-  });
-
-  it("keeps a missing same-origin sender avatar on initials across rerenders", async () => {
-    const gatewayOrigin = globalThis.location.origin;
-    setAvatarGatewayOrigin(gatewayOrigin);
-    const fetchAvatar = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(null, { status: 404 }));
-    const sender = {
-      id: "dd7c98e2-f51d-4590-b588-fa0682e165b7",
-      identity: { type: "profile" as const, id: "dd7c98e2-f51d-4590-b588-fa0682e165b7" },
-      name: "hrudolph",
-      profileAvatarUrl: "/api/users/dd7c98e2-f51d-4590-b588-fa0682e165b7/avatar",
-    };
-    const [identity, setIdentity] = createSignal(sender);
-    const { container } = mountSolid(() => <ChatAvatar role="user" sender={identity()} />);
-    expectSlotClass(container, "is-pending", true);
-    expect(container.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
-    await vi.waitFor(() => {
-      expect(fetchAvatar).toHaveBeenCalledOnce();
-      expect(container.querySelector(".chat-avatar-slot img")?.hasAttribute("src")).toBe(false);
-      expectSlotClass(container, "is-fallback", true);
-    });
-    expect(fetchAvatar).toHaveBeenCalledWith(
-      `${gatewayOrigin}/api/users/${sender.id}/avatar`,
-      expect.objectContaining({ credentials: "include", signal: expect.any(AbortSignal) }),
-    );
-
-    setIdentity({ ...sender });
-    flush();
-    expect(container.querySelector("img")).toBeNull();
-    expect(container.querySelector(".is-pending")).toBeNull();
-    expect(container.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
   });
 });

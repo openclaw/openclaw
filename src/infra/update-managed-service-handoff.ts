@@ -18,7 +18,7 @@ import {
   isGatewayRestartDraining,
 } from "../process/gateway-work-admission.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome.js";
+import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome-classification.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
@@ -63,6 +63,7 @@ import {
   assertManagedUpdateLeaseDatabaseIdentity,
   prepareManagedHandoffLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
+import { readHandoffStartupFailure } from "./update-managed-service-handoff-diagnostics.js";
 import { MANAGED_HANDOFF_LEASE_SOURCE } from "./update-managed-service-handoff-lease-source.js";
 import {
   prepareManagedHandoffLeaseStore,
@@ -442,7 +443,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
   // the new process to answer; never reuse the pre-activation runtime identity.
   runLedger?.recordUpdateRunVerification(params.runId, {
     serviceRunning, pid: servicePid, runningVersion: undefined, runningBuildId: undefined, versionMatch: undefined,
-    readyz: undefined, settled: undefined, channelsReady: undefined, pluginErrors: undefined,
+    readyz: undefined, coreReady: undefined, settled: undefined, channelsReady: undefined, pluginErrors: undefined,
   });
   if (restored) {
     try {
@@ -647,7 +648,7 @@ async function collectUpdateFailureTriage() {
     const recovery = typeof triageFailure.restored === "boolean"
       ? "Service recovery " + (triageFailure.restored ? "succeeded." : "failed.")
       : "Service recovery outcome was not recorded; inspect the handoff log before restarting.";
-    failure.error = [failure.error, recovery].filter(Boolean).join("\n");
+    failure.error = [failure.error, recovery, triageFailure.recoveryReason].filter(Boolean).join("\n");
     // Keep the canonical export intact even when installed triage cannot start.
     // Only this private annotated input is removed with the helper's other files.
     fs.writeFileSync(params.triageInputPath, JSON.stringify(failure), { mode: 0o600, flag: "wx" });
@@ -922,6 +923,7 @@ async function collectUpdateFailureTriage() {
     const childStatus = !exit.signal && resultRoot === params.updateLeaseKey && ["error", "skipped"].includes(result?.status) ? result.status : undefined;
     if (childStatus) closedUpdateResult = result;
     const recovery = childStatus ? result.recovery : null;
+    if (triageFailure && recovery?.service) triageFailure.restored = recovery.service === "healthy";
     const safe = !exit.signal && recovery?.serviceRestartSafe === true &&
       typeof recovery.version === "string" && recovery.version.trim() &&
       (recovery.buildId === undefined ? result.mode !== "git" :
@@ -962,7 +964,6 @@ async function collectUpdateFailureTriage() {
       if (restorationArmed && safe && recovery.service === undefined) {
         restored = await restoreGatewayService(previousGeneration ? result.reason : "managed-service-handoff-failed", recovery, childStatus, previousGeneration);
       } else {
-        if (restorationArmed && restored && triageFailure) triageFailure.restored = true;
         appendLog("managed update recovery not attempted: " +
           (recovery?.serviceRestartSafe === false ? "updater explicitly rejected activation" :
             recovery?.service === "healthy" ? "updater already verified recovery" :
@@ -1231,6 +1232,7 @@ async function spawnManagedServiceUpdateHandoff(
   };
 
   let child!: HandoffChild;
+  let helperLog: fs.FileHandle | undefined;
   let readiness!: string;
   const onExit = () => {
     // Keep exact ownership until cancellation proves the durable lease was released.
@@ -1243,6 +1245,7 @@ async function spawnManagedServiceUpdateHandoff(
     await fs.writeFile(paramsPath, `${JSON.stringify(helperParams, null, 2)}\n`, { mode: 0o600 });
     await fs.writeFile(metaPath, `${JSON.stringify(metaFile, null, 2)}\n`, { mode: 0o600 });
 
+    helperLog = await fs.open(logPath, "a", 0o600).catch(() => undefined);
     assertManagedUpdateLeaseDatabaseIdentity(updateLeaseDatabaseIdentity);
     owner.requesterAuthority?.assertCurrent();
     owner.requesterAuthority?.signal?.throwIfAborted();
@@ -1255,8 +1258,8 @@ async function spawnManagedServiceUpdateHandoff(
       detached: true,
       stdio:
         helperParams.stateEngine === "postgres"
-          ? ["pipe", "pipe", "ignore", "ipc"]
-          : ["pipe", "pipe", "ignore"],
+          ? ["pipe", "pipe", helperLog?.fd ?? "ignore", "ipc"]
+          : ["pipe", "pipe", helperLog?.fd ?? "ignore"],
     });
     const { stdin, stdout } = spawned;
     if (!stdin || !stdout) {
@@ -1357,8 +1360,13 @@ async function spawnManagedServiceUpdateHandoff(
     child?.removeListener("exit", onExit);
     child?.stdin.destroy();
     child?.stdout.destroy();
+    const failure = await readHandoffStartupFailure(err, logPath, serviceEnv);
+    await helperLog?.close().catch(() => {});
+    helperLog = undefined;
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
-    throw err;
+    throw failure;
+  } finally {
+    await helperLog?.close().catch(() => {});
   }
   if (params.beforePark) {
     let noticePending = false;

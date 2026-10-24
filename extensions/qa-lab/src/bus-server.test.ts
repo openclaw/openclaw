@@ -69,6 +69,13 @@ async function postQaBusRawJson(baseUrl: string, path: string, body: string) {
   });
 }
 
+async function expectJson(response: Response, status: number, body: unknown) {
+  expect(response.status).toBe(status);
+  await expect(response.json()).resolves.toEqual(body);
+}
+const messageIds = (result: QaBusPollResult) =>
+  result.events.flatMap((event) => ("message" in event ? [event.message.id] : []));
+
 describe("closeQaHttpServer", () => {
   it("closes idle keep-alive sockets so suite processes can exit", async () => {
     const server = createServer((_req, res) => {
@@ -140,8 +147,7 @@ describe("qa-bus server", () => {
     const response = await fetch(`${bus.baseUrl}/v1/state`, {
       signal: AbortSignal.timeout(1_000),
     });
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: requestError.message });
+    await expectJson(response, 500, { error: requestError.message });
   });
 
   it("normalizes direct-message aliases at HTTP ingress without accepting unknown kinds", async () => {
@@ -272,28 +278,18 @@ describe("qa-bus server", () => {
     await poll(firstPoll.cursor, 0);
     expect(state.getAcknowledgedPollCursor("acct-a")).toBe(0);
     const unacknowledgedRestart = await poll();
-    expect(
-      unacknowledgedRestart.events.flatMap((event) =>
-        "message" in event ? [event.message.id] : [],
-      ),
-    ).toEqual([consumed.id]);
+    expect(messageIds(unacknowledgedRestart)).toEqual([consumed.id]);
 
     await poll(firstPoll.cursor, firstPoll.cursor);
     expect(state.getAcknowledgedPollCursor("acct-a")).toBe(firstPoll.cursor);
     const queuedDuringRestart = inbound("queued during restart", "second");
     const restartedPoll = await poll();
-    const restartedMessageIds = restartedPoll.events.flatMap((event) =>
-      "message" in event ? [event.message.id] : [],
-    );
-    expect(restartedMessageIds).toEqual([queuedDuringRestart.id]);
-    expect(restartedMessageIds).not.toContain(consumed.id);
+    expect(messageIds(restartedPoll)).toEqual([queuedDuringRestart.id]);
 
     state.reset();
     const queuedAfterReset = inbound("queued after bus reset", "third");
     const resetPoll = await poll();
-    expect(
-      resetPoll.events.flatMap((event) => ("message" in event ? [event.message.id] : [])),
-    ).toEqual([queuedAfterReset.id]);
+    expect(messageIds(resetPoll)).toEqual([queuedAfterReset.id]);
   });
 
   it("paginates a burst without advancing past events omitted by the poll limit", async () => {
@@ -324,10 +320,7 @@ describe("qa-bus server", () => {
     });
 
     expect(Date.now() - startedAt).toBeLessThan(300);
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      error: "poll cursor must be an integer at least 0.",
-    });
+    await expectJson(response, 400, { error: "poll cursor must be an integer at least 0." });
   });
 
   it("rejects acknowledgements beyond the fetched cursor", async () => {
@@ -340,26 +333,19 @@ describe("qa-bus server", () => {
       timeoutMs: 0,
     });
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
+    await expectJson(response, 400, {
       error: "acknowledged poll cursor must not exceed the requested poll cursor.",
     });
   });
 
   it("rejects malformed search limits before querying state", async () => {
-    const state = createQaBusState();
-    const bus = await startQaBusServer({ state });
-    stops.push(bus["stop"]);
-
-    const response = await postQaBusJson(bus.baseUrl, "/v1/actions/search", {
+    const { post } = await fixture();
+    const response = await post("/v1/actions/search", {
       limit: "all",
       query: "anything",
     });
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      error: "search limit must be an integer at least 1.",
-    });
+    await expectJson(response, 400, { error: "search limit must be an integer at least 1." });
   });
 
   it.each(["inbound", "outbound"] as const)(
@@ -410,10 +396,7 @@ describe("qa-bus server", () => {
     const { raw } = await fixture();
     const response = await raw("/v1/reset", "{");
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      error: "Malformed JSON body",
-    });
+    await expectJson(response, 400, { error: "Malformed JSON body" });
   });
 
   it("keeps oversized numeric poll and search fields bounded", async () => {

@@ -10,13 +10,14 @@ import {
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
+import { isSidebarSlotVisible } from "./sidebar-layout.ts";
 import {
   configureNativeKeyTarget,
   nativeControlNavigationCases,
 } from "./test-helpers/chat-scroll-input.tsx";
 
 function createFocusedPane() {
-  const { pane } = createTestChatPane({
+  const { pane, state } = createTestChatPane({
     client: createGatewayBrowserClientFixture(),
     sessions: createSessionCapabilityFixture(),
   });
@@ -26,7 +27,7 @@ function createFocusedPane() {
   const textarea = composer.appendChild(document.createElement("textarea"));
   getChatComposerState(pane.presentationId).composerTextarea = textarea;
   pane.append(composer);
-  return { pane, focus: vi.spyOn(textarea, "focus") };
+  return { pane, state, focus: vi.spyOn(textarea, "focus") };
 }
 
 function typingTarget(pane: ReturnType<typeof createFocusedPane>["pane"], target: HTMLElement) {
@@ -144,4 +145,21 @@ it("does not steal typing focus from a light-DOM confirmation", () => {
   onTestFinished(registerModalSurface(modal));
   pane.handleDocumentKeydown(new KeyboardEvent("keydown", { key: "x", cancelable: true }));
   expect(focus).not.toHaveBeenCalled();
+});
+
+it("uses current panel availability before consuming its keyboard shortcut", () => {
+  const { pane, state } = createFocusedPane();
+  const shortcut = () =>
+    new KeyboardEvent("keydown", { key: "`", code: "Backquote", ctrlKey: true, cancelable: true });
+  state.terminalAvailable = false;
+  const unavailable = shortcut();
+  pane.handleDocumentKeydown(unavailable);
+  expect(unavailable.defaultPrevented).toBe(false);
+  expect(isSidebarSlotVisible(state.sidebarLayout, "terminal")).toBe(false);
+
+  state.terminalAvailable = true;
+  const available = shortcut();
+  pane.handleDocumentKeydown(available);
+  expect(available.defaultPrevented).toBe(true);
+  expect(isSidebarSlotVisible(state.sidebarLayout, "terminal")).toBe(true);
 });

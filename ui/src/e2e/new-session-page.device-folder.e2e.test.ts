@@ -85,7 +85,7 @@ suite.define(() => {
       const model = page.locator('[data-chat-model-select="true"]');
       const selectModel = async (id: "worker" | "remote") => {
         await model.click();
-        await selectChatModelOption(page.locator(`[data-chat-model-option="example/${id}"]`));
+        await selectChatModelOption(page, `example/${id}`);
       };
       await selectModel("remote");
       await project.click();

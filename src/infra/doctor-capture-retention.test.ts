@@ -50,8 +50,8 @@ function captureManifest(runId: string, ageDays: number, stateDir: string) {
   });
 }
 
-function retire(f: ReturnType<typeof fixture>, keepRunId = "") {
-  return retireExpiredStandaloneDoctorCaptures({ ...f, now, keepRunId, assertCurrent: vi.fn() });
+function retire(f: ReturnType<typeof fixture>, keepRunId = "", assertCurrent = vi.fn()) {
+  return retireExpiredStandaloneDoctorCaptures({ ...f, now, keepRunId, assertCurrent });
 }
 
 function fixture(marked = true) {
@@ -83,8 +83,7 @@ it("retains only the newest three of five sealed standalone captures, leaving up
   expect(result.warnings).toEqual([]);
   expect(result.retired.toSorted()).toEqual(captures.slice(0, 2).toSorted());
   expect(captures.map(fs.existsSync)).toEqual([false, false, true, true, true]);
-  expect(fs.existsSync(update)).toBe(true);
-  expect(fs.existsSync(incomplete)).toBe(true);
+  expect([update, incomplete].map(fs.existsSync)).toEqual([true, true]);
 });
 
 it("protects an old capture referenced by active recovery and keeps all captures when recovery is unreadable", async () => {
@@ -155,12 +154,7 @@ it("retires only expired sealed standalone Doctor captures and preserves incompl
   }
   const assertCurrent = vi.fn();
 
-  const result = await retireExpiredStandaloneDoctorCaptures({
-    ...f,
-    keepRunId: path.basename(recent),
-    now,
-    assertCurrent,
-  });
+  const result = await retire(f, path.basename(recent), assertCurrent);
 
   expect(result).toEqual({ retired: [expired], warnings: [] });
   expect(assertCurrent).toHaveBeenCalled();

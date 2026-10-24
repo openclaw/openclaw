@@ -19,7 +19,7 @@ type StatusCommandReportDataParams = Parameters<typeof buildStatusCommandReportL
 
 const STATUS_TEST_STATE_DIR = path.join(os.tmpdir(), `openclaw-status-test-${process.pid}-absent`);
 
-export const baseStatusCfg = {
+const baseStatusCfg = {
   update: { channel: "stable" },
   gateway: { bind: "loopback" },
 } as const;
@@ -38,13 +38,7 @@ const baseStatusUpdate = {
   registry: { latestVersion: "2026.4.10" },
 } as never;
 
-export const baseStatusExpectedUpdateChannelInfo = {
-  channel: "stable",
-  source: "config",
-  label: "stable (config)",
-} as const;
-
-export const baseStatusExpectedUpdateChannelLabel = baseStatusExpectedUpdateChannelInfo.label;
+export const baseStatusExpectedUpdateChannelLabel = "stable (config)";
 
 export const baseStatusGatewaySnapshot = {
   gatewayMode: "remote",

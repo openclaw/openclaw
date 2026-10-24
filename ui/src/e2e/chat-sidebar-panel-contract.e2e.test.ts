@@ -823,7 +823,14 @@ suite.define(() => {
         expect(outcome.heading, `${label} identifies its empty state`).not.toBe("");
         expect(outcome.description, `${label} explains its empty state`).not.toBe("");
       }
-      if (label === "Processes") {
+      if (label === "Subagents") {
+        expect(outcome).toEqual({
+          outcome: "generic-empty",
+          heading: "Subagents",
+          description: "No subagents in this conversation.",
+          emptyStateOffersAction: false,
+        });
+      } else if (label === "Processes") {
         expect(outcome).toEqual({
           outcome: "generic-empty",
           heading: "No processes",

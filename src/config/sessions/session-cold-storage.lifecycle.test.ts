@@ -24,6 +24,7 @@ import {
 import { buildConversationIdentity } from "./conversation-identity.js";
 import { resolveCurrentConversationSession } from "./conversation-registry.js";
 import {
+  appendTranscriptMessageSync as appendMessage,
   applySessionEntryLifecycleMutation,
   createSessionEntryWithTranscript,
   forkSessionAtMessage,
@@ -35,6 +36,7 @@ import {
   loadTranscriptEventsSync,
   replaceSessionEntry,
   replaceSessionEntrySync,
+  replaceTranscriptSuffixEventsSync as replaceSuffix,
   resetSessionEntryLifecycle,
   resolveSessionParentForkDecision,
   rewindSessionToMessage,
@@ -48,7 +50,15 @@ import {
 } from "./session-accessor.sqlite-conversation.js";
 import { applySessionEntryOperation } from "./session-accessor.sqlite-entry.js";
 import { forkSessionEntryFromParentTargetWithPatch } from "./session-accessor.sqlite-parent-session.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import {
+  appendTranscriptEventSnapshotSync,
+  appendTranscriptMessageSnapshotSync,
+} from "./session-accessor.sqlite-transcript-write.js";
+import {
+  appendTranscriptEventSync,
+  replaceTranscriptEvents,
+  replaceTranscriptEventsSync,
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { trimSessionTranscriptForManualCompact } from "./session-accessor.transcript.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
@@ -461,6 +471,42 @@ async function runAction(action: Action, fixture: Fixture) {
 }
 
 describe("cold current transcript lifecycle", () => {
+  it("refuses synchronous writes to cold current history without mutating or restoring it", async () => {
+    const fixture = await createColdCurrentSession();
+    const { scope, original, archivePath } = fixture;
+    const snapshot = () => ({
+      rows: fixture.snapshot(),
+      search: fixture
+        .database()
+        .prepare("SELECT * FROM session_transcript_fts ORDER BY message_id")
+        .all(),
+    });
+    const archiveBytes = await fs.readFile(archivePath);
+    const before = snapshot();
+    expect(fixture.database().prepare("SELECT * FROM transcript_events").all()).toEqual([]);
+    expect(
+      fixture.database().prepare("SELECT current_session_id FROM session_nodes").all(),
+    ).toEqual([{ current_session_id: scope.sessionId }]);
+    const event = { type: "custom", id: "sync-custom", customType: "sync-write", data: {} };
+    const message = { role: "user", content: "A new synchronous message", timestamp: 20 };
+    const mutations = {
+      "append event": () => appendTranscriptEventSync(scope, event),
+      "append event snapshot": () => appendTranscriptEventSnapshotSync(scope, event),
+      "append message": () => appendMessage(scope, { message, eventId: "sync-message" }),
+      "append message snapshot": () =>
+        appendTranscriptMessageSnapshotSync(scope, { message, eventId: "sync-message-snapshot" }),
+      "replace transcript": () => replaceTranscriptEventsSync(scope, [event]),
+      "replace full suffix": () => replaceSuffix(scope, original, original.slice(0, 1)),
+      "replace incremental suffix": () =>
+        replaceSuffix(scope, original.slice(1), [], 1, undefined, undefined, true),
+    };
+    for (const [name, run] of Object.entries(mutations)) {
+      expect(run, name).toThrow(expect.objectContaining({ code: "TRANSCRIPT_COLD" }));
+      expect(snapshot(), name).toEqual(before);
+      expect(await fs.readFile(archivePath), name).toEqual(archiveBytes);
+    }
+  });
+
   it("restores and compacts with ID-selected authority without search preparation", async () => {
     const fixture = await createColdCurrentSession();
     const current = await captureSessionEntryCurrentCheckAsyncInternal(fixture.scope);

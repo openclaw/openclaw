@@ -38,6 +38,10 @@ caller label. A reservation includes worker queueing, preparation, and result
 delivery; its duration alone does not establish a slow SQL transaction.
 Schemas, stored data, live commit authority, and update behavior are unchanged.
 
+Refused ordered session reads include the conflicting admission's shortened,
+bounded database path, operation, thread, age, and any recorded caller or worker
+operation labels in the error itself. They never include request payloads.
+
 SQLite admission delivery follows each worker's ordered cursor. The first snapshot
 includes its shared revision cells; later publications send only new or replaced
 facts, session scopes, and reference cells. Existing cells carry invalidation
@@ -48,6 +52,12 @@ Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
 the writer's ordered operation when a read must follow its accepted writes.
 Do not open a second main-thread connection or add a synchronous fallback.
+
+Agent creation and workspace mutations keep their recovery-hold recheck inside
+the existing synchronous engine admission; filesystem effects remain outside it.
+PostgreSQL cron-owner and schema inspection use the existing cron read worker,
+including when agent creation or Doctor requests those facts.
+
 Agent provenance presentation and managed outgoing media inventory/lookups use
 that read-only scope, so reconnect reads do not reserve the shared writer queue.
 Missing provenance storage stays absent until an agent is created. Media inserts,
@@ -55,6 +65,10 @@ attachment promotion, and cleanup claims/deletions retain their writer ordering
 and current-row checks. Scheduled media maintenance waits until after the first
 two minutes of startup, then keeps its hourly maintenance cadence; explicit media
 cleanup and retention rules are unchanged.
+Managed media retention selects the message IDs already recorded on attachment
+metadata through the transcript owner's identity index. Unrelated indexed
+transcript payloads stay in storage. Off-path branches, reset archives, and
+legacy messages without indexed IDs remain eligible to retain their attachments.
 The shared implementations are
 [`sqlite-readonly-worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/infra/sqlite-readonly-worker.ts),
 [`openclaw-state-read-worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-state-read-worker.ts),
@@ -63,6 +77,25 @@ and the agent's
 [`openclaw-agent-execution.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-agent-execution.worker.ts).
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
+
+If PostgreSQL schema publication invalidates admission, connection opening,
+shared-state reads before their callback, and standalone feature-schema ensures
+share a brief backoff retry for at most one second, bounded by the caller's
+deadline and cancellation. Transaction retries require a completed rollback;
+feature-schema ensures only replay their own schema work. Each retry asks the
+owner for current facts, even if physical facts arrived before version facts;
+ordinary reads do not poll. A longer publication gap
+still fails visibly. Readers never replay caller work or refresh an imported
+snapshot, and fragment checks inside a caller's transaction do not retry.
+Schema validation and live ownership checks remain in force.
+
+Startup client credential preparation uses the existing credential worker and
+its native custody admission. The admission's receipt postimage also decides
+whether legacy metadata needs upgrading, without a second receipt read. An app
+that owns the credentials remains authoritative through its existing IPC route.
+Required migrations still finish under maintenance ownership before startup
+continues; native schema, integrity, file-permission, and source-binding checks
+remain with credential admission.
 
 On Node 26.8 and later, the synchronous query owner explicitly disposes private
 statements after execution or iterator completion, and cached statements on
@@ -105,6 +138,9 @@ without inspecting the pathname again. Observer reads rely on that same admitted
 reader instead of capturing and rechecking every candidate file independently.
 Committed writes still invalidate retained entries; config routing, native-open
 replacement detection, and live disclosure authority remain with their owners.
+Session row projections borrow the replica's immutable nested entry facts while
+owning their mutable outer rows. Commit receipts carry pending final delivery in
+the canonical entry postimage, without a second copy.
 
 Session file reads retain workspace authority independently of evictable display
 rows. Committed writers carry their existing full postimages to predicates that
@@ -196,7 +232,10 @@ are the limited exceptions. Runtime access still using them is migration debt.
 For engine stores, the synchronous `withEngineStoreAdmission` scope is lexical:
 it cannot return a Promise, and a retained connection does not extend it.
 PostgreSQL rejects construction and SQL on the Gateway main thread outside that
-scope. The CLI entry records an immutable process role before state access;
+scope. Native lease verification, renewal, and release use this scope only for their
+storage primitive. Lifecycle callbacks remain outside it, and ownership checks
+still read the current owner and expiry before permitting an effect.
+The CLI entry records an immutable process role before state access;
 one-shot CLI and Doctor processes may use the synchronous PostgreSQL bridge.
 An unset role still refuses main-thread access. Interactive onboarding and
 `setup` (including `crestodian`) keep the CLI role through their prompts and
@@ -498,6 +537,12 @@ drain still owns the complete backfill, and a failed or cancelled refresh reject
 its pending exact reads instead of returning stale totals.
 
 ## Transactions and query shape
+
+Personal account mutations, approval operations, auth authorization enrollment,
+and auth usage writes obtain their initial host grant before `BEGIN IMMEDIATE`.
+They reread authoritative rows inside the transaction and retain final commit
+authorization. A busy host therefore cannot hold the writer during initial
+admission; commit admission still retains transaction custody.
 
 Use Kysely for ordinary queries. Raw SQL belongs to schema, migrations,
 bootstrap, or a justified engine-owned primitive. Prepare asynchronous inputs
@@ -3414,6 +3459,12 @@ missing store; idle agents still have no durable database until their first writ
 Session event capture retains the physical source reported by the worker after
 cold admission. A first writer that finishes before the read can supply that
 source; a file created after an absent read or replaced after capture is refused.
+Retained generation checks consume published session facts and the physical identity
+captured at admission. Existing files need one identity probe without rediscovering
+their canonical path; this still fences external tool effects after file replacement.
+Same-generation settings keep their published identity until permission mode or tool
+overrides change, so event guards compare policy once per settings revision. Every
+check still observes pending publications and current execution authority.
 No schema, durability, configuration, or update migration changes are required.
 
 Accepted chat input prepares fresh sharing and exact-row facts again before
@@ -4830,7 +4881,12 @@ cache updates and delivery acknowledgments compare the current payload inside
 the worker transaction. Only definite comparison conflicts retry, at most four
 times; failed reads never advance the audit cursor and uncertain writes never
 replay. Config observation captures its audit writer before filesystem reads and
-rechecks its health owner at transaction and commit admission. Cold synchronous
+rechecks its health owner at transaction and commit admission. Accepted config writes
+and rollback consume the health worker's conditional-write outcome without rereading
+their own writes. Only definite comparison conflicts refresh and reconsider, at
+most four times; unavailable reads and uncertain writes stop best-effort health
+bookkeeping without replay. Newer baselines and anomaly markers retain their
+existing compensation guards. This adds no schema or stored fields. Cold synchronous
 config loading retains native audit registration; Doctor and update inspection
 retain native tail reads. Schemas, audit collection and retention, stored payloads,
 prompt bytes, and update behavior are unchanged.

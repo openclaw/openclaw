@@ -65,66 +65,10 @@ async function connectResumeGateway(opts: ResumeCliOptions, handoffTarget: boole
   }
 }
 
-async function resolveHandoffConnection(
-  opts: ResumeCliOptions,
-  handoff: { sessionKey: string; agentId: string },
-) {
-  const client = await connectResumeGateway(opts, true);
-  try {
-    let result: unknown;
-    try {
-      result = await client.resolveSession({
-        key: handoff.sessionKey,
-        agentId: handoff.agentId,
-        includeGlobal: true,
-        allowMissing: true,
-      });
-    } catch {
-      throw new Error(RESUME_HANDOFF_UNRESOLVED);
-    }
-    if (!validateHandoffSessionResolveResult(result) || !result.ok) {
-      throw new Error(RESUME_HANDOFF_UNRESOLVED);
-    }
-    const canonicalKeyOwner = parseAgentSessionKey(result.key)?.agentId;
-    if (result.agentId !== handoff.agentId || canonicalKeyOwner !== result.agentId) {
-      throw new Error(RESUME_HANDOFF_UNRESOLVED);
-    }
-    return { connection: client.connection, sessionKey: result.key };
-  } finally {
-    await client.stop();
-  }
-}
-
-async function fetchResumeSessions(
-  opts: ResumeCliOptions,
-  options: { agentId?: string; includeGlobal?: boolean } = {},
-) {
-  const client = await connectResumeGateway(opts, false);
-  try {
-    return {
-      connection: client.connection,
-      sessions: await loadRecentSessions(client, options),
-    };
-  } catch (error) {
-    throw await formatResumeConnectionError(error);
-  } finally {
-    await client.stop();
-  }
-}
-
 function formatResumeCandidate(candidate: SessionPickerChoice): string {
   const label = sanitizeTerminalText(candidate.label);
   const key = sanitizeTerminalText(candidate.value);
   return label === key ? key : `${label} [${key}]`;
-}
-
-function resolveExplicitGlobalSessionKey(
-  query: string | undefined,
-): { agentId: string; key: string } | undefined {
-  const parsed = parseAgentSessionKey(query);
-  return parsed?.rest === "global"
-    ? { agentId: parsed.agentId, key: `agent:${parsed.agentId}:global` }
-    : undefined;
 }
 
 export async function runResumeCommand(query: string | undefined, opts: ResumeCliOptions) {
@@ -137,32 +81,60 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
     throw new Error(RESUME_INTERACTIVE_TERMINAL_GUIDANCE);
   }
   const resolvedQuery = query?.trim();
-  const explicitGlobalSession = resolveExplicitGlobalSessionKey(resolvedQuery);
+  const parsedQuery = parseAgentSessionKey(resolvedQuery);
+  const explicitGlobalSession = parsedQuery?.rest === "global" ? parsedQuery : undefined;
   let connection: Awaited<ReturnType<typeof connectResumeGateway>>["connection"];
   let sessionKey: string | null;
   if (handoff) {
     const parsed = parseAgentSessionKey(handoff.sessionKey)!;
-    const resolved = await resolveHandoffConnection(
-      {
-        ...connectionOptions,
-        url: handoff.gatewayUrl,
-      },
-      { sessionKey: handoff.sessionKey, agentId: parsed.agentId },
+    const client = await connectResumeGateway(
+      { ...connectionOptions, url: handoff.gatewayUrl },
+      true,
     );
-    connection = resolved.connection;
-    sessionKey = resolved.sessionKey;
+    try {
+      let result: unknown;
+      try {
+        result = await client.resolveSession({
+          key: handoff.sessionKey,
+          agentId: parsed.agentId,
+          includeGlobal: true,
+          allowMissing: true,
+        });
+      } catch {
+        throw new Error(RESUME_HANDOFF_UNRESOLVED);
+      }
+      if (!validateHandoffSessionResolveResult(result) || !result.ok) {
+        throw new Error(RESUME_HANDOFF_UNRESOLVED);
+      }
+      const canonicalKeyOwner = parseAgentSessionKey(result.key)?.agentId;
+      if (result.agentId !== parsed.agentId || canonicalKeyOwner !== result.agentId) {
+        throw new Error(RESUME_HANDOFF_UNRESOLVED);
+      }
+      connection = client.connection;
+      sessionKey = result.key;
+    } finally {
+      await client.stop();
+    }
   } else {
-    const discovery = await fetchResumeSessions(
-      connectionOptions,
-      explicitGlobalSession
-        ? { agentId: explicitGlobalSession.agentId, includeGlobal: true }
-        : undefined,
-    );
-    connection = discovery.connection;
+    const client = await connectResumeGateway(connectionOptions, false);
+    let sessions: Awaited<ReturnType<typeof loadRecentSessions>>;
+    try {
+      connection = client.connection;
+      sessions = await loadRecentSessions(
+        client,
+        explicitGlobalSession
+          ? { agentId: explicitGlobalSession.agentId, includeGlobal: true }
+          : undefined,
+      );
+    } catch (error) {
+      throw await formatResumeConnectionError(error);
+    } finally {
+      await client.stop();
+    }
     if (explicitGlobalSession) {
-      sessionKey = explicitGlobalSession.key;
+      sessionKey = `agent:${explicitGlobalSession.agentId}:global`;
     } else if (resolvedQuery) {
-      const resolution = resolveResumeSession(discovery.sessions, resolvedQuery);
+      const resolution = resolveResumeSession(sessions, resolvedQuery);
       if (resolution.kind !== "match") {
         if (resolution.kind === "ambiguous") {
           defaultRuntime.error(
@@ -183,7 +155,7 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
       }
       sessionKey = resolution.session.value;
     } else {
-      const choices = buildSessionChoices(discovery.sessions);
+      const choices = buildSessionChoices(sessions);
       if (choices.length === 0) {
         throw new Error(
           "No recent sessions found. Run `openclaw sessions` to inspect sessions or `openclaw tui` to start one.",

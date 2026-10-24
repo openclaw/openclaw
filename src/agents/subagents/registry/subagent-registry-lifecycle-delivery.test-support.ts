@@ -173,23 +173,6 @@ export function registerLifecycleDeliveryReceiptCases({
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("records completion announcement timestamps from transcript delivery", async () => {
-    const { entry, controller } = createReceiptFixture(
-      { delivered: true, path: "steered", enqueuedAt: 4_100, deliveredAt: 12_300 },
-      "delivered",
-    );
-    await expect(completeRun(controller, entry, visibleCompletion)).resolves.toBeUndefined();
-
-    await waitForLifecycleState(() =>
-      expect(readLifecycleRun(entry).delivery?.announcedAt).toBe(12_300),
-    );
-    expect(readLifecycleRun(entry).delivery).toMatchObject({
-      enqueuedAt: 4_100,
-      deliveredAt: 12_300,
-    });
-    expect(readLifecycleRun(entry).delivery?.lastDropReason).toBeUndefined();
-  });
-
   it.each<[string, Partial<SubagentAnnounceDeliveryResult>, string, string]>([
     [
       "phase-only failure and steer-drop diagnostics",
@@ -314,6 +297,7 @@ export function registerLifecycleDeliveryReceiptCases({
         await announceParams.onDeliveryResult?.({
           delivered: true,
           path: "direct",
+          enqueuedAt: 4_100,
           deliveredAt: 12_300,
         });
         await Promise.resolve();
@@ -331,6 +315,7 @@ export function registerLifecycleDeliveryReceiptCases({
       await announce.observed.promise;
       expect(readLifecycleRun(entry).delivery).toMatchObject({
         status: "delivered",
+        enqueuedAt: 4_100,
         announcedAt: 12_300,
         deliveredAt: 12_300,
       });

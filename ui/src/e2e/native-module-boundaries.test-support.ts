@@ -33,7 +33,10 @@ export function defineNativeModuleBoundaryTests(
         });
         await held.request;
         const element = page.locator(testCase.tag).first();
-        expect(await element.evaluate((node) => node.matches(":defined"))).toBe(false);
+        expect(await element.count()).toBe(0);
+        expect(
+          await page.evaluate((tag) => customElements.get(tag) === undefined, testCase.tag),
+        ).toBe(true);
         const toggle = page.locator(".topbar-nav-toggle");
         const navigation = page.getByRole("dialog", { name: "Navigation" });
         await toggle.click();

@@ -114,16 +114,13 @@ Binary Images: secret-token`,
     );
   });
   const result = await collectGatewayProcessDiagnostics(123, { sample: true });
-  expect(result.process).toEqual({
-    outcome: "captured",
-    cpuPercent: 12.3,
-    rssBytes: 2097152,
-    state: "S",
-  });
-  expect(result.sample).toEqual({
-    outcome: "captured",
-    frameCount: 7,
-    frameCounts: { sqlite: 1, filesystem: 1, locks: 1, poll: 1, v8: 1, node: 1, other: 1 },
+  expect({ process: result.process, sample: result.sample }).toEqual({
+    process: { outcome: "captured", cpuPercent: 12.3, rssBytes: 2097152, state: "S" },
+    sample: {
+      outcome: "captured",
+      frameCount: 7,
+      frameCounts: { sqlite: 1, filesystem: 1, locks: 1, poll: 1, v8: 1, node: 1, other: 1 },
+    },
   });
   expect(result.host.totalMemoryBytes).toBeGreaterThan(0);
   expect(JSON.stringify(result)).not.toMatch(/secret-token|\/private\//u);

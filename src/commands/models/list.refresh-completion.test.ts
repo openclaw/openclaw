@@ -111,11 +111,7 @@ module.exports = {
       { assertCurrent() {} },
     ),
   );
-  vi.spyOn(configLoader, "loadModelsConfigWithSource").mockResolvedValue({
-    sourceConfig: config,
-    resolvedConfig: config,
-    diagnostics: [],
-  });
+  vi.spyOn(configLoader, "loadModelsConfig").mockResolvedValue(config);
   vi.spyOn(gateway, "isImplicitLocalGatewayTarget").mockResolvedValue(true);
   vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue(undefined);
   const runtime = createNonExitingRuntimeEnv();

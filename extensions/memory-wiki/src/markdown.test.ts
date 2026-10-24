@@ -3,7 +3,6 @@ import {
   extractHumanNotesBlock,
   parseWikiMarkdown,
   preserveHumanNotesBlock,
-  renderWikiMarkdown,
   scanWikiPageSummary,
   slugifyWikiSegment,
   toWikiPageSummary,
@@ -79,83 +78,6 @@ describe("human Notes blocks", () => {
 });
 
 describe("toWikiPageSummary", () => {
-  it("normalizes agent-facing people wiki metadata", () => {
-    const relationships = [
-      {
-        targetId: "entity.alice",
-        targetTitle: "Alice",
-        kind: "collaborates-with",
-        weight: 0.7,
-        confidence: 0.6,
-        evidenceKind: "discrawl-stat",
-        privacyTier: "local-private",
-      },
-    ];
-    const evidence = [
-      {
-        kind: "maintainer-whois",
-        sourceId: "source.maintainers",
-        confidence: 0.8,
-        privacyTier: "local-private",
-      },
-    ];
-    const raw = renderWikiMarkdown({
-      frontmatter: {
-        pageType: "entity",
-        entityType: "person",
-        id: "entity.brad",
-        title: "Brad Groux",
-        canonicalId: "maintainer.brad-groux",
-        aliases: ["brad", "bgroux"],
-        privacyTier: "local-private",
-        bestUsedFor: ["Microsoft ecosystem routing"],
-        notEnoughFor: ["legal approval"],
-        lastRefreshedAt: "2026-04-29T00:00:00.000Z",
-        personCard: {
-          handles: ["@bgroux"],
-          email: "brad@example.com",
-          lane: "Microsoft Teams",
-          confidence: 0.8,
-          privacyTier: "confirm-before-use",
-        },
-        relationships,
-        claims: [
-          {
-            id: "claim.brad.teams",
-            text: "Brad is useful for Microsoft Teams routing.",
-            confidence: 0.9,
-            evidence,
-          },
-        ],
-      },
-      body: "# Brad Groux\n",
-    });
-
-    const summary = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/entities/brad.md",
-      relativePath: "entities/brad.md",
-      raw,
-    });
-    expect(summary).toMatchObject({
-      entityType: "person",
-      canonicalId: "maintainer.brad-groux",
-      aliases: ["brad", "bgroux"],
-      privacyTier: "local-private",
-      bestUsedFor: ["Microsoft ecosystem routing"],
-      notEnoughFor: ["legal approval"],
-      lastRefreshedAt: "2026-04-29T00:00:00.000Z",
-      personCard: expect.objectContaining({
-        handles: ["@bgroux"],
-        emails: ["brad@example.com"],
-        lane: "Microsoft Teams",
-        privacyTier: "confirm-before-use",
-      }),
-    });
-    expect(summary?.relationships).toEqual(relationships);
-    expect(summary?.claims[0]?.id).toBe("claim.brad.teams");
-    expect(summary?.claims[0]?.evidence).toEqual(evidence);
-  });
-
   it("reports and excludes sequence frontmatter roots from page scans", () => {
     const raw = "---\n- pageType: synthesis\n---\n\n# Invalid Root";
     const params = {
@@ -187,4 +109,42 @@ it.each([
   ],
 ])("excludes fenced link targets with a %s (#97945)", (_name, markdown, target) => {
   expect(scanWikiLinkTargets(markdown)).toEqual([target]);
+});
+
+it("keeps inline link filtering while parsing CommonMark destinations", () => {
+  const markdown = [
+    "[[Wiki target|Alias]]",
+    '[Plan](../syntheses/plan(v2).md?view=full#details "Project plan")',
+    "[Escaped](../syntheses/plan\\(v3\\).md)",
+    "![Image](../assets/diagram.png)",
+    "[External](https://example.com/page.md)",
+    "[Anchor](#details)",
+    "`[Inline code](inline.md)`",
+    "```markdown\n[Fenced code](fenced.md)\n```",
+    "<!-- openclaw:wiki:related:start -->",
+    "[Generated](generated.md)",
+    "<!-- openclaw:wiki:related:end -->",
+    "[Reference][ref]\n\n[ref]: reference.md",
+  ].join("\n\n");
+
+  expect(scanWikiLinkTargets(markdown)).toEqual([
+    "Wiki target",
+    "syntheses/plan(v2).md",
+    "syntheses/plan(v3).md",
+    "assets/diagram.png",
+  ]);
+});
+
+it("decodes percent-encoded inline link destinations", () => {
+  const markdown = [
+    "[Notes](../syntheses/plan%20notes.md)",
+    "[Cafe](../syntheses/caf%C3%A9.md#menu)",
+    "[Malformed](../syntheses/100%.md)",
+  ].join("\n\n");
+
+  expect(scanWikiLinkTargets(markdown)).toEqual([
+    "syntheses/plan notes.md",
+    "syntheses/café.md",
+    "syntheses/100%.md",
+  ]);
 });

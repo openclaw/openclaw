@@ -38,6 +38,9 @@ it.each<[string, PluginOrigin | "official", PluginEntryConfig["hooks"], Grant, G
 it("normalizes every manifest contract family, surface and configured model grant", () => {
   const contracts = {
     codeModeExecutors: ["quickjs"],
+    commandRuntimeCapabilities: ["subagents", "scheduledTurns"],
+    sessionScheduledTurns: ["requester-command"],
+    subagentProfiles: ["reviewer"],
     agentToolResultMiddleware: ["middleware"],
     trustedToolPolicies: ["trusted-policy"],
     externalAuthProviders: ["external-auth"],
@@ -106,6 +109,10 @@ it("normalizes every manifest contract family, surface and configured model gran
     skills: ["alpha", "zulu"],
     dangerousConfigFlags: ["plugins.alpha", "plugins.zulu"],
   });
+  expect(summary.declared.contracts).toContain("commandRuntimeCapabilities: subagents");
+  expect(summary.declared.contracts).toContain("commandRuntimeCapabilities: scheduledTurns");
+  expect(summary.declared.contracts).toContain("sessionScheduledTurns: requester-command");
+  expect(summary.declared.contracts).toContain("subagentProfiles: reviewer");
   expect(summary.grants.llm).toEqual({
     allowModelOverride: true,
     allowedModels: ["alpha/model", "zulu/model"],

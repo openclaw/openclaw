@@ -233,7 +233,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     const call = deliveredCallArg();
     expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b,run-c"));
     const message = expectMessage(
-      findings.map((result) => `${"&lt;result&gt;".repeat(700)}${result}`),
+      findings.map((result) => `${resultPrefix}${result}`),
       [
         "stale previous result",
         "earlier commentary",
@@ -359,9 +359,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
           ? { ...staleChild, runId: "run-replacement", requesterSessionKey: "agent:other:main" }
           : undefined,
     );
-    await expectNoWake({ settledEntry: staleChild });
-    setChildren([{ ...staleChild, requesterSettleWake: undefined }, ...children]);
-    expect(await wake({ settledEntry: children[0] })).toBe(true);
+    expect(await wake({ settledEntry: staleChild })).toBe(true);
+    expect(deliverSpy).toHaveBeenCalledOnce();
     const message = expectMessage([], ["stale output", "old/owner"]);
     const routeBlock = message.slice(
       message.indexOf("Model route changed:"),
@@ -445,10 +444,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(await wake()).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
     const call = deliveredCallArg();
-    expectMessage(
-      [`${"&lt;source-reply&gt;".repeat(400)}required source reply tail`],
-      ["NO_REPLY", "stale source reply", "unrelated source reply"],
-    );
+    expectMessage([text], ["NO_REPLY", "stale source reply", "unrelated source reply"]);
     expect(call.requireVisibleReply).toBe(true);
     expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-b"], 1, {
       delivered: true,

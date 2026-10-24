@@ -268,18 +268,21 @@ function shouldExposeXaiBilledTool(params: {
   return isXaiProviderId(activeProvider) || params.enabled === true;
 }
 
-function createLazyCodeExecutionTool(ctx: OpenClawPluginToolContext) {
+function canExposeXaiBilledTool(
+  ctx: OpenClawPluginToolContext,
+  readConfig: (config: OpenClawConfig | undefined) => { enabled?: unknown } | undefined,
+  isEnabled: (config: OpenClawConfig | undefined, auth?: XaiToolAuthContext) => boolean,
+): boolean {
   const effectiveConfig = ctx.runtimeConfig ?? ctx.config;
-  const codeExecutionConfig = readPluginCodeExecutionConfig(effectiveConfig);
-  if (
-    !shouldExposeXaiBilledTool({
-      activeProvider: ctx.activeModel?.provider,
-      enabled: codeExecutionConfig?.enabled,
-    })
-  ) {
-    return null;
-  }
-  if (!isCodeExecutionEnabled(effectiveConfig, ctx)) {
+  const enabled = readConfig(effectiveConfig)?.enabled;
+  return (
+    shouldExposeXaiBilledTool({ activeProvider: ctx.activeModel?.provider, enabled }) &&
+    isEnabled(effectiveConfig, ctx)
+  );
+}
+
+function createLazyCodeExecutionTool(ctx: OpenClawPluginToolContext) {
+  if (!canExposeXaiBilledTool(ctx, readPluginCodeExecutionConfig, isCodeExecutionEnabled)) {
     return null;
   }
 
@@ -300,17 +303,7 @@ function createLazyCodeExecutionTool(ctx: OpenClawPluginToolContext) {
 }
 
 function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
-  const effectiveConfig = ctx.runtimeConfig ?? ctx.config;
-  const xSearchConfig = resolveEffectiveXSearchConfig(effectiveConfig);
-  if (
-    !shouldExposeXaiBilledTool({
-      activeProvider: ctx.activeModel?.provider,
-      enabled: xSearchConfig?.enabled,
-    })
-  ) {
-    return null;
-  }
-  if (!isXSearchEnabled(effectiveConfig, ctx)) {
+  if (!canExposeXaiBilledTool(ctx, resolveEffectiveXSearchConfig, isXSearchEnabled)) {
     return null;
   }
 

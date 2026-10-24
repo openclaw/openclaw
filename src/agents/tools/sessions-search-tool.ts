@@ -195,6 +195,7 @@ async function listVisibleSearchSessions(params: {
             ownerSessionKey?: unknown;
             parentSessionKey?: unknown;
             spawnedBy?: unknown;
+            childOwnerSessionKeys?: string[];
           }>;
           hasMore?: boolean;
           nextOffset?: number;
@@ -216,6 +217,7 @@ async function listVisibleSearchSessions(params: {
           }
           const visibilityRow = {
             key: row.key,
+            childOwnerSessionKeys: row.childOwnerSessionKeys,
             ...(typeof row.agentId === "string"
               ? { agentId: row.agentId }
               : agentId

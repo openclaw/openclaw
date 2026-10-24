@@ -19,6 +19,7 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import { type ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
@@ -79,8 +80,14 @@ const sessionSnapshot = (
 };
 
 function createRosterHost(request: GatewayBrowserClient["request"], assistantDock?: AssistantDock) {
-  const client = { request } as GatewayBrowserClient;
-  const { gateway } = createGatewayHarness(client);
+  const client = createTestGatewayClient((method, ...args) =>
+    method === "plugins.controlUi.list"
+      ? { plugins: [], diagnostics: [] }
+      : request(method, ...args),
+  );
+  const { gateway } = createGatewayHarness(client, undefined, {
+    initial: { hello: gatewayHelloForMethods(["plugins.controlUi.list"]) },
+  });
   const agents = createAgentCapability(gateway);
   const sessions = createTestSessionCapability(gateway);
   const context = {

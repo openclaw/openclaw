@@ -46,6 +46,31 @@ const { getReplacementPublicationDelivery } =
 const delivery = getReplacementPublicationDelivery();
 const cleanupWarning = "Session mutation completed before executor cleanup failed";
 
+function withoutSql(assertions: () => void) {
+  const sql = observeMainThreadSql();
+  try {
+    assertions();
+    sql.expectIdle();
+  } finally {
+    sql.restore();
+  }
+}
+
+function conversation(peerId: string) {
+  const address = { channel: "slack", accountId: "default", kind: "channel" as const, peerId };
+  return {
+    address,
+    routed: (sessionId: string, updatedAt: number): SessionEntry => ({
+      sessionId,
+      updatedAt,
+      chatType: "channel",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: address.channel, accountId: address.accountId, to: peerId },
+      }),
+    }),
+  };
+}
+
 function setup(name: string) {
   const database = openOpenClawAgentDatabase({ agentId: "main" });
   const scope = { agentId: "main", sessionKey: `agent:main:${name}`, storePath: database.path };
@@ -152,24 +177,7 @@ it.each(["delivered", "lost", "overtaken"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { scope, write, replace } = setup("conversation-competitor");
       const selected = { ...scope, sessionKey: "agent:main:conversation-selected" };
-      const address = {
-        channel: "slack",
-        accountId: "default",
-        kind: "channel" as const,
-        peerId: "channel:C_SYNTHETIC",
-      };
-      const routed = (sessionId: string, updatedAt: number): SessionEntry => ({
-        sessionId,
-        updatedAt,
-        chatType: "channel" as const,
-        delivery: normalizeSessionDeliveryState({
-          context: {
-            channel: address.channel,
-            accountId: address.accountId,
-            to: address.peerId,
-          },
-        }),
-      });
+      const { address, routed } = conversation("channel:C_SYNTHETIC");
       replaceSessionEntrySync(selected, routed("selected", 10));
       write(makeEntry("competitor", {}));
       const check = await captureSessionEntryCurrentCheckAsyncInternal({
@@ -177,15 +185,10 @@ it.each(["delivered", "lost", "overtaken"] as const)(
         matchGeneration: false,
         alternatives: [{ conversations: [{ ...address, sessionKey: selected.sessionKey }] }],
       });
-      const assertRefusedWithoutSql = () => {
-        const sql = observeMainThreadSql();
-        try {
+      const assertRefusedWithoutSql = () =>
+        withoutSql(() => {
           expect(() => check.source()).toThrow("selected session changed");
-          sql.expectIdle();
-        } finally {
-          sql.restore();
-        }
-      };
+        });
       let observed = 0;
       let delivered = 0;
       const stop = sessionChanges.subscribe((change) => {
@@ -221,12 +224,9 @@ it.each(["delivered", "lost", "overtaken"] as const)(
             matchGeneration: false,
             alternatives: [{ conversations: [{ ...address, sessionKey: selected.sessionKey }] }],
           });
-          const sql = observeMainThreadSql();
           try {
-            expect(() => fresh.source()).not.toThrow();
-            sql.expectIdle();
+            withoutSql(() => expect(() => fresh.source()).not.toThrow());
           } finally {
-            sql.restore();
             fresh.release();
           }
         }
@@ -245,24 +245,11 @@ it.each(["commit", "rollback", "unknown"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { scope, write, replace } = setup("pending-conversation-competitor");
       const selected = { ...scope, sessionKey: "agent:main:pending-conversation-selected" };
-      const address = {
-        channel: "slack",
-        accountId: "default",
-        kind: "channel" as const,
-        peerId: "channel:C_PENDING_SYNTHETIC",
-      };
+      const { address, routed } = conversation("channel:C_PENDING_SYNTHETIC");
       const { conversationRef } = buildConversationIdentity({
         ...address,
         deliveryTarget: address.peerId,
       })!;
-      const routed = (sessionId: string, updatedAt: number): SessionEntry => ({
-        sessionId,
-        updatedAt,
-        chatType: "channel",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: address.channel, accountId: address.accountId, to: address.peerId },
-        }),
-      });
       replaceSessionEntrySync(selected, routed("pending-selected", 10));
       write(makeEntry("pending-competitor", {}));
       const snapshot = await withSessionStoreReaderInWorker(
@@ -341,16 +328,12 @@ it.each(["commit", "rollback", "unknown"] as const)(
       delivery.afterResult = () => {
         delivered++;
         expect(acquired).toBeDefined();
-        const sql = observeMainThreadSql();
-        try {
+        withoutSql(() => {
           // Real COMMIT has finished; the publication owner has not installed its receipt yet.
           expect(() => acquired!.currentSessionKey(conversationRef)).toThrow(
             "Conversation binding publication is unavailable",
           );
-          sql.expectIdle();
-        } finally {
-          sql.restore();
-        }
+        });
         if (boundary === "unknown") {
           const owned = nativeAdmission!;
           expect(owned.committed).toMatchObject({
@@ -377,13 +360,9 @@ it.each(["commit", "rollback", "unknown"] as const)(
         expect(acquisition).toMatchObject({ kind: "refused", error: expect.any(Error) });
         expect(acquisitionSql).toBe(0);
         expect(delivered).toBe(boundary === "rollback" ? 0 : 1);
-        if (boundary === "commit") {
-          expect(outcome).toEqual({ kind: "returned" });
-        } else {
-          expect(outcome.kind).toBe("failed");
-          if (outcome.kind === "failed") {
-            expect(isSqliteWorkerError(outcome.error, "outcome-unknown")).toBe(true);
-          }
+        expect(outcome.kind).toBe(boundary === "commit" ? "returned" : "failed");
+        if (outcome.kind === "failed") {
+          expect(isSqliteWorkerError(outcome.error, "outcome-unknown")).toBe(true);
         }
         for (const restore of restoreDelivery.splice(0)) {
           restore();
@@ -392,8 +371,7 @@ it.each(["commit", "rollback", "unknown"] as const)(
           expect(nativeAdmission?.committed).toBeUndefined();
           expect(nativeAdmission?.settlement).toMatchObject({ kind: "completed" });
         }
-        const sql = observeMainThreadSql();
-        try {
+        withoutSql(() => {
           if (boundary === "commit") {
             expect(acquired!.currentSessionKey(conversationRef)).toBe(scope.sessionKey);
           } else {
@@ -402,19 +380,15 @@ it.each(["commit", "rollback", "unknown"] as const)(
               "Conversation binding publication is unavailable",
             );
           }
-          sql.expectIdle();
-        } finally {
-          sql.restore();
-        }
+        });
         const fresh = await captureConversationBindingFacts(scope, [conversationRef]);
-        const freshSql = observeMainThreadSql();
         try {
-          expect(fresh.currentSessionKey(conversationRef)).toBe(
-            boundary === "rollback" ? selected.sessionKey : scope.sessionKey,
+          withoutSql(() =>
+            expect(fresh.currentSessionKey(conversationRef)).toBe(
+              boundary === "rollback" ? selected.sessionKey : scope.sessionKey,
+            ),
           );
-          freshSql.expectIdle();
         } finally {
-          freshSql.restore();
           fresh.release();
         }
       } finally {

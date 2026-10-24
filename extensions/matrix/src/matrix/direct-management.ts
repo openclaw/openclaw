@@ -36,7 +36,6 @@ type MatrixDirectRoomPromotionResult =
   | {
       classifyAsDirect: true;
       repaired: boolean;
-      roomId: string;
       reason: "promoted" | "already-mapped" | "repair-failed";
     }
   | {
@@ -138,14 +137,12 @@ export async function promoteMatrixDirectRoomCandidate(params: {
     return {
       classifyAsDirect: true,
       repaired,
-      roomId: params.roomId,
       reason: repaired ? "promoted" : "already-mapped",
     };
   } catch {
     return {
       classifyAsDirect: true,
       repaired: false,
-      roomId: params.roomId,
       reason: "repair-failed",
     };
   }

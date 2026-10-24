@@ -1,10 +1,8 @@
 // Slack tests cover monitor plugin behavior.
-import type { App } from "@slack/bolt";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
 import { resolveSlackChannelConfig } from "./channel-config.js";
-import { createSlackMonitorContext, normalizeSlackChannelType } from "./context.js";
+import { normalizeSlackChannelType } from "./context.js";
+import { createMonitorTestContext } from "./monitor-context.test-support.js";
 
 describe("resolveSlackChannelConfig", () => {
   it("does not match a bare channel ID when workspace scope is required", () => {
@@ -55,48 +53,25 @@ describe("resolveSlackChannelConfig", () => {
   );
 });
 
-function createContext(overrides: Partial<Parameters<typeof createSlackMonitorContext>[0]> = {}) {
-  return createSlackMonitorContext({
-    cfg: {} as OpenClawConfig,
-    accountId: "default",
+function createContext(overrides: Parameters<typeof createMonitorTestContext>[0] = {}) {
+  return createMonitorTestContext({
+    cfg: {},
     botToken: "token",
-    app: { client: {} } as App,
-    runtime: {} as RuntimeEnv,
     botUserId: "B1",
     botId: "B1",
-    identityHealth: { lifecycle: "ready" as const, lastError: null },
     teamId: "T1",
     apiAppId: "A1",
-    historyLimit: 0,
-    dmHistoryLimit: 0,
-    sessionScope: "per-sender" as const,
-    mainKey: "main",
-    dmEnabled: true,
-    dmPolicy: "open" as const,
-    allowFrom: [],
-    allowNameMatching: false,
     groupDmEnabled: true,
-    groupDmChannels: [],
-    defaultRequireMention: true,
-    channelsConfig: undefined,
-    groupPolicy: "open" as const,
+    groupPolicy: "open",
     useAccessGroups: false,
-    reactionMode: "off" as const,
-    reactionAllowlist: [],
-    replyToMode: "off" as const,
     slashCommand: {
       enabled: false,
       name: "openclaw",
       sessionPrefix: "slack:slash",
       ephemeral: true,
     },
-    textLimit: 4000,
-    typingReaction: "",
     mediaMaxBytes: 1,
-    threadHistoryScope: "thread" as const,
-    threadInheritParent: false,
     ...overrides,
-    channelsConfigKeys: overrides.channelsConfigKeys ?? Object.keys(overrides.channelsConfig ?? {}),
   });
 }
 

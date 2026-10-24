@@ -160,16 +160,47 @@ it("hides archived pages in the restored sidebar before live data arrives", asyn
   });
   host.invalidate();
   await host.updateComplete;
-  expect(
-    dom.present(
-      '.sidebar-pages [data-session-key="agent:main:active"]',
-      '.sidebar-pages [data-session-key="agent:main:archived"]',
-      ".sidebar-pages .sidebar-session-sort",
-    ),
-  ).toEqual([true, false, false]);
+  await waitForSolid(() =>
+    expect(
+      dom.present(
+        '.sidebar-pages [data-session-key="agent:main:active"]',
+        '.sidebar-pages [data-session-key="agent:main:archived"]',
+        ".sidebar-pages .sidebar-session-sort",
+      ),
+    ).toEqual([true, false, false]),
+  );
 });
 
-it("paints the restored roster and workspace in the first sidebar update", async () => {
+it("sorts built-in Pages alphabetically without reordering dashboards", async () => {
+  const { host, context, dom } = await createCachedHost();
+  const dashboardKeys = ["agent:main:dashboard:zulu", "agent:main:dashboard:alpha"];
+  host.restoreSidebarSnapshot({
+    ...emptySnapshot,
+    mode: "roster",
+    navigationView: "pages",
+    pageScopeId: context.agentSelection.state.scopeId,
+    pages: snapshotSessions(
+      dashboardKeys.map((key) => projectSidebarSession({ key, label: key, hasBoard: true })),
+    ),
+  });
+  host.invalidate();
+  await host.updateComplete;
+  const entries = [...dom.all(".sidebar-pages [data-sidebar-entry]")];
+  const routes = entries
+    .map((entry) => entry.getAttribute("data-sidebar-entry"))
+    .filter((entry): entry is string => Boolean(entry?.startsWith("route:")));
+  const routeLabels = routes.map(
+    (route) => dom.query(`[data-sidebar-entry="${route}"] a`)?.textContent?.trim() ?? "",
+  );
+  expect(routeLabels.length).toBeGreaterThan(4);
+  expect(routeLabels).not.toContain("");
+  expect(routeLabels).toEqual(routeLabels.toSorted((left, right) => left.localeCompare(right)));
+  expect(entries.map((entry) => entry.getAttribute("data-sidebar-entry")).slice(-2)).toEqual(
+    dashboardKeys.map((key) => `session:${key}`),
+  );
+});
+
+it("paints the restored roster and workspace before live data arrives", async () => {
   const { host, dom } = await createCachedHost();
   host.sidebarAgentsMode = "chip";
   host.sidebarLiveActivity = false;
@@ -181,9 +212,11 @@ it("paints the restored roster and workspace in the first sidebar update", async
   });
   host.invalidate();
   await host.updateComplete;
-  expect(
-    dom.present('aside[data-snapshot-state="cached"]', "openclaw-sidebar-agent-roster"),
-  ).toEqual([true, true]);
+  await waitForSolid(() =>
+    expect(
+      dom.present('aside[data-snapshot-state="cached"]', "openclaw-sidebar-agent-roster"),
+    ).toEqual([true, true]),
+  );
   await waitForSolid(() => expect(dom.text('[data-agent-group="main"]')).toContain("Harbor"));
   expect(dom.query('[data-avatar="⚓"]')).not.toBeNull();
 });
@@ -211,6 +244,7 @@ it("keeps cached agent rows while the live roster settles", async () => {
     }),
   );
   const sessions = createTestSessionCapability(gateway.gateway);
+  await sessions.refresh({ agentId: "main" });
   const context = createContext(gateway.gateway, sessions, {
     defaultId: "main",
     mainKey: "main",

@@ -181,6 +181,11 @@
   white-space: nowrap;
 }
 
+/* Bands carrying a sentence, a reason and an action wrap on narrow panes. */
+.agent-chat__composer-status-band--wrap {
+  white-space: normal;
+}
+
 .agent-chat__composer-status-icon {
   display: inline-flex;
   flex: 0 0 auto;
@@ -1749,10 +1754,27 @@ html[dir="rtl"] .chat-attachment-loading > span {
   color: var(--muted);
 }
 
-.chat-attachment-file__preview img {
+.chat-attachment-file__preview img,
+.chat-attachment-video__placeholder {
   border-radius: max(0px, calc(var(--chat-attachment-radius) - 5px));
   outline: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
   outline-offset: -1px;
+}
+
+.chat-attachment-video__placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.chat-attachment-video__placeholder > svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+  stroke: none;
 }
 
 .chat-attachment-file__preview > svg {
@@ -1779,6 +1801,22 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 10px;
   fill: currentColor;
   stroke: none;
+}
+
+.chat-attachment-video__play--warning {
+  color: var(--popover);
+  background: var(--warn);
+}
+
+.chat-attachment-video__play--error {
+  color: var(--destructive-foreground);
+  background: var(--destructive);
+}
+
+.chat-attachment-video__play--warning svg,
+.chat-attachment-video__play--error svg {
+  fill: none;
+  stroke: currentColor;
 }
 
 .chat-attachment-file__icon {
@@ -2315,7 +2353,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   white-space: nowrap;
 }
 
-.chat-controls__model-menu .chat-controls__auth-meta [aria-hidden] svg {
+.chat-controls__model-menu .chat-controls__auth-meta svg[aria-hidden] {
   width: 13px;
   height: 13px;
   color: inherit;
@@ -2393,6 +2431,32 @@ html[dir="rtl"] .chat-attachment-loading > span {
   overscroll-behavior: none;
 }
 
+/* Group/list hosts keep their accessible structure; one window owns row geometry. */
+.chat-controls__model-options[data-chat-model-window] {
+  display: block;
+}
+
+.chat-controls__model-virtual-content {
+  flex: none;
+  position: relative;
+  width: 100%;
+}
+
+.chat-controls__model-virtual-content .chat-controls__provider-model-group,
+.chat-controls__model-virtual-content .chat-controls__provider-model-list {
+  display: contents;
+}
+
+.chat-controls__model-virtual-row {
+  position: absolute;
+  inset: 0 0 auto;
+  padding-bottom: 2px;
+}
+
+.chat-controls__model-virtual-row .chat-controls__model-option {
+  content-visibility: visible;
+}
+
 .chat-controls__provider-model-group,
 .chat-controls__provider-model-list {
   display: grid;
@@ -2422,6 +2486,8 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 .chat-controls__model-option {
   order: var(--chat-model-rank, 0);
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 0px;
   justify-content: flex-start;
   /* Grid-item min-width:auto would size the provider group's track to the
      row's full content width (long name + meta), overflowing the 340px menu. */
@@ -2918,11 +2984,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
   background: color-mix(in srgb, var(--accent) 12%, var(--card));
   color: var(--accent);
-}
-
-.chat-controls__speed-option:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 .chat-controls__speed-option:disabled {
@@ -3472,7 +3533,8 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-chat__welcome-secondary {
+  .agent-chat__welcome-secondary,
+  .sidebar-markdown-reader {
     transition: none;
   }
 }

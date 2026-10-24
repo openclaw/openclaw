@@ -18,6 +18,7 @@ import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js"
 // Keep this static: the tunnel graph reaches compiled-subprocess declarations, whose one-time
 // invocation-wide preparation must happen at collection, not inside a test deadline.
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
+import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { NodeWorkspaceTransferSnapshot } from "./node-workspace-transfer-snapshot.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -129,10 +130,7 @@ export function withWorkspaceDrain(
   return async (request) => {
     const input = request.params as { argv?: string[] } | undefined;
     return input?.argv?.[0] === NODE_WORKSPACE_DRAIN_COMMAND
-      ? {
-          ok: true,
-          payloadJSON: workspaceCommandPayload("/node/workspace", { stdout: "drained\n" }),
-        }
+      ? workspaceReply("/node/workspace", { stdout: "drained\n" })
       : await invoke(request);
   };
 }
@@ -158,6 +156,25 @@ export function createManager(
     launchNodeWorker: vi.fn(),
     validateWorkerTurn: () => true,
     workspaceTransfer: workspaceTransfer(),
+    ...overrides,
+  });
+}
+
+export function workspaceReply(workspaceDir: string, result: Partial<SpawnResult> = {}) {
+  return { ok: true, payloadJSON: workspaceCommandPayload(workspaceDir, result) };
+}
+
+type WorkspaceActionsOptions = Parameters<typeof createNodeWorkerWorkspaceActions>[0];
+export function workspaceActions(
+  overrides: Pick<WorkspaceActionsOptions, "workspaceTransfer" | "runWorkspaceCommand"> &
+    Partial<WorkspaceActionsOptions>,
+) {
+  return createNodeWorkerWorkspaceActions({
+    environmentId: "environment-1",
+    ownerEpoch: 1,
+    sessionId: "session-1",
+    ownerSignal: new AbortController().signal,
+    isOwnerCurrent: () => true,
     ...overrides,
   });
 }

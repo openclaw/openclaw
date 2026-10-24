@@ -68,6 +68,16 @@ Details: [Plugins](/tools/plugin)
 Self-hosted Mattermost on a private/LAN/tailnet address: outbound Mattermost API requests pass through an SSRF guard that blocks private and internal IPs by default. Opt in with `channels.mattermost.network.dangerouslyAllowPrivateNetwork: true` (per account: `channels.mattermost.accounts.<id>.network.dangerouslyAllowPrivateNetwork`).
 </Note>
 
+## Inbound batching
+
+Set `messages.inbound.byChannel.mattermost` (milliseconds) to combine rapid,
+consecutive text posts from the same sender in the same channel and thread.
+The default is the global `messages.inbound.debounceMs`, or `0` when unset.
+A different sender or thread ends the previous batch; attachments and control
+commands flush buffered text before their own dispatch. Channel batches preserve
+arrival order through turn admission. Stopping the monitor cancels buffered work
+and leaves unadopted durable posts available for recovery.
+
 ## Native slash commands
 
 Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash commands on every team the bot is a member of and receives callback POSTs on the gateway HTTP server.
@@ -268,6 +278,7 @@ Use these target formats with `openclaw message send` or cron/webhooks:
 | `@username`                         | DM (username resolved via the Mattermost API)                 |
 
 Outbound sends support at most one attachment per message; split multiple files into separate sends.
+Unsupported binary attachment objects are rejected before any message is posted.
 
 Set `channels.mattermost.mediaMaxMb` to limit each inbound download and outbound
 attachment in MiB. `accounts.<id>.mediaMaxMb` overrides the channel root, then

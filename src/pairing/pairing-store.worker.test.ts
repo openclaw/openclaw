@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { SQLInputValue } from "node:sqlite";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
@@ -21,6 +21,7 @@ const directories = useAutoCleanupTempDirTracker((cleanup) =>
 let root: string;
 let env: NodeJS.ProcessEnv;
 let database: ReturnType<typeof openOpenClawStateDatabase>;
+beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", root));
 beforeAll(() => {
   root = directories.make("pairing-mutation-worker-");
   env = { ...process.env, OPENCLAW_STATE_DIR: root };

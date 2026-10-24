@@ -33,7 +33,6 @@ import {
   buildCliLiveOwnerKey,
   restartCliLiveSession,
 } from "./cli-live-session-registry.js";
-import { executeDeps } from "./execute-deps.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import { NODE_CLAUDE_FORWARD_ENV_KEYS, resolveNodeClaudeAuthEnv } from "./execute-logging.js";
 import { stripGatewayLocalClaudeArgs } from "./execute-node-claude.js";
@@ -49,11 +48,13 @@ import {
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
+  writeCliSystemPromptFile,
 } from "./helpers.js";
 import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import { composeCliPromptContext } from "./prompt-context.js";
 import { resolveCliNoOutputTimeoutMs, resolveCliRunTimeoutOverrideMs } from "./reliability.js";
+import { recordCliModelCompleted, recordCliTrajectoryEvent } from "./trajectory.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 function exactToolAvailabilityError(params: {
@@ -126,9 +127,7 @@ export async function executePreparedCliRun(
   const shouldSendSystemPrompt =
     systemPromptArg &&
     (!useResume || backend.systemPromptWhen === "always" || resendSystemPromptForSoftResume);
-  let systemPromptFile:
-    | Awaited<ReturnType<typeof executeDeps.writeCliSystemPromptFile>>
-    | undefined;
+  let systemPromptFile: Awaited<ReturnType<typeof writeCliSystemPromptFile>> | undefined;
   const nodeSystemPrompt = nodePlacement && shouldSendSystemPrompt ? systemPromptArg : undefined;
 
   const basePrompt = cliSessionIdToUse
@@ -264,7 +263,7 @@ export async function executePreparedCliRun(
     await context.preparedBackend.beforeExecution?.();
     assertCurrent();
     if (!nodePlacement && !usePluginOwnedExecution && shouldSendSystemPrompt) {
-      systemPromptFile = await executeDeps.writeCliSystemPromptFile({
+      systemPromptFile = await writeCliSystemPromptFile({
         backend,
         systemPrompt: systemPromptArg,
       });
@@ -489,11 +488,17 @@ export async function executePreparedCliRun(
         useResume,
         trigger: params.trigger,
       });
+      if (context.trajectoryRecorder) {
+        recordCliTrajectoryEvent(context.trajectoryRecorder, "prompt.submitted", {
+          prompt: sentPrompt,
+          ...(systemPromptArg ? { systemPrompt: systemPromptArg } : {}),
+          imagesCount: imagePayload.imagePaths?.length ?? 0,
+        });
+      }
       runOutput = await executeCliProcess({
         context,
         assertCurrent,
         backend,
-        deps: executeDeps,
         events,
         toolTracking,
         diagnostics,
@@ -646,5 +651,8 @@ export async function executePreparedCliRun(
   // Success stays provisional until persistence and cleanup finish; otherwise
   // a rejected turn would be exported as completed.
   diagnostics?.emitCompleted(completedOutput);
+  if (context.trajectoryRecorder) {
+    recordCliModelCompleted(context.trajectoryRecorder, completedOutput);
+  }
   return completedOutput;
 }

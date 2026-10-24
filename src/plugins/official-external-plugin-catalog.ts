@@ -162,22 +162,16 @@ function resolveFeedEntryInstallCandidate(params: {
 /** Source-specific catalog pins stay attached to the artifact they authenticate. */
 export function resolveOfficialExternalPluginInstallSources(
   entry: OfficialExternalPluginCatalogEntry,
-  params?: {
-    catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
-    resolvedInstall?: PluginPackageInstall | null;
-  },
+  params?: { resolvedInstall?: PluginPackageInstall | null },
 ): PluginInstallSource[] {
   const install =
     params?.resolvedInstall === undefined
-      ? resolveOfficialExternalPluginInstall(entry, params)
+      ? resolveOfficialExternalPluginInstall(entry)
       : params.resolvedInstall;
   if (!install) {
     return [];
   }
-  const candidates = resolveFeedEntryInstallSources({
-    entry,
-    catalogConfig: params?.catalogConfig,
-  });
+  const candidates = resolveFeedEntryInstallSources({ entry });
   return candidates.length > 0 ? candidates : resolvePluginInstallSources(install);
 }
 
@@ -365,12 +359,11 @@ export function resolveOfficialExternalProviderContractPluginIds(params: {
 
 /** Resolves official web provider owners from matching documented environment credentials. */
 export function resolveOfficialExternalWebProviderContractPluginIdsForEnv(params: {
-  contract: OfficialExternalProviderContract;
   env: NodeJS.ProcessEnv;
 }): string[] {
   return resolveOfficialExternalPluginOwners((manifest) => {
     const contractProviderIds = normalizedProviderIdSet(
-      manifest.contracts?.[params.contract] ?? [],
+      manifest.contracts?.webFetchProviders ?? [],
     );
     return (
       contractProviderIds.size > 0 &&

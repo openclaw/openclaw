@@ -206,7 +206,6 @@ describe("cron method validation", () => {
       defaultAgentId: "main",
       log: cronLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
     const context = createDirectChatContext({ cron, cronStorePath: storePath, getRuntimeConfig });
@@ -1250,7 +1249,6 @@ describe("cron method validation", () => {
       defaultAgentId: "main",
       log: cronLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     await cron.start();
@@ -1842,10 +1840,10 @@ describe("cron method validation", () => {
       defaultAgentId: "ops",
       log: cronLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const context = createCronContext();
+    context.cron.getJob.mockImplementation((id) => cron.getJob(id));
     context.cron.readJob.mockImplementation((id) => cron.readJob(id));
     context.cron.updateWithPrecondition.mockImplementation((...args) =>
       cron.updateWithPrecondition(...args),
@@ -1935,10 +1933,10 @@ describe("cron method validation", () => {
       defaultAgentId: "ops",
       log: cronLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const context = createCronContext();
+    context.cron.getJob.mockImplementation((id) => cron.getJob(id));
     context.cron.readJob.mockImplementation((id) => cron.readJob(id));
     context.cron.updateWithPrecondition.mockImplementation((...args) =>
       cron.updateWithPrecondition(...args),

@@ -1,3 +1,4 @@
+import "./session-send-recovery.delivery.mocks.test-support.js";
 import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
@@ -13,10 +14,8 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { SessionPendingInput } from "../config/sessions/session-pending-input.types.js";
-import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
-  AgentDatabaseAdmissionError,
   createAgentDatabaseInspectionRefusal,
   failPendingAgentDatabase,
   preparePendingAgentDatabase,
@@ -29,17 +28,23 @@ import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test
 import type { SessionSendDelivery } from "./session-send-delivery.js";
 import { readSessionSendDeliveryAdmission } from "./session-send-delivery.js";
 import { recoverSessionSendDeliveries } from "./session-send-recovery.js";
-import { config, delivery, input, sourceSnapshot } from "./session-send-recovery.test-support.js";
+import { verifyRecoveryNoticeTurnOrdering } from "./session-send-recovery.notice-order.test-support.js";
+import {
+  config,
+  delivery,
+  input,
+  inspectionError,
+  privateDatabasePath,
+  quarantineCommand,
+  recoveryDiagnosticCases,
+  sourceSnapshot,
+  terminalRecoveryFailures,
+} from "./session-send-recovery.test-support.js";
 import { SessionStoreUnavailableError } from "./session-utils-store-error.js";
 
-const io = vi.hoisted(() => ({
-  discover: vi.fn(),
-  entries: vi.fn(),
-  pending: vi.fn(),
-  source: vi.fn(),
-  load: vi.fn(),
-  report: vi.fn(),
-  withdraw: vi.fn(),
+const { recoveryDeliveryMocks } =
+  await import("./session-send-recovery.delivery.mocks.test-support.js");
+const recoveryOverrides = vi.hoisted(() => ({
   restoreOperator:
     vi.fn<typeof import("./operator-run-recovery.js").restoreGatewayQueuedOperatorRecovery>(),
   resumeMain:
@@ -51,47 +56,15 @@ vi.mock(
   import("../agents/main-session-recovery/main-session-restart-recovery.js"),
   async (importOriginal) => ({
     ...(await importOriginal()),
-    retryRestartAbortedMainSessionRecovery: io.resumeMain,
-  }),
-);
-vi.mock(
-  import("../agents/main-session-recovery/main-session-restart-recovery-shared.js"),
-  async (importOriginal) => ({
-    ...(await importOriginal()),
-    discoverRestartRecoveryStoreTargets: io.discover,
-  }),
-);
-vi.mock(import("../config/sessions/session-entry-read-maintenance.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  readPendingInputRecoveryEntriesInWorker: io.entries,
-}));
-vi.mock(import("../config/sessions/session-pending-input-history.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  readSessionSendRecoveryPage: io.pending,
-}));
-vi.mock(import("../config/sessions/session-pending-input-source.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  readPendingInputSource: io.source,
-}));
-vi.mock(import("../config/sessions/session-accessor.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  appendSessionTranscriptReport: io.report,
-}));
-vi.mock(
-  import("../config/sessions/session-pending-input-withdrawal.js"),
-  async (importOriginal) => ({
-    ...(await importOriginal()),
-    discardSessionPendingInput: io.withdraw,
+    retryRestartAbortedMainSessionRecovery: recoveryOverrides.resumeMain,
   }),
 );
 vi.mock(import("./operator-run-recovery.js"), async (importOriginal) => ({
   ...(await importOriginal()),
-  restoreGatewayQueuedOperatorRecovery: io.restoreOperator,
+  restoreGatewayQueuedOperatorRecovery: recoveryOverrides.restoreOperator,
 }));
-vi.mock(import("./session-utils-store-worker.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  resolveGatewaySessionStoreTargetInWorker: io.load,
-}));
+
+const io = { ...recoveryDeliveryMocks, ...recoveryOverrides };
 
 let sourceEntry: {
   sessionId: string;
@@ -125,7 +98,8 @@ const storeTarget = (key: string) => ({
   storePath: "/fixture/sessions.json",
   store: { [key]: key === delivery.source.sessionKey ? sourceEntry : targetEntry },
 });
-const recover = (signal = controller().signal) => recoverSessionSendDeliveries(context, signal);
+const recover = (signal = controller().signal) =>
+  recoverSessionSendDeliveries(context, signal).settled;
 async function recoverWithTimers(signal = controller().signal) {
   await Promise.all([recover(signal), vi.runAllTimersAsync()]);
 }
@@ -309,6 +283,81 @@ it.each(["admitted", "reconfigured", "permission-revoked", "failed", "cancelled"
   },
 );
 
+it("joins every pending store and replays admitted work before reporting a preparation failure", async ({
+  signal,
+}) => {
+  const refusals = ["secondary", "main"].map((agentId) =>
+    createAgentDatabaseInspectionRefusal({
+      agentId,
+      paths: [`/fixture/${agentId}/sessions.json`],
+      reason: "Synthetic startup inspection",
+      pending: true,
+    }),
+  );
+  recordAgentDatabaseAdmissions(refusals);
+  io.discover.mockImplementation(async () =>
+    readAgentDatabaseAdmissionRefusal("main")
+      ? []
+      : [{ agentId: "main", storePath: "/fixture/sessions.json" }],
+  );
+  const joined = createDeferred();
+  const failed = createDeferred();
+  const prepared = createDeferred();
+  const failure = new Error("Synthetic preparation failure");
+  let waits = 0;
+  const settled = vi.fn();
+  const recovery = withAgentDatabasePreparationContext(
+    () => ({
+      waitForAgentPreparation: (agentId) => {
+        if (++waits === 2) {
+          joined.resolve();
+        }
+        return agentId === "main" ? prepared.promise : failed.promise;
+      },
+    }),
+    () => recover(),
+  );
+  const observed = recovery.then(settled, settled);
+  const rejected = expect(recovery).rejects.toBe(failure);
+  try {
+    await withinTest(joined.promise, signal);
+    failed.reject(failure);
+    await vi.runAllTimersAsync();
+    expect(settled).not.toHaveBeenCalled();
+    expectNoCalls(dispatch);
+    await preparePendingAgentDatabase(refusals[1]!, { assertCurrent() {} }, async () => {});
+    prepared.resolve();
+    await rejected;
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(dispatch.mock.calls[0]![0].idempotencyKey).toBe(delivery.runId);
+  } finally {
+    failed.reject(failure);
+    prepared.resolve();
+    await observed;
+  }
+});
+
+it("does not join pending preparation when initial recovery fails", async () => {
+  recordAgentDatabaseAdmissions([
+    createAgentDatabaseInspectionRefusal({
+      agentId: "main",
+      paths: ["/fixture/sessions.json"],
+      reason: "Synthetic startup inspection",
+      pending: true,
+    }),
+  ]);
+  const failure = new Error("Synthetic discovery failure");
+  io.discover.mockRejectedValueOnce(failure);
+  const waitForAgentPreparation = vi.fn(async () => {});
+  await expect(
+    withAgentDatabasePreparationContext(
+      () => ({ waitForAgentPreparation }),
+      () => recover(),
+    ),
+  ).rejects.toBe(failure);
+  expectNoCalls(waitForAgentPreparation, dispatch);
+});
+
 it.each([
   ["chat", "transient"],
   ["chat", "policy"],
@@ -459,6 +508,9 @@ it("resumes chat inputs in acceptance order across pages, excluding expired and 
     })),
   );
 });
+
+it("does not close an accepted chat turn with a blocked-delivery notice", ({ signal }) =>
+  verifyRecoveryNoticeTurnOrdering({ io, sourceEntry, resumeChat, warn, recover }, signal));
 
 it.each(["replaced", "archived-source", "archived-target"] as const)(
   "settles %s inputs durably so the second restart is silent",
@@ -825,63 +877,7 @@ it("retains replaced-endpoint inputs when the durable notice is refused", async 
   );
 });
 
-const privateDatabasePath = "/synthetic/private/agents/main/openclaw-agent.sqlite";
-const quarantineCommand = `mv ${privateDatabasePath} /synthetic/private/quarantine/`;
-const privateDiagnostic = `Inspection failed at ${privateDatabasePath}; ${quarantineCommand}`;
-const inspectionError = (code: "pending" | "failed", privatePaths = true) =>
-  new AgentDatabaseAdmissionError({
-    agentId: "main",
-    paths: privatePaths ? [privateDatabasePath] : [],
-    code: `agent-database-inspection-${code}`,
-    reason: privatePaths ? privateDiagnostic : "Inspection is starting",
-    repairHint: privatePaths ? quarantineCommand : "Wait for inspection",
-  });
-const exhausted = {
-  reason: "transient-admission",
-  attempts: 3,
-  description: "the Gateway was still unavailable after 3 automatic attempts",
-};
-
-it.each([
-  ["capacity", "endpoint", new WorkerTaskError(privateDiagnostic, "overloaded"), exhausted],
-  ["pending inspection", "endpoint", inspectionError("pending"), exhausted],
-  [
-    "failed inspection",
-    "endpoint",
-    inspectionError("failed"),
-    {
-      reason: "store-unavailable",
-      attempts: 1,
-      description: "session storage was unavailable",
-    },
-  ],
-  [
-    "unknown",
-    "endpoint",
-    new Error(privateDiagnostic),
-    {
-      reason: "unknown",
-      attempts: 1,
-      description: "delivery failed",
-    },
-  ],
-  [
-    "requester preparation capacity",
-    "requester",
-    new WorkerTaskError(privateDiagnostic, "overloaded"),
-    exhausted,
-  ],
-  [
-    "requester authority refusal",
-    "requester",
-    new Error(privateDiagnostic),
-    {
-      reason: "requester-unavailable",
-      attempts: 1,
-      description: "original requester authority is unavailable; submit a new request",
-    },
-  ],
-] as const)(
+it.each(recoveryDiagnosticCases)(
   "keeps path-bearing %s diagnostics out of saved recovery notices",
   async (_name, stage, error, { reason, attempts, description }) => {
     if (stage === "requester") {
@@ -914,7 +910,7 @@ it.each([
     for (const retry of retries) {
       warn.mockImplementationOnce(() => retry.resolve());
     }
-    const recovery = recoverSessionSendDeliveries(context, controller().signal);
+    const recovery = recoverSessionSendDeliveries(context, controller().signal).settled;
     for (const retry of retries) {
       // A dynamic requester import can finish after an empty fake-timer drain.
       await Promise.race([retry.promise, recovery]);
@@ -979,31 +975,14 @@ it.each([
   expect(io.report).not.toHaveBeenCalled();
 });
 
-it.each([
-  new GatewayClientRequestError({
-    code: "UNAVAILABLE",
-    message: "Admission denied",
-    retryable: false,
-  }),
-  new SqliteWorkerError("Native outcome is unknown", "outcome-unknown"),
-  new SessionStoreUnavailableError("main", "read-failed", {
-    name: "SqliteError",
-    code: "SQLITE_CORRUPT",
-    message: "Database is corrupt",
-  }),
-  new AgentDatabaseAdmissionError({
-    agentId: "main",
-    paths: [],
-    code: "agent-database-ownership-mismatch",
-    embeddedOwnerId: "other",
-    reason: "Database owner differs",
-    repairHint: "Inspect the database owner",
-  }),
-])("does not retry terminal admission or storage failures: %s", async (error) => {
-  dispatch.mockRejectedValue(error);
-  await recoverWithTimers();
-  expect(dispatch).toHaveBeenCalledOnce();
-  expect(io.report.mock.calls[0]![1].selectReport(undefined).details.inputs[0]).toMatchObject({
-    attempts: 1,
-  });
-});
+it.each(terminalRecoveryFailures)(
+  "does not retry terminal admission or storage failures: %s",
+  async (error) => {
+    dispatch.mockRejectedValue(error);
+    await recoverWithTimers();
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(io.report.mock.calls[0]![1].selectReport(undefined).details.inputs[0]).toMatchObject({
+      attempts: 1,
+    });
+  },
+);

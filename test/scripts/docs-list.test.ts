@@ -1,20 +1,19 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderDocsHeadingMap } from "../../scripts/docs-list.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { files } from "./docs-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const docsListScriptPath = path.resolve(import.meta.dirname, "../../scripts/docs-list.js");
 
-function makeDocs(files: Record<string, string>) {
+function makeDocs(contents: Record<string, string>) {
   const root = tempDirs.make("openclaw-docs-list-");
   const docs = path.join(root, "docs");
-  for (const [file, content] of Object.entries(files)) {
-    const target = path.join(docs, file);
-    mkdirSync(path.dirname(target), { recursive: true });
-    writeFileSync(target, content, "utf8");
+  for (const [file, content] of Object.entries(contents)) {
+    files(docs).write(file, content);
   }
   return { root, docs };
 }
@@ -54,29 +53,15 @@ describe("docs-list", () => {
 
   it("renders the publish docs map on demand without creating a mirror", () => {
     const { root, docs } = makeDocs({
-      "page.md": `---
-summary: "Page"
-# This metadata comment must not become a heading
-... # end
-# Visible title
-## \`API[*]\` <script>alert(1)</script>
-### <scr<script>ipt>alert(1)</script>
-#### \`![label](https://example.test/image)\`
-\`\`\`md
-### Hidden fenced heading
-\`\`\`
-\`\`\`\`md
-\`\`\`json
-### Hidden nested fenced heading
-\`\`\`
-\`\`\`\`
-~~~md
-### Hidden fenced heading with a suffixed closer
-~~~json
-### Still hidden after the invalid closer
-~~~
-# Visible after the fenced block
-`,
+      "page.md": [
+        '---\nsummary: "Page"\n# This metadata comment must not become a heading\n... # end',
+        "# Visible title\n## `API[*]` <script>alert(1)</script>",
+        "### <scr<script>ipt>alert(1)</script>\n#### `![label](https://example.test/image)`",
+        "```md\n### Hidden fenced heading\n```",
+        "````md\n```json\n### Hidden nested fenced heading\n```\n````",
+        "~~~md\n### Hidden fenced heading with a suffixed closer\n~~~json",
+        "### Still hidden after the invalid closer\n~~~\n# Visible after the fenced block\n",
+      ].join("\n"),
       "nested/index.mdx": "# Nested\n",
       "AGENTS.md": "# Instructions\n",
     });
