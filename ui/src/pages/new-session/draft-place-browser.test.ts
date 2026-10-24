@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readSystemInfo } from "../../lib/system-info.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -56,9 +57,11 @@ function createBrowser(
     browser?.resetProjects(reset);
   });
   const hello = {
+    type: "hello-ok",
+    protocol: 4,
     auth: { recoveryScope: "principal-a", role: "operator", scopes: ["operator.read"] },
     features: { methods: ["projects.list"] },
-  };
+  } satisfies GatewayHelloOk;
   const context = {
     gateway: {
       subscribe: () => () => undefined,
