@@ -393,9 +393,13 @@ describe("GatewayChatClient", () => {
   it("passes selected-agent global scope through chat methods", async () => {
     vi.useFakeTimers();
     const { client, request } = mockClient({ messages: [] });
+    request.mockResolvedValueOnce({ runId: "run-gateway", status: "timeout" });
     const scope = { sessionKey: "global", agentId: "work" };
     const runId = "run-global-work";
-    await client.sendChat({ ...scope, message: "hello", runId });
+    await expect(client.sendChat({ ...scope, message: "hello", runId })).resolves.toEqual({
+      runId: "run-gateway",
+      status: "timeout",
+    });
     await client.loadHistory({ ...scope, limit: 50 });
     await client.abortChat({ ...scope, runId });
     await client.listModels({ agentId: "work" });
@@ -464,14 +468,6 @@ describe("GatewayChatClient", () => {
       );
     },
   );
-
-  it("returns the actual chat send ack status from the gateway", async () => {
-    const client = createClient();
-    mockRequest({ runId: "run-gateway", status: "timeout" });
-    await expect(
-      client.sendChat({ sessionKey: "main", message: "hello", runId: "run-local" }),
-    ).resolves.toEqual({ runId: "run-gateway", status: "timeout" });
-  });
 
   it("lists gateway commands through commands.list", async () => {
     const command = {
