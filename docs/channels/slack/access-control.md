@@ -37,7 +37,7 @@ administrator profile keep their existing command access. See
 
 ## Actions and gates
 
-Slack actions are controlled by `channels.slack.actions.*`.
+Slack actions are controlled by `channels.slack.actions.*`. `channels.slack.accounts.<accountId>.actions` overrides individual gates for that account; gates the account leaves unset inherit the channel root.
 
 Available action groups in current Slack tooling:
 
