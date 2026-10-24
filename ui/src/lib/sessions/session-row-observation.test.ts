@@ -20,6 +20,15 @@ const frame = (event: string, payload: unknown, seq?: number): GatewayEventFrame
 });
 const change = (emit: (event: GatewayEventFrame) => void, payload: unknown) =>
   emit(frame("sessions.changed", payload));
+const workTarget = { key: "global", agentId: "work" };
+
+function ownedChange(
+  emit: (event: GatewayEventFrame) => void,
+  row: GatewaySessionRow,
+  fields: Record<string, unknown>,
+) {
+  change(emit, { sessionKey: row.key, agentId: row.agentId, sessionId: row.sessionId, ...fields });
+}
 
 type DescribeResult = { session: GatewaySessionRow | null };
 
@@ -105,7 +114,7 @@ async function descriptorOwner(
     const reconcile = observation.captureReconcile();
     return track(
       client
-        .request<DescribeResult>("sessions.describe", { key: "global", agentId: "work" })
+        .request<DescribeResult>("sessions.describe", workTarget)
         .then((result) => reconcile(result.session ?? undefined)),
     );
   };
@@ -131,12 +140,12 @@ async function descriptorOwner(
   const primaryResult = sessions.state.result;
   const revision = sessions.canonicalListRevision;
   const changed = vi.fn<(row: GatewaySessionRow | null) => void>();
-  const observation = sessions.observeRow({ key: "global", agentId: "work" }, changed, {
+  const observation = sessions.observeRow(workTarget, changed, {
     onInvalidate,
   });
   disposers.push(observation.dispose);
   expect(observation.row).toBeNull();
-  reply("sessions.describe", { key: "global", agentId: "work" }, { session: initial });
+  reply("sessions.describe", workTarget, { session: initial });
   expect(await read(observation)).toMatchObject({ status: "current", row: initial });
   changed.mockClear();
 
@@ -154,11 +163,7 @@ async function descriptorOwner(
     return { response, settled };
   };
   const holdDescribe = (target = observation) => {
-    const response = hold<DescribeResult>(
-      "sessions.describe",
-      { key: "global", agentId: "work" },
-      { session: initial },
-    );
+    const response = hold<DescribeResult>("sessions.describe", workTarget, { session: initial });
     return { response, settled: read(target) };
   };
   const settleRun = (fields: Partial<Parameters<typeof sessions.reconcileRunTerminal>[0]>) =>
@@ -244,7 +249,7 @@ describe("session row observations", () => {
     const sessions = createTestSessionCapability(gateway);
     const invalidated = vi.fn();
     const delivered = vi.fn<SessionRowEventListener>();
-    const observation = sessions.observeRow({ key: "global", agentId: "work" }, () => undefined, {
+    const observation = sessions.observeRow(workTarget, () => undefined, {
       onInvalidate: invalidated,
       onEvent: delivered,
     });
@@ -635,10 +640,7 @@ describe("session row observations", () => {
     expect(await old.settled).toEqual({ status: "retired" });
     expect(h.changed).not.toHaveBeenCalled();
     react = false;
-    change(h.emitEvent, {
-      sessionKey: "global",
-      agentId: "work",
-      sessionId: initial.sessionId,
+    ownedChange(h.emitEvent, initial, {
       reason: "patch",
       ts: 500,
       updatedAt: 500,
@@ -706,10 +708,8 @@ describe("session row observations", () => {
         expect(h.changed).not.toHaveBeenCalled();
         h.keepMain();
       };
-      change(h.emitEvent, {
-        sessionKey: key,
+      ownedChange(h.emitEvent, initial, {
         agentId: "research",
-        sessionId: initial.sessionId,
         reason: "patch",
         ts: 1_000,
         updatedAt: 1_000,
@@ -719,10 +719,8 @@ describe("session row observations", () => {
         activeRunIds: scoped ? [] : ["research-run"],
       });
       unchanged();
-      change(h.emitEvent, {
-        sessionKey: key,
+      ownedChange(h.emitEvent, initial, {
         agentId: "research",
-        sessionId: initial.sessionId,
         reason: "delete",
         ts: scoped ? 1_100 : 1_050,
       });
@@ -732,10 +730,8 @@ describe("session row observations", () => {
         updatedAt: scoped ? 250 : 1_100,
         label: scoped ? "Owned descriptor" : "Owned sentinel",
       };
-      change(h.emitEvent, {
-        sessionKey: key,
+      ownedChange(h.emitEvent, initial, {
         agentId: owner,
-        sessionId: initial.sessionId,
         reason: "patch",
         ts: owned.updatedAt,
         updatedAt: owned.updatedAt,
@@ -751,10 +747,7 @@ describe("session row observations", () => {
         list.response.resolve(sessionsResult([initial], 200));
         await list.settled;
         expect(h.sessions.state.result?.sessions[0]?.label).toBe("Owned descriptor");
-        change(h.emitEvent, {
-          sessionKey: "global",
-          agentId: "work",
-          sessionId: initial.sessionId,
+        ownedChange(h.emitEvent, initial, {
           reason: "delete",
           ts: 1_200,
         });
@@ -773,7 +766,7 @@ describe("session row observations", () => {
       let observation = h.observation;
       if (retirement === "delete") {
         observation.dispose();
-        observation = h.sessions.observeRow({ key: "global", agentId: "work" }, () => undefined);
+        observation = h.sessions.observeRow(workTarget, () => undefined);
         h.disposers.push(observation.dispose);
         expect(observation.row).toBeNull();
       }
@@ -785,10 +778,7 @@ describe("session row observations", () => {
         h.reply("sessions.list", query, sessionsResult([workRow], 200));
         await managed.refresh();
         expect(observation.row).toMatchObject(workRow);
-        change(h.emitEvent, {
-          sessionKey: "global",
-          agentId: "work",
-          sessionId: workRow.sessionId,
+        ownedChange(h.emitEvent, workRow, {
           reason: "delete",
           ts: 300,
         });
