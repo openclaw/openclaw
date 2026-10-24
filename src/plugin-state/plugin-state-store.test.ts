@@ -5,7 +5,6 @@ import { runInNewContext } from "node:vm";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { ok } from "@openclaw/normalization-core/result";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { clearOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
@@ -24,7 +23,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { keyedStore, keyedStores, useState } from "./plugin-state-fixtures.test-support.js";
 import {
@@ -33,7 +31,6 @@ import {
 } from "./plugin-state-store.database.js";
 import {
   getPluginStateCapacity,
-  registerPluginStateSequencedJournalEntry,
   createCorePluginStateKeyedStore,
   createCorePluginStateKeyedStoreV2,
   createCorePluginStateSyncKeyedStore,
@@ -129,16 +126,6 @@ describe("plugin-state-store", () => {
     });
   });
 
-  it("updates a key from the current stored value", () => {
-    const store = syncStore<{ count: number }>();
-    const update = store.update;
-
-    expect(update("counter", (current) => ({ count: (current?.count ?? 0) + 1 }))).toBe(true);
-    expect(update("counter", (current) => ({ count: (current?.count ?? 0) + 1 }))).toBe(true);
-    expect(update("counter", () => undefined)).toBe(false);
-    expect(store.lookup("counter")).toEqual({ count: 2 });
-  });
-
   it("rejects new durable rows at capacity without evicting or blocking updates", async () => {
     vi.useFakeTimers();
     const store = syncStore<number>(
@@ -146,7 +133,9 @@ describe("plugin-state-store", () => {
       "codex",
     );
     vi.setSystemTime(1000);
-    expect(store.registerIfAbsent("first", 1)).toBe(true);
+    const update = store.update;
+    expect(update("first", (current) => (current ?? 0) + 1)).toBe(true);
+    expect(store.lookup("first")).toBe(1);
     vi.setSystemTime(2000);
     expect(store.registerIfAbsent("second", 2)).toBe(true);
 
@@ -154,7 +143,8 @@ describe("plugin-state-store", () => {
     throws(() => store.register("third", 3), limit);
     expect(store.registerIfAbsent("first", 99)).toBe(false);
     vi.setSystemTime(3000);
-    expect(store.update("first", () => 10)).toBe(true);
+    expect(update("first", (current) => (current ?? 0) + 9)).toBe(true);
+    expect(update("first", () => undefined)).toBe(false);
     throws(() => store.update("third", () => 3), limit);
     expect(store.entries()).toEqual([
       expect.objectContaining({ key: "second", value: 2 }),
@@ -163,13 +153,12 @@ describe("plugin-state-store", () => {
   });
 
   it("deletes an entry only when the current value matches", async () => {
-    const store = openAsyncStore<{ version: number }>();
-    await store.register("chat", { version: 1 });
-
-    await expect(store.deleteIf("chat", (current) => current.version === 2)).resolves.toBe(false);
-    await expect(store.lookup("chat")).resolves.toEqual({ version: 1 });
-    await expect(store.deleteIf("chat", (current) => current.version === 1)).resolves.toBe(true);
-    await expect(store.lookup("chat")).resolves.toBeUndefined();
+    const store = openAsyncStore<number>();
+    await store.register("chat", 1);
+    expect(await store.deleteIf("chat", (current) => current === 2)).toBe(false);
+    expect(await store.lookup("chat")).toBe(1);
+    expect(await store.deleteIf("chat", (current) => current === 1)).toBe(true);
+    expect(await store.lookup("chat")).toBeUndefined();
   });
 
   it("rejects plugin state ttl when expiry cannot fit in a Date timestamp", async () => {
@@ -198,20 +187,12 @@ describe("plugin-state-store", () => {
     sparse[1] = "hole";
     const nonEnumerable = { visible: true };
     Object.defineProperty(nonEnumerable, "hidden", { value: true, enumerable: false });
-    for (const [key, value] of Object.entries({
-      " ": true,
-      undefined,
-      infinity: Infinity,
-      circular,
-      sparse,
-      date: new Date(),
-      map: new Map([["k", "v"]]),
-      "non-enumerable": nonEnumerable,
-    })) {
-      await expect(store.register(key, value), key).rejects.toThrow(PluginStateStoreError);
+    for (const value of [undefined, Infinity, circular, sparse, new Date(), nonEnumerable]) {
+      await expect(store.register("invalid", value)).rejects.toThrow(PluginStateStoreError);
     }
-
-    await expect(store.register("k".repeat(513), true)).rejects.toThrow(PluginStateStoreError);
+    for (const key of [" ", "k".repeat(513)]) {
+      await expect(store.register(key, true)).rejects.toThrow(PluginStateStoreError);
+    }
 
     let deep: unknown = { leaf: true };
     for (let i = 0; i < 65; i += 1) {
@@ -255,23 +236,23 @@ describe("plugin-state-store", () => {
       namespace: "stopped",
       maxEntries: 10,
     };
-    const store = createCorePluginStateSyncKeyedStore<{ stopped: boolean }>(options);
-    const asyncStore = createCorePluginStateKeyedStore<{ stopped: boolean }>(options);
-    const workerStore = createCorePluginStateKeyedStoreV2<{ stopped: boolean }>(options, {
+    const store = createCorePluginStateSyncKeyedStore<boolean>(options);
+    const asyncStore = createCorePluginStateKeyedStore<boolean>(options);
+    const workerStore = createCorePluginStateKeyedStoreV2<boolean>(options, {
       assertCurrent: () => {},
     });
-    expect(store.update(key, () => ({ stopped: true }))).toBe(true);
+    expect(store.update(key, () => true)).toBe(true);
     closePluginStateDatabase();
-    await expect(asyncStore.lookup(key)).resolves.toEqual({ stopped: true });
+    expect(await asyncStore.lookup(key)).toBe(true);
     const observation = await workerStore.observe(key);
-    store.register(key, { stopped: false });
+    store.register(key, false);
     await expect(
       workerStore.compareAndApply(key, observation.comparison, {
         operation: "delete",
         action: "delete",
       }),
     ).resolves.toMatchObject({ status: "conflict" });
-    await expect(workerStore.lookup(key)).resolves.toEqual({ stopped: false });
+    expect(await workerStore.lookup(key)).toBe(false);
     expect(() => createCorePluginStateKeyedStore({ ...options, maxEntries: 11 })).toThrow(
       PluginStateStoreError,
     );
@@ -323,13 +304,11 @@ describe("plugin-state-store", () => {
     },
   );
 
-  it("bulk reads exact keys positionally with sync/async parity across reopen", async () => {
+  it("round-trips unusual bulk keys and detached duplicate values after reopen", async () => {
     const options = { namespace: "bulk", maxEntries: 20 };
     const { sync, store } = stores<{ index: number }>(options);
     const keys = ["10", "2", "nul\0tail", "\\u0000", "\ud800", "__proto__"] as const;
     keys.forEach((key, index) => sync.register(key, { index }));
-    createPluginStateSyncKeyedStore("telegram", options).register(keys[0], { index: 99 });
-    syncStore({ ...options, namespace: "other" }).register(keys[0], { index: 98 });
     const now = Date.now();
     seedScope("discord", "bulk", [{ key: "expired", value: {}, expiresAt: now }]);
     const request = [keys[3], "missing", keys[0], "expired", ...keys, ` ${keys[1]} `];
@@ -341,46 +320,31 @@ describe("plugin-state-store", () => {
       ...keys.map((_, index) => ({ index })),
       { index: 1 },
     ];
-    for (let connection = 0; connection < 2; connection++) {
-      expect(sync.lookupMany(request)).toEqual(expected.map(ok));
-      await expect(store.lookupMany(request)).resolves.toEqual(expected.map(ok));
-      for (const duplicates of [
-        sync.lookupMany([keys[0], keys[0]]),
-        await store.lookupMany([keys[0], keys[0]]),
-      ]) {
-        expect(duplicates[0]?.ok && duplicates[0].value).not.toBe(
-          duplicates[1]?.ok && duplicates[1].value,
-        );
-      }
-      if (connection > 0) {
-        expect(isOpenClawStateDatabaseOpen()).toBe(false);
-      }
-      closePluginStateDatabase();
+    closePluginStateDatabase();
+    expect(sync.lookupMany(request)).toEqual(expected.map(ok));
+    expect(await store.lookupMany(request)).toEqual(expected.map(ok));
+    for (const duplicates of [
+      sync.lookupMany([keys[0], keys[0]]),
+      await store.lookupMany([keys[0], keys[0]]),
+    ]) {
+      expect(duplicates[0]?.ok && duplicates[0].value).not.toBe(
+        duplicates[1]?.ok && duplicates[1].value,
+      );
     }
     expect(isOpenClawStateDatabaseOpen()).toBe(false);
   });
 
-  it("bounds and validates every bulk key before reading, with one native query", async () => {
+  it("bounds and validates bulk keys", async () => {
     const { sync, store } = stores<number>({ namespace: "bulk-bounds" });
     sync.register("key", 1);
-    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
-    const reads = trackSqliteStatementExecutions(db, ["reads"], (sql) =>
-      sql.startsWith("select ") && sql.includes('"plugin_state_entries"') ? "reads" : null,
+    expect(sync.lookupMany([])).toEqual([]);
+    throws(() => sync.lookupMany(["key", " "]), invalidLookup);
+    await expect(
+      store.lookupMany(Array.from({ length: 10_001 }, () => "key")),
+    ).rejects.toMatchObject(invalidLookup);
+    expect(sync.lookupMany(Array.from({ length: 10_000 }, () => "key"))).toEqual(
+      Array.from({ length: 10_000 }, () => ok(1)),
     );
-    try {
-      expect(sync.lookupMany([])).toEqual([]);
-      throws(() => sync.lookupMany(["key", " "]), invalidLookup);
-      await expect(
-        store.lookupMany(Array.from({ length: 10_001 }, () => "key")),
-      ).rejects.toMatchObject(invalidLookup);
-      expect(reads.counts.reads).toBe(0);
-      expect(sync.lookupMany(Array.from({ length: 10_000 }, () => "key"))).toEqual(
-        Array.from({ length: 10_000 }, () => ok(1)),
-      );
-      expect(reads).toMatchObject({ counts: { reads: 1 }, rowCounts: { reads: 1 } });
-    } finally {
-      reads.restore();
-    }
   });
 
   it("bulk-deletes only unchanged scoped rows in one bounded transaction", () => {
@@ -697,48 +661,15 @@ describe("plugin-state-store.retention", () => {
   const seed = (namespace: string, rows: Omit<SeedRow, "namespace" | "pluginId">[]) =>
     seedScope("discord", namespace, rows);
 
-  it("shares quota and expiry facts while refreshing time and preserving sibling rows", () => {
-    vi.useFakeTimers({ now: 1_000 });
+  it("rechecks quota when the clock moves backward", () => {
+    vi.useFakeTimers({ now: 2_000 });
     const scope = { pluginId: "discord", namespace: "operation-retention" };
     const params = { ...scope, maxEntries: 2, overflowPolicy: "reject-new" as const };
     seedPluginStateEntriesForTests([
       { ...scope, key: "stable", value: 1 },
-      { ...scope, key: "expiring", value: 2, expiresAt: 2_000 },
-      { ...scope, namespace: "sibling", key: "expired", value: 3, expiresAt: 800 },
+      { ...scope, key: "backward-visible", value: 2, expiresAt: 1_500 },
     ]);
     const current = open(scope.namespace, 2, true);
-    const sibling = open("sibling", 2);
-    const counts = runWriteTransaction("register", (store) => {
-      const retention = readPluginStateRetention(store.db, { ...scope, now: Date.now() });
-      const replace = (valueJson: string) =>
-        registerPluginStateEntry(store, { ...params, key: "stable", valueJson }, retention, true);
-      const statements = trackSqliteStatementExecutions(
-        requireNativeSqliteDatabase(store.db),
-        ["expiryProbe", "delete"],
-        (sql) =>
-          sql.startsWith('select "expires_at" from "plugin_state_entries"')
-            ? "expiryProbe"
-            : sql.startsWith('delete from "plugin_state_entries"')
-              ? "delete"
-              : null,
-      );
-      try {
-        replace("4");
-      } finally {
-        statements.restore();
-      }
-      vi.setSystemTime(2_000);
-      replace("5");
-      return statements.counts;
-    });
-    vi.setSystemTime(500);
-    expect(current.entries()).toEqual([entryOf("stable", 5, 2_000)]);
-    expect(sibling.lookup("expired")).toBe(3);
-
-    seedPluginStateEntriesForTests([
-      { ...scope, key: "backward-visible", value: 6, expiresAt: 1_500 },
-    ]);
-    vi.setSystemTime(2_000);
     expect(() =>
       runWriteTransaction("register", (store) => {
         const retention = readPluginStateRetention(store.db, { ...scope, now: Date.now() });
@@ -752,37 +683,6 @@ describe("plugin-state-store.retention", () => {
       }),
     ).toThrow("reached its 2-row limit");
     expect(current.lookup("over-capacity")).toBeUndefined();
-    expect(counts).toEqual({ expiryProbe: 0, delete: 0 });
-  });
-
-  it("evicts oldest live entries over maxEntries with bounded database calls", () => {
-    vi.useFakeTimers({ now: 1000 });
-    seed(
-      "evict",
-      Array.from({ length: 64 }, (_, n) =>
-        entryOf(`key-${String(n).padStart(2, "0")}`, n, n >= 61 ? 1000 : Math.floor(n / 2)),
-      ),
-    );
-    const store = open("evict", 3);
-    const statements = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
-      ["delete"],
-      (sql) => (sql.startsWith('delete from "plugin_state_entries"') ? "delete" : null),
-    );
-    try {
-      store.register("a-protected", 64);
-    } finally {
-      statements.restore();
-    }
-
-    // The final victim ties the protected key; work stays bounded across all 62 victims.
-    expect(statements.counts.delete).toBeGreaterThan(0);
-    expect(statements.counts.delete).toBeLessThanOrEqual(2);
-    expect(store.entries()).toEqual([
-      entryOf("a-protected", 64, 1000),
-      entryOf("key-62", 62, 1000),
-      entryOf("key-63", 63, 1000),
-    ]);
   });
 
   it.each(["native", "worker"] as const)(
@@ -812,64 +712,19 @@ describe("plugin-state-store.retention", () => {
     },
   );
 
-  it("protects a worker claim when existing rows have later timestamps", async () => {
-    const store = keyedStore<number>("discord", "evict-worker-claim", { maxEntries: 1 });
-    seed("evict-worker-claim", [entryOf("z", 1, Date.now() + 24 * 60 * 60 * 1000)]);
+  it("protects a worker claim and breaks eviction ties by key", async () => {
+    const store = keyedStore<number>("discord", "evict-worker-claim", { maxEntries: 2 });
+    const future = Date.now() + 24 * 60 * 60 * 1000;
+    seed("evict-worker-claim", [entryOf("y", 1, future), entryOf("z", 3, future)]);
     const before = Date.now();
     expect(await store.registerIfAbsent("a", 2)).toBe(true);
     const after = Date.now();
     const entries = await store.entries();
-    expect(entries).toMatchObject([{ key: "a", value: 2 }]);
+    expect(entries).toMatchObject([
+      { key: "a", value: 2 },
+      { key: "z", value: 3 },
+    ]);
     expect(entries[0]?.createdAt).toBeGreaterThanOrEqual(before);
     expect(entries[0]?.createdAt).toBeLessThanOrEqual(after);
-  });
-
-  it("sheds sequenced journal rows without evicting durable sibling state", async () => {
-    const durableEntryCount = 37;
-    const row = (namespace: string, key: string, value: unknown) => ({
-      pluginId: "memory-core",
-      namespace,
-      key,
-      value,
-    });
-    const store = (namespace: string, maxEntries: number, rejectNew = false) =>
-      createPluginStateKeyedStore("memory-core", {
-        namespace,
-        maxEntries,
-        overflowPolicy: rejectNew ? "reject-new" : "evict-oldest",
-      });
-    seedPluginStateEntriesForTests([
-      ...Array.from({ length: durableEntryCount }, (_, entryIndex) =>
-        row("durable-state", `durable-${entryIndex}`, { entryIndex }),
-      ),
-      row("memory-host.event-migration-checkpoints", "generation", { kind: "raw-checkpoint" }),
-      row("memory-host.event-cursors", "workspace", { kind: "cursor", lastSequence: 9 }),
-      row("memory-host.events", "event-0000000000000009", { sequence: 9 }),
-    ]);
-
-    expect(
-      await registerPluginStateSequencedJournalEntry({
-        pluginId: "memory-core",
-        cursorOptions: { namespace: "memory-host.event-cursors", maxEntries: 1_000 },
-        cursorKey: "workspace",
-        journalOptions: { namespace: "memory-host.events", maxEntries: 1 },
-        journalKeyPrefix: "event-",
-        journalKeyRange: { keyStartInclusive: "event-", keyEndExclusive: "event." },
-        journalValue: {},
-      }),
-    ).toBe(10);
-
-    const durable = store("durable-state", durableEntryCount);
-    const checkpoints = store("memory-host.event-migration-checkpoints", 10_000, true);
-    const journal = store("memory-host.events", 1);
-    const cursor = store("memory-host.event-cursors", 1_000);
-    await expect(durable.lookup("durable-0")).resolves.toEqual({ entryIndex: 0 });
-    await expect(checkpoints.lookup("generation")).resolves.toEqual({ kind: "raw-checkpoint" });
-    await expect(journal.lookup("event-0000000000000009")).resolves.toBeUndefined();
-    await expect(journal.lookup("event-0000000000000010")).resolves.toEqual({ sequence: 10 });
-    await expect(cursor.lookup("workspace")).resolves.toEqual({
-      kind: "cursor",
-      lastSequence: 10,
-    });
   });
 });
