@@ -12,6 +12,7 @@ import {
   createOAuthRefreshCredential,
 } from "./auth-profiles/credential-fixtures.test-support.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
+import { buildAgentHarnessSupportContext } from "./harness/support.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
 import {
   authStore,
@@ -78,6 +79,50 @@ function materialization(
 }
 
 describe("createModelAuthAvailabilityResolver", () => {
+  it("projects provider-selected sharing consent into public Responses harness support", () => {
+    const cfg = { auth: { order: { openai: ["openai:shared"] } } };
+    const auth = resolverWith({
+      cfg,
+      authStore: authStore({
+        "openai:shared": createOAuthRefreshCredential({ authFlow: "chatgpt-token-sharing" }),
+      }),
+    }).evaluateRuntimeModelAuth("openai", {
+      modelId: "gpt-5.4",
+      runtimeId: "codex",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    expect(auth).toMatchObject({
+      availability: true,
+      selectedCredential: {
+        source: "profile",
+        mode: "oauth",
+        authFlow: "chatgpt-token-sharing",
+        requirement: "api-key",
+      },
+    });
+    expect(
+      buildAgentHarnessSupportContext({
+        config: cfg,
+        provider: "openai",
+        modelId: "gpt-5.4",
+        requestedRuntime: "codex",
+        modelProvider: { ...auth.selectedRoute, preparedAuth: auth.selectedCredential },
+      }).modelProvider,
+    ).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      requestTransportOverrides: "none",
+      runtimePolicy: { compatibleIds: expect.arrayContaining(["openclaw", "codex"]) },
+      preparedAuth: {
+        source: "profile",
+        mode: "oauth",
+        authFlow: "chatgpt-token-sharing",
+        requirement: "api-key",
+      },
+    });
+  });
+
   it("canonicalizes prepared runtime auth through provider aliases", () => {
     const metadataSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [

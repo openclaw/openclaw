@@ -60,6 +60,7 @@ it.each([
       selectedAuthFlow: "chatgpt-token-sharing",
       modelRoute: { ...apiRoute, baseUrl: "https://api.openai.com/v1" },
     },
+    { source: "profile", mode: "oauth", authFlow: "chatgpt-token-sharing", requirement: "api-key" },
   ],
   [
     "provider preference filters invalid profiles without locking fallback",
@@ -122,9 +123,16 @@ it.each([
     }),
     { credentialSource: { kind: "direct", evidence: "synthetic", authorization: "declared" } },
   ],
-] satisfies [string, () => Params, object][])("%s", (_name, fixture, expected) => {
-  expect(preparePlan(fixture())).toMatchObject(expected);
-});
+] satisfies [string, () => Params, object, object?][])(
+  "%s",
+  (_name, fixture, expected, support?: object) => {
+    const plan = preparePlan(fixture());
+    expect(plan).toMatchObject(expected);
+    if (support) {
+      expect(resolveAgentHarnessPreparedAuthSupport({ plan })).toEqual(support);
+    }
+  },
+);
 
 it("non-Codex harnesses honor no-host-auth policy", () => {
   const plan = preparePlan({

@@ -1271,9 +1271,9 @@ export function createModelAuthAvailabilityResolver(
       provider,
       profileId: evaluation.selectedProfileId,
       mode: evaluation.selectedAuthMode,
-      authRequirement: evaluation.selectedProfileId
-        ? profilePolicyFacts(provider, evaluation.selectedProfileId).authRequirement
-        : undefined,
+      ...(evaluation.selectedProfileId
+        ? profilePolicyFacts(provider, evaluation.selectedProfileId)
+        : {}),
       runtimeAuth: evaluation.runtimeAuth,
     }),
   });

@@ -283,6 +283,62 @@ describe("Codex agent harness supports()", () => {
     }
   });
 
+  it("accepts prepared profile sharing facts on public Responses", () => {
+    expect(
+      supports({
+        modelProvider: {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+          preparedAuth: {
+            source: "profile",
+            mode: "oauth",
+            authFlow: "chatgpt-token-sharing",
+            requirement: "api-key",
+          },
+        },
+      }),
+    ).toMatchObject({ supported: true });
+  });
+
+  it.each<{
+    name: string;
+    provider?: string;
+    auth?: Partial<
+      NonNullable<NonNullable<AgentHarnessSupportContext["modelProvider"]>["preparedAuth"]>
+    >;
+    route?: Partial<NonNullable<AgentHarnessSupportContext["modelProvider"]>>;
+  }>([
+    { name: "missing sharing consent", auth: { authFlow: undefined } },
+    { name: "identity-only consent", auth: { authFlow: "chatgpt-identity" } },
+    { name: "native OAuth", auth: { authFlow: "external-cli" } },
+    { name: "unowned direct OAuth", auth: { source: "direct" } },
+    { name: "native-owned OAuth", auth: { source: "harness" } },
+    { name: "foreign provider", provider: "anthropic" },
+    { name: "custom endpoint", route: { baseUrl: "https://relay.example.test/v1" } },
+    { name: "native backend adapter", route: { api: "openai-chatgpt-responses" } },
+  ])("rejects public Responses sharing with $name", ({ provider = "openai", auth, route }) => {
+    expect(
+      supports({
+        provider,
+        modelProvider: {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+          preparedAuth: {
+            source: "profile",
+            mode: "oauth",
+            authFlow: "chatgpt-token-sharing",
+            requirement: "api-key",
+            ...auth,
+          },
+          ...route,
+        },
+      }).supported,
+    ).toBe(false);
+  });
+
   it("rejects a prepared route that does not declare Codex compatibility", () => {
     const result = supports({
       modelProvider: {
