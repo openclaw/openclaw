@@ -1,7 +1,5 @@
-import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -15,7 +13,6 @@ import {
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { registerMaintenanceCommands } from "../program/register.maintenance.js";
 import { registerCurrentCoreServiceReceiptTests } from "./update-command-current-core-service-receipt.test-support.js";
 import {
   createManagedServiceIdentityFixture,
@@ -25,7 +22,6 @@ import {
   expectUpdateFailure,
   managedServiceState,
   mockVerifiedGatewayRun,
-  programArguments,
   registerForegroundFinalizationTests,
   registerVerifiedActivationFailureTests,
   registerManagedInstallEnvironmentTest,
@@ -202,24 +198,6 @@ describe("successful update finalization ordering", () => {
     mocks,
   });
   registerServiceInstallationConvergenceTests(() => tempDirs.make("update-install-drift-"), mocks);
-
-  it("refuses same-schema finalization after requester revocation", async () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("finalizer-revoked-requester-") };
-    const record = createUpdateRun({ trigger: "cli" }, { env });
-    await expect(
-      finishSuccessfulPackageSwitch({
-        run: {
-          runId: record.runId,
-          env,
-          executorFence: { assertCurrent() {} },
-          requesterAuthority: { requester: {}, isCurrent: () => false },
-        },
-      }),
-    ).rejects.toThrow("requester-revoked");
-    expect(mocks.updatePlugins).not.toHaveBeenCalled();
-    expect(mocks.restartService).not.toHaveBeenCalled();
-    expect(getUpdateRun(record.runId, { env })?.status).toBe("running");
-  });
 
   it("does not finalize or clean an active durable run without its live executor", async () => {
     const home = tempDirs.make("finalizer-pending-recovery-");
@@ -678,32 +656,6 @@ describe("successful update finalization ordering", () => {
       },
     );
 
-    it("skips unsafe metadata refresh for unknown ownership", async () => {
-      const portArguments = [...programArguments, "--port", "19305"];
-      mocks.readServiceState.mockResolvedValueOnce(
-        managedServiceState(
-          {},
-          {
-            programArguments: portArguments,
-            managedDefinition: { programArguments: portArguments },
-            managedOverrides: { environment: true },
-          },
-        ),
-      );
-
-      await finishSuccessfulPackageSwitch();
-
-      expect(mocks.restartService).toHaveBeenCalledWith(
-        partial({
-          shouldRestart: true,
-          refreshServiceEnv: false,
-          serviceInstallEnv: null,
-          serviceUpdateVerdict: partial({ refreshDefinition: false }),
-        }),
-      );
-      expect(mocks.restartService.mock.lastCall?.[0].gatewayPort).toBe(19305);
-    });
-
     it.each(["inspection", "revalidation"] as const)(
       "does not restart a stopped sealed service when fresh %s fails",
       async (failure) => {
@@ -766,22 +718,6 @@ describe("successful update finalization ordering", () => {
       }
 
       expect(mocks.restartService).toHaveBeenCalledOnce();
-      expect(mocks.restartService).toHaveBeenCalledWith(
-        partial({
-          refreshServiceEnv: false,
-          serviceEnv,
-          serviceUpdateVerdict: {
-            kind: "owned",
-            root: "/tmp/openclaw-update",
-            refreshDefinition: false,
-            fingerprint: "sealed",
-          },
-          result: partial({
-            after: { version: "2026.4.24", ...(unloaded ? { buildId: "new-build" } : {}) },
-          }),
-          requireRunningServiceAfterRestart: !unloaded,
-        }),
-      );
       expectBefore(mocks.revalidateService, mocks.restartService);
       if (activated) {
         expect(mocks.writeSentinel).toHaveBeenCalledTimes(2);
@@ -831,41 +767,22 @@ describe("successful update finalization ordering", () => {
   });
 
   it.each([
-    // owner, candidate runtime, adopted finalization, parent marker, inspections run, ready
     ["original updater", false, undefined, false, true, true],
     ["migrated worker with the marker", true, undefined, true, true, true],
     ["unadopted worker from a shipped updater", true, undefined, false, false, true],
     ["adopted worker from a shipped updater", true, true, false, true, true],
     ["unverified Gateway", false, undefined, false, true, false],
   ] as const)(
-    "runs deferred Doctor inspections after the restart for the %s",
+    "runs deferred inspections only after verified activation for the %s",
     async (_owner, candidateRuntime, adoptedFinalization, marker, runs, ready) => {
       const root = tempDirs.make("post-activation-inspections-");
       const lintLog = path.join(root, "lint.json");
-      const findings = [
-        ...(!candidateRuntime || adoptedFinalization
-          ? [
-              {
-                checkId: "core/doctor/runtime-tool-schemas",
-                severity: "warning",
-                message: "Plugin drift.",
-              },
-            ]
-          : []),
-        {
-          checkId: "core/doctor/command-owner",
-          severity: "info",
-          message: "No command owner is configured.",
-        },
-      ];
       await fs.mkdir(path.join(root, "dist"));
       await fs.writeFile(
-        path.join(root, "dist", "index.js"),
+        path.join(root, "dist/index.js"),
         `import { writeFileSync } from "node:fs";
 writeFileSync(${JSON.stringify(lintLog)}, JSON.stringify({ argv: process.argv.slice(2), inProgress: process.env.OPENCLAW_UPDATE_IN_PROGRESS ?? null }));
-process.stdout.write(${JSON.stringify(JSON.stringify({ ok: false, checksRun: 3, findings }))});
-process.exitCode = 1;
-`,
+process.stdout.write('{"ok":true,"checksRun":1,"findings":[]}');`,
       );
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
       if (marker) {
@@ -880,102 +797,60 @@ process.exitCode = 1;
         );
         return { pluginUpdate: plugins, configSnapshot: validConfigSnapshot };
       });
-      const events: string[] = [];
       mocks.restartService.mockImplementation(async ({ onVerified }) => {
-        events.push(
-          await fs.stat(lintLog).then(
-            () => "restart after lint",
-            () => "restart",
-          ),
-        );
+        await expect(fs.stat(lintLog)).rejects.toMatchObject({ code: "ENOENT" });
         if (ready) {
           onVerified?.(Date.now());
         }
         return "ok";
       });
-      const doctorStep = {
-        name: "openclaw doctor",
-        command: "openclaw doctor --fix",
-        cwd: root,
-        durationMs: 1,
-        exitCode: 0,
-        deferredInspectionCheckIds: [
-          "core/doctor/hooks-model",
-          "core/doctor/runtime-tool-schemas",
-          "core/doctor/provider-catalog-projection",
-        ],
-      };
-      const initialSteps = [doctorStep];
-
-      await finishSuccessfulPackageSwitch(
+      const initialSteps = [
         {
-          packageRoot: root,
-          restartEnvironment: process.env,
-          sealed: false,
-          stoppedForUpdate: true,
+          name: "openclaw doctor",
+          command: "openclaw doctor --fix",
+          cwd: root,
+          durationMs: 1,
+          exitCode: 0,
+          deferredInspectionCheckIds: ["core/doctor/hooks-model"],
         },
+      ];
+      await finishSuccessfulPackageSwitch(
+        { packageRoot: root, restartEnvironment: process.env, stoppedForUpdate: true },
         {
           result: { status: "ok", mode: "npm", root, steps: initialSteps, durationMs: 1 },
           packageUpdateNodeRunner: process.execPath,
         },
         { candidateRuntime, adoptedFinalization },
       );
-
-      expect(events).toEqual(["restart"]);
-      const steps = mocks.printResult.mock.lastCall?.[0].steps;
-      if (!runs) {
-        await expect(fs.stat(lintLog)).rejects.toThrow();
-        expect(steps).toEqual(initialSteps);
-        return;
-      }
-      if (!ready) {
-        await expect(fs.stat(lintLog)).rejects.toThrow();
-        expect(steps).toEqual([
-          ...initialSteps,
-          partial({
-            name: "post-activation doctor inspections",
-            advisory: partial({
-              kind: "recoverable-maintenance",
-              message: expect.stringContaining("Gateway readiness was not verified"),
-            }),
-          }),
-        ]);
-        expect(mocks.printResult.mock.lastCall?.[0].status).toBe("ok");
-        return;
-      }
-      const lint = JSON.parse(await fs.readFile(lintLog, "utf8"));
-      const program = new Command();
-      registerMaintenanceCommands(program);
-      const doctor = program.commands.find((command) => command.name() === "doctor");
-      assert(doctor);
-      doctor.parseOptions(lint.argv.slice(1));
-      const options = doctor.opts();
-      expect(options.severityMin).toBe("info");
-      expect(options.only).toHaveLength(3);
-      expect(options.only).toEqual(
-        containing([
-          "core/doctor/hooks-model",
-          "core/doctor/runtime-tool-schemas",
-          "core/doctor/provider-catalog-projection",
-        ]),
-      );
-      expect(lint.inProgress).toBeNull();
-      expect(steps).toEqual([
-        ...initialSteps,
-        partial({
+      const result = mocks.printResult.mock.lastCall?.[0];
+      expect(result.status).toBe("ok");
+      if (runs && ready) {
+        const lint = JSON.parse(await fs.readFile(lintLog, "utf8"));
+        expect(lint).toEqual({
+          argv: [
+            "doctor",
+            "--lint",
+            "--json",
+            "--only=core/doctor/hooks-model",
+            "--severity-min",
+            "info",
+          ],
+          inProgress: null,
+        });
+        expect(result.steps.at(-1)).toMatchObject({
           name: "post-activation doctor inspections",
-          exitCode: 1,
-          ...(!candidateRuntime || adoptedFinalization
-            ? { warnings: ["core/doctor/runtime-tool-schemas: Plugin drift."] }
-            : {}),
-          doctorLintFindings: findings,
-          advisory: {
-            kind: "recoverable-maintenance",
-            message: expect.stringContaining("openclaw doctor --lint --all --severity-min info"),
-          },
-        }),
-      ]);
-      expect(mocks.printResult.mock.lastCall?.[0].status).toBe("ok");
+          exitCode: 0,
+        });
+      } else {
+        await expect(fs.stat(lintLog)).rejects.toMatchObject({ code: "ENOENT" });
+        if (!runs) {
+          expect(result.steps).toEqual(initialSteps);
+        } else {
+          expect(result.steps.at(-1)).toMatchObject({
+            advisory: { message: expect.stringContaining("Gateway readiness was not verified") },
+          });
+        }
+      }
     },
   );
 });

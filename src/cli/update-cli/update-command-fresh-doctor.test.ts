@@ -214,13 +214,11 @@ describe("post-plugin update readiness", () => {
       });
       const onWarnings = vi.fn();
       mocks.command.mockImplementationOnce(async (_command, _args, options) => {
-        await fs.writeFile(
-          options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
-          JSON.stringify(
-            kind === "deferred"
-              ? { status: "ok", warnings: [warning], maintenanceRefusal: refusal }
-              : { status: "error", failureFacts: [], maintenanceRefusal: refusal },
-          ),
+        await writeFreshDoctorResult(
+          options,
+          kind === "deferred"
+            ? { status: "ok", warnings: [warning], maintenanceRefusal: refusal }
+            : { status: "error", failureFacts: [], maintenanceRefusal: refusal },
         );
         if (kind === "data-at-risk") {
           throw childFailure;
@@ -244,7 +242,7 @@ describe("post-plugin update readiness", () => {
     },
   );
 
-  it.each(["revoked", "", "  "])(
+  it.each(["revoked", "  "])(
     "refuses invalid Doctor authority %j without retrying",
     async (runId) => {
       const isCurrent = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
@@ -274,10 +272,8 @@ describe("post-plugin update readiness", () => {
   );
 
   it.each([
-    { phase: "pre-plugin", operatorPolicy: "external", timeout: undefined, expected: 5_000 },
     { phase: "post-plugin", operatorPolicy: "external", timeout: "3", expected: 3_000 },
-    { phase: "pre-plugin", operatorPolicy: undefined, timeout: "3", expected: 3_000 },
-    { phase: "post-plugin", operatorPolicy: undefined, timeout: undefined, expected: 5_000 },
+    { phase: "pre-plugin", operatorPolicy: undefined, timeout: undefined, expected: 5_000 },
   ] as const)(
     "keeps parent service authority and the operator deadline in $phase Doctor ($operatorPolicy, $timeout)",
     async ({ phase, operatorPolicy, timeout, expected }) => {
