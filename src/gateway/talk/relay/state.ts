@@ -109,6 +109,7 @@ export class TalkRealtimeRelayOutputOwnership {
     private readonly activeTurnId: () => string | undefined,
     private readonly ensureTurn: () => string,
     private readonly fail: (message: string) => void,
+    private readonly continuousOutput: () => boolean,
   ) {}
 
   get discarding(): boolean {
@@ -157,7 +158,13 @@ export class TalkRealtimeRelayOutputOwnership {
     if (this.discarding) {
       return undefined;
     }
-    const activeTurnId = this.activeTurnId();
+    // Continuous transports never send response.created, so output that arrives
+    // before client input starts its own turn, as an ID-less response does.
+    const activeTurnId =
+      this.activeTurnId() ??
+      (claim && this.phase === "unowned" && this.continuousOutput()
+        ? this.ensureTurn()
+        : undefined);
     if (activeTurnId && this.mode === "turn-bound" && claim && this.phase === "unowned") {
       this.cancelledTerminal = undefined;
       Object.assign(this, { phase: "owned" as const, turnId: activeTurnId });
