@@ -430,6 +430,11 @@ function registryBudgetFixture(warningCount = 0, validationInputs: Record<string
     releaseProfile,
     rerunGroup: "all",
     resolveTargetResult: "success",
+    npmPreparationResult: "success",
+    npmQualificationResult: "success",
+    pluginNpmPreflightRequired: false,
+    pluginNpmPreparationResult: "skipped",
+    dockerPreparationResult: "success",
   };
   const built = buildReleaseExecutionPlan(inputs);
   const plan = buildPlanArtifact({

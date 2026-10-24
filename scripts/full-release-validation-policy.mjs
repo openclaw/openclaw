@@ -890,6 +890,26 @@ export function buildReleaseExecutionPlan(input) {
       result: stringValue(input.resolveTargetResult, "missing"),
     },
     {
+      name: "Prepare release npm artifacts",
+      required: rerunGroup === "all" || (!reused && booleanValue(input.candidateRequired)),
+      result: stringValue(input.npmPreparationResult, "skipped"),
+    },
+    {
+      name: "Qualify release npm artifacts",
+      required: rerunGroup === "all",
+      result: stringValue(input.npmQualificationResult, "skipped"),
+    },
+    {
+      name: "Prepare exact plugin npm artifacts",
+      required: rerunGroup === "all" && booleanValue(input.pluginNpmPreflightRequired),
+      result: stringValue(input.pluginNpmPreparationResult, "skipped"),
+    },
+    {
+      name: "Prepare release Docker artifacts",
+      required: rerunGroup === "all",
+      result: stringValue(input.dockerPreparationResult, "skipped"),
+    },
+    {
       name: phasedChildren ? "Acquire full release candidate" : "Prepare shared release candidate",
       required: phasedChildren
         ? !reused && booleanValue(input.candidateRequired)
