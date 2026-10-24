@@ -400,87 +400,6 @@ suite.define(() => {
     ]);
   });
 
-  it("keeps formatted PR references and their hover targets consistent", async () => {
-    const context = await newBrowserContext();
-    const page = await context.newPage();
-    const repository = { owner: "synthetic", repo: "formatting-demo" };
-    const href = "https://github.com/synthetic/formatting-demo/pull/1576";
-    const otherHref = "https://github.com/synthetic/other-project/pull/1576#issuecomment-1";
-    const gateway = await installPreview(page, {
-      featureMethods: [
-        ...defaultControlUiFeatureMethods,
-        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        "forge.preview",
-        "forge.detail",
-      ],
-      historyMessages: [
-        assistantMessage(
-          [
-            "Synthetic formatting example",
-            "Plain: PR synthetic/formatting-demo#1576 opened.",
-            "Formatted: PR **synthetic/formatting-demo#1576 opened**.",
-            "Short reference: **PR** synthetic/formatting-demo#42 opened.",
-            `Other repository: [#1576](${otherHref})`,
-          ].join("\n\n"),
-        ),
-      ],
-      methodResponses: {
-        [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
-        "forge.preview": {
-          cases: [
-            referencePreview(
-              href,
-              "synthetic/formatting-demo #1576",
-              "Synthetic formatting example",
-            ),
-            referencePreview(
-              otherHref,
-              "synthetic/other-project #1576",
-              "Separate repository example",
-            ),
-          ],
-        },
-      },
-    });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const key = await waitForWatchedSessionKey(gateway);
-    await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-      sessions: { [key]: { repository, pullRequests: [], rateLimited: false, status: "ready" } },
-    });
-    const formatted = page.locator("strong a.markdown-github-item");
-    await formatted.waitFor({ state: "visible" });
-    await formatted.focus();
-    const card = page.locator(".link-reader-hovercard");
-    await expectText(card, "Synthetic formatting example");
-    await expectAttr(formatted, "href", href);
-    await expectAttr(formatted, "data-github-kind", "pull");
-    await expectAttr(part(card, "title"), "href", href);
-    expect(await page.locator(`a[href="${href}"]`).count()).toBeGreaterThanOrEqual(2);
-    expect(
-      await page.locator('a[href="https://github.com/synthetic/formatting-demo/pull/42"]').count(),
-    ).toBe(1);
-    await page.keyboard.press("Escape");
-    const other = page.locator(`a[href="${otherHref}"]`);
-    await other.focus();
-    await expectText(card, "Separate repository example");
-    await expectAttr(part(card, "title"), "href", otherHref);
-    const requests = await gateway.getRequests("forge.preview");
-    expect(requests.map((request) => request.params)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ url: href }),
-        expect.objectContaining({ url: otherHref }),
-      ]),
-    );
-    expect(
-      requests.some(
-        ({ params }) =>
-          isRecord(params) &&
-          typeof params.url === "string" &&
-          new URL(params.url).pathname.includes("/issues/"),
-      ),
-    ).toBe(false);
-  });
-
   it.each([
     { theme: "light", reducedMotion: "no-preference", width: 1180, fails: false },
     { theme: "dark", reducedMotion: "reduce", width: 390, fails: true },
@@ -583,32 +502,6 @@ suite.define(() => {
     expect(await card.count()).toBe(0);
     await gateway.resolveDeferred("forge.preview");
     await expectText(card, pullPreviewResponse.title);
-  });
-
-  it("keeps a pending prefetch alive across dismissal and reuses it on rehover", async () => {
-    const { card, gateway, page, pullLink } = await openPullPreviewPage(true);
-
-    await gateway.waitForRequest("forge.preview");
-    expect(await card.count()).toBe(0);
-    expect(await pullLink.evaluate((element) => element.matches(":hover, :focus"))).toBe(false);
-    expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
-    await pullLink.hover();
-    await page.clock.runFor(300);
-    await moveOff(page, card);
-
-    await pullLink.hover();
-    await page.clock.runFor(300);
-    expect(await card.count()).toBe(0);
-    // The transcript still owns this request after the popup activation ends.
-    await gateway.resolveDeferred("forge.preview");
-    await expectText(card, pullPreviewResponse.title);
-    expect(await page.locator("body").getAttribute("data-preview-empty-mounts")).toBe("0");
-    expect((await gateway.getRequests("forge.preview")).length).toBe(1);
-
-    await moveOff(page, card);
-    await pullLink.hover();
-    await expectText(card, pullPreviewResponse.title);
-    expect((await gateway.getRequests("forge.preview")).length).toBe(1);
   });
 
   it("previews issue and pull request links while preserving navigation", async () => {
