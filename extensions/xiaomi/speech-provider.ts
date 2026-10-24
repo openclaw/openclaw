@@ -155,7 +155,7 @@ export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
       const voiceDesign = model === XIAOMI_TTS_VOICE_DESIGN_MODEL;
       const resolvedStyle =
         trimToUndefined(style) ?? (voiceDesign ? DEFAULT_XIAOMI_TTS_VOICE_DESIGN_STYLE : undefined);
-      const authHeaders = usesXiaomiTokenPlanAuth(config.baseUrl)
+      const authHeaders: Record<string, string> = usesXiaomiTokenPlanAuth(config.baseUrl)
         ? { Authorization: `Bearer ${config.apiKey}` }
         : { "api-key": config.apiKey };
       let audioBuffer: Buffer;
